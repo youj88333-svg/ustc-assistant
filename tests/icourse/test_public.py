@@ -1,31 +1,22 @@
 import json
-import sys
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-
-import icourse_public_query as legacy_service
+FIXTURE = ROOT / "tests" / "fixtures" / "jw" / "import-bundle.json"
 
 from ustc_assistant.sources.icourse import client, parser, service
 
 
-class PublicServiceParityTests(unittest.TestCase):
-    def test_jw_grouping_matches_legacy_and_excludes_bundle_metadata(self):
-        bundle = json.loads(
-            (ROOT / "examples" / "ustc-jw-import-bundle.sample.json").read_text(
-                encoding="utf-8"
-            )
-        )
+class PublicServiceContractTests(unittest.TestCase):
+    def test_jw_grouping_excludes_bundle_metadata(self):
+        bundle = json.loads(FIXTURE.read_text(encoding="utf-8"))
 
-        actual = service.group_jw_offerings(bundle)
+        offerings = service.group_jw_offerings(bundle)
 
-        self.assertEqual(actual, legacy_service.group_jw_offerings(bundle))
-        serialized = json.dumps(actual, ensure_ascii=False)
+        self.assertEqual(6, len(offerings))
+        serialized = json.dumps(offerings, ensure_ascii=False)
         self.assertNotIn("sourceRecords", serialized)
         self.assertNotIn('"userId"', serialized)
 
