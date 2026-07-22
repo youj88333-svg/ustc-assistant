@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ustc_assistant import cli
 from ustc_assistant.common import browser, storage
+from ustc_assistant.sources.icourse import service as icourse_service
 
 
 class FakePage:
@@ -51,6 +52,21 @@ class PackageEntryTests(unittest.TestCase):
         self.assertEqual(collect_args.source, "jw")
         self.assertEqual(query_args.command, "query")
         self.assertEqual(query_args.source, "icourse")
+
+    def test_collect_parsers_preserve_prototype_defaults(self):
+        parser = cli.build_parser()
+
+        jw = parser.parse_args(["collect", "jw", "--semester-id", "421"])
+        schedule = parser.parse_args(
+            ["collect", "young-schedule", "--today", "2026-07-22"]
+        )
+
+        self.assertEqual(jw.semester_key, "2026spring")
+        self.assertEqual(jw.output, Path("tmp/ustc-jw-import.generated.json"))
+        self.assertEqual(schedule.today.isoformat(), "2026-07-22")
+
+    def test_icourse_service_exposes_app_callable_query_runner(self):
+        self.assertTrue(callable(icourse_service.run_query))
 
 
 class CommonStorageTests(unittest.TestCase):

@@ -3,10 +3,18 @@
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
 import re
 from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Iterable
+from zoneinfo import ZoneInfo
+
+from ustc_assistant.sources.icourse import client as public_client
+from ustc_assistant.sources.icourse import parser as page_parser
 
 
 SUPPORTED_PREFERENCES = {
@@ -207,3 +215,188 @@ def select_evidence(
     conflict_reviews = [review for review in valid if _conflicts(entry, review)][:conflicting]
     selected = _dedupe_reviews(newest + most_upvoted + conflict_reviews)
     return [{**deepcopy(review), "untrustedText": True} for review in selected]
+
+
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
+SOURCE_NAME = "icourse_public"
+
+
+def parse_preference(value: str) -> tuple[str, str]:
+    if "=" not in value:
+        raise argparse.ArgumentTypeError("preference must use dimension=value")
+    dimension, preferred = (item.strip().lower() for item in value.split("=", 1))
+    if SUPPORTED_PREFERENCES.get(dimension) != preferred:
+        allowed = ", ".join(
+            f"{key}={item}" for key, item in SUPPORTED_PREFERENCES.items()
+        )
+        raise argparse.ArgumentTypeError(
+            f"unsupported preference; expected one of: {allowed}"
+        )
+    return dimension, preferred
+
+
+def _preferences(args: argparse.Namespace) -> dict[str, str]:
+    return dict(args.prefer)
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    with Path(path).open("r", encoding="utf-8") as file:
+        payload = json.load(file)
+    if not isinstance(payload, dict):
+        raise ValueError("JW bundle root must be an object")
+    return payload
+
+
+def _course_entries(client: Any, search_text: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for result in client.search(search_text):
+        if result.get("kind") == "course" and isinstance(result.get("sourceUrl"), str):
+            entries.append(client.get_course(result["sourceUrl"]))
+    return entries
+
+
+def _rank_with_evidence(
+    entries: list[dict[str, Any]], preferences: dict[str, str]
+) -> list[dict[str, Any]]:
+    ranked = rank_entries(entries, preferences)
+    for entry in ranked:
+        entry["selectedEvidence"] = select_evidence(entry)
+    return ranked
+
+
+def _query_teacher(name: str, client: Any) -> list[dict[str, Any]]:
+    profiles: list[dict[str, Any]] = []
+    search_results = client.search(name)
+    for result in search_results:
+        if result.get("kind") == "teacher" and isinstance(result.get("sourceUrl"), str):
+            profiles.append(client.get_teacher(result["sourceUrl"]))
+    if profiles:
+        return profiles
+
+    wanted = "".join(name.split()).casefold()
+    seen_urls: set[str] = set()
+    inspected = 0
+    for result in search_results:
+        if result.get("kind") != "course" or not isinstance(result.get("sourceUrl"), str):
+            continue
+        if wanted not in "".join(str(result.get("label") or "").split()).casefold():
+            continue
+        course = client.get_course(result["sourceUrl"])
+        inspected += 1
+        for teacher in course.get("teacherLinks", []):
+            if not isinstance(teacher, dict):
+                continue
+            label = "".join(str(teacher.get("label") or "").split()).casefold()
+            url = teacher.get("sourceUrl")
+            if label == wanted and isinstance(url, str) and url not in seen_urls:
+                seen_urls.add(url)
+                profiles.append(client.get_teacher(url))
+        if profiles or inspected >= 5:
+            break
+    return profiles
+
+
+def _query_jw(
+    offerings: list[dict[str, Any]],
+    client: Any,
+    preferences: dict[str, str],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for offering in offerings:
+        try:
+            candidates = _course_entries(client, offering["title"])
+            for candidate in candidates:
+                candidate["relationStrength"] = relation_strength(offering, candidate)
+            results.append(
+                {
+                    "offering": offering,
+                    "status": "matched" if candidates else "not_found",
+                    "candidates": _rank_with_evidence(candidates, preferences),
+                }
+            )
+        except (
+            public_client.IcourseNetworkError,
+            page_parser.ParseError,
+            ValueError,
+            OSError,
+        ) as exc:
+            results.append(
+                {
+                    "offering": offering,
+                    "status": "failed",
+                    "error": str(exc),
+                    "candidates": [],
+                }
+            )
+    return results
+
+
+def _count_stale(value: Any) -> int:
+    if isinstance(value, dict):
+        own = int(
+            bool(isinstance(value.get("cache"), dict) and value["cache"].get("stale"))
+        )
+        return own + sum(_count_stale(item) for item in value.values())
+    if isinstance(value, list):
+        return sum(_count_stale(item) for item in value)
+    return 0
+
+
+def build_client(cache_dir: Path, timeout_seconds: float) -> public_client.PublicIcourseClient:
+    return public_client.PublicIcourseClient(
+        cache=public_client.JsonPageCache(cache_dir),
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def run_query(
+    args: argparse.Namespace,
+    *,
+    client: Any | None = None,
+) -> dict[str, Any]:
+    preferences = _preferences(args)
+    input_event_count = None
+    if args.jw_bundle is not None:
+        bundle = _load_json(args.jw_bundle)
+        events = bundle.get("calendarEvents")
+        input_event_count = len(events) if isinstance(events, list) else None
+        offerings = group_jw_offerings(bundle)
+        if args.group_only:
+            mode = "jw_group_only"
+            results = offerings
+        else:
+            if client is None:
+                client = build_client(args.cache_dir, args.timeout_seconds)
+            mode = "jw_bundle"
+            results = _query_jw(offerings, client, preferences)
+    elif args.course is not None:
+        if client is None:
+            client = build_client(args.cache_dir, args.timeout_seconds)
+        mode = "course"
+        results = _rank_with_evidence(
+            _course_entries(client, args.course), preferences
+        )
+    else:
+        if client is None:
+            client = build_client(args.cache_dir, args.timeout_seconds)
+        mode = "teacher"
+        results = _query_teacher(args.teacher, client)
+
+    return {
+        "schemaVersion": "1.0",
+        "source": SOURCE_NAME,
+        "generatedAt": datetime.now(BEIJING_TZ).isoformat(timespec="seconds"),
+        "query": {
+            "mode": mode,
+            "value": args.course
+            or args.teacher
+            or (str(args.jw_bundle) if args.jw_bundle else None),
+            "preferences": preferences,
+        },
+        "metadata": {
+            "resultCount": len(results),
+            "staleEntryCount": _count_stale(results),
+            "inputEventCount": input_event_count,
+        },
+        "results": results,
+    }
