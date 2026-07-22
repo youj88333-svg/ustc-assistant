@@ -1,0 +1,1 @@
+"""USTC second-classroom integration."""
