@@ -1,32 +1,16 @@
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
+from playwright.sync_api import Error as PlaywrightError
+from ustc_assistant.sources.jw import collector
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "scripts" / "ustc_jw_collector.py"
-
-
-def load_collector_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("ustc_jw_collector", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-collector = load_collector_module()
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeResponse:
@@ -121,6 +105,7 @@ class FakeBrowserContext:
     def __init__(self, page: FakePage, request: FakeRequestContext):
         self.pages = [page]
         self.request = request
+        page.context = self
         self.closed = False
 
     def close(self):
@@ -415,7 +400,7 @@ class BrowserBoundaryTests(unittest.TestCase):
     def test_playwright_error_is_sanitized(self):
         class FailingChromium:
             def launch_persistent_context(self, user_data_dir, **kwargs):
-                raise collector.PlaywrightError(
+                raise PlaywrightError(
                     "navigation failed at ?dataId=context-secret"
                 )
 

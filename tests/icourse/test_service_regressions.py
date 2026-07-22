@@ -1,28 +1,8 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 import unittest
-from pathlib import Path
 
-
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "scripts" / "icourse_public_query.py"
-
-
-def load_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("icourse_public_query", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-query = load_module()
+from ustc_assistant.sources.icourse import service as query
 
 
 def event(event_id, lesson_id, title, teachers, event_type="course"):

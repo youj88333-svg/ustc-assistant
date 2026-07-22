@@ -11,7 +11,7 @@ RECORD = {
     "startTime": "2026-07-22 08:00:00",
     "endTime": "2026-07-22 09:00:00",
     "place": "campus",
-    "content": "<p>note</p>",
+    "content": "<p>First &amp; second<br>line</p>",
     "userId": "private-user",
 }
 
@@ -42,7 +42,11 @@ class ScheduleServiceTests(unittest.TestCase):
                 "descriptionText",
             },
         )
-        self.assertEqual(normalized["schedules"][0]["descriptionText"], "note")
+        item = normalized["schedules"][0]
+        self.assertEqual(item["startsAt"], "2026-07-22T08:00:00+08:00")
+        self.assertEqual(item["endsAt"], "2026-07-22T09:00:00+08:00")
+        self.assertEqual(item["descriptionText"], "First & second\nline")
+        self.assertNotIn("userId", item)
 
 
 if __name__ == "__main__":

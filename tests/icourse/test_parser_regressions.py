@@ -1,32 +1,16 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import unittest
 from pathlib import Path
 
+from ustc_assistant.sources.icourse import parser
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "scripts" / "icourse_public_parser.py"
-
-
-def load_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("icourse_public_parser", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-parser = load_module()
-SEARCH_HTML = (ROOT / "examples" / "icourse-search.sample.html").read_text(encoding="utf-8")
-COURSE_HTML = (ROOT / "examples" / "icourse-course.sample.html").read_text(encoding="utf-8")
-TEACHER_HTML = (ROOT / "examples" / "icourse-teacher.sample.html").read_text(encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURES = ROOT / "tests" / "fixtures" / "icourse"
+SEARCH_HTML = (FIXTURES / "search.html").read_text(encoding="utf-8")
+COURSE_HTML = (FIXTURES / "course.html").read_text(encoding="utf-8")
+TEACHER_HTML = (FIXTURES / "teacher.html").read_text(encoding="utf-8")
 
 
 class ModuleContractTests(unittest.TestCase):

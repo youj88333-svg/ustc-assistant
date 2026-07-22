@@ -1,6 +1,10 @@
+import json
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from ustc_assistant import cli
 from ustc_assistant.common import browser, storage
@@ -67,6 +71,94 @@ class PackageEntryTests(unittest.TestCase):
 
     def test_icourse_service_exposes_app_callable_query_runner(self):
         self.assertTrue(callable(icourse_service.run_query))
+
+
+class CollectorCommandTests(unittest.TestCase):
+    def test_jw_command_writes_bundle_and_optional_raw_sources(self):
+        bundle = {
+            "calendarEvents": [{"id": "event-1"}],
+            "sourceRecords": [{"id": "source-1"}],
+            "scheduleRelations": [],
+        }
+        sources = SimpleNamespace(
+            course_datum={"result": {"lessonList": []}},
+            exam_html='<table id="exams"></table>',
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                [
+                    "collect",
+                    "jw",
+                    "--output",
+                    str(root / "bundle.json"),
+                    "--save-raw",
+                    "--raw-dir",
+                    str(root / "private"),
+                ]
+            )
+            with patch.object(cli.jw, "collect_jw_bundle", return_value=(bundle, sources)):
+                self.assertEqual(0, args.handler(args, lambda _: None))
+
+            self.assertEqual(bundle, json.loads((root / "bundle.json").read_text(encoding="utf-8")))
+            self.assertTrue((root / "private" / "course-datum.raw.json").exists())
+            self.assertTrue((root / "private" / "exam-arrange.raw.html").exists())
+
+    def test_young_enrolment_command_defaults_to_normalized_output_only(self):
+        normalized = {
+            "activities": [{"sourceActivityId": "activity-1"}],
+            "metadata": {"pages": 1},
+        }
+        raw = SimpleNamespace(records=({"id": "activity-1", "userId": "private"},))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                ["collect", "young-enrolment", "--output", str(root / "out.json")]
+            )
+            with patch.object(
+                cli.enrolment,
+                "collect_enrolment_snapshot",
+                return_value=(normalized, raw),
+            ):
+                self.assertEqual(0, args.handler(args, lambda _: None))
+
+            self.assertEqual(normalized, json.loads((root / "out.json").read_text(encoding="utf-8")))
+            self.assertFalse((root / "private").exists())
+
+    def test_young_schedule_command_passes_today_and_saves_named_raw_file(self):
+        normalized = {
+            "schedules": [{"sourceScheduleId": "schedule-1"}],
+            "metadata": {"queriedDates": 1},
+        }
+        raw = SimpleNamespace(records=({"id": "schedule-1", "userId": "private"},))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                [
+                    "collect",
+                    "young-schedule",
+                    "--today",
+                    "2026-07-22",
+                    "--output",
+                    str(root / "out.json"),
+                    "--save-raw",
+                    "--raw-dir",
+                    str(root / "private"),
+                ]
+            )
+            with patch.object(
+                cli.schedule,
+                "collect_schedule_snapshot",
+                return_value=(normalized, raw),
+            ) as collect:
+                self.assertEqual(0, args.handler(args, lambda _: None))
+
+            self.assertEqual(date(2026, 7, 22), collect.call_args.kwargs["today"])
+            raw_path = root / "private" / "ustc-young-my-schedule.raw.json"
+            self.assertEqual("private", json.loads(raw_path.read_text(encoding="utf-8"))["records"][0]["userId"])
 
 
 class CommonStorageTests(unittest.TestCase):

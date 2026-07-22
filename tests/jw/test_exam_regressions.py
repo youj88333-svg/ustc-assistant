@@ -1,30 +1,13 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import unittest
 from pathlib import Path
 
+from ustc_assistant.sources.jw import exam as parser
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "scripts" / "convert_ustc_jw_exam_html.py"
-SAMPLE_PATH = ROOT / "examples" / "ustc-jw-exam-page.sample.html"
-
-
-def load_parser_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("convert_ustc_jw_exam_html", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-parser = load_parser_module()
+ROOT = Path(__file__).resolve().parents[2]
+SAMPLE_PATH = ROOT / "tests" / "fixtures" / "jw" / "exam-page.html"
 
 
 HEADERS = """

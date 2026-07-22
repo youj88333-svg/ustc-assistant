@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,13 +20,6 @@ PACKAGE_KEYS = ("calendarEvents", "sourceRecords", "scheduleRelations")
 def load_json(path: Path) -> Any:
     with path.open("r", encoding="utf-8") as file:
         return json.load(file)
-
-
-def dump_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-        file.write("\n")
 
 
 def _validate_package(package: dict[str, Any], source_name: str) -> None:
@@ -159,58 +151,3 @@ def import_sources(
         raise ValueError("at least one input source is required")
 
     return merge_packages(packages, user_id, included_sources)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Merge saved USTC JW course/exam captures into one JSON bundle."
-    )
-    parser.add_argument(
-        "--course-datum",
-        type=Path,
-        help="Path to a saved course-table datum JSON file.",
-    )
-    parser.add_argument(
-        "--exam-html",
-        type=Path,
-        help="Path to a saved exam-arrangement HTML file.",
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        type=Path,
-        default=Path("tmp/ustc-jw-import.generated.json"),
-        help="Path to write the merged import bundle.",
-    )
-    parser.add_argument(
-        "--semester-key",
-        default="2026spring",
-        help="Stable product-side semester key used by source converters.",
-    )
-    parser.add_argument(
-        "--user-id",
-        default="user_sample",
-        help="Local user id to place in generated objects.",
-    )
-    return parser.parse_args()
-
-
-def main() -> None:
-    args = parse_args()
-    result = import_sources(
-        course_datum_path=args.course_datum,
-        exam_html_path=args.exam_html,
-        semester_key=args.semester_key,
-        user_id=args.user_id,
-    )
-    dump_json(args.output, result)
-    print(
-        f"imported {len(result['calendarEvents'])} events, "
-        f"{len(result['sourceRecords'])} source records, "
-        f"{len(result['scheduleRelations'])} schedule relations "
-        f"-> {args.output}"
-    )
-
-
-if __name__ == "__main__":
-    main()

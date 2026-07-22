@@ -8,12 +8,10 @@ chosen.
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 from collections import Counter, OrderedDict
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 
@@ -21,47 +19,6 @@ TZ_OFFSET = "+08:00"
 TIMEZONE = "Asia/Shanghai"
 SOURCE = "ustc_jw"
 SOURCE_SYSTEM = "jw.ustc.edu.cn"
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Convert USTC JW datum JSON to CalendarEvent-style JSON."
-    )
-    parser.add_argument(
-        "--input",
-        "-i",
-        default="examples/ustc-jw-datum.sample.json",
-        help="Path to datum JSON input.",
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        default="tmp/calendar-events.generated.json",
-        help="Path to converted JSON output.",
-    )
-    parser.add_argument(
-        "--semester-key",
-        default="2026spring",
-        help="Stable product-side semester key used in externalId.",
-    )
-    parser.add_argument(
-        "--user-id",
-        default="user_sample",
-        help="User id to place in generated objects.",
-    )
-    return parser.parse_args()
-
-
-def load_json(path: Path) -> Any:
-    with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def dump_json(path: Path, data: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.write("\n")
 
 
 def hhmm(value: Any) -> str:
@@ -411,21 +368,3 @@ def convert(data: dict[str, Any], semester_key: str, user_id: str) -> dict[str, 
 
 
 convert_course = convert
-
-
-def main() -> None:
-    args = parse_args()
-    data = load_json(Path(args.input))
-    converted = convert(data, args.semester_key, args.user_id)
-    dump_json(Path(args.output), converted)
-    print(
-        "converted "
-        f"{len(converted['calendarEvents'])} events, "
-        f"{len(converted['sourceRecords'])} source records, "
-        f"{len(converted['scheduleRelations'])} schedule relations "
-        f"-> {args.output}"
-    )
-
-
-if __name__ == "__main__":
-    main()

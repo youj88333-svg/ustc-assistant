@@ -1,34 +1,15 @@
 from __future__ import annotations
 
-import importlib.util
 import os
-import sys
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
+from ustc_assistant.sources.young import schedule as collector
 
-ROOT = Path(__file__).resolve().parents[1]
-MODULE_PATH = ROOT / "scripts" / "ustc_young_schedule_collector.py"
-
-
-def load_collector_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location(
-        "ustc_young_schedule_collector", MODULE_PATH
-    )
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-collector = load_collector_module()
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class FakeRequest:

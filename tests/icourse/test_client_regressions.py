@@ -1,35 +1,16 @@
 from __future__ import annotations
 
-import importlib.util
 import json
-import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+from ustc_assistant.sources.icourse import client as client_module
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPTS = ROOT / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
-MODULE_PATH = SCRIPTS / "icourse_public_client.py"
-
-
-def load_module():
-    if not MODULE_PATH.exists():
-        return None
-    spec = importlib.util.spec_from_file_location("icourse_public_client", MODULE_PATH)
-    if spec is None or spec.loader is None:
-        return None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-client_module = load_module()
+ROOT = Path(__file__).resolve().parents[2]
+FIXTURES = ROOT / "tests" / "fixtures" / "icourse"
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
 URL = "https://icourse.club/course/100/"
 
@@ -71,7 +52,7 @@ class HttpClientTests(unittest.TestCase):
     def test_search_retries_once_with_new_one_time_token(self):
         session = FakeSession(
             tokens=[FakeResponse(payload={"ok": True, "token": "old"}), FakeResponse(payload={"ok": True, "token": "new"})],
-            searches=[FakeResponse(status_code=403), FakeResponse(text=(ROOT / "examples" / "icourse-search.sample.html").read_text(encoding="utf-8"))],
+            searches=[FakeResponse(status_code=403), FakeResponse(text=(FIXTURES / "search.html").read_text(encoding="utf-8"))],
         )
         client = client_module.PublicIcourseClient(session=session, sleep=lambda _: None)
 

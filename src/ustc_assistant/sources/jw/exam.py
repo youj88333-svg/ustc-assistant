@@ -3,14 +3,11 @@
 
 from __future__ import annotations
 
-import argparse
 import hashlib
-import json
 import re
 from dataclasses import dataclass, fields
 from datetime import datetime
 from html.parser import HTMLParser
-from pathlib import Path
 from typing import Any
 
 
@@ -281,54 +278,3 @@ def convert(html_text: str, semester_key: str, user_id: str) -> dict[str, Any]:
 
 
 convert_exam = convert
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Convert a saved USTC JW exam HTML page to calendar JSON."
-    )
-    parser.add_argument(
-        "--input",
-        "-i",
-        default="examples/ustc-jw-exam-page.sample.html",
-        help="Path to a correctly decoded UTF-8 exam HTML file.",
-    )
-    parser.add_argument(
-        "--output",
-        "-o",
-        default="tmp/exam-events.generated.json",
-        help="Path to converted JSON output.",
-    )
-    parser.add_argument(
-        "--semester-key",
-        default="2026spring",
-        help="Stable product-side semester key used in externalId.",
-    )
-    parser.add_argument(
-        "--user-id",
-        default="user_sample",
-        help="User id to place in generated objects.",
-    )
-    return parser.parse_args()
-
-
-def dump_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="\n") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-
-
-def main() -> None:
-    args = parse_args()
-    html_text = Path(args.input).read_text(encoding="utf-8")
-    result = convert(html_text, args.semester_key, args.user_id)
-    dump_json(Path(args.output), result)
-    print(
-        f"converted {len(result['calendarEvents'])} events, "
-        f"{len(result['sourceRecords'])} source records -> {args.output}"
-    )
-
-
-if __name__ == "__main__":
-    main()

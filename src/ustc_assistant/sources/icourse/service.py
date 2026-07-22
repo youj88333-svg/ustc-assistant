@@ -354,6 +354,9 @@ def run_query(
     *,
     client: Any | None = None,
 ) -> dict[str, Any]:
+    if args.group_only and args.jw_bundle is None:
+        raise ValueError("--group-only requires --jw-bundle")
+
     preferences = _preferences(args)
     input_event_count = None
     if args.jw_bundle is not None:
