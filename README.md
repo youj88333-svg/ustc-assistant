@@ -20,6 +20,8 @@ python -m ustc_assistant collect young-schedule
 python -m ustc_assistant query icourse --jw-bundle tmp/ustc-jw-import.generated.json
 ```
 
+教务联动评课社区会把课程名称作为检索词发送给公开网站 `icourse.club`，但不会发送完整课表、时间、地点、用户 ID 或登录信息。首次使用前应确认这一隐私影响；仅需本地检查课程分组时可增加 `--group-only`，该模式不会联网。
+
 默认输出分别位于：
 
 - `tmp/ustc-jw-import.generated.json`
