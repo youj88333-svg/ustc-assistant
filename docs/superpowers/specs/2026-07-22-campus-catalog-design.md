@@ -93,13 +93,13 @@ stale
 ```text
 refresh_catalogs(sources=None, force=False)
 search_catalog(query, filters=None, limit=20)
-read_detail(entry_id, allow_stale=True)
+read_detail(entry_id, allow_stale=True, follow_link_ids=None)
 read_attachment(item_id, attachment_id)
 ```
 
 未来 Agent 只获得后三种受控工具，不获得通用 HTTP 请求工具。一次推理先自主选择最多 3 个详情条目；证据不足时可以再读取一批。候选存在歧义时也由 Agent 自主判断，不要求用户逐条选择。
 
-`read_detail()` 只接受本地目录中存在的 `entry_id`。附件必须由已读取详情页直接引用。普通外链默认不跟随；仅当详情明确将关键内容放在该链接中且当前内容不足时，允许跟进一层。
+`read_detail()` 只接受本地目录中存在的 `entry_id`。首次读取返回带稳定 ID 的候选关键链接；Agent 只能通过 `follow_link_ids` 选择这些已发现 ID，不能提交 URL。附件必须由已读取详情页直接引用。普通外链默认不跟随；仅当详情明确将关键内容放在该链接中且当前内容不足时，允许跟进一层。
 
 ## 7. 数据流与缓存
 
