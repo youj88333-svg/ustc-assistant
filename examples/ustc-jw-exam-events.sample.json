@@ -1,0 +1,145 @@
+{
+  "calendarEvents": [
+    {
+      "id": "event_exam_82f0d3a70da61a23a03d6875",
+      "userId": "user_sample",
+      "title": "数据结构 & 算法（示例）（期末考试）",
+      "type": "exam",
+      "status": "active",
+      "startAt": "2026-06-22T08:30:00+08:00",
+      "endAt": "2026-06-22T10:30:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "locationName": "A101",
+      "buildingName": "示例第一教学楼",
+      "campusName": "示例东区",
+      "source": "ustc_jw",
+      "sourceRecordId": "source_exam_82f0d3a70da61a23a03d6875",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE1001.01:期末考试",
+      "confidence": "high",
+      "importance": "critical",
+      "attendancePolicy": "must_go",
+      "attendanceDecision": "go",
+      "attendanceDecisionAt": null,
+      "attendanceNote": "考试默认必须到场",
+      "attendanceOutcome": "unknown",
+      "listeningMode": "unknown",
+      "listeningNote": null,
+      "tags": [
+        "exam",
+        "期末考试"
+      ],
+      "participants": [],
+      "metadata": {
+        "courseCode": "SAMPLE1001.01",
+        "examType": "期末考试",
+        "examNote": null
+      }
+    },
+    {
+      "id": "event_exam_424613a3ad2fef75c66e5775",
+      "userId": "user_sample",
+      "title": "概率论（示例）（期末考试）",
+      "type": "exam",
+      "status": "active",
+      "startAt": "2026-06-22T14:30:00+08:00",
+      "endAt": "2026-06-22T16:30:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "locationName": "B202",
+      "buildingName": "示例第二教学楼",
+      "campusName": "示例西区",
+      "source": "ustc_jw",
+      "sourceRecordId": "source_exam_424613a3ad2fef75c66e5775",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE2002.02:期末考试",
+      "confidence": "high",
+      "importance": "critical",
+      "attendancePolicy": "must_go",
+      "attendanceDecision": "go",
+      "attendanceDecisionAt": null,
+      "attendanceNote": "考试默认必须到场",
+      "attendanceOutcome": "unknown",
+      "listeningMode": "unknown",
+      "listeningNote": null,
+      "tags": [
+        "exam",
+        "期末考试"
+      ],
+      "participants": [],
+      "metadata": {
+        "courseCode": "SAMPLE2002.02",
+        "examType": "期末考试",
+        "examNote": "允许携带一张手写资料"
+      }
+    },
+    {
+      "id": "event_exam_702b9ff8a4d5019afaa74b45",
+      "userId": "user_sample",
+      "title": "程序设计实践（示例）（阶段考试）",
+      "type": "exam",
+      "status": "active",
+      "startAt": "2026-06-25T19:00:00+08:00",
+      "endAt": "2026-06-25T21:00:00+08:00",
+      "timezone": "Asia/Shanghai",
+      "locationName": "机房 C303",
+      "buildingName": "示例实验楼",
+      "campusName": "示例南区",
+      "source": "ustc_jw",
+      "sourceRecordId": "source_exam_702b9ff8a4d5019afaa74b45",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE3003.03:阶段考试",
+      "confidence": "high",
+      "importance": "critical",
+      "attendancePolicy": "must_go",
+      "attendanceDecision": "go",
+      "attendanceDecisionAt": null,
+      "attendanceNote": "考试默认必须到场",
+      "attendanceOutcome": "unknown",
+      "listeningMode": "unknown",
+      "listeningNote": null,
+      "tags": [
+        "exam",
+        "阶段考试"
+      ],
+      "participants": [],
+      "metadata": {
+        "courseCode": "SAMPLE3003.03",
+        "examType": "阶段考试",
+        "examNote": "上机考试"
+      }
+    }
+  ],
+  "sourceRecords": [
+    {
+      "id": "source_exam_82f0d3a70da61a23a03d6875",
+      "userId": "user_sample",
+      "source": "ustc_jw",
+      "sourceSystem": "jw.ustc.edu.cn",
+      "sourceType": "jw_exam",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE1001.01:期末考试",
+      "fingerprint": "131919f640e9e36615ab68fa15fb18633a930a9f611b95f8b6ad388f63a78ede",
+      "rawSummary": "courseCode=SAMPLE1001.01, examType=期末考试, one exam table row",
+      "status": "active"
+    },
+    {
+      "id": "source_exam_424613a3ad2fef75c66e5775",
+      "userId": "user_sample",
+      "source": "ustc_jw",
+      "sourceSystem": "jw.ustc.edu.cn",
+      "sourceType": "jw_exam",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE2002.02:期末考试",
+      "fingerprint": "c1c18448ab23c1c150e45609346a7ca3be371c2b43354868d15aceb456efcda6",
+      "rawSummary": "courseCode=SAMPLE2002.02, examType=期末考试, one exam table row",
+      "status": "active"
+    },
+    {
+      "id": "source_exam_702b9ff8a4d5019afaa74b45",
+      "userId": "user_sample",
+      "source": "ustc_jw",
+      "sourceSystem": "jw.ustc.edu.cn",
+      "sourceType": "jw_exam",
+      "externalId": "ustc_jw:exam:2026spring:SAMPLE3003.03:阶段考试",
+      "fingerprint": "e6145fee2dbc8dadc9fd2da789a0cafc8a6808290deac8218e9b9d7637305552",
+      "rawSummary": "courseCode=SAMPLE3003.03, examType=阶段考试, one exam table row",
+      "status": "active"
+    }
+  ],
+  "scheduleRelations": []
+}

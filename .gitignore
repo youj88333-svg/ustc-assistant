@@ -1,0 +1,29 @@
+# Sensitive capture data and generated output
+temp.md
+tmp/
+private/
+*.raw.json
+*.raw.html
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+.venv/
+venv/
+
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# IDE and operating system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

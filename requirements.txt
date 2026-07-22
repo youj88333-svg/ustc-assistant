@@ -1,0 +1,6 @@
+# Browser automation for the USTC JW collection prototype.
+playwright>=1.50,<2
+
+# Public, read-only USTC iCourse query prototype.
+requests>=2.31,<3
+beautifulsoup4>=4.12,<5
