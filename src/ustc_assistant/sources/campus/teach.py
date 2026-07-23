@@ -21,7 +21,8 @@ from ustc_assistant.sources.campus.catalog import (
 
 
 DATE_PATTERN = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
-DETAIL_PATH_PATTERN = re.compile(r"^/(?:notice|service)/.+\.html$")
+NOTICE_PATH_PATTERN = re.compile(r"^/notice/.+\.html$")
+GUIDE_PATH_PATTERN = re.compile(r"^/service/svc-student/.+\.html$")
 EMPTY_MARKERS = (".no-results", ".wp-block-query-no-results", ".empty")
 EXPLICIT_LINK_PATTERN = re.compile(r"详情见|具体办法|点击查看|参见")
 ATTACHMENT_MEDIA_TYPES = {
@@ -93,9 +94,16 @@ def parse_teach_catalog(
     soup = BeautifulSoup(html, "html.parser")
     entries: list[CatalogEntry] = []
     seen: set[str] = set()
-    for anchor in soup.find_all("a", href=True):
+    roots = soup.select("ul.article-list")
+    anchors = [
+        anchor
+        for root in roots
+        for anchor in root.find_all("a", href=True)
+    ] if roots else soup.find_all("a", href=True)
+    path_pattern = NOTICE_PATH_PATTERN if kind == "notice" else GUIDE_PATH_PATTERN
+    for anchor in anchors:
         absolute = canonicalize_url(urljoin(base_url, str(anchor["href"])))
-        if not DETAIL_PATH_PATTERN.match(urlsplit(absolute).path):
+        if not path_pattern.match(urlsplit(absolute).path):
             continue
         title = _collapse(anchor.get_text(" ", strip=True))
         if not title:
@@ -134,9 +142,10 @@ def _linked_id(prefix: str, url: str) -> str:
 
 def parse_teach_detail(html: str, url: str) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
-    title_node = soup.find("h1")
+    title_node = soup.select_one(".single-title h1, h1")
     content_node = soup.select_one(
-        ".entry-content, .article-content, .post-content, #content .entry-content"
+        ".entry-content, .article-content, .post-content, "
+        "#content .entry-content, main.single > article"
     )
     if title_node is None or content_node is None:
         raise CampusParseError("teach detail page did not contain expected content")

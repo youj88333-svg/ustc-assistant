@@ -121,6 +121,20 @@ class HttpBoundaryTests(unittest.TestCase):
         with self.assertRaises(UnsafeCampusUrl):
             client.get_text("https://www.teach.ustc.edu.cn/page")
 
+    def test_configured_finance_host_may_downgrade_only_after_https_request(self):
+        response = FakeResponse(
+            url="http://finance.ustc.edu.cn/ywzn/list2.psp",
+            body="公开指南目录".encode(),
+        )
+        client = CampusHttpClient(session=FakeSession([response]))
+
+        self.assertEqual(
+            "公开指南目录",
+            client.get_text("https://finance.ustc.edu.cn/ywzn/list2.htm"),
+        )
+        with self.assertRaises(UnsafeCampusUrl):
+            client.get_text("http://finance.ustc.edu.cn/ywzn/list2.psp")
+
 
 class DetailCacheTests(unittest.TestCase):
     def test_fresh_cache_skips_fetch(self):

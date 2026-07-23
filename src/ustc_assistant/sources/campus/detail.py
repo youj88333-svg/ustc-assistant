@@ -55,13 +55,23 @@ class DetailCacheResult:
     stale: bool = False
 
 
-def _validate_url(url: str, *, discovered_child: bool) -> str:
+def _validate_url(
+    url: str,
+    *,
+    discovered_child: bool,
+    allow_primary_http: bool = False,
+) -> str:
     split = urlsplit(url.strip())
-    if split.scheme.lower() != "https" or not split.hostname:
-        raise UnsafeCampusUrl("campus URL must use public HTTPS")
+    if not split.hostname:
+        raise UnsafeCampusUrl("campus URL must include a public host")
     if split.username or split.password:
         raise UnsafeCampusUrl("campus URL credentials are not allowed")
     host = split.hostname.lower()
+    scheme = split.scheme.lower()
+    if scheme != "https" and not (
+        allow_primary_http and scheme == "http" and host in PRIMARY_HOSTS
+    ):
+        raise UnsafeCampusUrl("campus URL must use public HTTPS")
     if host == "localhost" or host.endswith(".local"):
         raise UnsafeCampusUrl("campus URL host is not public")
     try:
@@ -121,6 +131,7 @@ class CampusHttpClient:
             final_url = _validate_url(
                 str(response.url),
                 discovered_child=discovered_child,
+                allow_primary_http=True,
             )
             if response.status_code >= 400:
                 host = urlsplit(final_url).hostname or "configured host"

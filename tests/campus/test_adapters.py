@@ -107,6 +107,7 @@ class FinanceCatalogTests(unittest.TestCase):
         self.assertEqual(2, len(page.entries))
         self.assertEqual("2025-05-19", page.entries[0].published_at)
         self.assertIsNone(page.entries[1].published_at)
+        self.assertIsNone(page.next_url)
 
     def test_rejects_unrecognized_nonempty_page(self):
         with self.assertRaises(CampusError):
@@ -136,6 +137,26 @@ class DetailParserTests(unittest.TestCase):
         self.assertEqual("explicit-reference", result["candidateLinks"][0]["reason"])
         self.assertTrue(result["candidateLinks"][0]["id"].startswith("link_"))
 
+    def test_teach_detail_accepts_direct_wordpress_article_body(self):
+        html = """
+        <div class="wrapper common-title single-title"><h1>选课指南</h1></div>
+        <main class="single">
+          <article class="post type-post">
+            <p>正文直接位于文章节点。</p>
+            <table><tr><td>办理步骤</td></tr></table>
+          </article>
+        </main>
+        """
+
+        result = teach.parse_teach_detail(
+            html,
+            "https://www.teach.ustc.edu.cn/service/svc-student/300.html",
+        )
+
+        self.assertEqual("选课指南", result["title"])
+        self.assertIn("正文直接位于文章节点", result["content"])
+        self.assertIn("办理步骤", result["content"])
+
     def test_finance_detail_extracts_binary_attachment_descriptor(self):
         result = finance.parse_finance_detail(
             fixture("finance-detail.html"),
@@ -149,6 +170,48 @@ class DetailParserTests(unittest.TestCase):
             result["attachments"][0]["mediaType"],
         )
         self.assertEqual(1, len(result["candidateLinks"]))
+
+    def test_finance_detail_extracts_embedded_pdf_player(self):
+        html = """
+        <div class="article">
+          <h1 class="arti_title">财务报销指南</h1>
+          <div class="entry">
+            <div class="wp_articlecontent">
+              <div
+                class="wp_pdf_player"
+                pdfsrc="/_upload/article/files/guide.pdf"
+                sudyfile-attr="{'title':'财务报销指南.pdf'}"
+              ></div>
+            </div>
+          </div>
+        </div>
+        """
+
+        result = finance.parse_finance_detail(
+            html,
+            "https://finance.ustc.edu.cn/2024/0606/c21813a1/page.htm",
+        )
+
+        self.assertEqual("", result["content"])
+        self.assertEqual(1, len(result["attachments"]))
+        self.assertEqual("application/pdf", result["attachments"][0]["mediaType"])
+        self.assertEqual("财务报销指南.pdf", result["attachments"][0]["label"])
+        self.assertEqual(
+            "https://finance.ustc.edu.cn/_upload/article/files/guide.pdf",
+            result["attachments"][0]["url"],
+        )
+
+    def test_finance_detail_rejects_empty_content_without_resources(self):
+        html = """
+        <h1>空白指南</h1>
+        <div class="wp_articlecontent"><p></p></div>
+        """
+
+        with self.assertRaises(CampusError):
+            finance.parse_finance_detail(
+                html,
+                "https://finance.ustc.edu.cn/2024/0606/c21813a1/page.htm",
+            )
 
     def test_missing_detail_content_fails_loudly(self):
         with self.assertRaises(CampusError):

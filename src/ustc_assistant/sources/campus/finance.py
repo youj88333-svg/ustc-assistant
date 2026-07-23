@@ -24,6 +24,7 @@ DATE_PATTERN = re.compile(r"\b(20\d{2}-\d{2}-\d{2})\b")
 DETAIL_PATH_PATTERN = re.compile(r"/page\.htm$")
 EMPTY_MARKERS = (".no-results", ".wp-block-query-no-results", ".empty")
 EXPLICIT_LINK_PATTERN = re.compile(r"详情见|具体办法|点击查看|参见")
+SUDY_TITLE_PATTERN = re.compile(r"""['"]title['"]\s*:\s*['"]([^'"]+)['"]""")
 ATTACHMENT_MEDIA_TYPES = {
     ".pdf": "application/pdf",
     ".doc": "application/msword",
@@ -86,7 +87,12 @@ def _next_url(soup: BeautifulSoup, base_url: str) -> str | None:
             ),
             None,
         )
-    return urljoin(base_url, str(candidate["href"])) if candidate else None
+    if candidate is None:
+        return None
+    href = str(candidate["href"]).strip()
+    if not href or href.startswith(("javascript:", "#")):
+        return None
+    return urljoin(base_url, href)
 
 
 def parse_finance_catalog(
@@ -100,7 +106,13 @@ def parse_finance_catalog(
     soup = BeautifulSoup(html, "html.parser")
     entries: list[CatalogEntry] = []
     seen: set[str] = set()
-    for anchor in soup.find_all("a", href=True):
+    roots = soup.select("ul.news_list")
+    anchors = [
+        anchor
+        for root in roots
+        for anchor in root.find_all("a", href=True)
+    ] if roots else soup.find_all("a", href=True)
+    for anchor in anchors:
         absolute = canonicalize_url(urljoin(base_url, str(anchor["href"])))
         if not DETAIL_PATH_PATTERN.search(urlsplit(absolute).path):
             continue
@@ -168,6 +180,22 @@ def parse_finance_detail(html: str, url: str) -> dict[str, Any]:
                 }
             )
 
+    for player in content_node.select("[pdfsrc]"):
+        absolute = canonicalize_url(urljoin(url, str(player["pdfsrc"])))
+        metadata = str(player.get("sudyfile-attr", ""))
+        title_match = SUDY_TITLE_PATTERN.search(metadata)
+        label = _collapse(title_match.group(1)) if title_match else PurePosixPath(
+            urlsplit(absolute).path
+        ).name
+        attachments.append(
+            {
+                "id": _linked_id("attachment", absolute),
+                "label": label or absolute,
+                "url": absolute,
+                "mediaType": "application/pdf",
+            }
+        )
+
     images = [
         {
             "url": canonicalize_url(urljoin(url, str(image["src"]))),
@@ -175,10 +203,13 @@ def parse_finance_detail(html: str, url: str) -> dict[str, Any]:
         }
         for image in content_node.find_all("img", src=True)
     ]
+    content = _collapse(content_node.get_text(" ", strip=True))
+    if not content and not attachments and not images and not candidate_links:
+        raise CampusParseError("finance detail page content was empty")
     date_match = DATE_PATTERN.search(soup.get_text(" ", strip=True))
     return {
         "title": _collapse(title_node.get_text(" ", strip=True)),
-        "content": _collapse(content_node.get_text(" ", strip=True)),
+        "content": content,
         "publishedAt": date_match.group(1) if date_match else None,
         "url": canonicalize_url(url),
         "category": None,
