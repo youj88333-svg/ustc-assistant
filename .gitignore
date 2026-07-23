@@ -23,6 +23,7 @@ venv/
 !.env.example
 
 # IDE and operating system files
+.superpowers/
 .vscode/
 .idea/
 .DS_Store
