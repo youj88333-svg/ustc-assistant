@@ -137,6 +137,7 @@ def refresh_catalogs(
     *,
     catalog_path: Path = DEFAULT_CATALOG_PATH,
     client: Any | None = None,
+    timeout_seconds: float = 20,
     now: datetime | None = None,
     today: date | None = None,
 ) -> dict[str, Any]:
@@ -148,7 +149,7 @@ def refresh_catalogs(
     checked_at = now or datetime.now(BEIJING_TZ)
     current_date = today or checked_at.astimezone(BEIJING_TZ).date()
     store = CatalogStore(Path(catalog_path))
-    http = client or CampusHttpClient()
+    http = client or CampusHttpClient(timeout_seconds=timeout_seconds)
     results: dict[str, dict[str, Any]] = {}
 
     for name in selected:
@@ -244,13 +245,14 @@ def read_detail(
     catalog_path: Path = DEFAULT_CATALOG_PATH,
     cache_dir: Path = DEFAULT_CACHE_DIR,
     client: CampusHttpClient | None = None,
+    timeout_seconds: float = 20,
     now: datetime | None = None,
     reader: DetailReader | None = None,
 ) -> dict[str, Any]:
     active_reader = reader or _default_reader(
         catalog_path=catalog_path,
         cache_dir=cache_dir,
-        client=client,
+        client=client or CampusHttpClient(timeout_seconds=timeout_seconds),
         now=now,
     )
     return active_reader.read_detail(
@@ -267,12 +269,13 @@ def read_attachment(
     catalog_path: Path = DEFAULT_CATALOG_PATH,
     cache_dir: Path = DEFAULT_CACHE_DIR,
     client: CampusHttpClient | None = None,
+    timeout_seconds: float = 20,
     reader: DetailReader | None = None,
 ) -> dict[str, Any]:
     active_reader = reader or _default_reader(
         catalog_path=catalog_path,
         cache_dir=cache_dir,
-        client=client,
+        client=client or CampusHttpClient(timeout_seconds=timeout_seconds),
         now=None,
     )
     return active_reader.read_attachment(item_id, attachment_id)

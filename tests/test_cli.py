@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from ustc_assistant import cli
 from ustc_assistant.common import browser, storage
+from ustc_assistant.sources import campus
 from ustc_assistant.sources.icourse import service as icourse_service
 
 
@@ -71,6 +72,67 @@ class PackageEntryTests(unittest.TestCase):
 
     def test_icourse_service_exposes_app_callable_query_runner(self):
         self.assertTrue(callable(icourse_service.run_query))
+
+    def test_campus_parsers_expose_collect_query_and_read_defaults(self):
+        parser = cli.build_parser()
+
+        collect = parser.parse_args(["collect", "campus"])
+        query = parser.parse_args(["query", "campus", "--text", "缓考"])
+        read = parser.parse_args(
+            ["read", "campus", "--entry-id", "campus_abc"]
+        )
+
+        self.assertEqual(Path("tmp/campus-catalog.json"), collect.catalog_path)
+        self.assertEqual(
+            Path("tmp/campus-collection.generated.json"),
+            collect.output,
+        )
+        self.assertFalse(collect.force)
+        self.assertEqual([], collect.sources)
+        self.assertEqual(20, query.limit)
+        self.assertEqual(Path("tmp/campus-query.generated.json"), query.output)
+        self.assertTrue(read.allow_stale)
+        self.assertEqual([], read.follow_link_ids)
+        self.assertEqual(Path("tmp/campus-detail.generated.json"), read.output)
+
+    def test_campus_repeatable_and_safety_options_are_parsed(self):
+        parser = cli.build_parser()
+
+        collect = parser.parse_args(
+            [
+                "collect",
+                "campus",
+                "--source",
+                "teach_notice",
+                "--source",
+                "finance_notice",
+                "--force",
+                "--timeout-seconds",
+                "9",
+            ]
+        )
+        read = parser.parse_args(
+            [
+                "read",
+                "campus",
+                "--entry-id",
+                "campus_abc",
+                "--follow-link-id",
+                "link_1",
+                "--follow-link-id",
+                "link_2",
+                "--no-stale",
+                "--cache-dir",
+                "tmp/custom-cache",
+            ]
+        )
+
+        self.assertEqual(["teach_notice", "finance_notice"], collect.sources)
+        self.assertTrue(collect.force)
+        self.assertEqual(9, collect.timeout_seconds)
+        self.assertEqual(["link_1", "link_2"], read.follow_link_ids)
+        self.assertFalse(read.allow_stale)
+        self.assertEqual(Path("tmp/custom-cache"), read.cache_dir)
 
 
 class CollectorCommandTests(unittest.TestCase):
@@ -159,6 +221,119 @@ class CollectorCommandTests(unittest.TestCase):
             self.assertEqual(date(2026, 7, 22), collect.call_args.kwargs["today"])
             raw_path = root / "private" / "ustc-young-my-schedule.raw.json"
             self.assertEqual("private", json.loads(raw_path.read_text(encoding="utf-8"))["records"][0]["userId"])
+
+
+class CampusCommandTests(unittest.TestCase):
+    def test_collect_writes_summary_and_returns_one_on_partial_failure(self):
+        payload = {
+            "source": "ustc_campus_catalog",
+            "sources": {
+                "teach_notice": {
+                    "status": "updated",
+                    "activeCount": 2,
+                    "error": None,
+                },
+                "finance_notice": {
+                    "status": "failed",
+                    "activeCount": 0,
+                    "error": "layout changed",
+                },
+            },
+            "metadata": {"updated": 1, "skipped": 0, "failed": 1},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                [
+                    "collect",
+                    "campus",
+                    "--source",
+                    "teach_notice",
+                    "--output",
+                    str(root / "summary.json"),
+                    "--catalog-path",
+                    str(root / "catalog.json"),
+                ]
+            )
+            with patch.object(campus, "refresh_catalogs", return_value=payload) as refresh:
+                result = args.handler(args, lambda _: None)
+
+            written = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(1, result)
+        self.assertEqual(payload, written)
+        self.assertEqual(["teach_notice"], refresh.call_args.kwargs["sources"])
+
+    def test_query_writes_empty_offline_result(self):
+        payload = {
+            "source": "ustc_campus_catalog",
+            "query": "不存在",
+            "results": [],
+            "metadata": {"resultCount": 0},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                [
+                    "query",
+                    "campus",
+                    "--text",
+                    "不存在",
+                    "--output",
+                    str(root / "query.json"),
+                    "--catalog-path",
+                    str(root / "catalog.json"),
+                ]
+            )
+            with patch.object(campus, "search_catalog", return_value=payload) as search:
+                result = args.handler(args, lambda _: None)
+
+            written = json.loads((root / "query.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(0, result)
+        self.assertEqual(payload, written)
+        self.assertNotIn("client", search.call_args.kwargs)
+
+    def test_read_forwards_stale_and_candidate_link_ids(self):
+        payload = {
+            "id": "knowledge_1",
+            "title": "公开指南",
+            "content": "正文不应出现在状态消息中",
+            "stale": False,
+        }
+        statuses: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = cli.build_parser().parse_args(
+                [
+                    "read",
+                    "campus",
+                    "--entry-id",
+                    "campus_1",
+                    "--follow-link-id",
+                    "link_1",
+                    "--no-stale",
+                    "--output",
+                    str(root / "detail.json"),
+                ]
+            )
+            with patch.object(campus, "read_detail", return_value=payload) as read:
+                result = args.handler(args, statuses.append)
+
+        self.assertEqual(0, result)
+        self.assertFalse(read.call_args.kwargs["allow_stale"])
+        self.assertEqual(["link_1"], read.call_args.kwargs["follow_link_ids"])
+        self.assertNotIn("正文不应出现在状态消息中", " ".join(statuses))
+
+    def test_main_handles_campus_error_without_traceback(self):
+        with patch.object(
+            campus,
+            "search_catalog",
+            side_effect=campus.CampusError("catalog unavailable"),
+        ):
+            result = cli.main(["query", "campus", "--text", "缓考"])
+
+        self.assertEqual(1, result)
 
 
 class CommonStorageTests(unittest.TestCase):
