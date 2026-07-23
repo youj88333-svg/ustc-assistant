@@ -176,6 +176,23 @@ class CatalogStoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 store.search("缓考", limit=0)
 
+    def test_count_is_not_limited_by_search_page_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = CatalogStore(Path(directory) / "catalog.json")
+            entries = [
+                make_entry(
+                    title=f"指南 {index}",
+                    url=f"https://www.teach.ustc.edu.cn/notice/{index}.html",
+                )
+                for index in range(101)
+            ]
+            store.commit_source("teach_notice", entries, refreshed_at=NOW)
+
+            self.assertEqual(
+                101,
+                store.count(filters={"source": "teach_notice", "status": "active"}),
+            )
+
     def test_invalid_schema_is_rejected_without_overwrite(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "catalog.json"

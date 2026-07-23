@@ -291,3 +291,18 @@ class CatalogStore:
             reverse=True,
         )
         return [entry.to_dict() for entry in matches[:limit]]
+
+    def count(self, *, filters: dict[str, str] | None = None) -> int:
+        selected_filters = filters or {}
+        if set(selected_filters) - SEARCH_FILTERS:
+            raise ValueError("campus catalog count filter is not supported")
+        payload = self.load()
+        return sum(
+            1
+            for source in payload["sources"]
+            for entry in self._source_entries(payload, source)
+            if all(
+                entry.to_dict()[key] == value
+                for key, value in selected_filters.items()
+            )
+        )
