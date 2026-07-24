@@ -65,4 +65,7 @@ conda run -n ustc_assistant python -m compileall -q src tests
 - 学校来源记录通过稳定外部身份 upsert，历史记录不会仅因滚动窗口变化而物理删除。
 - 课程出勤支持必去、可以赌、不去及自由备注；听讲模式独立记录。
 - 时间重叠不自动等于冲突，冲突关系允许用户解释和调整。
-- 后续 App 直接调用来源 service，不通过子进程解析 CLI 文本。
+- Windows Flutter App 通过本机临时 Python Bridge 调用来源能力，Bridge 直接
+  导入来源 service；不得启动采集 CLI 后解析终端文本。
+- Android/iOS 后续使用移动端 `SourceGateway` 重新实现采集，但必须复用相同的
+  版本化 `SourceBundle`、Flutter `ImportService` 和本地业务模型。

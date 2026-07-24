@@ -40,7 +40,10 @@ src/ustc_assistant/sources/campus/
     service.py       CLI、未来 App 和 Agent 共用的稳定接口
 ```
 
-各站点保留独立 DOM 和分页规则，只共享 HTTP 生命周期、缓存、结构化对象和错误边界。App 和 Agent 直接调用 service，不通过子进程解析 CLI 输出。
+各站点保留独立 DOM 和分页规则，只共享 HTTP 生命周期、缓存、结构化对象和错误
+边界。CLI 和 Windows Python Bridge 直接调用 service；Flutter 通过 Bridge 或
+未来移动端 `SourceGateway` 使用相同的结构化契约。任何调用方都不通过启动采集
+CLI 并解析终端输出来获得数据。
 
 ## 5. 数据对象
 

@@ -330,7 +330,9 @@ data does not implicitly delete credentials. A complete local-data reset lists
 each affected category and requires a second confirmation.
 
 Cloud sync, sharing, LLM API configuration, and Agent permission settings are
-not part of this milestone.
+not part of this milestone. An unused `agent_permission_policies` schema shell
+exists for the next milestone, but it has no settings UI, default grants, or
+runtime effect.
 
 ## 9. Failure Handling
 

@@ -76,6 +76,13 @@ The chat page is an application shell in this milestone. It must not pretend
 that an Agent or daily briefing is available before the real LLM integration
 exists.
 
+Because LLM integration is expected immediately after this milestone, the
+initial database migration includes an empty `agent_permission_policies`
+table and the domain layer may reserve its enums and repository interface.
+This is schema scaffolding only: the milestone creates no default grants,
+performs no Agent permission checks, exposes no Agent permission settings, and
+allows no Agent write actions.
+
 Second-classroom registration and cancellation remain user actions on the
 official school page. This is a permanent safety boundary rather than an
 LLM-related feature deferral.
@@ -102,6 +109,7 @@ plan_blocks
 reminders
 sync_runs
 action_logs
+agent_permission_policies  (reserved empty shell)
 ```
 
 Each imported bundle declares a schema version, source, collection time,
@@ -368,6 +376,8 @@ Implementation must include:
 - tests for Task and PlanBlock lifecycle transitions;
 - tests for one-step undo replacement and expiry;
 - tests for reminder rescheduling and cancellation.
+- a migration test that the reserved Agent permission table is empty and has
+  no runtime effect in the first milestone.
 
 The implementation plan must keep source collection tests separate from
 Flutter database and widget tests.
@@ -381,4 +391,6 @@ Task lifecycle, manual planning, one-step undo, and deterministic local
 reminders are defined in `2026-07-24-flutter-task-planning-design.md`.
 
 Real LLM integration, cloud privacy consent, daily briefings, chat tools, and
-Agent permission policy belong to a later Agent design.
+activation of Agent permission policy belong to a later Agent design. The
+first milestone contains only the unused schema and domain scaffolding
+defined above.

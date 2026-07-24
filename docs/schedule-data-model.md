@@ -32,7 +32,9 @@
 
 ```text
 - 普通新增可以由 Agent 草拟，保存前让用户确认。
-- Agent 不自动提交二课报名、事务申请等外部写操作，除非用户已明确授予相应类型权限。
+- 二课报名和取消报名始终由用户在学校官方页面亲自完成，Agent 不得代为提交，
+  也不能通过权限设置放宽这条边界。
+- 其他校园事务申请属于未来外部写操作，必须另行设计风险策略和确认规则。
 - 对 critical 风险动作，即使用户放宽权限，也建议保留二次确认或短时间撤销窗口。
 ```
 
@@ -50,7 +52,7 @@
 | `UserOverlay` | 用户对导入数据的个人修正 | 标记必去、隐藏、改显示名 |
 | `Reminder` | 提醒规则 | 上课前 20 分钟提醒 |
 | `ActionLog` | Agent 或用户做过的动作记录 | 导入课表、修改时间 |
-| `AgentPermissionPolicy` | 用户授予 Agent 的风险操作权限 | 二课报名前是否确认 |
+| `AgentPermissionPolicy` | 用户授予 Agent 的风险操作权限 | 新增或移动日程前是否确认 |
 | `KnowledgeItem` | 校园知识库条目 | 通知、办事指南、校史资料 |
 
 关系大致如下：
@@ -896,7 +898,7 @@ record_attendance_decision
 record_listening_mode
 create_schedule_relation
 update_permission_policy
-submit_second_class_registration
+open_second_class_registration_page
 ```
 
 其中 `record_attendance_decision` 用于记录“可以赌”的课最终去不去，例如：
@@ -919,7 +921,7 @@ submit_second_class_registration
 移动用户锁定的时间块：始终确认
 移动多个日程：始终确认，除非用户在设置中明确放宽
 删除日程：始终确认
-报名二课：始终确认，除非用户明确放宽该类权限
+打开二课报名页面：只允许打开对应的学校官方页面，不得填写或提交报名
 提交校园事务申请：始终确认，critical 动作建议不允许完全免确认
 ```
 
@@ -1200,14 +1202,32 @@ import_jw_course_table()
 import_jw_exams()
 search_second_class_activity()
 prepare_second_class_registration()
-submit_second_class_registration()
+open_second_class_registration_page(activityId)
 ```
 
-其中 `submit_second_class_registration()` 默认必须要求用户确认；如果用户在权限设置中放宽该类权限，仍应在执行前展示清晰的操作摘要。
+`prepare_second_class_registration()` 只能整理活动摘要和报名注意事项。
+`open_second_class_registration_page(activityId)` 只能根据已查询到的活动 ID 打开
+学校官方页面，不接受任意 URL，不填写表单，也不提交或取消报名。二课报名与取消报名
+始终由用户在官方页面亲自完成，`AgentPermissionPolicy` 不得放宽这条边界。
 
-## 16. MVP 最小字段
+## 16. 首版字段与未来空壳
 
-第一版可以先只实现这些字段，不必一次做全。
+第一版完整实现 `CalendarEvent`、`Task`、`PlanBlock`、`ScheduleRelation` 和
+`ActionLog` 的首版字段及确定性行为。
+
+考虑到首版完成后将立即尝试接入 LLM，首版数据库迁移同时创建
+`AgentPermissionPolicy` 的空表，并在领域层保留枚举和仓储接口。该空壳在首版：
+
+```text
+不创建默认授权记录
+不参与任何操作的权限判断
+不提供 Agent 权限设置界面
+不允许 Agent 执行写操作
+不改变二课报名必须由用户亲自在官方页面完成的永久边界
+```
+
+LLM 接入前必须另行完成 Agent 工具、风险分级、确认流程和权限设置设计，之后才能
+启用这张表。存在空表不表示首版已经实现 Agent 权限功能。
 
 ### 16.1 CalendarEvent MVP
 
@@ -1302,7 +1322,7 @@ riskLevel
 createdAt
 ```
 
-### 16.6 AgentPermissionPolicy MVP
+### 16.6 AgentPermissionPolicy 预留空壳
 
 ```text
 id
@@ -1313,16 +1333,4 @@ riskLevel
 confirmationMode
 enabled
 updatedAt
-```
-
-## 17. 下一步
-
-建议按这个顺序推进：
-
-```text
-1. 用本文模型创建一份脱敏 datum 样例。
-2. 写转换脚本：ustc_jw_datum.json -> calendar_events.json。
-3. 验证重复课程合并、时间解析、externalId 去重。
-4. 再研究考试安排接口，并复用 CalendarEvent 模型。
-5. 设计移动端首页“今天”视图的数据需求。
 ```
