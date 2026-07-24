@@ -392,7 +392,7 @@ estimatedMinutes: 120
 
 颜色不能成为唯一提示。圆圈感叹号必须带有可访问语义，任务块中也必须显示文字状态。“今日截止”和“已经逾期”的图标表示截止风险；日程事件上的红色圆圈感叹号表示已确认冲突，两者在详情和无障碍标签中必须明确区分。
 
-点击 `Task` 打开任务详情，至少显示截止时间、状态、预计工时、已规划工时、剩余工时和关联的 `PlanBlock`。`Task` 本身不参与时间冲突判断；只有进入时间网格的 `PlanBlock` 才参与重叠和 `ScheduleRelation` 判断。
+点击 `Task` 打开任务详情，至少显示截止时间、状态、预计工时、已规划工时、未规划工时、已执行工时、剩余执行工时和关联的 `PlanBlock`。`Task` 本身不参与时间冲突判断；只有进入时间网格的 `PlanBlock` 才参与重叠和 `ScheduleRelation` 判断。
 
 ## 5. PlanBlock
 
@@ -808,8 +808,9 @@ attendance_decision_check
 ### 9.3 channel
 
 ```text
-push
+system_notification
 in_app
+push
 email
 sms
 wechat
@@ -818,10 +819,26 @@ wechat
 第一版只需要：
 
 ```text
-push
+system_notification
 in_app
-smart_morning_brief
 ```
+
+`system_notification` 表示由 Windows、Android 或 iOS 在本机调度的系统通知，不依赖远程推送服务。`push` 保留给未来可能的远程推送。
+
+第一版的类型默认值：
+
+```text
+普通课程             开始前 15 分钟
+考试                 开始前 24 小时和 2 小时
+已报名二课           开始前 2 小时
+普通个人日程         开始前 15 分钟
+Task                 截止前 24 小时和 2 小时
+PlanBlock            开始前 10 分钟
+```
+
+单个对象可以覆盖类型默认值，设置页可以关闭某一类型的默认提醒。对象被取消、完成或隐藏后必须取消尚未触发的通知；时间变化后必须重新调度。
+
+第一版不为“今日截止 Task”或“逾期 Task”生成每天固定时间的通知。它们只在截止事项带中显示黄色或红色警告；未来由 LLM 每日简报统一提醒。通知权限被拒绝时，App 内提醒仍然保留。
 
 ## 10. ActionLog
 

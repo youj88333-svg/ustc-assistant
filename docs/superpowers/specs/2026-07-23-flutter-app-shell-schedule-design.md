@@ -58,29 +58,33 @@ The first Windows milestone includes:
 - attendance values `must_go`, `gamble`, and `skip`;
 - listening values `listen` and `not_listen`;
 - free-form user notes;
+- manual `Task` creation and lifecycle management;
+- manual `PlanBlock` creation, splitting, movement, locking, and completion;
+- two deadline bands and task progress presentation;
+- deterministic local reminders and system notifications;
+- one-step session undo for reversible local changes;
 - sync results and redacted failures.
 
-The first milestone does not include:
+The first milestone explicitly excludes LLM behavior:
 
 - a real LLM Agent;
 - a daily briefing;
 - free-form chat commands;
-- task planning or `Task` and `PlanBlock`;
-- mobile login and collection;
-- automatic second-classroom registration or cancellation.
+- LLM-generated planning, explanation, ranking, and reminders.
 
 The chat page is an application shell in this milestone. It must not pretend
 that an Agent or daily briefing is available before the real LLM integration
 exists.
 
-Although task planning is outside the first milestone, Section 6.5 fixes the
-future weekly-schedule presentation contract for `Task` and `PlanBlock`. The
-first implementation must not create placeholder task behavior that conflicts
-with that contract.
+Second-classroom registration and cancellation remain user actions on the
+official school page. This is a permanent safety boundary rather than an
+LLM-related feature deferral.
 
 The active-enrolment list, iCourse content, and campus public information keep
-their existing source services. They enter later discovery, course-review, and
-knowledge modules instead of being forced into the schedule database.
+their existing source services, caches, tests, and safety contracts. They do
+not receive standalone Flutter screens. A later LLM can call them through
+bounded tools and present results in Chat. Until then they remain backend
+capabilities and development references rather than user-facing App flows.
 
 ## 4. Local Data and Import Semantics
 
@@ -93,7 +97,11 @@ calendar_events
 schedule_relations
 course_series
 user_overlays
+tasks
+plan_blocks
+reminders
 sync_runs
+action_logs
 ```
 
 Each imported bundle declares a schema version, source, collection time,
@@ -354,26 +362,23 @@ Implementation must include:
 - widget tests for the two-step overlap interaction and event detail;
 - responsive screenshot checks for Windows and representative phone widths;
 - explicit checks that all seven days remain reachable;
-- accessibility semantics for conflict warnings and event selection.
+- accessibility semantics for conflict warnings and event selection;
+- tests for both deadline bands and planned-task retention;
+- tests for due-today, overdue, and completed-task presentation;
+- tests for Task and PlanBlock lifecycle transitions;
+- tests for one-step undo replacement and expiry;
+- tests for reminder rescheduling and cancellation.
 
 The implementation plan must keep source collection tests separate from
 Flutter database and widget tests.
 
-When the task module enters implementation scope, its own acceptance suite must
-cover both deadline bands, planned-task retention, due-today and overdue
-warnings, completed-task filtering, and PlanBlock status presentation. These
-tests are not part of the first Windows milestone.
+## 9. Companion Designs
 
-## 9. Follow-Up Design Boundary
+Authentication, credentials, bridge lifecycle, sync, operation history, and
+settings are defined in `2026-07-24-flutter-auth-sync-design.md`.
 
-Before implementation begins, a separate confirmed design must define:
-
-- school login and account state;
-- secure password storage;
-- Windows bridge startup, authentication, shutdown, and error propagation;
-- one-click and file-import sync flows;
-- operation-history storage and presentation;
-- settings required by the first milestone.
+Task lifecycle, manual planning, one-step undo, and deterministic local
+reminders are defined in `2026-07-24-flutter-task-planning-design.md`.
 
 Real LLM integration, cloud privacy consent, daily briefings, chat tools, and
 Agent permission policy belong to a later Agent design.
