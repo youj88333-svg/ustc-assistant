@@ -73,6 +73,11 @@ The chat page is an application shell in this milestone. It must not pretend
 that an Agent or daily briefing is available before the real LLM integration
 exists.
 
+Although task planning is outside the first milestone, Section 6.5 fixes the
+future weekly-schedule presentation contract for `Task` and `PlanBlock`. The
+first implementation must not create placeholder task behavior that conflicts
+with that contract.
+
 The active-enrolment list, iCourse content, and campus public information keep
 their existing source services. They enter later discovery, course-review, and
 knowledge modules instead of being forced into the schedule database.
@@ -208,6 +213,73 @@ The preview must:
 - remain clickable for course-series details;
 - never be included as an active event in reminders or conflict calculations.
 
+### 6.5 Task Deadline Bands and PlanBlocks
+
+`Task` does not enter the time grid because it has no required start and end
+time. The weekly schedule places two deadline bands above the official-period
+grid:
+
+```text
+undated-task band
+dated-deadline band
+official-period and real-minute time grid
+```
+
+The undated-task band:
+
+- shows every incomplete `Task` whose `deadlineAt` is absent;
+- spans the complete week instead of assigning a false day;
+- appears in every selected week while matching tasks exist;
+- hides the complete band when no matching task exists;
+- keeps a task after planning creates one or more `PlanBlock` records;
+- removes a completed undated task from the active band while preserving it in
+  task history.
+
+The dated-deadline band:
+
+- aligns tasks whose `deadlineAt` falls in the selected week with Monday
+  through Sunday;
+- keeps the `Task` after planning;
+- retains completed tasks in their deadline week with reduced contrast;
+- supports a hide-completed filter;
+- keeps incomplete overdue tasks visible in the current week until completion,
+  cancellation, or deletion.
+
+Band titles, task titles, and status text use high-contrast foreground colors
+on their backgrounds. Low-opacity text is not acceptable for primary labels.
+
+Deadline warning presentation is:
+
+```text
+due today -> yellow task block + yellow circled exclamation + text status
+overdue   -> red task block + red circled exclamation + overdue duration
+completed -> reduced contrast + completion mark
+```
+
+Warnings have semantic accessibility labels and never rely only on color. A
+deadline warning and a confirmed-conflict warning may share the circled
+exclamation shape, but their detail text and accessibility labels distinguish
+deadline risk from schedule conflict.
+
+Planning creates `PlanBlock` records without replacing the parent `Task`.
+PlanBlocks enter the time grid at their real `startAt` and `endAt`, participate
+in overlap and conflict relationships, and remain linked to the deadline-band
+task.
+
+PlanBlock presentation is:
+
+```text
+suggested -> dashed border
+accepted  -> solid task-linked style
+active    -> solid task-linked style
+done      -> retained with reduced contrast and completion mark
+```
+
+Selecting a task opens task detail with deadline, status, estimated effort,
+planned effort, remaining effort, and related PlanBlocks. Selecting a
+PlanBlock opens execution-block detail and provides a path to the parent task.
+Changing or deleting a PlanBlock does not silently delete its parent Task.
+
 ## 7. Overlap and Conflict Presentation
 
 Time overlap and confirmed conflict are different concepts. Overlapping events
@@ -286,6 +358,11 @@ Implementation must include:
 
 The implementation plan must keep source collection tests separate from
 Flutter database and widget tests.
+
+When the task module enters implementation scope, its own acceptance suite must
+cover both deadline bands, planned-task retention, due-today and overdue
+warnings, completed-task filtering, and PlanBlock status presentation. These
+tests are not part of the first Windows milestone.
 
 ## 9. Follow-Up Design Boundary
 
