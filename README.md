@@ -54,4 +54,6 @@ conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 ```
 
-架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。
+架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。Flutter 正式
+导入契约见 `docs/data-sources/source-bundle-v1.md`；当前 CLI 输出仍是待迁移的
+legacy 开发格式。

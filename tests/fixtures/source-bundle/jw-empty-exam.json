@@ -1,0 +1,121 @@
+{
+  "schemaVersion": "1.0",
+  "bundleId": "00000000-0000-4000-8000-000000000002",
+  "source": "ustc_jw",
+  "subject": {
+    "accountId": "acct_fixture"
+  },
+  "collectedAt": "2026-07-25T20:31:00+08:00",
+  "producer": {
+    "name": "ustc_assistant_python",
+    "version": "0.1.0",
+    "platform": "development"
+  },
+  "snapshot": {
+    "completeness": "complete",
+    "scope": {
+      "type": "semester",
+      "semesterKey": "2026fall",
+      "sourceSemesterId": 461,
+      "components": [
+        {
+          "name": "course_table",
+          "status": "complete",
+          "observedRecordCount": 2
+        },
+        {
+          "name": "exam_arrange",
+          "status": "complete",
+          "observedRecordCount": 0
+        }
+      ]
+    }
+  },
+  "manifest": {
+    "sourceRecordCount": 2,
+    "calendarEventCount": 1,
+    "courseSeriesCount": 1,
+    "scheduleRelationCount": 0
+  },
+  "data": {
+    "sourceRecords": [
+      {
+        "externalId": "ustc_jw:2026fall:record:course-series:lesson:173667",
+        "recordType": "jw_course_series",
+        "entityType": "course_series",
+        "entityExternalId": "ustc_jw:2026fall:series:lesson:173667",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:173667:188457:20260901:0945:1120",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:173667:188457:20260901:0945:1120",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      }
+    ],
+    "calendarEvents": [
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:173667:188457:20260901:0945:1120",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:173667",
+        "title": "示例课程",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-09-01T09:45:00+08:00",
+          "endAt": "2026-09-01T11:20:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "3C203",
+          "building": "第三教学楼",
+          "campus": "西区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "示例教师甲"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "173667",
+          "scheduleGroupId": "188457",
+          "courseCode": "EXAMPLE1001",
+          "courseTypeName": "专业基础课",
+          "weekIndex": 1,
+          "periods": 2,
+          "exerciseClass": false
+        }
+      }
+    ],
+    "courseSeries": [
+      {
+        "externalId": "ustc_jw:2026fall:series:lesson:173667",
+        "title": "示例课程",
+        "courseCode": "EXAMPLE1001",
+        "semesterKey": "2026fall",
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "示例教师甲"
+          }
+        ],
+        "sourceDetails": {
+          "kind": "jw_course_series",
+          "lessonId": "173667"
+        }
+      }
+    ],
+    "scheduleRelations": []
+  }
+}

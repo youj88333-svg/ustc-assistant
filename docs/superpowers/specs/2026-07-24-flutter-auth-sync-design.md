@@ -192,8 +192,16 @@ Manual and automatic collection return versioned source bundles. File import
 accepts the same contract. All three paths call the same Flutter
 `ImportService`.
 
-A file bundle affects freshness only when its schema, source scope,
-completeness declaration, and collection timestamp pass validation.
+The normative v1 contract is `docs/data-sources/source-bundle-v1.md`, with
+`schemas/source-bundle-1.0.schema.json` and shared fixtures under
+`tests/fixtures/source-bundle/`. It applies only to JW and registered
+second-classroom schedule snapshots. Active-enrolment, iCourse, and campus
+query/detail results do not pass through ImportService.
+
+A file bundle affects freshness only when its supported schema, local account
+subject, source scope, completeness declaration, manifest, collection
+timestamp, and semantic references pass validation. Older consumers reject a
+newer unsupported minor version rather than guessing unknown fields.
 
 ## 6. Bridge Protocol and Lifecycle
 
@@ -244,6 +252,9 @@ failed
 
 The bridge returns a source bundle only after the source service has produced a
 complete normalized result. It never presents a partial bundle as complete.
+One Bundle represents exactly one logical source and one database transaction;
+JW contains both course-table and exam components, while registered
+second-classroom schedules use an independent date-window Bundle.
 
 Raw responses, cookies, tokens, CAS tickets, browser-profile paths, and JW
 context identifiers do not cross into Flutter.

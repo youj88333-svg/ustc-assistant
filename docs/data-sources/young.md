@@ -23,3 +23,8 @@
 ## 快照语义
 
 输出是本次窗口完整快照，不代表历史删除。未来 App 同步层应执行 upsert，区分窗口外、窗口内缺失、来源取消和用户删除，并始终保留用户覆盖层。
+
+当前 Python 输出的顶层 `schedules` 是 legacy 开发格式。Flutter 接入时必须转换为
+`docs/data-sources/source-bundle-v1.md` 定义的
+`ustc_young_my_schedule` Bundle：每条已报名日程变为 CalendarEvent，日期窗口
+声明完整检查天数和空日期数量，不携带远端 userId 或原始 HTML。

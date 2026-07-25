@@ -14,6 +14,10 @@
 
 运行入口统一为 `python -m ustc_assistant`，详情见 `README.md`。稳定来源契约见 `docs/data-sources/`，日程产品模型见 `docs/schedule-data-model.md`。
 
+正式导入边界为 `docs/data-sources/source-bundle-v1.md` 与
+`schemas/source-bundle-1.0.schema.json`。当前 Python JW 和二课日程规范化输出仍是
+待迁移 legacy 格式；在完成契约实现前不得声称已经生成 SourceBundle 1.0。
+
 ## 强制安全规则
 
 - 不保存用户密码明文。
@@ -79,3 +83,7 @@ conda run -n ustc_assistant python -m compileall -q src tests
   导入来源 service；不得启动采集 CLI 后解析终端文本。
 - Android/iOS 后续使用移动端 `SourceGateway` 重新实现采集，但必须复用相同的
   版本化 `SourceBundle`、Flutter `ImportService` 和本地业务模型。
+- SourceBundle 只用于 JW 与已报名二课日程的完整可导入快照；报名中活动、评课
+  和校园公开信息继续使用独立版本化查询结果，不得混入 ImportService。
+- SourceBundle 不携带数据库主键、远端个人身份、用户覆盖或自动冲突判断；一个
+  Bundle 只对应一个账号、一个逻辑来源、一个完整范围和一个数据库事务。

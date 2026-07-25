@@ -1,0 +1,1060 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ustc-assistant.local/schemas/source-bundle-1.0.schema.json",
+  "title": "USTC Assistant SourceBundle 1.0",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "bundleId",
+    "source",
+    "subject",
+    "collectedAt",
+    "snapshot",
+    "manifest",
+    "data"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "bundleId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "source": {
+      "enum": [
+        "ustc_jw",
+        "ustc_young_my_schedule"
+      ]
+    },
+    "subject": {
+      "$ref": "#/$defs/subject"
+    },
+    "collectedAt": {
+      "$ref": "#/$defs/beijingDateTime"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    },
+    "snapshot": {
+      "$ref": "#/$defs/snapshot"
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest"
+    },
+    "data": {
+      "$ref": "#/$defs/data"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "ustc_jw"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "snapshot": {
+            "properties": {
+              "scope": {
+                "$ref": "#/$defs/jwScope"
+              }
+            }
+          },
+          "data": {
+            "properties": {
+              "sourceRecords": {
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/sourceRecord"
+                    },
+                    {
+                      "properties": {
+                        "recordType": {
+                          "enum": [
+                            "jw_course_series",
+                            "jw_course_occurrence",
+                            "jw_exam",
+                            "jw_exam_course_relation"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "calendarEvents": {
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/calendarEvent"
+                    },
+                    {
+                      "properties": {
+                        "eventType": {
+                          "enum": [
+                            "course",
+                            "exam"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "ustc_young_my_schedule"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "then": {
+        "properties": {
+          "snapshot": {
+            "properties": {
+              "scope": {
+                "$ref": "#/$defs/youngScope"
+              }
+            }
+          },
+          "data": {
+            "properties": {
+              "sourceRecords": {
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/sourceRecord"
+                    },
+                    {
+                      "properties": {
+                        "recordType": {
+                          "const": "young_registered_schedule"
+                        },
+                        "entityType": {
+                          "const": "calendar_event"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "calendarEvents": {
+                "items": {
+                  "allOf": [
+                    {
+                      "$ref": "#/$defs/calendarEvent"
+                    },
+                    {
+                      "properties": {
+                        "eventType": {
+                          "const": "second_class"
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "courseSeries": {
+                "maxItems": 0
+              },
+              "scheduleRelations": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "externalId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u0020\\u007f]+$"
+    },
+    "shortText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "nullableShortText": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/shortText"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "descriptionText": {
+      "oneOf": [
+        {
+          "type": "string",
+          "maxLength": 20000
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "date": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+    },
+    "beijingDateTime": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?\\+08:00$"
+    },
+    "subject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accountId"
+      ],
+      "properties": {
+        "accountId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "version",
+        "platform"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$"
+        },
+        "platform": {
+          "enum": [
+            "windows",
+            "android",
+            "ios",
+            "development"
+          ]
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "status",
+        "observedRecordCount"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "course_table",
+            "exam_arrange"
+          ]
+        },
+        "status": {
+          "const": "complete"
+        },
+        "observedRecordCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50000
+        }
+      }
+    },
+    "jwScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "semesterKey",
+        "sourceSemesterId",
+        "components"
+      ],
+      "properties": {
+        "type": {
+          "const": "semester"
+        },
+        "semesterKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "sourceSemesterId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "components": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {
+            "$ref": "#/$defs/component"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "properties": {
+                  "name": {
+                    "const": "course_table"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "properties": {
+                  "name": {
+                    "const": "exam_arrange"
+                  }
+                },
+                "required": [
+                  "name"
+                ]
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        }
+      }
+    },
+    "youngScope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "fromDate",
+        "throughDate",
+        "timezone",
+        "expectedDateCount",
+        "checkedDateCount",
+        "emptyDateCount"
+      ],
+      "properties": {
+        "type": {
+          "const": "date_window"
+        },
+        "fromDate": {
+          "$ref": "#/$defs/date"
+        },
+        "throughDate": {
+          "$ref": "#/$defs/date"
+        },
+        "timezone": {
+          "const": "Asia/Shanghai"
+        },
+        "expectedDateCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400
+        },
+        "checkedDateCount": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 400
+        },
+        "emptyDateCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 400
+        }
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "completeness",
+        "scope"
+      ],
+      "properties": {
+        "completeness": {
+          "const": "complete"
+        },
+        "scope": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/jwScope"
+            },
+            {
+              "$ref": "#/$defs/youngScope"
+            }
+          ]
+        }
+      }
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRecordCount",
+        "calendarEventCount",
+        "courseSeriesCount",
+        "scheduleRelationCount"
+      ],
+      "properties": {
+        "sourceRecordCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 50000
+        },
+        "calendarEventCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        },
+        "courseSeriesCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 5000
+        },
+        "scheduleRelationCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 20000
+        }
+      }
+    },
+    "sourceRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "recordType",
+        "entityType",
+        "entityExternalId",
+        "sourceStatus"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "recordType": {
+          "enum": [
+            "jw_course_series",
+            "jw_course_occurrence",
+            "jw_exam",
+            "jw_exam_course_relation",
+            "young_registered_schedule"
+          ]
+        },
+        "entityType": {
+          "enum": [
+            "calendar_event",
+            "course_series",
+            "schedule_relation"
+          ]
+        },
+        "entityExternalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "sourceStatus": {
+          "enum": [
+            "active",
+            "cancelled"
+          ]
+        },
+        "sourceUpdatedAt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/beijingDateTime"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "name"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "teacher",
+            "organizer"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      }
+    },
+    "jwCourseSeriesDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "lessonId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "jw_course_series"
+        },
+        "lessonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    },
+    "courseSeries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "title",
+        "courseCode",
+        "semesterKey",
+        "participants",
+        "sourceDetails"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        },
+        "courseCode": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "semesterKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "participants": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/participant"
+          }
+        },
+        "sourceDetails": {
+          "$ref": "#/$defs/jwCourseSeriesDetails"
+        }
+      }
+    },
+    "timedEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "startAt",
+        "endAt",
+        "timezone"
+      ],
+      "properties": {
+        "kind": {
+          "const": "timed"
+        },
+        "startAt": {
+          "$ref": "#/$defs/beijingDateTime"
+        },
+        "endAt": {
+          "$ref": "#/$defs/beijingDateTime"
+        },
+        "timezone": {
+          "const": "Asia/Shanghai"
+        }
+      }
+    },
+    "allDayEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "startDate",
+        "endDateExclusive",
+        "timezone"
+      ],
+      "properties": {
+        "kind": {
+          "const": "all_day"
+        },
+        "startDate": {
+          "$ref": "#/$defs/date"
+        },
+        "endDateExclusive": {
+          "$ref": "#/$defs/date"
+        },
+        "timezone": {
+          "const": "Asia/Shanghai"
+        }
+      }
+    },
+    "location": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "building",
+            "campus"
+          ],
+          "properties": {
+            "name": {
+              "$ref": "#/$defs/nullableShortText"
+            },
+            "building": {
+              "$ref": "#/$defs/nullableShortText"
+            },
+            "campus": {
+              "$ref": "#/$defs/nullableShortText"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sourceDefaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "importance",
+        "attendancePolicy",
+        "listeningMode"
+      ],
+      "properties": {
+        "importance": {
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "critical"
+          ]
+        },
+        "attendancePolicy": {
+          "enum": [
+            "unknown",
+            "must_go",
+            "gamble",
+            "skip"
+          ]
+        },
+        "listeningMode": {
+          "enum": [
+            "unknown",
+            "listen",
+            "not_listen"
+          ]
+        }
+      }
+    },
+    "jwCourseOccurrenceDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "semesterKey",
+        "lessonId",
+        "scheduleGroupId",
+        "courseCode",
+        "courseTypeName",
+        "weekIndex",
+        "periods",
+        "exerciseClass"
+      ],
+      "properties": {
+        "kind": {
+          "const": "jw_course_occurrence"
+        },
+        "semesterKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "lessonId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "scheduleGroupId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "courseCode": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "courseTypeName": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "weekIndex": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "periods": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 24
+        },
+        "exerciseClass": {
+          "type": "boolean"
+        }
+      }
+    },
+    "jwExamDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "semesterKey",
+        "classroomNumber",
+        "examType",
+        "courseCode",
+        "instructions"
+      ],
+      "properties": {
+        "kind": {
+          "const": "jw_exam"
+        },
+        "semesterKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "classroomNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "examType": {
+          "$ref": "#/$defs/shortText"
+        },
+        "courseCode": {
+          "$ref": "#/$defs/nullableShortText"
+        },
+        "instructions": {
+          "$ref": "#/$defs/descriptionText"
+        }
+      }
+    },
+    "youngScheduleDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "sourceActivityId"
+      ],
+      "properties": {
+        "kind": {
+          "const": "young_registered_schedule"
+        },
+        "sourceActivityId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      }
+    },
+    "calendarEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "seriesExternalId",
+        "title",
+        "descriptionText",
+        "eventType",
+        "time",
+        "location",
+        "participants",
+        "sourceDefaults",
+        "sourceDetails"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "seriesExternalId": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/externalId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "$ref": "#/$defs/shortText"
+        },
+        "descriptionText": {
+          "$ref": "#/$defs/descriptionText"
+        },
+        "eventType": {
+          "enum": [
+            "course",
+            "exam",
+            "second_class"
+          ]
+        },
+        "time": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/timedEvent"
+            },
+            {
+              "$ref": "#/$defs/allDayEvent"
+            }
+          ]
+        },
+        "location": {
+          "$ref": "#/$defs/location"
+        },
+        "participants": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "$ref": "#/$defs/participant"
+          }
+        },
+        "sourceDefaults": {
+          "$ref": "#/$defs/sourceDefaults"
+        },
+        "sourceDetails": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/jwCourseOccurrenceDetails"
+            },
+            {
+              "$ref": "#/$defs/jwExamDetails"
+            },
+            {
+              "$ref": "#/$defs/youngScheduleDetails"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "eventType": {
+                "const": "course"
+              }
+            },
+            "required": [
+              "eventType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "seriesExternalId": {
+                "$ref": "#/$defs/externalId"
+              },
+              "sourceDefaults": {
+                "properties": {
+                  "attendancePolicy": {
+                    "const": "unknown"
+                  }
+                }
+              },
+              "sourceDetails": {
+                "$ref": "#/$defs/jwCourseOccurrenceDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "eventType": {
+                "const": "exam"
+              }
+            },
+            "required": [
+              "eventType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sourceDefaults": {
+                "properties": {
+                  "importance": {
+                    "const": "critical"
+                  },
+                  "attendancePolicy": {
+                    "const": "must_go"
+                  }
+                }
+              },
+              "sourceDetails": {
+                "$ref": "#/$defs/jwExamDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "eventType": {
+                "const": "second_class"
+              }
+            },
+            "required": [
+              "eventType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "seriesExternalId": {
+                "type": "null"
+              },
+              "sourceDefaults": {
+                "properties": {
+                  "attendancePolicy": {
+                    "const": "must_go"
+                  }
+                }
+              },
+              "sourceDetails": {
+                "$ref": "#/$defs/youngScheduleDetails"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "entityReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entityType",
+        "externalId"
+      ],
+      "properties": {
+        "entityType": {
+          "enum": [
+            "calendar_event",
+            "course_series"
+          ]
+        },
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        }
+      }
+    },
+    "scheduleRelation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "externalId",
+        "relationType",
+        "primary",
+        "related"
+      ],
+      "properties": {
+        "externalId": {
+          "$ref": "#/$defs/externalId"
+        },
+        "relationType": {
+          "const": "exam_for_course"
+        },
+        "primary": {
+          "$ref": "#/$defs/entityReference"
+        },
+        "related": {
+          "$ref": "#/$defs/entityReference"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceRecords",
+        "calendarEvents",
+        "courseSeries",
+        "scheduleRelations"
+      ],
+      "properties": {
+        "sourceRecords": {
+          "type": "array",
+          "maxItems": 50000,
+          "items": {
+            "$ref": "#/$defs/sourceRecord"
+          }
+        },
+        "calendarEvents": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {
+            "$ref": "#/$defs/calendarEvent"
+          }
+        },
+        "courseSeries": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": {
+            "$ref": "#/$defs/courseSeries"
+          }
+        },
+        "scheduleRelations": {
+          "type": "array",
+          "maxItems": 20000,
+          "items": {
+            "$ref": "#/$defs/scheduleRelation"
+          }
+        }
+      }
+    }
+  }
+}

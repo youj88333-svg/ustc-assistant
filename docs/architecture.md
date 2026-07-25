@@ -16,13 +16,15 @@
 - `sources.campus`：公开目录索引、本地检索、按 ID 读取详情和附件缓存。
 - `cli`：所有采集、查询和读取命令的统一入口。
 
-来源 service 返回结构化字典和必要的内存原始对象。
+来源 service 返回结构化字典和必要的内存原始对象。只有需要导入 Flutter
+本地数据库的完整来源快照使用 `SourceBundle`；报名中二课、评课社区、校园目录
+查询和详情读取继续使用各自版本化的 `QueryResult` 或 `DetailResult`。
 
 Windows 第一版中，Flutter 不能直接导入 Python 包，因此通过只监听
 `127.0.0.1` 的临时 Python Bridge 调用来源能力。Bridge 直接导入
-`ustc_assistant.sources.*` service，返回版本化 `SourceBundle`；它不运行采集
-CLI，也不让 Flutter 解析终端文字或中间 JSON 文件。CLI 仅用于开发、调试和
-独立验收。
+对应的 `ustc_assistant.sources.*` service。JW 与已报名二课日程返回版本化
+`SourceBundle`；查询型能力返回各自结构化结果。Bridge 不运行采集 CLI，也不让
+Flutter 解析终端文字或中间 JSON 文件。CLI 仅用于开发、调试和独立验收。
 
 迁移到 Android 和 iOS 后，移动端 `SourceGateway` 使用 WebView 登录会话及
 移动端 HTTP/页面适配器重新实现采集。移动端适配器仍输出相同的
@@ -53,7 +55,14 @@ Development:
 source service -> CLI -> local normalized JSON
 ```
 
-学校来源数据未来通过 `source + externalId` upsert。来源刷新不得覆盖 `UserOverlay` 中的用户备注、出勤、听讲和提醒设置；窗口外记录也不等于删除。
+SourceBundle 1.0 的规范性契约见
+`docs/data-sources/source-bundle-v1.md`，机器可读 Schema 位于
+`schemas/source-bundle-1.0.schema.json`。一个 Bundle 只对应一个独立同步来源
+和一个完整范围，并由 Flutter 在单个事务中导入。
+
+学校来源数据通过本地 `accountId + source + entityType + externalId` upsert。
+来源刷新不得覆盖 `UserOverlay` 中的用户备注、出勤、听讲和提醒设置；窗口外记录
+也不等于删除。来源 Bundle 不携带本地数据库主键、学号或远端用户身份。
 
 校园公开信息先把目录元数据写入本地索引，Agent 再根据对话意图选择至多 3 个目录 ID 按需读取。详情读取不接受任意 URL；正文发现的后续链接只能按解析器生成的候选 ID 跟进一层。二进制附件只下载和缓存，文档转换属于独立处理层。
 

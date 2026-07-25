@@ -24,6 +24,13 @@ CLI 仍可显式覆盖学期 ID 和产品学期键；历史测试中的 `421 / 2
 
 ## 输出
 
-`jw.service.build_bundle()` 合并课程和考试，输出 `calendarEvents`、`sourceRecords`、`scheduleRelations` 和 `metadata`。考试默认重要级别为 critical、出勤为 must_go。
+当前 `jw.service.build_bundle()` 合并课程和考试，输出 legacy
+`calendarEvents`、`sourceRecords`、`scheduleRelations` 和 `metadata`，以保持
+现有采集、CLI 和回归测试可运行。
+
+Flutter 接入时必须迁移到 `docs/data-sources/source-bundle-v1.md`：同一个
+`ustc_jw` Bundle 声明课程与考试组件完整，生成 CourseSeries 和规范化
+CalendarEvent，不携带本地 ID、userId 或自动冲突关系。考试默认重要级别为
+critical、出勤为 must_go；课程出勤默认 unknown。
 
 默认不保存完整 `datum` 或考试 HTML。`--save-raw` 仅用于本地调试。

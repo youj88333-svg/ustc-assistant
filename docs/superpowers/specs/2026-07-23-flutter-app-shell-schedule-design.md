@@ -115,22 +115,37 @@ action_logs
 agent_permission_policies  (reserved empty shell)
 ```
 
-Each imported bundle declares a schema version, source, collection time,
-snapshot mode, and collection scope. Import follows these rules:
+The normative import contract is
+`docs/data-sources/source-bundle-v1.md`, with its machine-readable schema at
+`schemas/source-bundle-1.0.schema.json`. SourceBundle v1 is limited to JW and
+registered second-classroom schedules; query-oriented sources keep separate
+versioned result contracts.
 
-1. Upsert external records by `source + externalId`.
+Each imported bundle declares a supported schema version, unique collection
+batch, local account subject, source, Beijing collection time, complete
+collection scope, manifest, and four normalized entity arrays. Import follows
+these rules:
+
+1. Upsert external records by
+   `accountId + source + entityType + externalId`.
 2. Import one bundle in one SQLite transaction.
 3. Roll back the complete bundle if validation or persistence fails.
-4. Make repeated import of the same bundle idempotent.
+4. Make repeated import of the same bundle idempotent and reject reused bundle
+   IDs with different normalized content.
 5. Update changed source fields without modifying `user_overlays`.
-6. Mark records that leave a rolling query window as `outside_scope`; do not
-   delete them.
+6. Distinguish `observed`, `missing_within_scope`, and `outside_scope`; do not
+   physically delete them.
 7. Mark an event `cancelled` only when the source explicitly reports
    cancellation.
 8. Never infer deletion from a failed or incomplete source snapshot.
 9. Store instants in UTC while preserving the `Asia/Shanghai` time-zone
    meaning.
 10. Evolve the database only through versioned migrations.
+
+SourceBundle contains only source facts, source defaults, and objective
+source-declared relations. It never imports user conflict judgments. Time
+overlap is computed locally, while conflict/non-conflict is created only after
+explicit user classification.
 
 The effective event view applies overlays in this order:
 

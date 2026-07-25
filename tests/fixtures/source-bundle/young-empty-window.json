@@ -1,0 +1,38 @@
+{
+  "schemaVersion": "1.0",
+  "bundleId": "00000000-0000-4000-8000-000000000004",
+  "source": "ustc_young_my_schedule",
+  "subject": {
+    "accountId": "acct_fixture"
+  },
+  "collectedAt": "2026-07-25T20:33:00+08:00",
+  "producer": {
+    "name": "ustc_assistant_python",
+    "version": "0.1.0",
+    "platform": "development"
+  },
+  "snapshot": {
+    "completeness": "complete",
+    "scope": {
+      "type": "date_window",
+      "fromDate": "2026-07-18",
+      "throughDate": "2026-08-25",
+      "timezone": "Asia/Shanghai",
+      "expectedDateCount": 39,
+      "checkedDateCount": 39,
+      "emptyDateCount": 39
+    }
+  },
+  "manifest": {
+    "sourceRecordCount": 0,
+    "calendarEventCount": 0,
+    "courseSeriesCount": 0,
+    "scheduleRelationCount": 0
+  },
+  "data": {
+    "sourceRecords": [],
+    "calendarEvents": [],
+    "courseSeries": [],
+    "scheduleRelations": []
+  }
+}
