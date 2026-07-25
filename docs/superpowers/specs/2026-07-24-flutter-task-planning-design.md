@@ -20,7 +20,8 @@ The first milestone includes:
 - manual creation of one or more PlanBlocks for a Task;
 - PlanBlock movement, resizing, splitting, locking, skipping, completion, and
   cancellation;
-- deterministic effort accounting;
+- explicit post-PlanBlock review and Task completion confirmation;
+- deterministic planning, deadline-risk, and pending-review projections;
 - deterministic local and in-App reminders;
 - one-step undo for reversible local business actions;
 - action-history records for all important changes.
@@ -69,9 +70,7 @@ minutes are positive.
 Task status uses:
 
 ```text
-todo
-planned
-in_progress
+active
 blocked
 completed
 cancelled
@@ -79,17 +78,42 @@ cancelled
 
 Behavior is:
 
-- a newly created Task starts as `todo`;
-- a Task with at least one accepted or active future PlanBlock can be
-  `planned`;
-- starting or completing execution work can move it to `in_progress`;
-- the user can explicitly mark it `blocked`;
-- only explicit user confirmation marks it `completed`;
-- cancellation preserves history and relations;
+- a newly created Task starts as `active`;
+- `blocked`, shown as "Waiting for a condition", is an explicit user state and
+  may carry an optional reason;
+- only explicit user confirmation marks a Task `completed`;
+- only explicit user action marks a Task `cancelled`;
+- time passage and PlanBlock changes never write a Task status;
+- completing a Task sets `completedAt`, cancellation sets `cancelledAt`, and
+  the two timestamps are mutually exclusive;
+- reopening a completed or cancelled Task returns it to `active`, clears both
+  terminal timestamps, and does not restore cancelled PlanBlocks;
 - deletion is soft deletion and is eligible for one-step undo;
-- a completed or cancelled Task can be reopened.
+- terminal Tasks must be reopened before they can become `blocked`.
 
 Task status changes never rewrite source-owned CalendarEvent data.
+
+The query layer derives three independent presentation states:
+
+```text
+planningState:     unplanned | planned
+deadlineState:     not_applicable | no_deadline | upcoming | due_today | overdue
+confirmationState: clear | awaiting_planblock_review
+```
+
+For an active or blocked Task, `planningState` is `planned` only when a
+non-deleted `accepted` PlanBlock has `endAt > now`. An elapsed `accepted`
+PlanBlock instead contributes to `awaiting_planblock_review`. Suggested, done,
+skipped, rescheduled, and cancelled blocks do not count as future planning.
+Completed and cancelled Tasks always project `planningState=unplanned` and
+`confirmationState=clear`, even when retained PlanBlocks remain visible as
+history or schedule entries.
+
+Completed and cancelled Tasks use `deadlineState=not_applicable`. Active and
+blocked Tasks use `Asia/Shanghai`: a missing deadline is `no_deadline`, a
+future date is `upcoming`, the current local date before its deadline is
+`due_today`, and `now > deadlineAt` is `overdue`. These projections never write
+the database, create an ActionLog entry, or consume the undo slot.
 
 ## 5. Weekly Schedule Presentation
 
@@ -137,9 +161,10 @@ Warnings include semantic accessibility labels. Deadline warnings and schedule
 conflict warnings may share the circled-exclamation shape, but their text and
 semantics distinguish the two meanings.
 
-Selecting a Task opens detail with deadline, status, priority, estimated
-effort, planned effort, executed effort, remaining effort, notes, reminders,
-and related PlanBlocks.
+Selecting a Task opens detail with deadline, persisted status, all three
+derived states, priority, optional estimated effort, future PlanBlock count and
+duration, notes, reminders, and related PlanBlocks. Future PlanBlock duration
+describes schedule occupancy and never claims to measure Task progress.
 
 ## 6. Manual Planning
 
@@ -156,11 +181,13 @@ The planner continuously shows:
 
 ```text
 estimated minutes
-planned minutes
-unplanned minutes
-executed minutes
-remaining execution minutes
+future PlanBlock count
+future PlanBlock total duration
 ```
+
+`estimatedMinutes` is an optional initial planning reference. The App does not
+derive completion percentage, executed effort, remaining effort, or actual
+minutes from PlanBlocks.
 
 Windows supports pointer dragging and resizing as secondary shortcuts. Mobile
 supports long-press dragging, but form editing remains available so precise
@@ -185,7 +212,6 @@ PlanBlock status uses:
 ```text
 suggested
 accepted
-active
 done
 skipped
 rescheduled
@@ -202,7 +228,7 @@ PlanBlock supports:
 - move and resize;
 - split into multiple blocks;
 - lock against ordinary movement;
-- mark active, done, skipped, rescheduled, or cancelled;
+- mark done, skipped, rescheduled, or cancelled;
 - soft delete where deletion is exposed;
 - navigate to the parent Task.
 
@@ -211,48 +237,54 @@ Visual presentation is:
 ```text
 suggested -> dashed border
 accepted  -> solid Task-linked style
-active    -> solid Task-linked style
 done      -> retained with reduced contrast and completion mark
 ```
+
+An `accepted` PlanBlock whose `endAt <= now` remains persisted as `accepted`
+but derives an awaiting-review presentation. The first milestone exposes a
+central pending-review list and matching entry points from the weekly schedule
+and Task detail. It does not send a system notification merely because a block
+ended.
 
 PlanBlock uses actual start and end minutes in the mixed official-period
 timeline. It participates in overlap grouping and ScheduleRelation conflict
 logic. Task itself does not.
 
 Changing, skipping, cancelling, or deleting a PlanBlock never silently deletes
-the parent Task or removes it from a deadline band.
+the parent Task or removes it from a deadline band. A rescheduled block stores
+the stable ID of its replacement in `rescheduledToPlanBlockId`.
 
-## 8. Completion and Effort Accounting
+## 8. Review and Completion
 
-The App tracks these values independently:
+Reviewing an elapsed accepted PlanBlock offers:
 
 ```text
-estimatedMinutes
-plannedMinutes
-unplannedMinutes
-executedMinutes
-remainingExecutionMinutes
+done
+skipped
+rescheduled
+review later
 ```
 
-`plannedMinutes` derives from PlanBlocks in `accepted`, `active`, or `done`
-state. `unplannedMinutes` is
-`max(estimatedMinutes - plannedMinutes, 0)`.
+`done` confirms that the planned session occurred, but records no actual
+minutes or completion percentage. The App then asks separately whether the
+whole Task is complete. A negative answer leaves the Task unchanged and allows
+more planning. `skipped` also leaves the Task unchanged. `rescheduled` marks
+the old block and atomically creates a new accepted block. Review can be
+deferred without changing either object.
 
-`executedMinutes` derives from `done` PlanBlocks and any explicit user
-adjustment supported later. `remainingExecutionMinutes` is
-`max(estimatedMinutes - executedMinutes, 0)`.
+Completing every PlanBlock never completes its parent Task. Only explicit user
+confirmation changes Task to `completed`.
 
-Completing a PlanBlock does not complete its parent Task. Completing every
-PlanBlock also does not automatically complete the Task.
+Before Task completion, the App summarizes future accepted PlanBlocks. The user
+may cancel all or review them individually, including explicitly retaining a
+block. A retained block remains linked and is labelled as having a completed
+parent. Elapsed unreviewed blocks remain honest historical `accepted` records
+but leave the active pending-review queue once the parent Task is terminal.
 
-When executed minutes reach or exceed estimated minutes, the App asks whether
-the Task is complete. Only user confirmation changes Task to `completed`.
-
-The user can complete Task early. If future incomplete PlanBlocks remain, the
-App asks whether to keep, cancel, or review them individually. It does not
-silently delete them.
-
-Reopening Task preserves its historical PlanBlocks and execution records.
+Cancelling a Task shows an impact summary and atomically cancels every future
+accepted PlanBlock. Blocking a Task does not modify PlanBlocks. Reopening a
+Task preserves all PlanBlock history but does not restore blocks cancelled by
+completion or cancellation.
 
 ## 9. One-Step Undo
 
@@ -340,6 +372,12 @@ Task and PlanBlock records use stable local IDs. Relations reference IDs rather
 than embedding duplicate objects. Timestamps preserve `Asia/Shanghai`
 semantics according to the application-wide time policy.
 
+Task persistence includes `blockedReason`, `completedAt`, `cancelledAt`, and
+`deletedAt`. Leaving `blocked` clears the current `blockedReason`; ActionLog
+retains its history. The model has no progress percentage or actual-execution
+minutes. PlanBlock persistence includes optional `rescheduledToPlanBlockId` and
+`deletedAt`.
+
 ## 12. Failure Handling
 
 - Invalid forms do not write partial Task or PlanBlock records.
@@ -350,19 +388,34 @@ semantics according to the application-wide time policy.
 - An invalid or stale undo record is discarded with a redacted log entry.
 - Deadline and overlap warnings never silently block an explicit user choice.
 - Reopening or restoring Task preserves its existing relations.
+- Domain commands reject stale status changes and require the caller to refresh
+  before confirming against newer data.
+- Task completion, Task cancellation, associated PlanBlock changes, ActionLog,
+  and undo-state updates are committed atomically.
+- UI and future Agent callers use the same lifecycle service and cannot write
+  status fields directly.
 
 ## 13. Verification
 
 Domain and database tests cover:
 
 - Task lifecycle transitions;
+- rejection of illegal and stale lifecycle transitions;
 - Task persistence with and without deadlines;
 - both deadline-band queries;
 - planned Task retention in its deadline band;
-- due-today, overdue, and completed states;
-- PlanBlock effort accounting;
+- `Asia/Shanghai` due-today, exact-deadline, overdue, blocked, and terminal
+  deadline states;
+- planning and pending-review projections for every PlanBlock status;
+- proof that advancing the clock changes only projections and performs no
+  database write;
 - no automatic Task completion;
-- future PlanBlock handling during Task completion;
+- two-stage PlanBlock and Task completion confirmation;
+- future and elapsed PlanBlock handling during Task completion;
+- future PlanBlock cancellation during Task cancellation;
+- reopening without automatic PlanBlock restoration;
+- absence of progress percentages, actual minutes, and remaining-effort
+  calculations;
 - split, move, resize, lock, and status transitions;
 - overlap and conflict participation;
 - one-step undo replacement, transactionality, and startup expiry;
@@ -376,8 +429,9 @@ Widget tests cover:
 - Task form and course-linked creation;
 - both deadline bands and empty undated-band collapse;
 - Task detail and manual planning;
+- central pending-PlanBlock review list;
 - pointer and form-based PlanBlock edits;
-- completion prompt and future-block handling;
+- two-stage completion prompt and future-block handling;
 - warning icon semantics and high-contrast labels;
 - one-step Undo message and toolbar state.
 

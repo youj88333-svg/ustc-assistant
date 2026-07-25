@@ -61,7 +61,7 @@ The first Windows milestone includes:
 - personal one-off, all-day, multi-day, and basic recurring CalendarEvents;
 - manual `Task` creation and lifecycle management;
 - manual `PlanBlock` creation, splitting, movement, locking, and completion;
-- two deadline bands and task progress presentation;
+- two deadline bands, derived Task state, and pending-PlanBlock review;
 - deterministic local reminders and system notifications;
 - one-step session undo for reversible local changes;
 - sync results and redacted failures.
@@ -295,14 +295,17 @@ PlanBlock presentation is:
 ```text
 suggested -> dashed border
 accepted  -> solid task-linked style
-active    -> solid task-linked style
 done      -> retained with reduced contrast and completion mark
 ```
 
-Selecting a task opens task detail with deadline, status, estimated effort,
-planned effort, remaining effort, and related PlanBlocks. Selecting a
-PlanBlock opens execution-block detail and provides a path to the parent task.
-Changing or deleting a PlanBlock does not silently delete its parent Task.
+Selecting a task opens task detail with deadline, persisted and derived states,
+estimated effort, future PlanBlock count and duration, and related PlanBlocks.
+These schedule occupancy values do not represent completion progress. For an
+active or blocked parent Task, an elapsed accepted PlanBlock derives a
+pending-review presentation until the user marks it done, skipped, or
+rescheduled. Selecting a PlanBlock opens execution-block detail and provides a
+path to the parent task. Changing or deleting a PlanBlock does not silently
+delete its parent Task.
 
 ## 7. Overlap and Conflict Presentation
 

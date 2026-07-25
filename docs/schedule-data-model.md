@@ -359,14 +359,15 @@ source
 sourceRecordId
 externalId
 tags
-progress
 userNotes
 agentNotes
 createdBy
 updatedBy
 createdAt
 updatedAt
+blockedReason
 completedAt
+cancelledAt
 deletedAt
 ```
 
@@ -385,13 +386,37 @@ custom         自定义任务
 ### 4.3 status
 
 ```text
-todo
-planned
-in_progress
-blocked
-completed
-cancelled
+active       未完成，默认状态
+blocked      等待外部条件，由用户明确设置
+completed    用户明确确认完成
+cancelled    用户明确取消
 ```
+
+时间流逝和 `PlanBlock` 变化都不得写入 `Task.status`。`blocked` 在界面显示为
+“等待条件”，可以填写 `blockedReason`。离开 `blocked` 时清空当前原因，历史由
+`ActionLog` 保留。进入 `completed` 时写入 `completedAt`，进入 `cancelled` 时写入
+`cancelledAt`，两者互斥。重新打开终态 Task 后回到 `active`，清空终态时间，但不
+恢复此前取消的 PlanBlock。终态 Task 必须先重新打开才能进入 `blocked`。
+
+查询层派生三组互相独立的状态：
+
+```text
+planningState:     unplanned | planned
+deadlineState:     not_applicable | no_deadline | upcoming | due_today | overdue
+confirmationState: clear | awaiting_planblock_review
+```
+
+- 对 `active` 或 `blocked` Task，至少存在一个未删除、`status=accepted` 且
+  `endAt > now` 的 PlanBlock 时，`planningState=planned`，否则为 `unplanned`。
+- `active` 或 `blocked` Task 中，已结束但仍为 `accepted` 的 PlanBlock 进入待确认
+  投影，不再算未来规划。
+- `completed` 和 `cancelled` Task 固定派生为 `planningState=unplanned`、
+  `confirmationState=clear`；明确保留的 PlanBlock 仍可作为历史或日程项显示。
+- `completed` 和 `cancelled` Task 的截止状态为 `not_applicable`。
+- `active` 和 `blocked` Task 按 `Asia/Shanghai` 计算截止状态；同日且尚未超过
+  截止时刻为 `due_today`，`now > deadlineAt` 后立即为 `overdue`。
+- 派生状态只用于显示、筛选和 Agent 读取，不写数据库，不生成操作日志，也不占用
+  一步撤回槽。
 
 ### 4.4 任务与日程的关系
 
@@ -410,7 +435,7 @@ estimatedMinutes: 120
 周四 19:30-20:30 写嵌入式实验报告
 ```
 
-规划不会替代 `Task` 本体。即使已经生成一个或多个 `PlanBlock`，`Task` 仍保留在截止事项带中，用于表达截止时间、整体状态、进度和剩余工作；`PlanBlock` 只表达具体执行时间。
+规划不会替代 `Task` 本体。即使已经生成一个或多个 `PlanBlock`，`Task` 仍保留在截止事项带中，用于表达截止时间和整体状态；`PlanBlock` 只表达具体执行时间。`estimatedMinutes` 只是可选的初始安排参考，PlanBlock 不用于推断完成百分比、实际执行分钟或剩余工时。
 
 ### 4.5 Task 在周日程中的显示
 
@@ -451,7 +476,7 @@ estimatedMinutes: 120
 
 颜色不能成为唯一提示。圆圈感叹号必须带有可访问语义，任务块中也必须显示文字状态。“今日截止”和“已经逾期”的图标表示截止风险；日程事件上的红色圆圈感叹号表示已确认冲突，两者在详情和无障碍标签中必须明确区分。
 
-点击 `Task` 打开任务详情，至少显示截止时间、状态、预计工时、已规划工时、未规划工时、已执行工时、剩余执行工时和关联的 `PlanBlock`。`Task` 本身不参与时间冲突判断；只有进入时间网格的 `PlanBlock` 才参与重叠和 `ScheduleRelation` 判断。
+点击 `Task` 打开任务详情，至少显示截止时间、持久化状态、派生规划状态和截止状态、预计工时、未来 PlanBlock 数量与总时长，以及关联的 `PlanBlock`。未来块总时长只表示日程占用，不表示完成进度。`Task` 本身不参与时间冲突判断；只有进入时间网格的 `PlanBlock` 才参与重叠和 `ScheduleRelation` 判断。
 
 ## 5. PlanBlock
 
@@ -462,9 +487,12 @@ estimatedMinutes: 120
 ```text
 suggested   虚线边框，表示尚未确认
 accepted    实线样式，表示用户已接受
-active      实线样式，表示已进入执行日程
 done        保留但弱化，并显示完成标记
 ```
+
+`accepted` PlanBlock 在 `endAt <= now` 后仍保持原数据库状态，但查询时派生为
+“待确认”。首版提供集中待确认列表，并在日程块和 Task 详情中提供入口；仅因时间块
+结束不发送系统通知。
 
 点击 `PlanBlock` 打开执行块详情，并能继续进入父 `Task`。删除、跳过或重排 `PlanBlock` 不会自动删除父 `Task`，也不会移除截止事项带中的任务。
 
@@ -484,8 +512,10 @@ reason
 locationPreference
 energyLevel
 sourceCalendarEventIds
+rescheduledToPlanBlockId
 createdAt
 updatedAt
+deletedAt
 ```
 
 ### 5.2 status
@@ -493,14 +523,35 @@ updatedAt
 ```text
 suggested    Agent 建议，还未确认
 accepted     用户确认
-active       已进入日程
-done         已完成
+done         已执行
 skipped      跳过
 rescheduled  已重排
 cancelled    取消
 ```
 
-### 5.3 locked
+### 5.3 结束后的确认
+
+用户处理已结束的 `accepted` PlanBlock 时可以选择：
+
+```text
+done         确认本次计划已执行
+skipped      确认本次没有执行
+rescheduled  旧块关联到一个新的 accepted PlanBlock
+稍后处理     不修改状态，继续留在待确认列表
+```
+
+`done` 不记录实际执行分钟或完成百分比。确认本次执行后，App 再单独询问整个 Task
+是否完成；只有用户确认才把父 Task 改为 `completed`。所有 PlanBlock 均为 `done`
+也不会自动完成 Task。
+
+完成 Task 前先展示未来 `accepted` PlanBlock 的影响摘要，用户可以全部取消或逐项
+处理，包括明确保留。保留块继续关联父 Task，并显示“父任务已完成”。已经结束但
+未确认的块保留为真实历史记录，但父 Task 进入终态后不再进入主动待确认列表。
+
+取消 Task 时展示影响摘要，并在同一事务中取消所有未来 `accepted` PlanBlock。
+`blocked` 不修改 PlanBlock。重新打开 Task 保留全部历史，但不自动恢复已取消的块。
+
+### 5.4 locked
 
 `locked=true` 表示用户明确不希望 Agent 自动移动这个时间块。
 
@@ -512,7 +563,7 @@ cancelled    取消
 已经答应别人的约饭
 ```
 
-### 5.4 embedded planning
+### 5.5 embedded planning
 
 `PlanBlock` 可以被安排在某个 `CalendarEvent` 内部，但必须通过 `ScheduleRelation` 记录原因。
 
@@ -1195,7 +1246,7 @@ personId -> personIds[]
   "userId": "user_01",
   "title": "完成示例课程作业",
   "type": "assignment",
-  "status": "todo",
+  "status": "active",
   "priority": "high",
   "deadlineAt": "2026-03-06T23:59:00+08:00",
   "estimatedMinutes": 120,
@@ -1217,10 +1268,10 @@ personId -> personIds[]
   "title": "写示例课程作业",
   "startAt": "2026-03-04T20:00:00+08:00",
   "endAt": "2026-03-04T21:30:00+08:00",
-  "status": "suggested",
+  "status": "accepted",
   "locked": false,
-  "generatedBy": "agent",
-  "reason": "避开课程和晚饭时间，距离截止时间还有 2 天"
+  "generatedBy": "user",
+  "reason": "用户安排在课程和晚饭之后"
 }
 ```
 
@@ -1385,10 +1436,14 @@ status
 priority
 deadlineAt
 estimatedMinutes
+blockedReason
+completedAt
+cancelledAt
 relatedCalendarEventIds
 tags
 createdAt
 updatedAt
+deletedAt
 ```
 
 ### 16.5 PlanBlock MVP
@@ -1403,8 +1458,10 @@ endAt
 status
 locked
 reason
+rescheduledToPlanBlockId
 createdAt
 updatedAt
+deletedAt
 ```
 
 ### 16.6 ScheduleRelation MVP

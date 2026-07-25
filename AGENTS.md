@@ -71,6 +71,10 @@ conda run -n ustc_assistant python -m compileall -q src tests
   使用稳定身份和单次例外，不无限物化历史记录。
 - 定时个人事件默认开始前 15 分钟提醒，全天个人事件默认不提醒；个人事件完成确认
   不发送系统通知，后续由 LLM 在聊天中处理待确认事件。
+- `Task` 只持久化 `active`、`blocked`、`completed`、`cancelled`；规划、截止风险
+  和 PlanBlock 待确认状态均按北京时间查询派生，不根据时间自动改写 Task。
+- PlanBlock 结束后由用户确认已执行、跳过或重排，再单独确认整个 Task 是否完成；
+  不记录完成百分比、实际执行分钟或自动剩余工时。
 - Windows Flutter App 通过本机临时 Python Bridge 调用来源能力，Bridge 直接
   导入来源 service；不得启动采集 CLI 后解析终端文本。
 - Android/iOS 后续使用移动端 `SourceGateway` 重新实现采集，但必须复用相同的
