@@ -17,6 +17,8 @@ from ustc_assistant.sources.young import enrolment, schedule
 
 
 DEFAULT_RAW_DIR = Path("tmp/private")
+DEFAULT_JW_SEMESTER_ID = 461
+DEFAULT_JW_SEMESTER_KEY = "2026fall"
 
 
 def _date_argument(value: str) -> date:
@@ -44,8 +46,10 @@ def build_parser() -> argparse.ArgumentParser:
     jw_parser.add_argument(
         "--output", "-o", type=Path, default=Path("tmp/ustc-jw-import.generated.json")
     )
-    jw_parser.add_argument("--semester-id", type=int, default=421)
-    jw_parser.add_argument("--semester-key", default="2026spring")
+    jw_parser.add_argument(
+        "--semester-id", type=int, default=DEFAULT_JW_SEMESTER_ID
+    )
+    jw_parser.add_argument("--semester-key", default=DEFAULT_JW_SEMESTER_KEY)
     jw_parser.add_argument("--user-id", default="local_user")
     _add_browser_options(jw_parser)
     jw_parser.set_defaults(handler=_collect_jw)

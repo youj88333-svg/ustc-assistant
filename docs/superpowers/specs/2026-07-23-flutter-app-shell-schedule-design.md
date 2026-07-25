@@ -58,6 +58,7 @@ The first Windows milestone includes:
 - attendance values `must_go`, `gamble`, and `skip`;
 - listening values `listen` and `not_listen`;
 - free-form user notes;
+- personal one-off, all-day, multi-day, and basic recurring CalendarEvents;
 - manual `Task` creation and lifecycle management;
 - manual `PlanBlock` creation, splitting, movement, locking, and completion;
 - two deadline bands and task progress presentation;
@@ -101,6 +102,8 @@ contains:
 ```text
 source_records
 calendar_events
+calendar_event_series
+calendar_event_occurrence_exceptions
 schedule_relations
 course_series
 user_overlays
@@ -232,14 +235,19 @@ The preview must:
 ### 6.5 Task Deadline Bands and PlanBlocks
 
 `Task` does not enter the time grid because it has no required start and end
-time. The weekly schedule places two deadline bands above the official-period
-grid:
+time. The weekly schedule places an all-day event band and two Task bands above
+the official-period grid:
 
 ```text
+all-day event band
 undated-task band
 dated-deadline band
 official-period and real-minute time grid
 ```
+
+The all-day event band hides when empty. One-day all-day events align with one
+date column, while multi-day events span their date range. They do not occupy
+hour geometry or automatically conflict with every timed event on those dates.
 
 The undated-task band:
 
@@ -389,6 +397,9 @@ settings are defined in `2026-07-24-flutter-auth-sync-design.md`.
 
 Task lifecycle, manual planning, one-step undo, and deterministic local
 reminders are defined in `2026-07-24-flutter-task-planning-design.md`.
+
+Personal one-off, all-day, and recurring CalendarEvent behavior is defined in
+`2026-07-25-flutter-personal-calendar-event-design.md`.
 
 Real LLM integration, cloud privacy consent, daily briefings, chat tools, and
 activation of Agent permission policy belong to a later Agent design. The

@@ -58,15 +58,16 @@ class PackageEntryTests(unittest.TestCase):
         self.assertEqual(query_args.command, "query")
         self.assertEqual(query_args.source, "icourse")
 
-    def test_collect_parsers_preserve_prototype_defaults(self):
+    def test_collect_parsers_use_current_semester_defaults(self):
         parser = cli.build_parser()
 
-        jw = parser.parse_args(["collect", "jw", "--semester-id", "421"])
+        jw = parser.parse_args(["collect", "jw"])
         schedule = parser.parse_args(
             ["collect", "young-schedule", "--today", "2026-07-22"]
         )
 
-        self.assertEqual(jw.semester_key, "2026spring")
+        self.assertEqual(jw.semester_id, 461)
+        self.assertEqual(jw.semester_key, "2026fall")
         self.assertEqual(jw.output, Path("tmp/ustc-jw-import.generated.json"))
         self.assertEqual(schedule.today.isoformat(), "2026-07-22")
 

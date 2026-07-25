@@ -11,7 +11,10 @@
 3. 读取 `lessonIds`，调用 `POST /for-std/course-table/datum`。
 4. 使用 `lessonList`、`scheduleList` 和 `scheduleGroupList` 生成日程。
 
-`semesterId` 不能根据年份推算。当前原型默认 `421` 与产品学期键 `2026spring`，均可通过 CLI 覆盖。
+`semesterId` 不能根据年份推算。当前 Windows 自动同步和 CLI 默认使用
+`semesterId=461`，对应产品学期键 `2026fall` 和显示名“2026 秋季学期”。
+CLI 仍可显式覆盖学期 ID 和产品学期键；历史测试中的 `421 / 2026spring`
+仅作为 2026 春季学期回归样例保留。
 
 同一节课可能因多教师产生多行，也可能存在不同地点或习题课分组。转换器按课程、排课组、日期、时间、地点和规范化习题课信息合并；`null`、`false` 和空习题课标记等价，多位教师进入同一事件。只有真实身份碰撞时才追加稳定哈希后缀。
 

@@ -16,7 +16,7 @@ The first milestone includes:
   deletion;
 - optional deadlines and estimated effort;
 - Task association with a course or event;
-- two deadline bands above the weekly timetable;
+- two Task deadline bands between the all-day band and weekly time grid;
 - manual creation of one or more PlanBlocks for a Task;
 - PlanBlock movement, resizing, splitting, locking, skipping, completion, and
   cancellation;
@@ -99,6 +99,7 @@ CalendarEvent.
 The weekly schedule places these layers above the time grid:
 
 ```text
+all-day event band
 undated-task band
 dated-deadline band
 official-period and real-minute time grid
@@ -298,6 +299,7 @@ ordinary course             15 minutes before start
 exam                        24 hours and 2 hours before start
 registered second classroom 2 hours before start
 personal CalendarEvent      15 minutes before start
+all-day CalendarEvent       no default reminder
 Task                        24 hours and 2 hours before deadline
 PlanBlock                   10 minutes before start
 ```

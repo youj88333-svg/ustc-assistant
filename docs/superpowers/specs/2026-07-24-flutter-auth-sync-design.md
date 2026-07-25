@@ -140,6 +140,20 @@ now - lastSuccessfulAt >= 12 hours -> due
 no successful sync                 -> due
 ```
 
+The initial Windows release configures JW automatic and manual sync for:
+
+```text
+semesterId  = 461
+semesterKey = 2026fall
+displayName = 2026 秋季学期
+```
+
+The App must not derive `semesterId` from a year or semester label. The mapping
+is stored as source configuration so a later release can update or extend it
+without changing imported event identities. Historical semesters already in
+SQLite remain available and are not refreshed or deleted merely because the
+configured automatic-sync semester changes.
+
 Opening the App always renders SQLite data first. Freshness checks and
 automatic work happen after the local UI is available.
 

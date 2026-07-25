@@ -45,6 +45,8 @@
 | 对象 | 含义 | 示例 |
 | --- | --- | --- |
 | `CalendarEvent` | 有明确开始和结束时间的事件 | 课程、考试、二课、聚餐 |
+| `CalendarEventSeries` | 个人事件的基础重复规则和模板 | 每周二、四晚自习 |
+| `CalendarEventOccurrenceException` | 重复系列中某一次的覆盖 | 本周例会改到周三 |
 | `Task` | 有目标或截止时间，但不一定有固定执行时间 | 作业、复习、填表 |
 | `PlanBlock` | 系统或用户安排出来的执行时间段 | 周三 20:00-21:30 写作业 |
 | `ScheduleRelation` | 两个时间安排之间的关系和冲突判断 | 课上写作业、翘课参加二课 |
@@ -59,6 +61,8 @@
 
 ```text
 SourceRecord -> CalendarEvent
+CalendarEventSeries -> EffectiveCalendarEvent
+CalendarEventOccurrenceException -> EffectiveCalendarEvent
 Task -> PlanBlock
 CalendarEvent -> Reminder
 CalendarEvent -> UserOverlay
@@ -85,6 +89,10 @@ startAt
 endAt
 timezone
 allDay
+startDate
+endDateExclusive
+seriesId
+occurrenceKey
 locationName
 buildingName
 campusName
@@ -94,6 +102,8 @@ sourceRecordId
 externalId
 confidence
 importance
+color
+completionPolicy
 attendancePolicy
 attendanceDecision
 attendanceDecisionAt
@@ -120,7 +130,6 @@ deletedAt
 ```text
 course              课程
 exam                考试
-assignment_block    作业执行时间块
 second_class        二课活动
 personal            普通个人事项
 entertainment       娱乐
@@ -131,6 +140,10 @@ study               自习/复习
 system              系统生成的辅助事件
 ```
 
+用户手动创建时只允许选择 `personal`、`entertainment`、`meal`、
+`campus_affair`、`travel` 和 `study`，默认 `personal`。`course`、`exam` 和
+`second_class` 只由来源导入；自定义分类使用标签。
+
 ### 3.3 status
 
 ```text
@@ -138,10 +151,14 @@ active      正常
 tentative   暂定
 cancelled   取消
 completed   已完成
+skipped     时间已过且用户确认未进行
 hidden      用户隐藏
 ```
 
 冲突不放在 `CalendarEvent.status` 中表达，而由 `ScheduleRelation.conflictState` 表达。原因是时间重叠不一定是冲突，同一时间上课、写作业、娱乐、二课都有可能是用户有意安排。
+
+`deletedAt` 表示软删除，不属于状态枚举。作业执行时间只使用独立的
+`PlanBlock`，不再使用 `CalendarEvent.assignment_block`。
 
 ### 3.4 source
 
@@ -265,6 +282,46 @@ single_event   只覆盖某一节课
 course_series  覆盖同一门课/同一教学班的所有课
 event_type     覆盖某类事件，例如所有二课
 ```
+
+### 3.8 个人事件时间与完成策略
+
+定时个人事件使用 `startAt/endAt`。全天个人事件使用北京时间日期区间
+`[startDate, endDateExclusive)`，不使用伪造的午夜时间表达全天语义。两组字段
+互斥。
+
+个人事件的完成策略为：
+
+```text
+auto_after_end       结束后有效状态自动变为 completed，默认
+manual_confirmation  结束后进入待确认状态
+```
+
+自动完成和待确认均由查询派生，不为重复系列的每个历史 occurrence 批量写入记录。
+用户可以明确改为 `completed`、`skipped` 或重新安排。完成确认不发送系统通知；
+后续 LLM 可以在 App 打开时读取待确认事件并通过聊天询问。
+
+课程、考试和已报名二课不继承个人事件的自动完成默认值。
+
+### 3.9 个人重复事件
+
+个人重复事件使用 `CalendarEventSeries` 保存模板和基础规则，使用
+`CalendarEventOccurrenceException` 保存单次覆盖。首版支持每天、每 N 天、每周
+指定一个或多个星期、每 N 周、每月和每 N 月，以及可选的包含式结束日期。
+
+月度重复保留原始日期锚点；当月没有该日期时顺延到月末，之后恢复原锚点。
+occurrence 身份由系列 ID 和原始计划本地日期/时间稳定生成，单次改期不改变身份。
+
+系列编辑范围为：
+
+```text
+only_this       只写单次例外
+this_and_future 截断旧系列并创建新系列
+whole_series    更新整个系列模板或规则
+```
+
+规则变化后无法对应到 occurrence 的旧例外标记为 `orphaned`，保留历史但不进入
+有效日程。详细行为见
+`docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md`。
 
 ## 4. Task
 
@@ -833,7 +890,8 @@ in_app
 普通课程             开始前 15 分钟
 考试                 开始前 24 小时和 2 小时
 已报名二课           开始前 2 小时
-普通个人日程         开始前 15 分钟
+定时个人日程         开始前 15 分钟
+全天个人日程         默认不提醒
 Task                 截止前 24 小时和 2 小时
 PlanBlock            开始前 10 分钟
 ```
@@ -1235,16 +1293,25 @@ LLM 接入前必须另行完成 Agent 工具、风险分级、确认流程和权
 id
 userId
 title
+description
 type
 status
 startAt
 endAt
+timezone
+allDay
+startDate
+endDateExclusive
+seriesId
+occurrenceKey
 locationName
 buildingName
 campusName
 source
 externalId
 importance
+color
+completionPolicy
 attendancePolicy
 attendanceDecision
 attendanceDecisionAt
@@ -1256,9 +1323,58 @@ tags
 userNotes
 createdAt
 updatedAt
+deletedAt
 ```
 
-### 16.2 Task MVP
+### 16.2 CalendarEventSeries MVP
+
+```text
+id
+userId
+title
+description
+type
+status
+timezone
+allDay
+anchorStartAt
+durationMinutes
+anchorStartDate
+durationDays
+frequency
+interval
+weekdays
+untilDate
+locationName
+importance
+color
+completionPolicy
+tags
+userNotes
+createdAt
+updatedAt
+deletedAt
+```
+
+### 16.3 CalendarEventOccurrenceException MVP
+
+```text
+id
+userId
+seriesId
+occurrenceKey
+originalStartAt
+originalStartDate
+overriddenFields
+overridePayload
+status
+orphaned
+deletedAt
+createdAt
+updatedAt
+```
+
+### 16.4 Task MVP
 
 ```text
 id
@@ -1275,7 +1391,7 @@ createdAt
 updatedAt
 ```
 
-### 16.3 PlanBlock MVP
+### 16.5 PlanBlock MVP
 
 ```text
 id
@@ -1291,7 +1407,7 @@ createdAt
 updatedAt
 ```
 
-### 16.4 ScheduleRelation MVP
+### 16.6 ScheduleRelation MVP
 
 ```text
 id
@@ -1308,7 +1424,7 @@ createdAt
 updatedAt
 ```
 
-### 16.5 ActionLog MVP
+### 16.7 ActionLog MVP
 
 ```text
 id
@@ -1322,7 +1438,7 @@ riskLevel
 createdAt
 ```
 
-### 16.6 AgentPermissionPolicy 预留空壳
+### 16.8 AgentPermissionPolicy 预留空壳
 
 ```text
 id
