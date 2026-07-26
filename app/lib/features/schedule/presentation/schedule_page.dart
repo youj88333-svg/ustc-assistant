@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 
 import '../../tasks/presentation/task_center_page.dart';
+import '../domain/schedule_projection.dart';
+import 'week_timetable.dart';
 
 enum ScheduleSection { week, tasks }
 
@@ -46,22 +48,19 @@ class _SchedulePageState extends State<SchedulePage>
         ),
         Expanded(
           child: switch (selected) {
-            ScheduleSection.week => const _WeekPlaceholder(),
+            ScheduleSection.week => WeekTimetable(
+              projection: buildWeek(
+                ScheduleQuery(
+                  selectedDate: DateTime.now(),
+                  events: const [],
+                ),
+              ),
+              onEventSelected: (_) {},
+            ),
             ScheduleSection.tasks => const TaskCenterPage(),
           },
         ),
       ],
-    );
-  }
-}
-
-class _WeekPlaceholder extends StatelessWidget {
-  const _WeekPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Text('本周暂无日程', style: TextStyle(fontSize: 16)),
     );
   }
 }
