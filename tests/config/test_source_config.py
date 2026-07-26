@@ -40,6 +40,46 @@ class SourceConfigTests(unittest.TestCase):
             JwSemesterConfig(421, "2026spring", "2026 春季学期"),
         )
 
+    def test_loader_rejects_missing_root_and_jw_keys(self):
+        cases = (
+            ({}, "jw"),
+            (
+                {
+                    "jw": {
+                        "semesterKey": "2026fall",
+                        "displayName": "2026 秋季学期",
+                    }
+                },
+                "semesterId",
+            ),
+            (
+                {
+                    "jw": {
+                        "semesterId": 461,
+                        "displayName": "2026 秋季学期",
+                    }
+                },
+                "semesterKey",
+            ),
+            (
+                {
+                    "jw": {
+                        "semesterId": 461,
+                        "semesterKey": "2026fall",
+                    }
+                },
+                "displayName",
+            ),
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "source-defaults.json"
+            for payload, message in cases:
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.subTest(payload=payload):
+                    with self.assertRaisesRegex(SourceConfigError, message):
+                        load_default_jw_semester(path)
+
     def test_loader_rejects_unknown_and_invalid_values(self):
         cases = (
             ({"unexpected": {}}, "unknown"),
