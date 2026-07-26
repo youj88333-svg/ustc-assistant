@@ -11,6 +11,7 @@ dependencies = [
   "playwright>=1.50,<2",
   "requests>=2.31,<3",
   "beautifulsoup4>=4.12,<5",
+  "jsonschema>=4.23,<5",
 ]
 
 [project.scripts]
