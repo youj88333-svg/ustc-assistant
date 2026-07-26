@@ -15,7 +15,8 @@ daily briefing, Agent tools, cloud sync, or mobile collection.
 The first milestone supports:
 
 - a dedicated persistent Edge profile for school sessions;
-- optional encrypted storage of school username and password;
+- mandatory protected storage of the verified school username and opt-in
+  protected storage of the password;
 - automatic sync when a source has not succeeded for 12 hours;
 - manual sync of all or one source at any time;
 - file import through the same Flutter import service;
@@ -65,8 +66,10 @@ The App never recognizes, bypasses, or submits a CAPTCHA automatically.
 
 ### 4.1 Storage Decision
 
-Encrypted username and password blobs are stored in SQLite. The ability to
-decrypt them is bound to the current platform user and device.
+The verified school username is always stored as a protected blob in SQLite.
+The password blob is nullable and stored only when the user opts in. The
+ability to decrypt either value is bound to the current platform user and
+device.
 
 The encryption key or equivalent unwrapping capability must not be stored in
 SQLite, source code, configuration, logs, exported data, or the Python bridge.
@@ -119,8 +122,10 @@ operation-history payloads.
 
 ### 4.3 Save and Use Rules
 
-- Saving credentials is opt-in.
-- Save only after a successful school login.
+- Protected username storage is mandatory after school identity verification;
+  only password storage is opt-in.
+- Persist the protected username, and an opted-in protected password, only
+  after a successful school login verifies the expected identity.
 - Encryption failure aborts saving; plaintext fallback is forbidden.
 - The username may be decrypted briefly for each local session/account
   verification.

@@ -50,7 +50,7 @@
 | `Task` | 有目标或截止时间，但不一定有固定执行时间 | 作业、复习、填表 |
 | `PlanBlock` | 系统或用户安排出来的执行时间段 | 周三 20:00-21:30 写作业 |
 | `ScheduleRelation` | 两个时间安排之间的关系和冲突判断 | 课上写作业、翘课参加二课 |
-| `ScheduleRelationRule` | 对兼容的本次及未来 occurrence 生效的结构化冲突规则 | 两个重复系列从本周起允许共存 |
+| `ScheduleRelationRule` | 由两个稳定系列身份限定、对本次及未来 occurrence 生效的结构化冲突规则 | 两个重复系列从本周起允许共存 |
 | `SourceRecord` | 从外部系统导入的原始记录摘要 | 教务课表记录、二课活动记录 |
 | `UserOverlay` | 用户对导入数据的个人修正 | 标记必去、隐藏、改显示名 |
 | `Reminder` | 提醒规则 | 上课前 20 分钟提醒 |
@@ -667,7 +667,8 @@ ask_user        需要询问用户
 ### 6.5 ScheduleRelationRule
 
 `ScheduleRelation` 只保存一对具体时间安排的分类。用户选择“本次及未来”时，必须
-另存一条结构化且有界的 `ScheduleRelationRule`：
+另存一条由两个精确稳定系列身份和 `effectiveFrom` 确定的结构化
+`ScheduleRelationRule`：
 
 ```text
 id
@@ -688,9 +689,17 @@ updatedAt
 ```
 
 `primarySeriesType` 和 `relatedSeriesType` 只能引用明确支持的
-`course_series` 或 `calendar_event_series`。`effectiveFrom` 与
-`effectiveThrough` 是包含两端的 `Asia/Shanghai` 本地日期，
-`effectiveThrough` 不得早于 `effectiveFrom`，规则不得无界。
+`course_series` 或 `calendar_event_series`。两侧都必须具有稳定系列身份；任一侧
+只有 occurrence 身份时，`currentAndFuture` 分类必须拒绝。
+
+`effectiveFrom` 是必填的 `Asia/Shanghai` 本地日期。`effectiveThrough` 可空：
+
+- 任一参与系列有有限结束日期时，取两侧所有有限结束日期中最早的日期；
+- 两侧系列都没有有限结束日期时保持为空；
+- 非空时不得早于 `effectiveFrom`。
+
+规则由精确的两个系列身份和 `effectiveFrom` 确定，不得通过任意固定 horizon
+伪造结束日期。
 
 查询层只把规则应用于两侧系列中日期落在范围内且时间语义兼容的 projected
 occurrence。针对某一次明确保存的 `ScheduleRelation` 优先于系列规则。规则必须
@@ -1534,7 +1543,7 @@ primarySeriesId
 relatedSeriesType
 relatedSeriesId
 effectiveFrom
-effectiveThrough
+effectiveThrough (nullable)
 relationType
 conflictState
 resolution

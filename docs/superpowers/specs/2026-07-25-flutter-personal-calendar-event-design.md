@@ -314,11 +314,15 @@ non-conflict relation may record embedded work, replacement, an alternative
 choice, or another user explanation.
 
 A classification may target one occurrence or compatible current-and-future
-occurrences. The latter persists a bounded, structured
-`ScheduleRelationRule`; it is not hidden in JSON or expanded into unbounded
-occurrence rows. The first milestone does not let deterministic code classify
-overlap on the user's behalf. A later LLM may suggest a classification but must
-not save it without the applicable permission and confirmation flow.
+occurrences. The latter requires exact stable identities for both participating
+series plus `effectiveFrom`. Its structured `ScheduleRelationRule` stores
+nullable `effectiveThrough` as the earliest finite end of either series, or
+null when both are unbounded. If either stable series identity is unavailable,
+the App rejects current-and-future scope. It uses no arbitrary fixed horizon,
+is not hidden in JSON, and is not expanded into occurrence rows. The first
+milestone does not let deterministic code classify overlap on the user's
+behalf. A later LLM may suggest a classification but must not save it without
+the applicable permission and confirmation flow.
 
 ## 11. Reminders
 

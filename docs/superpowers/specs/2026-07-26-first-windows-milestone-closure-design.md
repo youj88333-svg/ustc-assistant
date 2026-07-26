@@ -203,8 +203,10 @@ agent_permission_policies
 - Task 不在一列中嵌入相关事件 ID 数组；
 - Task 正式包含 `description`、`userNotes`、`blockedReason`、终态时间和软删除时间；
 - Reminder 独立建表，不把提醒规则塞入 Task 或 Event 的任意 JSON；
-- `schedule_relation_rules` 以结构化系列引用和有界生效范围保存“本次及未来”的
-  冲突分类；不得藏入 JSON，也不得把该能力缩减为仅 occurrence 分类；
+- `schedule_relation_rules` 以两个精确稳定的系列身份和 `effectiveFrom` 保存“本次
+  及未来”的冲突分类；`effectiveThrough` 可空，有任一系列存在有限结束日期时取
+  两者中最早的有限结束日期，否则为空；缺少任一稳定系列身份时拒绝该 scope；
+  不得使用任意固定 horizon、藏入 JSON 或缩减为仅 occurrence 分类；
 - `import_batches` 保存 `bundleId`、规范化摘要、来源、scope 和导入结果；
 - `ActionLog` 至少包含结果、脱敏摘要、目标、actor、风险和相关同步批次；
 - `ActionLog` 追加后不能通过普通业务操作编辑；
@@ -370,7 +372,10 @@ infrastructure
 - 时间重叠由查询层计算，不自动写冲突关系；
 - 冲突判断只能经过 `ConflictService`；
 - 可撤回的 mutation 通过稳定 `UndoRecorder` 端口记录撤回命令，全局
-  `UndoService` 是该端口的一步撤回实现；
+  `UndoService` 是该端口的一步撤回实现；Reminder override service 在 Reminder
+  阶段创建后接入该既有端口；
+- `TaskLifecycleService` 只依赖带 no-op/default 实现的稳定
+  `PlanBlockLifecyclePort`，`PlanBlockService` 创建后提供具体实现；
 - `ImportService` 只依赖稳定 `ReminderReconciler` 端口，不直接依赖 Windows
   通知实现；
 - 时间逻辑统一使用可注入 `Clock` 和 `Asia/Shanghai`；

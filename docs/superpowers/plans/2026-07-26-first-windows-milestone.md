@@ -924,8 +924,9 @@ test('undo slot contains at most one row', () async {
 
 Add timed/all-day exclusivity, end-after-start, Task terminal timestamp,
 PlanBlock parent, relation pair uniqueness, structured current-and-future
-relation-rule bounds and pair uniqueness, occurrence exception identity,
-Reminder target, and account-partition tests.
+relation-rule identity/effective-date uniqueness, nullable `effectiveThrough`
+constraints, occurrence exception identity, Reminder target, and
+account-partition tests.
 
 - [ ] **Step 2: Run and confirm failures**
 
@@ -939,9 +940,11 @@ relations only in `task_event_links`. Store enum values as checked text columns,
 sets/tags as normalized JSON arrays, and occurrence override payloads as
 versioned JSON with explicit overridden-field names. Persist
 `ScheduleRelationRule` in the structured `schedule_relation_rules` table with
-typed series references and bounded effective dates; never hide
-current-and-future conflict classification in JSON or reduce it to
-occurrence-only `schedule_relations`.
+typed series references, required `effectiveFrom`, and nullable
+`effectiveThrough`. The exact two stable series identities bound the rule;
+when either series has a finite end, `effectiveThrough` is the earliest finite
+end, otherwise it is null. Never hide current-and-future conflict
+classification in JSON or reduce it to occurrence-only `schedule_relations`.
 
 - [ ] **Step 4: Generate, test all database files, and commit**
 
@@ -1327,10 +1330,18 @@ test('current-and-future classification persists a structured rule', () async {
     ConflictState.nonConflict,
     scope: ConflictScope.currentAndFuture,
   );
-  expect(await relationRuleRows(), hasLength(1));
+  final rule = (await relationRuleRows()).single;
+  expect(rule.primarySeriesId, a.seriesId);
+  expect(rule.relatedSeriesId, b.seriesId);
+  expect(rule.effectiveFrom, selectedOccurrenceDate);
+  expect(rule.effectiveThrough, isNull);
   expect((await relationRows()).where((row) => row.isSynthetic), isEmpty);
 });
 ```
+
+Add cases proving a finite participant sets `effectiveThrough` to the earliest
+finite series end, two unbounded series leave it null, and a missing stable
+series identity rejects `currentAndFuture` without writing any rule.
 
 - [ ] **Step 2: Run and confirm missing services**
 
@@ -1339,13 +1350,17 @@ Run: `& "$env:Flutter_Path\flutter.bat" test test/features/schedule/overlay_conf
 - [ ] **Step 3: Implement transactional services and redacted logs**
 
 Support attendance `must_go/gamble/skip`, listening `listen/not_listen`, notes,
-color, reminder override, foreground preference, occurrence-specific
+color, foreground preference, occurrence-specific
 `going/not_going/undecided` decisions, attendance outcomes, attendance notes,
 and listening notes. Pair identities are canonicalized so `(a,b)` and `(b,a)`
-cannot duplicate. A current-and-future conflict classification stores a bounded
-structured `ScheduleRelationRule` row with typed series references and applies
-only to compatible projected occurrences. It is not stored as JSON and is not
-expanded into unbounded occurrence rows.
+cannot duplicate. A current-and-future conflict classification requires exact
+stable identities for both participating series and stores them with
+`effectiveFrom`. Set nullable `effectiveThrough` to the earliest finite end of
+the two series when either has one; leave it null when both series are
+unbounded. Reject current-and-future classification when either stable series
+identity is unavailable. The rule is not stored as JSON and is not eagerly
+expanded into occurrence rows. Task 25 adds reminder-override mutations after
+the reminder feature exists.
 
 - [ ] **Step 4: Implement event detail and “处理重叠”**
 
@@ -1481,6 +1496,7 @@ git commit -m "feat: support recurring personal events"
 - Create: `app/lib/features/tasks/domain/task.dart`
 - Create: `app/lib/features/tasks/domain/task_projection.dart`
 - Create: `app/lib/features/tasks/application/undo_recorder.dart`
+- Create: `app/lib/features/tasks/application/plan_block_lifecycle_port.dart`
 - Create: `app/lib/features/tasks/application/task_lifecycle_service.dart`
 - Create: `app/test/features/tasks/task_lifecycle_test.dart`
 
@@ -1488,6 +1504,7 @@ git commit -m "feat: support recurring personal events"
 - Persisted statuses: `active`, `blocked`, `completed`, `cancelled`.
 - Derived: planning, deadline, and confirmation states.
 - Produces: stable `UndoRecorder` port consumed by reversible mutation services.
+- Produces: stable `PlanBlockLifecyclePort` with no-op/default behavior for Task terminal commands.
 - No persisted in-progress state, percentage, actual minutes, or automatic status writes.
 
 - [ ] **Step 1: Write failing lifecycle tests**
@@ -1508,7 +1525,10 @@ test('completed task must be reopened before blocking', () async {
 
 Add blocked-reason clearing, terminal timestamps, reopen behavior, no automatic
 completion, soft delete, stale command, Task-event link, and fake
-`UndoRecorder` invocation tests.
+`UndoRecorder` invocation tests. Add tests proving Task completion and
+cancellation compile and commit with the default no-op
+`PlanBlockLifecyclePort`, plus fake-port tests for impact summaries and
+post-transition calls.
 
 - [ ] **Step 2: Run and confirm missing lifecycle service**
 
@@ -1519,9 +1539,11 @@ Run: `& "$env:Flutter_Path\flutter.bat" test test/features/tasks/task_lifecycle_
 All mutations include expected `updatedAt` for stale-write rejection and append
 a redacted ActionLog. Define the stable undo-recording port in this task and
 make reversible Task mutations call it only after their business write
-succeeds; Task 21 supplies the global one-step implementation. Completion and
-cancellation summarize linked future PlanBlocks through the interface created
-in Task 21.
+succeeds; Task 21 supplies the global one-step implementation. Also define the
+stable `PlanBlockLifecyclePort` and a no-op/default implementation in this task,
+so completion and cancellation can summarize and update linked future
+PlanBlocks without depending on later files. Task 21 supplies the concrete
+PlanBlock implementation of this port.
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -1549,6 +1571,7 @@ git commit -m "feat: implement task lifecycle"
 **Interfaces:**
 - PlanBlock statuses: `suggested`, `accepted`, `done`, `skipped`, `rescheduled`, `cancelled`.
 - Produces one global session undo slot for the most recent reversible local command.
+- `PlanBlockService` implements Task 20's stable `PlanBlockLifecyclePort`.
 
 - [ ] **Step 1: Write failing PlanBlock and undo tests**
 
@@ -1581,16 +1604,18 @@ Run: `& "$env:Flutter_Path\flutter.bat" test test/features/tasks/plan_block_undo
 
 Reschedule atomically marks the old block and creates a replacement. Task
 cancellation cancels future accepted blocks; blocked Task changes none.
-Completing all PlanBlocks never completes the Task.
+Completing all PlanBlocks never completes the Task. Supply the concrete
+`PlanBlockLifecyclePort` implementation used by `TaskLifecycleService`.
 
 - [ ] **Step 4: Implement versioned undo commands**
 
 Store minimal before-state and command kind. Clear at normal startup. Do not
 allow sync, file import, credentials, browser session clearing, or complete
 data clearing in undo. Register reversible commands from Task, PlanBlock,
-personal CalendarEvent, UserOverlay, Reminder override, and conflict services
-through the Task 20 `UndoRecorder` port with this one `UndoService`; none of
-those features owns a private undo stack.
+personal CalendarEvent, UserOverlay, and conflict services that exist by this
+task through the Task 20 `UndoRecorder` port with this one `UndoService`; none
+of those features owns a private undo stack. Reminder override joins the same
+global port when its service is created in Task 25.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -1844,14 +1869,17 @@ git commit -m "feat: synchronize Flutter through Python Bridge"
 **Files:**
 - Create: `app/lib/features/reminders/domain/reminder_rule.dart`
 - Create: `app/lib/features/reminders/application/reminder_service.dart`
+- Create: `app/lib/features/reminders/application/reminder_override_service.dart`
 - Create: `app/lib/features/reminders/application/windows_reminder_reconciler.dart`
 - Create: `app/lib/features/reminders/data/foreground_notification_adapter.dart`
 - Modify: `app/lib/app/app.dart`
 - Create: `app/test/features/reminders/reminder_service_test.dart`
+- Create: `app/test/features/reminders/reminder_override_undo_test.dart`
 - Create: `app/test/features/reminders/foreground_notification_test.dart`
 
 **Interfaces:**
 - Computes persisted Reminder records from source defaults and overlays.
+- Reminder override mutations consume Task 20's existing `UndoRecorder` port.
 - Supplies the Windows implementation of Task 13's stable `ReminderReconciler` port.
 - Emits Windows toast only while App process is running.
 - Never claims closed-App delivery/cancellation.
@@ -1876,6 +1904,10 @@ and foreground adapter failure tests. For Tasks, use parameterized Beijing
 deadlines across ordinary, month-boundary, and year-boundary dates and assert
 the exact trigger-instant set for the 24-hour and 2-hour offsets, plus the exact
 empty set when no deadline or a terminal state suppresses reminders.
+Add tests proving a reminder override records through the existing global
+`UndoRecorder`, replaces the same one-step undo slot used by earlier mutation
+services, and rolls back both the override and its Reminder reconciliation
+atomically on undo failure.
 
 - [ ] **Step 2: Run and confirm missing reminder engine**
 
@@ -1886,7 +1918,9 @@ Run: `& "$env:Flutter_Path\flutter.bat" test test/features/reminders`
 Compute all trigger instants with injected Beijing Clock. Persist desired,
 delivered, cancelled, missed, and failed states. On startup, mark elapsed
 undelivered process-lifetime reminders as missed and expose them in-App; do not
-emit a burst of stale Windows toasts.
+emit a burst of stale Windows toasts. Create `ReminderOverrideService` here and
+wire its reversible mutations to Task 20's `UndoRecorder`; do not create a
+feature-local undo stack.
 
 - [ ] **Step 4: Implement the running-process notification adapter**
 
@@ -2001,9 +2035,10 @@ conflict classification, account switch, undo expiry, and interrupted sync.
 - [ ] **Step 2: Add migration and accessibility tests**
 
 Verify schema version 1 creates every table, Agent permission table is empty,
-`schedule_relation_rules` has structured bounded columns, foreign keys are on,
-ActionLog is retained, warning icons have semantic labels, keyboard focus
-reaches controls, and color is never the only state signal.
+`schedule_relation_rules` has structured identity/effective-date columns
+including nullable `effectiveThrough`, foreign keys are on, ActionLog is
+retained, warning icons have semantic labels, keyboard focus reaches controls,
+and color is never the only state signal.
 
 - [ ] **Step 3: Add and inspect responsive goldens**
 

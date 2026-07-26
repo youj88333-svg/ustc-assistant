@@ -155,8 +155,12 @@ source-declared relations. It never imports user conflict judgments. Time
 overlap is computed locally, while conflict/non-conflict is created only after
 explicit user classification. One-occurrence classifications use
 `schedule_relations`; compatible current-and-future classifications use the
-structured, bounded `schedule_relation_rules` table. Rules are not hidden in
-JSON or eagerly reduced to occurrence-only rows.
+structured `schedule_relation_rules` table and require exact stable identities
+for both series plus `effectiveFrom`. `effectiveThrough` is the earliest finite
+end of either series when one exists and is null when both are unbounded.
+Missing stable series identity rejects this scope. Rules use no arbitrary fixed
+horizon, are not hidden in JSON, and are not eagerly reduced to occurrence-only
+rows.
 
 The effective event view applies overlays in this order:
 

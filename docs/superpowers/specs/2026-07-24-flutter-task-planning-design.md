@@ -93,6 +93,12 @@ Behavior is:
 
 Task status changes never rewrite source-owned CalendarEvent data.
 
+`TaskLifecycleService` depends on a stable `PlanBlockLifecyclePort` for terminal
+impact queries and linked-future-block updates. The Task lifecycle layer defines
+this port with no-op/default behavior, so Task completion and cancellation are
+independently usable before PlanBlock implementation exists.
+`PlanBlockService` later supplies the concrete port implementation.
+
 The query layer derives three independent presentation states:
 
 ```text
@@ -294,8 +300,10 @@ local mutation.
 Reversible mutation services depend on a stable `UndoRecorder` port. The Task
 lifecycle layer defines that port; the global one-step `UndoService` supplies
 its implementation and is the only owner of `undo_slot`. Task, PlanBlock,
-personal CalendarEvent, UserOverlay, reminder-override, and conflict-priority
-mutations use the same port and never create feature-local undo stacks.
+personal CalendarEvent, UserOverlay, and conflict-priority mutations use the
+same port once global undo is created. The later reminder feature wires its
+`ReminderOverrideService` to that existing port; no feature creates a local undo
+stack.
 
 Supported actions include:
 
@@ -356,6 +364,11 @@ Users can:
 - disable a type default;
 - disable all system notifications while keeping in-App reminders;
 - remove one of multiple default offsets.
+
+Reminder override mutations are owned by `ReminderOverrideService`, created
+with the reminder feature after global undo exists. That service consumes the
+existing `UndoRecorder` port, so overrides use the same one-step slot as Task,
+PlanBlock, CalendarEvent, UserOverlay, and conflict-priority mutations.
 
 Time changes reschedule persisted reminder records. Completion, cancellation,
 deletion, or hiding invalidates reminders that no longer apply. The running
@@ -421,6 +434,8 @@ minutes. PlanBlock persistence includes optional `rescheduledToPlanBlockId` and
 Domain and database tests cover:
 
 - Task lifecycle transitions;
+- Task terminal commands with the default no-op and a fake
+  `PlanBlockLifecyclePort`;
 - rejection of illegal and stale lifecycle transitions;
 - Task persistence with and without deadlines;
 - both deadline-band queries;
