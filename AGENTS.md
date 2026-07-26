@@ -118,9 +118,10 @@ source service
 - SourceBundle 迁移：先读 `docs/data-sources/source-bundle-v1.md`、Schema 与
   `tests/fixtures/source-bundle/`，然后修改生产者；不要让 Flutter 兼容 legacy
   成为长期方案。
-- Flutter 日程和 App 构建：先读 `schedule-data-model.md`，再依次读 App Shell、
-  Auth/Sync、Task 和 Personal CalendarEvent 四份 spec；不要假设仓库已有 Flutter
-  工程。
+- Flutter 日程和 App 构建：先读
+  `docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`
+  掌握首版总边界，再读 `schedule-data-model.md` 和 App Shell、Auth/Sync、Task、
+  Personal CalendarEvent 四份详细 spec；不要假设仓库已有 Flutter 工程。
 - 修改网站契约时同步更新来源文档和回归测试；修改跨端导入字段时同步更新正式
   契约、Schema、fixture、Python 生产者测试和未来 Flutter 消费者测试。
 - `tmp/`、`temp.md`、原始响应和浏览器 Profile 只用于本机研究，不能作为稳定输入
