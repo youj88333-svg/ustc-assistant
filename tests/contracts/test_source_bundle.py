@@ -111,6 +111,50 @@ class SourceBundleContractTests(unittest.TestCase):
         ]["calendarEvents"][0]["externalId"]
         self.assert_validation_code(bundle, "dangling_reference")
 
+    def test_exam_relation_primary_must_be_an_exam_event(self):
+        bundle = load_fixture("jw-with-exam.json")
+        relation_id = "ustc_jw:2026fall:relation:exam-for-course:private"
+        bundle["data"]["scheduleRelations"].append(
+            {
+                "externalId": relation_id,
+                "relationType": "exam_for_course",
+                "primary": {
+                    "entityType": "calendar_event",
+                    "externalId": bundle["data"]["calendarEvents"][0][
+                        "externalId"
+                    ],
+                },
+                "related": {
+                    "entityType": "course_series",
+                    "externalId": bundle["data"]["courseSeries"][0][
+                        "externalId"
+                    ],
+                },
+            }
+        )
+        bundle["data"]["sourceRecords"].append(
+            {
+                "externalId": (
+                    "ustc_jw:2026fall:record:exam-course-relation:private"
+                ),
+                "recordType": "jw_exam_course_relation",
+                "entityType": "schedule_relation",
+                "entityExternalId": relation_id,
+                "sourceStatus": "active",
+                "sourceUpdatedAt": None,
+            }
+        )
+        bundle["manifest"]["sourceRecordCount"] = 4
+        bundle["manifest"]["scheduleRelationCount"] = 1
+        bundle["snapshot"]["scope"]["components"][1][
+            "observedRecordCount"
+        ] = 2
+
+        with self.assertRaises(SourceBundleValidationError) as caught:
+            validate_source_bundle(bundle)
+        self.assertEqual(caught.exception.code, "dangling_reference")
+        self.assertNotIn(relation_id, str(caught.exception))
+
     def test_non_beijing_offset_is_invalid_time(self):
         bundle = load_fixture("young-with-schedule.json")
         bundle["data"]["calendarEvents"][0]["time"][

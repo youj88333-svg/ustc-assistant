@@ -95,6 +95,10 @@ def _verify_redundant_jw_contains_bounds(schema: Mapping[str, Any]) -> None:
             and all(
                 constraint.get("minContains") == 1
                 and constraint.get("maxContains") == 1
+                and isinstance(
+                    constraint["contains"].get("required"), list
+                )
+                and "name" in constraint["contains"]["required"]
                 for constraint in constraints
             )
         )

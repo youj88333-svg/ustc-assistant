@@ -332,6 +332,10 @@ def _check_references(data: Mapping[str, Any]) -> None:
             and (
                 primary["entityType"] != "calendar_event"
                 or related["entityType"] != "course_series"
+                or entity_kinds["calendar_event"][
+                    primary["externalId"]
+                ]
+                != "jw_exam"
             )
         ):
             _raise("dangling_reference")

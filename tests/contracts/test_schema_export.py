@@ -135,6 +135,15 @@ class Draft7SchemaExportTests(unittest.TestCase):
         with self.assertRaises(UnsupportedSchemaKeywordError):
             build_draft7_compat_schema(canonical)
 
+    def test_jw_contains_without_required_name_is_not_safely_convertible(self):
+        canonical = load_canonical_schema()
+        constraint = canonical["$defs"]["jwScope"]["properties"][
+            "components"
+        ]["allOf"][0]["contains"]
+        constraint.pop("required")
+        with self.assertRaises(UnsupportedSchemaKeywordError):
+            build_draft7_compat_schema(canonical)
+
     def test_cli_writes_only_requested_utf8_file_with_trailing_newline(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "source_bundle_draft7.schema.json"
