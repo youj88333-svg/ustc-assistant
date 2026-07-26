@@ -17,6 +17,22 @@ RECORD = {
 
 
 class ScheduleServiceTests(unittest.TestCase):
+    def test_normalizes_one_schedule_for_reuse_by_import_producers(self):
+        normalized = schedule.normalize_schedule_record(RECORD)
+
+        self.assertEqual(
+            normalized,
+            {
+                "sourceScheduleId": "schedule-1",
+                "sourceActivityId": "activity-1",
+                "title": "sample",
+                "startsAt": "2026-07-22T08:00:00+08:00",
+                "endsAt": "2026-07-22T09:00:00+08:00",
+                "location": "campus",
+                "descriptionText": "First & second\nline",
+            },
+        )
+
     def test_normalized_snapshot_has_only_approved_schedule_fields(self):
         collection = schedule.CollectedSchedules(
             records=(RECORD,),

@@ -409,7 +409,8 @@ def _require_text(record: dict[str, Any], field: str) -> str:
     return value
 
 
-def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
+def normalize_schedule_record(record: dict[str, Any]) -> dict[str, Any]:
+    """Return the approved public fields of one registered schedule."""
     return {
         "sourceScheduleId": _require_text(record, "id"),
         "sourceActivityId": _require_text(record, "itemId"),
@@ -427,7 +428,7 @@ def normalize_schedules(
     collected_at: str | None = None,
 ) -> dict[str, Any]:
     timestamp = collected_at or datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
-    schedules = [_normalize_record(record) for record in collection.records]
+    schedules = [normalize_schedule_record(record) for record in collection.records]
     return {
         "schemaVersion": "1.0",
         "source": SOURCE_NAME,
