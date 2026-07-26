@@ -7,9 +7,19 @@ import json
 import os
 import threading
 import time
+from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
+from urllib.parse import parse_qs, urlsplit
 
+from ustc_assistant.bridge.jobs import (
+    BridgeBusy,
+    InvalidJobState,
+    JobManager,
+    JobNotFound,
+    JwCollectionRequest,
+    YoungCollectionRequest,
+)
 from ustc_assistant.bridge.protocol import (
     MAX_REQUEST_BYTES,
     PROTOCOL_VERSION,
@@ -18,6 +28,10 @@ from ustc_assistant.bridge.protocol import (
     parse_request_body,
 )
 from ustc_assistant.config import load_default_jw_semester
+from ustc_assistant.config import JwSemesterConfig
+from ustc_assistant.common.auth import AccountMismatch, LoginCredentials
+from ustc_assistant.sources.jw import service as jw_service
+from ustc_assistant.sources.young import source_bundle as young_service
 
 
 IDLE_TIMEOUT_SECONDS = 10 * 60
@@ -84,13 +98,14 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._authenticated():
             return
-        if self.path == "/health":
+        parsed = urlsplit(self.path)
+        if parsed.path == "/health":
             self._write(
                 200,
                 {"ok": True, "protocolVersion": PROTOCOL_VERSION},
             )
             return
-        if self.path == "/capabilities":
+        if parsed.path == "/capabilities":
             semester = load_default_jw_semester()
             self._write(
                 200,
@@ -104,6 +119,26 @@ class _Handler(BaseHTTPRequestHandler):
                     },
                 },
             )
+            return
+        parts = parsed.path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "events":
+            values = parse_qs(parsed.query).get("after", ["0"])
+            try:
+                after = int(values[0])
+                wait_ms = int(
+                    parse_qs(parsed.query).get("waitMs", ["15000"])[0]
+                )
+                if after < 0:
+                    raise ValueError
+                if not 0 <= wait_ms <= 20_000:
+                    raise ValueError
+                payload = self.bridge.jobs.get(parts[1]).events_after(
+                    after, wait_timeout=wait_ms / 1000
+                )
+            except (ValueError, JobNotFound):
+                self._write(404, {"error": "job_not_found"})
+                return
+            self._write(200, payload)
             return
         self._write(404, {"error": "not_found"})
 
@@ -124,18 +159,34 @@ class _Handler(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(length)
         try:
-            parse_request_body(body, declared_length=length)
+            payload = parse_request_body(body, declared_length=length)
         except ProtocolError as exc:
             status = 413 if exc.code == "too_large" else 400
             if exc.code == "unsupported_version":
                 status = 409
             self._write(status, {"error": exc.code})
             return
-        if self.path != "/shutdown":
+        try:
+            response = self.bridge.dispatch_post(self.path, payload)
+        except BridgeBusy:
+            self._write(409, {"error": "bridge_busy"})
+            return
+        except JobNotFound:
+            self._write(404, {"error": "job_not_found"})
+            return
+        except (InvalidJobState, AccountMismatch):
+            self._write(409, {"error": "invalid_job_state"})
+            return
+        except (KeyError, TypeError, ValueError):
+            self._write(400, {"error": "invalid_request"})
+            return
+        if response is None:
             self._write(404, {"error": "not_found"})
             return
-        self._write(200, {"ok": True})
-        threading.Thread(target=self.bridge.stop, daemon=True).start()
+        status, result = response
+        self._write(status, result)
+        if self.path == "/shutdown":
+            threading.Thread(target=self.bridge.stop, daemon=True).start()
 
 
 class BridgeServer:
@@ -148,6 +199,13 @@ class BridgeServer:
         token: str | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         parent_alive: Callable[[int], bool] = _default_parent_alive,
+        job_manager: JobManager | None = None,
+        jw_collector: Callable[..., Any] = (
+            jw_service.collect_jw_source_bundle
+        ),
+        young_collector: Callable[..., Any] = (
+            young_service.collect_young_schedule_source_bundle
+        ),
     ) -> None:
         if host != "127.0.0.1":
             raise ValueError("Bridge must bind to 127.0.0.1")
@@ -157,8 +215,10 @@ class BridgeServer:
         self.parent_pid = parent_pid
         self._monotonic = monotonic
         self._parent_alive = parent_alive
+        self.jobs = job_manager or JobManager()
+        self._jw_collector = jw_collector
+        self._young_collector = young_collector
         self._last_activity = monotonic()
-        self._active_jobs = 0
         self._lock = threading.Lock()
         self._stopping = threading.Event()
         self._serve_thread_id: int | None = None
@@ -177,6 +237,114 @@ class BridgeServer:
         with self._lock:
             self._last_activity = self._monotonic()
 
+    @staticmethod
+    def _text(payload: dict[str, Any], key: str, limit: int = 256) -> str:
+        value = payload[key]
+        if not isinstance(value, str) or not value.strip() or len(value) > limit:
+            raise ValueError("invalid text")
+        return value.strip()
+
+    @staticmethod
+    def _require_keys(
+        payload: dict[str, Any],
+        required: set[str],
+        optional: set[str] | None = None,
+    ) -> None:
+        optional = optional or set()
+        keys = set(payload)
+        if not required <= keys or keys - required - optional:
+            raise ValueError("invalid request fields")
+
+    def dispatch_post(
+        self, path: str, payload: dict[str, Any]
+    ) -> tuple[int, dict[str, Any]] | None:
+        if path == "/shutdown":
+            self._require_keys(payload, {"protocolVersion"})
+            return 200, {"ok": True}
+        if path == "/collect/jw":
+            self._require_keys(
+                payload,
+                {
+                    "protocolVersion",
+                    "accountId",
+                    "expectedUsername",
+                    "semester",
+                },
+            )
+            semester = payload["semester"]
+            if not isinstance(semester, dict):
+                raise ValueError("invalid semester")
+            self._require_keys(
+                semester,
+                {"semesterId", "semesterKey", "displayName"},
+            )
+            semester_id = semester["semesterId"]
+            if (
+                isinstance(semester_id, bool)
+                or not isinstance(semester_id, int)
+                or semester_id < 1
+            ):
+                raise ValueError("invalid semester")
+            request = JwCollectionRequest(
+                account_id=self._text(payload, "accountId"),
+                expected_username=self._text(payload, "expectedUsername"),
+                semester=JwSemesterConfig(
+                    semester_id,
+                    self._text(semester, "semesterKey"),
+                    self._text(semester, "displayName"),
+                ),
+            )
+            job = self.jobs.start_jw(
+                request, collector=self._jw_collector
+            )
+            return 202, {"jobId": job.id, "phase": job.phase}
+        if path == "/collect/young-schedule":
+            self._require_keys(
+                payload,
+                {"protocolVersion", "accountId", "expectedUsername"},
+                {"today"},
+            )
+            today_value = payload.get("today")
+            today = (
+                date.fromisoformat(today_value)
+                if isinstance(today_value, str)
+                else None
+            )
+            request = YoungCollectionRequest(
+                account_id=self._text(payload, "accountId"),
+                expected_username=self._text(payload, "expectedUsername"),
+                today=today,
+            )
+            job = self.jobs.start_young_schedule(
+                request, collector=self._young_collector
+            )
+            return 202, {"jobId": job.id, "phase": job.phase}
+        if path == "/login/resume":
+            self._require_keys(
+                payload,
+                {"protocolVersion", "jobId"},
+                {"password"},
+            )
+            job = self.jobs.get(self._text(payload, "jobId"))
+            password = payload.get("password")
+            if password is not None and (
+                not isinstance(password, str) or len(password) > 1024
+            ):
+                raise ValueError("invalid password")
+            self.jobs.resume_login(
+                job.id,
+                credentials=LoginCredentials(
+                    job.request.expected_username, password
+                ),
+            )
+            return 202, {"jobId": job.id, "phase": job.phase}
+        parts = path.strip("/").split("/")
+        if len(parts) == 3 and parts[0] == "jobs" and parts[2] == "cancel":
+            self._require_keys(payload, {"protocolVersion"})
+            job = self.jobs.cancel(parts[1])
+            return 202, {"jobId": job.id, "phase": job.phase}
+        return None
+
     def serve_forever(self) -> None:
         self._serve_thread_id = threading.get_ident()
         monitor = threading.Thread(target=self._monitor, daemon=True)
@@ -187,7 +355,7 @@ class BridgeServer:
         while not self._stopping.wait(0.25):
             with self._lock:
                 last_activity = self._last_activity
-                active_jobs = self._active_jobs
+                active_jobs = self.jobs.active_jobs
             if should_stop(
                 parent_pid=self.parent_pid,
                 parent_alive=self._parent_alive,

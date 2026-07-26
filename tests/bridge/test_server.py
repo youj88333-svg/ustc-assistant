@@ -9,8 +9,11 @@ from ustc_assistant.bridge.server import BridgeServer, should_stop
 
 
 class RunningServer:
+    def __init__(self, server=None):
+        self.server = server
+
     def __enter__(self):
-        self.server = BridgeServer(parent_pid=None)
+        self.server = self.server or BridgeServer(parent_pid=None)
         self.thread = threading.Thread(
             target=self.server.serve_forever,
             daemon=True,
