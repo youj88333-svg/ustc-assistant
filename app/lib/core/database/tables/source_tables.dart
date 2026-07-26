@@ -25,6 +25,7 @@ class SourceConfigs extends Table {
   ];
 }
 
+@DataClassName('ImportBatch')
 class ImportBatches extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>

@@ -1301,7 +1301,7 @@ class SourceConfigsCompanion extends UpdateCompanion<SourceConfig> {
 }
 
 class $ImportBatchesTable extends ImportBatches
-    with TableInfo<$ImportBatchesTable, ImportBatche> {
+    with TableInfo<$ImportBatchesTable, ImportBatch> {
   @override
   final GeneratedDatabase attachedDatabase;
   final String? _alias;
@@ -1407,7 +1407,7 @@ class $ImportBatchesTable extends ImportBatches
   static const String $name = 'import_batches';
   @override
   VerificationContext validateIntegrity(
-    Insertable<ImportBatche> instance, {
+    Insertable<ImportBatch> instance, {
     bool isInserting = false,
   }) {
     final context = VerificationContext();
@@ -1484,9 +1484,9 @@ class $ImportBatchesTable extends ImportBatches
     {accountId, digest},
   ];
   @override
-  ImportBatche map(Map<String, dynamic> data, {String? tablePrefix}) {
+  ImportBatch map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
-    return ImportBatche(
+    return ImportBatch(
       id: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}id'],
@@ -1528,7 +1528,7 @@ class $ImportBatchesTable extends ImportBatches
   }
 }
 
-class ImportBatche extends DataClass implements Insertable<ImportBatche> {
+class ImportBatch extends DataClass implements Insertable<ImportBatch> {
   final String id;
   final String accountId;
   final String bundleId;
@@ -1537,7 +1537,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
   final String scopeKey;
   final int importedAt;
   final String origin;
-  const ImportBatche({
+  const ImportBatch({
     required this.id,
     required this.accountId,
     required this.bundleId,
@@ -1574,12 +1574,12 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
     );
   }
 
-  factory ImportBatche.fromJson(
+  factory ImportBatch.fromJson(
     Map<String, dynamic> json, {
     ValueSerializer? serializer,
   }) {
     serializer ??= driftRuntimeOptions.defaultSerializer;
-    return ImportBatche(
+    return ImportBatch(
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
       bundleId: serializer.fromJson<String>(json['bundleId']),
@@ -1605,7 +1605,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
     };
   }
 
-  ImportBatche copyWith({
+  ImportBatch copyWith({
     String? id,
     String? accountId,
     String? bundleId,
@@ -1614,7 +1614,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
     String? scopeKey,
     int? importedAt,
     String? origin,
-  }) => ImportBatche(
+  }) => ImportBatch(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
     bundleId: bundleId ?? this.bundleId,
@@ -1624,8 +1624,8 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
     importedAt: importedAt ?? this.importedAt,
     origin: origin ?? this.origin,
   );
-  ImportBatche copyWithCompanion(ImportBatchesCompanion data) {
-    return ImportBatche(
+  ImportBatch copyWithCompanion(ImportBatchesCompanion data) {
+    return ImportBatch(
       id: data.id.present ? data.id.value : this.id,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
       bundleId: data.bundleId.present ? data.bundleId.value : this.bundleId,
@@ -1641,7 +1641,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
 
   @override
   String toString() {
-    return (StringBuffer('ImportBatche(')
+    return (StringBuffer('ImportBatch(')
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('bundleId: $bundleId, ')
@@ -1668,7 +1668,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
-      (other is ImportBatche &&
+      (other is ImportBatch &&
           other.id == this.id &&
           other.accountId == this.accountId &&
           other.bundleId == this.bundleId &&
@@ -1679,7 +1679,7 @@ class ImportBatche extends DataClass implements Insertable<ImportBatche> {
           other.origin == this.origin);
 }
 
-class ImportBatchesCompanion extends UpdateCompanion<ImportBatche> {
+class ImportBatchesCompanion extends UpdateCompanion<ImportBatch> {
   final Value<String> id;
   final Value<String> accountId;
   final Value<String> bundleId;
@@ -1718,7 +1718,7 @@ class ImportBatchesCompanion extends UpdateCompanion<ImportBatche> {
        scopeKey = Value(scopeKey),
        importedAt = Value(importedAt),
        origin = Value(origin);
-  static Insertable<ImportBatche> custom({
+  static Insertable<ImportBatch> custom({
     Expression<String>? id,
     Expression<String>? accountId,
     Expression<String>? bundleId,
@@ -10892,6 +10892,85 @@ class $ScheduleRelationsTable extends ScheduleRelations
       'REFERENCES local_accounts (id) ON DELETE CASCADE',
     ),
   );
+  static const VerificationMeta _sourceMeta = const VerificationMeta('source');
+  @override
+  late final GeneratedColumn<String> source = GeneratedColumn<String>(
+    'source',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('user'),
+  );
+  static const VerificationMeta _externalIdMeta = const VerificationMeta(
+    'externalId',
+  );
+  @override
+  late final GeneratedColumn<String> externalId = GeneratedColumn<String>(
+    'external_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _relationTypeMeta = const VerificationMeta(
+    'relationType',
+  );
+  @override
+  late final GeneratedColumn<String> relationType = GeneratedColumn<String>(
+    'relation_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('conflict'),
+  );
+  static const VerificationMeta _primaryEntityTypeMeta = const VerificationMeta(
+    'primaryEntityType',
+  );
+  @override
+  late final GeneratedColumn<String> primaryEntityType =
+      GeneratedColumn<String>(
+        'primary_entity_type',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _primaryEntityIdMeta = const VerificationMeta(
+    'primaryEntityId',
+  );
+  @override
+  late final GeneratedColumn<String> primaryEntityId = GeneratedColumn<String>(
+    'primary_entity_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _relatedEntityTypeMeta = const VerificationMeta(
+    'relatedEntityType',
+  );
+  @override
+  late final GeneratedColumn<String> relatedEntityType =
+      GeneratedColumn<String>(
+        'related_entity_type',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _relatedEntityIdMeta = const VerificationMeta(
+    'relatedEntityId',
+  );
+  @override
+  late final GeneratedColumn<String> relatedEntityId = GeneratedColumn<String>(
+    'related_entity_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _leftKindMeta = const VerificationMeta(
     'leftKind',
   );
@@ -10899,18 +10978,18 @@ class $ScheduleRelationsTable extends ScheduleRelations
   late final GeneratedColumn<String> leftKind = GeneratedColumn<String>(
     'left_kind',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _leftIdMeta = const VerificationMeta('leftId');
   @override
   late final GeneratedColumn<String> leftId = GeneratedColumn<String>(
     'left_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _rightKindMeta = const VerificationMeta(
     'rightKind',
@@ -10919,9 +10998,9 @@ class $ScheduleRelationsTable extends ScheduleRelations
   late final GeneratedColumn<String> rightKind = GeneratedColumn<String>(
     'right_kind',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _rightIdMeta = const VerificationMeta(
     'rightId',
@@ -10930,9 +11009,9 @@ class $ScheduleRelationsTable extends ScheduleRelations
   late final GeneratedColumn<String> rightId = GeneratedColumn<String>(
     'right_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _leftEventIdMeta = const VerificationMeta(
     'leftEventId',
@@ -10997,9 +11076,9 @@ class $ScheduleRelationsTable extends ScheduleRelations
   late final GeneratedColumn<String> conflictState = GeneratedColumn<String>(
     'conflict_state',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _reasonMeta = const VerificationMeta('reason');
   @override
@@ -11036,6 +11115,13 @@ class $ScheduleRelationsTable extends ScheduleRelations
   List<GeneratedColumn> get $columns => [
     id,
     accountId,
+    source,
+    externalId,
+    relationType,
+    primaryEntityType,
+    primaryEntityId,
+    relatedEntityType,
+    relatedEntityId,
     leftKind,
     leftId,
     rightKind,
@@ -11074,37 +11160,86 @@ class $ScheduleRelationsTable extends ScheduleRelations
     } else if (isInserting) {
       context.missing(_accountIdMeta);
     }
+    if (data.containsKey('source')) {
+      context.handle(
+        _sourceMeta,
+        source.isAcceptableOrUnknown(data['source']!, _sourceMeta),
+      );
+    }
+    if (data.containsKey('external_id')) {
+      context.handle(
+        _externalIdMeta,
+        externalId.isAcceptableOrUnknown(data['external_id']!, _externalIdMeta),
+      );
+    }
+    if (data.containsKey('relation_type')) {
+      context.handle(
+        _relationTypeMeta,
+        relationType.isAcceptableOrUnknown(
+          data['relation_type']!,
+          _relationTypeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('primary_entity_type')) {
+      context.handle(
+        _primaryEntityTypeMeta,
+        primaryEntityType.isAcceptableOrUnknown(
+          data['primary_entity_type']!,
+          _primaryEntityTypeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('primary_entity_id')) {
+      context.handle(
+        _primaryEntityIdMeta,
+        primaryEntityId.isAcceptableOrUnknown(
+          data['primary_entity_id']!,
+          _primaryEntityIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('related_entity_type')) {
+      context.handle(
+        _relatedEntityTypeMeta,
+        relatedEntityType.isAcceptableOrUnknown(
+          data['related_entity_type']!,
+          _relatedEntityTypeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('related_entity_id')) {
+      context.handle(
+        _relatedEntityIdMeta,
+        relatedEntityId.isAcceptableOrUnknown(
+          data['related_entity_id']!,
+          _relatedEntityIdMeta,
+        ),
+      );
+    }
     if (data.containsKey('left_kind')) {
       context.handle(
         _leftKindMeta,
         leftKind.isAcceptableOrUnknown(data['left_kind']!, _leftKindMeta),
       );
-    } else if (isInserting) {
-      context.missing(_leftKindMeta);
     }
     if (data.containsKey('left_id')) {
       context.handle(
         _leftIdMeta,
         leftId.isAcceptableOrUnknown(data['left_id']!, _leftIdMeta),
       );
-    } else if (isInserting) {
-      context.missing(_leftIdMeta);
     }
     if (data.containsKey('right_kind')) {
       context.handle(
         _rightKindMeta,
         rightKind.isAcceptableOrUnknown(data['right_kind']!, _rightKindMeta),
       );
-    } else if (isInserting) {
-      context.missing(_rightKindMeta);
     }
     if (data.containsKey('right_id')) {
       context.handle(
         _rightIdMeta,
         rightId.isAcceptableOrUnknown(data['right_id']!, _rightIdMeta),
       );
-    } else if (isInserting) {
-      context.missing(_rightIdMeta);
     }
     if (data.containsKey('left_event_id')) {
       context.handle(
@@ -11150,8 +11285,6 @@ class $ScheduleRelationsTable extends ScheduleRelations
           _conflictStateMeta,
         ),
       );
-    } else if (isInserting) {
-      context.missing(_conflictStateMeta);
     }
     if (data.containsKey('reason')) {
       context.handle(
@@ -11183,6 +11316,7 @@ class $ScheduleRelationsTable extends ScheduleRelations
   @override
   List<Set<GeneratedColumn>> get uniqueKeys => [
     {accountId, leftKind, leftId, rightKind, rightId},
+    {accountId, source, externalId},
   ];
   @override
   ScheduleRelation map(Map<String, dynamic> data, {String? tablePrefix}) {
@@ -11196,22 +11330,50 @@ class $ScheduleRelationsTable extends ScheduleRelations
         DriftSqlType.string,
         data['${effectivePrefix}account_id'],
       )!,
+      source: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source'],
+      )!,
+      externalId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}external_id'],
+      ),
+      relationType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}relation_type'],
+      )!,
+      primaryEntityType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}primary_entity_type'],
+      ),
+      primaryEntityId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}primary_entity_id'],
+      ),
+      relatedEntityType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}related_entity_type'],
+      ),
+      relatedEntityId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}related_entity_id'],
+      ),
       leftKind: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}left_kind'],
-      )!,
+      ),
       leftId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}left_id'],
-      )!,
+      ),
       rightKind: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}right_kind'],
-      )!,
+      ),
       rightId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}right_id'],
-      )!,
+      ),
       leftEventId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}left_event_id'],
@@ -11231,7 +11393,7 @@ class $ScheduleRelationsTable extends ScheduleRelations
       conflictState: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}conflict_state'],
-      )!,
+      ),
       reason: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}reason'],
@@ -11257,30 +11419,44 @@ class ScheduleRelation extends DataClass
     implements Insertable<ScheduleRelation> {
   final String id;
   final String accountId;
-  final String leftKind;
-  final String leftId;
-  final String rightKind;
-  final String rightId;
+  final String source;
+  final String? externalId;
+  final String relationType;
+  final String? primaryEntityType;
+  final String? primaryEntityId;
+  final String? relatedEntityType;
+  final String? relatedEntityId;
+  final String? leftKind;
+  final String? leftId;
+  final String? rightKind;
+  final String? rightId;
   final String? leftEventId;
   final String? leftPlanBlockId;
   final String? rightEventId;
   final String? rightPlanBlockId;
-  final String conflictState;
+  final String? conflictState;
   final String? reason;
   final int createdAt;
   final int updatedAt;
   const ScheduleRelation({
     required this.id,
     required this.accountId,
-    required this.leftKind,
-    required this.leftId,
-    required this.rightKind,
-    required this.rightId,
+    required this.source,
+    this.externalId,
+    required this.relationType,
+    this.primaryEntityType,
+    this.primaryEntityId,
+    this.relatedEntityType,
+    this.relatedEntityId,
+    this.leftKind,
+    this.leftId,
+    this.rightKind,
+    this.rightId,
     this.leftEventId,
     this.leftPlanBlockId,
     this.rightEventId,
     this.rightPlanBlockId,
-    required this.conflictState,
+    this.conflictState,
     this.reason,
     required this.createdAt,
     required this.updatedAt,
@@ -11290,10 +11466,35 @@ class ScheduleRelation extends DataClass
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['account_id'] = Variable<String>(accountId);
-    map['left_kind'] = Variable<String>(leftKind);
-    map['left_id'] = Variable<String>(leftId);
-    map['right_kind'] = Variable<String>(rightKind);
-    map['right_id'] = Variable<String>(rightId);
+    map['source'] = Variable<String>(source);
+    if (!nullToAbsent || externalId != null) {
+      map['external_id'] = Variable<String>(externalId);
+    }
+    map['relation_type'] = Variable<String>(relationType);
+    if (!nullToAbsent || primaryEntityType != null) {
+      map['primary_entity_type'] = Variable<String>(primaryEntityType);
+    }
+    if (!nullToAbsent || primaryEntityId != null) {
+      map['primary_entity_id'] = Variable<String>(primaryEntityId);
+    }
+    if (!nullToAbsent || relatedEntityType != null) {
+      map['related_entity_type'] = Variable<String>(relatedEntityType);
+    }
+    if (!nullToAbsent || relatedEntityId != null) {
+      map['related_entity_id'] = Variable<String>(relatedEntityId);
+    }
+    if (!nullToAbsent || leftKind != null) {
+      map['left_kind'] = Variable<String>(leftKind);
+    }
+    if (!nullToAbsent || leftId != null) {
+      map['left_id'] = Variable<String>(leftId);
+    }
+    if (!nullToAbsent || rightKind != null) {
+      map['right_kind'] = Variable<String>(rightKind);
+    }
+    if (!nullToAbsent || rightId != null) {
+      map['right_id'] = Variable<String>(rightId);
+    }
     if (!nullToAbsent || leftEventId != null) {
       map['left_event_id'] = Variable<String>(leftEventId);
     }
@@ -11306,7 +11507,9 @@ class ScheduleRelation extends DataClass
     if (!nullToAbsent || rightPlanBlockId != null) {
       map['right_plan_block_id'] = Variable<String>(rightPlanBlockId);
     }
-    map['conflict_state'] = Variable<String>(conflictState);
+    if (!nullToAbsent || conflictState != null) {
+      map['conflict_state'] = Variable<String>(conflictState);
+    }
     if (!nullToAbsent || reason != null) {
       map['reason'] = Variable<String>(reason);
     }
@@ -11319,10 +11522,35 @@ class ScheduleRelation extends DataClass
     return ScheduleRelationsCompanion(
       id: Value(id),
       accountId: Value(accountId),
-      leftKind: Value(leftKind),
-      leftId: Value(leftId),
-      rightKind: Value(rightKind),
-      rightId: Value(rightId),
+      source: Value(source),
+      externalId: externalId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(externalId),
+      relationType: Value(relationType),
+      primaryEntityType: primaryEntityType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(primaryEntityType),
+      primaryEntityId: primaryEntityId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(primaryEntityId),
+      relatedEntityType: relatedEntityType == null && nullToAbsent
+          ? const Value.absent()
+          : Value(relatedEntityType),
+      relatedEntityId: relatedEntityId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(relatedEntityId),
+      leftKind: leftKind == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leftKind),
+      leftId: leftId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leftId),
+      rightKind: rightKind == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rightKind),
+      rightId: rightId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rightId),
       leftEventId: leftEventId == null && nullToAbsent
           ? const Value.absent()
           : Value(leftEventId),
@@ -11335,7 +11563,9 @@ class ScheduleRelation extends DataClass
       rightPlanBlockId: rightPlanBlockId == null && nullToAbsent
           ? const Value.absent()
           : Value(rightPlanBlockId),
-      conflictState: Value(conflictState),
+      conflictState: conflictState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(conflictState),
       reason: reason == null && nullToAbsent
           ? const Value.absent()
           : Value(reason),
@@ -11352,15 +11582,26 @@ class ScheduleRelation extends DataClass
     return ScheduleRelation(
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
-      leftKind: serializer.fromJson<String>(json['leftKind']),
-      leftId: serializer.fromJson<String>(json['leftId']),
-      rightKind: serializer.fromJson<String>(json['rightKind']),
-      rightId: serializer.fromJson<String>(json['rightId']),
+      source: serializer.fromJson<String>(json['source']),
+      externalId: serializer.fromJson<String?>(json['externalId']),
+      relationType: serializer.fromJson<String>(json['relationType']),
+      primaryEntityType: serializer.fromJson<String?>(
+        json['primaryEntityType'],
+      ),
+      primaryEntityId: serializer.fromJson<String?>(json['primaryEntityId']),
+      relatedEntityType: serializer.fromJson<String?>(
+        json['relatedEntityType'],
+      ),
+      relatedEntityId: serializer.fromJson<String?>(json['relatedEntityId']),
+      leftKind: serializer.fromJson<String?>(json['leftKind']),
+      leftId: serializer.fromJson<String?>(json['leftId']),
+      rightKind: serializer.fromJson<String?>(json['rightKind']),
+      rightId: serializer.fromJson<String?>(json['rightId']),
       leftEventId: serializer.fromJson<String?>(json['leftEventId']),
       leftPlanBlockId: serializer.fromJson<String?>(json['leftPlanBlockId']),
       rightEventId: serializer.fromJson<String?>(json['rightEventId']),
       rightPlanBlockId: serializer.fromJson<String?>(json['rightPlanBlockId']),
-      conflictState: serializer.fromJson<String>(json['conflictState']),
+      conflictState: serializer.fromJson<String?>(json['conflictState']),
       reason: serializer.fromJson<String?>(json['reason']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
@@ -11372,15 +11613,22 @@ class ScheduleRelation extends DataClass
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'accountId': serializer.toJson<String>(accountId),
-      'leftKind': serializer.toJson<String>(leftKind),
-      'leftId': serializer.toJson<String>(leftId),
-      'rightKind': serializer.toJson<String>(rightKind),
-      'rightId': serializer.toJson<String>(rightId),
+      'source': serializer.toJson<String>(source),
+      'externalId': serializer.toJson<String?>(externalId),
+      'relationType': serializer.toJson<String>(relationType),
+      'primaryEntityType': serializer.toJson<String?>(primaryEntityType),
+      'primaryEntityId': serializer.toJson<String?>(primaryEntityId),
+      'relatedEntityType': serializer.toJson<String?>(relatedEntityType),
+      'relatedEntityId': serializer.toJson<String?>(relatedEntityId),
+      'leftKind': serializer.toJson<String?>(leftKind),
+      'leftId': serializer.toJson<String?>(leftId),
+      'rightKind': serializer.toJson<String?>(rightKind),
+      'rightId': serializer.toJson<String?>(rightId),
       'leftEventId': serializer.toJson<String?>(leftEventId),
       'leftPlanBlockId': serializer.toJson<String?>(leftPlanBlockId),
       'rightEventId': serializer.toJson<String?>(rightEventId),
       'rightPlanBlockId': serializer.toJson<String?>(rightPlanBlockId),
-      'conflictState': serializer.toJson<String>(conflictState),
+      'conflictState': serializer.toJson<String?>(conflictState),
       'reason': serializer.toJson<String?>(reason),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
@@ -11390,25 +11638,47 @@ class ScheduleRelation extends DataClass
   ScheduleRelation copyWith({
     String? id,
     String? accountId,
-    String? leftKind,
-    String? leftId,
-    String? rightKind,
-    String? rightId,
+    String? source,
+    Value<String?> externalId = const Value.absent(),
+    String? relationType,
+    Value<String?> primaryEntityType = const Value.absent(),
+    Value<String?> primaryEntityId = const Value.absent(),
+    Value<String?> relatedEntityType = const Value.absent(),
+    Value<String?> relatedEntityId = const Value.absent(),
+    Value<String?> leftKind = const Value.absent(),
+    Value<String?> leftId = const Value.absent(),
+    Value<String?> rightKind = const Value.absent(),
+    Value<String?> rightId = const Value.absent(),
     Value<String?> leftEventId = const Value.absent(),
     Value<String?> leftPlanBlockId = const Value.absent(),
     Value<String?> rightEventId = const Value.absent(),
     Value<String?> rightPlanBlockId = const Value.absent(),
-    String? conflictState,
+    Value<String?> conflictState = const Value.absent(),
     Value<String?> reason = const Value.absent(),
     int? createdAt,
     int? updatedAt,
   }) => ScheduleRelation(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
-    leftKind: leftKind ?? this.leftKind,
-    leftId: leftId ?? this.leftId,
-    rightKind: rightKind ?? this.rightKind,
-    rightId: rightId ?? this.rightId,
+    source: source ?? this.source,
+    externalId: externalId.present ? externalId.value : this.externalId,
+    relationType: relationType ?? this.relationType,
+    primaryEntityType: primaryEntityType.present
+        ? primaryEntityType.value
+        : this.primaryEntityType,
+    primaryEntityId: primaryEntityId.present
+        ? primaryEntityId.value
+        : this.primaryEntityId,
+    relatedEntityType: relatedEntityType.present
+        ? relatedEntityType.value
+        : this.relatedEntityType,
+    relatedEntityId: relatedEntityId.present
+        ? relatedEntityId.value
+        : this.relatedEntityId,
+    leftKind: leftKind.present ? leftKind.value : this.leftKind,
+    leftId: leftId.present ? leftId.value : this.leftId,
+    rightKind: rightKind.present ? rightKind.value : this.rightKind,
+    rightId: rightId.present ? rightId.value : this.rightId,
     leftEventId: leftEventId.present ? leftEventId.value : this.leftEventId,
     leftPlanBlockId: leftPlanBlockId.present
         ? leftPlanBlockId.value
@@ -11417,7 +11687,9 @@ class ScheduleRelation extends DataClass
     rightPlanBlockId: rightPlanBlockId.present
         ? rightPlanBlockId.value
         : this.rightPlanBlockId,
-    conflictState: conflictState ?? this.conflictState,
+    conflictState: conflictState.present
+        ? conflictState.value
+        : this.conflictState,
     reason: reason.present ? reason.value : this.reason,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -11426,6 +11698,25 @@ class ScheduleRelation extends DataClass
     return ScheduleRelation(
       id: data.id.present ? data.id.value : this.id,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      source: data.source.present ? data.source.value : this.source,
+      externalId: data.externalId.present
+          ? data.externalId.value
+          : this.externalId,
+      relationType: data.relationType.present
+          ? data.relationType.value
+          : this.relationType,
+      primaryEntityType: data.primaryEntityType.present
+          ? data.primaryEntityType.value
+          : this.primaryEntityType,
+      primaryEntityId: data.primaryEntityId.present
+          ? data.primaryEntityId.value
+          : this.primaryEntityId,
+      relatedEntityType: data.relatedEntityType.present
+          ? data.relatedEntityType.value
+          : this.relatedEntityType,
+      relatedEntityId: data.relatedEntityId.present
+          ? data.relatedEntityId.value
+          : this.relatedEntityId,
       leftKind: data.leftKind.present ? data.leftKind.value : this.leftKind,
       leftId: data.leftId.present ? data.leftId.value : this.leftId,
       rightKind: data.rightKind.present ? data.rightKind.value : this.rightKind,
@@ -11456,6 +11747,13 @@ class ScheduleRelation extends DataClass
     return (StringBuffer('ScheduleRelation(')
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
+          ..write('source: $source, ')
+          ..write('externalId: $externalId, ')
+          ..write('relationType: $relationType, ')
+          ..write('primaryEntityType: $primaryEntityType, ')
+          ..write('primaryEntityId: $primaryEntityId, ')
+          ..write('relatedEntityType: $relatedEntityType, ')
+          ..write('relatedEntityId: $relatedEntityId, ')
           ..write('leftKind: $leftKind, ')
           ..write('leftId: $leftId, ')
           ..write('rightKind: $rightKind, ')
@@ -11473,9 +11771,16 @@ class ScheduleRelation extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     accountId,
+    source,
+    externalId,
+    relationType,
+    primaryEntityType,
+    primaryEntityId,
+    relatedEntityType,
+    relatedEntityId,
     leftKind,
     leftId,
     rightKind,
@@ -11488,13 +11793,20 @@ class ScheduleRelation extends DataClass
     reason,
     createdAt,
     updatedAt,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is ScheduleRelation &&
           other.id == this.id &&
           other.accountId == this.accountId &&
+          other.source == this.source &&
+          other.externalId == this.externalId &&
+          other.relationType == this.relationType &&
+          other.primaryEntityType == this.primaryEntityType &&
+          other.primaryEntityId == this.primaryEntityId &&
+          other.relatedEntityType == this.relatedEntityType &&
+          other.relatedEntityId == this.relatedEntityId &&
           other.leftKind == this.leftKind &&
           other.leftId == this.leftId &&
           other.rightKind == this.rightKind &&
@@ -11512,15 +11824,22 @@ class ScheduleRelation extends DataClass
 class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
   final Value<String> id;
   final Value<String> accountId;
-  final Value<String> leftKind;
-  final Value<String> leftId;
-  final Value<String> rightKind;
-  final Value<String> rightId;
+  final Value<String> source;
+  final Value<String?> externalId;
+  final Value<String> relationType;
+  final Value<String?> primaryEntityType;
+  final Value<String?> primaryEntityId;
+  final Value<String?> relatedEntityType;
+  final Value<String?> relatedEntityId;
+  final Value<String?> leftKind;
+  final Value<String?> leftId;
+  final Value<String?> rightKind;
+  final Value<String?> rightId;
   final Value<String?> leftEventId;
   final Value<String?> leftPlanBlockId;
   final Value<String?> rightEventId;
   final Value<String?> rightPlanBlockId;
-  final Value<String> conflictState;
+  final Value<String?> conflictState;
   final Value<String?> reason;
   final Value<int> createdAt;
   final Value<int> updatedAt;
@@ -11528,6 +11847,13 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
   const ScheduleRelationsCompanion({
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
+    this.source = const Value.absent(),
+    this.externalId = const Value.absent(),
+    this.relationType = const Value.absent(),
+    this.primaryEntityType = const Value.absent(),
+    this.primaryEntityId = const Value.absent(),
+    this.relatedEntityType = const Value.absent(),
+    this.relatedEntityId = const Value.absent(),
     this.leftKind = const Value.absent(),
     this.leftId = const Value.absent(),
     this.rightKind = const Value.absent(),
@@ -11545,31 +11871,40 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
   ScheduleRelationsCompanion.insert({
     required String id,
     required String accountId,
-    required String leftKind,
-    required String leftId,
-    required String rightKind,
-    required String rightId,
+    this.source = const Value.absent(),
+    this.externalId = const Value.absent(),
+    this.relationType = const Value.absent(),
+    this.primaryEntityType = const Value.absent(),
+    this.primaryEntityId = const Value.absent(),
+    this.relatedEntityType = const Value.absent(),
+    this.relatedEntityId = const Value.absent(),
+    this.leftKind = const Value.absent(),
+    this.leftId = const Value.absent(),
+    this.rightKind = const Value.absent(),
+    this.rightId = const Value.absent(),
     this.leftEventId = const Value.absent(),
     this.leftPlanBlockId = const Value.absent(),
     this.rightEventId = const Value.absent(),
     this.rightPlanBlockId = const Value.absent(),
-    required String conflictState,
+    this.conflictState = const Value.absent(),
     this.reason = const Value.absent(),
     required int createdAt,
     required int updatedAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        accountId = Value(accountId),
-       leftKind = Value(leftKind),
-       leftId = Value(leftId),
-       rightKind = Value(rightKind),
-       rightId = Value(rightId),
-       conflictState = Value(conflictState),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<ScheduleRelation> custom({
     Expression<String>? id,
     Expression<String>? accountId,
+    Expression<String>? source,
+    Expression<String>? externalId,
+    Expression<String>? relationType,
+    Expression<String>? primaryEntityType,
+    Expression<String>? primaryEntityId,
+    Expression<String>? relatedEntityType,
+    Expression<String>? relatedEntityId,
     Expression<String>? leftKind,
     Expression<String>? leftId,
     Expression<String>? rightKind,
@@ -11587,6 +11922,13 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (accountId != null) 'account_id': accountId,
+      if (source != null) 'source': source,
+      if (externalId != null) 'external_id': externalId,
+      if (relationType != null) 'relation_type': relationType,
+      if (primaryEntityType != null) 'primary_entity_type': primaryEntityType,
+      if (primaryEntityId != null) 'primary_entity_id': primaryEntityId,
+      if (relatedEntityType != null) 'related_entity_type': relatedEntityType,
+      if (relatedEntityId != null) 'related_entity_id': relatedEntityId,
       if (leftKind != null) 'left_kind': leftKind,
       if (leftId != null) 'left_id': leftId,
       if (rightKind != null) 'right_kind': rightKind,
@@ -11606,15 +11948,22 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
   ScheduleRelationsCompanion copyWith({
     Value<String>? id,
     Value<String>? accountId,
-    Value<String>? leftKind,
-    Value<String>? leftId,
-    Value<String>? rightKind,
-    Value<String>? rightId,
+    Value<String>? source,
+    Value<String?>? externalId,
+    Value<String>? relationType,
+    Value<String?>? primaryEntityType,
+    Value<String?>? primaryEntityId,
+    Value<String?>? relatedEntityType,
+    Value<String?>? relatedEntityId,
+    Value<String?>? leftKind,
+    Value<String?>? leftId,
+    Value<String?>? rightKind,
+    Value<String?>? rightId,
     Value<String?>? leftEventId,
     Value<String?>? leftPlanBlockId,
     Value<String?>? rightEventId,
     Value<String?>? rightPlanBlockId,
-    Value<String>? conflictState,
+    Value<String?>? conflictState,
     Value<String?>? reason,
     Value<int>? createdAt,
     Value<int>? updatedAt,
@@ -11623,6 +11972,13 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     return ScheduleRelationsCompanion(
       id: id ?? this.id,
       accountId: accountId ?? this.accountId,
+      source: source ?? this.source,
+      externalId: externalId ?? this.externalId,
+      relationType: relationType ?? this.relationType,
+      primaryEntityType: primaryEntityType ?? this.primaryEntityType,
+      primaryEntityId: primaryEntityId ?? this.primaryEntityId,
+      relatedEntityType: relatedEntityType ?? this.relatedEntityType,
+      relatedEntityId: relatedEntityId ?? this.relatedEntityId,
       leftKind: leftKind ?? this.leftKind,
       leftId: leftId ?? this.leftId,
       rightKind: rightKind ?? this.rightKind,
@@ -11647,6 +12003,27 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     }
     if (accountId.present) {
       map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (source.present) {
+      map['source'] = Variable<String>(source.value);
+    }
+    if (externalId.present) {
+      map['external_id'] = Variable<String>(externalId.value);
+    }
+    if (relationType.present) {
+      map['relation_type'] = Variable<String>(relationType.value);
+    }
+    if (primaryEntityType.present) {
+      map['primary_entity_type'] = Variable<String>(primaryEntityType.value);
+    }
+    if (primaryEntityId.present) {
+      map['primary_entity_id'] = Variable<String>(primaryEntityId.value);
+    }
+    if (relatedEntityType.present) {
+      map['related_entity_type'] = Variable<String>(relatedEntityType.value);
+    }
+    if (relatedEntityId.present) {
+      map['related_entity_id'] = Variable<String>(relatedEntityId.value);
     }
     if (leftKind.present) {
       map['left_kind'] = Variable<String>(leftKind.value);
@@ -11695,6 +12072,13 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     return (StringBuffer('ScheduleRelationsCompanion(')
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
+          ..write('source: $source, ')
+          ..write('externalId: $externalId, ')
+          ..write('relationType: $relationType, ')
+          ..write('primaryEntityType: $primaryEntityType, ')
+          ..write('primaryEntityId: $primaryEntityId, ')
+          ..write('relatedEntityType: $relatedEntityType, ')
+          ..write('relatedEntityId: $relatedEntityId, ')
           ..write('leftKind: $leftKind, ')
           ..write('leftId: $leftId, ')
           ..write('rightKind: $rightKind, ')
@@ -14030,7 +14414,7 @@ final class $$LocalAccountsTableReferences
     );
   }
 
-  static MultiTypedResultKey<$ImportBatchesTable, List<ImportBatche>>
+  static MultiTypedResultKey<$ImportBatchesTable, List<ImportBatch>>
   _importBatchesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
     db.importBatches,
     aliasName: 'local_accounts__id__import_batches__account_id',
@@ -15541,7 +15925,7 @@ class $$LocalAccountsTableTableManager
                         await $_getPrefetchedData<
                           LocalAccount,
                           $LocalAccountsTable,
-                          ImportBatche
+                          ImportBatch
                         >(
                           currentTable: table,
                           referencedTable: $$LocalAccountsTableReferences
@@ -16663,7 +17047,7 @@ typedef $$ImportBatchesTableUpdateCompanionBuilder =
     });
 
 final class $$ImportBatchesTableReferences
-    extends BaseReferences<_$AppDatabase, $ImportBatchesTable, ImportBatche> {
+    extends BaseReferences<_$AppDatabase, $ImportBatchesTable, ImportBatch> {
   $$ImportBatchesTableReferences(
     super.$_db,
     super.$_table,
@@ -17023,14 +17407,14 @@ class $$ImportBatchesTableTableManager
         RootTableManager<
           _$AppDatabase,
           $ImportBatchesTable,
-          ImportBatche,
+          ImportBatch,
           $$ImportBatchesTableFilterComposer,
           $$ImportBatchesTableOrderingComposer,
           $$ImportBatchesTableAnnotationComposer,
           $$ImportBatchesTableCreateCompanionBuilder,
           $$ImportBatchesTableUpdateCompanionBuilder,
-          (ImportBatche, $$ImportBatchesTableReferences),
-          ImportBatche,
+          (ImportBatch, $$ImportBatchesTableReferences),
+          ImportBatch,
           PrefetchHooks Function({
             bool accountId,
             bool sourceRecordsRefs,
@@ -17150,7 +17534,7 @@ class $$ImportBatchesTableTableManager
                     return [
                       if (sourceRecordsRefs)
                         await $_getPrefetchedData<
-                          ImportBatche,
+                          ImportBatch,
                           $ImportBatchesTable,
                           SourceRecord
                         >(
@@ -17171,7 +17555,7 @@ class $$ImportBatchesTableTableManager
                         ),
                       if (syncRunsRefs)
                         await $_getPrefetchedData<
-                          ImportBatche,
+                          ImportBatch,
                           $ImportBatchesTable,
                           SyncRun
                         >(
@@ -17202,14 +17586,14 @@ typedef $$ImportBatchesTableProcessedTableManager =
     ProcessedTableManager<
       _$AppDatabase,
       $ImportBatchesTable,
-      ImportBatche,
+      ImportBatch,
       $$ImportBatchesTableFilterComposer,
       $$ImportBatchesTableOrderingComposer,
       $$ImportBatchesTableAnnotationComposer,
       $$ImportBatchesTableCreateCompanionBuilder,
       $$ImportBatchesTableUpdateCompanionBuilder,
-      (ImportBatche, $$ImportBatchesTableReferences),
-      ImportBatche,
+      (ImportBatch, $$ImportBatchesTableReferences),
+      ImportBatch,
       PrefetchHooks Function({
         bool accountId,
         bool sourceRecordsRefs,
@@ -24906,15 +25290,22 @@ typedef $$ScheduleRelationsTableCreateCompanionBuilder =
     ScheduleRelationsCompanion Function({
       required String id,
       required String accountId,
-      required String leftKind,
-      required String leftId,
-      required String rightKind,
-      required String rightId,
+      Value<String> source,
+      Value<String?> externalId,
+      Value<String> relationType,
+      Value<String?> primaryEntityType,
+      Value<String?> primaryEntityId,
+      Value<String?> relatedEntityType,
+      Value<String?> relatedEntityId,
+      Value<String?> leftKind,
+      Value<String?> leftId,
+      Value<String?> rightKind,
+      Value<String?> rightId,
       Value<String?> leftEventId,
       Value<String?> leftPlanBlockId,
       Value<String?> rightEventId,
       Value<String?> rightPlanBlockId,
-      required String conflictState,
+      Value<String?> conflictState,
       Value<String?> reason,
       required int createdAt,
       required int updatedAt,
@@ -24924,15 +25315,22 @@ typedef $$ScheduleRelationsTableUpdateCompanionBuilder =
     ScheduleRelationsCompanion Function({
       Value<String> id,
       Value<String> accountId,
-      Value<String> leftKind,
-      Value<String> leftId,
-      Value<String> rightKind,
-      Value<String> rightId,
+      Value<String> source,
+      Value<String?> externalId,
+      Value<String> relationType,
+      Value<String?> primaryEntityType,
+      Value<String?> primaryEntityId,
+      Value<String?> relatedEntityType,
+      Value<String?> relatedEntityId,
+      Value<String?> leftKind,
+      Value<String?> leftId,
+      Value<String?> rightKind,
+      Value<String?> rightId,
       Value<String?> leftEventId,
       Value<String?> leftPlanBlockId,
       Value<String?> rightEventId,
       Value<String?> rightPlanBlockId,
-      Value<String> conflictState,
+      Value<String?> conflictState,
       Value<String?> reason,
       Value<int> createdAt,
       Value<int> updatedAt,
@@ -25054,6 +25452,41 @@ class $$ScheduleRelationsTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get externalId => $composableBuilder(
+    column: $table.externalId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get relationType => $composableBuilder(
+    column: $table.relationType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get primaryEntityType => $composableBuilder(
+    column: $table.primaryEntityType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get primaryEntityId => $composableBuilder(
+    column: $table.primaryEntityId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get relatedEntityType => $composableBuilder(
+    column: $table.relatedEntityType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get relatedEntityId => $composableBuilder(
+    column: $table.relatedEntityId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -25227,6 +25660,41 @@ class $$ScheduleRelationsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get source => $composableBuilder(
+    column: $table.source,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get externalId => $composableBuilder(
+    column: $table.externalId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get relationType => $composableBuilder(
+    column: $table.relationType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get primaryEntityType => $composableBuilder(
+    column: $table.primaryEntityType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get primaryEntityId => $composableBuilder(
+    column: $table.primaryEntityId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get relatedEntityType => $composableBuilder(
+    column: $table.relatedEntityType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get relatedEntityId => $composableBuilder(
+    column: $table.relatedEntityId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get leftKind => $composableBuilder(
     column: $table.leftKind,
     builder: (column) => ColumnOrderings(column),
@@ -25394,6 +25862,39 @@ class $$ScheduleRelationsTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get source =>
+      $composableBuilder(column: $table.source, builder: (column) => column);
+
+  GeneratedColumn<String> get externalId => $composableBuilder(
+    column: $table.externalId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get relationType => $composableBuilder(
+    column: $table.relationType,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get primaryEntityType => $composableBuilder(
+    column: $table.primaryEntityType,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get primaryEntityId => $composableBuilder(
+    column: $table.primaryEntityId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get relatedEntityType => $composableBuilder(
+    column: $table.relatedEntityType,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get relatedEntityId => $composableBuilder(
+    column: $table.relatedEntityId,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get leftKind =>
       $composableBuilder(column: $table.leftKind, builder: (column) => column);
@@ -25578,15 +26079,22 @@ class $$ScheduleRelationsTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> accountId = const Value.absent(),
-                Value<String> leftKind = const Value.absent(),
-                Value<String> leftId = const Value.absent(),
-                Value<String> rightKind = const Value.absent(),
-                Value<String> rightId = const Value.absent(),
+                Value<String> source = const Value.absent(),
+                Value<String?> externalId = const Value.absent(),
+                Value<String> relationType = const Value.absent(),
+                Value<String?> primaryEntityType = const Value.absent(),
+                Value<String?> primaryEntityId = const Value.absent(),
+                Value<String?> relatedEntityType = const Value.absent(),
+                Value<String?> relatedEntityId = const Value.absent(),
+                Value<String?> leftKind = const Value.absent(),
+                Value<String?> leftId = const Value.absent(),
+                Value<String?> rightKind = const Value.absent(),
+                Value<String?> rightId = const Value.absent(),
                 Value<String?> leftEventId = const Value.absent(),
                 Value<String?> leftPlanBlockId = const Value.absent(),
                 Value<String?> rightEventId = const Value.absent(),
                 Value<String?> rightPlanBlockId = const Value.absent(),
-                Value<String> conflictState = const Value.absent(),
+                Value<String?> conflictState = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
@@ -25594,6 +26102,13 @@ class $$ScheduleRelationsTableTableManager
               }) => ScheduleRelationsCompanion(
                 id: id,
                 accountId: accountId,
+                source: source,
+                externalId: externalId,
+                relationType: relationType,
+                primaryEntityType: primaryEntityType,
+                primaryEntityId: primaryEntityId,
+                relatedEntityType: relatedEntityType,
+                relatedEntityId: relatedEntityId,
                 leftKind: leftKind,
                 leftId: leftId,
                 rightKind: rightKind,
@@ -25612,15 +26127,22 @@ class $$ScheduleRelationsTableTableManager
               ({
                 required String id,
                 required String accountId,
-                required String leftKind,
-                required String leftId,
-                required String rightKind,
-                required String rightId,
+                Value<String> source = const Value.absent(),
+                Value<String?> externalId = const Value.absent(),
+                Value<String> relationType = const Value.absent(),
+                Value<String?> primaryEntityType = const Value.absent(),
+                Value<String?> primaryEntityId = const Value.absent(),
+                Value<String?> relatedEntityType = const Value.absent(),
+                Value<String?> relatedEntityId = const Value.absent(),
+                Value<String?> leftKind = const Value.absent(),
+                Value<String?> leftId = const Value.absent(),
+                Value<String?> rightKind = const Value.absent(),
+                Value<String?> rightId = const Value.absent(),
                 Value<String?> leftEventId = const Value.absent(),
                 Value<String?> leftPlanBlockId = const Value.absent(),
                 Value<String?> rightEventId = const Value.absent(),
                 Value<String?> rightPlanBlockId = const Value.absent(),
-                required String conflictState,
+                Value<String?> conflictState = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
@@ -25628,6 +26150,13 @@ class $$ScheduleRelationsTableTableManager
               }) => ScheduleRelationsCompanion.insert(
                 id: id,
                 accountId: accountId,
+                source: source,
+                externalId: externalId,
+                relationType: relationType,
+                primaryEntityType: primaryEntityType,
+                primaryEntityId: primaryEntityId,
+                relatedEntityType: relatedEntityType,
+                relatedEntityId: relatedEntityId,
                 leftKind: leftKind,
                 leftId: leftId,
                 rightKind: rightKind,

@@ -148,13 +148,13 @@ void main() {
     final relation = ScheduleRelationsCompanion.insert(
       id: 'r1',
       accountId: 'a',
-      leftKind: 'event',
-      leftId: 'e1',
+      leftKind: const Value('event'),
+      leftId: const Value('e1'),
       leftEventId: const Value('e1'),
-      rightKind: 'event',
-      rightId: 'e2',
+      rightKind: const Value('event'),
+      rightId: const Value('e2'),
       rightEventId: const Value('e2'),
-      conflictState: 'conflict',
+      conflictState: const Value('conflict'),
       createdAt: 1,
       updatedAt: 1,
     );

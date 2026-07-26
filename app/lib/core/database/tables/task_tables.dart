@@ -88,10 +88,18 @@ class ScheduleRelations extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>
       text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
-  TextColumn get leftKind => text()();
-  TextColumn get leftId => text()();
-  TextColumn get rightKind => text()();
-  TextColumn get rightId => text()();
+  TextColumn get source => text().withDefault(const Constant('user'))();
+  TextColumn get externalId => text().nullable()();
+  TextColumn get relationType =>
+      text().withDefault(const Constant('conflict'))();
+  TextColumn get primaryEntityType => text().nullable()();
+  TextColumn get primaryEntityId => text().nullable()();
+  TextColumn get relatedEntityType => text().nullable()();
+  TextColumn get relatedEntityId => text().nullable()();
+  TextColumn get leftKind => text().nullable()();
+  TextColumn get leftId => text().nullable()();
+  TextColumn get rightKind => text().nullable()();
+  TextColumn get rightId => text().nullable()();
   @ReferenceName('leftEventRelations')
   TextColumn get leftEventId =>
       text().nullable().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
@@ -104,7 +112,7 @@ class ScheduleRelations extends Table {
   @ReferenceName('rightPlanBlockRelations')
   TextColumn get rightPlanBlockId =>
       text().nullable().references(PlanBlocks, #id, onDelete: KeyAction.cascade)();
-  TextColumn get conflictState => text()();
+  TextColumn get conflictState => text().nullable()();
   TextColumn get reason => text().nullable()();
   IntColumn get createdAt => integer()();
   IntColumn get updatedAt => integer()();
@@ -118,21 +126,31 @@ class ScheduleRelations extends Table {
   @override
   List<Set<Column<Object>>> get uniqueKeys => [
     {accountId, leftKind, leftId, rightKind, rightId},
+    {accountId, source, externalId},
   ];
 
   @override
   List<String> get customConstraints => [
-    'CHECK ((left_event_id IS NOT NULL) != '
-        '(left_plan_block_id IS NOT NULL))',
-    'CHECK ((right_event_id IS NOT NULL) != '
-        '(right_plan_block_id IS NOT NULL))',
-    "CHECK (left_kind IN ('event','plan_block'))",
-    "CHECK (right_kind IN ('event','plan_block'))",
-    "CHECK ((left_kind = 'event' AND left_event_id = left_id) OR "
-        "(left_kind = 'plan_block' AND left_plan_block_id = left_id))",
-    "CHECK ((right_kind = 'event' AND right_event_id = right_id) OR "
-        "(right_kind = 'plan_block' AND right_plan_block_id = right_id))",
-    "CHECK (conflict_state IN ('conflict','no_conflict'))",
+    "CHECK ((relation_type = 'conflict' "
+        "AND ((left_event_id IS NOT NULL) != (left_plan_block_id IS NOT NULL)) "
+        "AND ((right_event_id IS NOT NULL) != (right_plan_block_id IS NOT NULL)) "
+        "AND left_kind IN ('event','plan_block') "
+        "AND right_kind IN ('event','plan_block') "
+        "AND ((left_kind = 'event' AND left_event_id = left_id) OR "
+        "(left_kind = 'plan_block' AND left_plan_block_id = left_id)) "
+        "AND ((right_kind = 'event' AND right_event_id = right_id) OR "
+        "(right_kind = 'plan_block' AND right_plan_block_id = right_id)) "
+        "AND conflict_state IN ('conflict','no_conflict') "
+        "AND primary_entity_type IS NULL AND related_entity_type IS NULL) "
+        "OR (relation_type = 'exam_for_course' "
+        "AND external_id IS NOT NULL "
+        "AND primary_entity_type = 'calendar_event' "
+        "AND related_entity_type = 'course_series' "
+        "AND primary_entity_id IS NOT NULL AND related_entity_id IS NOT NULL "
+        "AND left_kind IS NULL AND right_kind IS NULL "
+        "AND left_event_id IS NULL AND left_plan_block_id IS NULL "
+        "AND right_event_id IS NULL AND right_plan_block_id IS NULL "
+        "AND conflict_state IS NULL))",
   ];
 }
 
