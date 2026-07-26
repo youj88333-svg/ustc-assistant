@@ -18,6 +18,114 @@
 `schemas/source-bundle-1.0.schema.json`。当前 Python JW 和二课日程规范化输出仍是
 待迁移 legacy 格式；在完成契约实现前不得声称已经生成 SourceBundle 1.0。
 
+## 项目结构与当前阶段
+
+### 实现状态
+
+- 当前仓库已经实现的是 Python 数据层和五条只读来源链路，统一入口为
+  `python -m ustc_assistant`。
+- Flutter App、Windows Python Bridge、Flutter `ImportService` 和移动端
+  `SourceGateway` 尚未创建；`docs/superpowers/specs/` 中的相关内容是已经确认的
+  产品与技术设计，不是现有代码。
+- SourceBundle 1.0 的 Markdown 契约、JSON Schema 和合成 fixture 已存在，但
+  Python JW 与已报名二课日程尚未迁移到该格式。最近真实验收中的事件、来源记录
+  和日程关系数量均描述 legacy 输出。
+- 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
+  删除现有 service、测试或真实故障回归样例。
+
+### 目录职责
+
+```text
+src/ustc_assistant/
+  __main__.py              python -m ustc_assistant 入口
+  cli.py                   参数、脱敏状态输出和 service 编排
+  common/
+    browser.py             可见 Edge 持久会话及生命周期
+    storage.py             UTF-8 JSON 和显式原始文件写入
+  sources/
+    jw/
+      collector.py         登录、动态上下文和课程/考试页面采集
+      course.py            课程 datum 解析与 legacy 规范化
+      exam.py              考试 HTML 解析与 legacy 规范化
+      service.py           合并课程和考试
+    young/
+      enrolment.py         当前报名中活动列表
+      schedule.py          已报名日程和北京时间滚动窗口
+    icourse/
+      client.py            公开 HTTP、一次性 token 和 24 小时缓存
+      parser.py            搜索、课程和教师公开页面解析
+      service.py           教务分组、匹配、排序和代表性点评
+    campus/
+      teach.py/finance.py  教务处和财务处独立目录/详情适配器
+      catalog.py           本地目录、稳定身份、刷新和检索
+      detail.py            按目录 ID 读取详情、附件和 30 天缓存
+      service.py           五个公开目录的应用级编排
+
+tests/
+  test_cli.py              CLI 和公共浏览器/存储边界
+  jw|young|icourse|campus/ 与来源模块对应的单元和回归测试
+  fixtures/                合成网页、legacy 样例和 SourceBundle 契约样例
+
+docs/
+  architecture.md          当前采集层与未来 App 的总边界
+  data-sources/            已实现来源契约及 SourceBundle 正式契约
+  schedule-data-model.md   Flutter 本地日程领域模型
+  superpowers/specs/       已确认但多数尚未实现的 Flutter 产品设计
+  superpowers/plans/       已写出的历史实施计划，不等于全部仍待执行
+
+schemas/
+  source-bundle-1.0.schema.json  Flutter 正式导入的机器契约
+
+README.md                  安装、CLI 命令和输出路径
+pyproject.toml             Python 包、依赖和命令入口
+tmp/、temp.md              私有调试数据，不是代码或正式契约
+```
+
+`scripts/` 当前没有正式运行入口。不要重新引入已经清理掉的平行脚本；新能力优先
+进入 `src/ustc_assistant/` service 和统一 CLI。
+
+### 数据流
+
+当前开发与验收：
+
+```text
+学校/公开网站
+  -> source collector/client
+  -> parser/normalizer
+  -> source service
+  -> cli.py
+  -> tmp/ 中的本地规范化 JSON
+```
+
+计划中的 Windows App：
+
+```text
+source service
+  -> 临时 localhost Python Bridge
+  -> SourceBundle 1.0
+  -> Flutter ImportService
+  -> Drift/SQLite + UserOverlay
+```
+
+未来 Android/iOS 只替换采集适配器，不能改变 SourceBundle、ImportService 和本地
+领域模型的语义。
+
+### 新 Agent 阅读和修改路径
+
+- 来源采集或解析问题：先读对应 `docs/data-sources/*.md`，再读
+  `src/ustc_assistant/sources/<source>/` 和同名测试目录。
+- CLI、输出路径或命令问题：读 `README.md`、`cli.py` 和 `tests/test_cli.py`。
+- SourceBundle 迁移：先读 `docs/data-sources/source-bundle-v1.md`、Schema 与
+  `tests/fixtures/source-bundle/`，然后修改生产者；不要让 Flutter 兼容 legacy
+  成为长期方案。
+- Flutter 日程和 App 构建：先读 `schedule-data-model.md`，再依次读 App Shell、
+  Auth/Sync、Task 和 Personal CalendarEvent 四份 spec；不要假设仓库已有 Flutter
+  工程。
+- 修改网站契约时同步更新来源文档和回归测试；修改跨端导入字段时同步更新正式
+  契约、Schema、fixture、Python 生产者测试和未来 Flutter 消费者测试。
+- `tmp/`、`temp.md`、原始响应和浏览器 Profile 只用于本机研究，不能作为稳定输入
+  或提交内容。
+
 ## 强制安全规则
 
 - 不保存用户密码明文。
