@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../calendar/presentation/calendar_event_form.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../domain/schedule_projection.dart';
 import 'week_timetable.dart';
@@ -7,7 +8,9 @@ import 'week_timetable.dart';
 enum ScheduleSection { week, tasks }
 
 class SchedulePage extends StatefulWidget {
-  const SchedulePage({super.key});
+  const SchedulePage({this.onCreateCalendarEvent, super.key});
+
+  final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
 
   @override
   State<SchedulePage> createState() => _SchedulePageState();
@@ -50,12 +53,29 @@ class _SchedulePageState extends State<SchedulePage>
           child: switch (selected) {
             ScheduleSection.week => WeekTimetable(
               projection: buildWeek(
-                ScheduleQuery(
-                  selectedDate: DateTime.now(),
-                  events: const [],
-                ),
+                ScheduleQuery(selectedDate: DateTime.now(), events: const []),
               ),
               onEventSelected: (_) {},
+              onEmptyRangeCreate: (day, minute) {
+                final start = DateTime(
+                  day.year,
+                  day.month,
+                  day.day,
+                  minute ~/ 60,
+                  minute % 60,
+                );
+                widget.onCreateCalendarEvent?.call(
+                  CalendarEventPrefill(
+                    start: start,
+                    end: start.add(const Duration(hours: 1)),
+                  ),
+                );
+              },
+              onEmptyAllDayCreate: (day) {
+                widget.onCreateCalendarEvent?.call(
+                  CalendarEventPrefill(allDayDate: day),
+                );
+              },
             ),
             ScheduleSection.tasks => const TaskCenterPage(),
           },

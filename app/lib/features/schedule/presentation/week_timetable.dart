@@ -15,12 +15,14 @@ class WeekTimetable extends StatelessWidget {
     required this.projection,
     required this.onEventSelected,
     this.onEmptyRangeCreate,
+    this.onEmptyAllDayCreate,
     super.key,
   });
 
   final ScheduleProjection projection;
   final ValueChanged<EffectiveEvent> onEventSelected;
   final void Function(DateTime day, int minute)? onEmptyRangeCreate;
+  final ValueChanged<DateTime>? onEmptyAllDayCreate;
 
   static const axisWidth = 56.0;
   static const minimumDayWidth = 142.0;
@@ -49,6 +51,7 @@ class WeekTimetable extends StatelessWidget {
                   days: projection.week.days,
                   dayWidth: dayWidth,
                   axisWidth: axisWidth,
+                  onEmptyAllDayCreate: onEmptyAllDayCreate,
                 ),
                 AllDayBand(
                   eventsByDay: projection.allDayByDay,
@@ -72,7 +75,8 @@ class WeekTimetable extends StatelessWidget {
                               day: day,
                               width: dayWidth,
                               events:
-                                  projection.timedByDay[day.weekday] ?? const [],
+                                  projection.timedByDay[day.weekday] ??
+                                  const [],
                               groupsByEvent: groupsByEvent,
                               onEventSelected: onEventSelected,
                               onEmptyRangeCreate: onEmptyRangeCreate,
@@ -96,11 +100,13 @@ class _DayHeaders extends StatelessWidget {
     required this.days,
     required this.dayWidth,
     required this.axisWidth,
+    required this.onEmptyAllDayCreate,
   });
 
   final List<DateTime> days;
   final double dayWidth;
   final double axisWidth;
+  final ValueChanged<DateTime>? onEmptyAllDayCreate;
 
   static const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
@@ -112,20 +118,25 @@ class _DayHeaders extends StatelessWidget {
         children: [
           SizedBox(width: axisWidth),
           for (var index = 0; index < days.length; index++)
-            SizedBox(
-              width: dayWidth,
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    labels[index],
-                    style: const TextStyle(fontWeight: FontWeight.w600),
-                  ),
-                  Text(
-                    '${days[index].month}/${days[index].day}',
-                    style: Theme.of(context).textTheme.labelSmall,
-                  ),
-                ],
+            GestureDetector(
+              onLongPress: onEmptyAllDayCreate == null
+                  ? null
+                  : () => onEmptyAllDayCreate!(days[index]),
+              child: SizedBox(
+                width: dayWidth,
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      labels[index],
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    Text(
+                      '${days[index].month}/${days[index].day}',
+                      style: Theme.of(context).textTheme.labelSmall,
+                    ),
+                  ],
+                ),
               ),
             ),
         ],
@@ -153,13 +164,14 @@ class _DayColumn extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final ordered = [...events]..sort((a, b) {
-      final groupA = groupsByEvent[a.event.id];
-      final groupB = groupsByEvent[b.event.id];
-      final foregroundA = groupA?.foreground.id == a.event.id ? 1 : 0;
-      final foregroundB = groupB?.foreground.id == b.event.id ? 1 : 0;
-      return foregroundA.compareTo(foregroundB);
-    });
+    final ordered = [...events]
+      ..sort((a, b) {
+        final groupA = groupsByEvent[a.event.id];
+        final groupB = groupsByEvent[b.event.id];
+        final foregroundA = groupA?.foreground.id == a.event.id ? 1 : 0;
+        final foregroundB = groupB?.foreground.id == b.event.id ? 1 : 0;
+        return foregroundA.compareTo(foregroundB);
+      });
     return GestureDetector(
       behavior: HitTestBehavior.translucent,
       onLongPressStart: onEmptyRangeCreate == null
@@ -212,10 +224,8 @@ class _DayColumn extends StatelessWidget {
         } else {
           showDialog<void>(
             context: context,
-            builder: (context) => OverlapExpansion(
-              group: group,
-              onSelected: onEventSelected,
-            ),
+            builder: (context) =>
+                OverlapExpansion(group: group, onSelected: onEventSelected),
           );
         }
       },
@@ -230,7 +240,9 @@ class _DayColumn extends StatelessWidget {
       );
     }
     return Positioned(
-      key: foreground && group != null ? Key('overlap-group-${group.id}') : null,
+      key: foreground && group != null
+          ? Key('overlap-group-${group.id}')
+          : null,
       top: item.topMinutes * WeekTimetable.pixelsPerMinute,
       left: 3,
       right: 3,

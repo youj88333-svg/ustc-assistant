@@ -57,9 +57,9 @@ class OfficialWebsitesPage extends StatelessWidget {
             onTap: () async {
               final launched = await launcher.launch(website.uri);
               if (!launched && context.mounted) {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('无法打开官方网站')));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('无法打开官方网站')),
+                );
               }
             },
           );

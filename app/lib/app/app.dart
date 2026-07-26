@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
+import '../core/database/app_database.dart';
+import '../core/database/connection.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import 'router.dart';
 import 'theme.dart';
@@ -10,21 +13,34 @@ export '../features/schedule/presentation/schedule_page.dart'
 class UstcAssistantApp extends StatefulWidget {
   const UstcAssistantApp({
     this.websiteLauncher = const UrlLauncherOfficialWebsiteLauncher(),
+    this.database,
     super.key,
   });
 
   final OfficialWebsiteLauncher websiteLauncher;
+  final AppDatabase? database;
 
   @override
   State<UstcAssistantApp> createState() => _UstcAssistantAppState();
 }
 
 class _UstcAssistantAppState extends State<UstcAssistantApp> {
-  late final router = buildRouter(widget.websiteLauncher);
+  late final bool ownsDatabase;
+  late final AppDatabase database;
+  late final GoRouter router;
+
+  @override
+  void initState() {
+    super.initState();
+    ownsDatabase = widget.database == null;
+    database = widget.database ?? AppDatabase(openAppDatabase());
+    router = buildRouter(widget.websiteLauncher, database);
+  }
 
   @override
   void dispose() {
     router.dispose();
+    if (ownsDatabase) database.close();
     super.dispose();
   }
 
