@@ -68,8 +68,14 @@ class PackageEntryTests(unittest.TestCase):
 
         self.assertEqual(jw.semester_id, 461)
         self.assertEqual(jw.semester_key, "2026fall")
+        self.assertEqual(jw.display_name, "2026 秋季学期")
         self.assertEqual(jw.output, Path("tmp/ustc-jw-import.generated.json"))
         self.assertEqual(schedule.today.isoformat(), "2026-07-22")
+
+    def test_jw_semester_override_requires_complete_triple(self):
+        result = cli.main(["collect", "jw", "--semester-id", "421"])
+
+        self.assertEqual(result, 1)
 
     def test_icourse_service_exposes_app_callable_query_runner(self):
         self.assertTrue(callable(icourse_service.run_query))
@@ -159,14 +165,24 @@ class CollectorCommandTests(unittest.TestCase):
                     "--save-raw",
                     "--raw-dir",
                     str(root / "private"),
+                    "--semester-id",
+                    "421",
+                    "--semester-key",
+                    "2026spring",
+                    "--semester-name",
+                    "2026 春季学期",
                 ]
             )
-            with patch.object(cli.jw, "collect_jw_bundle", return_value=(bundle, sources)):
+            with patch.object(
+                cli.jw, "collect_jw_bundle", return_value=(bundle, sources)
+            ) as collect:
                 self.assertEqual(0, args.handler(args, lambda _: None))
 
             self.assertEqual(bundle, json.loads((root / "bundle.json").read_text(encoding="utf-8")))
             self.assertTrue((root / "private" / "course-datum.raw.json").exists())
             self.assertTrue((root / "private" / "exam-arrange.raw.html").exists())
+            self.assertEqual(421, collect.call_args.kwargs["semester_id"])
+            self.assertEqual("2026spring", collect.call_args.kwargs["semester_key"])
 
     def test_young_enrolment_command_defaults_to_normalized_output_only(self):
         normalized = {

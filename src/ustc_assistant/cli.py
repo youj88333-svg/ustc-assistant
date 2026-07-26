@@ -10,6 +10,11 @@ from typing import Any, Callable
 
 from ustc_assistant.common.browser import CollectionError
 from ustc_assistant.common.storage import dump_json, write_raw_json, write_raw_text
+from ustc_assistant.config import (
+    SourceConfigError,
+    load_default_jw_semester,
+    resolve_jw_semester,
+)
 from ustc_assistant.sources import campus
 from ustc_assistant.sources.icourse import service as icourse
 from ustc_assistant.sources.jw import service as jw
@@ -17,8 +22,22 @@ from ustc_assistant.sources.young import enrolment, schedule
 
 
 DEFAULT_RAW_DIR = Path("tmp/private")
-DEFAULT_JW_SEMESTER_ID = 461
-DEFAULT_JW_SEMESTER_KEY = "2026fall"
+
+
+class _SemesterOverrideAction(argparse.Action):
+    """Track which semester fields were explicitly supplied to the CLI."""
+
+    def __call__(
+        self,
+        parser: argparse.ArgumentParser,
+        namespace: argparse.Namespace,
+        values: Any,
+        option_string: str | None = None,
+    ) -> None:
+        setattr(namespace, self.dest, values)
+        override_fields = set(getattr(namespace, "jw_semester_override_fields", ()))
+        override_fields.add(self.dest)
+        setattr(namespace, "jw_semester_override_fields", override_fields)
 
 
 def _date_argument(value: str) -> date:
@@ -42,17 +61,35 @@ def build_parser() -> argparse.ArgumentParser:
     collect = commands.add_parser("collect")
     collect_sources = collect.add_subparsers(dest="source", required=True)
 
+    jw_default_semester = load_default_jw_semester()
     jw_parser = collect_sources.add_parser("jw")
     jw_parser.add_argument(
         "--output", "-o", type=Path, default=Path("tmp/ustc-jw-import.generated.json")
     )
     jw_parser.add_argument(
-        "--semester-id", type=int, default=DEFAULT_JW_SEMESTER_ID
+        "--semester-id",
+        type=int,
+        default=jw_default_semester.semester_id,
+        action=_SemesterOverrideAction,
     )
-    jw_parser.add_argument("--semester-key", default=DEFAULT_JW_SEMESTER_KEY)
+    jw_parser.add_argument(
+        "--semester-key",
+        default=jw_default_semester.semester_key,
+        action=_SemesterOverrideAction,
+    )
+    jw_parser.add_argument(
+        "--semester-name",
+        dest="display_name",
+        default=jw_default_semester.display_name,
+        action=_SemesterOverrideAction,
+    )
     jw_parser.add_argument("--user-id", default="local_user")
     _add_browser_options(jw_parser)
-    jw_parser.set_defaults(handler=_collect_jw)
+    jw_parser.set_defaults(
+        handler=_collect_jw,
+        jw_default_semester=jw_default_semester,
+        jw_semester_override_fields=(),
+    )
 
     enrolment_parser = collect_sources.add_parser("young-enrolment")
     enrolment_parser.add_argument(
@@ -184,9 +221,16 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _collect_jw(args: argparse.Namespace, status: Callable[[str], None]) -> int:
+    override_fields = set(args.jw_semester_override_fields)
+    semester = resolve_jw_semester(
+        args.jw_default_semester,
+        semester_id=args.semester_id if "semester_id" in override_fields else None,
+        semester_key=args.semester_key if "semester_key" in override_fields else None,
+        display_name=args.display_name if "display_name" in override_fields else None,
+    )
     bundle, sources = jw.collect_jw_bundle(
-        semester_id=args.semester_id,
-        semester_key=args.semester_key,
+        semester_id=semester.semester_id,
+        semester_key=semester.semester_key,
         user_id=args.user_id,
         profile_dir=args.profile_dir,
         login_timeout_ms=args.login_timeout_seconds * 1000,
@@ -334,10 +378,16 @@ def main(
     *,
     status: Callable[[str], None] = print,
 ) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
     try:
+        parser = build_parser()
+        args = parser.parse_args(argv)
         return args.handler(args, status)
-    except (CollectionError, campus.CampusError, ValueError, OSError) as exc:
+    except (
+        CollectionError,
+        SourceConfigError,
+        campus.CampusError,
+        ValueError,
+        OSError,
+    ) as exc:
         print(f"Operation failed: {exc}", file=sys.stderr)
         return 1
