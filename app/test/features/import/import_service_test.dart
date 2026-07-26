@@ -71,7 +71,7 @@ void main() {
       UserOverlaysCompanion.insert(
         id: 'overlay',
         accountId: 'acct_fixture',
-        eventId: event.id,
+        eventId: Value(event.id),
         userNotes: const Value('保留这条备注'),
         createdAt: 1,
         updatedAt: 1,

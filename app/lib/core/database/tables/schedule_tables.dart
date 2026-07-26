@@ -163,9 +163,14 @@ class UserOverlays extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>
       text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
-  TextColumn get eventId =>
-      text().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get eventId => text()
+      .nullable()
+      .references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get courseSeriesId => text()
+      .nullable()
+      .references(CourseSeries, #id, onDelete: KeyAction.cascade)();
   TextColumn get displayTitle => text().nullable()();
+  TextColumn get displayLocation => text().nullable()();
   TextColumn get attendancePolicy => text().nullable()();
   TextColumn get attendanceDecision => text().nullable()();
   IntColumn get attendanceDecisionAt => integer().nullable()();
@@ -175,6 +180,7 @@ class UserOverlays extends Table {
   TextColumn get listeningNote => text().nullable()();
   TextColumn get importance => text().nullable()();
   TextColumn get color => text().nullable()();
+  IntColumn get foregroundPriority => integer().nullable()();
   BoolColumn get hidden => boolean().nullable()();
   TextColumn get userNotes => text().nullable()();
   TextColumn get tagsJson => text().nullable()();
@@ -190,5 +196,11 @@ class UserOverlays extends Table {
   @override
   List<Set<Column<Object>>> get uniqueKeys => [
     {accountId, eventId},
+    {accountId, courseSeriesId},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK ((event_id IS NOT NULL) != (course_series_id IS NOT NULL))',
   ];
 }

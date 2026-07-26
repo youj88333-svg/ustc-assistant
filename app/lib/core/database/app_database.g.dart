@@ -7884,11 +7884,25 @@ class $UserOverlaysTable extends UserOverlays
   late final GeneratedColumn<String> eventId = GeneratedColumn<String>(
     'event_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
       'REFERENCES calendar_events (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _courseSeriesIdMeta = const VerificationMeta(
+    'courseSeriesId',
+  );
+  @override
+  late final GeneratedColumn<String> courseSeriesId = GeneratedColumn<String>(
+    'course_series_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES course_series (id) ON DELETE CASCADE',
     ),
   );
   static const VerificationMeta _displayTitleMeta = const VerificationMeta(
@@ -7897,6 +7911,17 @@ class $UserOverlaysTable extends UserOverlays
   @override
   late final GeneratedColumn<String> displayTitle = GeneratedColumn<String>(
     'display_title',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _displayLocationMeta = const VerificationMeta(
+    'displayLocation',
+  );
+  @override
+  late final GeneratedColumn<String> displayLocation = GeneratedColumn<String>(
+    'display_location',
     aliasedName,
     true,
     type: DriftSqlType.string,
@@ -7999,6 +8024,16 @@ class $UserOverlaysTable extends UserOverlays
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _foregroundPriorityMeta =
+      const VerificationMeta('foregroundPriority');
+  @override
+  late final GeneratedColumn<int> foregroundPriority = GeneratedColumn<int>(
+    'foreground_priority',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _hiddenMeta = const VerificationMeta('hidden');
   @override
   late final GeneratedColumn<bool> hidden = GeneratedColumn<bool>(
@@ -8060,7 +8095,9 @@ class $UserOverlaysTable extends UserOverlays
     id,
     accountId,
     eventId,
+    courseSeriesId,
     displayTitle,
+    displayLocation,
     attendancePolicy,
     attendanceDecision,
     attendanceDecisionAt,
@@ -8070,6 +8107,7 @@ class $UserOverlaysTable extends UserOverlays
     listeningNote,
     importance,
     color,
+    foregroundPriority,
     hidden,
     userNotes,
     tagsJson,
@@ -8106,8 +8144,15 @@ class $UserOverlaysTable extends UserOverlays
         _eventIdMeta,
         eventId.isAcceptableOrUnknown(data['event_id']!, _eventIdMeta),
       );
-    } else if (isInserting) {
-      context.missing(_eventIdMeta);
+    }
+    if (data.containsKey('course_series_id')) {
+      context.handle(
+        _courseSeriesIdMeta,
+        courseSeriesId.isAcceptableOrUnknown(
+          data['course_series_id']!,
+          _courseSeriesIdMeta,
+        ),
+      );
     }
     if (data.containsKey('display_title')) {
       context.handle(
@@ -8115,6 +8160,15 @@ class $UserOverlaysTable extends UserOverlays
         displayTitle.isAcceptableOrUnknown(
           data['display_title']!,
           _displayTitleMeta,
+        ),
+      );
+    }
+    if (data.containsKey('display_location')) {
+      context.handle(
+        _displayLocationMeta,
+        displayLocation.isAcceptableOrUnknown(
+          data['display_location']!,
+          _displayLocationMeta,
         ),
       );
     }
@@ -8193,6 +8247,15 @@ class $UserOverlaysTable extends UserOverlays
         color.isAcceptableOrUnknown(data['color']!, _colorMeta),
       );
     }
+    if (data.containsKey('foreground_priority')) {
+      context.handle(
+        _foregroundPriorityMeta,
+        foregroundPriority.isAcceptableOrUnknown(
+          data['foreground_priority']!,
+          _foregroundPriorityMeta,
+        ),
+      );
+    }
     if (data.containsKey('hidden')) {
       context.handle(
         _hiddenMeta,
@@ -8235,6 +8298,7 @@ class $UserOverlaysTable extends UserOverlays
   @override
   List<Set<GeneratedColumn>> get uniqueKeys => [
     {accountId, eventId},
+    {accountId, courseSeriesId},
   ];
   @override
   UserOverlay map(Map<String, dynamic> data, {String? tablePrefix}) {
@@ -8251,10 +8315,18 @@ class $UserOverlaysTable extends UserOverlays
       eventId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}event_id'],
-      )!,
+      ),
+      courseSeriesId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}course_series_id'],
+      ),
       displayTitle: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}display_title'],
+      ),
+      displayLocation: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}display_location'],
       ),
       attendancePolicy: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -8292,6 +8364,10 @@ class $UserOverlaysTable extends UserOverlays
         DriftSqlType.string,
         data['${effectivePrefix}color'],
       ),
+      foregroundPriority: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}foreground_priority'],
+      ),
       hidden: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}hidden'],
@@ -8324,8 +8400,10 @@ class $UserOverlaysTable extends UserOverlays
 class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   final String id;
   final String accountId;
-  final String eventId;
+  final String? eventId;
+  final String? courseSeriesId;
   final String? displayTitle;
+  final String? displayLocation;
   final String? attendancePolicy;
   final String? attendanceDecision;
   final int? attendanceDecisionAt;
@@ -8335,6 +8413,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   final String? listeningNote;
   final String? importance;
   final String? color;
+  final int? foregroundPriority;
   final bool? hidden;
   final String? userNotes;
   final String? tagsJson;
@@ -8343,8 +8422,10 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   const UserOverlay({
     required this.id,
     required this.accountId,
-    required this.eventId,
+    this.eventId,
+    this.courseSeriesId,
     this.displayTitle,
+    this.displayLocation,
     this.attendancePolicy,
     this.attendanceDecision,
     this.attendanceDecisionAt,
@@ -8354,6 +8435,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     this.listeningNote,
     this.importance,
     this.color,
+    this.foregroundPriority,
     this.hidden,
     this.userNotes,
     this.tagsJson,
@@ -8365,9 +8447,17 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['account_id'] = Variable<String>(accountId);
-    map['event_id'] = Variable<String>(eventId);
+    if (!nullToAbsent || eventId != null) {
+      map['event_id'] = Variable<String>(eventId);
+    }
+    if (!nullToAbsent || courseSeriesId != null) {
+      map['course_series_id'] = Variable<String>(courseSeriesId);
+    }
     if (!nullToAbsent || displayTitle != null) {
       map['display_title'] = Variable<String>(displayTitle);
+    }
+    if (!nullToAbsent || displayLocation != null) {
+      map['display_location'] = Variable<String>(displayLocation);
     }
     if (!nullToAbsent || attendancePolicy != null) {
       map['attendance_policy'] = Variable<String>(attendancePolicy);
@@ -8396,6 +8486,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     if (!nullToAbsent || color != null) {
       map['color'] = Variable<String>(color);
     }
+    if (!nullToAbsent || foregroundPriority != null) {
+      map['foreground_priority'] = Variable<int>(foregroundPriority);
+    }
     if (!nullToAbsent || hidden != null) {
       map['hidden'] = Variable<bool>(hidden);
     }
@@ -8414,10 +8507,18 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     return UserOverlaysCompanion(
       id: Value(id),
       accountId: Value(accountId),
-      eventId: Value(eventId),
+      eventId: eventId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(eventId),
+      courseSeriesId: courseSeriesId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(courseSeriesId),
       displayTitle: displayTitle == null && nullToAbsent
           ? const Value.absent()
           : Value(displayTitle),
+      displayLocation: displayLocation == null && nullToAbsent
+          ? const Value.absent()
+          : Value(displayLocation),
       attendancePolicy: attendancePolicy == null && nullToAbsent
           ? const Value.absent()
           : Value(attendancePolicy),
@@ -8445,6 +8546,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
       color: color == null && nullToAbsent
           ? const Value.absent()
           : Value(color),
+      foregroundPriority: foregroundPriority == null && nullToAbsent
+          ? const Value.absent()
+          : Value(foregroundPriority),
       hidden: hidden == null && nullToAbsent
           ? const Value.absent()
           : Value(hidden),
@@ -8467,8 +8571,10 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     return UserOverlay(
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
-      eventId: serializer.fromJson<String>(json['eventId']),
+      eventId: serializer.fromJson<String?>(json['eventId']),
+      courseSeriesId: serializer.fromJson<String?>(json['courseSeriesId']),
       displayTitle: serializer.fromJson<String?>(json['displayTitle']),
+      displayLocation: serializer.fromJson<String?>(json['displayLocation']),
       attendancePolicy: serializer.fromJson<String?>(json['attendancePolicy']),
       attendanceDecision: serializer.fromJson<String?>(
         json['attendanceDecision'],
@@ -8484,6 +8590,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
       listeningNote: serializer.fromJson<String?>(json['listeningNote']),
       importance: serializer.fromJson<String?>(json['importance']),
       color: serializer.fromJson<String?>(json['color']),
+      foregroundPriority: serializer.fromJson<int?>(json['foregroundPriority']),
       hidden: serializer.fromJson<bool?>(json['hidden']),
       userNotes: serializer.fromJson<String?>(json['userNotes']),
       tagsJson: serializer.fromJson<String?>(json['tagsJson']),
@@ -8497,8 +8604,10 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'accountId': serializer.toJson<String>(accountId),
-      'eventId': serializer.toJson<String>(eventId),
+      'eventId': serializer.toJson<String?>(eventId),
+      'courseSeriesId': serializer.toJson<String?>(courseSeriesId),
       'displayTitle': serializer.toJson<String?>(displayTitle),
+      'displayLocation': serializer.toJson<String?>(displayLocation),
       'attendancePolicy': serializer.toJson<String?>(attendancePolicy),
       'attendanceDecision': serializer.toJson<String?>(attendanceDecision),
       'attendanceDecisionAt': serializer.toJson<int?>(attendanceDecisionAt),
@@ -8508,6 +8617,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
       'listeningNote': serializer.toJson<String?>(listeningNote),
       'importance': serializer.toJson<String?>(importance),
       'color': serializer.toJson<String?>(color),
+      'foregroundPriority': serializer.toJson<int?>(foregroundPriority),
       'hidden': serializer.toJson<bool?>(hidden),
       'userNotes': serializer.toJson<String?>(userNotes),
       'tagsJson': serializer.toJson<String?>(tagsJson),
@@ -8519,8 +8629,10 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   UserOverlay copyWith({
     String? id,
     String? accountId,
-    String? eventId,
+    Value<String?> eventId = const Value.absent(),
+    Value<String?> courseSeriesId = const Value.absent(),
     Value<String?> displayTitle = const Value.absent(),
+    Value<String?> displayLocation = const Value.absent(),
     Value<String?> attendancePolicy = const Value.absent(),
     Value<String?> attendanceDecision = const Value.absent(),
     Value<int?> attendanceDecisionAt = const Value.absent(),
@@ -8530,6 +8642,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     Value<String?> listeningNote = const Value.absent(),
     Value<String?> importance = const Value.absent(),
     Value<String?> color = const Value.absent(),
+    Value<int?> foregroundPriority = const Value.absent(),
     Value<bool?> hidden = const Value.absent(),
     Value<String?> userNotes = const Value.absent(),
     Value<String?> tagsJson = const Value.absent(),
@@ -8538,8 +8651,14 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   }) => UserOverlay(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
-    eventId: eventId ?? this.eventId,
+    eventId: eventId.present ? eventId.value : this.eventId,
+    courseSeriesId: courseSeriesId.present
+        ? courseSeriesId.value
+        : this.courseSeriesId,
     displayTitle: displayTitle.present ? displayTitle.value : this.displayTitle,
+    displayLocation: displayLocation.present
+        ? displayLocation.value
+        : this.displayLocation,
     attendancePolicy: attendancePolicy.present
         ? attendancePolicy.value
         : this.attendancePolicy,
@@ -8563,6 +8682,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
         : this.listeningNote,
     importance: importance.present ? importance.value : this.importance,
     color: color.present ? color.value : this.color,
+    foregroundPriority: foregroundPriority.present
+        ? foregroundPriority.value
+        : this.foregroundPriority,
     hidden: hidden.present ? hidden.value : this.hidden,
     userNotes: userNotes.present ? userNotes.value : this.userNotes,
     tagsJson: tagsJson.present ? tagsJson.value : this.tagsJson,
@@ -8574,9 +8696,15 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
       id: data.id.present ? data.id.value : this.id,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
       eventId: data.eventId.present ? data.eventId.value : this.eventId,
+      courseSeriesId: data.courseSeriesId.present
+          ? data.courseSeriesId.value
+          : this.courseSeriesId,
       displayTitle: data.displayTitle.present
           ? data.displayTitle.value
           : this.displayTitle,
+      displayLocation: data.displayLocation.present
+          ? data.displayLocation.value
+          : this.displayLocation,
       attendancePolicy: data.attendancePolicy.present
           ? data.attendancePolicy.value
           : this.attendancePolicy,
@@ -8602,6 +8730,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
           ? data.importance.value
           : this.importance,
       color: data.color.present ? data.color.value : this.color,
+      foregroundPriority: data.foregroundPriority.present
+          ? data.foregroundPriority.value
+          : this.foregroundPriority,
       hidden: data.hidden.present ? data.hidden.value : this.hidden,
       userNotes: data.userNotes.present ? data.userNotes.value : this.userNotes,
       tagsJson: data.tagsJson.present ? data.tagsJson.value : this.tagsJson,
@@ -8616,7 +8747,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('eventId: $eventId, ')
+          ..write('courseSeriesId: $courseSeriesId, ')
           ..write('displayTitle: $displayTitle, ')
+          ..write('displayLocation: $displayLocation, ')
           ..write('attendancePolicy: $attendancePolicy, ')
           ..write('attendanceDecision: $attendanceDecision, ')
           ..write('attendanceDecisionAt: $attendanceDecisionAt, ')
@@ -8626,6 +8759,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
           ..write('listeningNote: $listeningNote, ')
           ..write('importance: $importance, ')
           ..write('color: $color, ')
+          ..write('foregroundPriority: $foregroundPriority, ')
           ..write('hidden: $hidden, ')
           ..write('userNotes: $userNotes, ')
           ..write('tagsJson: $tagsJson, ')
@@ -8636,11 +8770,13 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     accountId,
     eventId,
+    courseSeriesId,
     displayTitle,
+    displayLocation,
     attendancePolicy,
     attendanceDecision,
     attendanceDecisionAt,
@@ -8650,12 +8786,13 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
     listeningNote,
     importance,
     color,
+    foregroundPriority,
     hidden,
     userNotes,
     tagsJson,
     createdAt,
     updatedAt,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -8663,7 +8800,9 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
           other.id == this.id &&
           other.accountId == this.accountId &&
           other.eventId == this.eventId &&
+          other.courseSeriesId == this.courseSeriesId &&
           other.displayTitle == this.displayTitle &&
+          other.displayLocation == this.displayLocation &&
           other.attendancePolicy == this.attendancePolicy &&
           other.attendanceDecision == this.attendanceDecision &&
           other.attendanceDecisionAt == this.attendanceDecisionAt &&
@@ -8673,6 +8812,7 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
           other.listeningNote == this.listeningNote &&
           other.importance == this.importance &&
           other.color == this.color &&
+          other.foregroundPriority == this.foregroundPriority &&
           other.hidden == this.hidden &&
           other.userNotes == this.userNotes &&
           other.tagsJson == this.tagsJson &&
@@ -8683,8 +8823,10 @@ class UserOverlay extends DataClass implements Insertable<UserOverlay> {
 class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
   final Value<String> id;
   final Value<String> accountId;
-  final Value<String> eventId;
+  final Value<String?> eventId;
+  final Value<String?> courseSeriesId;
   final Value<String?> displayTitle;
+  final Value<String?> displayLocation;
   final Value<String?> attendancePolicy;
   final Value<String?> attendanceDecision;
   final Value<int?> attendanceDecisionAt;
@@ -8694,6 +8836,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
   final Value<String?> listeningNote;
   final Value<String?> importance;
   final Value<String?> color;
+  final Value<int?> foregroundPriority;
   final Value<bool?> hidden;
   final Value<String?> userNotes;
   final Value<String?> tagsJson;
@@ -8704,7 +8847,9 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
     this.eventId = const Value.absent(),
+    this.courseSeriesId = const Value.absent(),
     this.displayTitle = const Value.absent(),
+    this.displayLocation = const Value.absent(),
     this.attendancePolicy = const Value.absent(),
     this.attendanceDecision = const Value.absent(),
     this.attendanceDecisionAt = const Value.absent(),
@@ -8714,6 +8859,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     this.listeningNote = const Value.absent(),
     this.importance = const Value.absent(),
     this.color = const Value.absent(),
+    this.foregroundPriority = const Value.absent(),
     this.hidden = const Value.absent(),
     this.userNotes = const Value.absent(),
     this.tagsJson = const Value.absent(),
@@ -8724,8 +8870,10 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
   UserOverlaysCompanion.insert({
     required String id,
     required String accountId,
-    required String eventId,
+    this.eventId = const Value.absent(),
+    this.courseSeriesId = const Value.absent(),
     this.displayTitle = const Value.absent(),
+    this.displayLocation = const Value.absent(),
     this.attendancePolicy = const Value.absent(),
     this.attendanceDecision = const Value.absent(),
     this.attendanceDecisionAt = const Value.absent(),
@@ -8735,6 +8883,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     this.listeningNote = const Value.absent(),
     this.importance = const Value.absent(),
     this.color = const Value.absent(),
+    this.foregroundPriority = const Value.absent(),
     this.hidden = const Value.absent(),
     this.userNotes = const Value.absent(),
     this.tagsJson = const Value.absent(),
@@ -8743,14 +8892,15 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        accountId = Value(accountId),
-       eventId = Value(eventId),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<UserOverlay> custom({
     Expression<String>? id,
     Expression<String>? accountId,
     Expression<String>? eventId,
+    Expression<String>? courseSeriesId,
     Expression<String>? displayTitle,
+    Expression<String>? displayLocation,
     Expression<String>? attendancePolicy,
     Expression<String>? attendanceDecision,
     Expression<int>? attendanceDecisionAt,
@@ -8760,6 +8910,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     Expression<String>? listeningNote,
     Expression<String>? importance,
     Expression<String>? color,
+    Expression<int>? foregroundPriority,
     Expression<bool>? hidden,
     Expression<String>? userNotes,
     Expression<String>? tagsJson,
@@ -8771,7 +8922,9 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
       if (id != null) 'id': id,
       if (accountId != null) 'account_id': accountId,
       if (eventId != null) 'event_id': eventId,
+      if (courseSeriesId != null) 'course_series_id': courseSeriesId,
       if (displayTitle != null) 'display_title': displayTitle,
+      if (displayLocation != null) 'display_location': displayLocation,
       if (attendancePolicy != null) 'attendance_policy': attendancePolicy,
       if (attendanceDecision != null) 'attendance_decision': attendanceDecision,
       if (attendanceDecisionAt != null)
@@ -8782,6 +8935,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
       if (listeningNote != null) 'listening_note': listeningNote,
       if (importance != null) 'importance': importance,
       if (color != null) 'color': color,
+      if (foregroundPriority != null) 'foreground_priority': foregroundPriority,
       if (hidden != null) 'hidden': hidden,
       if (userNotes != null) 'user_notes': userNotes,
       if (tagsJson != null) 'tags_json': tagsJson,
@@ -8794,8 +8948,10 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
   UserOverlaysCompanion copyWith({
     Value<String>? id,
     Value<String>? accountId,
-    Value<String>? eventId,
+    Value<String?>? eventId,
+    Value<String?>? courseSeriesId,
     Value<String?>? displayTitle,
+    Value<String?>? displayLocation,
     Value<String?>? attendancePolicy,
     Value<String?>? attendanceDecision,
     Value<int?>? attendanceDecisionAt,
@@ -8805,6 +8961,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     Value<String?>? listeningNote,
     Value<String?>? importance,
     Value<String?>? color,
+    Value<int?>? foregroundPriority,
     Value<bool?>? hidden,
     Value<String?>? userNotes,
     Value<String?>? tagsJson,
@@ -8816,7 +8973,9 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
       id: id ?? this.id,
       accountId: accountId ?? this.accountId,
       eventId: eventId ?? this.eventId,
+      courseSeriesId: courseSeriesId ?? this.courseSeriesId,
       displayTitle: displayTitle ?? this.displayTitle,
+      displayLocation: displayLocation ?? this.displayLocation,
       attendancePolicy: attendancePolicy ?? this.attendancePolicy,
       attendanceDecision: attendanceDecision ?? this.attendanceDecision,
       attendanceDecisionAt: attendanceDecisionAt ?? this.attendanceDecisionAt,
@@ -8826,6 +8985,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
       listeningNote: listeningNote ?? this.listeningNote,
       importance: importance ?? this.importance,
       color: color ?? this.color,
+      foregroundPriority: foregroundPriority ?? this.foregroundPriority,
       hidden: hidden ?? this.hidden,
       userNotes: userNotes ?? this.userNotes,
       tagsJson: tagsJson ?? this.tagsJson,
@@ -8847,8 +9007,14 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     if (eventId.present) {
       map['event_id'] = Variable<String>(eventId.value);
     }
+    if (courseSeriesId.present) {
+      map['course_series_id'] = Variable<String>(courseSeriesId.value);
+    }
     if (displayTitle.present) {
       map['display_title'] = Variable<String>(displayTitle.value);
+    }
+    if (displayLocation.present) {
+      map['display_location'] = Variable<String>(displayLocation.value);
     }
     if (attendancePolicy.present) {
       map['attendance_policy'] = Variable<String>(attendancePolicy.value);
@@ -8877,6 +9043,9 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
     if (color.present) {
       map['color'] = Variable<String>(color.value);
     }
+    if (foregroundPriority.present) {
+      map['foreground_priority'] = Variable<int>(foregroundPriority.value);
+    }
     if (hidden.present) {
       map['hidden'] = Variable<bool>(hidden.value);
     }
@@ -8904,7 +9073,9 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('eventId: $eventId, ')
+          ..write('courseSeriesId: $courseSeriesId, ')
           ..write('displayTitle: $displayTitle, ')
+          ..write('displayLocation: $displayLocation, ')
           ..write('attendancePolicy: $attendancePolicy, ')
           ..write('attendanceDecision: $attendanceDecision, ')
           ..write('attendanceDecisionAt: $attendanceDecisionAt, ')
@@ -8914,6 +9085,7 @@ class UserOverlaysCompanion extends UpdateCompanion<UserOverlay> {
           ..write('listeningNote: $listeningNote, ')
           ..write('importance: $importance, ')
           ..write('color: $color, ')
+          ..write('foregroundPriority: $foregroundPriority, ')
           ..write('hidden: $hidden, ')
           ..write('userNotes: $userNotes, ')
           ..write('tagsJson: $tagsJson, ')
@@ -14235,6 +14407,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
+        'course_series',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('user_overlays', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
         'local_accounts',
         limitUpdateKind: UpdateKind.delete,
       ),
@@ -19415,6 +19594,24 @@ final class $$CourseSeriesTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
+
+  static MultiTypedResultKey<$UserOverlaysTable, List<UserOverlay>>
+  _userOverlaysRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.userOverlays,
+    aliasName: 'course_series__id__user_overlays__course_series_id',
+  );
+
+  $$UserOverlaysTableProcessedTableManager get userOverlaysRefs {
+    final manager = $$UserOverlaysTableTableManager(
+      $_db,
+      $_db.userOverlays,
+    ).filter((f) => f.courseSeriesId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_userOverlaysRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$CourseSeriesTableFilterComposer
@@ -19497,6 +19694,31 @@ class $$CourseSeriesTableFilterComposer
           ),
     );
     return composer;
+  }
+
+  Expression<bool> userOverlaysRefs(
+    Expression<bool> Function($$UserOverlaysTableFilterComposer f) f,
+  ) {
+    final $$UserOverlaysTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.userOverlays,
+      getReferencedColumn: (t) => t.courseSeriesId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$UserOverlaysTableFilterComposer(
+            $db: $db,
+            $table: $db.userOverlays,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 }
 
@@ -19654,6 +19876,31 @@ class $$CourseSeriesTableAnnotationComposer
     );
     return composer;
   }
+
+  Expression<T> userOverlaysRefs<T extends Object>(
+    Expression<T> Function($$UserOverlaysTableAnnotationComposer a) f,
+  ) {
+    final $$UserOverlaysTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.userOverlays,
+      getReferencedColumn: (t) => t.courseSeriesId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$UserOverlaysTableAnnotationComposer(
+            $db: $db,
+            $table: $db.userOverlays,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$CourseSeriesTableTableManager
@@ -19669,7 +19916,7 @@ class $$CourseSeriesTableTableManager
           $$CourseSeriesTableUpdateCompanionBuilder,
           (CourseSery, $$CourseSeriesTableReferences),
           CourseSery,
-          PrefetchHooks Function({bool accountId})
+          PrefetchHooks Function({bool accountId, bool userOverlaysRefs})
         > {
   $$CourseSeriesTableTableManager(_$AppDatabase db, $CourseSeriesTable table)
     : super(
@@ -19746,47 +19993,74 @@ class $$CourseSeriesTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({accountId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (accountId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.accountId,
-                                referencedTable: $$CourseSeriesTableReferences
-                                    ._accountIdTable(db),
-                                referencedColumn: $$CourseSeriesTableReferences
-                                    ._accountIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({accountId = false, userOverlaysRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (userOverlaysRefs) db.userOverlays,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (accountId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.accountId,
+                                    referencedTable:
+                                        $$CourseSeriesTableReferences
+                                            ._accountIdTable(db),
+                                    referencedColumn:
+                                        $$CourseSeriesTableReferences
+                                            ._accountIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (userOverlaysRefs)
+                        await $_getPrefetchedData<
+                          CourseSery,
+                          $CourseSeriesTable,
+                          UserOverlay
+                        >(
+                          currentTable: table,
+                          referencedTable: $$CourseSeriesTableReferences
+                              ._userOverlaysRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$CourseSeriesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).userOverlaysRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.courseSeriesId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -19803,7 +20077,7 @@ typedef $$CourseSeriesTableProcessedTableManager =
       $$CourseSeriesTableUpdateCompanionBuilder,
       (CourseSery, $$CourseSeriesTableReferences),
       CourseSery,
-      PrefetchHooks Function({bool accountId})
+      PrefetchHooks Function({bool accountId, bool userOverlaysRefs})
     >;
 typedef $$CalendarEventSeriesTableCreateCompanionBuilder =
     CalendarEventSeriesCompanion Function({
@@ -22487,8 +22761,10 @@ typedef $$UserOverlaysTableCreateCompanionBuilder =
     UserOverlaysCompanion Function({
       required String id,
       required String accountId,
-      required String eventId,
+      Value<String?> eventId,
+      Value<String?> courseSeriesId,
       Value<String?> displayTitle,
+      Value<String?> displayLocation,
       Value<String?> attendancePolicy,
       Value<String?> attendanceDecision,
       Value<int?> attendanceDecisionAt,
@@ -22498,6 +22774,7 @@ typedef $$UserOverlaysTableCreateCompanionBuilder =
       Value<String?> listeningNote,
       Value<String?> importance,
       Value<String?> color,
+      Value<int?> foregroundPriority,
       Value<bool?> hidden,
       Value<String?> userNotes,
       Value<String?> tagsJson,
@@ -22509,8 +22786,10 @@ typedef $$UserOverlaysTableUpdateCompanionBuilder =
     UserOverlaysCompanion Function({
       Value<String> id,
       Value<String> accountId,
-      Value<String> eventId,
+      Value<String?> eventId,
+      Value<String?> courseSeriesId,
       Value<String?> displayTitle,
+      Value<String?> displayLocation,
       Value<String?> attendancePolicy,
       Value<String?> attendanceDecision,
       Value<int?> attendanceDecisionAt,
@@ -22520,6 +22799,7 @@ typedef $$UserOverlaysTableUpdateCompanionBuilder =
       Value<String?> listeningNote,
       Value<String?> importance,
       Value<String?> color,
+      Value<int?> foregroundPriority,
       Value<bool?> hidden,
       Value<String?> userNotes,
       Value<String?> tagsJson,
@@ -22554,14 +22834,32 @@ final class $$UserOverlaysTableReferences
       .calendarEvents
       .createAlias('user_overlays__event_id__calendar_events__id');
 
-  $$CalendarEventsTableProcessedTableManager get eventId {
-    final $_column = $_itemColumn<String>('event_id')!;
-
+  $$CalendarEventsTableProcessedTableManager? get eventId {
+    final $_column = $_itemColumn<String>('event_id');
+    if ($_column == null) return null;
     final manager = $$CalendarEventsTableTableManager(
       $_db,
       $_db.calendarEvents,
     ).filter((f) => f.id.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_eventIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $CourseSeriesTable _courseSeriesIdTable(_$AppDatabase db) => db
+      .courseSeries
+      .createAlias('user_overlays__course_series_id__course_series__id');
+
+  $$CourseSeriesTableProcessedTableManager? get courseSeriesId {
+    final $_column = $_itemColumn<String>('course_series_id');
+    if ($_column == null) return null;
+    final manager = $$CourseSeriesTableTableManager(
+      $_db,
+      $_db.courseSeries,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_courseSeriesIdTable($_db));
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -22585,6 +22883,11 @@ class $$UserOverlaysTableFilterComposer
 
   ColumnFilters<String> get displayTitle => $composableBuilder(
     column: $table.displayTitle,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get displayLocation => $composableBuilder(
+    column: $table.displayLocation,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -22630,6 +22933,11 @@ class $$UserOverlaysTableFilterComposer
 
   ColumnFilters<String> get color => $composableBuilder(
     column: $table.color,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get foregroundPriority => $composableBuilder(
+    column: $table.foregroundPriority,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -22703,6 +23011,29 @@ class $$UserOverlaysTableFilterComposer
     );
     return composer;
   }
+
+  $$CourseSeriesTableFilterComposer get courseSeriesId {
+    final $$CourseSeriesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.courseSeriesId,
+      referencedTable: $db.courseSeries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$CourseSeriesTableFilterComposer(
+            $db: $db,
+            $table: $db.courseSeries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$UserOverlaysTableOrderingComposer
@@ -22721,6 +23052,11 @@ class $$UserOverlaysTableOrderingComposer
 
   ColumnOrderings<String> get displayTitle => $composableBuilder(
     column: $table.displayTitle,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get displayLocation => $composableBuilder(
+    column: $table.displayLocation,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -22766,6 +23102,11 @@ class $$UserOverlaysTableOrderingComposer
 
   ColumnOrderings<String> get color => $composableBuilder(
     column: $table.color,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get foregroundPriority => $composableBuilder(
+    column: $table.foregroundPriority,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -22839,6 +23180,29 @@ class $$UserOverlaysTableOrderingComposer
     );
     return composer;
   }
+
+  $$CourseSeriesTableOrderingComposer get courseSeriesId {
+    final $$CourseSeriesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.courseSeriesId,
+      referencedTable: $db.courseSeries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$CourseSeriesTableOrderingComposer(
+            $db: $db,
+            $table: $db.courseSeries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$UserOverlaysTableAnnotationComposer
@@ -22855,6 +23219,11 @@ class $$UserOverlaysTableAnnotationComposer
 
   GeneratedColumn<String> get displayTitle => $composableBuilder(
     column: $table.displayTitle,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get displayLocation => $composableBuilder(
+    column: $table.displayLocation,
     builder: (column) => column,
   );
 
@@ -22900,6 +23269,11 @@ class $$UserOverlaysTableAnnotationComposer
 
   GeneratedColumn<String> get color =>
       $composableBuilder(column: $table.color, builder: (column) => column);
+
+  GeneratedColumn<int> get foregroundPriority => $composableBuilder(
+    column: $table.foregroundPriority,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<bool> get hidden =>
       $composableBuilder(column: $table.hidden, builder: (column) => column);
@@ -22961,6 +23335,29 @@ class $$UserOverlaysTableAnnotationComposer
     );
     return composer;
   }
+
+  $$CourseSeriesTableAnnotationComposer get courseSeriesId {
+    final $$CourseSeriesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.courseSeriesId,
+      referencedTable: $db.courseSeries,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$CourseSeriesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.courseSeries,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
 }
 
 class $$UserOverlaysTableTableManager
@@ -22976,7 +23373,11 @@ class $$UserOverlaysTableTableManager
           $$UserOverlaysTableUpdateCompanionBuilder,
           (UserOverlay, $$UserOverlaysTableReferences),
           UserOverlay,
-          PrefetchHooks Function({bool accountId, bool eventId})
+          PrefetchHooks Function({
+            bool accountId,
+            bool eventId,
+            bool courseSeriesId,
+          })
         > {
   $$UserOverlaysTableTableManager(_$AppDatabase db, $UserOverlaysTable table)
     : super(
@@ -22993,8 +23394,10 @@ class $$UserOverlaysTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> accountId = const Value.absent(),
-                Value<String> eventId = const Value.absent(),
+                Value<String?> eventId = const Value.absent(),
+                Value<String?> courseSeriesId = const Value.absent(),
                 Value<String?> displayTitle = const Value.absent(),
+                Value<String?> displayLocation = const Value.absent(),
                 Value<String?> attendancePolicy = const Value.absent(),
                 Value<String?> attendanceDecision = const Value.absent(),
                 Value<int?> attendanceDecisionAt = const Value.absent(),
@@ -23004,6 +23407,7 @@ class $$UserOverlaysTableTableManager
                 Value<String?> listeningNote = const Value.absent(),
                 Value<String?> importance = const Value.absent(),
                 Value<String?> color = const Value.absent(),
+                Value<int?> foregroundPriority = const Value.absent(),
                 Value<bool?> hidden = const Value.absent(),
                 Value<String?> userNotes = const Value.absent(),
                 Value<String?> tagsJson = const Value.absent(),
@@ -23014,7 +23418,9 @@ class $$UserOverlaysTableTableManager
                 id: id,
                 accountId: accountId,
                 eventId: eventId,
+                courseSeriesId: courseSeriesId,
                 displayTitle: displayTitle,
+                displayLocation: displayLocation,
                 attendancePolicy: attendancePolicy,
                 attendanceDecision: attendanceDecision,
                 attendanceDecisionAt: attendanceDecisionAt,
@@ -23024,6 +23430,7 @@ class $$UserOverlaysTableTableManager
                 listeningNote: listeningNote,
                 importance: importance,
                 color: color,
+                foregroundPriority: foregroundPriority,
                 hidden: hidden,
                 userNotes: userNotes,
                 tagsJson: tagsJson,
@@ -23035,8 +23442,10 @@ class $$UserOverlaysTableTableManager
               ({
                 required String id,
                 required String accountId,
-                required String eventId,
+                Value<String?> eventId = const Value.absent(),
+                Value<String?> courseSeriesId = const Value.absent(),
                 Value<String?> displayTitle = const Value.absent(),
+                Value<String?> displayLocation = const Value.absent(),
                 Value<String?> attendancePolicy = const Value.absent(),
                 Value<String?> attendanceDecision = const Value.absent(),
                 Value<int?> attendanceDecisionAt = const Value.absent(),
@@ -23046,6 +23455,7 @@ class $$UserOverlaysTableTableManager
                 Value<String?> listeningNote = const Value.absent(),
                 Value<String?> importance = const Value.absent(),
                 Value<String?> color = const Value.absent(),
+                Value<int?> foregroundPriority = const Value.absent(),
                 Value<bool?> hidden = const Value.absent(),
                 Value<String?> userNotes = const Value.absent(),
                 Value<String?> tagsJson = const Value.absent(),
@@ -23056,7 +23466,9 @@ class $$UserOverlaysTableTableManager
                 id: id,
                 accountId: accountId,
                 eventId: eventId,
+                courseSeriesId: courseSeriesId,
                 displayTitle: displayTitle,
+                displayLocation: displayLocation,
                 attendancePolicy: attendancePolicy,
                 attendanceDecision: attendanceDecision,
                 attendanceDecisionAt: attendanceDecisionAt,
@@ -23066,6 +23478,7 @@ class $$UserOverlaysTableTableManager
                 listeningNote: listeningNote,
                 importance: importance,
                 color: color,
+                foregroundPriority: foregroundPriority,
                 hidden: hidden,
                 userNotes: userNotes,
                 tagsJson: tagsJson,
@@ -23081,60 +23494,80 @@ class $$UserOverlaysTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({accountId = false, eventId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (accountId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.accountId,
-                                referencedTable: $$UserOverlaysTableReferences
-                                    ._accountIdTable(db),
-                                referencedColumn: $$UserOverlaysTableReferences
-                                    ._accountIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
-                    if (eventId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.eventId,
-                                referencedTable: $$UserOverlaysTableReferences
-                                    ._eventIdTable(db),
-                                referencedColumn: $$UserOverlaysTableReferences
-                                    ._eventIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({accountId = false, eventId = false, courseSeriesId = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (accountId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.accountId,
+                                    referencedTable:
+                                        $$UserOverlaysTableReferences
+                                            ._accountIdTable(db),
+                                    referencedColumn:
+                                        $$UserOverlaysTableReferences
+                                            ._accountIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (eventId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.eventId,
+                                    referencedTable:
+                                        $$UserOverlaysTableReferences
+                                            ._eventIdTable(db),
+                                    referencedColumn:
+                                        $$UserOverlaysTableReferences
+                                            ._eventIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (courseSeriesId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.courseSeriesId,
+                                    referencedTable:
+                                        $$UserOverlaysTableReferences
+                                            ._courseSeriesIdTable(db),
+                                    referencedColumn:
+                                        $$UserOverlaysTableReferences
+                                            ._courseSeriesIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -23151,7 +23584,11 @@ typedef $$UserOverlaysTableProcessedTableManager =
       $$UserOverlaysTableUpdateCompanionBuilder,
       (UserOverlay, $$UserOverlaysTableReferences),
       UserOverlay,
-      PrefetchHooks Function({bool accountId, bool eventId})
+      PrefetchHooks Function({
+        bool accountId,
+        bool eventId,
+        bool courseSeriesId,
+      })
     >;
 typedef $$TasksTableCreateCompanionBuilder =
     TasksCompanion Function({
