@@ -20,6 +20,9 @@ PRODUCER = {
     "version": "0.1.0",
     "platform": "windows",
 }
+_PARTICIPANT_ROW_FIELDS = frozenset(
+    {"teacherId", "personId", "personName"}
+)
 
 
 def _public_participants(
@@ -71,23 +74,113 @@ def _require_course_result(
     return result
 
 
+def _source_integer(value: Any, error_message: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(error_message)
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(error_message) from None
+
+
+def _validate_unique_map_ids(
+    items: list[Any], *, label: str
+) -> None:
+    seen: set[int] = set()
+    error_message = f"course datum contains invalid {label} identifiers"
+    duplicate_message = (
+        f"course datum contains duplicate {label} identifiers"
+    )
+    for item in items:
+        if not isinstance(item, dict) or "id" not in item:
+            raise ValueError(error_message)
+        item_id = _source_integer(item["id"], error_message)
+        if item_id in seen:
+            raise ValueError(duplicate_message)
+        seen.add(item_id)
+
+
+def _normalize_schedule_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (
+                    str(key),
+                    _normalize_schedule_value(child),
+                )
+                for key, child in value.items()
+            )
+        )
+    if isinstance(value, list):
+        return tuple(_normalize_schedule_value(item) for item in value)
+    if isinstance(value, str):
+        return " ".join(value.split())
+    return value
+
+
+def _merged_row_signature(row: dict[str, Any]) -> tuple[Any, ...]:
+    normalized = {
+        key: _normalize_schedule_value(value)
+        for key, value in row.items()
+        if key not in _PARTICIPANT_ROW_FIELDS
+    }
+    normalized["exerciseClass"] = course.exercise_key(row)
+    return tuple(sorted(normalized.items()))
+
+
 def _build_course_data(
     result: dict[str, Any], semester_key: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    _validate_unique_map_ids(result["lessonList"], label="lesson")
+    _validate_unique_map_ids(
+        result["scheduleGroupList"], label="schedule group"
+    )
     lesson_map, group_map = course.build_maps(result)
+    for group in result["scheduleGroupList"]:
+        lesson_id = _source_integer(
+            group.get("lessonId"),
+            "course schedule group has invalid lesson assignment",
+        )
+        if lesson_id not in lesson_map:
+            raise ValueError(
+                "course schedule group has invalid lesson assignment"
+            )
+
     grouped_rows = course.group_schedule_rows(result["scheduleList"])
     rows_by_lesson: dict[int, list[dict[str, Any]]] = defaultdict(list)
     for rows in grouped_rows:
         row = rows[0]
-        lesson_id = int(row["lessonId"])
-        group_id = int(row["scheduleGroupId"])
+        lesson_id = _source_integer(
+            row.get("lessonId"),
+            "course schedule row has invalid lesson assignment",
+        )
+        group_id = _source_integer(
+            row.get("scheduleGroupId"),
+            "course schedule row has invalid group assignment",
+        )
         if lesson_id not in lesson_map:
             raise ValueError(
-                f"course schedule references unknown lesson {lesson_id}"
+                "course schedule row has invalid lesson assignment"
             )
         if group_id not in group_map:
             raise ValueError(
-                f"course schedule references unknown group {group_id}"
+                "course schedule row has invalid group assignment"
+            )
+        group_lesson_id = _source_integer(
+            group_map[group_id].get("lessonId"),
+            "course schedule group has invalid lesson assignment",
+        )
+        if group_lesson_id != lesson_id:
+            raise ValueError(
+                "course schedule group does not belong to row lesson"
+            )
+        signature = _merged_row_signature(row)
+        if any(
+            _merged_row_signature(candidate) != signature
+            for candidate in rows[1:]
+        ):
+            raise ValueError(
+                "course schedule rows disagree outside participant fields"
             )
         rows_by_lesson[lesson_id].extend(rows)
 

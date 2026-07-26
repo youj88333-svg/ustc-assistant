@@ -17,6 +17,17 @@ def room(code: str) -> dict:
     }
 
 
+def room_without_code(name: str) -> dict:
+    return {
+        "nameZh": name,
+        "virtual": False,
+        "building": {
+            "nameZh": "  示例教学楼  ",
+            "campus": {"nameZh": " 示例校区 "},
+        },
+    }
+
+
 def course_datum(*schedule_rows: dict) -> dict:
     return {
         "result": {
@@ -97,6 +108,29 @@ class ExternalIdentityTests(unittest.TestCase):
                 )
                 for event in events
             )
+        )
+
+    def test_rooms_without_codes_use_normalized_location_fallback(self):
+        first = schedule_row("unused", teacher="示例教师甲")
+        first["room"] = room_without_code("  无码教室 甲 ")
+        second = schedule_row("unused", teacher="示例教师乙")
+        second["room"] = room_without_code("无码教室 乙")
+
+        result = converter.convert(
+            course_datum(first, second),
+            semester_key="2026spring",
+            user_id="user_sample",
+        )
+
+        self.assertEqual(2, len(result["calendarEvents"]))
+        self.assertEqual(
+            2,
+            len(
+                {
+                    event["externalId"]
+                    for event in result["calendarEvents"]
+                }
+            ),
         )
 
     def test_false_and_missing_exercise_class_merge_teacher_rows(self):

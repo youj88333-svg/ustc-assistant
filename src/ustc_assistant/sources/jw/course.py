@@ -42,8 +42,32 @@ def room_code(row: dict[str, Any]) -> str | None:
     return room.get("code")
 
 
+def _normalized_identity_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).split())
+
+
 def place_key(row: dict[str, Any]) -> str:
-    return room_code(row) or row.get("customPlace") or "unknown-place"
+    code = room_code(row)
+    if code:
+        return code
+    room = row.get("room")
+    if room:
+        building = room.get("building") or {}
+        campus = building.get("campus") or {}
+        location_parts = [
+            _normalized_identity_text(room.get("nameZh")),
+            _normalized_identity_text(building.get("nameZh")),
+            _normalized_identity_text(campus.get("nameZh")),
+        ]
+        if any(location_parts):
+            return json.dumps(
+                ["room", *location_parts],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+    return row.get("customPlace") or "unknown-place"
 
 
 def exercise_key(row: dict[str, Any]) -> str:

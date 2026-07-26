@@ -172,6 +172,60 @@ class JwSourceBundleTests(unittest.TestCase):
             [{"role": "teacher", "name": "王*"}],
         )
 
+    def test_duplicate_lesson_ids_are_rejected_without_echoing_input(self):
+        datum = load_course_datum()
+        duplicate = copy.deepcopy(datum["result"]["lessonList"][0])
+        duplicate["courseName"] = "private duplicate lesson payload"
+        datum["result"]["lessonList"].append(duplicate)
+
+        with self.assertRaises(ValueError) as caught:
+            build_bundle(datum, EMPTY_EXAM_HTML)
+
+        message = str(caught.exception)
+        self.assertNotIn("1001", message)
+        self.assertNotIn("private duplicate lesson payload", message)
+
+    def test_duplicate_group_ids_are_rejected_without_echoing_input(self):
+        datum = load_course_datum()
+        duplicate = copy.deepcopy(datum["result"]["scheduleGroupList"][0])
+        duplicate["no"] = "private duplicate group payload"
+        datum["result"]["scheduleGroupList"].append(duplicate)
+
+        with self.assertRaises(ValueError) as caught:
+            build_bundle(datum, EMPTY_EXAM_HTML)
+
+        message = str(caught.exception)
+        self.assertNotIn("5001", message)
+        self.assertNotIn("private duplicate group payload", message)
+
+    def test_schedule_group_must_belong_to_the_rows_lesson(self):
+        datum = load_course_datum()
+        datum["result"]["scheduleList"][0]["scheduleGroupId"] = 5002
+
+        with self.assertRaises(ValueError) as caught:
+            build_bundle(datum, EMPTY_EXAM_HTML)
+
+        message = str(caught.exception)
+        self.assertNotIn("1001", message)
+        self.assertNotIn("5002", message)
+
+    def test_merged_teacher_rows_must_agree_on_occurrence_fields(self):
+        datum = load_course_datum()
+        conflicting = copy.deepcopy(datum["result"]["scheduleList"][0])
+        conflicting["teacherId"] = 987654321
+        conflicting["personId"] = 123456789
+        conflicting["personName"] = "private conflicting teacher"
+        conflicting["periods"] = 3
+        datum["result"]["scheduleList"].append(conflicting)
+
+        with self.assertRaises(ValueError) as caught:
+            build_bundle(datum, EMPTY_EXAM_HTML)
+
+        message = str(caught.exception)
+        self.assertNotIn("987654321", message)
+        self.assertNotIn("123456789", message)
+        self.assertNotIn("private conflicting teacher", message)
+
     def test_same_time_different_place_has_stable_collision_safe_identity(self):
         original = load_course_datum()
         first_row = original["result"]["scheduleList"][0]
@@ -201,6 +255,53 @@ class JwSourceBundleTests(unittest.TestCase):
             and event["time"]["startAt"] == "2026-03-02T09:45:00+08:00"
         )
         self.assertIn(original_id, {event["externalId"] for event in matching})
+
+    def test_rooms_without_codes_use_stable_normalized_location_identity(self):
+        original = load_course_datum()
+        first_row = original["result"]["scheduleList"][0]
+        first_row["room"].pop("code")
+        first_row["room"]["nameZh"] = "  无码教室 甲  "
+        first_row["room"]["building"]["nameZh"] = "  示例教学楼  "
+        first_row["room"]["building"]["campus"]["nameZh"] = " 示例校区 "
+        expanded = copy.deepcopy(original)
+        other_room = copy.deepcopy(first_row)
+        other_room["room"]["nameZh"] = "无码教室 乙"
+        other_room["personName"] = "另一位教师"
+        expanded["result"]["scheduleList"].append(other_room)
+        normalized = copy.deepcopy(original)
+        normalized_room = normalized["result"]["scheduleList"][0]["room"]
+        normalized_room["nameZh"] = "无码教室 甲"
+        normalized_room["building"]["nameZh"] = "示例教学楼"
+        normalized_room["building"]["campus"]["nameZh"] = "示例校区"
+
+        original_bundle = build_bundle(original, EMPTY_EXAM_HTML)
+        expanded_bundle = build_bundle(expanded, EMPTY_EXAM_HTML)
+        normalized_bundle = build_bundle(normalized, EMPTY_EXAM_HTML)
+        matching = [
+            event
+            for event in course_events(expanded_bundle)
+            if event["sourceDetails"]["lessonId"] == "1001"
+            and event["time"]["startAt"] == "2026-03-02T09:45:00+08:00"
+        ]
+
+        self.assertEqual(len(matching), 2)
+        self.assertEqual(
+            len({event["externalId"] for event in matching}), 2
+        )
+        original_id = next(
+            event["externalId"]
+            for event in course_events(original_bundle)
+            if event["sourceDetails"]["lessonId"] == "1001"
+            and event["time"]["startAt"] == "2026-03-02T09:45:00+08:00"
+        )
+        self.assertIn(original_id, {event["externalId"] for event in matching})
+        normalized_id = next(
+            event["externalId"]
+            for event in course_events(normalized_bundle)
+            if event["sourceDetails"]["lessonId"] == "1001"
+            and event["time"]["startAt"] == "2026-03-02T09:45:00+08:00"
+        )
+        self.assertEqual(original_id, normalized_id)
 
     def test_source_overlap_does_not_emit_a_relation(self):
         bundle = build_bundle(exam_html=EMPTY_EXAM_HTML)
