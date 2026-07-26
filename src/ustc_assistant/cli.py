@@ -19,6 +19,7 @@ from ustc_assistant.sources import campus
 from ustc_assistant.sources.icourse import service as icourse
 from ustc_assistant.sources.jw import service as jw
 from ustc_assistant.sources.young import enrolment, schedule
+from ustc_assistant.sources.young import source_bundle as young_source_bundle
 
 
 DEFAULT_RAW_DIR = Path("tmp/private")
@@ -45,6 +46,13 @@ def _date_argument(value: str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("date must use YYYY-MM-DD") from exc
+
+
+def _required_account_id(args: argparse.Namespace) -> str:
+    account_id = getattr(args, "account_id", None)
+    if not isinstance(account_id, str) or not account_id.strip():
+        raise ValueError("--account-id is required")
+    return account_id.strip()
 
 
 def _add_browser_options(parser: argparse.ArgumentParser) -> None:
@@ -83,7 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=jw_default_semester.display_name,
         action=_SemesterOverrideAction,
     )
-    jw_parser.add_argument("--user-id", default="local_user")
+    jw_parser.add_argument("--account-id")
     _add_browser_options(jw_parser)
     jw_parser.set_defaults(
         handler=_collect_jw,
@@ -109,6 +117,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("tmp/ustc-young-my-schedule.generated.json"),
     )
     schedule_parser.add_argument("--today", type=_date_argument)
+    schedule_parser.add_argument("--account-id")
     _add_browser_options(schedule_parser)
     schedule_parser.set_defaults(handler=_collect_young_schedule)
 
@@ -221,6 +230,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _collect_jw(args: argparse.Namespace, status: Callable[[str], None]) -> int:
+    account_id = _required_account_id(args)
     override_fields = set(args.jw_semester_override_fields)
     semester = resolve_jw_semester(
         args.jw_default_semester,
@@ -228,10 +238,9 @@ def _collect_jw(args: argparse.Namespace, status: Callable[[str], None]) -> int:
         semester_key=args.semester_key if "semester_key" in override_fields else None,
         display_name=args.display_name if "display_name" in override_fields else None,
     )
-    bundle, sources = jw.collect_jw_bundle(
-        semester_id=semester.semester_id,
-        semester_key=semester.semester_key,
-        user_id=args.user_id,
+    bundle, sources = jw.collect_jw_source_bundle(
+        account_id=account_id,
+        semester=semester,
         profile_dir=args.profile_dir,
         login_timeout_ms=args.login_timeout_seconds * 1000,
         status=status,
@@ -242,9 +251,9 @@ def _collect_jw(args: argparse.Namespace, status: Callable[[str], None]) -> int:
         write_raw_text(args.raw_dir, "exam-arrange.raw.html", sources.exam_html)
         status(f"Privacy warning: sensitive raw JW data was saved under {args.raw_dir}.")
     status(
-        f"Collection complete: {len(bundle['calendarEvents'])} events, "
-        f"{len(bundle['sourceRecords'])} source records, "
-        f"{len(bundle['scheduleRelations'])} relations -> {args.output}"
+        f"Collection complete: {len(bundle['data']['calendarEvents'])} events, "
+        f"{len(bundle['data']['sourceRecords'])} source records, "
+        f"{len(bundle['data']['scheduleRelations'])} relations -> {args.output}"
     )
     return 0
 
@@ -275,13 +284,15 @@ def _collect_young_enrolment(
 def _collect_young_schedule(
     args: argparse.Namespace, status: Callable[[str], None]
 ) -> int:
-    normalized, raw = schedule.collect_schedule_snapshot(
+    account_id = _required_account_id(args)
+    bundle, raw = young_source_bundle.collect_young_schedule_source_bundle(
+        account_id=account_id,
         profile_dir=args.profile_dir,
         today=args.today,
         login_timeout_ms=args.login_timeout_seconds * 1000,
         status=status,
     )
-    dump_json(args.output, normalized)
+    dump_json(args.output, bundle)
     if args.save_raw:
         write_raw_json(
             args.raw_dir,
@@ -290,8 +301,8 @@ def _collect_young_schedule(
         )
         status(f"Privacy warning: complete raw schedule data was saved under {args.raw_dir}.")
     status(
-        f"Collection complete: {len(normalized['schedules'])} schedules across "
-        f"{normalized['metadata']['queriedDates']} dates -> {args.output}"
+        f"Collection complete: {len(bundle['data']['calendarEvents'])} schedules across "
+        f"{raw.queried_dates} dates -> {args.output}"
     )
     return 0
 

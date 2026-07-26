@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import re
 from copy import deepcopy
@@ -15,6 +14,10 @@ from zoneinfo import ZoneInfo
 
 from ustc_assistant.sources.icourse import client as public_client
 from ustc_assistant.sources.icourse import parser as page_parser
+from ustc_assistant.sources.icourse.jw_input import (
+    course_groups_from_payload,
+    load_jw_course_groups,
+)
 
 
 SUPPORTED_PREFERENCES = {
@@ -29,58 +32,9 @@ def _normalized_text(value: Any) -> str:
     return re.sub(r"\s+", "", str(value or "")).casefold()
 
 
-def _participants(event: dict[str, Any]) -> list[dict[str, Any]]:
-    value = event.get("participants")
-    if isinstance(value, dict):
-        return [value]
-    if isinstance(value, list):
-        return [item for item in value if isinstance(item, dict)]
-    return []
-
-
-def _teacher_names(event: dict[str, Any]) -> list[str]:
-    names = {
-        str(item.get("name")).strip()
-        for item in _participants(event)
-        if item.get("role") == "teacher" and isinstance(item.get("name"), str) and item.get("name").strip()
-    }
-    return sorted(names, key=str.casefold)
-
-
 def group_jw_offerings(bundle: dict[str, Any]) -> list[dict[str, Any]]:
-    events = bundle.get("calendarEvents")
-    if not isinstance(events, list):
-        raise ValueError("JW bundle must contain a calendarEvents list")
-    groups: dict[tuple[Any, ...], dict[str, Any]] = {}
-    for event in events:
-        if not isinstance(event, dict) or event.get("type") != "course":
-            continue
-        metadata = event.get("metadata") if isinstance(event.get("metadata"), dict) else {}
-        title = str(event.get("title") or "").strip()
-        if not title:
-            raise ValueError("JW course event is missing title")
-        teachers = _teacher_names(event)
-        lesson_id = metadata.get("lessonId")
-        course_code = str(metadata.get("courseCode") or "").strip() or None
-        key = (
-            str(lesson_id) if lesson_id is not None else "",
-            _normalized_text(course_code),
-            _normalized_text(title),
-            tuple(_normalized_text(name) for name in teachers),
-        )
-        if key not in groups:
-            groups[key] = {
-                "sourceLessonId": str(lesson_id) if lesson_id is not None else None,
-                "title": title,
-                "courseCode": course_code,
-                "teachers": teachers,
-                "occurrenceCount": 0,
-            }
-        groups[key]["occurrenceCount"] += 1
-    return sorted(
-        groups.values(),
-        key=lambda item: (_normalized_text(item["title"]), tuple(map(_normalized_text, item["teachers"])), item["sourceLessonId"] or ""),
-    )
+    """Compatibility entry point for in-memory formal or legacy payloads."""
+    return [group.as_dict() for group in course_groups_from_payload(bundle)]
 
 
 def _teacher_set(value: dict[str, Any]) -> set[str]:
@@ -239,14 +193,6 @@ def _preferences(args: argparse.Namespace) -> dict[str, str]:
     return dict(args.prefer)
 
 
-def _load_json(path: Path) -> dict[str, Any]:
-    with Path(path).open("r", encoding="utf-8") as file:
-        payload = json.load(file)
-    if not isinstance(payload, dict):
-        raise ValueError("JW bundle root must be an object")
-    return payload
-
-
 def _course_entries(client: Any, search_text: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     for result in client.search(search_text):
@@ -360,10 +306,9 @@ def run_query(
     preferences = _preferences(args)
     input_event_count = None
     if args.jw_bundle is not None:
-        bundle = _load_json(args.jw_bundle)
-        events = bundle.get("calendarEvents")
-        input_event_count = len(events) if isinstance(events, list) else None
-        offerings = group_jw_offerings(bundle)
+        groups = load_jw_course_groups(args.jw_bundle)
+        offerings = [group.as_dict() for group in groups]
+        input_event_count = sum(group.occurrence_count for group in groups)
         if args.group_only:
             mode = "jw_group_only"
             results = offerings

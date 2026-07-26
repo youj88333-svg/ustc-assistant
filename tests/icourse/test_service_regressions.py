@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from ustc_assistant.sources.icourse import service as query
+from ustc_assistant.sources.icourse.jw_input import load_jw_course_groups
+
+
+FORMAL_JW_FIXTURE = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "source-bundle"
+    / "positive"
+    / "jw-with-exam.json"
+)
 
 
 def event(event_id, lesson_id, title, teachers, event_type="course"):
@@ -48,7 +59,18 @@ class ModuleContractTests(unittest.TestCase):
 
 @unittest.skipIf(query is None, "query module not implemented yet")
 class JwGroupingTests(unittest.TestCase):
-    def test_repeated_occurrences_collapse_and_exams_are_ignored(self):
+    def test_formal_source_bundle_groups_course_series_and_ignores_exam(self):
+        offerings = [
+            group.as_dict() for group in load_jw_course_groups(FORMAL_JW_FIXTURE)
+        ]
+
+        self.assertEqual(1, len(offerings))
+        self.assertEqual("173667", offerings[0]["sourceLessonId"])
+        self.assertEqual("EXAMPLE1001", offerings[0]["courseCode"])
+        self.assertEqual(1, offerings[0]["occurrenceCount"])
+        self.assertNotIn("accountId", str(offerings))
+
+    def test_legacy_adapter_collapses_occurrences_without_network(self):
         offerings = query.group_jw_offerings(sample_bundle())
 
         self.assertEqual(2, len(offerings))
@@ -56,8 +78,8 @@ class JwGroupingTests(unittest.TestCase):
         self.assertEqual([["Teacher A"], ["Teacher B", "Teacher C"]], [item["teachers"] for item in offerings])
         self.assertNotIn("userId", str(offerings))
 
-    def test_invalid_bundle_fails_loudly(self):
-        with self.assertRaisesRegex(ValueError, "calendarEvents"):
+    def test_invalid_bundle_fails_loudly_without_legacy_fallback(self):
+        with self.assertRaisesRegex(ValueError, "JW input"):
             query.group_jw_offerings({})
 
 

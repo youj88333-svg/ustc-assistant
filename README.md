@@ -14,9 +14,9 @@ python -m pip install --no-build-isolation -e .
 ## 命令
 
 ```powershell
-python -m ustc_assistant collect jw
+python -m ustc_assistant collect jw --account-id <local-account-id>
 python -m ustc_assistant collect young-enrolment
-python -m ustc_assistant collect young-schedule
+python -m ustc_assistant collect young-schedule --account-id <local-account-id>
 python -m ustc_assistant query icourse --jw-bundle tmp/ustc-jw-import.generated.json
 python -m ustc_assistant collect campus
 python -m ustc_assistant query campus --text "选课"
@@ -25,7 +25,8 @@ python -m ustc_assistant read campus --entry-id <catalog-entry-id>
 
 教务采集默认学期由 `config/source-defaults.json` 统一提供：`461 / 2026fall / 2026 秋季学期`。
 调试时必须同时提供完整三元组，例如
-`python -m ustc_assistant collect jw --semester-id 421 --semester-key 2026spring --semester-name "2026 春季学期"`；不会根据年份或名称推算教务内部学期 ID。
+`python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 421 --semester-key 2026spring --semester-name "2026 春季学期"`；不会根据年份或名称推算教务内部学期 ID。
+`--account-id` 是 App 本地账号标识，不是教务动态上下文 ID；正式采集命令不提供默认值。
 
 教务联动评课社区会把课程名称作为检索词发送给公开网站 `icourse.club`，但不会发送完整课表、时间、地点、用户 ID 或登录信息。首次使用前应确认这一隐私影响；仅需本地检查课程分组时可增加 `--group-only`，该模式不会联网。
 
@@ -58,6 +59,7 @@ conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 ```
 
-架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。Flutter 正式
-导入契约见 `docs/data-sources/source-bundle-v1.md`；当前 CLI 输出仍是待迁移的
-legacy 开发格式。
+架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。`collect jw`
+与 `collect young-schedule` 默认输出
+`docs/data-sources/source-bundle-v1.md` 定义的 SourceBundle 1.0，可直接作为
+Flutter 导入层的输入。报名中活动、评课和校园公开信息继续使用各自的查询结果契约。

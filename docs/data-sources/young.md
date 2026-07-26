@@ -24,7 +24,11 @@
 
 输出是本次窗口完整快照，不代表历史删除。未来 App 同步层应执行 upsert，区分窗口外、窗口内缺失、来源取消和用户删除，并始终保留用户覆盖层。
 
-当前 Python 输出的顶层 `schedules` 是 legacy 开发格式。Flutter 接入时必须转换为
-`docs/data-sources/source-bundle-v1.md` 定义的
-`ustc_young_my_schedule` Bundle：每条已报名日程变为 CalendarEvent，日期窗口
-声明完整检查天数和空日期数量，不携带远端 userId 或原始 HTML。
+`python -m ustc_assistant collect young-schedule --account-id <local-account-id>`
+输出 `docs/data-sources/source-bundle-v1.md` 定义的
+`ustc_young_my_schedule` SourceBundle 1.0：每条已报名日程变为 CalendarEvent，
+日期窗口声明完整检查天数和空日期数量，不携带远端 userId 或原始 HTML。报名中活动
+列表保持独立查询结果，不混入 SourceBundle。
+
+旧版顶层 `schedules` 快照只作为内部兼容数据保留，不再是采集 CLI 的默认输出，也
+不得进入 Flutter ImportService。

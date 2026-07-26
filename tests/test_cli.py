@@ -50,7 +50,9 @@ class PackageEntryTests(unittest.TestCase):
     def test_root_parser_exposes_collect_and_query(self):
         parser = cli.build_parser()
 
-        collect_args = parser.parse_args(["collect", "jw"])
+        collect_args = parser.parse_args(
+            ["collect", "jw", "--account-id", "acct_cli"]
+        )
         query_args = parser.parse_args(["query", "icourse", "--course", "test"])
 
         self.assertEqual(collect_args.command, "collect")
@@ -61,9 +63,18 @@ class PackageEntryTests(unittest.TestCase):
     def test_collect_parsers_use_current_semester_defaults(self):
         parser = cli.build_parser()
 
-        jw = parser.parse_args(["collect", "jw"])
+        jw = parser.parse_args(
+            ["collect", "jw", "--account-id", "acct_cli"]
+        )
         schedule = parser.parse_args(
-            ["collect", "young-schedule", "--today", "2026-07-22"]
+            [
+                "collect",
+                "young-schedule",
+                "--account-id",
+                "acct_cli",
+                "--today",
+                "2026-07-22",
+            ]
         )
 
         self.assertEqual(jw.semester_id, 461)
@@ -73,9 +84,30 @@ class PackageEntryTests(unittest.TestCase):
         self.assertEqual(schedule.today.isoformat(), "2026-07-22")
 
     def test_jw_semester_override_requires_complete_triple(self):
-        result = cli.main(["collect", "jw", "--semester-id", "421"])
+        result = cli.main(
+            [
+                "collect",
+                "jw",
+                "--account-id",
+                "acct_cli",
+                "--semester-id",
+                "421",
+            ]
+        )
 
         self.assertEqual(result, 1)
+
+    def test_formal_collect_commands_require_account_id_without_collecting(self):
+        with patch.object(cli.jw, "collect_jw_source_bundle") as collect_jw:
+            self.assertEqual(1, cli.main(["collect", "jw"]))
+        with patch.object(
+            cli.young_source_bundle,
+            "collect_young_schedule_source_bundle",
+        ) as collect_young:
+            self.assertEqual(1, cli.main(["collect", "young-schedule"]))
+
+        collect_jw.assert_not_called()
+        collect_young.assert_not_called()
 
     def test_icourse_service_exposes_app_callable_query_runner(self):
         self.assertTrue(callable(icourse_service.run_query))
@@ -143,11 +175,16 @@ class PackageEntryTests(unittest.TestCase):
 
 
 class CollectorCommandTests(unittest.TestCase):
-    def test_jw_command_writes_bundle_and_optional_raw_sources(self):
+    def test_jw_command_writes_source_bundle_and_optional_raw_sources(self):
         bundle = {
-            "calendarEvents": [{"id": "event-1"}],
-            "sourceRecords": [{"id": "source-1"}],
-            "scheduleRelations": [],
+            "schemaVersion": "1.0",
+            "subject": {"accountId": "acct_cli"},
+            "data": {
+                "calendarEvents": [{"externalId": "event-1"}],
+                "sourceRecords": [{"externalId": "source-1"}],
+                "courseSeries": [],
+                "scheduleRelations": [],
+            },
         }
         sources = SimpleNamespace(
             course_datum={"result": {"lessonList": []}},
@@ -160,6 +197,8 @@ class CollectorCommandTests(unittest.TestCase):
                 [
                     "collect",
                     "jw",
+                    "--account-id",
+                    "acct_cli",
                     "--output",
                     str(root / "bundle.json"),
                     "--save-raw",
@@ -174,15 +213,19 @@ class CollectorCommandTests(unittest.TestCase):
                 ]
             )
             with patch.object(
-                cli.jw, "collect_jw_bundle", return_value=(bundle, sources)
+                cli.jw,
+                "collect_jw_source_bundle",
+                return_value=(bundle, sources),
             ) as collect:
                 self.assertEqual(0, args.handler(args, lambda _: None))
 
             self.assertEqual(bundle, json.loads((root / "bundle.json").read_text(encoding="utf-8")))
+            self.assertNotIn("metadata", bundle)
             self.assertTrue((root / "private" / "course-datum.raw.json").exists())
             self.assertTrue((root / "private" / "exam-arrange.raw.html").exists())
-            self.assertEqual(421, collect.call_args.kwargs["semester_id"])
-            self.assertEqual("2026spring", collect.call_args.kwargs["semester_key"])
+            self.assertEqual("acct_cli", collect.call_args.kwargs["account_id"])
+            self.assertEqual(421, collect.call_args.kwargs["semester"].semester_id)
+            self.assertEqual("2026spring", collect.call_args.kwargs["semester"].semester_key)
 
     def test_young_enrolment_command_defaults_to_normalized_output_only(self):
         normalized = {
@@ -206,12 +249,21 @@ class CollectorCommandTests(unittest.TestCase):
             self.assertEqual(normalized, json.loads((root / "out.json").read_text(encoding="utf-8")))
             self.assertFalse((root / "private").exists())
 
-    def test_young_schedule_command_passes_today_and_saves_named_raw_file(self):
-        normalized = {
-            "schedules": [{"sourceScheduleId": "schedule-1"}],
-            "metadata": {"queriedDates": 1},
+    def test_young_schedule_command_writes_source_bundle_and_named_raw_file(self):
+        bundle = {
+            "schemaVersion": "1.0",
+            "subject": {"accountId": "acct_cli"},
+            "data": {
+                "calendarEvents": [{"externalId": "schedule-1"}],
+                "sourceRecords": [{"externalId": "record-1"}],
+                "courseSeries": [],
+                "scheduleRelations": [],
+            },
         }
-        raw = SimpleNamespace(records=({"id": "schedule-1", "userId": "private"},))
+        raw = SimpleNamespace(
+            records=({"id": "schedule-1", "userId": "private"},),
+            queried_dates=1,
+        )
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -219,6 +271,8 @@ class CollectorCommandTests(unittest.TestCase):
                 [
                     "collect",
                     "young-schedule",
+                    "--account-id",
+                    "acct_cli",
                     "--today",
                     "2026-07-22",
                     "--output",
@@ -229,13 +283,18 @@ class CollectorCommandTests(unittest.TestCase):
                 ]
             )
             with patch.object(
-                cli.schedule,
-                "collect_schedule_snapshot",
-                return_value=(normalized, raw),
+                cli.young_source_bundle,
+                "collect_young_schedule_source_bundle",
+                return_value=(bundle, raw),
             ) as collect:
                 self.assertEqual(0, args.handler(args, lambda _: None))
 
             self.assertEqual(date(2026, 7, 22), collect.call_args.kwargs["today"])
+            self.assertEqual("acct_cli", collect.call_args.kwargs["account_id"])
+            self.assertEqual(
+                bundle,
+                json.loads((root / "out.json").read_text(encoding="utf-8")),
+            )
             raw_path = root / "private" / "ustc-young-my-schedule.raw.json"
             self.assertEqual("private", json.loads(raw_path.read_text(encoding="utf-8"))["records"][0]["userId"])
 

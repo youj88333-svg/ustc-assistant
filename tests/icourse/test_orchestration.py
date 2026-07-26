@@ -8,6 +8,14 @@ from pathlib import Path
 from ustc_assistant import cli as app_cli
 from ustc_assistant.sources.icourse import service as icourse
 
+FORMAL_JW_FIXTURE = (
+    Path(__file__).parents[1]
+    / "fixtures"
+    / "source-bundle"
+    / "positive"
+    / "jw-with-exam.json"
+)
+
 def parse_args(values):
     return app_cli.build_parser().parse_args(["query", "icourse", *values])
 
@@ -105,32 +113,36 @@ class OrchestrationTests(unittest.TestCase):
 
         self.assertEqual("Teacher A", result["results"][0]["name"])
 
-    def test_group_only_collapses_private_bundle_without_network_or_user_id(self):
+    def test_group_only_reads_formal_bundle_without_network_or_account_id(self):
+        args = parse_args(
+            ["--jw-bundle", str(FORMAL_JW_FIXTURE), "--group-only"]
+        )
+
+        result = icourse.run_query(args, client=None)
+        serialized = json.dumps(result)
+
+        self.assertEqual(1, len(result["results"]))
+        self.assertEqual(1, result["results"][0]["occurrenceCount"])
+        self.assertNotIn("acct_fixture", serialized)
+        self.assertNotIn("accountId", serialized)
+
+    def test_jw_mode_searches_once_per_grouped_offering(self):
+        args = parse_args(["--jw-bundle", str(FORMAL_JW_FIXTURE)])
+        client = FakeClient()
+
+        icourse.run_query(args, client=client)
+
+        self.assertEqual(["示例课程"], client.searches)
+
+    def test_legacy_bundle_remains_readable_offline(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            source = root / "bundle.json"
+            source = Path(temporary_directory) / "legacy.json"
             source.write_text(json.dumps(bundle()), encoding="utf-8")
             args = parse_args(["--jw-bundle", str(source), "--group-only"])
 
             result = icourse.run_query(args, client=None)
-            serialized = json.dumps(result)
 
         self.assertEqual(2, len(result["results"]))
-        self.assertEqual(2, result["results"][0]["occurrenceCount"])
-        self.assertNotIn("private-user", serialized)
-        self.assertNotIn("userId", serialized)
-
-    def test_jw_mode_searches_once_per_grouped_offering(self):
-        with tempfile.TemporaryDirectory() as temporary_directory:
-            root = Path(temporary_directory)
-            source = root / "bundle.json"
-            source.write_text(json.dumps(bundle()), encoding="utf-8")
-            args = parse_args(["--jw-bundle", str(source)])
-            client = FakeClient()
-
-            icourse.run_query(args, client=client)
-
-        self.assertEqual(["Course A", "Course B"], client.searches)
 
 
 if __name__ == "__main__":
