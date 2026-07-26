@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'app/app.dart';
+
 void main() {
   runApp(const MyApp());
 }
@@ -9,13 +11,6 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'USTC Assistant',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF275D38)),
-        useMaterial3: true,
-      ),
-      home: const Scaffold(body: SizedBox.expand()),
-    );
+    return const UstcAssistantApp();
   }
 }
