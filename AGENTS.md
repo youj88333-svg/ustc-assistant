@@ -15,8 +15,8 @@
 运行入口统一为 `python -m ustc_assistant`，详情见 `README.md`。稳定来源契约见 `docs/data-sources/`，日程产品模型见 `docs/schedule-data-model.md`。
 
 正式导入边界为 `docs/data-sources/source-bundle-v1.md` 与
-`schemas/source-bundle-1.0.schema.json`。当前 Python JW 和二课日程规范化输出仍是
-待迁移 legacy 格式；在完成契约实现前不得声称已经生成 SourceBundle 1.0。
+`schemas/source-bundle-1.0.schema.json`。Python JW 和已报名二课日程已生成
+SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集作业。
 
 ## 项目结构与当前阶段
 
@@ -24,12 +24,12 @@
 
 - 当前仓库已经实现的是 Python 数据层和五条只读来源链路，统一入口为
   `python -m ustc_assistant`。
-- Flutter App、Windows Python Bridge、Flutter `ImportService` 和移动端
-  `SourceGateway` 尚未创建；`docs/superpowers/specs/` 中的相关内容是已经确认的
-  产品与技术设计，不是现有代码。
-- SourceBundle 1.0 的 Markdown 契约、JSON Schema 和合成 fixture 已存在，但
-  Python JW 与已报名二课日程尚未迁移到该格式。最近真实验收中的事件、来源记录
-  和日程关系数量均描述 legacy 输出。
+- `app/` 已创建 Flutter Windows、Android、iOS 工程脚手架；当前只有最小应用入口，
+  Flutter `ImportService`、数据库和产品界面仍待实现。
+- `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消；
+  移动端 `SourceGateway` 尚未实现。
+- Windows SDK 验证时缺少 Visual Studio 的 Desktop development with C++
+  workload；安装前不得声称 Windows 可执行文件已经构建验收。
 - 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
   删除现有 service、测试或真实故障回归样例。
 
@@ -42,6 +42,7 @@ src/ustc_assistant/
   common/
     browser.py             可见 Edge 持久会话及生命周期
     storage.py             UTF-8 JSON 和显式原始文件写入
+  bridge/                  Windows Flutter 使用的认证回环采集 Bridge
   sources/
     jw/
       collector.py         登录、动态上下文和课程/考试页面采集
@@ -78,6 +79,7 @@ schemas/
 
 README.md                  安装、CLI 命令和输出路径
 pyproject.toml             Python 包、依赖和命令入口
+app/                       Flutter Windows、Android、iOS 工程与契约资产
 tmp/、temp.md              私有调试数据，不是代码或正式契约
 ```
 

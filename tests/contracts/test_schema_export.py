@@ -23,6 +23,13 @@ POSITIVE_FIXTURE_DIR = (
 NEGATIVE_FIXTURE_DIR = (
     REPO_ROOT / "tests" / "fixtures" / "source-bundle" / "negative"
 )
+FLUTTER_SCHEMA_ASSET = (
+    REPO_ROOT
+    / "app"
+    / "assets"
+    / "schemas"
+    / "source-bundle-1.0.draft7.schema.json"
+)
 
 
 def load_canonical_schema() -> dict:
@@ -30,6 +37,14 @@ def load_canonical_schema() -> dict:
 
 
 class Draft7SchemaExportTests(unittest.TestCase):
+    def test_committed_flutter_asset_matches_generated_schema(self):
+        expected = build_draft7_compat_schema(load_canonical_schema())
+        committed = json.loads(
+            FLUTTER_SCHEMA_ASSET.read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(expected, committed)
+
     def test_conversion_rewrites_draft_specific_constructs_without_mutation(self):
         canonical = load_canonical_schema()
         original = copy.deepcopy(canonical)

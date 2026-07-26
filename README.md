@@ -59,6 +59,12 @@ conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 ```
 
+Flutter 工程位于 `app/`，使用 Flutter 3.44.5 和 Dart 3.12.2。当前环境缺少
+Visual Studio 的 Desktop development with C++ workload，因此可以运行
+`flutter analyze` 与 `flutter test`，但 Windows 可执行文件构建仍处于环境阻塞状态。
+由于 Flutter 3.44.5 固定的 `meta` 版本与原计划的新生成器不兼容，当前锁定
+`drift_dev 2.34.0` 与 `build_runner 2.10.5`；运行时 `drift` 保持 2.34.2。
+
 架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。`collect jw`
 与 `collect young-schedule` 默认输出
 `docs/data-sources/source-bundle-v1.md` 定义的 SourceBundle 1.0，可直接作为
