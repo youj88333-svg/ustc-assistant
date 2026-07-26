@@ -112,6 +112,7 @@ calendar_events
 calendar_event_series
 calendar_event_occurrence_exceptions
 schedule_relations
+schedule_relation_rules
 course_series
 user_overlays
 tasks
@@ -152,7 +153,10 @@ these rules:
 SourceBundle contains only source facts, source defaults, and objective
 source-declared relations. It never imports user conflict judgments. Time
 overlap is computed locally, while conflict/non-conflict is created only after
-explicit user classification.
+explicit user classification. One-occurrence classifications use
+`schedule_relations`; compatible current-and-future classifications use the
+structured, bounded `schedule_relation_rules` table. Rules are not hidden in
+JSON or eagerly reduced to occurrence-only rows.
 
 The effective event view applies overlays in this order:
 
@@ -402,7 +406,8 @@ Implementation must include:
 - tests that overlap alone does not create a conflict warning;
 - widget tests for the two-step overlap interaction and event detail;
 - responsive screenshot checks for Windows and representative phone widths;
-- explicit checks that all seven days remain reachable;
+- explicit narrow-screen scrolling checks that the Sunday header and a seeded
+  Sunday event become actually visible/reachable;
 - accessibility semantics for conflict warnings and event selection;
 - tests for both deadline bands and planned-task retention;
 - tests for due-today, overdue, and completed-task presentation;

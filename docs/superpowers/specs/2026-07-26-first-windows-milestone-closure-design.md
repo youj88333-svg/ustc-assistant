@@ -150,11 +150,15 @@ config/source-defaults.json
 
 规则：
 
-- 首次成功登录学校账号后创建对应 `accountId`；
+- 首次登录先在内存中创建临时随机 `accountId`；学校身份验证成功后才持久化账号并
+  导入该账号的 Bundle，失败或取消时丢弃临时身份；
 - 同一学校账号再次登录时复用原 `accountId`；
 - 学校账号名始终使用 Windows 当前用户 DPAPI 加密保存；
 - 保存密码仍为可选项，且密码同样使用 DPAPI；
 - 不保存密码不影响账号识别、数据归属和历史保留；
+- 每次同步都可以只在内存中短暂解密学校账号名，用于本机会话和账号验证；密码
+  只能在 Bridge 报告需要交互登录且用户选择继续后解密；
+- 账号名和密码都不得进入日志或 SourceBundle；
 - SourceBundle 只携带本地 `accountId`，不携带学号；
 - 自动或手动同步必须验证当前会话属于预期学校账号；
 - 账号不一致时返回 `account_mismatch`，不生成或导入 Bundle。
@@ -180,6 +184,7 @@ calendar_event_series
 calendar_event_occurrence_exceptions
 user_overlays
 schedule_relations
+schedule_relation_rules
 task_event_links
 tasks
 plan_blocks
@@ -198,6 +203,8 @@ agent_permission_policies
 - Task 不在一列中嵌入相关事件 ID 数组；
 - Task 正式包含 `description`、`userNotes`、`blockedReason`、终态时间和软删除时间；
 - Reminder 独立建表，不把提醒规则塞入 Task 或 Event 的任意 JSON；
+- `schedule_relation_rules` 以结构化系列引用和有界生效范围保存“本次及未来”的
+  冲突分类；不得藏入 JSON，也不得把该能力缩减为仅 occurrence 分类；
 - `import_batches` 保存 `bundleId`、规范化摘要、来源、scope 和导入结果；
 - `ActionLog` 至少包含结果、脱敏摘要、目标、actor、风险和相关同步批次；
 - `ActionLog` 追加后不能通过普通业务操作编辑；
@@ -231,7 +238,8 @@ SourceBundle，而是实现其生产者和消费者。
 迁移顺序：
 
 1. 为 JW 和已报名二课日程实现 SourceBundle 1.0 生产器。
-2. 用共享正反 fixture 验证 Schema、语义、计数、身份和隐私。
+2. 用共享正反 fixture 验证 Schema、语义、计数、身份和隐私；正例与反例必须
+   位于不同目录。
 3. 将对应 CLI 默认输出切换到 SourceBundle。
 4. 更新评课社区教务联动，使其读取 SourceBundle 的 `courseSeries`。
 5. 仅保留一个有明确删除条件的 legacy 输入兼容适配器。
@@ -245,6 +253,12 @@ collect_young_schedule(accountId, dateWindow) -> SourceBundle
 
 JW 必须同时完成课程和考试组件。二课必须完成整个日期窗口。生产器必须在返回前
 运行自身输出校验。报名中二课、评课和校园公开信息继续使用独立版本化查询结果。
+正式 JW 和已报名二课日程 CLI 输出都必须显式提供 `--account-id`；
+`acct_cli_local` 只允许出现在 fixture 和测试中。
+
+Flutter 使用的 Draft 7 导出只可在固定数组大小和多个 `contains` 约束已经保证等价
+时删除冗余的 `minContains`/`maxContains`，并必须用正例与针对性反例证明导出前后
+接受和拒绝结果等价。
 
 Flutter 文件导入和 Bridge 返回都只调用一个 `ImportService`：
 
@@ -262,6 +276,11 @@ Flutter 文件导入和 Bridge 返回都只调用一个 `ImportService`：
 
 任何导入错误都回滚完整 Bundle。旧数据、UserOverlay 和最近成功状态不得被失败
 导入改写。
+
+文件导入必须让用户明确确认目标账号，活动账号只能作为预选项；Bundle 的
+`subject.accountId` 必须匹配用户确认的目标账号。`ImportService` 通过稳定的
+`ReminderReconciler` 端口执行提交后处理，端口有 no-op 默认实现，Windows 提醒
+实现由提醒阶段接入。
 
 ## 9. Windows Python Bridge
 
@@ -350,6 +369,10 @@ infrastructure
 - Task 与 PlanBlock 状态只能经过生命周期服务；
 - 时间重叠由查询层计算，不自动写冲突关系；
 - 冲突判断只能经过 `ConflictService`；
+- 可撤回的 mutation 通过稳定 `UndoRecorder` 端口记录撤回命令，全局
+  `UndoService` 是该端口的一步撤回实现；
+- `ImportService` 只依赖稳定 `ReminderReconciler` 端口，不直接依赖 Windows
+  通知实现；
 - 时间逻辑统一使用可注入 `Clock` 和 `Asia/Shanghai`；
 - DPAPI、Bridge 和通知属于可替换平台适配器；
 - 未来 LLM 也只能调用同一 application service，不得直接写库。
@@ -487,17 +510,21 @@ Python 回归测试
   现有来源、CLI、脱敏和真实故障 fixture
 
 SourceBundle 契约测试
-  Python 生产者与 Flutter 消费者共享正反 fixture
+  Python 生产者与 Flutter 消费者共享 fixture，正例和反例位于不同目录
 
 Flutter 单元和数据库测试
   migrations、事务、身份、状态机、北京时间、覆盖层
 
 Widget 和截图测试
-  七天周视图、窄屏、重叠、Task、表单、可访问性
+  七天周视图、窄屏滚动后 Sunday 实际可见、重叠、Task、表单、可访问性
 
 Windows 平台测试
-  DPAPI、Bridge 生命周期、运行期间通知、进程退出边界
+  DPAPI 平台调用、SQLite 无账号名/密码明文、Bridge 生命周期、运行期间通知、
+  进程退出边界
 ```
+
+Task Reminder 测试必须在普通日期、跨月和跨年日期上断言完整且精确的触发时刻
+集合。历史脱敏测试必须预置非空对抗数据，再验证所有可见字段均已脱敏。
 
 自动测试不得访问学校网站。Flutter 包和具体版本在实施计划中根据当前 Flutter
 环境确定，但不能改变本文的分层和边界。

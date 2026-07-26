@@ -25,7 +25,7 @@
 - Existing source tests never access school websites; real Edge acceptance is manual.
 - Use `apply_patch` for manual edits, preserve unrelated user changes, and do not commit `tmp/`, `temp.md`, browser profiles, caches, credentials, or raw responses.
 - Every implementation task follows red-green TDD and ends with an independently reviewable commit.
-- Conda, Git, and Python commands run from repository root `E:\107`; after Task 9, Flutter and Dart commands run from `E:\107\app` unless a command block explicitly changes location.
+- Every absolute repository path in command-location guidance means the active Git worktree root, not a particular checkout. Conda, Git, and Python commands run from that root; after Task 9, Flutter and Dart commands run from that worktree's `app/` unless a command block explicitly changes location.
 
 ## Target Repository Structure
 
@@ -191,6 +191,8 @@ git commit -m "feat: centralize JW semester configuration"
 - Create: `src/ustc_assistant/contracts/schema_export.py`
 - Create: `tests/contracts/test_source_bundle.py`
 - Create: `tests/contracts/test_schema_export.py`
+- Move positive fixtures into: `tests/fixtures/source-bundle/positive/`
+- Create negative fixtures only under: `tests/fixtures/source-bundle/negative/`
 - Modify: `pyproject.toml`
 
 **Interfaces:**
@@ -206,7 +208,7 @@ git commit -m "feat: centralize JW semester configuration"
 ```python
 class SourceBundleContractTests(unittest.TestCase):
     def test_all_four_shared_fixtures_validate(self):
-        for path in FIXTURE_DIR.glob("*.json"):
+        for path in POSITIVE_FIXTURE_DIR.glob("*.json"):
             validate_source_bundle(json.loads(path.read_text(encoding="utf-8")))
 
     def test_duplicate_external_identity_is_rejected_safely(self):
@@ -223,7 +225,9 @@ class SourceBundleContractTests(unittest.TestCase):
 Add tests for manifest mismatch, dangling references, invalid `+08:00` time,
 incomplete snapshots, hard limits, unknown fields, subject mismatch helper
 behavior, unsupported higher minor/major versions, and deterministic SHA-256
-digest from canonical UTF-8 JSON.
+digest from canonical UTF-8 JSON. Positive and negative fixtures must remain in
+their distinct directories; no glob may treat rejection fixtures as valid
+examples.
 
 - [ ] **Step 2: Run tests and confirm failure**
 
@@ -249,10 +253,12 @@ def canonical_bundle_digest(bundle: Mapping[str, Any]) -> str:
 
 - [ ] **Step 4: Implement deterministic Draft 7 asset conversion**
 
-The canonical schema uses only Draft 7-compatible validation keywords plus the
-2020-12 `$defs` name. Recursively transform `$defs` to `definitions`,
-`#/$defs/` references to `#/definitions/`, and the metaschema URL to Draft 7.
-Reject any future canonical keyword outside the explicit compatibility allowlist.
+Recursively transform `$defs` to `definitions`, `#/$defs/` references to
+`#/definitions/`, and the metaschema URL to Draft 7. Draft 7 export removes
+`minContains` and `maxContains` only for the JW component array where its fixed
+array size and the two distinct `contains` constraints make both bounds
+redundant. Reject those keywords everywhere else, along with any future
+canonical keyword outside the explicit compatibility allowlist.
 
 ```python
 def build_draft7_compat_schema(canonical: Mapping[str, Any]) -> dict[str, Any]:
@@ -263,7 +269,10 @@ def build_draft7_compat_schema(canonical: Mapping[str, Any]) -> dict[str, Any]:
 
 The module CLI resolves the canonical root schema, writes UTF-8 JSON with a
 trailing newline, and refuses an output path outside the explicitly supplied
-file. It performs no networking.
+file. It performs no networking. Add explicit equivalence tests that validate
+the positive corpus and focused component-array mutations with both Draft
+2020-12 and the converted Draft 7 schema and assert identical accept/reject
+results.
 
 - [ ] **Step 5: Verify canonical and converted schemas against fixtures**
 
@@ -274,12 +283,14 @@ conda run -n ustc_assistant python -m unittest tests.contracts -v
 conda run -n ustc_assistant python -m compileall -q src tests
 ```
 
-Expected: both contract suites pass; malformed fixtures fail with the same stable error category.
+Expected: both contract suites pass; positive and negative fixture locations
+remain distinct, malformed fixtures fail with the same stable error category,
+and canonical/Draft 7 equivalence cases have identical outcomes.
 
 - [ ] **Step 6: Commit**
 
 ```powershell
-git add pyproject.toml src/ustc_assistant/contracts tests/contracts
+git add pyproject.toml src/ustc_assistant/contracts tests/contracts tests/fixtures/source-bundle
 git commit -m "feat: validate SourceBundle 1.0 contracts"
 ```
 
@@ -474,7 +485,8 @@ def test_jw_command_writes_source_bundle_1_0(self):
 
 Add matching young-schedule tests and iCourse grouping tests using
 `jw-with-exam.json`. Keep one legacy fixture test proving the compatibility
-reader works without networking.
+reader works without networking. Add rejection tests proving both formal
+commands fail safely when `--account-id` is absent.
 
 - [ ] **Step 2: Run selected tests and observe legacy-shape failures**
 
@@ -484,10 +496,11 @@ Expected: assertions fail because CLI still writes legacy envelopes.
 
 - [ ] **Step 3: Switch CLI services and adapt iCourse grouping**
 
-Add `--account-id` with safe developer default `acct_cli_local`. Group formal
-JW input from `data.courseSeries`; ignore exams and occurrence duplication.
-Legacy parsing is isolated in `jw_input.py` and emits the same internal
-`JwCourseGroup` values.
+Require `--account-id` for formal `collect jw` and `collect young-schedule`
+SourceBundle output; there is no production or developer default.
+`acct_cli_local` is fixture/test-only. Group formal JW input from
+`data.courseSeries`; ignore exams and occurrence duplication. Legacy parsing is
+isolated in `jw_input.py` and emits the same internal `JwCourseGroup` values.
 
 - [ ] **Step 4: Update docs and remove ambiguous claims**
 
@@ -764,7 +777,8 @@ Run:
 ```
 
 Review generated changes and preserve the repository root README and ignore
-rules.
+rules. Update `AGENTS.md` only to report that the Flutter scaffold now exists;
+do not describe later milestone capabilities as completed.
 
 - [ ] **Step 3: Add exact first-milestone dependencies**
 
@@ -885,7 +899,7 @@ git commit -m "feat: add account and source database schema"
 - Create: `app/test/core/database/schedule_task_schema_test.dart`
 
 **Interfaces:**
-- Produces tables: `course_series`, `calendar_events`, `calendar_event_series`, `calendar_event_occurrence_exceptions`, `user_overlays`, `schedule_relations`, `task_event_links`, `tasks`, `plan_blocks`, `reminders`, `undo_slot`
+- Produces tables: `course_series`, `calendar_events`, `calendar_event_series`, `calendar_event_occurrence_exceptions`, `user_overlays`, `schedule_relations`, `schedule_relation_rules`, `task_event_links`, `tasks`, `plan_blocks`, `reminders`, `undo_slot`
 - Source-owned records and local records share `calendar_events` but differ by `source` and nullable `externalId`.
 
 - [ ] **Step 1: Write failing relation and invariant tests**
@@ -909,7 +923,8 @@ test('undo slot contains at most one row', () async {
 ```
 
 Add timed/all-day exclusivity, end-after-start, Task terminal timestamp,
-PlanBlock parent, relation pair uniqueness, occurrence exception identity,
+PlanBlock parent, relation pair uniqueness, structured current-and-future
+relation-rule bounds and pair uniqueness, occurrence exception identity,
 Reminder target, and account-partition tests.
 
 - [ ] **Step 2: Run and confirm failures**
@@ -922,7 +937,11 @@ Use the MVP fields from `docs/schedule-data-model.md`, replacing `userId` with
 `accountId`, adding Task `description` and `userNotes`, and representing Task
 relations only in `task_event_links`. Store enum values as checked text columns,
 sets/tags as normalized JSON arrays, and occurrence override payloads as
-versioned JSON with explicit overridden-field names.
+versioned JSON with explicit overridden-field names. Persist
+`ScheduleRelationRule` in the structured `schedule_relation_rules` table with
+typed series references and bounded effective dates; never hide
+current-and-future conflict classification in JSON or reduce it to
+occurrence-only `schedule_relations`.
 
 - [ ] **Step 4: Generate, test all database files, and commit**
 
@@ -942,7 +961,8 @@ git commit -m "feat: add schedule and task database schema"
 - Create: `app/lib/features/import/data/source_bundle_decoder.dart`
 - Create: `app/lib/features/import/data/source_bundle_semantics.dart`
 - Create: `app/test/features/import/source_bundle_decoder_test.dart`
-- Copy fixtures into: `app/test/fixtures/source_bundle/`
+- Copy positive fixtures into: `app/test/fixtures/source_bundle/positive/`
+- Copy negative fixtures into: `app/test/fixtures/source_bundle/negative/`
 
 **Interfaces:**
 - Produces: `SourceBundleDecoder.decode(Uint8List bytes) -> SourceBundle`
@@ -959,7 +979,7 @@ for (final name in [
   'young-empty-window.json',
 ]) {
   test('$name decodes', () async {
-    final bytes = await fixtureBytes(name);
+    final bytes = await positiveFixtureBytes(name);
     expect(decoder.decode(bytes).schemaVersion, '1.0');
   });
 }
@@ -992,7 +1012,8 @@ would ignore them.
 Match Python checks for manifest counts, source/scope compatibility, identity,
 exactly-one SourceRecord mappings, references, hard limits, complete windows,
 `+08:00`, all-day dates, and forbidden sensitive keys. Add mutated negative
-fixtures shared with Python.
+fixtures shared with Python, keeping every rejection fixture under the
+dedicated negative fixture directory.
 
 - [ ] **Step 5: Run Dart and Python contract suites, then commit**
 
@@ -1007,13 +1028,14 @@ git commit -m "feat: decode SourceBundle contracts in Flutter"
 
 **Files:**
 - Create: `app/lib/features/import/application/import_service.dart`
+- Create: `app/lib/features/import/application/reminder_reconciler.dart`
 - Create: `app/lib/features/import/data/import_repository.dart`
 - Create: `app/lib/features/import/domain/import_result.dart`
 - Create: `app/test/features/import/import_service_test.dart`
 
 **Interfaces:**
 - Produces: `Future<ImportResult> ImportService.importBytes(Uint8List bytes, {required String accountId, required ImportOrigin origin})`
-- Consumes: `SourceBundleDecoder`, `AppDatabase`, post-commit `ReminderReconciler`
+- Consumes: `SourceBundleDecoder`, `AppDatabase`, stable post-commit `ReminderReconciler` port
 - Guarantees: one Bundle equals one Drift transaction.
 
 - [ ] **Step 1: Write failing transaction tests**
@@ -1038,7 +1060,8 @@ test('bundle failure rolls back every row', () async {
 
 Add tests for bundle replay, same ID/different digest, new ID/same content,
 subject mismatch, `observed`, `missing_within_scope`, `outside_scope`,
-reappearance, explicit cancellation, and independent source success.
+reappearance, explicit cancellation, independent source success, the default
+no-op reconciler, and a fake reconciler receiving only committed imports.
 
 - [ ] **Step 2: Run and confirm missing service**
 
@@ -1053,8 +1076,11 @@ transaction.
 
 - [ ] **Step 4: Trigger Reminder reconciliation only after commit**
 
+Define the stable `ReminderReconciler` port and a no-op/default implementation
+in this task so ImportService has no dependency on the later Windows adapter.
 Expose a fake reconciler in tests. A reminder error updates retryable reminder
-state but does not roll back imported events.
+state but does not roll back imported events. Task 25 supplies the Windows
+reminder implementation of this port.
 
 - [ ] **Step 5: Run database/import tests and commit**
 
@@ -1216,10 +1242,11 @@ git commit -m "feat: project seven-day schedules"
 ```dart
 testWidgets('Saturday and Sunday remain reachable on phone width', (tester) async {
   tester.view.physicalSize = const Size(390, 844);
-  await tester.pumpWidget(timetableFixture());
+  await tester.pumpWidget(timetableFixture(withSeededSundayEvent: true));
   await tester.drag(find.byType(Scrollable).first, const Offset(-1200, 0));
   await tester.pumpAndSettle();
-  expect(find.text('周日'), findsOneWidget);
+  expect(find.text('周日').hitTestable(), findsOneWidget);
+  expect(find.byKey(const Key('event-sunday')).hitTestable(), findsOneWidget);
 });
 
 testWidgets('first overlap tap expands and second opens detail', (tester) async {
@@ -1292,6 +1319,17 @@ test('attendance decision remains occurrence-specific', () async {
   expect((await repository.byId(eventA)).attendanceDecision, AttendanceDecision.notGoing);
   expect((await repository.byId(eventB)).attendanceDecision, AttendanceDecision.undecided);
 });
+
+test('current-and-future classification persists a structured rule', () async {
+  await conflictService.classifyPair(
+    a,
+    b,
+    ConflictState.nonConflict,
+    scope: ConflictScope.currentAndFuture,
+  );
+  expect(await relationRuleRows(), hasLength(1));
+  expect((await relationRows()).where((row) => row.isSynthetic), isEmpty);
+});
 ```
 
 - [ ] **Step 2: Run and confirm missing services**
@@ -1305,7 +1343,9 @@ color, reminder override, foreground preference, occurrence-specific
 `going/not_going/undecided` decisions, attendance outcomes, attendance notes,
 and listening notes. Pair identities are canonicalized so `(a,b)` and `(b,a)`
 cannot duplicate. A current-and-future conflict classification stores a bounded
-series rule and applies only to compatible projected occurrences.
+structured `ScheduleRelationRule` row with typed series references and applies
+only to compatible projected occurrences. It is not stored as JSON and is not
+expanded into unbounded occurrence rows.
 
 - [ ] **Step 4: Implement event detail and “处理重叠”**
 
@@ -1440,12 +1480,14 @@ git commit -m "feat: support recurring personal events"
 **Files:**
 - Create: `app/lib/features/tasks/domain/task.dart`
 - Create: `app/lib/features/tasks/domain/task_projection.dart`
+- Create: `app/lib/features/tasks/application/undo_recorder.dart`
 - Create: `app/lib/features/tasks/application/task_lifecycle_service.dart`
 - Create: `app/test/features/tasks/task_lifecycle_test.dart`
 
 **Interfaces:**
 - Persisted statuses: `active`, `blocked`, `completed`, `cancelled`.
 - Derived: planning, deadline, and confirmation states.
+- Produces: stable `UndoRecorder` port consumed by reversible mutation services.
 - No persisted in-progress state, percentage, actual minutes, or automatic status writes.
 
 - [ ] **Step 1: Write failing lifecycle tests**
@@ -1465,7 +1507,8 @@ test('completed task must be reopened before blocking', () async {
 ```
 
 Add blocked-reason clearing, terminal timestamps, reopen behavior, no automatic
-completion, soft delete, stale command, and Task-event link tests.
+completion, soft delete, stale command, Task-event link, and fake
+`UndoRecorder` invocation tests.
 
 - [ ] **Step 2: Run and confirm missing lifecycle service**
 
@@ -1474,8 +1517,11 @@ Run: `& "$env:Flutter_Path\flutter.bat" test test/features/tasks/task_lifecycle_
 - [ ] **Step 3: Implement command service and projections**
 
 All mutations include expected `updatedAt` for stale-write rejection and append
-a redacted ActionLog. Completion and cancellation summarize linked future
-PlanBlocks through the interface created in Task 21.
+a redacted ActionLog. Define the stable undo-recording port in this task and
+make reversible Task mutations call it only after their business write
+succeeds; Task 21 supplies the global one-step implementation. Completion and
+cancellation summarize linked future PlanBlocks through the interface created
+in Task 21.
 
 - [ ] **Step 4: Run tests and commit**
 
@@ -1491,7 +1537,14 @@ git commit -m "feat: implement task lifecycle"
 - Create: `app/lib/features/tasks/domain/plan_block.dart`
 - Create: `app/lib/features/tasks/application/plan_block_service.dart`
 - Create: `app/lib/features/tasks/application/undo_service.dart`
+- Modify: `app/lib/features/tasks/application/task_lifecycle_service.dart`
+- Modify: `app/lib/features/calendar/application/calendar_event_service.dart`
+- Modify: `app/lib/features/schedule/application/overlay_service.dart`
+- Modify: `app/lib/features/schedule/application/conflict_service.dart`
 - Create: `app/test/features/tasks/plan_block_undo_test.dart`
+- Modify: `app/test/features/tasks/task_lifecycle_test.dart`
+- Modify: `app/test/features/calendar/calendar_event_service_test.dart`
+- Modify: `app/test/features/schedule/overlay_conflict_test.dart`
 
 **Interfaces:**
 - PlanBlock statuses: `suggested`, `accepted`, `done`, `skipped`, `rescheduled`, `cancelled`.
@@ -1536,13 +1589,15 @@ Store minimal before-state and command kind. Clear at normal startup. Do not
 allow sync, file import, credentials, browser session clearing, or complete
 data clearing in undo. Register reversible commands from Task, PlanBlock,
 personal CalendarEvent, UserOverlay, Reminder override, and conflict services
-with this one `UndoService`; none of those features owns a private undo stack.
+through the Task 20 `UndoRecorder` port with this one `UndoService`; none of
+those features owns a private undo stack.
 
 - [ ] **Step 5: Run tests and commit**
 
 ```powershell
 & "$env:Flutter_Path\flutter.bat" test test/features/tasks
-git add app/lib/features/tasks app/test/features/tasks
+& "$env:Flutter_Path\flutter.bat" test test/features/calendar test/features/schedule
+git add app/lib/features/tasks app/lib/features/calendar/application/calendar_event_service.dart app/lib/features/schedule/application/overlay_service.dart app/lib/features/schedule/application/conflict_service.dart app/test/features/tasks app/test/features/calendar/calendar_event_service_test.dart app/test/features/schedule/overlay_conflict_test.dart
 git commit -m "feat: manage planning blocks and one-step undo"
 ```
 
@@ -1647,7 +1702,28 @@ test('password is stored only after successful school login', () async {
   await service.confirmSuccessfulLogin();
   expect((await credentialRows()).single.protectedPassword, isNotNull);
 });
+
+test('first login keeps a provisional account out of SQLite', () async {
+  final provisional = await service.beginFirstLogin();
+  expect(provisional.accountId, isNotEmpty);
+  expect(await localAccountRows(), isEmpty);
+  await service.cancelFirstLogin(provisional);
+  expect(await localAccountRows(), isEmpty);
+});
+
+test('copied SQLite contains no credential plaintext', () async {
+  await service.persistVerifiedAccount(
+    username: 'PB00000000',
+    password: 'adversarial-secret',
+  );
+  final bytes = await copyDatabaseBytes();
+  expect(databaseBytesContainUtf8(bytes, 'PB00000000'), isFalse);
+  expect(databaseBytesContainUtf8(bytes, 'adversarial-secret'), isFalse);
+});
 ```
+
+Keep a Windows-only platform test that exercises the real current-user DPAPI
+adapter, in addition to portable fake-protector tests.
 
 - [ ] **Step 2: Run tests and confirm missing adapter**
 
@@ -1666,7 +1742,10 @@ Show only masked hint, saved-password flag, source connection states, active
 account, login again, switch, delete credentials, and clear browser session.
 Each destructive action has its own confirmation. Stage plaintext only in
 memory during login and persist protected material only after the Bridge reports
-successful authentication for the expected school account.
+successful authentication for the expected school account. First login creates
+an in-memory provisional random `accountId`; no account or credential row is
+persisted until school identity verification succeeds, and failure or
+cancellation discards the provisional identity.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -1685,8 +1764,11 @@ git commit -m "feat: protect and partition school accounts"
 - Create: `app/lib/features/sync/application/sync_coordinator.dart`
 - Create: `app/lib/features/sync/presentation/sync_page.dart`
 - Create: `app/lib/features/import/presentation/file_import_action.dart`
+- Modify: `app/lib/features/accounts/application/account_service.dart`
 - Create: `app/test/features/sync/bridge_client_test.dart`
 - Create: `app/test/features/sync/sync_coordinator_test.dart`
+- Modify: `app/test/features/accounts/account_service_test.dart`
+- Create: `app/test/features/import/file_import_action_test.dart`
 
 **Interfaces:**
 - Starts `python -m ustc_assistant.bridge`, reads one handshake line, and authenticates every request.
@@ -1712,11 +1794,13 @@ test('manual sync bypasses automatic backoff', () async {
 Add invalid handshake, protocol mismatch, parent shutdown, event polling,
 cancel, user-login pause/resume, account mismatch, source-independent result,
 interrupted-run recovery, file subject mismatch, `Sync all` sequential order,
-and capability-to-`source_configs` persistence tests.
+capability-to-`source_configs` persistence, per-sync username verification,
+password-decryption gating, provisional first-login success/failure/cancellation,
+and explicit file-target confirmation tests.
 
-- [ ] **Step 2: Run and confirm missing sync layer**
+- [ ] **Step 2: Run and confirm missing sync/import orchestration**
 
-Run: `& "$env:Flutter_Path\flutter.bat" test test/features/sync`
+Run: `& "$env:Flutter_Path\flutter.bat" test test/features/sync test/features/import test/features/accounts`
 
 - [ ] **Step 3: Implement Python location and Bridge lifecycle**
 
@@ -1728,23 +1812,30 @@ saving it.
 - [ ] **Step 4: Implement sync orchestration**
 
 Render local data first. Serialize source jobs. Import only terminal complete
-bundles. On `needs_user_action`, show an in-App prompt; decrypt credentials and
-call resume only after confirmation. Keep old data and last-success time on
-failure. On Bridge startup, persist its shared JW capability as the default
-source configuration. A development override must replace the complete
+bundles. Every sync may decrypt the school username briefly in memory for local
+session/account verification; it never enters logs or SourceBundle. Decrypt the
+password only after the Bridge reports `needs_user_action` and the user chooses
+to continue, then call resume. For first login, send an in-memory provisional
+random `accountId`, persist the verified account and import its Bundle only
+after school identity verification, and discard the provisional identity on
+failure or cancellation. Keep old data and last-success time on failure. On
+Bridge startup, persist its shared JW capability as the default source
+configuration. A development override must replace the complete
 ID/key/display-name triple and is sent explicitly on each JW request.
 
 - [ ] **Step 5: Implement file import through the same ImportService**
 
 Use `file_selector` for one JSON file, enforce 16 MiB before reading, require
-active account subject match, and never update freshness from an invalid file.
+the user to confirm a target account, and require the Bundle subject to match
+that confirmed account. The active account may be preselected but is never
+silently accepted as the target. Never update freshness from an invalid file.
 
 - [ ] **Step 6: Run Flutter and Bridge tests, then commit**
 
 ```powershell
-& "$env:Flutter_Path\flutter.bat" test test/features/sync test/features/import
+& "$env:Flutter_Path\flutter.bat" test test/features/sync test/features/import test/features/accounts
 conda run -n ustc_assistant python -m unittest tests.bridge -v
-git add app/lib/features/sync app/lib/features/import/presentation app/test/features/sync
+git add app/lib/features/sync app/lib/features/import/presentation app/lib/features/accounts/application/account_service.dart app/test/features/sync app/test/features/import app/test/features/accounts/account_service_test.dart
 git commit -m "feat: synchronize Flutter through Python Bridge"
 ```
 
@@ -1753,13 +1844,15 @@ git commit -m "feat: synchronize Flutter through Python Bridge"
 **Files:**
 - Create: `app/lib/features/reminders/domain/reminder_rule.dart`
 - Create: `app/lib/features/reminders/application/reminder_service.dart`
-- Create: `app/lib/features/reminders/application/reminder_reconciler.dart`
+- Create: `app/lib/features/reminders/application/windows_reminder_reconciler.dart`
 - Create: `app/lib/features/reminders/data/foreground_notification_adapter.dart`
+- Modify: `app/lib/app/app.dart`
 - Create: `app/test/features/reminders/reminder_service_test.dart`
 - Create: `app/test/features/reminders/foreground_notification_test.dart`
 
 **Interfaces:**
 - Computes persisted Reminder records from source defaults and overlays.
+- Supplies the Windows implementation of Task 13's stable `ReminderReconciler` port.
 - Emits Windows toast only while App process is running.
 - Never claims closed-App delivery/cancellation.
 
@@ -1779,7 +1872,10 @@ test('daily due and overdue task reminders are absent', () {
 
 Add course/personal 15-minute, all-day none, override, type-disable,
 reschedule, completion/cancellation/hide invalidation, restart reconciliation,
-and foreground adapter failure tests.
+and foreground adapter failure tests. For Tasks, use parameterized Beijing
+deadlines across ordinary, month-boundary, and year-boundary dates and assert
+the exact trigger-instant set for the 24-hour and 2-hour offsets, plus the exact
+empty set when no deadline or a terminal state suppresses reminders.
 
 - [ ] **Step 2: Run and confirm missing reminder engine**
 
@@ -1797,13 +1893,15 @@ emit a burst of stale Windows toasts.
 Use `flutter_local_notifications` for immediate toast delivery when an active
 timer reaches its trigger. Cancel and rebuild timers from persisted records on
 business changes. Surface adapter unavailable/disabled without corrupting the
-Reminder row.
+Reminder row. Wire this adapter-backed reconciler as the production
+implementation of Task 13's port; retain the no-op implementation for tests and
+non-Windows composition.
 
 - [ ] **Step 5: Run tests and commit**
 
 ```powershell
 & "$env:Flutter_Path\flutter.bat" test test/features/reminders
-git add app/lib/features/reminders app/test/features/reminders
+git add app/lib/features/reminders app/lib/app/app.dart app/test/features/reminders
 git commit -m "feat: add deterministic process-lifetime reminders"
 ```
 
@@ -1825,7 +1923,13 @@ git commit -m "feat: add deterministic process-lifetime reminders"
 
 ```dart
 test('history never exposes protected or authentication material', () async {
+  await seedAdversarialHistory(
+    username: 'fine_username',
+    password: 'password',
+    authorization: 'Bearer secret-token',
+  );
   final text = (await repository.query()).map((e) => e.safeSummary).join();
+  expect(text, isNotEmpty);
   expect(text, isNot(contains('password')));
   expect(text, isNot(contains('Bearer ')));
   expect(text, isNot(contains('fine_username')));
@@ -1842,7 +1946,9 @@ Add source-disable history preservation, credentials/browser separation,
 business-data confirmation, complete-reset second confirmation, fixed 12-hour
 interval, and no Agent permission settings tests. Verify that changing the JW
 debug semester requires the complete ID/key/display-name triple and that reset
-restores the shared Bridge capability value.
+restores the shared Bridge capability value. Seed non-empty adversarial history
+through the real logging boundary and verify every rendered/filterable history
+field is sanitized, so an empty result cannot satisfy the privacy test.
 
 - [ ] **Step 2: Run and confirm missing pages/services**
 
@@ -1895,15 +2001,17 @@ conflict classification, account switch, undo expiry, and interrupted sync.
 - [ ] **Step 2: Add migration and accessibility tests**
 
 Verify schema version 1 creates every table, Agent permission table is empty,
-foreign keys are on, ActionLog is retained, warning icons have semantic labels,
-keyboard focus reaches controls, and color is never the only state signal.
+`schedule_relation_rules` has structured bounded columns, foreign keys are on,
+ActionLog is retained, warning icons have semantic labels, keyboard focus
+reaches controls, and color is never the only state signal.
 
 - [ ] **Step 3: Add and inspect responsive goldens**
 
 Capture Chat, seven-day week, overlap expansion, Task center, deadline bands,
-event detail, sync, and settings. Confirm text does not overlap, Saturday and
-Sunday remain reachable, timetable dimensions do not shift, and compact panels
-do not use hero-size text.
+event detail, sync, and settings. Confirm text does not overlap, then scroll the
+narrow timetable to Sunday and assert that the Sunday header and seeded Sunday
+event are actually visible/reachable. Also confirm timetable dimensions do not
+shift and compact panels do not use hero-size text.
 
 - [ ] **Step 4: Run the complete automated gate**
 
@@ -1950,7 +2058,8 @@ queries, context IDs, cookies, tokens, or raw payloads.
 
 Import each of the four canonical fixtures, repeat each import, edit an overlay,
 import a new batch, restart App, and verify counts, presence, history, and
-overlay persistence.
+overlay persistence. For each file import, confirm its target account
+explicitly and verify the active account is only a preselected choice.
 
 - [ ] **Step 3: Run real JW acceptance**
 
@@ -1967,19 +2076,26 @@ the next rolling window become `outside_scope` rather than deleted.
 - [ ] **Step 5: Run authentication and failure acceptance**
 
 Verify automatic session reuse, `needs_user_action`, visible Edge only after
-confirmation, optional credential fill without CAPTCHA automation, cancellation,
-Bridge crash recovery, independent source failure, account mismatch rejection,
+confirmation, per-sync in-memory username verification, password decryption only
+after that confirmation, optional credential fill without CAPTCHA automation,
+first-login provisional identity discard on failure/cancellation, Bridge crash
+recovery, independent source failure, account mismatch rejection,
 credential/browser separation, and copied SQLite containing no plaintext
 username or password.
 
 - [ ] **Step 6: Run final automated verification**
 
+Rerun the complete Task 27 automated gate without omitting format,
+integration-test, or build checks:
+
 ```powershell
 conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 Push-Location app
+& "$env:Flutter_Path\dart.bat" format --output=none --set-exit-if-changed lib test integration_test
 & "$env:Flutter_Path\flutter.bat" analyze
 & "$env:Flutter_Path\flutter.bat" test
+& "$env:Flutter_Path\flutter.bat" test integration_test
 & "$env:Flutter_Path\flutter.bat" build windows
 Pop-Location
 git diff --check

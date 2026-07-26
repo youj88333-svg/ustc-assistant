@@ -50,6 +50,7 @@
 | `Task` | 有目标或截止时间，但不一定有固定执行时间 | 作业、复习、填表 |
 | `PlanBlock` | 系统或用户安排出来的执行时间段 | 周三 20:00-21:30 写作业 |
 | `ScheduleRelation` | 两个时间安排之间的关系和冲突判断 | 课上写作业、翘课参加二课 |
+| `ScheduleRelationRule` | 对兼容的本次及未来 occurrence 生效的结构化冲突规则 | 两个重复系列从本周起允许共存 |
 | `SourceRecord` | 从外部系统导入的原始记录摘要 | 教务课表记录、二课活动记录 |
 | `UserOverlay` | 用户对导入数据的个人修正 | 标记必去、隐藏、改显示名 |
 | `Reminder` | 提醒规则 | 上课前 20 分钟提醒 |
@@ -67,6 +68,7 @@ Task -> PlanBlock
 CalendarEvent -> Reminder
 CalendarEvent -> UserOverlay
 CalendarEvent/PlanBlock -> ScheduleRelation
+CalendarEventSeries/CourseSeries -> ScheduleRelationRule
 Agent/User action -> ActionLog
 Agent action -> AgentPermissionPolicy
 KnowledgeItem -> Agent answer citations
@@ -662,7 +664,40 @@ allow_both      两者都保留
 ask_user        需要询问用户
 ```
 
-### 6.5 示例
+### 6.5 ScheduleRelationRule
+
+`ScheduleRelation` 只保存一对具体时间安排的分类。用户选择“本次及未来”时，必须
+另存一条结构化且有界的 `ScheduleRelationRule`：
+
+```text
+id
+userId
+primarySeriesType
+primarySeriesId
+relatedSeriesType
+relatedSeriesId
+effectiveFrom
+effectiveThrough
+relationType
+conflictState
+resolution
+reason
+createdBy
+createdAt
+updatedAt
+```
+
+`primarySeriesType` 和 `relatedSeriesType` 只能引用明确支持的
+`course_series` 或 `calendar_event_series`。`effectiveFrom` 与
+`effectiveThrough` 是包含两端的 `Asia/Shanghai` 本地日期，
+`effectiveThrough` 不得早于 `effectiveFrom`，规则不得无界。
+
+查询层只把规则应用于两侧系列中日期落在范围内且时间语义兼容的 projected
+occurrence。针对某一次明确保存的 `ScheduleRelation` 优先于系列规则。规则必须
+使用独立结构化表和字段，不得隐藏在 JSON，也不得预先展开为无限或仅
+occurrence 的关系记录。
+
+### 6.6 示例
 
 课上写作业：
 
@@ -1329,8 +1364,8 @@ open_second_class_registration_page(activityId)
 
 ## 16. 首版字段与未来空壳
 
-第一版完整实现 `CalendarEvent`、`Task`、`PlanBlock`、`ScheduleRelation` 和
-`ActionLog` 的首版字段及确定性行为。
+第一版完整实现 `CalendarEvent`、`Task`、`PlanBlock`、`ScheduleRelation`、
+`ScheduleRelationRule` 和 `ActionLog` 的首版字段及确定性行为。
 
 考虑到首版完成后将立即尝试接入 LLM，首版数据库迁移同时创建
 `AgentPermissionPolicy` 的空表，并在领域层保留枚举和仓储接口。该空壳在首版：
@@ -1489,7 +1524,26 @@ createdAt
 updatedAt
 ```
 
-### 16.7 ActionLog MVP
+### 16.7 ScheduleRelationRule MVP
+
+```text
+id
+userId
+primarySeriesType
+primarySeriesId
+relatedSeriesType
+relatedSeriesId
+effectiveFrom
+effectiveThrough
+relationType
+conflictState
+resolution
+reason
+createdAt
+updatedAt
+```
+
+### 16.8 ActionLog MVP
 
 ```text
 id
@@ -1503,7 +1557,7 @@ riskLevel
 createdAt
 ```
 
-### 16.8 AgentPermissionPolicy 预留空壳
+### 16.9 AgentPermissionPolicy 预留空壳
 
 ```text
 id

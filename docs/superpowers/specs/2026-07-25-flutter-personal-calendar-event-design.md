@@ -313,10 +313,12 @@ Only a confirmed conflict displays the red circled-exclamation warning. A
 non-conflict relation may record embedded work, replacement, an alternative
 choice, or another user explanation.
 
-A classification may target one occurrence or compatible future occurrences.
-The first milestone does not let deterministic code classify overlap on the
-user's behalf. A later LLM may suggest a classification but must not save it
-without the applicable permission and confirmation flow.
+A classification may target one occurrence or compatible current-and-future
+occurrences. The latter persists a bounded, structured
+`ScheduleRelationRule`; it is not hidden in JSON or expanded into unbounded
+occurrence rows. The first milestone does not let deterministic code classify
+overlap on the user's behalf. A later LLM may suggest a classification but must
+not save it without the applicable permission and confirmation flow.
 
 ## 11. Reminders
 

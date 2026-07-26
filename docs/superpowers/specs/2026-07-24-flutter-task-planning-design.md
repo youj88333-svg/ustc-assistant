@@ -291,6 +291,12 @@ completion or cancellation.
 Undo is global, session-scoped, and stores only the most recent reversible
 local mutation.
 
+Reversible mutation services depend on a stable `UndoRecorder` port. The Task
+lifecycle layer defines that port; the global one-step `UndoService` supplies
+its implementation and is the only owner of `undo_slot`. Task, PlanBlock,
+personal CalendarEvent, UserOverlay, reminder-override, and conflict-priority
+mutations use the same port and never create feature-local undo stacks.
+
 Supported actions include:
 
 - Task create, edit, status change, cancel, reopen, and soft delete;
@@ -355,6 +361,11 @@ Time changes reschedule persisted reminder records. Completion, cancellation,
 deletion, or hiding invalidates reminders that no longer apply. The running
 Windows adapter reconciles its process-lifetime notifications from those
 records.
+
+`ImportService` depends only on a stable `ReminderReconciler` port with a
+no-op/default implementation. The reminder feature supplies the Windows
+implementation later and wires it after import transactions commit; notification
+failure never rolls back imported business data.
 
 The first milestone does not schedule a daily notification for due-today or
 overdue Tasks. Their deadline bands still show yellow and red warning states.
@@ -431,6 +442,9 @@ Domain and database tests cover:
 - one-step undo replacement, transactionality, and startup expiry;
 - excluded undo actions;
 - reminder default expansion, override, rescheduling, and cancellation;
+- exact Task trigger-instant sets for 24-hour and 2-hour offsets across
+  ordinary, month-boundary, and year-boundary Beijing dates, including exact
+  empty sets when suppressed;
 - absence of daily due-today and overdue notification schedules.
 
 Widget tests cover:

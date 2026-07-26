@@ -31,7 +31,8 @@ ustc_young_my_schedule
 ```text
 docs/data-sources/source-bundle-v1.md
 schemas/source-bundle-1.0.schema.json
-tests/fixtures/source-bundle/
+tests/fixtures/source-bundle/positive/
+tests/fixtures/source-bundle/negative/
 ```
 
 JSON Schema 负责字段、类型、枚举和基本边界。本文额外定义跨记录身份、计数、
@@ -102,7 +103,9 @@ Bridge 握手由 Flutter 声明支持版本，Python 只能生成双方共同支
 Bridge 请求可以携带该本地 ID，生产者只能原样返回。
 
 Bundle 内实体不重复携带 `userId`。账号与目标导入账号不一致时不得静默导入；
-手动文件导入必须由用户明确选择目标账号。
+手动文件导入必须由用户明确确认目标账号，活动账号只可作为预选项，不能被静默
+采用。正式 JW 和已报名二课日程 CLI 输出必须显式传入 `--account-id`；
+`acct_cli_local` 只允许用于 fixture 和测试。
 
 ### 3.4 collectedAt 与 producer
 
@@ -476,13 +479,16 @@ transaction_failed
 
 ## 15. 验证
 
-Python 生产者和 Flutter 消费者共享 `tests/fixtures/source-bundle/`：
+Python 生产者和 Flutter 消费者共享 fixture，但正例和反例必须保存在不同目录：
 
 ```text
-jw-with-exam.json
-jw-empty-exam.json
-young-with-schedule.json
-young-empty-window.json
+tests/fixtures/source-bundle/positive/
+  jw-with-exam.json
+  jw-empty-exam.json
+  young-with-schedule.json
+  young-empty-window.json
+tests/fixtures/source-bundle/negative/
+  <stable rejection fixtures>
 ```
 
 契约测试必须覆盖：

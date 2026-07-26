@@ -49,6 +49,16 @@ If a source cannot be collected invisibly even with a valid session, automatic
 sync transitions to `needs_user_action` instead of silently launching visible
 UI.
 
+Every sync may decrypt the protected school username briefly in memory for
+local session/account verification. Password decryption remains forbidden until
+the bridge reports `needs_user_action` and the user chooses to continue.
+Neither plaintext value enters logs or SourceBundle.
+
+First login uses an in-memory provisional random `accountId`. The App persists
+the account and imports its bundle only after the school identity is verified;
+failure or cancellation discards the provisional identity without creating an
+account partition.
+
 The App never recognizes, bypasses, or submits a CAPTCHA automatically.
 
 ## 4. Encrypted Credential Storage
@@ -112,8 +122,10 @@ operation-history payloads.
 - Saving credentials is opt-in.
 - Save only after a successful school login.
 - Encryption failure aborts saving; plaintext fallback is forbidden.
-- Decrypt only after a bridge requests interactive login and the user chooses
-  to continue.
+- The username may be decrypted briefly for each local session/account
+  verification.
+- Decrypt the password only after the bridge requests interactive login and
+  the user chooses to continue.
 - Keep plaintext lifetime as short as the Dart, native, and Python runtimes
   reasonably allow.
 - Never interpolate credentials into commands, URLs, status messages, or
@@ -192,11 +204,16 @@ Manual and automatic collection return versioned source bundles. File import
 accepts the same contract. All three paths call the same Flutter
 `ImportService`.
 
+File import requires explicit confirmation of a target account before
+`ImportService` runs. The active account may be preselected, but it is not
+silently accepted; the Bundle subject must match the confirmed target.
+
 The normative v1 contract is `docs/data-sources/source-bundle-v1.md`, with
 `schemas/source-bundle-1.0.schema.json` and shared fixtures under
-`tests/fixtures/source-bundle/`. It applies only to JW and registered
-second-classroom schedule snapshots. Active-enrolment, iCourse, and campus
-query/detail results do not pass through ImportService.
+the distinct `tests/fixtures/source-bundle/positive/` and
+`tests/fixtures/source-bundle/negative/` directories. It applies only to JW
+and registered second-classroom schedule snapshots. Active-enrolment, iCourse,
+and campus query/detail results do not pass through ImportService.
 
 A file bundle affects freshness only when its supported schema, local account
 subject, source scope, completeness declaration, manifest, collection
@@ -315,6 +332,10 @@ The school-account screen shows:
 Deleting credentials and clearing the browser profile require separate
 confirmations.
 
+During first login, the provisional random `accountId` remains in memory and is
+not displayed as a persisted account. Verified success persists that account
+and its first complete Bundle; failure or cancellation discards it.
+
 ### 8.2 Operation History
 
 Add an `action_logs` table. It records:
@@ -397,7 +418,10 @@ Flutter tests cover:
 - independent per-source success;
 - interrupted-run recovery;
 - credential-protector failure without plaintext persistence;
-- action-log redaction;
+- copied SQLite contains no plaintext username or password;
+- Windows current-user DPAPI platform behavior remains covered;
+- non-empty adversarial action-history data is sanitized in every visible
+  field;
 - account and destructive-setting confirmations.
 
 Platform integration tests cover:
@@ -405,7 +429,7 @@ Platform integration tests cover:
 - Windows current-user DPAPI round trip;
 - failure to decrypt under an unrelated context where practical;
 - credential deletion;
-- absence of plaintext credentials in SQLite and logs.
+- absence of plaintext credentials in copied SQLite and logs.
 
 Existing source tests remain isolated from school websites. Real school-page
 behavior is accepted manually with a dedicated Edge session.
@@ -427,6 +451,11 @@ The Windows milestone is accepted only after these scenarios pass:
 11. Deleting credentials does not clear the browser session, and clearing the
     browser session does not silently delete credentials.
 12. Source and action history contains no authentication material.
+13. First-login failure or cancellation leaves no persisted provisional
+    account, while verified success persists the account and imports only its
+    matching Bundle.
+14. File import requires confirmation of its target account even when the
+    active account is preselected.
 
 ## 12. Security References
 
