@@ -3,7 +3,9 @@ import 'package:uuid/uuid.dart';
 
 import 'tables/account_tables.dart';
 import 'tables/operation_tables.dart';
+import 'tables/schedule_tables.dart';
 import 'tables/source_tables.dart';
+import 'tables/task_tables.dart';
 
 part 'app_database.g.dart';
 
@@ -17,6 +19,18 @@ part 'app_database.g.dart';
     SyncRuns,
     ActionLogs,
     AgentPermissionPolicies,
+    CourseSeries,
+    CalendarEventSeries,
+    CalendarEvents,
+    CalendarEventOccurrenceExceptions,
+    UserOverlays,
+    Tasks,
+    PlanBlocks,
+    TaskEventLinks,
+    ScheduleRelations,
+    ScheduleRelationRules,
+    Reminders,
+    UndoSlot,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -27,6 +41,20 @@ class AppDatabase extends _$AppDatabase {
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
+  );
+
+  Future<void> replaceUndoSlot({
+    required String commandId,
+    required String payload,
+    int? expiresAt,
+  }) => into(undoSlot).insertOnConflictUpdate(
+    UndoSlotCompanion.insert(
+      slot: const Value(1),
+      commandId: commandId,
+      payload: payload,
+      expiresAt: Value(expiresAt),
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+    ),
   );
 
   @override
