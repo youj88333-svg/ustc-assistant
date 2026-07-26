@@ -151,8 +151,11 @@ def collect_jw_source_bundle(
     **collector_kwargs: Any,
 ) -> tuple[dict[str, Any], CollectedSources]:
     sources = collect_sources(
-        semester_id=semester.semester_id, **collector_kwargs
+        semester_id=semester.semester_id,
+        account_id=account_id,
+        **collector_kwargs,
     )
+    cancel_check = collector_kwargs.get("cancel_check")
     bundle = build_jw_source_bundle(
         sources.course_datum,
         sources.exam_html,
@@ -160,6 +163,7 @@ def collect_jw_source_bundle(
         semester=semester,
         bundle_id=bundle_id,
         collected_at=collected_at,
+        cancel_check=cancel_check,
     )
     return bundle, sources
 

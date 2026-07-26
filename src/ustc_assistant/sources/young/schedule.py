@@ -20,6 +20,16 @@ from ustc_assistant.common.browser import (
     default_profile_dir,
     run_in_edge,
 )
+from ustc_assistant.common.auth import (
+    AccountMismatch,
+    CollectionCancelled,
+    LoginCredentials,
+    UserActionRequired,
+    fill_ustc_login,
+    profile_dir_for_account,
+    raise_if_cancelled,
+    verify_ustc_account,
+)
 
 
 BEIJING_TZ = ZoneInfo("Asia/Shanghai")
@@ -194,7 +204,11 @@ def _open_schedule_after_login(
     *,
     login_timeout_ms: int,
     status: Callable[[str], None],
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> None:
+    raise_if_cancelled(cancel_check)
     page.goto(MY_SCHEDULE_URL, wait_until="domcontentloaded")
     calendar_view = page.locator(CALENDAR_SELECTOR)
     deadline = time.monotonic() + max(login_timeout_ms, 0) / 1000
@@ -203,7 +217,13 @@ def _open_schedule_after_login(
 
     while True:
         if calendar_view.is_visible():
+            if credentials is not None:
+                verify_ustc_account(page, credentials.username)
             return
+        if not allow_interactive_login:
+            raise UserActionRequired(
+                "second-classroom login requires user action"
+            )
         if (
             not reopened_after_login
             and _is_young_app_url(page.url)
@@ -225,6 +245,9 @@ def _open_schedule_after_login(
                 "second-classroom application ..."
             )
             announced_login_wait = True
+            if credentials is not None:
+                fill_ustc_login(page, credentials)
+        raise_if_cancelled(cancel_check)
         page.wait_for_timeout(min(250, remaining_ms))
 
 
@@ -300,6 +323,9 @@ def collect_from_page(
     queried_through: date | None = None,
     login_timeout_ms: int = DEFAULT_LOGIN_TIMEOUT_MS,
     response_timeout_ms: int = DEFAULT_RESPONSE_TIMEOUT_MS,
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     status: Callable[[str], None] = print,
 ) -> CollectedSchedules:
     current_date = today or beijing_today()
@@ -309,7 +335,12 @@ def collect_from_page(
     dates = tuple(iter_dates(start, end))
 
     _open_schedule_after_login(
-        page, login_timeout_ms=login_timeout_ms, status=status
+        page,
+        login_timeout_ms=login_timeout_ms,
+        status=status,
+        allow_interactive_login=allow_interactive_login,
+        credentials=credentials,
+        cancel_check=cancel_check,
     )
     displayed_month = date(current_date.year, current_date.month, 1)
     displayed_month = _move_calendar_month(page, displayed_month, start)
@@ -318,6 +349,7 @@ def collect_from_page(
     date_checks: list[ScheduleDateCheck] = []
 
     for selected_date in dates:
+        raise_if_cancelled(cancel_check)
         if (selected_date.year, selected_date.month) != (
             displayed_month.year,
             displayed_month.month,
@@ -338,6 +370,7 @@ def collect_from_page(
         )
         _merge_records(records_by_id, schedule_page.records)
 
+    raise_if_cancelled(cancel_check)
     return CollectedSchedules(
         records=tuple(records_by_id.values()),
         queried_from=start,
@@ -351,14 +384,21 @@ def collect_from_page(
 def collect_schedules(
     *,
     profile_dir: Path | None = None,
+    account_id: str | None = None,
     today: date | None = None,
     queried_from: date | None = None,
     queried_through: date | None = None,
     login_timeout_ms: int = DEFAULT_LOGIN_TIMEOUT_MS,
     response_timeout_ms: int = DEFAULT_RESPONSE_TIMEOUT_MS,
     playwright_factory: Callable[[], Any] | None = None,
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     status: Callable[[str], None] = print,
 ) -> CollectedSchedules:
+    resolved_profile = profile_dir
+    if resolved_profile is None and account_id is not None:
+        resolved_profile = profile_dir_for_account(account_id)
     return run_in_edge(
         lambda page: collect_from_page(
             page,
@@ -367,9 +407,13 @@ def collect_schedules(
             queried_through=queried_through,
             login_timeout_ms=login_timeout_ms,
             response_timeout_ms=response_timeout_ms,
+            allow_interactive_login=allow_interactive_login,
+            credentials=credentials,
+            cancel_check=cancel_check,
             status=status,
         ),
-        profile_dir=profile_dir,
+        profile_dir=resolved_profile,
+        headless=not allow_interactive_login,
         playwright_factory=playwright_factory,
     )
 

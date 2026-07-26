@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from ustc_assistant.config import JwSemesterConfig
+from ustc_assistant.common.auth import raise_if_cancelled
 from ustc_assistant.contracts import make_bundle_envelope, validate_source_bundle
 from ustc_assistant.sources.jw import course, exam
 
@@ -399,15 +400,19 @@ def build_jw_source_bundle(
     semester: JwSemesterConfig,
     bundle_id: UUID | None = None,
     collected_at: datetime | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Build and validate one complete JW semester snapshot."""
+    raise_if_cancelled(cancel_check)
     result = _require_course_result(course_datum)
     series, course_events, course_records = _build_course_data(
         result, semester.semester_key
     )
+    raise_if_cancelled(cancel_check)
     exam_events, exam_records = _build_exam_data(
         exam_html, semester.semester_key, series
     )
+    raise_if_cancelled(cancel_check)
     data = {
         "sourceRecords": [*course_records, *exam_records],
         "calendarEvents": [*course_events, *exam_events],
@@ -434,6 +439,7 @@ def build_jw_source_bundle(
             ],
         },
     }
+    raise_if_cancelled(cancel_check)
     bundle = make_bundle_envelope(
         bundle_id=str(bundle_id or uuid4()),
         source=SOURCE,

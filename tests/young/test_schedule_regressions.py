@@ -134,6 +134,17 @@ class MissingDateCellPage(FakePage):
         return FakeLocator(self, selector)
 
 
+class UnauthenticatedPage(FakePage):
+    def goto(self, url, **kwargs):
+        self.goto_calls.append((url, kwargs))
+        self.url = "https://id.ustc.edu.cn/cas/login?service=redacted"
+
+    def locator(self, selector):
+        if selector == collector.CALENDAR_SELECTOR:
+            return FakeLocator(self, selector, visible=False)
+        return FakeLocator(self, selector)
+
+
 class FakeBrowserContext:
     def __init__(self, page):
         self.pages = [page]
@@ -240,6 +251,25 @@ class ResponseContractTests(unittest.TestCase):
 
 @unittest.skipIf(collector is None, "collector module not implemented yet")
 class BrowserFlowTests(unittest.TestCase):
+    def test_background_collection_requires_user_action_without_visible_window(self):
+        page = UnauthenticatedPage([])
+        context = FakeBrowserContext(page)
+        chromium = FakeChromium(context)
+        manager = FakePlaywrightManager(chromium)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaises(collector.UserActionRequired):
+                collector.collect_schedules(
+                    profile_dir=Path(temporary_directory) / "profile",
+                    today=date(2026, 7, 21),
+                    allow_interactive_login=False,
+                    playwright_factory=lambda: manager,
+                    status=lambda message: None,
+                )
+
+        self.assertTrue(chromium.launch_calls[0][1]["headless"])
+        self.assertEqual(1, len(page.goto_calls))
+
     def test_reports_missing_calendar_cell_separately_from_response_timeout(self):
         page = MissingDateCellPage([])
 
@@ -325,6 +355,32 @@ class BrowserFlowTests(unittest.TestCase):
                 queried_through=date(2026, 7, 22),
                 status=lambda message: None,
             )
+
+    def test_cancellation_is_checked_before_each_selected_date(self):
+        page = FakePage(
+            [
+                FakeResponse(page_payload([])),
+                FakeResponse(page_payload([])),
+            ]
+        )
+        checks = 0
+
+        def cancel_check():
+            nonlocal checks
+            checks += 1
+            return checks == 3
+
+        with self.assertRaises(collector.CollectionCancelled):
+            collector.collect_from_page(
+                page,
+                today=date(2026, 7, 21),
+                queried_from=date(2026, 7, 21),
+                queried_through=date(2026, 7, 22),
+                cancel_check=cancel_check,
+                status=lambda message: None,
+            )
+
+        self.assertEqual(1, len(page.responses))
 
     def test_uses_shared_visible_edge_profile_and_closes_context(self):
         day = date(2026, 7, 21)

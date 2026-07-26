@@ -8,6 +8,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from playwright.sync_api import Error as PlaywrightError
+from ustc_assistant.common.auth import UserActionRequired
 from ustc_assistant.sources.jw import collector
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -396,6 +397,41 @@ class BrowserBoundaryTests(unittest.TestCase):
         )
         self.assertEqual(1234, page.wait_patterns[0][1]["timeout"])
         self.assertTrue(any("CAS" in message for message in messages))
+
+    def test_background_collection_returns_user_action_without_visible_login(self):
+        page = FakeLoginPage()
+        request = FakeRequestContext(FakeResponse(200, {}), FakeResponse(200, {}))
+        context = FakeBrowserContext(page, request)
+        chromium = FakeChromium(context)
+        manager = FakePlaywrightManager(chromium)
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            with self.assertRaises(UserActionRequired) as caught:
+                collector.collect_sources(
+                    semester_id=461,
+                    profile_dir=Path(temporary_directory) / "profile",
+                    allow_interactive_login=False,
+                    playwright_factory=lambda: manager,
+                    status=lambda message: None,
+                )
+
+        self.assertEqual("needs_user_action", caught.exception.code)
+        self.assertTrue(chromium.launch_calls[0][1]["headless"])
+        self.assertEqual(["https://jw.ustc.edu.cn/"], page.goto_calls)
+
+    def test_cancellation_before_course_request_makes_no_request(self):
+        request = FakeRequestContext(FakeResponse(200, {}), FakeResponse(200, {}))
+
+        with self.assertRaises(collector.CollectionCancelled):
+            collector.fetch_course_datum(
+                request,
+                semester_id=461,
+                data_id="redacted",
+                referer="https://jw.ustc.edu.cn/for-std/course-table",
+                cancel_check=lambda: True,
+            )
+
+        self.assertEqual([], request.calls)
 
     def test_playwright_error_is_sanitized(self):
         class FailingChromium:

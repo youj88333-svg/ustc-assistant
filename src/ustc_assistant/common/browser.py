@@ -27,6 +27,7 @@ def run_in_edge(
     action: Callable[[Any], T],
     *,
     profile_dir: Path | None = None,
+    headless: bool = False,
     playwright_factory: Callable[[], Any] | None = None,
 ) -> T:
     profile = Path(profile_dir) if profile_dir is not None else default_profile_dir()
@@ -38,8 +39,8 @@ def run_in_edge(
             context = playwright.chromium.launch_persistent_context(
                 str(profile),
                 channel="msedge",
-                headless=False,
-                no_viewport=True,
+                headless=headless,
+                no_viewport=not headless,
             )
             try:
                 page = context.pages[0] if context.pages else context.new_page()

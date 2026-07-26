@@ -356,16 +356,22 @@ class YoungScheduleSourceBundleTests(unittest.TestCase):
 
     def test_collects_then_builds_the_bundle_from_the_complete_collection(self):
         schedules = collection((RECORD,), empty_dates=38)
+        collector_calls = []
+
+        def collect(**kwargs):
+            collector_calls.append(kwargs)
+            return schedules
 
         bundle, returned = collect_young_schedule_source_bundle(
             account_id="acct_test",
-            collect_fn=lambda **kwargs: schedules,
+            collect_fn=collect,
             bundle_id=BUNDLE_ID,
             collected_at=COLLECTED_AT,
         )
 
         self.assertIs(returned, schedules)
         self.assertEqual(bundle["manifest"]["calendarEventCount"], 1)
+        self.assertEqual([{"account_id": "acct_test"}], collector_calls)
 
 
 if __name__ == "__main__":

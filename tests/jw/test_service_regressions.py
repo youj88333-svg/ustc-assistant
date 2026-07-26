@@ -106,6 +106,7 @@ class CanonicalCollectionTests(unittest.TestCase):
         self.assertIs(returned_sources, sources)
         collect.assert_called_once_with(
             semester_id=421,
+            account_id="acct_test",
             profile_dir=Path("private-profile"),
         )
 

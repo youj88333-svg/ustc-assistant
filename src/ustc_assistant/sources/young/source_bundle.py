@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
 
 from ustc_assistant.contracts import make_bundle_envelope, validate_source_bundle
+from ustc_assistant.common.auth import raise_if_cancelled
 from ustc_assistant.sources.young import schedule
 
 
@@ -143,8 +144,10 @@ def build_young_schedule_source_bundle(
     account_id: str,
     bundle_id: UUID | None = None,
     collected_at: datetime | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
     """Build and validate one complete registered-schedule window."""
+    raise_if_cancelled(cancel_check)
     scope = _complete_window_scope(collection)
     from_date = collection.queried_from
     through_date = collection.queried_through
@@ -152,6 +155,7 @@ def build_young_schedule_source_bundle(
     events: list[dict[str, Any]] = []
     records: list[dict[str, Any]] = []
     for raw_record in collection.records:
+        raise_if_cancelled(cancel_check)
         normalized = schedule.normalize_schedule_record(raw_record)
         schedule_id = normalized["sourceScheduleId"]
         if schedule_id in seen_schedule_ids:
@@ -163,6 +167,7 @@ def build_young_schedule_source_bundle(
         events.append(event)
         records.append(_source_record(event["externalId"], schedule_id))
 
+    raise_if_cancelled(cancel_check)
     bundle = make_bundle_envelope(
         bundle_id=str(bundle_id or uuid4()),
         source=SOURCE,
@@ -190,13 +195,16 @@ def collect_young_schedule_source_bundle(
     **collector_kwargs: Any,
 ) -> tuple[dict[str, Any], schedule.CollectedSchedules]:
     """Collect and convert one complete registered-schedule window."""
-    collection = collect_fn(**collector_kwargs)
+    collection = collect_fn(account_id=account_id, **collector_kwargs)
+    cancel_check = collector_kwargs.get("cancel_check")
+    raise_if_cancelled(cancel_check)
     return (
         build_young_schedule_source_bundle(
             collection,
             account_id=account_id,
             bundle_id=bundle_id,
             collected_at=collected_at,
+            cancel_check=cancel_check,
         ),
         collection,
     )
