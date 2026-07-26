@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Callable
 from uuid import UUID, uuid4
 from zoneinfo import ZoneInfo
@@ -43,11 +43,25 @@ def _complete_window_scope(
     ):
         raise ValueError("schedule collection has an invalid date window")
     expected_date_count = (queried_through - queried_from).days + 1
-    if collection.queried_dates != expected_date_count:
+    expected_dates = tuple(schedule.iter_dates(queried_from, queried_through))
+    checks = collection.date_checks
+    if (
+        not isinstance(collection.queried_dates, int)
+        or isinstance(collection.queried_dates, bool)
+        or collection.queried_dates != expected_date_count
+        or collection.queried_dates != len(checks)
+    ):
         raise ValueError("schedule collection is not a complete date window")
+    if any(
+        not isinstance(check, schedule.ScheduleDateCheck)
+        or not isinstance(check.was_empty, bool)
+        for check in checks
+    ) or tuple(check.checked_date for check in checks) != expected_dates:
+        raise ValueError("schedule collection is not a complete date window")
+    observed_empty_dates = sum(check.was_empty for check in checks)
     if not isinstance(collection.empty_dates, int) or isinstance(
         collection.empty_dates, bool
-    ) or not 0 <= collection.empty_dates <= collection.queried_dates:
+    ) or collection.empty_dates != observed_empty_dates:
         raise ValueError("schedule collection has an invalid empty date count")
     return {
         "type": "date_window",
@@ -81,18 +95,30 @@ def _event(
     if location is not None and not isinstance(location, str):
         raise ValueError("schedule location must be text")
     schedule_id = normalized["sourceScheduleId"]
+    if normalized["allDay"]:
+        event_time: dict[str, str] = {
+            "kind": "all_day",
+            "startDate": starts_at.date().isoformat(),
+            "endDateExclusive": (
+                datetime.fromisoformat(normalized["endsAt"]).date()
+                + timedelta(days=1)
+            ).isoformat(),
+            "timezone": "Asia/Shanghai",
+        }
+    else:
+        event_time = {
+            "kind": "timed",
+            "startAt": normalized["startsAt"],
+            "endAt": normalized["endsAt"],
+            "timezone": "Asia/Shanghai",
+        }
     return {
         "externalId": f"{SOURCE}:event:schedule:{schedule_id}",
         "seriesExternalId": None,
         "title": normalized["title"],
         "descriptionText": normalized["descriptionText"],
         "eventType": "second_class",
-        "time": {
-            "kind": "timed",
-            "startAt": normalized["startsAt"],
-            "endAt": normalized["endsAt"],
-            "timezone": "Asia/Shanghai",
-        },
+        "time": event_time,
         "location": {
             "name": location,
             "building": None,

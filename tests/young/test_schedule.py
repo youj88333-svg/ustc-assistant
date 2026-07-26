@@ -28,6 +28,7 @@ class ScheduleServiceTests(unittest.TestCase):
                 "title": "sample",
                 "startsAt": "2026-07-22T08:00:00+08:00",
                 "endsAt": "2026-07-22T09:00:00+08:00",
+                "allDay": False,
                 "location": "campus",
                 "descriptionText": "First & second\nline",
             },
@@ -54,6 +55,7 @@ class ScheduleServiceTests(unittest.TestCase):
                 "title",
                 "startsAt",
                 "endsAt",
+                "allDay",
                 "location",
                 "descriptionText",
             },
@@ -63,6 +65,13 @@ class ScheduleServiceTests(unittest.TestCase):
         self.assertEqual(item["endsAt"], "2026-07-22T09:00:00+08:00")
         self.assertEqual(item["descriptionText"], "First & second\nline")
         self.assertNotIn("userId", item)
+
+    def test_normalizer_preserves_a_boolean_all_day_value_only(self):
+        normalized = schedule.normalize_schedule_record(dict(RECORD, allDay=True))
+
+        self.assertTrue(normalized["allDay"])
+        with self.assertRaisesRegex(ValueError, "allDay must be boolean"):
+            schedule.normalize_schedule_record(dict(RECORD, allDay="yes"))
 
 
 if __name__ == "__main__":

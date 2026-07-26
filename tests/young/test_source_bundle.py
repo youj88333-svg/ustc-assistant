@@ -8,7 +8,10 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from ustc_assistant.contracts import validate_source_bundle
-from ustc_assistant.sources.young.schedule import CollectedSchedules
+from ustc_assistant.sources.young.schedule import (
+    CollectedSchedules,
+    ScheduleDateCheck,
+)
 from ustc_assistant.sources.young.source_bundle import (
     build_young_schedule_source_bundle,
     collect_young_schedule_source_bundle,
@@ -42,13 +45,39 @@ def collection(
     queried_through: date = WINDOW_THROUGH,
     queried_dates: int = 39,
     empty_dates: int = 39,
+    date_checks: tuple[ScheduleDateCheck, ...] | None = None,
 ) -> CollectedSchedules:
+    checks = date_checks or complete_date_checks(
+        queried_from, queried_through, empty_dates=empty_dates
+    )
     return CollectedSchedules(
         records=records,
         queried_from=queried_from,
         queried_through=queried_through,
         queried_dates=queried_dates,
         empty_dates=empty_dates,
+        date_checks=checks,
+    )
+
+
+def complete_date_checks(
+    queried_from: date,
+    queried_through: date,
+    *,
+    empty_dates: int | None = None,
+    non_empty_dates: tuple[date, ...] = (),
+) -> tuple[ScheduleDateCheck, ...]:
+    dates = tuple(
+        queried_from.fromordinal(ordinal)
+        for ordinal in range(
+            queried_from.toordinal(), queried_through.toordinal() + 1
+        )
+    )
+    if empty_dates is not None:
+        non_empty_dates = dates[empty_dates:]
+    return tuple(
+        ScheduleDateCheck(checked_date=value, was_empty=value not in non_empty_dates)
+        for value in dates
     )
 
 
@@ -81,10 +110,19 @@ class YoungScheduleSourceBundleTests(unittest.TestCase):
         )
 
     def test_registered_schedule_has_one_typed_record_and_public_fields(self):
-        record = dict(RECORD, allDay=True)
-        record["endTime"] = "2026-07-23 09:00:00"
+        record = dict(RECORD)
 
-        bundle = build_bundle(collection((record,), empty_dates=38))
+        bundle = build_bundle(
+            collection(
+                (record,),
+                empty_dates=38,
+                date_checks=complete_date_checks(
+                    WINDOW_FROM,
+                    WINDOW_THROUGH,
+                    non_empty_dates=(date(2026, 7, 22),),
+                ),
+            )
+        )
 
         validate_source_bundle(bundle)
         event = bundle["data"]["calendarEvents"][0]
@@ -99,7 +137,7 @@ class YoungScheduleSourceBundleTests(unittest.TestCase):
                 "time": {
                     "kind": "timed",
                     "startAt": "2026-07-22T08:00:00+08:00",
-                    "endAt": "2026-07-23T09:00:00+08:00",
+                    "endAt": "2026-07-22T09:00:00+08:00",
                     "timezone": "Asia/Shanghai",
                 },
                 "location": {
@@ -137,6 +175,70 @@ class YoungScheduleSourceBundleTests(unittest.TestCase):
             ],
         )
 
+    def test_same_day_all_day_schedule_uses_an_exclusive_following_date(self):
+        record = dict(
+            RECORD,
+            allDay=True,
+            startTime="2026-07-22 00:00:00",
+            endTime="2026-07-22 23:59:59",
+        )
+
+        bundle = build_bundle(
+            collection(
+                (record,),
+                empty_dates=38,
+                date_checks=complete_date_checks(
+                    WINDOW_FROM,
+                    WINDOW_THROUGH,
+                    non_empty_dates=(date(2026, 7, 22),),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            bundle["data"]["calendarEvents"][0]["time"],
+            {
+                "kind": "all_day",
+                "startDate": "2026-07-22",
+                "endDateExclusive": "2026-07-23",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
+    def test_multi_day_all_day_schedule_keeps_the_inclusive_source_end_date(self):
+        record = dict(
+            RECORD,
+            allDay=True,
+            startTime="2026-07-22 00:00:00",
+            endTime="2026-07-24 23:59:59",
+        )
+
+        bundle = build_bundle(
+            collection(
+                (record,),
+                empty_dates=36,
+                date_checks=complete_date_checks(
+                    WINDOW_FROM,
+                    WINDOW_THROUGH,
+                    non_empty_dates=(
+                        date(2026, 7, 22),
+                        date(2026, 7, 23),
+                        date(2026, 7, 24),
+                    ),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            bundle["data"]["calendarEvents"][0]["time"],
+            {
+                "kind": "all_day",
+                "startDate": "2026-07-22",
+                "endDateExclusive": "2026-07-25",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+
     def test_rejects_a_collection_with_an_unchecked_date(self):
         with self.assertRaisesRegex(ValueError, "complete date window"):
             build_bundle(collection(queried_dates=38, empty_dates=38))
@@ -144,6 +246,79 @@ class YoungScheduleSourceBundleTests(unittest.TestCase):
     def test_rejects_an_invalid_empty_date_count(self):
         with self.assertRaisesRegex(ValueError, "empty date count"):
             build_bundle(collection(empty_dates=40))
+
+    def test_rejects_incomplete_or_inconsistent_per_date_evidence(self):
+        checks = complete_date_checks(WINDOW_FROM, WINDOW_THROUGH)
+        cases = {
+            "missing": checks[:-1],
+            "duplicate": (checks[0], checks[0], *checks[2:]),
+            "out_of_order": (checks[1], checks[0], *checks[2:]),
+        }
+        for name, evidence in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaisesRegex(ValueError, "complete date window"):
+                    build_bundle(
+                        collection(
+                            date_checks=evidence,
+                            queried_dates=len(evidence),
+                            empty_dates=sum(check.was_empty for check in evidence),
+                        )
+                    )
+
+        with self.assertRaisesRegex(ValueError, "empty date count"):
+            build_bundle(
+                collection(
+                    date_checks=complete_date_checks(WINDOW_FROM, WINDOW_THROUGH),
+                    empty_dates=38,
+                )
+            )
+
+    def test_event_start_date_can_belong_to_the_window_when_its_end_is_after_it(self):
+        record = dict(
+            RECORD,
+            startTime="2026-08-26 23:00:00",
+            endTime="2026-08-27 01:00:00",
+        )
+
+        bundle = build_bundle(
+            collection(
+                (record,),
+                empty_dates=38,
+                date_checks=complete_date_checks(
+                    WINDOW_FROM,
+                    WINDOW_THROUGH,
+                    non_empty_dates=(date(2026, 8, 26),),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            bundle["data"]["calendarEvents"][0]["time"]["endAt"],
+            "2026-08-27T01:00:00+08:00",
+        )
+
+        all_day = dict(
+            RECORD,
+            allDay=True,
+            startTime="2026-08-26 00:00:00",
+            endTime="2026-08-27 23:59:59",
+        )
+        bundle = build_bundle(
+            collection(
+                (all_day,),
+                empty_dates=38,
+                date_checks=complete_date_checks(
+                    WINDOW_FROM,
+                    WINDOW_THROUGH,
+                    non_empty_dates=(date(2026, 8, 26),),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            bundle["data"]["calendarEvents"][0]["time"]["endDateExclusive"],
+            "2026-08-28",
+        )
 
     def test_rejects_duplicate_source_schedule_identity(self):
         duplicate = copy.deepcopy(RECORD)

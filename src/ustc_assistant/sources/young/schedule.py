@@ -53,12 +53,21 @@ class SchedulePage:
 
 
 @dataclass(frozen=True)
+class ScheduleDateCheck:
+    """One verified calendar-date response from the registered schedule."""
+
+    checked_date: date
+    was_empty: bool
+
+
+@dataclass(frozen=True)
 class CollectedSchedules:
     records: tuple[dict[str, Any], ...]
     queried_from: date
     queried_through: date
     queried_dates: int
     empty_dates: int
+    date_checks: tuple[ScheduleDateCheck, ...] = ()
 
 
 def beijing_today() -> date:
@@ -306,6 +315,7 @@ def collect_from_page(
     displayed_month = _move_calendar_month(page, displayed_month, start)
     records_by_id: dict[str, dict[str, Any]] = {}
     empty_dates = 0
+    date_checks: list[ScheduleDateCheck] = []
 
     for selected_date in dates:
         if (selected_date.year, selected_date.month) != (
@@ -320,6 +330,12 @@ def collect_from_page(
         )
         if not schedule_page.records:
             empty_dates += 1
+        date_checks.append(
+            ScheduleDateCheck(
+                checked_date=selected_date,
+                was_empty=not schedule_page.records,
+            )
+        )
         _merge_records(records_by_id, schedule_page.records)
 
     return CollectedSchedules(
@@ -328,6 +344,7 @@ def collect_from_page(
         queried_through=end,
         queried_dates=len(dates),
         empty_dates=empty_dates,
+        date_checks=tuple(date_checks),
     )
 
 
@@ -409,6 +426,13 @@ def _require_text(record: dict[str, Any], field: str) -> str:
     return value
 
 
+def _require_all_day(record: dict[str, Any]) -> bool:
+    value = record.get("allDay", False)
+    if not isinstance(value, bool):
+        raise ValueError("schedule allDay must be boolean")
+    return value
+
+
 def normalize_schedule_record(record: dict[str, Any]) -> dict[str, Any]:
     """Return the approved public fields of one registered schedule."""
     return {
@@ -417,6 +441,7 @@ def normalize_schedule_record(record: dict[str, Any]) -> dict[str, Any]:
         "title": _require_text(record, "title"),
         "startsAt": _normalize_source_datetime(record.get("startTime"), "startTime"),
         "endsAt": _normalize_source_datetime(record.get("endTime"), "endTime"),
+        "allDay": _require_all_day(record),
         "location": record.get("place"),
         "descriptionText": _html_to_text(record.get("content")),
     }

@@ -274,6 +274,14 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertEqual(("same", "b"), tuple(r["id"] for r in result.records))
         self.assertEqual(3, result.queried_dates)
         self.assertEqual(1, result.empty_dates)
+        self.assertEqual(
+            (
+                collector.ScheduleDateCheck(date(2026, 7, 31), False),
+                collector.ScheduleDateCheck(date(2026, 8, 1), True),
+                collector.ScheduleDateCheck(date(2026, 8, 2), False),
+            ),
+            result.date_checks,
+        )
         self.assertIn(collector.NEXT_MONTH_SELECTOR, page.clicks)
         self.assertIn(
             collector.date_cell_selector(date(2026, 8, 2)), page.clicks

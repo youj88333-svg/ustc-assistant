@@ -180,6 +180,8 @@ v1 的 `snapshot.completeness` 只能是 `complete`，不支持 delta、分页�
   `checkedDateCount`。
 - `emptyDateCount` 不能超过检查天数。
 - 任一日期未得到已验证响应时不生成 Bundle。
+- 日期窗口成员资格只由事件的北京时间开始日期（`startAt` 或 `startDate`）决定；
+  定时事件的结束时间或全天事件的 `endDateExclusive` 可以超过 `throughDate`。
 
 ## 5. Manifest
 
