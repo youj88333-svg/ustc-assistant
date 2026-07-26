@@ -24,6 +24,7 @@ venv/
 
 # IDE and operating system files
 .superpowers/
+.worktrees/
 .vscode/
 .idea/
 .DS_Store
