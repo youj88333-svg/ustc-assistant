@@ -10,13 +10,13 @@ from ustc_assistant.sources.jw import course, exam, service
 
 
 class TransformContractTests(unittest.TestCase):
-    def test_build_bundle_combines_fixture_sources(self):
+    def test_legacy_builder_combines_fixture_sources(self):
         datum = json.loads(
             (FIXTURES / "course-datum.json").read_text(encoding="utf-8")
         )
         exam_html = (FIXTURES / "exam-page.html").read_text(encoding="utf-8")
 
-        bundle = service.build_bundle(
+        bundle = service.build_legacy_import_package(
             datum,
             exam_html,
             semester_key="2026spring",

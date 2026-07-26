@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import json
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 
+from ustc_assistant.config import JwSemesterConfig
 from ustc_assistant.sources.jw import course as course_converter
 from ustc_assistant.sources.jw import exam as exam_converter
 from ustc_assistant.sources.jw.collector import CollectedSources, collect_sources
+from ustc_assistant.sources.jw.source_bundle import build_jw_source_bundle
 
 
 PACKAGE_KEYS = ("calendarEvents", "sourceRecords", "scheduleRelations")
@@ -84,7 +88,7 @@ def merge_packages(
     }
 
 
-def build_bundle(
+def build_legacy_import_package(
     course_datum: dict[str, Any],
     exam_html: str,
     *,
@@ -101,6 +105,26 @@ def build_bundle(
     )
 
 
+def build_bundle(
+    course_datum: dict[str, Any],
+    exam_html: str,
+    *,
+    semester_key: str,
+    user_id: str,
+) -> dict[str, Any]:
+    warnings.warn(
+        "build_bundle() is deprecated; use build_jw_source_bundle()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return build_legacy_import_package(
+        course_datum,
+        exam_html,
+        semester_key=semester_key,
+        user_id=user_id,
+    )
+
+
 def collect_jw_bundle(
     *,
     semester_id: int,
@@ -109,11 +133,33 @@ def collect_jw_bundle(
     **collector_kwargs: Any,
 ) -> tuple[dict[str, Any], CollectedSources]:
     sources = collect_sources(semester_id=semester_id, **collector_kwargs)
-    bundle = build_bundle(
+    bundle = build_legacy_import_package(
         sources.course_datum,
         sources.exam_html,
         semester_key=semester_key,
         user_id=user_id,
+    )
+    return bundle, sources
+
+
+def collect_jw_source_bundle(
+    *,
+    account_id: str,
+    semester: JwSemesterConfig,
+    bundle_id: UUID | None = None,
+    collected_at: datetime | None = None,
+    **collector_kwargs: Any,
+) -> tuple[dict[str, Any], CollectedSources]:
+    sources = collect_sources(
+        semester_id=semester.semester_id, **collector_kwargs
+    )
+    bundle = build_jw_source_bundle(
+        sources.course_datum,
+        sources.exam_html,
+        account_id=account_id,
+        semester=semester,
+        bundle_id=bundle_id,
+        collected_at=collected_at,
     )
     return bundle, sources
 
