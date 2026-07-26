@@ -321,8 +321,16 @@ An undo failure leaves current data unchanged and records a redacted failure.
 
 ## 10. Deterministic Reminders
 
-The first milestone uses local operating-system notifications and in-App
-reminders. It does not require remote push or LLM text generation.
+The first milestone persists deterministic reminder schedules and shows
+in-App reminders. While the unpackaged Windows development App is running, it
+may also emit Windows toast notifications. It does not require remote push or
+LLM text generation.
+
+An unpackaged Windows process has no reliable contract for cancelling or
+reconciling notifications after it exits. The first milestone therefore does
+not promise background delivery while the App is closed. Reliable closed-App
+delivery and cancellation require a later packaged Windows build or the
+Android/iOS notification adapters.
 
 Default reminder rules are:
 
@@ -343,16 +351,18 @@ Users can:
 - disable all system notifications while keeping in-App reminders;
 - remove one of multiple default offsets.
 
-Time changes reschedule future notifications. Completion, cancellation,
-deletion, or hiding cancels notifications that no longer apply.
+Time changes reschedule persisted reminder records. Completion, cancellation,
+deletion, or hiding invalidates reminders that no longer apply. The running
+Windows adapter reconciles its process-lifetime notifications from those
+records.
 
 The first milestone does not schedule a daily notification for due-today or
 overdue Tasks. Their deadline bands still show yellow and red warning states.
 A future LLM daily briefing owns recurring narrative reminders for those
 states.
 
-If system notification permission is denied, the App reports the disabled
-channel and continues to show in-App reminder state.
+If the system-notification adapter is unavailable or disabled, the App reports
+the disabled channel and continues to show in-App reminder state.
 
 ## 11. Persistence
 
@@ -435,5 +445,7 @@ Widget tests cover:
 - warning icon semantics and high-contrast labels;
 - one-step Undo message and toolbar state.
 
-Platform tests cover Windows system-notification scheduling. Android and iOS
-notification adapters follow the same application contract during migration.
+Platform tests cover Windows notification delivery and cancellation while the
+App process is running, plus explicit proof that no closed-App delivery is
+claimed. Android, iOS, and a later packaged Windows adapter follow the same
+persisted reminder contract.

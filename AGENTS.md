@@ -184,6 +184,8 @@ conda run -n ustc_assistant python -m compileall -q src tests
   使用稳定身份和单次例外，不无限物化历史记录。
 - 定时个人事件默认开始前 15 分钟提醒，全天个人事件默认不提醒；个人事件完成确认
   不发送系统通知，后续由 LLM 在聊天中处理待确认事件。
+- 未打包的 Windows 首版只保证 Reminder 持久化、App 内状态和 App 运行期间的
+  Windows 通知；关闭 App 后的可靠触发与取消留给后续 MSIX 或移动端适配器。
 - `Task` 只持久化 `active`、`blocked`、`completed`、`cancelled`；规划、截止风险
   和 PlanBlock 待确认状态均按北京时间查询派生，不根据时间自动改写 Task。
 - PlanBlock 结束后由用户确认已执行、跳过或重排，再单独确认整个 Task 是否完成；

@@ -336,6 +336,11 @@ Moving an occurrence reschedules its future reminders. Completing, skipping,
 cancelling, hiding, or deleting an occurrence cancels reminders that no longer
 apply.
 
+The unpackaged Windows development milestone guarantees reminder persistence,
+in-App state, and Windows notification behavior only while the App process is
+running. Reliable delivery and cancellation after process exit belong to a
+later packaged Windows build or the Android/iOS adapters.
+
 Future LLM daily briefings may mention all-day and awaiting-completion events.
 That behavior is not present in the first milestone.
 

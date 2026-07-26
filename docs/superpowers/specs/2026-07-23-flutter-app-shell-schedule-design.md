@@ -62,7 +62,8 @@ The first Windows milestone includes:
 - manual `Task` creation and lifecycle management;
 - manual `PlanBlock` creation, splitting, movement, locking, and completion;
 - two deadline bands, derived Task state, and pending-PlanBlock review;
-- deterministic local reminders and system notifications;
+- deterministic reminder records, in-App reminders, and Windows notifications
+  while the development App is running;
 - one-step session undo for reversible local changes;
 - sync results and redacted failures.
 
@@ -72,6 +73,12 @@ The first milestone explicitly excludes LLM behavior:
 - a daily briefing;
 - free-form chat commands;
 - LLM-generated planning, explanation, ranking, and reminders.
+
+Because this milestone is not packaged as MSIX, it also excludes reliable
+Windows notification delivery and cancellation after the App process exits.
+Reminder computation, persistence, reconciliation, and the platform-adapter
+boundary remain part of the milestone so mobile and a later packaged Windows
+build can add background delivery without changing domain behavior.
 
 The chat page is an application shell in this milestone. It must not pretend
 that an Agent or daily briefing is available before the real LLM integration

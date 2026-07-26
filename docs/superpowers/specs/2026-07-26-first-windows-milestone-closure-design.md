@@ -54,7 +54,7 @@ Windows 来源适配器。移动端以后替换来源采集适配器，不重写
 - 重叠展开、人工冲突分类和前景优先级；
 - 单次、全天、跨日和基础重复个人 CalendarEvent；
 - Task、PlanBlock、集中待确认、任务历史和一步撤回；
-- 确定性本地系统提醒；
+- 确定性 Reminder、App 内提醒和 App 运行期间的 Windows 通知；
 - 学校账号、DPAPI 凭据保护、同步状态、操作历史和设置。
 
 ### 3.2 不包含
@@ -65,6 +65,7 @@ Windows 来源适配器。移动端以后替换来源采集适配器，不重写
 - 云同步；
 - Agent 权限运行时和 Agent 写操作；
 - Windows 安装器和捆绑 Python runtime；
+- App 关闭后的可靠 Windows 通知触发与取消；
 - Android/iOS 来源采集实现；
 - 多账号同时同步。
 
@@ -466,7 +467,7 @@ non_conflict
 5. UserOverlay、重叠展开及冲突分类
 6. 个人 CalendarEvent 和重复系列
 7. Task、PlanBlock、任务中心和一步撤回
-8. 系统提醒、历史、设置及完整验收
+8. Reminder、运行期间通知、历史、设置及完整验收
 ```
 
 每一阶段必须：
@@ -495,7 +496,7 @@ Widget 和截图测试
   七天周视图、窄屏、重叠、Task、表单、可访问性
 
 Windows 平台测试
-  DPAPI、Bridge 生命周期、通知调度、进程退出
+  DPAPI、Bridge 生命周期、运行期间通知、进程退出边界
 ```
 
 自动测试不得访问学校网站。Flutter 包和具体版本在实施计划中根据当前 Flutter
@@ -527,6 +528,7 @@ Agent 工具协议
 查询型来源的 LLM 工具封装
 Android/iOS SourceGateway
 Windows 可分发打包
+关闭 App 后的可靠 Windows 通知投递与取消
 ```
 
 这些后续工作不得倒逼首版加入模拟 Agent、临时聊天协议或数据库直写入口。
