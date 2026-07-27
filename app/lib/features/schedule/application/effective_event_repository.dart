@@ -137,6 +137,16 @@ LEFT JOIN user_overlays so
 WHERE e.account_id = ?
   AND e.deleted_at IS NULL
   AND e.status NOT IN ('cancelled', 'hidden', 'skipped')
+  AND (
+    e.source = 'user'
+    OR EXISTS (
+      SELECT 1
+      FROM source_records sr
+      WHERE sr.account_id = e.account_id
+        AND sr.local_entity_id = e.id
+        AND sr.presence <> 'missing_within_scope'
+    )
+  )
 ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
 ''',
         variables: [Variable.withString(accountId)],
@@ -144,6 +154,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
           database.calendarEvents,
           database.userOverlays,
           database.courseSeries,
+          database.sourceRecords,
         },
       )
       .watch()

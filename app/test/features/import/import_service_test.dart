@@ -223,6 +223,19 @@ void main() {
         accountId: 'acct_fixture',
         origin: ImportOrigin.bridge,
       );
+      final importedEvent = await db.select(db.calendarEvents).getSingle();
+      await db
+          .into(db.userOverlays)
+          .insert(
+            UserOverlaysCompanion.insert(
+              id: 'keep-overlay',
+              accountId: 'acct_fixture',
+              eventId: Value(importedEvent.id),
+              userNotes: const Value('keep'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
 
       final empty =
           jsonDecode(utf8.decode(fixture('young-empty-window.json')))
@@ -239,6 +252,7 @@ void main() {
         'missing_within_scope',
       );
       expect(await db.select(db.calendarEvents).get(), hasLength(1));
+      expect((await db.select(db.userOverlays).get()).single.userNotes, 'keep');
     },
   );
 }

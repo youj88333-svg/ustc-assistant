@@ -1,4 +1,8 @@
+import 'package:drift/drift.dart';
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/course_color.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
@@ -129,4 +133,80 @@ void main() {
     expect(projection.previews.single.event.id, 'odd-week-preview');
     expect(projection.overlapGroups, isEmpty);
   });
+
+  test(
+    'display events exclude only source records missing within scope',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const accountId = 'account';
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: accountId,
+              maskedHint: 'PB****0000',
+              isActive: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      Future<void> insertEvent(String id, String source) => database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: id,
+              accountId: accountId,
+              source: source,
+              externalId: Value(source == 'user' ? null : id),
+              title: id,
+              type: source == 'user' ? 'personal' : 'exam',
+              startAt: const Value(1000),
+              endAt: const Value(2000),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      Future<void> insertSourceRecord(String id, String presence) => database
+          .into(database.sourceRecords)
+          .insert(
+            SourceRecordsCompanion.insert(
+              id: 'source-$id',
+              accountId: accountId,
+              source: id == 'outside' ? 'ustc_young_schedule' : 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: id,
+              localEntityId: id,
+              sourceStatus: 'active',
+              presence: presence,
+              scopeKey: 'scope',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+
+      await insertEvent('missing', 'ustc_jw');
+      await insertEvent('observed', 'ustc_jw');
+      await insertEvent('outside', 'ustc_young_schedule');
+      await insertEvent('personal', 'user');
+      await insertSourceRecord('missing', 'missing_within_scope');
+      await insertSourceRecord('observed', 'observed');
+      await insertSourceRecord('outside', 'outside_scope');
+
+      final visible = await EffectiveEventRepository(
+        database,
+        accountId: accountId,
+      ).watchDisplayEvents().first;
+
+      expect(
+        visible.map((event) => event.id),
+        containsAll(['observed', 'outside', 'personal']),
+      );
+      expect(visible.map((event) => event.id), isNot(contains('missing')));
+    },
+  );
 }
