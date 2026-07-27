@@ -14,8 +14,10 @@ class Tasks extends Table {
   TextColumn get blockedReason => text().nullable()();
   TextColumn get importance => text()();
   IntColumn get deadlineAt => integer().nullable()();
+  IntColumn get estimatedMinutes => integer().nullable()();
   TextColumn get tagsJson => text()();
-  IntColumn get terminalAt => integer().nullable()();
+  IntColumn get completedAt => integer().nullable()();
+  IntColumn get cancelledAt => integer().nullable()();
   IntColumn get createdAt => integer()();
   IntColumn get updatedAt => integer()();
   IntColumn get deletedAt => integer().nullable()();
@@ -29,10 +31,13 @@ class Tasks extends Table {
   @override
   List<String> get customConstraints => [
     "CHECK (state IN ('active','blocked','completed','cancelled'))",
-    "CHECK ((state IN ('completed','cancelled') AND terminal_at IS NOT NULL) "
-        "OR (state IN ('active','blocked') AND terminal_at IS NULL))",
-    "CHECK ((state = 'blocked' AND blocked_reason IS NOT NULL) "
-        "OR state != 'blocked')",
+    "CHECK ((state = 'completed' AND completed_at IS NOT NULL "
+        "AND cancelled_at IS NULL) OR "
+        "(state = 'cancelled' AND cancelled_at IS NOT NULL "
+        "AND completed_at IS NULL) OR "
+        "(state IN ('active','blocked') AND completed_at IS NULL "
+        "AND cancelled_at IS NULL))",
+    'CHECK (estimated_minutes IS NULL OR estimated_minutes > 0)',
   ];
 }
 

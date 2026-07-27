@@ -9909,6 +9909,17 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _estimatedMinutesMeta = const VerificationMeta(
+    'estimatedMinutes',
+  );
+  @override
+  late final GeneratedColumn<int> estimatedMinutes = GeneratedColumn<int>(
+    'estimated_minutes',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _tagsJsonMeta = const VerificationMeta(
     'tagsJson',
   );
@@ -9920,12 +9931,23 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _terminalAtMeta = const VerificationMeta(
-    'terminalAt',
+  static const VerificationMeta _completedAtMeta = const VerificationMeta(
+    'completedAt',
   );
   @override
-  late final GeneratedColumn<int> terminalAt = GeneratedColumn<int>(
-    'terminal_at',
+  late final GeneratedColumn<int> completedAt = GeneratedColumn<int>(
+    'completed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _cancelledAtMeta = const VerificationMeta(
+    'cancelledAt',
+  );
+  @override
+  late final GeneratedColumn<int> cancelledAt = GeneratedColumn<int>(
+    'cancelled_at',
     aliasedName,
     true,
     type: DriftSqlType.int,
@@ -9975,8 +9997,10 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     blockedReason,
     importance,
     deadlineAt,
+    estimatedMinutes,
     tagsJson,
-    terminalAt,
+    completedAt,
+    cancelledAt,
     createdAt,
     updatedAt,
     deletedAt,
@@ -10060,6 +10084,15 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         deadlineAt.isAcceptableOrUnknown(data['deadline_at']!, _deadlineAtMeta),
       );
     }
+    if (data.containsKey('estimated_minutes')) {
+      context.handle(
+        _estimatedMinutesMeta,
+        estimatedMinutes.isAcceptableOrUnknown(
+          data['estimated_minutes']!,
+          _estimatedMinutesMeta,
+        ),
+      );
+    }
     if (data.containsKey('tags_json')) {
       context.handle(
         _tagsJsonMeta,
@@ -10068,10 +10101,22 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
     } else if (isInserting) {
       context.missing(_tagsJsonMeta);
     }
-    if (data.containsKey('terminal_at')) {
+    if (data.containsKey('completed_at')) {
       context.handle(
-        _terminalAtMeta,
-        terminalAt.isAcceptableOrUnknown(data['terminal_at']!, _terminalAtMeta),
+        _completedAtMeta,
+        completedAt.isAcceptableOrUnknown(
+          data['completed_at']!,
+          _completedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('cancelled_at')) {
+      context.handle(
+        _cancelledAtMeta,
+        cancelledAt.isAcceptableOrUnknown(
+          data['cancelled_at']!,
+          _cancelledAtMeta,
+        ),
       );
     }
     if (data.containsKey('created_at')) {
@@ -10141,13 +10186,21 @@ class $TasksTable extends Tasks with TableInfo<$TasksTable, Task> {
         DriftSqlType.int,
         data['${effectivePrefix}deadline_at'],
       ),
+      estimatedMinutes: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}estimated_minutes'],
+      ),
       tagsJson: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}tags_json'],
       )!,
-      terminalAt: attachedDatabase.typeMapping.read(
+      completedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
-        data['${effectivePrefix}terminal_at'],
+        data['${effectivePrefix}completed_at'],
+      ),
+      cancelledAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}cancelled_at'],
       ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
@@ -10180,8 +10233,10 @@ class Task extends DataClass implements Insertable<Task> {
   final String? blockedReason;
   final String importance;
   final int? deadlineAt;
+  final int? estimatedMinutes;
   final String tagsJson;
-  final int? terminalAt;
+  final int? completedAt;
+  final int? cancelledAt;
   final int createdAt;
   final int updatedAt;
   final int? deletedAt;
@@ -10195,8 +10250,10 @@ class Task extends DataClass implements Insertable<Task> {
     this.blockedReason,
     required this.importance,
     this.deadlineAt,
+    this.estimatedMinutes,
     required this.tagsJson,
-    this.terminalAt,
+    this.completedAt,
+    this.cancelledAt,
     required this.createdAt,
     required this.updatedAt,
     this.deletedAt,
@@ -10221,9 +10278,15 @@ class Task extends DataClass implements Insertable<Task> {
     if (!nullToAbsent || deadlineAt != null) {
       map['deadline_at'] = Variable<int>(deadlineAt);
     }
+    if (!nullToAbsent || estimatedMinutes != null) {
+      map['estimated_minutes'] = Variable<int>(estimatedMinutes);
+    }
     map['tags_json'] = Variable<String>(tagsJson);
-    if (!nullToAbsent || terminalAt != null) {
-      map['terminal_at'] = Variable<int>(terminalAt);
+    if (!nullToAbsent || completedAt != null) {
+      map['completed_at'] = Variable<int>(completedAt);
+    }
+    if (!nullToAbsent || cancelledAt != null) {
+      map['cancelled_at'] = Variable<int>(cancelledAt);
     }
     map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
@@ -10252,10 +10315,16 @@ class Task extends DataClass implements Insertable<Task> {
       deadlineAt: deadlineAt == null && nullToAbsent
           ? const Value.absent()
           : Value(deadlineAt),
-      tagsJson: Value(tagsJson),
-      terminalAt: terminalAt == null && nullToAbsent
+      estimatedMinutes: estimatedMinutes == null && nullToAbsent
           ? const Value.absent()
-          : Value(terminalAt),
+          : Value(estimatedMinutes),
+      tagsJson: Value(tagsJson),
+      completedAt: completedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(completedAt),
+      cancelledAt: cancelledAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(cancelledAt),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
       deletedAt: deletedAt == null && nullToAbsent
@@ -10279,8 +10348,10 @@ class Task extends DataClass implements Insertable<Task> {
       blockedReason: serializer.fromJson<String?>(json['blockedReason']),
       importance: serializer.fromJson<String>(json['importance']),
       deadlineAt: serializer.fromJson<int?>(json['deadlineAt']),
+      estimatedMinutes: serializer.fromJson<int?>(json['estimatedMinutes']),
       tagsJson: serializer.fromJson<String>(json['tagsJson']),
-      terminalAt: serializer.fromJson<int?>(json['terminalAt']),
+      completedAt: serializer.fromJson<int?>(json['completedAt']),
+      cancelledAt: serializer.fromJson<int?>(json['cancelledAt']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
@@ -10299,8 +10370,10 @@ class Task extends DataClass implements Insertable<Task> {
       'blockedReason': serializer.toJson<String?>(blockedReason),
       'importance': serializer.toJson<String>(importance),
       'deadlineAt': serializer.toJson<int?>(deadlineAt),
+      'estimatedMinutes': serializer.toJson<int?>(estimatedMinutes),
       'tagsJson': serializer.toJson<String>(tagsJson),
-      'terminalAt': serializer.toJson<int?>(terminalAt),
+      'completedAt': serializer.toJson<int?>(completedAt),
+      'cancelledAt': serializer.toJson<int?>(cancelledAt),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
       'deletedAt': serializer.toJson<int?>(deletedAt),
@@ -10317,8 +10390,10 @@ class Task extends DataClass implements Insertable<Task> {
     Value<String?> blockedReason = const Value.absent(),
     String? importance,
     Value<int?> deadlineAt = const Value.absent(),
+    Value<int?> estimatedMinutes = const Value.absent(),
     String? tagsJson,
-    Value<int?> terminalAt = const Value.absent(),
+    Value<int?> completedAt = const Value.absent(),
+    Value<int?> cancelledAt = const Value.absent(),
     int? createdAt,
     int? updatedAt,
     Value<int?> deletedAt = const Value.absent(),
@@ -10334,8 +10409,12 @@ class Task extends DataClass implements Insertable<Task> {
         : this.blockedReason,
     importance: importance ?? this.importance,
     deadlineAt: deadlineAt.present ? deadlineAt.value : this.deadlineAt,
+    estimatedMinutes: estimatedMinutes.present
+        ? estimatedMinutes.value
+        : this.estimatedMinutes,
     tagsJson: tagsJson ?? this.tagsJson,
-    terminalAt: terminalAt.present ? terminalAt.value : this.terminalAt,
+    completedAt: completedAt.present ? completedAt.value : this.completedAt,
+    cancelledAt: cancelledAt.present ? cancelledAt.value : this.cancelledAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
@@ -10359,10 +10438,16 @@ class Task extends DataClass implements Insertable<Task> {
       deadlineAt: data.deadlineAt.present
           ? data.deadlineAt.value
           : this.deadlineAt,
+      estimatedMinutes: data.estimatedMinutes.present
+          ? data.estimatedMinutes.value
+          : this.estimatedMinutes,
       tagsJson: data.tagsJson.present ? data.tagsJson.value : this.tagsJson,
-      terminalAt: data.terminalAt.present
-          ? data.terminalAt.value
-          : this.terminalAt,
+      completedAt: data.completedAt.present
+          ? data.completedAt.value
+          : this.completedAt,
+      cancelledAt: data.cancelledAt.present
+          ? data.cancelledAt.value
+          : this.cancelledAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
@@ -10381,8 +10466,10 @@ class Task extends DataClass implements Insertable<Task> {
           ..write('blockedReason: $blockedReason, ')
           ..write('importance: $importance, ')
           ..write('deadlineAt: $deadlineAt, ')
+          ..write('estimatedMinutes: $estimatedMinutes, ')
           ..write('tagsJson: $tagsJson, ')
-          ..write('terminalAt: $terminalAt, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('cancelledAt: $cancelledAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt')
@@ -10401,8 +10488,10 @@ class Task extends DataClass implements Insertable<Task> {
     blockedReason,
     importance,
     deadlineAt,
+    estimatedMinutes,
     tagsJson,
-    terminalAt,
+    completedAt,
+    cancelledAt,
     createdAt,
     updatedAt,
     deletedAt,
@@ -10420,8 +10509,10 @@ class Task extends DataClass implements Insertable<Task> {
           other.blockedReason == this.blockedReason &&
           other.importance == this.importance &&
           other.deadlineAt == this.deadlineAt &&
+          other.estimatedMinutes == this.estimatedMinutes &&
           other.tagsJson == this.tagsJson &&
-          other.terminalAt == this.terminalAt &&
+          other.completedAt == this.completedAt &&
+          other.cancelledAt == this.cancelledAt &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
           other.deletedAt == this.deletedAt);
@@ -10437,8 +10528,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
   final Value<String?> blockedReason;
   final Value<String> importance;
   final Value<int?> deadlineAt;
+  final Value<int?> estimatedMinutes;
   final Value<String> tagsJson;
-  final Value<int?> terminalAt;
+  final Value<int?> completedAt;
+  final Value<int?> cancelledAt;
   final Value<int> createdAt;
   final Value<int> updatedAt;
   final Value<int?> deletedAt;
@@ -10453,8 +10546,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.blockedReason = const Value.absent(),
     this.importance = const Value.absent(),
     this.deadlineAt = const Value.absent(),
+    this.estimatedMinutes = const Value.absent(),
     this.tagsJson = const Value.absent(),
-    this.terminalAt = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    this.cancelledAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
@@ -10470,8 +10565,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
     this.blockedReason = const Value.absent(),
     required String importance,
     this.deadlineAt = const Value.absent(),
+    this.estimatedMinutes = const Value.absent(),
     required String tagsJson,
-    this.terminalAt = const Value.absent(),
+    this.completedAt = const Value.absent(),
+    this.cancelledAt = const Value.absent(),
     required int createdAt,
     required int updatedAt,
     this.deletedAt = const Value.absent(),
@@ -10494,8 +10591,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Expression<String>? blockedReason,
     Expression<String>? importance,
     Expression<int>? deadlineAt,
+    Expression<int>? estimatedMinutes,
     Expression<String>? tagsJson,
-    Expression<int>? terminalAt,
+    Expression<int>? completedAt,
+    Expression<int>? cancelledAt,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
     Expression<int>? deletedAt,
@@ -10511,8 +10610,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
       if (blockedReason != null) 'blocked_reason': blockedReason,
       if (importance != null) 'importance': importance,
       if (deadlineAt != null) 'deadline_at': deadlineAt,
+      if (estimatedMinutes != null) 'estimated_minutes': estimatedMinutes,
       if (tagsJson != null) 'tags_json': tagsJson,
-      if (terminalAt != null) 'terminal_at': terminalAt,
+      if (completedAt != null) 'completed_at': completedAt,
+      if (cancelledAt != null) 'cancelled_at': cancelledAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
@@ -10530,8 +10631,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
     Value<String?>? blockedReason,
     Value<String>? importance,
     Value<int?>? deadlineAt,
+    Value<int?>? estimatedMinutes,
     Value<String>? tagsJson,
-    Value<int?>? terminalAt,
+    Value<int?>? completedAt,
+    Value<int?>? cancelledAt,
     Value<int>? createdAt,
     Value<int>? updatedAt,
     Value<int?>? deletedAt,
@@ -10547,8 +10650,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
       blockedReason: blockedReason ?? this.blockedReason,
       importance: importance ?? this.importance,
       deadlineAt: deadlineAt ?? this.deadlineAt,
+      estimatedMinutes: estimatedMinutes ?? this.estimatedMinutes,
       tagsJson: tagsJson ?? this.tagsJson,
-      terminalAt: terminalAt ?? this.terminalAt,
+      completedAt: completedAt ?? this.completedAt,
+      cancelledAt: cancelledAt ?? this.cancelledAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
@@ -10586,11 +10691,17 @@ class TasksCompanion extends UpdateCompanion<Task> {
     if (deadlineAt.present) {
       map['deadline_at'] = Variable<int>(deadlineAt.value);
     }
+    if (estimatedMinutes.present) {
+      map['estimated_minutes'] = Variable<int>(estimatedMinutes.value);
+    }
     if (tagsJson.present) {
       map['tags_json'] = Variable<String>(tagsJson.value);
     }
-    if (terminalAt.present) {
-      map['terminal_at'] = Variable<int>(terminalAt.value);
+    if (completedAt.present) {
+      map['completed_at'] = Variable<int>(completedAt.value);
+    }
+    if (cancelledAt.present) {
+      map['cancelled_at'] = Variable<int>(cancelledAt.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
@@ -10619,8 +10730,10 @@ class TasksCompanion extends UpdateCompanion<Task> {
           ..write('blockedReason: $blockedReason, ')
           ..write('importance: $importance, ')
           ..write('deadlineAt: $deadlineAt, ')
+          ..write('estimatedMinutes: $estimatedMinutes, ')
           ..write('tagsJson: $tagsJson, ')
-          ..write('terminalAt: $terminalAt, ')
+          ..write('completedAt: $completedAt, ')
+          ..write('cancelledAt: $cancelledAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
@@ -24590,8 +24703,10 @@ typedef $$TasksTableCreateCompanionBuilder =
       Value<String?> blockedReason,
       required String importance,
       Value<int?> deadlineAt,
+      Value<int?> estimatedMinutes,
       required String tagsJson,
-      Value<int?> terminalAt,
+      Value<int?> completedAt,
+      Value<int?> cancelledAt,
       required int createdAt,
       required int updatedAt,
       Value<int?> deletedAt,
@@ -24608,8 +24723,10 @@ typedef $$TasksTableUpdateCompanionBuilder =
       Value<String?> blockedReason,
       Value<String> importance,
       Value<int?> deadlineAt,
+      Value<int?> estimatedMinutes,
       Value<String> tagsJson,
-      Value<int?> terminalAt,
+      Value<int?> completedAt,
+      Value<int?> cancelledAt,
       Value<int> createdAt,
       Value<int> updatedAt,
       Value<int?> deletedAt,
@@ -24740,13 +24857,23 @@ class $$TasksTableFilterComposer extends Composer<_$AppDatabase, $TasksTable> {
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get tagsJson => $composableBuilder(
     column: $table.tagsJson,
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<int> get terminalAt => $composableBuilder(
-    column: $table.terminalAt,
+  ColumnFilters<int> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get cancelledAt => $composableBuilder(
+    column: $table.cancelledAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -24913,13 +25040,23 @@ class $$TasksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get tagsJson => $composableBuilder(
     column: $table.tagsJson,
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<int> get terminalAt => $composableBuilder(
-    column: $table.terminalAt,
+  ColumnOrderings<int> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get cancelledAt => $composableBuilder(
+    column: $table.cancelledAt,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -25003,11 +25140,21 @@ class $$TasksTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get estimatedMinutes => $composableBuilder(
+    column: $table.estimatedMinutes,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get tagsJson =>
       $composableBuilder(column: $table.tagsJson, builder: (column) => column);
 
-  GeneratedColumn<int> get terminalAt => $composableBuilder(
-    column: $table.terminalAt,
+  GeneratedColumn<int> get completedAt => $composableBuilder(
+    column: $table.completedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get cancelledAt => $composableBuilder(
+    column: $table.cancelledAt,
     builder: (column) => column,
   );
 
@@ -25161,8 +25308,10 @@ class $$TasksTableTableManager
                 Value<String?> blockedReason = const Value.absent(),
                 Value<String> importance = const Value.absent(),
                 Value<int?> deadlineAt = const Value.absent(),
+                Value<int?> estimatedMinutes = const Value.absent(),
                 Value<String> tagsJson = const Value.absent(),
-                Value<int?> terminalAt = const Value.absent(),
+                Value<int?> completedAt = const Value.absent(),
+                Value<int?> cancelledAt = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int?> deletedAt = const Value.absent(),
@@ -25177,8 +25326,10 @@ class $$TasksTableTableManager
                 blockedReason: blockedReason,
                 importance: importance,
                 deadlineAt: deadlineAt,
+                estimatedMinutes: estimatedMinutes,
                 tagsJson: tagsJson,
-                terminalAt: terminalAt,
+                completedAt: completedAt,
+                cancelledAt: cancelledAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,
@@ -25195,8 +25346,10 @@ class $$TasksTableTableManager
                 Value<String?> blockedReason = const Value.absent(),
                 required String importance,
                 Value<int?> deadlineAt = const Value.absent(),
+                Value<int?> estimatedMinutes = const Value.absent(),
                 required String tagsJson,
-                Value<int?> terminalAt = const Value.absent(),
+                Value<int?> completedAt = const Value.absent(),
+                Value<int?> cancelledAt = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
                 Value<int?> deletedAt = const Value.absent(),
@@ -25211,8 +25364,10 @@ class $$TasksTableTableManager
                 blockedReason: blockedReason,
                 importance: importance,
                 deadlineAt: deadlineAt,
+                estimatedMinutes: estimatedMinutes,
                 tagsJson: tagsJson,
-                terminalAt: terminalAt,
+                completedAt: completedAt,
+                cancelledAt: cancelledAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,
