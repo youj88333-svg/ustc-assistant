@@ -2,7 +2,9 @@
 
 ## 目标
 
-开发一个面向中国科学技术大学的本地优先校园学习生活助手。当前阶段维护五条只读数据链路，为后续手机 App、统一日程和 LLM Agent 提供输入。
+开发一个面向中国科学技术大学的本地优先校园学习生活助手。当前阶段已经完成
+Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保留本地业务核心的
+前提下继续人工验收、接入真实 LLM，并为 Android/iOS 来源适配做准备。
 
 ## 当前能力
 
@@ -11,8 +13,12 @@
 3. 二课平台：北京时间滚动窗口内的已报名日程。
 4. 评课社区：公开课程/教师查询、缓存、教务联动、规则排序和代表性点评。
 5. 校园公开信息：教务处和财务处目录、本地检索、按需详情读取和附件缓存。
+6. Windows App：账号与同步、七日周课表、个人日程、Task/PlanBlock、冲突与用户
+   覆盖、提醒、操作历史、设置和一步撤回。
 
-运行入口统一为 `python -m ustc_assistant`，详情见 `README.md`。稳定来源契约见 `docs/data-sources/`，日程产品模型见 `docs/schedule-data-model.md`。
+Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
+`README.md`，当前交接状态见 `docs/project-status.md`，稳定来源契约见
+`docs/data-sources/`，日程产品模型见 `docs/schedule-data-model.md`。
 
 正式导入边界为 `docs/data-sources/source-bundle-v1.md` 与
 `schemas/source-bundle-1.0.schema.json`。Python JW 和已报名二课日程已生成
@@ -22,14 +28,17 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
 
 ### 实现状态
 
-- 当前仓库已经实现的是 Python 数据层和五条只读来源链路，统一入口为
-  `python -m ustc_assistant`。
-- `app/` 已创建 Flutter Windows、Android、iOS 工程脚手架；当前只有最小应用入口，
-  Flutter `ImportService`、数据库和产品界面仍待实现。
+- Python 数据层、五条只读来源链路和统一 CLI 已实现。
+- `app/` 已实现 Flutter Windows 首版，包括 Drift/SQLite、SourceBundle
+  `ImportService`、本地账号分区、同步、周日程、个人日程、Task/PlanBlock、提醒、
+  历史、设置及对应测试。Android/iOS 目录目前只有 Flutter 平台脚手架，移动端采集
+  适配器尚未实现。
 - `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消；
   移动端 `SourceGateway` 尚未实现。
-- Windows SDK 验证时缺少 Visual Studio 的 Desktop development with C++
-  workload；安装前不得声称 Windows 可执行文件已经构建验收。
+- Windows C++ 工具链已安装，Release 可构建。最近自动验证通过 Python 267 项测试、
+  Flutter 203 项测试、Flutter 静态分析和 Windows Release 构建。
+- 第一轮真实手工验收已经完成并产生修复；修复后的完整人工复测仍未结束。不得把
+  自动测试通过写成人工验收通过，详情见 `docs/project-status.md`。
 - 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
   删除现有 service、测试或真实故障回归样例。
 
@@ -64,22 +73,28 @@ src/ustc_assistant/
 
 tests/
   test_cli.py              CLI 和公共浏览器/存储边界
+  bridge|contracts|config/ Bridge、SourceBundle 和共享配置测试
   jw|young|icourse|campus/ 与来源模块对应的单元和回归测试
-  fixtures/                合成网页、legacy 样例和 SourceBundle 契约样例
+  fixtures/                合成网页、回归样例和 SourceBundle 契约样例
 
 docs/
-  architecture.md          当前采集层与未来 App 的总边界
+  architecture.md          Python、Bridge、Flutter 与未来移动端边界
   data-sources/            已实现来源契约及 SourceBundle 正式契约
   schedule-data-model.md   Flutter 本地日程领域模型
-  superpowers/specs/       已确认但多数尚未实现的 Flutter 产品设计
-  superpowers/plans/       已写出的历史实施计划，不等于全部仍待执行
+  project-status.md        当前实现、验证、已知限制和接手顺序
+  superpowers/specs/       首版设计及后续设计依据
+  superpowers/plans/       已执行的历史实施计划；复选框不是实时进度
 
 schemas/
   source-bundle-1.0.schema.json  Flutter 正式导入的机器契约
 
 README.md                  安装、CLI 命令和输出路径
 pyproject.toml             Python 包、依赖和命令入口
-app/                       Flutter Windows、Android、iOS 工程与契约资产
+app/
+  lib/core/                Drift 数据库、安全与北京时间工具
+  lib/features/            账号、同步、导入、日程、Task、提醒、历史和设置
+  test/                    Flutter 单元、数据库、Widget、Golden 和流程测试
+  windows|android|ios/     Flutter 平台工程；当前真实运行目标是 Windows
 tmp/、temp.md              私有调试数据，不是代码或正式契约
 ```
 
@@ -99,7 +114,7 @@ tmp/、temp.md              私有调试数据，不是代码或正式契约
   -> tmp/ 中的本地规范化 JSON
 ```
 
-计划中的 Windows App：
+当前 Windows App：
 
 ```text
 source service
@@ -118,12 +133,18 @@ source service
   `src/ustc_assistant/sources/<source>/` 和同名测试目录。
 - CLI、输出路径或命令问题：读 `README.md`、`cli.py` 和 `tests/test_cli.py`。
 - SourceBundle 迁移：先读 `docs/data-sources/source-bundle-v1.md`、Schema 与
-  `tests/fixtures/source-bundle/`，然后修改生产者；不要让 Flutter 兼容 legacy
-  成为长期方案。
-- Flutter 日程和 App 构建：先读
+  `tests/fixtures/source-bundle/` 和 `app/test/fixtures/source_bundle/`，再同步修改
+  Python 生产者与 Flutter 消费者；不要让 Flutter 兼容 legacy。
+- 接手当前项目：先读 `docs/project-status.md`，再读本文件和 `README.md`。历史
+  plan 中未勾选的复选框不代表代码未实现，以代码、测试和当前状态文档为准。
+- Flutter 日程和 App 修改：先读
   `docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`
   掌握首版总边界，再读 `schedule-data-model.md` 和 App Shell、Auth/Sync、Task、
-  Personal CalendarEvent 四份详细 spec；不要假设仓库已有 Flutter 工程。
+  Personal CalendarEvent 四份详细 spec，以及对应 `app/lib/features/` 和测试。
+- Windows 首版验收修复：读
+  `docs/superpowers/specs/2026-07-27-first-milestone-acceptance-repairs-design.md`
+  和对应实施计划。用户填写的验收文件可能带有未提交本地结果，不得覆盖或替用户
+  把失败项改为成功。
 - 修改网站契约时同步更新来源文档和回归测试；修改跨端导入字段时同步更新正式
   契约、Schema、fixture、Python 生产者测试和未来 Flutter 消费者测试。
 - `tmp/`、`temp.md`、原始响应和浏览器 Profile 只用于本机研究，不能作为稳定输入
@@ -158,9 +179,24 @@ source service
 ```powershell
 conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
+Push-Location app
+E:\flutter\flutter\bin\flutter.bat analyze
+E:\flutter\flutter\bin\flutter.bat test
+E:\flutter\flutter\bin\flutter.bat build windows --release
+Pop-Location
 ```
 
 涉及学校页面的改动还必须由真实 Edge 登录会话验收。自动测试不得访问学校网站。
+
+### Windows 首版自动验证（2026-07-28）
+
+- Python：267 项测试通过，`compileall` 通过。
+- Flutter：203 项测试通过，`flutter analyze` 无问题。
+- Windows：Release 构建成功，输出目录为
+  `app/build/windows/x64/runner/Release/`。
+- 第一轮人工验收发现的完整快照可见性、顺序同步、重新认证、日程与 Task 详情、
+  截止时间选择、完全重置和首次登录同步退出问题均已有代码修复与回归测试；仍需
+  用户按验收文档复测，不能视为最终人工验收结论。
 
 ### 最近真实验收（2026-07-22）
 

@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **状态更新（2026-07-28）：** Task 1-10 的代码、自动测试、静态分析和 Release
+> 构建已经完成。本文复选框是历史实施步骤，不是实时进度；修复后的完整人工复测仍
+> 待用户执行，当前结论见 `docs/project-status.md`。
+
 **Goal:** 修复 Windows 首版第一轮人工验收发现的数据可见性、顺序同步、日程详情、Task/PlanBlock、重新认证和完全重置问题。
 
 **Architecture:** 继续以 Drift/SQLite 为业务事实来源，通过 repository/service 补齐有效数据查询与稳定错误契约，通过 GoRouter 将现有详情组件接入应用。同步由 `SyncCoordinator` 严格串行编排，页面只负责用户交互决策；来源数据、用户覆盖和人工冲突关系继续分层保存。

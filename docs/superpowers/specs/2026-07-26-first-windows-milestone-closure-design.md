@@ -17,8 +17,9 @@ docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md
 已有详细规格继续定义字段语义和具体交互。本文在首版范围、命名、入口或实施边界
 发生歧义时优先，用来保证后续实现计划只有一种合理解释。
 
-本文描述的是已经确认的设计，不表示 Flutter App、Windows Python Bridge、
-Flutter `ImportService` 或 SourceBundle 生产者已经实现。
+> 实现状态更新（2026-07-28）：本文定义的 Windows 首版已经实现并通过自动测试、
+> 静态分析和 Release 构建。本文后续内容仍作为规范性设计保留；当前人工验收状态、
+> 已知限制和接手顺序见 `docs/project-status.md`。
 
 ## 2. 首版定位
 

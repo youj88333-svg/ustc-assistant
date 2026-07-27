@@ -1,10 +1,10 @@
-# 数据采集架构
+# USTC Assistant 架构
 
 ## 目标
 
-`ustc_assistant` 是后续手机 App 的本地数据源包。CLI、Windows Bridge 和未来
-移动端采集适配器遵守相同的来源契约；CLI 只负责参数、输出和脱敏状态，不承载
-网站规则。
+`ustc_assistant` Python 包是 Windows App 和后续手机 App 的本地数据源层。
+`app/` 是已经实现的共享 Flutter 应用核心。CLI、Windows Bridge 和未来移动端
+采集适配器遵守相同的来源契约；CLI 只负责参数、输出和脱敏状态，不承载网站规则。
 
 ## 分层
 
@@ -14,7 +14,14 @@
 - `sources.young`：报名中活动和已报名日程两个独立只读来源。
 - `sources.icourse`：公开 HTTP、HTML 解析、缓存、匹配与排序。
 - `sources.campus`：公开目录索引、本地检索、按 ID 读取详情和附件缓存。
+- `bridge`：Windows 临时 loopback 服务、认证回环和可恢复采集作业。
 - `cli`：所有采集、查询和读取命令的统一入口。
+- `app/lib/features/import`：SourceBundle 解码、语义校验和单事务导入。
+- `app/lib/core/database`：账号分区的 Drift/SQLite 本地事实来源。
+- `app/lib/features/schedule|calendar|tasks`：共享日程、个人事件、Task 和
+  PlanBlock 业务核心。
+- `app/lib/features/accounts|sync|reminders`：Windows 账号安全、Bridge 编排和
+  平台提醒适配。
 
 来源 service 返回结构化字典和必要的内存原始对象。只有需要导入 Flutter
 本地数据库的完整来源快照使用 `SourceBundle`；报名中二课、评课社区、校园目录
@@ -31,6 +38,9 @@ Flutter 解析终端文字或中间 JSON 文件。CLI 仅用于开发、调试�
 `SourceBundle`，因此 Flutter 的 `ImportService`、SQLite、用户覆盖层、日程和
 Task 逻辑不需要随采集实现重写。Python Bridge 是 Windows 平台适配器，不是
 跨平台应用核心。
+
+该 Windows 链路已经实现。Android/iOS 目录目前只有 Flutter 平台脚手架，移动端
+`SourceGateway` 仍是后续工作。
 
 ## 数据流
 

@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-07-28):** This historical plan has been implemented. Its
+> unchecked boxes are not live task tracking. See `docs/project-status.md` for
+> the current baseline and remaining manual acceptance work.
+
 **Goal:** Build the first Windows Flutter development version that imports and synchronizes JW plus registered second-classroom schedules, preserves local overlays, and provides the confirmed seven-day schedule, personal CalendarEvent, Task, PlanBlock, account, history, settings, and process-lifetime reminder workflows without an LLM.
 
 **Architecture:** Migrate the existing Python collectors to the canonical SourceBundle 1.0 contract, expose those source services through a temporary authenticated loopback Bridge, and consume complete bundles through one transactional Flutter `ImportService`. Flutter owns account-partitioned Drift persistence, domain services, projections, undo, reminder records, and presentation; Python remains a Windows-only source adapter.
