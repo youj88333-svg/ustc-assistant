@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import unittest
+from unittest.mock import patch
 
-from ustc_assistant.bridge.server import BridgeServer, should_stop
+from ustc_assistant.bridge.server import (
+    BridgeServer,
+    _default_parent_alive,
+    should_stop,
+)
 
 
 class RunningServer:
@@ -107,6 +113,13 @@ class HttpBoundaryTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows process probe regression")
+    def test_windows_parent_probe_never_uses_os_kill(self):
+        with patch("ustc_assistant.bridge.server.os.kill") as kill:
+            self.assertTrue(_default_parent_alive(os.getpid()))
+
+        kill.assert_not_called()
+
     def test_parent_exit_and_idle_timeout_stop_server(self):
         self.assertTrue(
             should_stop(
