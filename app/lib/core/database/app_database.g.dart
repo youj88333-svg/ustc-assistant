@@ -29,6 +29,17 @@ class $LocalAccountsTable extends LocalAccounts
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _identityDigestMeta = const VerificationMeta(
+    'identityDigest',
+  );
+  @override
+  late final GeneratedColumn<String> identityDigest = GeneratedColumn<String>(
+    'identity_digest',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _isActiveMeta = const VerificationMeta(
     'isActive',
   );
@@ -70,6 +81,7 @@ class $LocalAccountsTable extends LocalAccounts
   List<GeneratedColumn> get $columns => [
     id,
     maskedHint,
+    identityDigest,
     isActive,
     createdAt,
     updatedAt,
@@ -98,6 +110,15 @@ class $LocalAccountsTable extends LocalAccounts
       );
     } else if (isInserting) {
       context.missing(_maskedHintMeta);
+    }
+    if (data.containsKey('identity_digest')) {
+      context.handle(
+        _identityDigestMeta,
+        identityDigest.isAcceptableOrUnknown(
+          data['identity_digest']!,
+          _identityDigestMeta,
+        ),
+      );
     }
     if (data.containsKey('is_active')) {
       context.handle(
@@ -138,6 +159,10 @@ class $LocalAccountsTable extends LocalAccounts
         DriftSqlType.string,
         data['${effectivePrefix}masked_hint'],
       )!,
+      identityDigest: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}identity_digest'],
+      ),
       isActive: attachedDatabase.typeMapping.read(
         DriftSqlType.bool,
         data['${effectivePrefix}is_active'],
@@ -162,12 +187,14 @@ class $LocalAccountsTable extends LocalAccounts
 class LocalAccount extends DataClass implements Insertable<LocalAccount> {
   final String id;
   final String maskedHint;
+  final String? identityDigest;
   final bool isActive;
   final int createdAt;
   final int updatedAt;
   const LocalAccount({
     required this.id,
     required this.maskedHint,
+    this.identityDigest,
     required this.isActive,
     required this.createdAt,
     required this.updatedAt,
@@ -177,6 +204,9 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
     final map = <String, Expression>{};
     map['id'] = Variable<String>(id);
     map['masked_hint'] = Variable<String>(maskedHint);
+    if (!nullToAbsent || identityDigest != null) {
+      map['identity_digest'] = Variable<String>(identityDigest);
+    }
     map['is_active'] = Variable<bool>(isActive);
     map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
@@ -187,6 +217,9 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
     return LocalAccountsCompanion(
       id: Value(id),
       maskedHint: Value(maskedHint),
+      identityDigest: identityDigest == null && nullToAbsent
+          ? const Value.absent()
+          : Value(identityDigest),
       isActive: Value(isActive),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
@@ -201,6 +234,7 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
     return LocalAccount(
       id: serializer.fromJson<String>(json['id']),
       maskedHint: serializer.fromJson<String>(json['maskedHint']),
+      identityDigest: serializer.fromJson<String?>(json['identityDigest']),
       isActive: serializer.fromJson<bool>(json['isActive']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
@@ -212,6 +246,7 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
     return <String, dynamic>{
       'id': serializer.toJson<String>(id),
       'maskedHint': serializer.toJson<String>(maskedHint),
+      'identityDigest': serializer.toJson<String?>(identityDigest),
       'isActive': serializer.toJson<bool>(isActive),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
@@ -221,12 +256,16 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
   LocalAccount copyWith({
     String? id,
     String? maskedHint,
+    Value<String?> identityDigest = const Value.absent(),
     bool? isActive,
     int? createdAt,
     int? updatedAt,
   }) => LocalAccount(
     id: id ?? this.id,
     maskedHint: maskedHint ?? this.maskedHint,
+    identityDigest: identityDigest.present
+        ? identityDigest.value
+        : this.identityDigest,
     isActive: isActive ?? this.isActive,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -237,6 +276,9 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
       maskedHint: data.maskedHint.present
           ? data.maskedHint.value
           : this.maskedHint,
+      identityDigest: data.identityDigest.present
+          ? data.identityDigest.value
+          : this.identityDigest,
       isActive: data.isActive.present ? data.isActive.value : this.isActive,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -248,6 +290,7 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
     return (StringBuffer('LocalAccount(')
           ..write('id: $id, ')
           ..write('maskedHint: $maskedHint, ')
+          ..write('identityDigest: $identityDigest, ')
           ..write('isActive: $isActive, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
@@ -256,14 +299,21 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(id, maskedHint, isActive, createdAt, updatedAt);
+  int get hashCode => Object.hash(
+    id,
+    maskedHint,
+    identityDigest,
+    isActive,
+    createdAt,
+    updatedAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is LocalAccount &&
           other.id == this.id &&
           other.maskedHint == this.maskedHint &&
+          other.identityDigest == this.identityDigest &&
           other.isActive == this.isActive &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
@@ -272,6 +322,7 @@ class LocalAccount extends DataClass implements Insertable<LocalAccount> {
 class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
   final Value<String> id;
   final Value<String> maskedHint;
+  final Value<String?> identityDigest;
   final Value<bool> isActive;
   final Value<int> createdAt;
   final Value<int> updatedAt;
@@ -279,6 +330,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
   const LocalAccountsCompanion({
     this.id = const Value.absent(),
     this.maskedHint = const Value.absent(),
+    this.identityDigest = const Value.absent(),
     this.isActive = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -287,6 +339,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
   LocalAccountsCompanion.insert({
     required String id,
     required String maskedHint,
+    this.identityDigest = const Value.absent(),
     this.isActive = const Value.absent(),
     required int createdAt,
     required int updatedAt,
@@ -298,6 +351,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
   static Insertable<LocalAccount> custom({
     Expression<String>? id,
     Expression<String>? maskedHint,
+    Expression<String>? identityDigest,
     Expression<bool>? isActive,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
@@ -306,6 +360,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
     return RawValuesInsertable({
       if (id != null) 'id': id,
       if (maskedHint != null) 'masked_hint': maskedHint,
+      if (identityDigest != null) 'identity_digest': identityDigest,
       if (isActive != null) 'is_active': isActive,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -316,6 +371,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
   LocalAccountsCompanion copyWith({
     Value<String>? id,
     Value<String>? maskedHint,
+    Value<String?>? identityDigest,
     Value<bool>? isActive,
     Value<int>? createdAt,
     Value<int>? updatedAt,
@@ -324,6 +380,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
     return LocalAccountsCompanion(
       id: id ?? this.id,
       maskedHint: maskedHint ?? this.maskedHint,
+      identityDigest: identityDigest ?? this.identityDigest,
       isActive: isActive ?? this.isActive,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -339,6 +396,9 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
     }
     if (maskedHint.present) {
       map['masked_hint'] = Variable<String>(maskedHint.value);
+    }
+    if (identityDigest.present) {
+      map['identity_digest'] = Variable<String>(identityDigest.value);
     }
     if (isActive.present) {
       map['is_active'] = Variable<bool>(isActive.value);
@@ -360,6 +420,7 @@ class LocalAccountsCompanion extends UpdateCompanion<LocalAccount> {
     return (StringBuffer('LocalAccountsCompanion(')
           ..write('id: $id, ')
           ..write('maskedHint: $maskedHint, ')
+          ..write('identityDigest: $identityDigest, ')
           ..write('isActive: $isActive, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -15546,6 +15607,7 @@ typedef $$LocalAccountsTableCreateCompanionBuilder =
     LocalAccountsCompanion Function({
       required String id,
       required String maskedHint,
+      Value<String?> identityDigest,
       Value<bool> isActive,
       required int createdAt,
       required int updatedAt,
@@ -15555,6 +15617,7 @@ typedef $$LocalAccountsTableUpdateCompanionBuilder =
     LocalAccountsCompanion Function({
       Value<String> id,
       Value<String> maskedHint,
+      Value<String?> identityDigest,
       Value<bool> isActive,
       Value<int> createdAt,
       Value<int> updatedAt,
@@ -15944,6 +16007,11 @@ class $$LocalAccountsTableFilterComposer
 
   ColumnFilters<String> get maskedHint => $composableBuilder(
     column: $table.maskedHint,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get identityDigest => $composableBuilder(
+    column: $table.identityDigest,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -16438,6 +16506,11 @@ class $$LocalAccountsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get identityDigest => $composableBuilder(
+    column: $table.identityDigest,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<bool> get isActive => $composableBuilder(
     column: $table.isActive,
     builder: (column) => ColumnOrderings(column),
@@ -16468,6 +16541,11 @@ class $$LocalAccountsTableAnnotationComposer
 
   GeneratedColumn<String> get maskedHint => $composableBuilder(
     column: $table.maskedHint,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get identityDigest => $composableBuilder(
+    column: $table.identityDigest,
     builder: (column) => column,
   );
 
@@ -16990,6 +17068,7 @@ class $$LocalAccountsTableTableManager
               ({
                 Value<String> id = const Value.absent(),
                 Value<String> maskedHint = const Value.absent(),
+                Value<String?> identityDigest = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
@@ -16997,6 +17076,7 @@ class $$LocalAccountsTableTableManager
               }) => LocalAccountsCompanion(
                 id: id,
                 maskedHint: maskedHint,
+                identityDigest: identityDigest,
                 isActive: isActive,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -17006,6 +17086,7 @@ class $$LocalAccountsTableTableManager
               ({
                 required String id,
                 required String maskedHint,
+                Value<String?> identityDigest = const Value.absent(),
                 Value<bool> isActive = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
@@ -17013,6 +17094,7 @@ class $$LocalAccountsTableTableManager
               }) => LocalAccountsCompanion.insert(
                 id: id,
                 maskedHint: maskedHint,
+                identityDigest: identityDigest,
                 isActive: isActive,
                 createdAt: createdAt,
                 updatedAt: updatedAt,

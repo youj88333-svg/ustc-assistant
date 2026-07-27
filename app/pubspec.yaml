@@ -66,6 +66,7 @@ dev_dependencies:
   # 0.44.6 is retracted and removed an API still used by drift_dev 2.34.0.
   sqlparser: 0.44.5
   path: 1.9.1
+  sqlite3: 3.5.0
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

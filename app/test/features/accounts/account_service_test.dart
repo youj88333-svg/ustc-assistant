@@ -167,9 +167,81 @@ void main() {
       await service.deleteCredentials(id);
       expect(await database.select(database.localAccounts).get(), hasLength(1));
       expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await service.hasCredentials(id), isFalse);
+      final summary = (await service.summaries()).single;
+      expect(summary.hasCredentials, isFalse);
+      expect(
+        (await database.select(database.localAccounts).getSingle())
+            .identityDigest,
+        isNotNull,
+      );
+      expect(
+        service.usernameForSync(id),
+        throwsA(
+          isA<AccountVerificationError>().having(
+            (error) => error.code,
+            'code',
+            'credentials_not_found',
+          ),
+        ),
+      );
       expect(browserClears, 0);
       await service.clearDedicatedBrowserSession();
       expect(browserClears, 1);
     },
   );
+
+  test('reauthentication restores credentials in the same partition', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = AccountService(
+      database: database,
+      protector: FakeProtector(),
+    );
+    final id = await service.persistVerifiedAccount(
+      username: 'PB00000000',
+      password: 'old-secret',
+      savePassword: true,
+    );
+    await service.deleteCredentials(id);
+
+    final provisional = await service.stageReauthentication(
+      accountId: id,
+      username: 'PB00000000',
+      password: 'new-secret',
+      savePassword: true,
+    );
+    expect(provisional.accountId, id);
+    expect(
+      await service.confirmSuccessfulLogin(verifiedUsername: 'PB00000000'),
+      id,
+    );
+    expect(await service.hasCredentials(id), isTrue);
+    expect(await database.select(database.localAccounts).get(), hasLength(1));
+    expect(await service.passwordForInteractiveLogin(id), 'new-secret');
+  });
+
+  test('reauthentication rejects a different school account', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = AccountService(
+      database: database,
+      protector: FakeProtector(),
+    );
+    final id = await service.persistVerifiedAccount(username: 'PB00000000');
+    await service.deleteCredentials(id);
+
+    expect(
+      service.stageReauthentication(accountId: id, username: 'PB11111111'),
+      throwsA(
+        isA<AccountVerificationError>().having(
+          (error) => error.code,
+          'code',
+          'identity_mismatch',
+        ),
+      ),
+    );
+    expect(await database.select(database.credentialAccounts).get(), isEmpty);
+    expect(await database.select(database.localAccounts).get(), hasLength(1));
+  });
 }

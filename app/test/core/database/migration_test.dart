@@ -1,14 +1,18 @@
+import 'dart:io';
+
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 
 void main() {
   test(
-    'schema version one creates the complete constrained database',
+    'schema version two creates the complete constrained database',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      expect(database.schemaVersion, 1);
+      expect(database.schemaVersion, 2);
       final foreignKeys = await database
           .customSelect('PRAGMA foreign_keys')
           .getSingle();
@@ -50,6 +54,13 @@ void main() {
         await database.select(database.agentPermissionPolicies).get(),
         isEmpty,
       );
+      final accountColumns = await database
+          .customSelect('PRAGMA table_info(local_accounts)')
+          .get();
+      expect(
+        accountColumns.map((row) => row.read<String>('name')),
+        contains('identity_digest'),
+      );
     },
   );
 
@@ -78,4 +89,41 @@ void main() {
       expect(byName['effective_through']!['notnull'], 0);
     },
   );
+
+  test('schema one upgrades accounts without losing rows', () async {
+    final directory = await Directory.systemTemp.createTemp(
+      'ustc-migration-test',
+    );
+    addTearDown(() => directory.delete(recursive: true));
+    final path = p.join(directory.path, 'legacy.sqlite');
+    final legacy = sqlite.sqlite3.open(path);
+    legacy.execute('''
+CREATE TABLE local_accounts (
+  id TEXT NOT NULL PRIMARY KEY,
+  masked_hint TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+''');
+    legacy.execute(
+      "INSERT INTO local_accounts VALUES ('account', 'PB****0000', 1, 1, 1)",
+    );
+    legacy.execute('PRAGMA user_version = 1');
+    legacy.dispose();
+
+    final database = AppDatabase(NativeDatabase(File(path)));
+    addTearDown(database.close);
+    final account = await database.select(database.localAccounts).getSingle();
+
+    expect(account.id, 'account');
+    expect(account.identityDigest, isNull);
+    final columns = await database
+        .customSelect('PRAGMA table_info(local_accounts)')
+        .get();
+    expect(
+      columns.map((row) => row.read<String>('name')),
+      contains('identity_digest'),
+    );
+  });
 }

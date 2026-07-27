@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
@@ -26,6 +27,7 @@ class AccountSummary {
     required this.id,
     required this.maskedHint,
     required this.active,
+    required this.hasCredentials,
     required this.hasSavedPassword,
     this.jwLastSuccessAt,
     this.youngLastSuccessAt,
@@ -34,6 +36,7 @@ class AccountSummary {
   final String id;
   final String maskedHint;
   final bool active;
+  final bool hasCredentials;
   final bool hasSavedPassword;
   final int? jwLastSuccessAt;
   final int? youngLastSuccessAt;
@@ -45,12 +48,14 @@ class _StagedLogin {
     required this.username,
     required this.password,
     required this.savePassword,
+    this.fixedAccount = false,
   });
 
   final String accountId;
   String? username;
   String? password;
   final bool savePassword;
+  final bool fixedAccount;
 
   void discard() {
     username = null;
@@ -88,6 +93,7 @@ class AccountService {
     String? password,
     bool savePassword = false,
     ProvisionalAccount? provisional,
+    bool fixedAccount = false,
   }) async {
     final normalized = username.trim();
     if (normalized.isEmpty) {
@@ -100,8 +106,41 @@ class AccountService {
       username: normalized,
       password: password,
       savePassword: savePassword,
+      fixedAccount: fixedAccount,
     );
     return session;
+  }
+
+  Future<ProvisionalAccount> stageReauthentication({
+    required String accountId,
+    required String username,
+    String? password,
+    bool savePassword = false,
+  }) async {
+    final account = await (database.select(
+      database.localAccounts,
+    )..where((row) => row.id.equals(accountId))).getSingleOrNull();
+    if (account == null) {
+      throw const AccountVerificationError('account_not_found');
+    }
+    final normalized = username.trim();
+    if (normalized.isEmpty) {
+      throw const AccountVerificationError('blank_username');
+    }
+    final expectedDigest = account.identityDigest;
+    if (expectedDigest == null) {
+      throw const AccountVerificationError('account_identity_missing');
+    }
+    if (!_equalText(expectedDigest, _identityDigest(normalized))) {
+      throw const AccountVerificationError('identity_mismatch');
+    }
+    return stageLogin(
+      username: normalized,
+      password: password,
+      savePassword: savePassword,
+      provisional: ProvisionalAccount(accountId),
+      fixedAccount: true,
+    );
   }
 
   Future<String> confirmSuccessfulLogin({
@@ -118,8 +157,20 @@ class AccountService {
       throw const AccountVerificationError('identity_mismatch');
     }
     try {
-      final existingId = await accountIdFor(verified);
+      final existingId = staged.fixedAccount
+          ? staged.accountId
+          : await accountIdFor(verified);
       final accountId = existingId ?? staged.accountId;
+      if (staged.fixedAccount) {
+        final account = await (database.select(
+          database.localAccounts,
+        )..where((row) => row.id.equals(accountId))).getSingleOrNull();
+        if (account == null ||
+            account.identityDigest == null ||
+            !_equalText(account.identityDigest!, _identityDigest(verified))) {
+          throw const AccountVerificationError('identity_mismatch');
+        }
+      }
       final usernameSecret = await protector.protect(
         Uint8List.fromList(utf8.encode(verified)),
       );
@@ -152,6 +203,7 @@ class AccountService {
               LocalAccountsCompanion.insert(
                 id: accountId,
                 maskedHint: _maskedHint(verified),
+                identityDigest: Value(_identityDigest(verified)),
                 isActive: const Value(true),
                 createdAt: existing?.createdAt ?? timestamp,
                 updatedAt: timestamp,
@@ -280,6 +332,7 @@ class AccountService {
           id: account.id,
           maskedHint: account.maskedHint,
           active: account.isActive,
+          hasCredentials: byId.containsKey(account.id),
           hasSavedPassword: byId[account.id]?.passwordCiphertext != null,
           jwLastSuccessAt: syncByAccountAndSource['${account.id}\u0000ustc_jw'],
           youngLastSuccessAt:
@@ -298,6 +351,12 @@ class AccountService {
       plaintext.fillRange(0, plaintext.length, 0);
     }
   }
+
+  Future<bool> hasCredentials(String accountId) async =>
+      await (database.select(
+        database.credentialAccounts,
+      )..where((row) => row.accountId.equals(accountId))).getSingleOrNull() !=
+      null;
 
   Future<String?> passwordForInteractiveLogin(String accountId) async {
     final row = await _credential(accountId);
@@ -328,6 +387,7 @@ class AccountService {
   }
 
   Future<void> deleteCredentials(String accountId) async {
+    await _ensureIdentityDigest(accountId);
     final timestamp = now();
     await database.transaction(() async {
       await (database.delete(
@@ -363,6 +423,31 @@ class AccountService {
       throw const AccountVerificationError('credentials_not_found');
     }
     return row;
+  }
+
+  Future<void> _ensureIdentityDigest(String accountId) async {
+    final account = await (database.select(
+      database.localAccounts,
+    )..where((row) => row.id.equals(accountId))).getSingleOrNull();
+    if (account == null) {
+      throw const AccountVerificationError('account_not_found');
+    }
+    if (account.identityDigest != null) return;
+    final credential = await _credential(accountId);
+    final plaintext = await protector.unprotect(_usernameSecret(credential));
+    try {
+      final username = utf8.decode(plaintext);
+      await (database.update(
+        database.localAccounts,
+      )..where((row) => row.id.equals(accountId))).write(
+        LocalAccountsCompanion(
+          identityDigest: Value(_identityDigest(username)),
+          updatedAt: Value(now()),
+        ),
+      );
+    } finally {
+      plaintext.fillRange(0, plaintext.length, 0);
+    }
   }
 
   _StagedLogin _requireStaged(ProvisionalAccount provisional) {
@@ -416,6 +501,14 @@ class AccountService {
     }
     return difference == 0;
   }
+
+  static bool _equalText(String left, String right) => _equalBytes(
+    Uint8List.fromList(utf8.encode(left)),
+    Uint8List.fromList(utf8.encode(right)),
+  );
+
+  static String _identityDigest(String username) =>
+      sha256.convert(utf8.encode(username.trim())).toString();
 
   static Future<void> _noop() async {}
 }
