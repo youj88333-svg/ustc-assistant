@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../../tasks/domain/task.dart';
+import '../../tasks/presentation/task_filters.dart';
 import '../domain/overlap_engine.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/ustc_periods.dart';
@@ -16,6 +18,10 @@ class WeekTimetable extends StatelessWidget {
     required this.onEventSelected,
     this.onEmptyRangeCreate,
     this.onEmptyAllDayCreate,
+    this.tasks = const [],
+    this.now,
+    this.hideCompletedTasks = false,
+    this.onTaskSelected,
     super.key,
   });
 
@@ -23,6 +29,10 @@ class WeekTimetable extends StatelessWidget {
   final ValueChanged<EffectiveEvent> onEventSelected;
   final void Function(DateTime day, int minute)? onEmptyRangeCreate;
   final ValueChanged<DateTime>? onEmptyAllDayCreate;
+  final List<TaskItem> tasks;
+  final DateTime? now;
+  final bool hideCompletedTasks;
+  final ValueChanged<TaskItem>? onTaskSelected;
 
   static const axisWidth = 56.0;
   static const minimumDayWidth = 142.0;
@@ -58,6 +68,25 @@ class WeekTimetable extends StatelessWidget {
                   dayWidth: dayWidth,
                   axisWidth: axisWidth,
                 ),
+                _UndatedTaskBand(
+                  tasks: undatedBandTasks(tasks),
+                  totalWidth: totalWidth,
+                  axisWidth: axisWidth,
+                  onSelected: onTaskSelected,
+                ),
+                _DatedTaskBand(
+                  tasksByDay: datedBandTasks(
+                    tasks: tasks,
+                    weekStart: projection.week.start,
+                    now: now ?? DateTime.now(),
+                    hideCompleted: hideCompletedTasks,
+                  ),
+                  days: projection.week.days,
+                  dayWidth: dayWidth,
+                  axisWidth: axisWidth,
+                  now: now ?? DateTime.now(),
+                  onSelected: onTaskSelected,
+                ),
                 const Divider(height: 1),
                 Expanded(
                   child: SingleChildScrollView(
@@ -91,6 +120,208 @@ class WeekTimetable extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _UndatedTaskBand extends StatelessWidget {
+  const _UndatedTaskBand({
+    required this.tasks,
+    required this.totalWidth,
+    required this.axisWidth,
+    required this.onSelected,
+  });
+
+  final List<TaskItem> tasks;
+  final double totalWidth;
+  final double axisWidth;
+  final ValueChanged<TaskItem>? onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    if (tasks.isEmpty) return const SizedBox.shrink();
+    return Container(
+      key: const Key('undated-task-band'),
+      width: totalWidth,
+      constraints: const BoxConstraints(minHeight: 48),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerLow,
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: axisWidth,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6),
+              child: Text(
+                '未定截止',
+                style: TextStyle(
+                  color: Color(0xFF202124),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final task in tasks)
+                  ActionChip(
+                    avatar: const Icon(Icons.task_outlined, size: 16),
+                    label: Text(task.title),
+                    onPressed: onSelected == null
+                        ? null
+                        : () => onSelected!(task),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DatedTaskBand extends StatelessWidget {
+  const _DatedTaskBand({
+    required this.tasksByDay,
+    required this.days,
+    required this.dayWidth,
+    required this.axisWidth,
+    required this.now,
+    required this.onSelected,
+  });
+
+  final Map<int, List<TaskItem>> tasksByDay;
+  final List<DateTime> days;
+  final double dayWidth;
+  final double axisWidth;
+  final DateTime now;
+  final ValueChanged<TaskItem>? onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('dated-task-band'),
+      height: 72,
+      decoration: BoxDecoration(
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            width: axisWidth,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+              child: Text(
+                '截止事项',
+                style: TextStyle(
+                  color: Color(0xFF202124),
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+          ),
+          for (final day in days)
+            SizedBox(
+              width: dayWidth,
+              child: ListView(
+                padding: EdgeInsets.zero,
+                children: [
+                  for (final task in tasksByDay[day.weekday] ?? const [])
+                    _DeadlineTaskChip(
+                      task: task,
+                      now: now,
+                      onSelected: onSelected,
+                    ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeadlineTaskChip extends StatelessWidget {
+  const _DeadlineTaskChip({
+    required this.task,
+    required this.now,
+    required this.onSelected,
+  });
+
+  final TaskItem task;
+  final DateTime now;
+  final ValueChanged<TaskItem>? onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final deadline = task.deadlineAt!;
+    final overdue = task.state != TaskState.completed && now.isAfter(deadline);
+    final dueToday =
+        !overdue &&
+        task.state != TaskState.completed &&
+        deadline.year == now.year &&
+        deadline.month == now.month &&
+        deadline.day == now.day;
+    final color = overdue
+        ? const Color(0xFFFFDAD6)
+        : dueToday
+        ? const Color(0xFFFFE8A3)
+        : Theme.of(context).colorScheme.surfaceContainerHigh;
+    final warning = overdue
+        ? '已逾期'
+        : dueToday
+        ? '今天截止'
+        : null;
+    return Opacity(
+      opacity: task.state == TaskState.completed ? 0.55 : 1,
+      child: InkWell(
+        key: Key('deadline-task-${task.id}'),
+        onTap: onSelected == null ? null : () => onSelected!(task),
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(3, 3, 3, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
+          color: color,
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  task.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFF202124),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (warning != null)
+                Semantics(
+                  label: warning,
+                  container: true,
+                  excludeSemantics: true,
+                  child: Icon(
+                    Icons.error_outline,
+                    size: 18,
+                    color: overdue
+                        ? const Color(0xFFBA1A1A)
+                        : const Color(0xFF7A5900),
+                  ),
+                )
+              else if (task.state == TaskState.completed)
+                const Icon(Icons.check_circle_outline, size: 18),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

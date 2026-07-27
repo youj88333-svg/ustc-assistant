@@ -238,6 +238,23 @@ void main() {
     expect(link.eventId, 'event');
   });
 
+  test('soft-deleted task can be explicitly restored', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    var clock = 45;
+    final service = TaskLifecycleService(
+      database: database,
+      accountId: 'a',
+      now: () => ++clock,
+    );
+    final id = await service.create(title: 'Restore');
+    var task = await service.byId(id);
+    await service.softDelete(id, expectedUpdatedAt: task.updatedAt);
+    task = await service.byId(id, includeDeleted: true);
+    await service.restore(id, expectedUpdatedAt: task.updatedAt);
+    expect((await service.byId(id)).deletedAt, isNull);
+  });
+
   test(
     'default no-op PlanBlock port supports completion and cancellation',
     () async {

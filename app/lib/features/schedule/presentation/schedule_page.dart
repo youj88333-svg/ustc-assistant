@@ -1,6 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
+import '../../../core/database/app_database.dart';
 import '../../calendar/presentation/calendar_event_form.dart';
+import '../../tasks/application/plan_block_service.dart';
+import '../../tasks/application/task_lifecycle_service.dart';
+import '../../tasks/application/undo_service.dart';
+import '../../tasks/domain/plan_block.dart';
+import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../domain/schedule_projection.dart';
 import 'week_timetable.dart';
@@ -8,8 +16,13 @@ import 'week_timetable.dart';
 enum ScheduleSection { week, tasks }
 
 class SchedulePage extends StatefulWidget {
-  const SchedulePage({this.onCreateCalendarEvent, super.key});
+  const SchedulePage({
+    required this.database,
+    this.onCreateCalendarEvent,
+    super.key,
+  });
 
+  final AppDatabase database;
   final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
 
   @override
@@ -51,36 +64,146 @@ class _SchedulePageState extends State<SchedulePage>
         ),
         Expanded(
           child: switch (selected) {
-            ScheduleSection.week => WeekTimetable(
-              projection: buildWeek(
-                ScheduleQuery(selectedDate: DateTime.now(), events: const []),
-              ),
-              onEventSelected: (_) {},
-              onEmptyRangeCreate: (day, minute) {
-                final start = DateTime(
-                  day.year,
-                  day.month,
-                  day.day,
-                  minute ~/ 60,
-                  minute % 60,
-                );
-                widget.onCreateCalendarEvent?.call(
-                  CalendarEventPrefill(
-                    start: start,
-                    end: start.add(const Duration(hours: 1)),
-                  ),
-                );
-              },
-              onEmptyAllDayCreate: (day) {
-                widget.onCreateCalendarEvent?.call(
-                  CalendarEventPrefill(allDayDate: day),
-                );
-              },
+            ScheduleSection.week => _ScheduleData(
+              database: widget.database,
+              section: selected,
+              onCreateCalendarEvent: widget.onCreateCalendarEvent,
             ),
-            ScheduleSection.tasks => const TaskCenterPage(),
+            ScheduleSection.tasks => _ScheduleData(
+              database: widget.database,
+              section: selected,
+              onCreateCalendarEvent: widget.onCreateCalendarEvent,
+            ),
           },
         ),
       ],
+    );
+  }
+}
+
+class _ScheduleData extends StatelessWidget {
+  const _ScheduleData({
+    required this.database,
+    required this.section,
+    required this.onCreateCalendarEvent,
+  });
+
+  final AppDatabase database;
+  final ScheduleSection section;
+  final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LocalAccount?>(
+      future: (database.select(
+        database.localAccounts,
+      )..where((row) => row.isActive.equals(true))).getSingleOrNull(),
+      builder: (context, accountSnapshot) {
+        if (accountSnapshot.connectionState != ConnectionState.done) {
+          return const Center(child: CircularProgressIndicator());
+        }
+        final account = accountSnapshot.data;
+        if (account == null) {
+          return section == ScheduleSection.week
+              ? _week(context, const [])
+              : const TaskCenterPage();
+        }
+        final query = database.select(database.tasks)
+          ..where((row) => row.accountId.equals(account.id));
+        return StreamBuilder<List<Task>>(
+          stream: query.watch(),
+          builder: (context, taskSnapshot) {
+            final tasks = (taskSnapshot.data ?? const [])
+                .map(TaskItem.fromRow)
+                .toList(growable: false);
+            if (section == ScheduleSection.week) {
+              return _week(context, tasks);
+            }
+            return _taskCenter(context, account.id, tasks);
+          },
+        );
+      },
+    );
+  }
+
+  Widget _week(BuildContext context, List<TaskItem> tasks) => WeekTimetable(
+    projection: buildWeek(
+      ScheduleQuery(selectedDate: DateTime.now(), events: const []),
+    ),
+    tasks: tasks,
+    onTaskSelected: (task) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(task.title)));
+    },
+    onEventSelected: (_) {},
+    onEmptyRangeCreate: (day, minute) {
+      final start = DateTime(
+        day.year,
+        day.month,
+        day.day,
+        minute ~/ 60,
+        minute % 60,
+      );
+      onCreateCalendarEvent?.call(
+        CalendarEventPrefill(
+          start: start,
+          end: start.add(const Duration(hours: 1)),
+        ),
+      );
+    },
+    onEmptyAllDayCreate: (day) {
+      onCreateCalendarEvent?.call(CalendarEventPrefill(allDayDate: day));
+    },
+  );
+
+  Widget _taskCenter(
+    BuildContext context,
+    String accountId,
+    List<TaskItem> tasks,
+  ) {
+    final blocks = database.select(database.planBlocks)
+      ..where((row) => row.accountId.equals(accountId));
+    final service = PlanBlockService(database: database, accountId: accountId);
+    final undo = UndoService(database: database, accountId: accountId);
+    final taskService = TaskLifecycleService(
+      database: database,
+      accountId: accountId,
+      undoRecorder: undo,
+      planBlocks: service,
+    );
+    return StreamBuilder<List<PlanBlock>>(
+      stream: blocks.watch(),
+      builder: (context, blockSnapshot) {
+        final now = DateTime.now();
+        final pending = (blockSnapshot.data ?? const [])
+            .map(PlanBlockItem.fromRow)
+            .where((block) => projectPlanBlock(block, now).awaitingReview)
+            .toList(growable: false);
+        return FutureBuilder<bool>(
+          future: undo.canUndo(),
+          builder: (context, undoSnapshot) => TaskCenterPage(
+            tasks: tasks,
+            pendingReview: pending,
+            undoAvailable: undoSnapshot.data ?? false,
+            onUndo: () => unawaited(undo.undo()),
+            onRestore: (task) => unawaited(
+              taskService.restore(task.id, expectedUpdatedAt: task.updatedAt),
+            ),
+            onReviewDone: (block) => unawaited(
+              service.markDone(block.id, expectedUpdatedAt: block.updatedAt),
+            ),
+            onReviewSkipped: (block) => unawaited(
+              service.markSkipped(block.id, expectedUpdatedAt: block.updatedAt),
+            ),
+            onReviewReschedule: (block) {
+              ScaffoldMessenger.of(
+                context,
+              ).showSnackBar(const SnackBar(content: Text('请在计划编辑器中选择新的时间')));
+            },
+          ),
+        );
+      },
     );
   }
 }

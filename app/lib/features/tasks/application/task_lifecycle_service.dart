@@ -282,6 +282,20 @@ class TaskLifecycleService {
             TasksCompanion(deletedAt: Value(timestamp)),
       );
 
+  Future<void> restore(String id, {required int expectedUpdatedAt}) => _mutate(
+    id,
+    expectedUpdatedAt: expectedUpdatedAt,
+    actionType: 'task_restore',
+    summary: 'Restored a task.',
+    companion: (row, timestamp) {
+      if (row.deletedAt == null) {
+        throw const IllegalTaskTransition('task is not deleted');
+      }
+      return const TasksCompanion(deletedAt: Value(null));
+    },
+    includeDeleted: true,
+  );
+
   Future<PlanBlockImpact> terminalImpact(String id) async {
     await byId(id);
     final timestamp = now();
@@ -299,11 +313,12 @@ class TaskLifecycleService {
     required TasksCompanion Function(Task row, int timestamp) companion,
     Future<void> Function(int timestamp)? afterWrite,
     bool restorePlanBlocksOnUndo = false,
+    bool includeDeleted = false,
   }) async {
     late Task before;
     final timestamp = now();
     await database.transaction(() async {
-      final row = await _find(id);
+      final row = await _find(id, includeDeleted: includeDeleted);
       if (row == null) throw const TaskNotFoundError();
       if (row.updatedAt != expectedUpdatedAt) throw const StaleTaskCommand();
       before = row;
@@ -316,7 +331,9 @@ class TaskLifecycleService {
                 table.id.equals(id) &
                 table.accountId.equals(accountId) &
                 table.updatedAt.equals(expectedUpdatedAt) &
-                table.deletedAt.isNull(),
+                (includeDeleted
+                    ? const Constant(true)
+                    : table.deletedAt.isNull()),
           ))
           .write(changes);
       if (afterWrite != null) await afterWrite(timestamp);

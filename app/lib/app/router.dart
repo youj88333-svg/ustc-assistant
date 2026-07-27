@@ -8,6 +8,9 @@ import '../features/calendar/presentation/personal_event_management_page.dart';
 import '../features/chat/presentation/chat_shell_page.dart';
 import '../features/schedule/presentation/schedule_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/tasks/application/task_lifecycle_service.dart';
+import '../features/tasks/application/undo_service.dart';
+import '../features/tasks/presentation/task_form.dart';
 import 'app_drawer.dart';
 
 GoRouter buildRouter(
@@ -34,6 +37,7 @@ GoRouter buildRouter(
               GoRoute(
                 path: '/schedule',
                 builder: (context, state) => SchedulePage(
+                  database: database,
                   onCreateCalendarEvent: (prefill) {
                     context.push('/calendar-event/new', extra: prefill);
                   },
@@ -42,6 +46,10 @@ GoRouter buildRouter(
             ],
           ),
         ],
+      ),
+      GoRoute(
+        path: '/task/new',
+        builder: (context, state) => _TaskCreatePage(database: database),
       ),
       GoRoute(
         path: '/calendar-event/new',
@@ -152,10 +160,47 @@ class _MainShell extends StatelessWidget {
     );
     if (!context.mounted || choice == null) return;
     if (choice == _CreateChoice.task) {
-      navigationShell.goBranch(1);
+      context.push('/task/new');
     } else {
       context.push('/calendar-event/new');
     }
+  }
+}
+
+class _TaskCreatePage extends StatelessWidget {
+  const _TaskCreatePage({required this.database});
+
+  final AppDatabase database;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('新建任务')),
+      body: TaskForm(
+        onSubmit: (submission) async {
+          final account = await _activeAccount(database);
+          if (account == null) {
+            throw StateError('active account required');
+          }
+          final undo = UndoService(database: database, accountId: account.id);
+          await TaskLifecycleService(
+            database: database,
+            accountId: account.id,
+            undoRecorder: undo,
+          ).create(
+            title: submission.title,
+            description: submission.description,
+            userNotes: submission.userNotes,
+            importance: submission.importance,
+            deadlineAt: submission.deadlineAt,
+            estimatedMinutes: submission.estimatedMinutes,
+            tags: submission.tags,
+            eventIds: submission.relatedEventIds,
+          );
+          if (context.mounted) context.pop();
+        },
+      ),
+    );
   }
 }
 
