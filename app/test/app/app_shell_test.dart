@@ -110,4 +110,26 @@ void main() {
     expect(launcher.launched.single.scheme, 'https');
     expect(launcher.launched.single.host, 'jw.ustc.edu.cn');
   });
+
+  testWidgets('drawer destinations can return to the originating main page', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+      ),
+    );
+    await tester.tap(find.text('日程'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('打开侧边栏'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('学校官方网站'));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(BackButton), findsOneWidget);
+    await tester.tap(find.byType(BackButton));
+    await tester.pumpAndSettle();
+    expect(find.text('周视图'), findsOneWidget);
+  });
 }

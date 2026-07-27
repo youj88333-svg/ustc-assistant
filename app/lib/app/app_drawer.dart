@@ -36,7 +36,7 @@ class AppDrawer extends StatelessWidget {
               ListTile(
                 leading: Icon(destination.icon),
                 title: Text(destination.label),
-                onTap: () => context.go(destination.path),
+                onTap: () => context.push(destination.path),
               ),
           ],
         ),
