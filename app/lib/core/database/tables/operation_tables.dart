@@ -4,8 +4,11 @@ import 'account_tables.dart';
 
 class ActionLogs extends Table {
   TextColumn get id => text()();
-  TextColumn get accountId =>
-      text().nullable().references(LocalAccounts, #id, onDelete: KeyAction.setNull)();
+  TextColumn get accountId => text().nullable().references(
+    LocalAccounts,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
   TextColumn get source => text()();
   TextColumn get actionType => text()();
   TextColumn get result => text()();

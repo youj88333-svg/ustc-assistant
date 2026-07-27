@@ -107,29 +107,32 @@ class EffectiveEventRepository {
   final String accountId;
 
   Future<EffectiveEventRecord> byId(String eventId) async {
-    final event = await (database.select(database.calendarEvents)..where(
-          (row) => row.id.equals(eventId) & row.accountId.equals(accountId),
-        ))
-        .getSingleOrNull();
+    final event =
+        await (database.select(database.calendarEvents)..where(
+              (row) => row.id.equals(eventId) & row.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
     if (event == null) {
       throw StateError('calendar event not found');
     }
 
-    final eventOverlay = await (database.select(database.userOverlays)..where(
-          (row) =>
-              row.accountId.equals(accountId) & row.eventId.equals(eventId),
-        ))
-        .getSingleOrNull();
+    final eventOverlay =
+        await (database.select(database.userOverlays)..where(
+              (row) =>
+                  row.accountId.equals(accountId) & row.eventId.equals(eventId),
+            ))
+            .getSingleOrNull();
     CourseSery? series;
     UserOverlay? seriesOverlay;
     if (event.sourceSeriesExternalId != null) {
-      series = await (database.select(database.courseSeries)..where(
-            (row) =>
-                row.accountId.equals(accountId) &
-                row.source.equals(event.source) &
-                row.externalId.equals(event.sourceSeriesExternalId!),
-          ))
-          .getSingleOrNull();
+      series =
+          await (database.select(database.courseSeries)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    row.source.equals(event.source) &
+                    row.externalId.equals(event.sourceSeriesExternalId!),
+              ))
+              .getSingleOrNull();
       if (series != null) {
         seriesOverlay =
             await (database.select(database.userOverlays)..where(
@@ -141,8 +144,7 @@ class EffectiveEventRepository {
       }
     }
 
-    T? choose<T>(T? Function(UserOverlay overlay) read) =>
-        eventOverlay == null
+    T? choose<T>(T? Function(UserOverlay overlay) read) => eventOverlay == null
         ? (seriesOverlay == null ? null : read(seriesOverlay))
         : read(eventOverlay) ??
               (seriesOverlay == null ? null : read(seriesOverlay));
@@ -163,12 +165,10 @@ class EffectiveEventRepository {
       listeningMode: listeningModeFromStorage(
         choose((overlay) => overlay.listeningMode),
       ),
-      displayTitle:
-          choose((overlay) => overlay.displayTitle) ?? event.title,
+      displayTitle: choose((overlay) => overlay.displayTitle) ?? event.title,
       displayLocation:
           choose((overlay) => overlay.displayLocation) ?? event.locationName,
-      importance:
-          choose((overlay) => overlay.importance) ?? event.importance,
+      importance: choose((overlay) => overlay.importance) ?? event.importance,
       hidden: choose((overlay) => overlay.hidden) ?? false,
       attendanceNote: choose((overlay) => overlay.attendanceNote),
       listeningNote: choose((overlay) => overlay.listeningNote),

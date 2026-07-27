@@ -11,9 +11,8 @@ import 'package:ustc_assistant_app/features/import/data/source_bundle_decoder.da
 import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
 import 'package:ustc_assistant_app/features/import/domain/source_bundle_error.dart';
 
-Uint8List fixture(String name) => File(
-  'test/fixtures/source_bundle/positive/$name',
-).readAsBytesSync();
+Uint8List fixture(String name) =>
+    File('test/fixtures/source_bundle/positive/$name').readAsBytesSync();
 
 SourceBundleDecoder testDecoder() => SourceBundleDecoder(
   jsonDecode(
@@ -67,16 +66,18 @@ void main() {
       origin: ImportOrigin.file,
     );
     final event = (await db.select(db.calendarEvents).get()).first;
-    await db.into(db.userOverlays).insert(
-      UserOverlaysCompanion.insert(
-        id: 'overlay',
-        accountId: 'acct_fixture',
-        eventId: Value(event.id),
-        userNotes: const Value('保留这条备注'),
-        createdAt: 1,
-        updatedAt: 1,
-      ),
-    );
+    await db
+        .into(db.userOverlays)
+        .insert(
+          UserOverlaysCompanion.insert(
+            id: 'overlay',
+            accountId: 'acct_fixture',
+            eventId: Value(event.id),
+            userNotes: const Value('保留这条备注'),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
     final replay = await service.importBytes(
       fixture('jw-with-exam.json'),
       accountId: 'acct_fixture',
@@ -86,10 +87,7 @@ void main() {
     expect(first.status, ImportStatus.imported);
     expect(replay.status, ImportStatus.replayed);
     expect(await db.select(db.calendarEvents).get(), hasLength(2));
-    expect(
-      (await db.select(db.userOverlays).get()).single.userNotes,
-      '保留这条备注',
-    );
+    expect((await db.select(db.userOverlays).get()).single.userNotes, '保留这条备注');
   });
 
   test('validation failure writes no import rows', () async {
@@ -187,54 +185,60 @@ void main() {
     expect(await db.select(db.importBatches).get(), hasLength(2));
   });
 
-  test('reconciler runs only after committed import and failure is retryable', () async {
-    final db = await testDatabase();
-    addTearDown(db.close);
-    final reconciler = RecordingReconciler()..fail = true;
-    final service = ImportService(
-      database: db,
-      decoder: testDecoder(),
-      reminderReconciler: reconciler,
-    );
+  test(
+    'reconciler runs only after committed import and failure is retryable',
+    () async {
+      final db = await testDatabase();
+      addTearDown(db.close);
+      final reconciler = RecordingReconciler()..fail = true;
+      final service = ImportService(
+        database: db,
+        decoder: testDecoder(),
+        reminderReconciler: reconciler,
+      );
 
-    final result = await service.importBytes(
-      fixture('young-empty-window.json'),
-      accountId: 'acct_fixture',
-      origin: ImportOrigin.bridge,
-    );
+      final result = await service.importBytes(
+        fixture('young-empty-window.json'),
+        accountId: 'acct_fixture',
+        origin: ImportOrigin.bridge,
+      );
 
-    expect(result.reminderReconciliationPending, isTrue);
-    expect(reconciler.calls, [
-      (accountId: 'acct_fixture', source: 'ustc_young_my_schedule'),
-    ]);
-    expect(await db.select(db.importBatches).get(), hasLength(1));
-  });
+      expect(result.reminderReconciliationPending, isTrue);
+      expect(reconciler.calls, [
+        (accountId: 'acct_fixture', source: 'ustc_young_my_schedule'),
+      ]);
+      expect(await db.select(db.importBatches).get(), hasLength(1));
+    },
+  );
 
-  test('a newer complete snapshot marks absent records within scope missing', () async {
-    final db = await testDatabase();
-    addTearDown(db.close);
-    final service = ImportService(database: db, decoder: testDecoder());
-    final first = fixture('young-with-schedule.json');
-    await service.importBytes(
-      first,
-      accountId: 'acct_fixture',
-      origin: ImportOrigin.bridge,
-    );
+  test(
+    'a newer complete snapshot marks absent records within scope missing',
+    () async {
+      final db = await testDatabase();
+      addTearDown(db.close);
+      final service = ImportService(database: db, decoder: testDecoder());
+      final first = fixture('young-with-schedule.json');
+      await service.importBytes(
+        first,
+        accountId: 'acct_fixture',
+        origin: ImportOrigin.bridge,
+      );
 
-    final empty =
-        jsonDecode(utf8.decode(fixture('young-empty-window.json')))
-            as Map<String, dynamic>;
-    empty['bundleId'] = '00000000-0000-4000-8000-000000000088';
-    await service.importBytes(
-      Uint8List.fromList(utf8.encode(jsonEncode(empty))),
-      accountId: 'acct_fixture',
-      origin: ImportOrigin.bridge,
-    );
+      final empty =
+          jsonDecode(utf8.decode(fixture('young-empty-window.json')))
+              as Map<String, dynamic>;
+      empty['bundleId'] = '00000000-0000-4000-8000-000000000088';
+      await service.importBytes(
+        Uint8List.fromList(utf8.encode(jsonEncode(empty))),
+        accountId: 'acct_fixture',
+        origin: ImportOrigin.bridge,
+      );
 
-    expect(
-      (await db.select(db.sourceRecords).get()).single.presence,
-      'missing_within_scope',
-    );
-    expect(await db.select(db.calendarEvents).get(), hasLength(1));
-  });
+      expect(
+        (await db.select(db.sourceRecords).get()).single.presence,
+        'missing_within_scope',
+      );
+      expect(await db.select(db.calendarEvents).get(), hasLength(1));
+    },
+  );
 }

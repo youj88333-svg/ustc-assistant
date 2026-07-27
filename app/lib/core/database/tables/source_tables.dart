@@ -61,8 +61,11 @@ class SourceRecords extends Table {
   TextColumn get sourceStatus => text()();
   TextColumn get presence => text()();
   TextColumn get scopeKey => text()();
-  TextColumn get importBatchId =>
-      text().nullable().references(ImportBatches, #id, onDelete: KeyAction.restrict)();
+  TextColumn get importBatchId => text().nullable().references(
+    ImportBatches,
+    #id,
+    onDelete: KeyAction.restrict,
+  )();
   IntColumn get sourceUpdatedAt => integer().nullable()();
   IntColumn get firstObservedAt => integer()();
   IntColumn get lastObservedAt => integer()();
@@ -89,8 +92,11 @@ class SyncRuns extends Table {
   TextColumn get resultCode => text().nullable()();
   IntColumn get startedAt => integer()();
   IntColumn get finishedAt => integer().nullable()();
-  TextColumn get importBatchId =>
-      text().nullable().references(ImportBatches, #id, onDelete: KeyAction.setNull)();
+  TextColumn get importBatchId => text().nullable().references(
+    ImportBatches,
+    #id,
+    onDelete: KeyAction.setNull,
+  )();
 
   @override
   String get tableName => 'sync_runs';

@@ -28,7 +28,8 @@ class SourceBundle {
   final SourceBundleData data;
   final Map<String, dynamic> raw;
 
-  String get digest => sha256.convert(utf8.encode(canonicalJson(raw))).toString();
+  String get digest =>
+      sha256.convert(utf8.encode(canonicalJson(raw))).toString();
 
   void requireSubject(String expectedAccountId) {
     if (subject.accountId != expectedAccountId) {

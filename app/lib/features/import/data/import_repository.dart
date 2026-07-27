@@ -8,12 +8,10 @@ class ImportRepository {
   final AppDatabase database;
 
   Future<ImportBatch?> batchByBundleId(String accountId, String bundleId) {
-    return (database.select(database.importBatches)
-          ..where(
-            (row) =>
-                row.accountId.equals(accountId) &
-                row.bundleId.equals(bundleId),
-          ))
+    return (database.select(database.importBatches)..where(
+          (row) =>
+              row.accountId.equals(accountId) & row.bundleId.equals(bundleId),
+        ))
         .getSingleOrNull();
   }
 
@@ -22,13 +20,12 @@ class ImportRepository {
     required String source,
     required String externalId,
   }) {
-    return (database.select(database.sourceRecords)
-          ..where(
-            (row) =>
-                row.accountId.equals(accountId) &
-                row.source.equals(source) &
-                row.externalId.equals(externalId),
-          ))
+    return (database.select(database.sourceRecords)..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              row.source.equals(source) &
+              row.externalId.equals(externalId),
+        ))
         .getSingleOrNull();
   }
 
@@ -36,11 +33,9 @@ class ImportRepository {
     required String accountId,
     required String source,
   }) {
-    return (database.select(database.sourceRecords)
-          ..where(
-            (row) =>
-                row.accountId.equals(accountId) & row.source.equals(source),
-          ))
+    return (database.select(database.sourceRecords)..where(
+          (row) => row.accountId.equals(accountId) & row.source.equals(source),
+        ))
         .get();
   }
 }

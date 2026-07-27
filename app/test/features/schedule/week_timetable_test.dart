@@ -34,10 +34,7 @@ Widget fixture(
     home: Scaffold(
       body: WeekTimetable(
         projection: buildWeek(
-          ScheduleQuery(
-            selectedDate: DateTime(2026, 7, 20),
-            events: events,
-          ),
+          ScheduleQuery(selectedDate: DateTime(2026, 7, 20), events: events),
         ),
         onEventSelected: onSelected ?? (_) {},
       ),
@@ -52,9 +49,7 @@ void main() {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
-    await tester.pumpWidget(
-      fixture([timed('event-sunday', 6, 9, 45, 11, 20)]),
-    );
+    await tester.pumpWidget(fixture([timed('event-sunday', 6, 9, 45, 11, 20)]));
 
     await tester.drag(
       find.byKey(const Key('week-horizontal-scroll')),
@@ -73,18 +68,13 @@ void main() {
   ) async {
     EffectiveEvent? selected;
     await tester.pumpWidget(
-      fixture(
-        [
-          timed('电路基本理论', 1, 9, 45, 11, 20),
-          timed('量子物理 B', 1, 10, 0, 11, 30),
-        ],
-        onSelected: (event) => selected = event,
-      ),
+      fixture([
+        timed('电路基本理论', 1, 9, 45, 11, 20),
+        timed('量子物理 B', 1, 10, 0, 11, 30),
+      ], onSelected: (event) => selected = event),
     );
 
-    await tester.tap(
-      find.byKey(const Key('overlap-group-电路基本理论|量子物理 B')),
-    );
+    await tester.tap(find.byKey(const Key('overlap-group-电路基本理论|量子物理 B')));
     await tester.pumpAndSettle();
     expect(find.byType(OverlapExpansion), findsOneWidget);
     await tester.tap(find.text('量子物理 B').last);
@@ -110,27 +100,19 @@ void main() {
     expect(find.bySemanticsLabel('已确认冲突').evaluate(), isNotEmpty);
   });
 
-  testWidgets('event content prioritizes title and location with preview state', (
-    tester,
-  ) async {
-    await tester.pumpWidget(
-      fixture([
-        timed(
-          '随机过程',
-          2,
-          9,
-          45,
-          11,
-          20,
-          location: '3C203',
-          preview: true,
-        ),
-      ]),
-    );
+  testWidgets(
+    'event content prioritizes title and location with preview state',
+    (tester) async {
+      await tester.pumpWidget(
+        fixture([
+          timed('随机过程', 2, 9, 45, 11, 20, location: '3C203', preview: true),
+        ]),
+      );
 
-    expect(find.text('随机过程'), findsOneWidget);
-    expect(find.text('3C203'), findsOneWidget);
-    final block = tester.widget<EventBlock>(find.byType(EventBlock));
-    expect(block.event.isInactivePreview, isTrue);
-  });
+      expect(find.text('随机过程'), findsOneWidget);
+      expect(find.text('3C203'), findsOneWidget);
+      final block = tester.widget<EventBlock>(find.byType(EventBlock));
+      expect(block.event.isInactivePreview, isTrue);
+    },
+  );
 }

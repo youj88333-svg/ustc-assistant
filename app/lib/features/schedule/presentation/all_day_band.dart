@@ -24,7 +24,10 @@ class AllDayBand extends StatelessWidget {
       height: visibleRows * 25 + 8,
       child: Row(
         children: [
-          SizedBox(width: axisWidth, child: const Center(child: Text('全天'))),
+          SizedBox(
+            width: axisWidth,
+            child: const Center(child: Text('全天')),
+          ),
           for (var day = DateTime.monday; day <= DateTime.sunday; day++)
             _AllDayColumn(
               events: eventsByDay[day] ?? const [],

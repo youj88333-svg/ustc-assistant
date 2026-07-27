@@ -63,9 +63,7 @@ class OverlapGroup {
 
 List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
   final events =
-      input
-          .where((event) => !event.allDay && !event.isInactivePreview)
-          .toList()
+      input.where((event) => !event.allDay && !event.isInactivePreview).toList()
         ..sort((a, b) {
           final byStart = a.startAt!.compareTo(b.startAt!);
           return byStart != 0 ? byStart : a.id.compareTo(b.id);
@@ -93,8 +91,7 @@ List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
     final sameDay =
         current.isEmpty ||
         _dateKey(current.first.startAt!) == _dateKey(event.startAt!);
-    if (current.isEmpty ||
-        (sameDay && event.startAt!.isBefore(groupEnd!))) {
+    if (current.isEmpty || (sameDay && event.startAt!.isBefore(groupEnd!))) {
       current.add(event);
       if (groupEnd == null || event.endAt!.isAfter(groupEnd!)) {
         groupEnd = event.endAt;
@@ -110,18 +107,19 @@ List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
 }
 
 EffectiveEvent _foreground(List<EffectiveEvent> events) {
-  final ordered = [...events]..sort((a, b) {
-    final importance = b.importance.index.compareTo(a.importance.index);
-    if (importance != 0) return importance;
-    final conflict = (b.hasConfirmedConflict ? 1 : 0).compareTo(
-      a.hasConfirmedConflict ? 1 : 0,
-    );
-    if (conflict != 0) return conflict;
-    final exam = (b.eventType == 'exam' ? 1 : 0).compareTo(
-      a.eventType == 'exam' ? 1 : 0,
-    );
-    return exam != 0 ? exam : a.id.compareTo(b.id);
-  });
+  final ordered = [...events]
+    ..sort((a, b) {
+      final importance = b.importance.index.compareTo(a.importance.index);
+      if (importance != 0) return importance;
+      final conflict = (b.hasConfirmedConflict ? 1 : 0).compareTo(
+        a.hasConfirmedConflict ? 1 : 0,
+      );
+      if (conflict != 0) return conflict;
+      final exam = (b.eventType == 'exam' ? 1 : 0).compareTo(
+        a.eventType == 'exam' ? 1 : 0,
+      );
+      return exam != 0 ? exam : a.id.compareTo(b.id);
+    });
   return ordered.first;
 }
 

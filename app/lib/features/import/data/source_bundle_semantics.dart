@@ -84,10 +84,7 @@ void _checkUniqueIdentities(Map<String, dynamic> data) {
   }
 }
 
-void _checkManifest(
-  Map<String, dynamic> manifest,
-  Map<String, dynamic> data,
-) {
+void _checkManifest(Map<String, dynamic> manifest, Map<String, dynamic> data) {
   final expected = {
     'sourceRecordCount': (data['sourceRecords'] as List).length,
     'calendarEventCount': (data['calendarEvents'] as List).length,
@@ -161,8 +158,8 @@ void _checkReferences(Map<String, dynamic> data) {
     };
     kinds[entry.key] = {
       for (final item in entry.value)
-        (item as Map<String, dynamic>)['externalId'] as String:
-            entry.key == 'schedule_relation'
+        (item as Map<String, dynamic>)['externalId']
+            as String: entry.key == 'schedule_relation'
             ? 'jw_exam_course_relation'
             : ((item['sourceDetails'] as Map<String, dynamic>)['kind']
                   as String),
@@ -277,8 +274,7 @@ void _checkScope(
     throwSourceBundleError('count_mismatch');
   }
   for (final item in data['calendarEvents'] as List<dynamic>) {
-    final time =
-        (item as Map<String, dynamic>)['time'] as Map<String, dynamic>;
+    final time = (item as Map<String, dynamic>)['time'] as Map<String, dynamic>;
     final eventDate = time['kind'] == 'timed'
         ? (time['startAt'] as String).substring(0, 10)
         : time['startDate'] as String;

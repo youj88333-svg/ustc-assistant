@@ -39,9 +39,7 @@ void main() {
         .insert(record(accountId: 'a', externalId: 'x'));
 
     expect(
-      db
-          .into(db.sourceRecords)
-          .insert(record(accountId: 'a', externalId: 'x')),
+      db.into(db.sourceRecords).insert(record(accountId: 'a', externalId: 'x')),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -72,14 +70,16 @@ void main() {
     final db = testDatabase();
     addTearDown(db.close);
     await db.into(db.localAccounts).insert(account('a'));
-    await db.into(db.credentialAccounts).insert(
-      CredentialAccountsCompanion.insert(
-        accountId: 'a',
-        usernameCiphertext: Uint8List.fromList([1, 2, 3]),
-        scheme: 'dpapi-current-user-v1',
-        updatedAt: 1,
-      ),
-    );
+    await db
+        .into(db.credentialAccounts)
+        .insert(
+          CredentialAccountsCompanion.insert(
+            accountId: 'a',
+            usernameCiphertext: Uint8List.fromList([1, 2, 3]),
+            scheme: 'dpapi-current-user-v1',
+            updatedAt: 1,
+          ),
+        );
 
     expect(
       (await db.select(db.credentialAccounts).getSingle()).passwordCiphertext,
@@ -91,14 +91,16 @@ void main() {
     final db = testDatabase();
     addTearDown(db.close);
     await db.into(db.localAccounts).insert(account('a'));
-    await db.into(db.credentialAccounts).insert(
-      CredentialAccountsCompanion.insert(
-        accountId: 'a',
-        usernameCiphertext: Uint8List.fromList([1]),
-        scheme: 'dpapi-current-user-v1',
-        updatedAt: 1,
-      ),
-    );
+    await db
+        .into(db.credentialAccounts)
+        .insert(
+          CredentialAccountsCompanion.insert(
+            accountId: 'a',
+            usernameCiphertext: Uint8List.fromList([1]),
+            scheme: 'dpapi-current-user-v1',
+            updatedAt: 1,
+          ),
+        );
     await db
         .into(db.sourceRecords)
         .insert(record(accountId: 'a', externalId: 'x'));
@@ -132,12 +134,14 @@ void main() {
       throwsA(isA<SqliteException>()),
     );
     expect(
-      db.into(db.importBatches).insert(
-        first.copyWith(
-          id: const Value('y'),
-          bundleId: const Value('bundle-2'),
-        ),
-      ),
+      db
+          .into(db.importBatches)
+          .insert(
+            first.copyWith(
+              id: const Value('y'),
+              bundleId: const Value('bundle-2'),
+            ),
+          ),
       throwsA(isA<SqliteException>()),
     );
   });

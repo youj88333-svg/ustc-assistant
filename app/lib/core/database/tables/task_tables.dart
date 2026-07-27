@@ -113,17 +113,29 @@ class ScheduleRelations extends Table {
   TextColumn get rightKind => text().nullable()();
   TextColumn get rightId => text().nullable()();
   @ReferenceName('leftEventRelations')
-  TextColumn get leftEventId =>
-      text().nullable().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get leftEventId => text().nullable().references(
+    CalendarEvents,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   @ReferenceName('leftPlanBlockRelations')
-  TextColumn get leftPlanBlockId =>
-      text().nullable().references(PlanBlocks, #id, onDelete: KeyAction.cascade)();
+  TextColumn get leftPlanBlockId => text().nullable().references(
+    PlanBlocks,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   @ReferenceName('rightEventRelations')
-  TextColumn get rightEventId =>
-      text().nullable().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get rightEventId => text().nullable().references(
+    CalendarEvents,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   @ReferenceName('rightPlanBlockRelations')
-  TextColumn get rightPlanBlockId =>
-      text().nullable().references(PlanBlocks, #id, onDelete: KeyAction.cascade)();
+  TextColumn get rightPlanBlockId => text().nullable().references(
+    PlanBlocks,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get conflictState => text().nullable()();
   TextColumn get reason => text().nullable()();
   IntColumn get createdAt => integer()();
@@ -215,12 +227,18 @@ class Reminders extends Table {
       text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get targetType => text()();
   TextColumn get targetId => text()();
-  TextColumn get eventId =>
-      text().nullable().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get eventId => text().nullable().references(
+    CalendarEvents,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get taskId =>
       text().nullable().references(Tasks, #id, onDelete: KeyAction.cascade)();
-  TextColumn get planBlockId =>
-      text().nullable().references(PlanBlocks, #id, onDelete: KeyAction.cascade)();
+  TextColumn get planBlockId => text().nullable().references(
+    PlanBlocks,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   IntColumn get offsetMinutes => integer().nullable()();
   IntColumn get triggerAt => integer()();
   TextColumn get state => text()();

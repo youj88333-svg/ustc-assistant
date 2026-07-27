@@ -75,10 +75,7 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
     }
   }
   for (final values in timed.values) {
-    values.sort(
-      (a, b) =>
-          a.event.startAt!.compareTo(b.event.startAt!),
-    );
+    values.sort((a, b) => a.event.startAt!.compareTo(b.event.startAt!));
   }
   return ScheduleProjection(
     week: week,

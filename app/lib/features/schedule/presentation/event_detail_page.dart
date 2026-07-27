@@ -38,24 +38,15 @@ class EventDetailPage extends StatelessWidget {
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 12),
-          _DetailLine(
-            icon: Icons.schedule,
-            text: _timeText(source),
-          ),
+          _DetailLine(icon: Icons.schedule, text: _timeText(source)),
           if (event.displayLocation != null)
             _DetailLine(
               icon: Icons.location_on_outlined,
               text: event.displayLocation!,
             ),
-          _DetailLine(
-            icon: Icons.link,
-            text: _sourceLabel(source.source),
-          ),
+          _DetailLine(icon: Icons.link, text: _sourceLabel(source.source)),
           const Divider(height: 32),
-          _SettingLine(
-            label: '出勤',
-            value: _attendanceLabel(event.attendance),
-          ),
+          _SettingLine(label: '出勤', value: _attendanceLabel(event.attendance)),
           _SettingLine(
             label: '听讲',
             value: _listeningLabel(event.listeningMode),
@@ -149,10 +140,7 @@ class _SettingLine extends StatelessWidget {
         children: [
           SizedBox(
             width: 76,
-            child: Text(
-              label,
-              style: Theme.of(context).textTheme.labelLarge,
-            ),
+            child: Text(label, style: Theme.of(context).textTheme.labelLarge),
           ),
           Expanded(child: Text(value)),
         ],

@@ -26,10 +26,7 @@ class ChatShellPage extends StatelessWidget {
                       ),
                     ),
                     SizedBox(height: 6),
-                    Text(
-                      '首个本地版本暂不提供聊天与每日简报。',
-                      textAlign: TextAlign.center,
-                    ),
+                    Text('首个本地版本暂不提供聊天与每日简报。', textAlign: TextAlign.center),
                   ],
                 ),
               ),

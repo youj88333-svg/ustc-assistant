@@ -13,11 +13,13 @@ Uint8List fixtureBytes(String root, String name) =>
     File('$root/$name').readAsBytesSync();
 
 SourceBundleDecoder decoder() {
-  final schema = jsonDecode(
-    File(
-      'assets/schemas/source-bundle-1.0.draft7.schema.json',
-    ).readAsStringSync(),
-  ) as Map<String, dynamic>;
+  final schema =
+      jsonDecode(
+            File(
+              'assets/schemas/source-bundle-1.0.draft7.schema.json',
+            ).readAsStringSync(),
+          )
+          as Map<String, dynamic>;
   return SourceBundleDecoder(schema);
 }
 
@@ -32,7 +34,10 @@ void main() {
       final bundle = decoder().decode(fixtureBytes(positiveRoot, name));
       expect(bundle.schemaVersion, '1.0');
       expect(bundle.subject.accountId, 'acct_fixture');
-      expect(bundle.data.calendarEvents.length, bundle.manifest.calendarEventCount);
+      expect(
+        bundle.data.calendarEvents.length,
+        bundle.manifest.calendarEventCount,
+      );
     });
   }
 
@@ -60,11 +65,7 @@ void main() {
 
   test('duplicate identity does not echo the external identity', () {
     final json =
-        jsonDecode(
-              utf8.decode(
-                fixtureBytes(positiveRoot, 'jw-with-exam.json'),
-              ),
-            )
+        jsonDecode(utf8.decode(fixtureBytes(positiveRoot, 'jw-with-exam.json')))
             as Map<String, dynamic>;
     final data = json['data'] as Map<String, dynamic>;
     final events = data['calendarEvents'] as List<dynamic>;
@@ -142,11 +143,12 @@ void main() {
       ),
     );
 
-    final invalidTime = jsonDecode(jsonEncode(original)) as Map<String, dynamic>;
+    final invalidTime =
+        jsonDecode(jsonEncode(original)) as Map<String, dynamic>;
     final event =
         ((invalidTime['data'] as Map<String, dynamic>)['calendarEvents']
-                as List<dynamic>)
-            .first
+                    as List<dynamic>)
+                .first
             as Map<String, dynamic>;
     (event['time'] as Map<String, dynamic>)['endAt'] =
         '2026-07-22T18:00:00+08:00';

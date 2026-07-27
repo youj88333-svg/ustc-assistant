@@ -112,8 +112,7 @@ class _ConflictEditorState extends State<ConflictEditor> {
                   SwitchListTile(
                     contentPadding: EdgeInsets.zero,
                     title: const Text('应用到当前及未来兼容课次'),
-                    value:
-                        _scopes[pair.id] == ConflictScope.currentAndFuture,
+                    value: _scopes[pair.id] == ConflictScope.currentAndFuture,
                     onChanged: (enabled) {
                       setState(
                         () => _scopes[pair.id] = enabled
@@ -124,9 +123,7 @@ class _ConflictEditorState extends State<ConflictEditor> {
                   ),
                   TextField(
                     controller: _reasons[pair.id],
-                    decoration: const InputDecoration(
-                      labelText: '原因（可选）',
-                    ),
+                    decoration: const InputDecoration(labelText: '原因（可选）'),
                     maxLines: 2,
                   ),
                 ],

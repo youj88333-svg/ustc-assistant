@@ -77,18 +77,20 @@ class ImportService {
   ) async {
     final now = bundle.collectedAt.millisecondsSinceEpoch;
     final batchId = _uuid.v4();
-    await database.into(database.importBatches).insert(
-      ImportBatchesCompanion.insert(
-        id: batchId,
-        accountId: accountId,
-        bundleId: bundle.bundleId,
-        digest: bundle.digest,
-        source: bundle.source,
-        scopeKey: bundle.snapshot.scopeKey,
-        importedAt: now,
-        origin: origin.name,
-      ),
-    );
+    await database
+        .into(database.importBatches)
+        .insert(
+          ImportBatchesCompanion.insert(
+            id: batchId,
+            accountId: accountId,
+            bundleId: bundle.bundleId,
+            digest: bundle.digest,
+            source: bundle.source,
+            scopeKey: bundle.snapshot.scopeKey,
+            importedAt: now,
+            origin: origin.name,
+          ),
+        );
 
     final localIds = <String, String>{};
     for (final record in bundle.data.sourceRecords) {
@@ -102,21 +104,23 @@ class ImportService {
     }
 
     for (final series in bundle.data.courseSeries) {
-      await database.into(database.courseSeries).insertOnConflictUpdate(
-        CourseSeriesCompanion.insert(
-          id: localIds['course_series\u0000${series.externalId}']!,
-          accountId: accountId,
-          source: bundle.source,
-          externalId: series.externalId,
-          title: series.title,
-          courseCode: Value(series.courseCode),
-          semesterKey: series.semesterKey,
-          participantsJson: Value(jsonEncode(series.participants)),
-          sourceDetailsJson: jsonEncode(series.sourceDetails),
-          createdAt: now,
-          updatedAt: now,
-        ),
-      );
+      await database
+          .into(database.courseSeries)
+          .insertOnConflictUpdate(
+            CourseSeriesCompanion.insert(
+              id: localIds['course_series\u0000${series.externalId}']!,
+              accountId: accountId,
+              source: bundle.source,
+              externalId: series.externalId,
+              title: series.title,
+              courseCode: Value(series.courseCode),
+              semesterKey: series.semesterKey,
+              participantsJson: Value(jsonEncode(series.participants)),
+              sourceDetailsJson: jsonEncode(series.sourceDetails),
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
     }
 
     final sourceStatuses = {
@@ -130,75 +134,77 @@ class ImportService {
       final existingEvent = await (database.select(
         database.calendarEvents,
       )..where((row) => row.id.equals(localId))).getSingleOrNull();
-      await database.into(database.calendarEvents).insertOnConflictUpdate(
-        CalendarEventsCompanion.insert(
-          id: localId,
-          accountId: accountId,
-          source: bundle.source,
-          externalId: Value(event.externalId),
-          sourceSeriesExternalId: Value(event.seriesExternalId),
-          title: event.title,
-          description: Value(event.descriptionText),
-          type: event.eventType,
-          status: Value(
-            sourceStatuses['calendar_event\u0000${event.externalId}'] ==
-                    'cancelled'
-                ? 'cancelled'
-                : 'active',
-          ),
-          startAt: Value(
-            timed ? event.time.startAt!.millisecondsSinceEpoch : null,
-          ),
-          endAt: Value(
-            timed ? event.time.endAt!.millisecondsSinceEpoch : null,
-          ),
-          allDay: !timed,
-          startDate: Value(timed ? null : event.time.startDate),
-          endDateExclusive: Value(
-            timed ? null : event.time.endDateExclusive,
-          ),
-          timezone: event.time.timezone,
-          locationName: Value(event.location['name'] as String?),
-          buildingName: Value(event.location['building'] as String?),
-          campusName: Value(event.location['campus'] as String?),
-          participantsJson: Value(jsonEncode(event.participants)),
-          sourceDetailsJson: Value(jsonEncode(event.sourceDetails)),
-          importance: Value(event.sourceDefaults['importance'] as String),
-          completionPolicy: const Value('auto_complete'),
-          createdAt: existingEvent?.createdAt ?? now,
-          updatedAt: now,
-        ),
-      );
+      await database
+          .into(database.calendarEvents)
+          .insertOnConflictUpdate(
+            CalendarEventsCompanion.insert(
+              id: localId,
+              accountId: accountId,
+              source: bundle.source,
+              externalId: Value(event.externalId),
+              sourceSeriesExternalId: Value(event.seriesExternalId),
+              title: event.title,
+              description: Value(event.descriptionText),
+              type: event.eventType,
+              status: Value(
+                sourceStatuses['calendar_event\u0000${event.externalId}'] ==
+                        'cancelled'
+                    ? 'cancelled'
+                    : 'active',
+              ),
+              startAt: Value(
+                timed ? event.time.startAt!.millisecondsSinceEpoch : null,
+              ),
+              endAt: Value(
+                timed ? event.time.endAt!.millisecondsSinceEpoch : null,
+              ),
+              allDay: !timed,
+              startDate: Value(timed ? null : event.time.startDate),
+              endDateExclusive: Value(
+                timed ? null : event.time.endDateExclusive,
+              ),
+              timezone: event.time.timezone,
+              locationName: Value(event.location['name'] as String?),
+              buildingName: Value(event.location['building'] as String?),
+              campusName: Value(event.location['campus'] as String?),
+              participantsJson: Value(jsonEncode(event.participants)),
+              sourceDetailsJson: Value(jsonEncode(event.sourceDetails)),
+              importance: Value(event.sourceDefaults['importance'] as String),
+              completionPolicy: const Value('auto_complete'),
+              createdAt: existingEvent?.createdAt ?? now,
+              updatedAt: now,
+            ),
+          );
     }
 
     for (final relation in bundle.data.scheduleRelations) {
-      await database.into(database.scheduleRelations).insertOnConflictUpdate(
-        ScheduleRelationsCompanion.insert(
-          id: localIds['schedule_relation\u0000${relation.externalId}']!,
-          accountId: accountId,
-          source: Value(bundle.source),
-          externalId: Value(relation.externalId),
-          relationType: Value(relation.relationType),
-          primaryEntityType: Value(
-            relation.primary['entityType'] as String,
-          ),
-          primaryEntityId: Value(
-            localIds[
-                '${relation.primary['entityType']}\u0000'
-                '${relation.primary['externalId']}'],
-          ),
-          relatedEntityType: Value(
-            relation.related['entityType'] as String,
-          ),
-          relatedEntityId: Value(
-            localIds[
-                '${relation.related['entityType']}\u0000'
-                '${relation.related['externalId']}'],
-          ),
-          createdAt: now,
-          updatedAt: now,
-        ),
-      );
+      await database
+          .into(database.scheduleRelations)
+          .insertOnConflictUpdate(
+            ScheduleRelationsCompanion.insert(
+              id: localIds['schedule_relation\u0000${relation.externalId}']!,
+              accountId: accountId,
+              source: Value(bundle.source),
+              externalId: Value(relation.externalId),
+              relationType: Value(relation.relationType),
+              primaryEntityType: Value(
+                relation.primary['entityType'] as String,
+              ),
+              primaryEntityId: Value(
+                localIds['${relation.primary['entityType']}\u0000'
+                    '${relation.primary['externalId']}'],
+              ),
+              relatedEntityType: Value(
+                relation.related['entityType'] as String,
+              ),
+              relatedEntityId: Value(
+                localIds['${relation.related['entityType']}\u0000'
+                    '${relation.related['externalId']}'],
+              ),
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
     }
 
     final observedRecordIds = <String>{};
@@ -209,26 +215,28 @@ class ImportService {
         externalId: record.externalId,
       );
       observedRecordIds.add(record.externalId);
-      await database.into(database.sourceRecords).insertOnConflictUpdate(
-        SourceRecordsCompanion.insert(
-          id: prior?.id ?? _uuid.v4(),
-          accountId: accountId,
-          source: bundle.source,
-          entityType: record.entityType,
-          externalId: record.externalId,
-          localEntityId:
-              localIds['${record.entityType}\u0000${record.entityExternalId}']!,
-          sourceStatus: record.sourceStatus,
-          presence: 'observed',
-          scopeKey: bundle.snapshot.scopeKey,
-          importBatchId: Value(batchId),
-          sourceUpdatedAt: Value(
-            record.sourceUpdatedAt?.millisecondsSinceEpoch,
-          ),
-          firstObservedAt: prior?.firstObservedAt ?? now,
-          lastObservedAt: now,
-        ),
-      );
+      await database
+          .into(database.sourceRecords)
+          .insertOnConflictUpdate(
+            SourceRecordsCompanion.insert(
+              id: prior?.id ?? _uuid.v4(),
+              accountId: accountId,
+              source: bundle.source,
+              entityType: record.entityType,
+              externalId: record.externalId,
+              localEntityId:
+                  localIds['${record.entityType}\u0000${record.entityExternalId}']!,
+              sourceStatus: record.sourceStatus,
+              presence: 'observed',
+              scopeKey: bundle.snapshot.scopeKey,
+              importBatchId: Value(batchId),
+              sourceUpdatedAt: Value(
+                record.sourceUpdatedAt?.millisecondsSinceEpoch,
+              ),
+              firstObservedAt: prior?.firstObservedAt ?? now,
+              lastObservedAt: now,
+            ),
+          );
     }
     await _markAbsentRecords(
       bundle: bundle,
@@ -237,19 +245,21 @@ class ImportService {
       now: now,
     );
 
-    await database.into(database.syncRuns).insert(
-      SyncRunsCompanion.insert(
-        id: _uuid.v4(),
-        accountId: accountId,
-        source: bundle.source,
-        trigger: origin.name,
-        state: 'success',
-        resultCode: const Value('imported'),
-        startedAt: now,
-        finishedAt: Value(now),
-        importBatchId: Value(batchId),
-      ),
-    );
+    await database
+        .into(database.syncRuns)
+        .insert(
+          SyncRunsCompanion.insert(
+            id: _uuid.v4(),
+            accountId: accountId,
+            source: bundle.source,
+            trigger: origin.name,
+            state: 'success',
+            resultCode: const Value('imported'),
+            startedAt: now,
+            finishedAt: Value(now),
+            importBatchId: Value(batchId),
+          ),
+        );
     await database.actionLogsRepository.append(
       accountId: accountId,
       source: bundle.source,
@@ -292,21 +302,19 @@ class ImportService {
           continue;
         }
       } else if (record.entityType == 'calendar_event') {
-        final event = await (database.select(
-          database.calendarEvents,
-        )..where((row) => row.id.equals(record.localEntityId))).getSingleOrNull();
+        final event =
+            await (database.select(database.calendarEvents)
+                  ..where((row) => row.id.equals(record.localEntityId)))
+                .getSingleOrNull();
         if (event != null) {
           final from = bundle.snapshot.scope['fromDate'] as String;
           final through = bundle.snapshot.scope['throughDate'] as String;
           final eventDate = event.allDay
               ? event.startDate!
-              : DateTime.fromMillisecondsSinceEpoch(
-                  event.startAt!,
-                  isUtc: true,
-                ).add(const Duration(hours: 8)).toIso8601String().substring(
-                  0,
-                  10,
-                );
+              : DateTime.fromMillisecondsSinceEpoch(event.startAt!, isUtc: true)
+                    .add(const Duration(hours: 8))
+                    .toIso8601String()
+                    .substring(0, 10);
           if (eventDate.compareTo(from) >= 0 &&
               eventDate.compareTo(through) <= 0) {
             presence = 'missing_within_scope';

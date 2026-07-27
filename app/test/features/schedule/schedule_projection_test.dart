@@ -124,10 +124,7 @@ void main() {
       preview: true,
     );
     final projection = buildWeek(
-      ScheduleQuery(
-        selectedDate: DateTime(2026, 7, 20),
-        events: [preview],
-      ),
+      ScheduleQuery(selectedDate: DateTime(2026, 7, 20), events: [preview]),
     );
     expect(projection.previews.single.event.id, 'odd-week-preview');
     expect(projection.overlapGroups, isEmpty);

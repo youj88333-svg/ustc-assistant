@@ -82,21 +82,22 @@ class ActionLogRepository {
     required String safeSummary,
     required int occurredAt,
   }) async {
-    await _database.into(_database.actionLogs).insert(
-      ActionLogsCompanion.insert(
-        id: _uuid.v4(),
-        accountId: Value(accountId),
-        source: source,
-        actionType: actionType,
-        result: result,
-        safeSummary: safeSummary,
-        occurredAt: occurredAt,
-      ),
-    );
+    await _database
+        .into(_database.actionLogs)
+        .insert(
+          ActionLogsCompanion.insert(
+            id: _uuid.v4(),
+            accountId: Value(accountId),
+            source: source,
+            actionType: actionType,
+            result: result,
+            safeSummary: safeSummary,
+            occurredAt: occurredAt,
+          ),
+        );
   }
 
-  Future<List<ActionLog>> selectAll() =>
-      (_database.select(_database.actionLogs)
-            ..orderBy([(row) => OrderingTerm.desc(row.occurredAt)]))
-          .get();
+  Future<List<ActionLog>> selectAll() => (_database.select(
+    _database.actionLogs,
+  )..orderBy([(row) => OrderingTerm.desc(row.occurredAt)])).get();
 }

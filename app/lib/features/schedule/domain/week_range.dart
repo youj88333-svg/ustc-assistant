@@ -2,11 +2,7 @@ class WeekRange {
   WeekRange._(this.days);
 
   factory WeekRange.forDate(DateTime beijingDate) {
-    final date = DateTime(
-      beijingDate.year,
-      beijingDate.month,
-      beijingDate.day,
-    );
+    final date = DateTime(beijingDate.year, beijingDate.month, beijingDate.day);
     final monday = date.subtract(Duration(days: date.weekday - 1));
     return WeekRange._(
       List.unmodifiable(
