@@ -145,6 +145,43 @@ class UnauthenticatedPage(FakePage):
         return FakeLocator(self, selector)
 
 
+class RepeatedScheduleRedirectPage(FakePage):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.calendar_visible = False
+        self.polls = 0
+
+    def goto(self, url, **kwargs):
+        self.goto_calls.append((url, kwargs))
+        if len(self.goto_calls) == 1:
+            self.url = "https://id.ustc.edu.cn/cas/login?service=redacted"
+        elif len(self.goto_calls) == 2:
+            self.url = (
+                "https://young.ustc.edu.cn/login/"
+                "sc-wisdom-group-learning/dataAnalysis/visual"
+            )
+        else:
+            self.url = url
+            self.calendar_visible = True
+
+    def locator(self, selector):
+        if selector == collector.CALENDAR_SELECTOR:
+            return FakeLocator(
+                self,
+                selector,
+                visible=self.calendar_visible,
+            )
+        return FakeLocator(self, selector)
+
+    def wait_for_timeout(self, timeout):
+        self.polls += 1
+        if self.polls == 1:
+            self.url = (
+                "https://young.ustc.edu.cn/login/"
+                "sc-wisdom-group-learning/dataAnalysis/visual"
+            )
+
+
 class FakeBrowserContext:
     def __init__(self, page):
         self.pages = [page]
@@ -251,6 +288,26 @@ class ResponseContractTests(unittest.TestCase):
 
 @unittest.skipIf(collector is None, "collector module not implemented yet")
 class BrowserFlowTests(unittest.TestCase):
+    def test_retries_schedule_navigation_after_repeated_login_redirects(self):
+        page = RepeatedScheduleRedirectPage(
+            [FakeResponse(page_payload([]))]
+        )
+
+        result = collector.collect_from_page(
+            page,
+            today=date(2026, 7, 21),
+            queried_from=date(2026, 7, 21),
+            queried_through=date(2026, 7, 21),
+            login_timeout_ms=1000,
+            status=lambda message: None,
+        )
+
+        self.assertEqual(1, result.queried_dates)
+        self.assertEqual(3, len(page.goto_calls))
+        self.assertTrue(
+            all(call[0] == collector.MY_SCHEDULE_URL for call in page.goto_calls)
+        )
+
     def test_background_collection_requires_user_action_without_visible_window(self):
         page = UnauthenticatedPage([])
         context = FakeBrowserContext(page)

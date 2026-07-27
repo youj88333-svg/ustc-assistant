@@ -53,6 +53,7 @@ VISIBLE_OPTION_SELECTOR = (
 )
 DEFAULT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 DEFAULT_RESPONSE_TIMEOUT_MS = 30 * 1000
+SCHEDULE_REOPEN_INTERVAL_SECONDS = 0.25
 SOURCE_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
@@ -212,7 +213,7 @@ def _open_schedule_after_login(
     page.goto(MY_SCHEDULE_URL, wait_until="domcontentloaded")
     calendar_view = page.locator(CALENDAR_SELECTOR)
     deadline = time.monotonic() + max(login_timeout_ms, 0) / 1000
-    reopened_after_login = False
+    last_schedule_navigation = time.monotonic()
     announced_login_wait = False
 
     while True:
@@ -224,17 +225,19 @@ def _open_schedule_after_login(
             raise UserActionRequired(
                 "second-classroom login requires user action"
             )
+        now = time.monotonic()
         if (
-            not reopened_after_login
-            and _is_young_app_url(page.url)
+            _is_young_app_url(page.url)
             and not _is_my_schedule_url(page.url)
+            and now - last_schedule_navigation
+            >= SCHEDULE_REOPEN_INTERVAL_SECONDS
         ):
             status("Login completed; opening the signed-up schedule page ...")
             page.goto(MY_SCHEDULE_URL, wait_until="domcontentloaded")
             calendar_view = page.locator(CALENDAR_SELECTOR)
-            reopened_after_login = True
+            last_schedule_navigation = time.monotonic()
             continue
-        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        remaining_ms = int((deadline - now) * 1000)
         if remaining_ms <= 0:
             raise CollectionError(
                 "second-classroom login was not completed before timeout"
