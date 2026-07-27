@@ -276,6 +276,44 @@ class AccountService {
     ];
   }
 
+  Future<String> usernameForSync(String accountId) async {
+    final row = await _credential(accountId);
+    final plaintext = await protector.unprotect(_usernameSecret(row));
+    try {
+      return utf8.decode(plaintext);
+    } finally {
+      plaintext.fillRange(0, plaintext.length, 0);
+    }
+  }
+
+  Future<String?> passwordForInteractiveLogin(String accountId) async {
+    final row = await _credential(accountId);
+    final ciphertext = row.passwordCiphertext;
+    if (ciphertext == null) return null;
+    final plaintext = await protector.unprotect(
+      ProtectedSecret(
+        bytes: ciphertext,
+        scheme: row.scheme,
+        version: row.protectionVersion,
+        metadata: _metadata(row.protectionMetadata),
+      ),
+    );
+    try {
+      return utf8.decode(plaintext);
+    } finally {
+      plaintext.fillRange(0, plaintext.length, 0);
+    }
+  }
+
+  String stagedUsernameForSync(ProvisionalAccount provisional) {
+    final staged = _requireStaged(provisional);
+    return staged.username!;
+  }
+
+  String? stagedPasswordForInteractiveLogin(ProvisionalAccount provisional) {
+    return _requireStaged(provisional).password;
+  }
+
   Future<void> deleteCredentials(String accountId) async {
     final timestamp = now();
     await database.transaction(() async {
@@ -303,6 +341,33 @@ class AccountService {
   Future<List<CalendarEvent>> eventsFor(String accountId) => (database.select(
     database.calendarEvents,
   )..where((row) => row.accountId.equals(accountId))).get();
+
+  Future<CredentialAccount> _credential(String accountId) async {
+    final row = await (database.select(
+      database.credentialAccounts,
+    )..where((item) => item.accountId.equals(accountId))).getSingleOrNull();
+    if (row == null) {
+      throw const AccountVerificationError('credentials_not_found');
+    }
+    return row;
+  }
+
+  _StagedLogin _requireStaged(ProvisionalAccount provisional) {
+    final staged = _staged;
+    if (staged == null ||
+        staged.accountId != provisional.accountId ||
+        staged.username == null) {
+      throw const AccountVerificationError('no_staged_login');
+    }
+    return staged;
+  }
+
+  ProtectedSecret _usernameSecret(CredentialAccount row) => ProtectedSecret(
+    bytes: row.usernameCiphertext,
+    scheme: row.scheme,
+    version: row.protectionVersion,
+    metadata: _metadata(row.protectionMetadata),
+  );
 
   Future<void> _log(
     String type,

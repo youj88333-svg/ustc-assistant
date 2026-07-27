@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/database/app_database.dart';
 import '../core/database/connection.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/sync/presentation/sync_page.dart';
 import 'router.dart';
 import 'theme.dart';
 
@@ -35,6 +38,11 @@ class _UstcAssistantAppState extends State<UstcAssistantApp> {
     ownsDatabase = widget.database == null;
     database = widget.database ?? AppDatabase(openAppDatabase());
     router = buildRouter(widget.websiteLauncher, database);
+    if (ownsDatabase) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(runStartupAutomaticSync(database));
+      });
+    }
   }
 
   @override

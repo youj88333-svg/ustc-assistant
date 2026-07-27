@@ -11,6 +11,7 @@ import '../features/calendar/presentation/personal_event_management_page.dart';
 import '../features/chat/presentation/chat_shell_page.dart';
 import '../features/schedule/presentation/schedule_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
 import '../features/tasks/presentation/task_form.dart';
@@ -77,8 +78,11 @@ GoRouter buildRouter(
           onOpenOfficialPage: () => context.go('/official-websites'),
         ),
       ),
+      GoRoute(
+        path: '/sync',
+        builder: (context, state) => SyncPageLoader(database: database),
+      ),
       for (final route in const [
-        (path: '/sync', title: '同步'),
         (path: '/history', title: '操作历史'),
         (path: '/settings', title: '设置'),
       ])
