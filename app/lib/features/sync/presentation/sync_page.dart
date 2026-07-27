@@ -10,6 +10,7 @@ import '../../import/application/import_service.dart';
 import '../../import/application/reminder_reconciler.dart';
 import '../../import/data/source_bundle_decoder.dart';
 import '../../import/presentation/file_import_action.dart';
+import '../../settings/application/settings_service.dart';
 import '../application/sync_coordinator.dart';
 import '../data/bridge_client.dart';
 import '../data/python_locator.dart';
@@ -43,7 +44,13 @@ Future<void> runStartupAutomaticSync(
       bridgeFactory: () async {
         final current = bridge;
         if (current != null) return current;
-        final executable = await PythonLocator().locate();
+        final executable = await PythonLocator().locate(
+          savedExecutable: await SettingsService(
+            database: database,
+            accounts: accounts,
+            accountId: account.id,
+          ).pythonPath(),
+        );
         return bridge = await BridgeClient.start(pythonExecutable: executable);
       },
       importBundle: importer.importBytes,
@@ -102,7 +109,16 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       bridgeFactory: () async {
         final current = bridge;
         if (current != null) return current;
-        final executable = await PythonLocator().locate();
+        final account = await accounts.activeAccount();
+        final executable = await PythonLocator().locate(
+          savedExecutable: account == null
+              ? null
+              : await SettingsService(
+                  database: widget.database,
+                  accounts: accounts,
+                  accountId: account.id,
+                ).pythonPath(),
+        );
         final started = await BridgeClient.start(pythonExecutable: executable);
         bridge = started;
         return started;

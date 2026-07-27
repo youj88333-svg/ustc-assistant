@@ -10,8 +10,12 @@ import '../features/calendar/presentation/calendar_event_form.dart';
 import '../features/calendar/presentation/personal_event_management_page.dart';
 import '../features/chat/presentation/chat_shell_page.dart';
 import '../features/import/application/reminder_reconciler.dart';
+import '../features/history/application/history_repository.dart';
+import '../features/history/presentation/history_page.dart';
 import '../features/schedule/presentation/schedule_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/settings/application/settings_service.dart';
+import '../features/settings/presentation/settings_page.dart';
 import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
@@ -87,14 +91,15 @@ GoRouter buildRouter(
           reminderReconciler: reminderReconciler,
         ),
       ),
-      for (final route in const [
-        (path: '/history', title: '操作历史'),
-        (path: '/settings', title: '设置'),
-      ])
-        GoRoute(
-          path: route.path,
-          builder: (context, state) => _PlaceholderPage(title: route.title),
-        ),
+      GoRoute(
+        path: '/history',
+        builder: (context, state) =>
+            HistoryPage(repository: HistoryRepository(database)),
+      ),
+      GoRoute(
+        path: '/settings',
+        builder: (context, state) => _SettingsLoader(database: database),
+      ),
       GoRoute(
         path: '/official-websites',
         builder: (context, state) =>
@@ -296,20 +301,41 @@ class _PersonalEventManagementLoader extends StatelessWidget {
   }
 }
 
-Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(
-  database.localAccounts,
-)..where((row) => row.isActive.equals(true))).getSingleOrNull();
+class _SettingsLoader extends StatelessWidget {
+  const _SettingsLoader({required this.database});
 
-class _PlaceholderPage extends StatelessWidget {
-  const _PlaceholderPage({required this.title});
-
-  final String title;
+  final AppDatabase database;
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: Center(child: Text('$title 功能将在后续任务中实现')),
+    return FutureBuilder<LocalAccount?>(
+      future: _activeAccount(database),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final account = snapshot.data;
+        if (account == null) {
+          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
+        }
+        final accounts = AccountService(
+          database: database,
+          protector: WindowsDpapiProtector(),
+        );
+        return SettingsPage(
+          service: SettingsService(
+            database: database,
+            accounts: accounts,
+            accountId: account.id,
+          ),
+        );
+      },
     );
   }
 }
+
+Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(
+  database.localAccounts,
+)..where((row) => row.isActive.equals(true))).getSingleOrNull();
