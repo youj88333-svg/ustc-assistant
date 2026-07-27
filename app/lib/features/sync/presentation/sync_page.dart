@@ -75,6 +75,7 @@ class SyncPageLoader extends StatefulWidget {
     this.reauthenticateAccountId,
     this.onReauthenticated,
     this.onReauthenticationRequired,
+    this.onExit,
     super.key,
   });
 
@@ -83,6 +84,7 @@ class SyncPageLoader extends StatefulWidget {
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
   final ValueChanged<String>? onReauthenticationRequired;
+  final VoidCallback? onExit;
 
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
@@ -159,6 +161,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
           onReauthenticationRequired: widget.onReauthenticationRequired,
+          onExit: widget.onExit,
         );
       },
     );
@@ -180,6 +183,7 @@ class SyncPage extends StatefulWidget {
     this.reauthenticateAccountId,
     this.onReauthenticated,
     this.onReauthenticationRequired,
+    this.onExit,
     super.key,
   });
 
@@ -189,6 +193,7 @@ class SyncPage extends StatefulWidget {
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
   final ValueChanged<String>? onReauthenticationRequired;
+  final VoidCallback? onExit;
 
   @override
   State<SyncPage> createState() => _SyncPageState();
@@ -451,7 +456,17 @@ class _SyncPageState extends State<SyncPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('同步')),
+      appBar: AppBar(
+        leading: widget.onExit == null
+            ? null
+            : IconButton(
+                key: const Key('exit-sync'),
+                tooltip: '退出同步',
+                onPressed: widget.onExit,
+                icon: const Icon(Icons.arrow_back),
+              ),
+        title: const Text('同步'),
+      ),
       body: widget.reauthenticateAccountId != null
           ? _ReauthenticationPanel(
               maskedHint: reauthenticationHint ?? '本地账号',

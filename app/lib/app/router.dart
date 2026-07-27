@@ -125,6 +125,13 @@ GoRouter buildRouter(
         builder: (context, state) => SyncPageLoader(
           database: database,
           reminderReconciler: reminderReconciler,
+          onExit: () {
+            if (context.canPop()) {
+              context.pop();
+            } else {
+              context.go('/chat');
+            }
+          },
           onReauthenticationRequired: (accountId) =>
               context.push('/accounts/$accountId/reauthenticate'),
         ),

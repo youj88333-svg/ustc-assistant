@@ -50,6 +50,11 @@ void main() {
     expect(router.routeInformationProvider.value.uri.path, '/sync');
     expect(find.byKey(const Key('first-login-username')), findsOneWidget);
     expect(await database.select(database.localAccounts).get(), isEmpty);
+
+    await tester.tap(find.byKey(const Key('exit-sync')));
+    await tester.pumpAndSettle();
+    expect(router.routeInformationProvider.value.uri.path, '/chat');
+
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
