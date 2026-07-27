@@ -182,14 +182,24 @@ class SyncPage extends StatefulWidget {
 }
 
 class _SyncPageState extends State<SyncPage> {
+  final usernameController = TextEditingController();
+  final passwordController = TextEditingController();
   String? accountId;
   bool busy = false;
+  bool savePassword = false;
   Map<SyncSource, SyncSourceState> states = const {};
 
   @override
   void initState() {
     super.initState();
     _loadAndAutoSync();
+  }
+
+  @override
+  void dispose() {
+    usernameController.dispose();
+    passwordController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAndAutoSync() async {
@@ -242,8 +252,8 @@ class _SyncPageState extends State<SyncPage> {
     await _refresh();
   }
 
-  Future<void> _handle(SyncOutcome outcome) async {
-    if (outcome is! SyncNeedsUserAction || !mounted) return;
+  Future<SyncOutcome> _handle(SyncOutcome outcome) async {
+    if (outcome is! SyncNeedsUserAction || !mounted) return outcome;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -261,10 +271,43 @@ class _SyncPageState extends State<SyncPage> {
         ],
       ),
     );
-    await widget.coordinator.resumeInteractive(
+    return widget.coordinator.resumeInteractive(
       outcome.jobId,
       userConfirmed: confirmed == true,
     );
+  }
+
+  Future<void> _firstLogin() async {
+    final username = usernameController.text.trim();
+    if (username.isEmpty || busy) return;
+    setState(() => busy = true);
+    var outcome = await widget.coordinator.firstLoginSync(
+      SyncSource.jw,
+      username: username,
+      password: passwordController.text.isEmpty
+          ? null
+          : passwordController.text,
+      savePassword: savePassword,
+    );
+    outcome = await _handle(outcome);
+    passwordController.clear();
+    if (!mounted) return;
+    if (outcome is SyncSucceeded) {
+      accountId = (await widget.accounts.activeAccount())?.id;
+      await _refresh();
+    }
+    if (mounted) {
+      setState(() => busy = false);
+      final message = switch (outcome) {
+        SyncSucceeded() => '账号已绑定，教务同步完成',
+        SyncCancelled() => '已取消登录',
+        SyncFailed(:final code) => '登录或同步失败：$code',
+        _ => '登录未完成',
+      };
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(message)));
+    }
   }
 
   Future<void> _importFile() async {
@@ -342,7 +385,16 @@ class _SyncPageState extends State<SyncPage> {
     return Scaffold(
       appBar: AppBar(title: const Text('同步')),
       body: accountId == null
-          ? const Center(child: Text('请先配置学校账号'))
+          ? _FirstLoginPanel(
+              usernameController: usernameController,
+              passwordController: passwordController,
+              savePassword: savePassword,
+              busy: busy,
+              onSavePasswordChanged: (value) {
+                setState(() => savePassword = value);
+              },
+              onSubmit: _firstLogin,
+            )
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
@@ -398,5 +450,76 @@ class _SyncPageState extends State<SyncPage> {
     return state.lastSuccessfulAt == null
         ? label
         : '$label · ${state.lastSuccessfulAt!.toLocal()}';
+  }
+}
+
+class _FirstLoginPanel extends StatelessWidget {
+  const _FirstLoginPanel({
+    required this.usernameController,
+    required this.passwordController,
+    required this.savePassword,
+    required this.busy,
+    required this.onSavePasswordChanged,
+    required this.onSubmit,
+  });
+
+  final TextEditingController usernameController;
+  final TextEditingController passwordController;
+  final bool savePassword;
+  final bool busy;
+  final ValueChanged<bool> onSavePasswordChanged;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Text('绑定学校账号', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 16),
+        TextField(
+          key: const Key('first-login-username'),
+          controller: usernameController,
+          enabled: !busy,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            labelText: '学校账号',
+            prefixIcon: Icon(Icons.badge_outlined),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          key: const Key('first-login-password'),
+          controller: passwordController,
+          enabled: !busy,
+          obscureText: true,
+          onSubmitted: (_) => onSubmit(),
+          decoration: const InputDecoration(
+            labelText: '密码（可选）',
+            prefixIcon: Icon(Icons.password_outlined),
+          ),
+        ),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          value: savePassword,
+          onChanged: busy
+              ? null
+              : (value) => onSavePasswordChanged(value ?? false),
+          title: const Text('保存密码'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          onPressed: busy ? null : onSubmit,
+          icon: busy
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.login),
+          label: const Text('登录并同步教务'),
+        ),
+      ],
+    );
   }
 }
