@@ -48,6 +48,7 @@ void main() {
 
   testWidgets('imported events appear in the selected week', (tester) async {
     final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
     await database
         .into(database.localAccounts)
         .insert(
@@ -78,6 +79,23 @@ void main() {
             updatedAt: 1,
           ),
         );
+    await database
+        .into(database.sourceRecords)
+        .insert(
+          SourceRecordsCompanion.insert(
+            id: 'future-source',
+            accountId: 'account',
+            source: 'ustc_young_my_schedule',
+            entityType: 'calendar_event',
+            externalId: 'future-event',
+            localEntityId: 'future-event',
+            sourceStatus: 'active',
+            presence: 'observed',
+            scopeKey: 'window',
+            firstObservedAt: 1,
+            lastObservedAt: 1,
+          ),
+        );
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -100,5 +118,57 @@ void main() {
     expect(find.text('未来二课活动'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
     await tester.pump(const Duration(milliseconds: 1));
+  });
+
+  testWidgets('event selection exposes the stable event id', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'account',
+            maskedHint: 'PB****0000',
+            isActive: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.calendarEvents)
+        .insert(
+          CalendarEventsCompanion.insert(
+            id: 'personal-event',
+            accountId: 'account',
+            source: 'user',
+            title: '晚间安排',
+            type: 'personal',
+            startAt: Value(DateTime.utc(2026, 7, 27).millisecondsSinceEpoch),
+            endAt: Value(DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    String? selectedId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            onEventSelected: (value) => selectedId = value,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('event-personal-event')));
+    await tester.pumpAndSettle();
+    expect(selectedId, 'personal-event');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+    await database.close();
   });
 }

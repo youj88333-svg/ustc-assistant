@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
-import '../../calendar/presentation/calendar_event_form.dart';
 import '../../tasks/application/plan_block_service.dart';
 import '../../tasks/application/task_lifecycle_service.dart';
 import '../../tasks/application/undo_service.dart';
@@ -22,13 +21,15 @@ enum ScheduleSection { week, tasks }
 class SchedulePage extends StatefulWidget {
   const SchedulePage({
     required this.database,
-    this.onCreateCalendarEvent,
+    this.onEventSelected,
+    this.onTaskSelected,
     this.clock = const SystemBeijingClock(),
     super.key,
   });
 
   final AppDatabase database;
-  final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
+  final ValueChanged<String>? onEventSelected;
+  final ValueChanged<String>? onTaskSelected;
   final BeijingClock clock;
 
   @override
@@ -99,13 +100,15 @@ class _SchedulePageState extends State<SchedulePage>
               database: widget.database,
               section: selected,
               selectedDate: selectedDate,
-              onCreateCalendarEvent: widget.onCreateCalendarEvent,
+              onEventSelected: widget.onEventSelected,
+              onTaskSelected: widget.onTaskSelected,
             ),
             ScheduleSection.tasks => _ScheduleData(
               database: widget.database,
               section: selected,
               selectedDate: selectedDate,
-              onCreateCalendarEvent: widget.onCreateCalendarEvent,
+              onEventSelected: widget.onEventSelected,
+              onTaskSelected: widget.onTaskSelected,
             ),
           },
         ),
@@ -119,13 +122,15 @@ class _ScheduleData extends StatelessWidget {
     required this.database,
     required this.section,
     required this.selectedDate,
-    required this.onCreateCalendarEvent,
+    required this.onEventSelected,
+    required this.onTaskSelected,
   });
 
   final AppDatabase database;
   final ScheduleSection section;
   final DateTime selectedDate;
-  final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
+  final ValueChanged<String>? onEventSelected;
+  final ValueChanged<String>? onTaskSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -178,29 +183,9 @@ class _ScheduleData extends StatelessWidget {
     ),
     tasks: tasks,
     onTaskSelected: (task) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(task.title)));
+      onTaskSelected?.call(task.id);
     },
-    onEventSelected: (_) {},
-    onEmptyRangeCreate: (day, minute) {
-      final start = DateTime(
-        day.year,
-        day.month,
-        day.day,
-        minute ~/ 60,
-        minute % 60,
-      );
-      onCreateCalendarEvent?.call(
-        CalendarEventPrefill(
-          start: start,
-          end: start.add(const Duration(hours: 1)),
-        ),
-      );
-    },
-    onEmptyAllDayCreate: (day) {
-      onCreateCalendarEvent?.call(CalendarEventPrefill(allDayDate: day));
-    },
+    onEventSelected: (event) => onEventSelected?.call(event.id),
   );
 
   Widget _taskCenter(
@@ -233,6 +218,7 @@ class _ScheduleData extends StatelessWidget {
             pendingReview: pending,
             undoAvailable: undoSnapshot.data ?? false,
             onUndo: () => unawaited(undo.undo()),
+            onTaskSelected: (task) => onTaskSelected?.call(task.id),
             onRestore: (task) => unawaited(
               taskService.restore(task.id, expectedUpdatedAt: task.updatedAt),
             ),

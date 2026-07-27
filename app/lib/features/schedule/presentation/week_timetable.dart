@@ -16,8 +16,6 @@ class WeekTimetable extends StatelessWidget {
   const WeekTimetable({
     required this.projection,
     required this.onEventSelected,
-    this.onEmptyRangeCreate,
-    this.onEmptyAllDayCreate,
     this.tasks = const [],
     this.now,
     this.hideCompletedTasks = false,
@@ -27,8 +25,6 @@ class WeekTimetable extends StatelessWidget {
 
   final ScheduleProjection projection;
   final ValueChanged<EffectiveEvent> onEventSelected;
-  final void Function(DateTime day, int minute)? onEmptyRangeCreate;
-  final ValueChanged<DateTime>? onEmptyAllDayCreate;
   final List<TaskItem> tasks;
   final DateTime? now;
   final bool hideCompletedTasks;
@@ -61,7 +57,6 @@ class WeekTimetable extends StatelessWidget {
                   days: projection.week.days,
                   dayWidth: dayWidth,
                   axisWidth: axisWidth,
-                  onEmptyAllDayCreate: onEmptyAllDayCreate,
                 ),
                 AllDayBand(
                   eventsByDay: projection.allDayByDay,
@@ -108,7 +103,6 @@ class WeekTimetable extends StatelessWidget {
                                   const [],
                               groupsByEvent: groupsByEvent,
                               onEventSelected: onEventSelected,
-                              onEmptyRangeCreate: onEmptyRangeCreate,
                             ),
                         ],
                       ),
@@ -331,13 +325,11 @@ class _DayHeaders extends StatelessWidget {
     required this.days,
     required this.dayWidth,
     required this.axisWidth,
-    required this.onEmptyAllDayCreate,
   });
 
   final List<DateTime> days;
   final double dayWidth;
   final double axisWidth;
-  final ValueChanged<DateTime>? onEmptyAllDayCreate;
 
   static const labels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
 
@@ -349,25 +341,20 @@ class _DayHeaders extends StatelessWidget {
         children: [
           SizedBox(width: axisWidth),
           for (var index = 0; index < days.length; index++)
-            GestureDetector(
-              onLongPress: onEmptyAllDayCreate == null
-                  ? null
-                  : () => onEmptyAllDayCreate!(days[index]),
-              child: SizedBox(
-                width: dayWidth,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      labels[index],
-                      style: const TextStyle(fontWeight: FontWeight.w600),
-                    ),
-                    Text(
-                      '${days[index].month}/${days[index].day}',
-                      style: Theme.of(context).textTheme.labelSmall,
-                    ),
-                  ],
-                ),
+            SizedBox(
+              width: dayWidth,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Text(
+                    labels[index],
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  Text(
+                    '${days[index].month}/${days[index].day}',
+                    style: Theme.of(context).textTheme.labelSmall,
+                  ),
+                ],
               ),
             ),
         ],
@@ -383,7 +370,6 @@ class _DayColumn extends StatelessWidget {
     required this.events,
     required this.groupsByEvent,
     required this.onEventSelected,
-    required this.onEmptyRangeCreate,
   });
 
   final DateTime day;
@@ -391,7 +377,6 @@ class _DayColumn extends StatelessWidget {
   final List<ProjectedEvent> events;
   final Map<String, OverlapGroup> groupsByEvent;
   final ValueChanged<EffectiveEvent> onEventSelected;
-  final void Function(DateTime day, int minute)? onEmptyRangeCreate;
 
   @override
   Widget build(BuildContext context) {
@@ -403,42 +388,28 @@ class _DayColumn extends StatelessWidget {
         final foregroundB = groupB?.foreground.id == b.event.id ? 1 : 0;
         return foregroundA.compareTo(foregroundB);
       });
-    return GestureDetector(
-      behavior: HitTestBehavior.translucent,
-      onLongPressStart: onEmptyRangeCreate == null
-          ? null
-          : (details) {
-              final minute =
-                  UstcPeriods.dayStartMinutes +
-                  (details.localPosition.dy / WeekTimetable.pixelsPerMinute)
-                      .round();
-              onEmptyRangeCreate!(day, minute);
-            },
-      child: Container(
-        width: width,
-        decoration: BoxDecoration(
-          border: Border(
-            left: BorderSide(color: Theme.of(context).dividerColor),
-          ),
-        ),
-        child: Stack(
-          clipBehavior: Clip.none,
-          children: [
-            for (final period in UstcPeriods.values)
-              Positioned(
-                top:
-                    (period.startMinutes - UstcPeriods.dayStartMinutes) *
-                    WeekTimetable.pixelsPerMinute,
-                left: 0,
-                right: 0,
-                child: Divider(
-                  height: 1,
-                  color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
-                ),
+    return Container(
+      width: width,
+      decoration: BoxDecoration(
+        border: Border(left: BorderSide(color: Theme.of(context).dividerColor)),
+      ),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          for (final period in UstcPeriods.values)
+            Positioned(
+              top:
+                  (period.startMinutes - UstcPeriods.dayStartMinutes) *
+                  WeekTimetable.pixelsPerMinute,
+              left: 0,
+              right: 0,
+              child: Divider(
+                height: 1,
+                color: Theme.of(context).dividerColor.withValues(alpha: 0.5),
               ),
-            for (final item in ordered) _eventPosition(context, item),
-          ],
-        ),
+            ),
+          for (final item in ordered) _eventPosition(context, item),
+        ],
       ),
     );
   }

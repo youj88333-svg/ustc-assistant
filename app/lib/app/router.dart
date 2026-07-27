@@ -13,6 +13,7 @@ import '../features/import/application/reminder_reconciler.dart';
 import '../features/history/application/history_repository.dart';
 import '../features/history/presentation/history_page.dart';
 import '../features/schedule/presentation/schedule_page.dart';
+import '../features/schedule/presentation/event_detail_loader.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
@@ -48,9 +49,8 @@ GoRouter buildRouter(
                 path: '/schedule',
                 builder: (context, state) => SchedulePage(
                   database: database,
-                  onCreateCalendarEvent: (prefill) {
-                    context.push('/calendar-event/new', extra: prefill);
-                  },
+                  onEventSelected: (eventId) =>
+                      context.push('/events/$eventId'),
                 ),
               ),
             ],
@@ -66,6 +66,13 @@ GoRouter buildRouter(
         builder: (context, state) => _CalendarEventCreatePage(
           database: database,
           prefill: state.extra as CalendarEventPrefill?,
+        ),
+      ),
+      GoRoute(
+        path: '/events/:eventId',
+        builder: (context, state) => EventDetailLoader(
+          database: database,
+          eventId: state.pathParameters['eventId']!,
         ),
       ),
       GoRoute(
