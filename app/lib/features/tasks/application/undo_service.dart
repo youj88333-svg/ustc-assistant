@@ -103,8 +103,45 @@ class UndoService implements UndoRecorder {
         await _restoreScheduleRelation(payload);
       case 'schedule_relation_rule':
         await _restoreScheduleRelationRule(payload);
+      case 'reminder_override':
+        await _restoreReminderOverride(payload);
       default:
         throw const InvalidUndoCommand();
+    }
+  }
+
+  Future<void> _restoreReminderOverride(Map<String, dynamic> payload) async {
+    final targetType = payload['targetType'] as String;
+    final targetId = payload['targetId'] as String;
+    await (database.delete(database.reminders)..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              row.targetType.equals(targetType) &
+              row.targetId.equals(targetId),
+        ))
+        .go();
+    for (final value in payload['before'] as List<dynamic>) {
+      final row = value as Map<String, dynamic>;
+      await database
+          .into(database.reminders)
+          .insert(
+            RemindersCompanion.insert(
+              id: row['id'] as String,
+              accountId: accountId,
+              targetType: row['targetType'] as String,
+              targetId: row['targetId'] as String,
+              eventId: Value(row['eventId'] as String?),
+              taskId: Value(row['taskId'] as String?),
+              planBlockId: Value(row['planBlockId'] as String?),
+              offsetMinutes: Value(row['offsetMinutes'] as int?),
+              triggerAt: row['triggerAt'] as int,
+              state: row['state'] as String,
+              failureCode: Value(row['failureCode'] as String?),
+              deliveredAt: Value(row['deliveredAt'] as int?),
+              createdAt: row['createdAt'] as int,
+              updatedAt: row['updatedAt'] as int,
+            ),
+          );
     }
   }
 

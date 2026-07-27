@@ -9,6 +9,7 @@ import '../features/calendar/application/calendar_event_service.dart';
 import '../features/calendar/presentation/calendar_event_form.dart';
 import '../features/calendar/presentation/personal_event_management_page.dart';
 import '../features/chat/presentation/chat_shell_page.dart';
+import '../features/import/application/reminder_reconciler.dart';
 import '../features/schedule/presentation/schedule_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/sync/presentation/sync_page.dart';
@@ -19,8 +20,9 @@ import 'app_drawer.dart';
 
 GoRouter buildRouter(
   OfficialWebsiteLauncher websiteLauncher,
-  AppDatabase database,
-) {
+  AppDatabase database, [
+  ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
+]) {
   return GoRouter(
     initialLocation: '/chat',
     routes: [
@@ -80,7 +82,10 @@ GoRouter buildRouter(
       ),
       GoRoute(
         path: '/sync',
-        builder: (context, state) => SyncPageLoader(database: database),
+        builder: (context, state) => SyncPageLoader(
+          database: database,
+          reminderReconciler: reminderReconciler,
+        ),
       ),
       for (final route in const [
         (path: '/history', title: '操作历史'),

@@ -6,6 +6,9 @@ import 'package:go_router/go_router.dart';
 import '../core/database/app_database.dart';
 import '../core/database/connection.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/reminders/application/reminder_service.dart';
+import '../features/reminders/application/windows_reminder_reconciler.dart';
+import '../features/reminders/data/foreground_notification_adapter.dart';
 import '../features/sync/presentation/sync_page.dart';
 import 'router.dart';
 import 'theme.dart';
@@ -31,23 +34,41 @@ class _UstcAssistantAppState extends State<UstcAssistantApp> {
   late final bool ownsDatabase;
   late final AppDatabase database;
   late final GoRouter router;
+  late final WindowsReminderReconciler reminderReconciler;
 
   @override
   void initState() {
     super.initState();
     ownsDatabase = widget.database == null;
     database = widget.database ?? AppDatabase(openAppDatabase());
-    router = buildRouter(widget.websiteLauncher, database);
+    reminderReconciler = WindowsReminderReconciler(
+      database: database,
+      reminderService: ReminderService(database: database),
+      notifications: ForegroundNotificationAdapter(),
+    );
+    router = buildRouter(widget.websiteLauncher, database, reminderReconciler);
     if (ownsDatabase) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        unawaited(runStartupAutomaticSync(database));
+        unawaited(_startBackgroundWork());
       });
     }
+  }
+
+  Future<void> _startBackgroundWork() async {
+    final account = await (database.select(
+      database.localAccounts,
+    )..where((row) => row.isActive.equals(true))).getSingleOrNull();
+    if (account != null) await reminderReconciler.start(account.id);
+    await runStartupAutomaticSync(
+      database,
+      reminderReconciler: reminderReconciler,
+    );
   }
 
   @override
   void dispose() {
     router.dispose();
+    unawaited(reminderReconciler.dispose());
     if (ownsDatabase) database.close();
     super.dispose();
   }

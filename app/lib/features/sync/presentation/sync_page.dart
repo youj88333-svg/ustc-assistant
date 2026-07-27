@@ -7,6 +7,7 @@ import '../../../core/database/app_database.dart';
 import '../../../core/security/windows_dpapi_protector.dart';
 import '../../accounts/application/account_service.dart';
 import '../../import/application/import_service.dart';
+import '../../import/application/reminder_reconciler.dart';
 import '../../import/data/source_bundle_decoder.dart';
 import '../../import/presentation/file_import_action.dart';
 import '../application/sync_coordinator.dart';
@@ -14,7 +15,10 @@ import '../data/bridge_client.dart';
 import '../data/python_locator.dart';
 import '../domain/sync_state.dart';
 
-Future<void> runStartupAutomaticSync(AppDatabase database) async {
+Future<void> runStartupAutomaticSync(
+  AppDatabase database, {
+  ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
+}) async {
   BridgeGateway? bridge;
   try {
     final accounts = AccountService(
@@ -31,6 +35,7 @@ Future<void> runStartupAutomaticSync(AppDatabase database) async {
       decoder: SourceBundleDecoder(
         jsonDecode(schemaText) as Map<String, dynamic>,
       ),
+      reminderReconciler: reminderReconciler,
     );
     final coordinator = SyncCoordinator(
       database: database,
@@ -59,9 +64,14 @@ Future<void> runStartupAutomaticSync(AppDatabase database) async {
 }
 
 class SyncPageLoader extends StatefulWidget {
-  const SyncPageLoader({required this.database, super.key});
+  const SyncPageLoader({
+    required this.database,
+    this.reminderReconciler = const NoopReminderReconciler(),
+    super.key,
+  });
 
   final AppDatabase database;
+  final ReminderReconciler reminderReconciler;
 
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
@@ -84,6 +94,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       decoder: SourceBundleDecoder(
         jsonDecode(schemaText) as Map<String, dynamic>,
       ),
+      reminderReconciler: widget.reminderReconciler,
     );
     final coordinator = SyncCoordinator(
       database: widget.database,
