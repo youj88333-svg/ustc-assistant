@@ -23,9 +23,9 @@ python -m ustc_assistant query campus --text "选课"
 python -m ustc_assistant read campus --entry-id <catalog-entry-id>
 ```
 
-教务采集默认学期由 `config/source-defaults.json` 统一提供：`461 / 2026fall / 2026 秋季学期`。
+教务采集默认学期由 `config/source-defaults.json` 统一提供：`421 / 2026spring / 2026 春季学期`。
 调试时必须同时提供完整三元组，例如
-`python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 421 --semester-key 2026spring --semester-name "2026 春季学期"`；不会根据年份或名称推算教务内部学期 ID。
+`python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 461 --semester-key 2026fall --semester-name "2026 秋季学期"`；不会根据年份或名称推算教务内部学期 ID。
 `--account-id` 是 App 本地账号标识，不是教务动态上下文 ID；正式采集命令不提供默认值。
 
 教务联动评课社区会把课程名称作为检索词发送给公开网站 `icourse.club`，但不会发送完整课表、时间、地点、用户 ID 或登录信息。首次使用前应确认这一隐私影响；仅需本地检查课程分组时可增加 `--group-only`，该模式不会联网。

@@ -77,9 +77,9 @@ class PackageEntryTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(jw.semester_id, 461)
-        self.assertEqual(jw.semester_key, "2026fall")
-        self.assertEqual(jw.display_name, "2026 秋季学期")
+        self.assertEqual(jw.semester_id, 421)
+        self.assertEqual(jw.semester_key, "2026spring")
+        self.assertEqual(jw.display_name, "2026 春季学期")
         self.assertEqual(jw.output, Path("tmp/ustc-jw-import.generated.json"))
         self.assertEqual(schedule.today.isoformat(), "2026-07-22")
 

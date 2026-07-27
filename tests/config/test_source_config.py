@@ -16,12 +16,12 @@ DEFAULT = JwSemesterConfig(461, "2026fall", "2026 秋季学期")
 
 
 class SourceConfigTests(unittest.TestCase):
-    def test_repository_default_is_2026_fall(self):
+    def test_repository_default_is_2026_spring(self):
         config = load_default_jw_semester(ROOT / "config/source-defaults.json")
 
-        self.assertEqual(config.semester_id, 461)
-        self.assertEqual(config.semester_key, "2026fall")
-        self.assertEqual(config.display_name, "2026 秋季学期")
+        self.assertEqual(config.semester_id, 421)
+        self.assertEqual(config.semester_key, "2026spring")
+        self.assertEqual(config.display_name, "2026 春季学期")
 
     def test_debug_override_requires_the_complete_triple(self):
         with self.assertRaisesRegex(SourceConfigError, "complete semester override"):

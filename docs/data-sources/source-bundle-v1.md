@@ -506,6 +506,6 @@ tests/fixtures/source-bundle/negative/
 - 硬限制边界；
 - 输出中不存在认证材料、个人远端身份、上下文 ID、路径、原始 HTML 或未知字段。
 
-真实 Edge 验收使用当前 `semesterId=461 / 2026fall` 和北京时间二课窗口生成正式
+真实 Edge 验收使用当前 `semesterId=421 / 2026spring` 和北京时间二课窗口生成正式
 Bundle，在 Flutter 中执行首次导入、重复导入和第二次刷新。未来 Android/iOS
 SourceGateway 必须通过同一 fixture 契约测试。

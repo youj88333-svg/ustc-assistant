@@ -13,7 +13,7 @@
 - Python commands run in Conda environment `ustc_assistant`; minimum supported Python is 3.10.
 - Flutter commands use `E:\flutter\flutter\bin\flutter.bat` or `$env:Flutter_Path\flutter.bat`; verified SDK is Flutter 3.44.5 with Dart 3.12.2.
 - Time calculations use `Asia/Shanghai`; stored timed instants use UTC epoch milliseconds and all-day values use `YYYY-MM-DD`.
-- JW defaults come only from `config/source-defaults.json`: `semesterId=461`, `semesterKey=2026fall`, `displayName=2026 秋季学期`.
+- JW defaults come only from `config/source-defaults.json`: `semesterId=421`, `semesterKey=2026spring`, `displayName=2026 春季学期`.
 - Never derive a JW numeric semester ID from year, label, or adjacent IDs.
 - School account names are always DPAPI-protected locally; passwords are optional and never stored in plaintext.
 - SourceBundle contains local opaque `accountId`, never school username, student number, remote user ID, JW context ID, cookie, token, raw HTML, browser path, or arbitrary metadata.
@@ -122,9 +122,9 @@ docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md
 class SourceConfigTests(unittest.TestCase):
     def test_repository_default_is_2026_fall(self):
         config = load_default_jw_semester(ROOT / "config/source-defaults.json")
-        self.assertEqual(config.semester_id, 461)
-        self.assertEqual(config.semester_key, "2026fall")
-        self.assertEqual(config.display_name, "2026 秋季学期")
+        self.assertEqual(config.semester_id, 421)
+        self.assertEqual(config.semester_key, "2026spring")
+        self.assertEqual(config.display_name, "2026 春季学期")
 
     def test_debug_override_requires_the_complete_triple(self):
         with self.assertRaisesRegex(SourceConfigError, "complete semester override"):
@@ -171,7 +171,7 @@ Load UTF-8 JSON from the repository configuration, reject unknown keys, booleans
 
 Run: `conda run -n ustc_assistant python -m unittest tests.config.test_source_config tests.test_cli -v`
 
-Expected: all selected tests pass and parser defaults report 461/2026fall/2026 秋季学期.
+Expected: all selected tests pass and parser defaults report 421/2026spring/2026 春季学期.
 
 - [ ] **Step 5: Run the full Python gate and commit**
 
@@ -2099,7 +2099,7 @@ explicitly and verify the active account is only a preselected choice.
 - [ ] **Step 3: Run real JW acceptance**
 
 Start manual sync, complete CAS login and CAPTCHA when prompted, collect the
-shared `461 / 2026fall / 2026 秋季学期` scope, import it, repeat sync, and verify
+shared `421 / 2026spring / 2026 春季学期` scope, import it, repeat sync, and verify
 course/exam completeness plus no sensitive fields in Bundle or logs.
 
 - [ ] **Step 4: Run real registered second-classroom acceptance**

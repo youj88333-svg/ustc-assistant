@@ -160,9 +160,9 @@ no successful sync                 -> due
 The initial Windows release configures JW automatic and manual sync for:
 
 ```text
-semesterId  = 461
-semesterKey = 2026fall
-displayName = 2026 秋季学期
+semesterId  = 421
+semesterKey = 2026spring
+displayName = 2026 春季学期
 ```
 
 The App must not derive `semesterId` from a year or semester label. The mapping
