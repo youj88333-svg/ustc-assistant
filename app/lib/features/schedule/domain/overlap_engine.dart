@@ -12,6 +12,8 @@ class EffectiveEvent {
     this.isInactivePreview = false,
     this.importance = EventImportance.normal,
     this.eventType = 'personal',
+    this.foregroundPriority = 0,
+    this.color,
   }) : allDay = false,
        startDate = null,
        endDateExclusive = null;
@@ -27,6 +29,8 @@ class EffectiveEvent {
     this.isInactivePreview = false,
     this.importance = EventImportance.normal,
     this.eventType = 'personal',
+    this.foregroundPriority = 0,
+    this.color,
   }) : allDay = true,
        startAt = null,
        endAt = null;
@@ -44,6 +48,8 @@ class EffectiveEvent {
   final bool isInactivePreview;
   final EventImportance importance;
   final String eventType;
+  final int foregroundPriority;
+  final String? color;
 }
 
 class OverlapGroup {
@@ -109,6 +115,8 @@ List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
 EffectiveEvent _foreground(List<EffectiveEvent> events) {
   final ordered = [...events]
     ..sort((a, b) {
+      final foreground = b.foregroundPriority.compareTo(a.foregroundPriority);
+      if (foreground != 0) return foreground;
       final importance = b.importance.index.compareTo(a.importance.index);
       if (importance != 0) return importance;
       final conflict = (b.hasConfirmedConflict ? 1 : 0).compareTo(

@@ -1,7 +1,11 @@
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/history/application/history_repository.dart';
+import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
+import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 
 void main() {
   test('history sanitizes every rendered and filterable field', () async {
@@ -60,4 +64,92 @@ void main() {
     expect(entries, hasLength(1));
     expect(entries.single.occurredAt, 300);
   });
+
+  test(
+    'event operations write safe summaries without private content',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'account',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      for (final item in [
+        ('source-event', 'ustc_jw', '敏感课程标题'),
+        ('personal-event', 'user', '私密游戏安排'),
+      ]) {
+        await database
+            .into(database.calendarEvents)
+            .insert(
+              CalendarEventsCompanion.insert(
+                id: item.$1,
+                accountId: 'account',
+                source: item.$2,
+                title: item.$3,
+                type: item.$2 == 'user' ? 'personal' : 'course',
+                startAt: Value(
+                  DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch,
+                ),
+                endAt: Value(
+                  DateTime.utc(2026, 7, 27, 2).millisecondsSinceEpoch,
+                ),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+      }
+
+      await OverlayService(
+        database: database,
+        accountId: 'account',
+        now: () => 100,
+      ).setEventOverlay(
+        'source-event',
+        const OverlayMutation(hidden: true, userNotes: '敏感地点'),
+      );
+      await CalendarEventService(
+        database: database,
+        accountId: 'account',
+        now: () => 200,
+      ).softDelete('personal-event');
+      await ConflictService(
+        database: database,
+        accountId: 'account',
+        now: () => 300,
+      ).classifyPair(
+        EventConflictParticipant(
+          eventId: 'source-event',
+          occurrenceDate: DateTime(2026, 7, 27),
+        ),
+        EventConflictParticipant(
+          eventId: 'personal-event',
+          occurrenceDate: DateTime(2026, 7, 27),
+        ),
+        ConflictState.conflict,
+      );
+
+      final entries = await HistoryRepository(database).query();
+      expect(
+        entries.map((entry) => entry.actionType),
+        containsAll([
+          'user_overlay_update',
+          'calendar_event_delete',
+          'conflict_classification',
+        ]),
+      );
+      final rendered = entries.map((entry) => entry.safeSummary).join(' ');
+      expect(rendered, isNot(contains('敏感课程标题')));
+      expect(rendered, isNot(contains('私密游戏安排')));
+      expect(rendered, isNot(contains('敏感地点')));
+      expect(rendered, isNot(contains('PB****0000')));
+    },
+  );
 }

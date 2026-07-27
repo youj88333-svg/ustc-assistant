@@ -144,6 +144,39 @@ void main() {
     );
   });
 
+  test('overlapping records exclude missing source events', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    for (final eventId in ['event-a', 'event-b']) {
+      await database
+          .into(database.sourceRecords)
+          .insert(
+            SourceRecordsCompanion.insert(
+              id: 'source-$eventId',
+              accountId: 'a',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: eventId,
+              localEntityId: eventId,
+              sourceStatus: 'active',
+              presence: eventId == 'event-b'
+                  ? 'missing_within_scope'
+                  : 'observed',
+              scopeKey: 'semester',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+    }
+
+    final records = await EffectiveEventRepository(
+      database,
+      accountId: 'a',
+    ).overlappingRecords('event-a');
+
+    expect(records.map((record) => record.source.id), ['event-a']);
+  });
+
   test('attendance decisions remain occurrence-specific', () async {
     final database = await fixtureDatabase();
     addTearDown(database.close);
@@ -202,6 +235,63 @@ void main() {
     await service.classifyPair(a, b, ConflictState.conflict);
     expect(await service.showConflictWarning(a, b), isTrue);
   });
+
+  test(
+    'display projection includes conflict and foreground preferences',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      for (final eventId in ['event-a', 'event-b']) {
+        await database
+            .into(database.sourceRecords)
+            .insert(
+              SourceRecordsCompanion.insert(
+                id: 'source-$eventId',
+                accountId: 'a',
+                source: 'ustc_jw',
+                entityType: 'calendar_event',
+                externalId: eventId,
+                localEntityId: eventId,
+                sourceStatus: 'active',
+                presence: 'observed',
+                scopeKey: 'semester',
+                firstObservedAt: 1,
+                lastObservedAt: 1,
+              ),
+            );
+      }
+      await OverlayService(
+        database: database,
+        accountId: 'a',
+      ).setForegroundPreference('event-b', 100);
+      await ConflictService(database: database, accountId: 'a').classifyPair(
+        participant('event-a', 'series-a'),
+        participant('event-b', 'series-b'),
+        ConflictState.conflict,
+      );
+
+      final events = await EffectiveEventRepository(
+        database,
+        accountId: 'a',
+      ).watchDisplayEvents().first;
+      expect(
+        events.singleWhere((event) => event.id == 'event-b').foregroundPriority,
+        100,
+      );
+      expect(
+        events
+            .singleWhere((event) => event.id == 'event-a')
+            .hasConfirmedConflict,
+        isTrue,
+      );
+      expect(
+        events
+            .singleWhere((event) => event.id == 'event-b')
+            .hasConfirmedConflict,
+        isTrue,
+      );
+    },
+  );
 
   test(
     'current-and-future classification stores one structured rule',

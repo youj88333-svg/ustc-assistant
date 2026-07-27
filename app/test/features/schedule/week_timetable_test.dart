@@ -16,6 +16,7 @@ EffectiveEvent timed(
   String? location,
   bool conflict = false,
   bool preview = false,
+  int foregroundPriority = 0,
 }) => EffectiveEvent.timed(
   id: id,
   title: id,
@@ -24,6 +25,7 @@ EffectiveEvent timed(
   endAt: DateTime(2026, 7, 20 + day, endHour, endMinute),
   hasConfirmedConflict: conflict,
   isInactivePreview: preview,
+  foregroundPriority: foregroundPriority,
 );
 
 Widget fixture(
@@ -82,6 +84,26 @@ void main() {
     expect(selected?.id, '量子物理 B');
   });
 
+  testWidgets('overlap expansion shows every event in a three-event group', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      fixture([
+        timed('a', 1, 9, 45, 11, 20),
+        timed('b', 1, 10, 0, 11, 30),
+        timed('c', 1, 10, 15, 12, 0),
+      ]),
+    );
+
+    await tester.tap(find.byKey(const Key('overlap-group-a|b|c')));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(OverlapExpansion), findsOneWidget);
+    expect(find.text('a'), findsWidgets);
+    expect(find.text('b'), findsWidgets);
+    expect(find.text('c'), findsWidgets);
+  });
+
   testWidgets('foreground is translucent and background events are blurred', (
     tester,
   ) async {
@@ -98,6 +120,28 @@ void main() {
     expect(foreground.opacity, lessThan(1));
     expect(find.byType(ImageFiltered), findsWidgets);
     expect(find.bySemanticsLabel('已确认冲突').evaluate(), isNotEmpty);
+  });
+
+  testWidgets('explicit foreground priority wins overlap ordering', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      fixture([
+        timed('important', 0, 9, 45, 11, 20),
+        timed('chosen', 0, 10, 0, 11, 30, foregroundPriority: 100),
+      ]),
+    );
+
+    expect(
+      tester
+          .widget<Opacity>(find.byKey(const Key('event-opacity-chosen')))
+          .opacity,
+      greaterThan(
+        tester
+            .widget<Opacity>(find.byKey(const Key('event-opacity-important')))
+            .opacity,
+      ),
+    );
   });
 
   testWidgets(

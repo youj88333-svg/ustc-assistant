@@ -17,7 +17,9 @@ class EventBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = Color(courseColorValue(event.courseSeriesId ?? event.id));
+    final color = event.color == null
+        ? Color(courseColorValue(event.courseSeriesId ?? event.id))
+        : Color(int.parse(event.color!.substring(1), radix: 16) | 0xFF000000);
     return Semantics(
       button: true,
       label: [

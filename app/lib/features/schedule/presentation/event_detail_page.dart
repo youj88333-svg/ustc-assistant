@@ -8,12 +8,18 @@ class EventDetailPage extends StatelessWidget {
     required this.event,
     this.onEditPreferences,
     this.onHandleOverlaps,
+    this.onHideSourceEvent,
+    this.onEditPersonalEvent,
+    this.onDeletePersonalEvent,
     super.key,
   });
 
   final EffectiveEventRecord event;
   final VoidCallback? onEditPreferences;
   final VoidCallback? onHandleOverlaps;
+  final VoidCallback? onHideSourceEvent;
+  final VoidCallback? onEditPersonalEvent;
+  final VoidCallback? onDeletePersonalEvent;
 
   @override
   Widget build(BuildContext context) {
@@ -63,6 +69,33 @@ class EventDetailPage extends StatelessWidget {
               onPressed: onHandleOverlaps,
               icon: const Icon(Icons.layers_outlined),
               label: const Text('处理重叠日程'),
+            ),
+          ],
+          if (onEditPersonalEvent != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('edit-personal-event'),
+              onPressed: onEditPersonalEvent,
+              icon: const Icon(Icons.edit_outlined),
+              label: const Text('编辑个人日程'),
+            ),
+          ],
+          if (onHideSourceEvent != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('hide-source-event'),
+              onPressed: onHideSourceEvent,
+              icon: const Icon(Icons.visibility_off_outlined),
+              label: const Text('从日程中隐藏'),
+            ),
+          ],
+          if (onDeletePersonalEvent != null) ...[
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              key: const Key('delete-personal-event'),
+              onPressed: onDeletePersonalEvent,
+              icon: const Icon(Icons.delete_outline),
+              label: const Text('删除个人日程'),
             ),
           ],
         ],

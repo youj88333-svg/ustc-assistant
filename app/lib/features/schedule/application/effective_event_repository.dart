@@ -117,6 +117,46 @@ SELECT
     AS display_location,
   COALESCE(eo.importance, so.importance, e.importance) AS importance,
   COALESCE(eo.hidden, so.hidden, 0) AS hidden,
+  COALESCE(eo.color, so.color, e.color) AS color,
+  COALESCE(eo.foreground_priority, so.foreground_priority, 0)
+    AS foreground_priority,
+  (
+    EXISTS (
+      SELECT 1
+      FROM schedule_relations relation
+      WHERE relation.account_id = e.account_id
+        AND relation.conflict_state = 'conflict'
+        AND (
+          relation.left_event_id = e.id
+          OR relation.right_event_id = e.id
+        )
+    )
+    OR EXISTS (
+      SELECT 1
+      FROM schedule_relation_rules rule
+      WHERE rule.account_id = e.account_id
+        AND rule.conflict_state = 'conflict'
+        AND cs.id IS NOT NULL
+        AND (
+          (rule.left_series_type = 'course_series'
+            AND rule.left_series_id = cs.id)
+          OR
+          (rule.right_series_type = 'course_series'
+            AND rule.right_series_id = cs.id)
+        )
+        AND rule.effective_from <= CASE
+          WHEN e.all_day = 1 THEN e.start_date
+          ELSE date(e.start_at / 1000, 'unixepoch', '+8 hours')
+        END
+        AND (
+          rule.effective_through IS NULL
+          OR rule.effective_through >= CASE
+            WHEN e.all_day = 1 THEN e.start_date
+            ELSE date(e.start_at / 1000, 'unixepoch', '+8 hours')
+          END
+        )
+    )
+  ) AS has_confirmed_conflict,
   e.type,
   e.status,
   e.start_at,
@@ -155,6 +195,8 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
           database.userOverlays,
           database.courseSeries,
           database.sourceRecords,
+          database.scheduleRelations,
+          database.scheduleRelationRules,
         },
       )
       .watch()
@@ -164,6 +206,27 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
             .map(_displayEvent)
             .toList(growable: false),
       );
+
+  Future<List<EffectiveEventRecord>> overlappingRecords(String eventId) async {
+    final target = await byId(eventId);
+    if (!await _isPresent(target.source)) return const [];
+    final candidates =
+        await (database.select(database.calendarEvents)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.deletedAt.isNull() &
+                  row.status.isNotIn(['cancelled', 'hidden', 'skipped']),
+            ))
+            .get();
+    final visible = <CalendarEvent>[];
+    for (final candidate in candidates) {
+      if (!_overlaps(target.source, candidate)) continue;
+      if (!await _isPresent(candidate)) continue;
+      visible.add(candidate);
+    }
+    visible.sort((a, b) => a.id.compareTo(b.id));
+    return Future.wait(visible.map((candidate) => byId(candidate.id)));
+  }
 
   Stream<List<EffectiveEventRecord>> watchAll() => database
       .customSelect(
@@ -284,6 +347,9 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         location: location,
         importance: importance,
         eventType: eventType,
+        foregroundPriority: row.read<int>('foreground_priority'),
+        color: row.readNullable<String>('color'),
+        hasConfirmedConflict: row.read<int>('has_confirmed_conflict') != 0,
       );
     }
     return EffectiveEvent.timed(
@@ -296,7 +362,40 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       isInactivePreview: row.read<String>('status') == 'tentative',
       importance: importance,
       eventType: eventType,
+      foregroundPriority: row.read<int>('foreground_priority'),
+      color: row.readNullable<String>('color'),
+      hasConfirmedConflict: row.read<int>('has_confirmed_conflict') != 0,
     );
+  }
+
+  Future<bool> _isPresent(CalendarEvent event) async {
+    if (event.source == 'user') return true;
+    final record =
+        await (database.select(database.sourceRecords)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.localEntityId.equals(event.id) &
+                  row.presence.equals('missing_within_scope').not(),
+            ))
+            .getSingleOrNull();
+    return record != null;
+  }
+
+  bool _overlaps(CalendarEvent target, CalendarEvent candidate) {
+    final targetBounds = _localBounds(target);
+    final candidateBounds = _localBounds(candidate);
+    return candidateBounds.$1.isBefore(targetBounds.$2) &&
+        candidateBounds.$2.isAfter(targetBounds.$1);
+  }
+
+  (DateTime, DateTime) _localBounds(CalendarEvent event) {
+    if (event.allDay) {
+      return (
+        DateTime.parse(event.startDate!),
+        DateTime.parse(event.endDateExclusive!),
+      );
+    }
+    return (_beijingDateTime(event.startAt!), _beijingDateTime(event.endAt!));
   }
 
   DateTime _beijingDateTime(int millisecondsSinceEpoch) {

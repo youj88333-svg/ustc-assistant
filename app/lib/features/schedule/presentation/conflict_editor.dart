@@ -28,6 +28,7 @@ class ConflictEditor extends StatefulWidget {
   const ConflictEditor({
     required this.pairs,
     required this.onClassify,
+    this.onBeforeSave,
     super.key,
   });
 
@@ -40,6 +41,7 @@ class ConflictEditor extends StatefulWidget {
     String? reason,
   })
   onClassify;
+  final Future<void> Function()? onBeforeSave;
 
   @override
   State<ConflictEditor> createState() => _ConflictEditorState();
@@ -113,13 +115,17 @@ class _ConflictEditorState extends State<ConflictEditor> {
                     contentPadding: EdgeInsets.zero,
                     title: const Text('应用到当前及未来兼容课次'),
                     value: _scopes[pair.id] == ConflictScope.currentAndFuture,
-                    onChanged: (enabled) {
-                      setState(
-                        () => _scopes[pair.id] = enabled
-                            ? ConflictScope.currentAndFuture
-                            : ConflictScope.occurrence,
-                      );
-                    },
+                    onChanged:
+                        pair.left.hasStableSeriesIdentity &&
+                            pair.right.hasStableSeriesIdentity
+                        ? (enabled) {
+                            setState(
+                              () => _scopes[pair.id] = enabled
+                                  ? ConflictScope.currentAndFuture
+                                  : ConflictScope.occurrence,
+                            );
+                          }
+                        : null,
                   ),
                   TextField(
                     controller: _reasons[pair.id],
@@ -149,6 +155,7 @@ class _ConflictEditorState extends State<ConflictEditor> {
   Future<void> _save() async {
     setState(() => saving = true);
     try {
+      await widget.onBeforeSave?.call();
       for (final pair in widget.pairs) {
         final reason = _reasons[pair.id]!.text.trim();
         await widget.onClassify(

@@ -14,6 +14,7 @@ import '../features/history/application/history_repository.dart';
 import '../features/history/presentation/history_page.dart';
 import '../features/schedule/presentation/schedule_page.dart';
 import '../features/schedule/presentation/event_detail_loader.dart';
+import '../features/schedule/presentation/conflict_management_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
@@ -71,6 +72,15 @@ GoRouter buildRouter(
       GoRoute(
         path: '/events/:eventId',
         builder: (context, state) => EventDetailLoader(
+          database: database,
+          eventId: state.pathParameters['eventId']!,
+          onManageOverlaps: (eventId) =>
+              context.push('/events/$eventId/conflicts'),
+        ),
+      ),
+      GoRoute(
+        path: '/events/:eventId/conflicts',
+        builder: (context, state) => ConflictManagementLoader(
           database: database,
           eventId: state.pathParameters['eventId']!,
         ),
