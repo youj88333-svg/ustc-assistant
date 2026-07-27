@@ -22,6 +22,7 @@ import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
 import '../features/tasks/presentation/task_form.dart';
+import '../features/tasks/presentation/task_detail_loader.dart';
 import 'app_drawer.dart';
 
 GoRouter buildRouter(
@@ -52,6 +53,7 @@ GoRouter buildRouter(
                   database: database,
                   onEventSelected: (eventId) =>
                       context.push('/events/$eventId'),
+                  onTaskSelected: (taskId) => context.push('/tasks/$taskId'),
                 ),
               ),
             ],
@@ -61,6 +63,13 @@ GoRouter buildRouter(
       GoRoute(
         path: '/task/new',
         builder: (context, state) => _TaskCreatePage(database: database),
+      ),
+      GoRoute(
+        path: '/tasks/:taskId',
+        builder: (context, state) => TaskDetailLoader(
+          database: database,
+          taskId: state.pathParameters['taskId']!,
+        ),
       ),
       GoRoute(
         path: '/calendar-event/new',

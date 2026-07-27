@@ -1,10 +1,15 @@
 import 'package:flutter/material.dart';
 
 class PlanBlockDraft {
-  const PlanBlockDraft({required this.startAt, required this.durationMinutes});
+  const PlanBlockDraft({
+    required this.startAt,
+    required this.durationMinutes,
+    this.title,
+  });
 
   final DateTime startAt;
   final int durationMinutes;
+  final String? title;
 
   DateTime get endAt => startAt.add(Duration(minutes: durationMinutes));
 }
@@ -14,11 +19,15 @@ class PlanBlockEditor extends StatefulWidget {
     required this.initialStart,
     required this.onSubmit,
     this.estimatedMinutes,
+    this.initialTitle,
+    this.submitLabel = '安排时间',
     super.key,
   });
 
   final DateTime initialStart;
   final int? estimatedMinutes;
+  final String? initialTitle;
+  final String submitLabel;
   final Future<void> Function(PlanBlockDraft draft) onSubmit;
 
   @override
@@ -28,11 +37,13 @@ class PlanBlockEditor extends StatefulWidget {
 class _PlanBlockEditorState extends State<PlanBlockEditor> {
   late final TextEditingController start;
   late final TextEditingController duration;
+  late final TextEditingController title;
 
   @override
   void initState() {
     super.initState();
     start = TextEditingController(text: _format(widget.initialStart));
+    title = TextEditingController(text: widget.initialTitle);
     duration = TextEditingController(
       text: (widget.estimatedMinutes ?? 60).toString(),
     );
@@ -42,6 +53,7 @@ class _PlanBlockEditorState extends State<PlanBlockEditor> {
   void dispose() {
     start.dispose();
     duration.dispose();
+    title.dispose();
     super.dispose();
   }
 
@@ -50,6 +62,11 @@ class _PlanBlockEditorState extends State<PlanBlockEditor> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
+        TextField(
+          key: const Key('plan-title'),
+          controller: title,
+          decoration: const InputDecoration(labelText: '标题（可选）'),
+        ),
         TextField(
           key: const Key('plan-start'),
           controller: start,
@@ -62,7 +79,11 @@ class _PlanBlockEditorState extends State<PlanBlockEditor> {
           decoration: const InputDecoration(labelText: '时长（分钟）'),
         ),
         const SizedBox(height: 12),
-        FilledButton(onPressed: _submit, child: const Text('安排时间')),
+        FilledButton(
+          key: const Key('save-plan-block'),
+          onPressed: _submit,
+          child: Text(widget.submitLabel),
+        ),
       ],
     );
   }
@@ -77,7 +98,11 @@ class _PlanBlockEditorState extends State<PlanBlockEditor> {
       return;
     }
     await widget.onSubmit(
-      PlanBlockDraft(startAt: parsedStart, durationMinutes: parsedDuration),
+      PlanBlockDraft(
+        startAt: parsedStart,
+        durationMinutes: parsedDuration,
+        title: title.text.trim().isEmpty ? null : title.text.trim(),
+      ),
     );
   }
 

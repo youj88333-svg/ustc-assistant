@@ -79,6 +79,53 @@ void main() {
     expect(find.byType(SegmentedButton<ScheduleSection>), findsOneWidget);
   });
 
+  testWidgets('task center selection opens the task detail route', (
+    tester,
+  ) async {
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'account',
+            maskedHint: 'PB****0000',
+            isActive: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.tasks)
+        .insert(
+          TasksCompanion.insert(
+            id: 'task-route',
+            accountId: 'account',
+            title: '路由测试任务',
+            state: 'active',
+            importance: 'normal',
+            tagsJson: '[]',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+      ),
+    );
+    await tester.tap(find.text('日程'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('任务'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('路由测试任务'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('截止风险：未定截止'), findsOneWidget);
+    expect(find.byKey(const Key('schedule-task')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
   testWidgets('global add offers task and calendar event', (tester) async {
     await tester.pumpWidget(
       UstcAssistantApp(

@@ -252,6 +252,50 @@ void main() {
     },
   );
 
+  test(
+    'undoing task completion restores task and cancelled future blocks',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = DateTime(2026, 7, 27, 12).millisecondsSinceEpoch;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final blocks = PlanBlockService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final tasks = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+        planBlocks: blocks,
+      );
+      final taskId = await tasks.create(title: 'Task');
+      final blockId = await blocks.create(
+        taskId: taskId,
+        startAt: DateTime(2026, 7, 28, 9),
+        endAt: DateTime(2026, 7, 28, 10),
+      );
+      await tasks.complete(
+        taskId,
+        expectedUpdatedAt: (await tasks.byId(taskId)).updatedAt,
+        cancelFutureAccepted: true,
+      );
+      expect((await blocks.byId(blockId)).status, PlanBlockStatus.cancelled);
+
+      await undo.undo();
+
+      expect((await tasks.byId(taskId)).state.name, 'active');
+      expect((await blocks.byId(blockId)).status, PlanBlockStatus.accepted);
+    },
+  );
+
   test('undo slot clears on startup and failed undo preserves data', () async {
     final database = await fixtureDatabase();
     addTearDown(database.close);
