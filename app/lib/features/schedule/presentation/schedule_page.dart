@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../../core/time/beijing_clock.dart';
 import '../../calendar/presentation/calendar_event_form.dart';
 import '../../tasks/application/plan_block_service.dart';
 import '../../tasks/application/task_lifecycle_service.dart';
@@ -11,6 +12,7 @@ import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../domain/schedule_projection.dart';
+import '../domain/week_range.dart';
 import 'week_timetable.dart';
 
 enum ScheduleSection { week, tasks }
@@ -19,11 +21,13 @@ class SchedulePage extends StatefulWidget {
   const SchedulePage({
     required this.database,
     this.onCreateCalendarEvent,
+    this.clock = const SystemBeijingClock(),
     super.key,
   });
 
   final AppDatabase database;
   final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
+  final BeijingClock clock;
 
   @override
   State<SchedulePage> createState() => _SchedulePageState();
@@ -32,6 +36,13 @@ class SchedulePage extends StatefulWidget {
 class _SchedulePageState extends State<SchedulePage>
     with AutomaticKeepAliveClientMixin {
   ScheduleSection selected = ScheduleSection.week;
+  late DateTime selectedDate;
+
+  @override
+  void initState() {
+    super.initState();
+    selectedDate = widget.clock.now();
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -62,16 +73,36 @@ class _SchedulePageState extends State<SchedulePage>
             },
           ),
         ),
+        if (selected == ScheduleSection.week)
+          _WeekNavigation(
+            selectedDate: selectedDate,
+            currentDate: widget.clock.now(),
+            onPrevious: () {
+              setState(() {
+                selectedDate = selectedDate.subtract(const Duration(days: 7));
+              });
+            },
+            onCurrent: () {
+              setState(() => selectedDate = widget.clock.now());
+            },
+            onNext: () {
+              setState(() {
+                selectedDate = selectedDate.add(const Duration(days: 7));
+              });
+            },
+          ),
         Expanded(
           child: switch (selected) {
             ScheduleSection.week => _ScheduleData(
               database: widget.database,
               section: selected,
+              selectedDate: selectedDate,
               onCreateCalendarEvent: widget.onCreateCalendarEvent,
             ),
             ScheduleSection.tasks => _ScheduleData(
               database: widget.database,
               section: selected,
+              selectedDate: selectedDate,
               onCreateCalendarEvent: widget.onCreateCalendarEvent,
             ),
           },
@@ -85,11 +116,13 @@ class _ScheduleData extends StatelessWidget {
   const _ScheduleData({
     required this.database,
     required this.section,
+    required this.selectedDate,
     required this.onCreateCalendarEvent,
   });
 
   final AppDatabase database;
   final ScheduleSection section;
+  final DateTime selectedDate;
   final ValueChanged<CalendarEventPrefill>? onCreateCalendarEvent;
 
   @override
@@ -128,7 +161,7 @@ class _ScheduleData extends StatelessWidget {
 
   Widget _week(BuildContext context, List<TaskItem> tasks) => WeekTimetable(
     projection: buildWeek(
-      ScheduleQuery(selectedDate: DateTime.now(), events: const []),
+      ScheduleQuery(selectedDate: selectedDate, events: const []),
     ),
     tasks: tasks,
     onTaskSelected: (task) {
@@ -205,5 +238,69 @@ class _ScheduleData extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+class _WeekNavigation extends StatelessWidget {
+  const _WeekNavigation({
+    required this.selectedDate,
+    required this.currentDate,
+    required this.onPrevious,
+    required this.onCurrent,
+    required this.onNext,
+  });
+
+  final DateTime selectedDate;
+  final DateTime currentDate;
+  final VoidCallback onPrevious;
+  final VoidCallback onCurrent;
+  final VoidCallback onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final week = WeekRange.forDate(selectedDate);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: '上一周',
+            onPressed: onPrevious,
+            icon: const Icon(Icons.chevron_left),
+          ),
+          Expanded(
+            child: Text(
+              _rangeLabel(week),
+              key: const Key('week-range-label'),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+          ),
+          IconButton(
+            tooltip: '回到本周',
+            onPressed: week.contains(currentDate) ? null : onCurrent,
+            icon: const Icon(Icons.today_outlined),
+          ),
+          IconButton(
+            tooltip: '下一周',
+            onPressed: onNext,
+            icon: const Icon(Icons.chevron_right),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _rangeLabel(WeekRange week) {
+    final start = week.start;
+    final end = week.days.last;
+    if (start.year == end.year) {
+      return '${start.year}年${start.month}月${start.day}日'
+          ' - ${end.month}月${end.day}日';
+    }
+    return '${start.year}年${start.month}月${start.day}日'
+        ' - ${end.year}年${end.month}月${end.day}日';
   }
 }
