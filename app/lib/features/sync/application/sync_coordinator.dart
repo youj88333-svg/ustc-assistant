@@ -15,6 +15,8 @@ typedef BundleImport =
       required ImportOrigin origin,
     });
 
+typedef SyncActionResolver = Future<bool> Function(SyncNeedsUserAction action);
+
 class _PausedSync {
   const _PausedSync({
     required this.source,
@@ -85,6 +87,14 @@ class SyncCoordinator {
         !await isAutomaticDue(source, account.id)) {
       return SyncSkipped(source, reason: 'fresh_or_backoff');
     }
+    if (!await accounts.hasCredentials(account.id)) {
+      await recordFailure(
+        source,
+        account.id,
+        code: 'reauthentication_required',
+      );
+      return SyncFailed(source, code: 'reauthentication_required');
+    }
     _busy = true;
     try {
       final bridge = await bridgeFactory();
@@ -106,6 +116,16 @@ class SyncCoordinator {
         jobId: job.id,
         sequence: 0,
       );
+    } on AccountVerificationError catch (error) {
+      final code = error.code == 'credentials_not_found'
+          ? 'reauthentication_required'
+          : error.code;
+      await recordFailure(source, account.id, code: code);
+      return SyncFailed(source, code: code);
+    } on BridgeProtocolError catch (error) {
+      final code = error.code == 'busy' ? 'bridge_busy' : error.code;
+      await recordFailure(source, account.id, code: code);
+      return SyncFailed(source, code: code);
     } on Object {
       await recordFailure(source, account.id, code: 'sync_failed');
       return SyncFailed(source, code: 'sync_failed');
@@ -117,10 +137,19 @@ class SyncCoordinator {
   Future<List<SyncOutcome>> syncAll({
     required SyncTrigger trigger,
     String? accountId,
+    SyncActionResolver? resolveUserAction,
   }) async {
     final outcomes = <SyncOutcome>[];
     for (final source in SyncSource.values) {
-      outcomes.add(await sync(source, trigger: trigger, accountId: accountId));
+      var outcome = await sync(source, trigger: trigger, accountId: accountId);
+      if (outcome is SyncNeedsUserAction && resolveUserAction != null) {
+        final confirmed = await resolveUserAction(outcome);
+        outcome = await resumeInteractive(
+          outcome.jobId,
+          userConfirmed: confirmed,
+        );
+      }
+      outcomes.add(outcome);
     }
     return outcomes;
   }
@@ -166,6 +195,58 @@ class SyncCoordinator {
     } on Object {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
       return SyncFailed(source, code: 'first_login_failed');
+    } finally {
+      _busy = false;
+    }
+  }
+
+  Future<SyncOutcome> reauthenticate(
+    SyncSource source, {
+    required String accountId,
+    required String username,
+    String? password,
+    bool savePassword = false,
+    BridgeSemesterCapability? semesterOverride,
+  }) async {
+    if (_busy) return SyncSkipped(source, reason: 'busy');
+    _busy = true;
+    ProvisionalAccount? provisional;
+    try {
+      provisional = await accounts.stageReauthentication(
+        accountId: accountId,
+        username: username,
+        password: password,
+        savePassword: savePassword,
+      );
+      final bridge = await bridgeFactory();
+      final capabilities = await bridge.capabilities();
+      final runId = 'provisional:${_uuid.v4()}';
+      final job = await bridge.startCollection(
+        source: source,
+        accountId: provisional.accountId,
+        expectedUsername: accounts.stagedUsernameForSync(provisional),
+        jwSemester: semesterOverride ?? capabilities.jwSemester,
+      );
+      return await _consume(
+        bridge: bridge,
+        source: source,
+        accountId: provisional.accountId,
+        runId: runId,
+        jobId: job.id,
+        sequence: 0,
+        provisional: provisional,
+        verifiedUsername: username.trim(),
+      );
+    } on AccountVerificationError catch (error) {
+      if (provisional != null) accounts.cancelFirstLogin(provisional);
+      return SyncFailed(source, code: error.code);
+    } on BridgeProtocolError catch (error) {
+      if (provisional != null) accounts.cancelFirstLogin(provisional);
+      final code = error.code == 'busy' ? 'bridge_busy' : error.code;
+      return SyncFailed(source, code: code);
+    } on Object {
+      if (provisional != null) accounts.cancelFirstLogin(provisional);
+      return SyncFailed(source, code: 'reauthentication_failed');
     } finally {
       _busy = false;
     }

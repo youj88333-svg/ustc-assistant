@@ -207,6 +207,7 @@ void main() {
       final outcomes = await service.syncAll(
         trigger: SyncTrigger.manual,
         accountId: accountId,
+        resolveUserAction: (_) async => false,
       );
 
       expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
@@ -214,6 +215,133 @@ void main() {
       expect(outcomes.last, isA<SyncFailed>());
     },
   );
+
+  test(
+    'sync all resolves each interactive source before starting next',
+    () async {
+      final protector = CountingProtector();
+      final (database, accounts, accountId) = await fixture(
+        protector: protector,
+      );
+      addTearDown(database.close);
+      final bridge = FakeBridge()
+        ..polls['jw'] = [
+          const BridgeJobPoll(
+            events: [
+              {'sequence': 1, 'phase': 'needs_user_login'},
+            ],
+            nextSequence: 1,
+            terminal: false,
+          ),
+          successPoll(),
+        ]
+        ..polls['youngSchedule'] = [
+          const BridgeJobPoll(
+            events: [
+              {'sequence': 1, 'phase': 'needs_user_login'},
+            ],
+            nextSequence: 1,
+            terminal: false,
+          ),
+          successPoll(),
+        ];
+      final service = coordinator(
+        database: database,
+        accounts: accounts,
+        bridge: bridge,
+        now: () => 100,
+      );
+      final resolved = <SyncSource>[];
+
+      final outcomes = await service.syncAll(
+        trigger: SyncTrigger.manual,
+        accountId: accountId,
+        resolveUserAction: (action) async {
+          resolved.add(action.source);
+          if (action.source == SyncSource.jw) {
+            expect(bridge.starts, [SyncSource.jw]);
+          } else {
+            expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
+          }
+          return true;
+        },
+      );
+
+      expect(resolved, [SyncSource.jw, SyncSource.youngSchedule]);
+      expect(bridge.resumedPasswords, ['saved-password', 'saved-password']);
+      expect(outcomes, everyElement(isA<SyncSucceeded>()));
+    },
+  );
+
+  test('cancelling one interactive source continues with the next', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    final bridge = FakeBridge()
+      ..polls['jw'] = [
+        const BridgeJobPoll(
+          events: [
+            {'sequence': 1, 'phase': 'needs_user_login'},
+          ],
+          nextSequence: 1,
+          terminal: false,
+        ),
+      ]
+      ..polls['youngSchedule'] = [successPoll()];
+    final service = coordinator(
+      database: database,
+      accounts: accounts,
+      bridge: bridge,
+      now: () => 100,
+    );
+
+    final outcomes = await service.syncAll(
+      trigger: SyncTrigger.manual,
+      accountId: accountId,
+      resolveUserAction: (_) async => false,
+    );
+
+    expect(outcomes.first, isA<SyncCancelled>());
+    expect(outcomes.last, isA<SyncSucceeded>());
+    expect(bridge.cancelled, ['jw']);
+    expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
+  });
+
+  test('sync without credentials fails before bridge startup', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    await accounts.deleteCredentials(accountId);
+    var bridgeFactoryCalls = 0;
+    final bridge = FakeBridge();
+    final service = SyncCoordinator(
+      database: database,
+      accounts: accounts,
+      bridgeFactory: () async {
+        bridgeFactoryCalls++;
+        return bridge;
+      },
+      now: () => 100,
+      importBundle: (bytes, {required accountId, required origin}) async =>
+          throw StateError('must not import'),
+    );
+
+    final outcome = await service.sync(
+      SyncSource.jw,
+      trigger: SyncTrigger.manual,
+      accountId: accountId,
+    );
+
+    expect(
+      outcome,
+      isA<SyncFailed>().having(
+        (value) => value.code,
+        'code',
+        'reauthentication_required',
+      ),
+    );
+    expect(bridgeFactoryCalls, 0);
+  });
 
   test(
     'password decrypts only after user confirms interactive resume',
@@ -403,4 +531,62 @@ void main() {
       expect(await database.select(database.localAccounts).get(), isEmpty);
     },
   );
+
+  test('reauthentication sync restores the original account', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    await accounts.deleteCredentials(accountId);
+    final bridge = FakeBridge()..polls['jw'] = [successPoll()];
+    final service = coordinator(
+      database: database,
+      accounts: accounts,
+      bridge: bridge,
+      now: () => 100,
+    );
+
+    final outcome = await service.reauthenticate(
+      SyncSource.jw,
+      accountId: accountId,
+      username: 'PB00000000',
+      password: 'new-secret',
+      savePassword: true,
+    );
+
+    expect(outcome, isA<SyncSucceeded>());
+    expect(await database.select(database.localAccounts).get(), hasLength(1));
+    expect(await accounts.hasCredentials(accountId), isTrue);
+    expect(await accounts.passwordForInteractiveLogin(accountId), 'new-secret');
+  });
+
+  test('reauthentication rejects a different identity before bridge', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    await accounts.deleteCredentials(accountId);
+    final bridge = FakeBridge();
+    final service = coordinator(
+      database: database,
+      accounts: accounts,
+      bridge: bridge,
+      now: () => 100,
+    );
+
+    final outcome = await service.reauthenticate(
+      SyncSource.jw,
+      accountId: accountId,
+      username: 'PB11111111',
+    );
+
+    expect(
+      outcome,
+      isA<SyncFailed>().having(
+        (value) => value.code,
+        'code',
+        'identity_mismatch',
+      ),
+    );
+    expect(bridge.starts, isEmpty);
+    expect(await accounts.hasCredentials(accountId), isFalse);
+  });
 }
