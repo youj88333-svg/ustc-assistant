@@ -56,13 +56,11 @@ Future<void> runStartupAutomaticSync(
       importBundle: importer.importBytes,
     );
     await coordinator.recoverInterruptedRuns();
-    final outcomes = await coordinator.syncAll(
+    await coordinator.syncAll(
       trigger: SyncTrigger.automatic,
       accountId: account.id,
+      resolveUserAction: (_) async => false,
     );
-    for (final outcome in outcomes.whereType<SyncNeedsUserAction>()) {
-      await coordinator.resumeInteractive(outcome.jobId, userConfirmed: false);
-    }
   } on Object {
     // Startup synchronization is best-effort and must not block local data.
   } finally {
@@ -74,11 +72,17 @@ class SyncPageLoader extends StatefulWidget {
   const SyncPageLoader({
     required this.database,
     this.reminderReconciler = const NoopReminderReconciler(),
+    this.reauthenticateAccountId,
+    this.onReauthenticated,
+    this.onReauthenticationRequired,
     super.key,
   });
 
   final AppDatabase database;
   final ReminderReconciler reminderReconciler;
+  final String? reauthenticateAccountId;
+  final VoidCallback? onReauthenticated;
+  final ValueChanged<String>? onReauthenticationRequired;
 
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
@@ -152,6 +156,9 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
         return SyncPage(
           accounts: value.accounts,
           coordinator: value.coordinator,
+          reauthenticateAccountId: widget.reauthenticateAccountId,
+          onReauthenticated: widget.onReauthenticated,
+          onReauthenticationRequired: widget.onReauthenticationRequired,
         );
       },
     );
@@ -170,12 +177,18 @@ class SyncPage extends StatefulWidget {
     required this.accounts,
     required this.coordinator,
     this.filePicker = const SystemImportFilePicker(),
+    this.reauthenticateAccountId,
+    this.onReauthenticated,
+    this.onReauthenticationRequired,
     super.key,
   });
 
   final AccountService accounts;
   final SyncCoordinator coordinator;
   final ImportFilePicker filePicker;
+  final String? reauthenticateAccountId;
+  final VoidCallback? onReauthenticated;
+  final ValueChanged<String>? onReauthenticationRequired;
 
   @override
   State<SyncPage> createState() => _SyncPageState();
@@ -188,6 +201,7 @@ class _SyncPageState extends State<SyncPage> {
   bool busy = false;
   bool savePassword = false;
   Map<SyncSource, SyncSourceState> states = const {};
+  String? reauthenticationHint;
 
   @override
   void initState() {
@@ -203,6 +217,20 @@ class _SyncPageState extends State<SyncPage> {
   }
 
   Future<void> _loadAndAutoSync() async {
+    final reauthenticateId = widget.reauthenticateAccountId;
+    if (reauthenticateId != null) {
+      accountId = reauthenticateId;
+      final summaries = await widget.accounts.summaries();
+      for (final summary in summaries) {
+        if (summary.id == reauthenticateId) {
+          reauthenticationHint = summary.maskedHint;
+          break;
+        }
+      }
+      if (!mounted) return;
+      await _refresh();
+      return;
+    }
     final account = await widget.accounts.activeAccount();
     if (!mounted) return;
     accountId = account?.id;
@@ -241,40 +269,48 @@ class _SyncPageState extends State<SyncPage> {
     final id = accountId;
     if (id == null || busy) return;
     setState(() => busy = true);
-    final outcomes = await widget.coordinator.syncAll(
+    await widget.coordinator.syncAll(
       trigger: trigger,
       accountId: id,
+      resolveUserAction: trigger == SyncTrigger.automatic
+          ? (_) async => false
+          : _confirmInteractiveLogin,
     );
-    for (final outcome in outcomes) {
-      await _handle(outcome);
-    }
     if (mounted) setState(() => busy = false);
     await _refresh();
   }
 
   Future<SyncOutcome> _handle(SyncOutcome outcome) async {
     if (outcome is! SyncNeedsUserAction || !mounted) return outcome;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('需要登录学校网站'),
-        content: const Text('继续后将打开可见浏览器；仅在你确认后才会读取已保存密码。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('继续'),
-          ),
-        ],
-      ),
-    );
+    final confirmed = await _confirmInteractiveLogin(outcome);
     return widget.coordinator.resumeInteractive(
       outcome.jobId,
-      userConfirmed: confirmed == true,
+      userConfirmed: confirmed,
     );
+  }
+
+  Future<bool> _confirmInteractiveLogin(SyncNeedsUserAction outcome) async {
+    if (!mounted) return false;
+    return await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('需要登录学校网站'),
+            content: const Text('继续后将打开可见浏览器；仅在你确认后才会读取已保存密码。'),
+            actions: [
+              TextButton(
+                key: const Key('cancel-interactive-login'),
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('取消'),
+              ),
+              FilledButton(
+                key: const Key('continue-interactive-login'),
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('继续'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
   }
 
   Future<void> _firstLogin() async {
@@ -308,6 +344,38 @@ class _SyncPageState extends State<SyncPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(message)));
     }
+  }
+
+  Future<void> _reauthenticate() async {
+    final id = widget.reauthenticateAccountId;
+    final username = usernameController.text.trim();
+    if (id == null || username.isEmpty || busy) return;
+    setState(() => busy = true);
+    var outcome = await widget.coordinator.reauthenticate(
+      SyncSource.jw,
+      accountId: id,
+      username: username,
+      password: passwordController.text.isEmpty
+          ? null
+          : passwordController.text,
+      savePassword: savePassword,
+    );
+    outcome = await _handle(outcome);
+    passwordController.clear();
+    if (!mounted) return;
+    setState(() => busy = false);
+    if (outcome is SyncSucceeded) {
+      widget.onReauthenticated?.call();
+    }
+    final message = switch (outcome) {
+      SyncSucceeded() => '重新登录成功，教务同步完成',
+      SyncCancelled() => '已取消重新登录',
+      SyncFailed(:final code) => '重新登录失败：$code',
+      _ => '重新登录未完成',
+    };
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
   }
 
   Future<void> _importFile() async {
@@ -384,7 +452,19 @@ class _SyncPageState extends State<SyncPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('同步')),
-      body: accountId == null
+      body: widget.reauthenticateAccountId != null
+          ? _ReauthenticationPanel(
+              maskedHint: reauthenticationHint ?? '本地账号',
+              usernameController: usernameController,
+              passwordController: passwordController,
+              savePassword: savePassword,
+              busy: busy,
+              onSavePasswordChanged: (value) {
+                setState(() => savePassword = value);
+              },
+              onSubmit: _reauthenticate,
+            )
+          : accountId == null
           ? _FirstLoginPanel(
               usernameController: usernameController,
               passwordController: passwordController,
@@ -398,9 +478,31 @@ class _SyncPageState extends State<SyncPage> {
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [
+                if (states.values.any(
+                  (state) => state.resultCode == 'reauthentication_required',
+                )) ...[
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.key_off_outlined),
+                    title: const Text('请先重新登录'),
+                    subtitle: const Text('安全凭据已删除，同步不会自动启动登录窗口。'),
+                    trailing: FilledButton(
+                      key: const Key('sync-reauthenticate'),
+                      onPressed:
+                          accountId == null ||
+                              widget.onReauthenticationRequired == null
+                          ? null
+                          : () =>
+                                widget.onReauthenticationRequired!(accountId!),
+                      child: const Text('重新登录'),
+                    ),
+                  ),
+                  const Divider(),
+                ],
                 Row(
                   children: [
                     FilledButton.icon(
+                      key: const Key('sync-all'),
                       onPressed: busy
                           ? null
                           : () => _runAll(SyncTrigger.manual),
@@ -422,7 +524,10 @@ class _SyncPageState extends State<SyncPage> {
                       source == SyncSource.jw ? Icons.school : Icons.event,
                     ),
                     title: Text(source == SyncSource.jw ? '教务系统' : '已报名二课'),
-                    subtitle: Text(_stateLabel(states[source])),
+                    subtitle: Text(
+                      _stateLabel(states[source]),
+                      key: Key('sync-state-${source.name}'),
+                    ),
                     trailing: IconButton(
                       tooltip: '同步',
                       onPressed: busy
@@ -450,6 +555,82 @@ class _SyncPageState extends State<SyncPage> {
     return state.lastSuccessfulAt == null
         ? label
         : '$label · ${state.lastSuccessfulAt!.toLocal()}';
+  }
+}
+
+class _ReauthenticationPanel extends StatelessWidget {
+  const _ReauthenticationPanel({
+    required this.maskedHint,
+    required this.usernameController,
+    required this.passwordController,
+    required this.savePassword,
+    required this.busy,
+    required this.onSavePasswordChanged,
+    required this.onSubmit,
+  });
+
+  final String maskedHint;
+  final TextEditingController usernameController;
+  final TextEditingController passwordController;
+  final bool savePassword;
+  final bool busy;
+  final ValueChanged<bool> onSavePasswordChanged;
+  final VoidCallback onSubmit;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(24),
+      children: [
+        Text('重新登录', style: Theme.of(context).textTheme.titleLarge),
+        const SizedBox(height: 8),
+        Text('本地数据分区：$maskedHint'),
+        const SizedBox(height: 16),
+        TextField(
+          key: const Key('reauth-username'),
+          controller: usernameController,
+          enabled: !busy,
+          textInputAction: TextInputAction.next,
+          decoration: const InputDecoration(
+            labelText: '完整学校账号',
+            prefixIcon: Icon(Icons.badge_outlined),
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          key: const Key('reauth-password'),
+          controller: passwordController,
+          enabled: !busy,
+          obscureText: true,
+          onSubmitted: (_) => onSubmit(),
+          decoration: const InputDecoration(
+            labelText: '密码（可选）',
+            prefixIcon: Icon(Icons.password_outlined),
+          ),
+        ),
+        CheckboxListTile(
+          contentPadding: EdgeInsets.zero,
+          value: savePassword,
+          onChanged: busy
+              ? null
+              : (value) => onSavePasswordChanged(value ?? false),
+          title: const Text('保存密码'),
+          controlAffinity: ListTileControlAffinity.leading,
+        ),
+        const SizedBox(height: 8),
+        FilledButton.icon(
+          key: const Key('submit-reauthentication'),
+          onPressed: busy ? null : onSubmit,
+          icon: busy
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Icon(Icons.login),
+          label: const Text('重新登录并同步教务'),
+        ),
+      ],
+    );
   }
 }
 

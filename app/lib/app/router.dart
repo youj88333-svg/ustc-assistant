@@ -80,8 +80,18 @@ GoRouter buildRouter(
             database: database,
             protector: WindowsDpapiProtector(),
           ),
-          onLoginAgain: (_) => context.go('/sync'),
+          onLoginAgain: (accountId) =>
+              context.push('/accounts/$accountId/reauthenticate'),
           onOpenOfficialPage: () => context.go('/official-websites'),
+        ),
+      ),
+      GoRoute(
+        path: '/accounts/:accountId/reauthenticate',
+        builder: (context, state) => SyncPageLoader(
+          database: database,
+          reminderReconciler: reminderReconciler,
+          reauthenticateAccountId: state.pathParameters['accountId']!,
+          onReauthenticated: () => context.go('/accounts'),
         ),
       ),
       GoRoute(
@@ -89,6 +99,8 @@ GoRouter buildRouter(
         builder: (context, state) => SyncPageLoader(
           database: database,
           reminderReconciler: reminderReconciler,
+          onReauthenticationRequired: (accountId) =>
+              context.push('/accounts/$accountId/reauthenticate'),
         ),
       ),
       GoRoute(

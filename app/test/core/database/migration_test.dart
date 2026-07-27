@@ -110,7 +110,7 @@ CREATE TABLE local_accounts (
       "INSERT INTO local_accounts VALUES ('account', 'PB****0000', 1, 1, 1)",
     );
     legacy.execute('PRAGMA user_version = 1');
-    legacy.dispose();
+    legacy.close();
 
     final database = AppDatabase(NativeDatabase(File(path)));
     addTearDown(database.close);

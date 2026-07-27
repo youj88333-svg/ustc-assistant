@@ -64,6 +64,39 @@ void main() {
     );
   });
 
+  testWidgets('deleted credentials expose same-account reauthentication', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final service = AccountService(database: database, protector: Protector());
+    final id = await service.persistVerifiedAccount(
+      username: 'PB00000000',
+      password: 'secret',
+      savePassword: true,
+    );
+    String? reauthenticateId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AccountsPage(
+          service: service,
+          onLoginAgain: (value) => reauthenticateId = value,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(Key('delete-credentials-$id')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilledButton, '删除凭据'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('需要重新登录'), findsOneWidget);
+    expect(find.byKey(Key('reauthenticate-$id')), findsOneWidget);
+    await tester.tap(find.byKey(Key('reauthenticate-$id')));
+    expect(reauthenticateId, id);
+  });
+
   testWidgets('account page shows persisted per-source sync success', (
     tester,
   ) async {

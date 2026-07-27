@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,6 +90,38 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('Task'), findsOneWidget);
     expect(find.text('Calendar event'), findsOneWidget);
+  });
+
+  testWidgets('account reauthentication route keeps the local partition', (
+    tester,
+  ) async {
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'account',
+            maskedHint: 'PB****0000',
+            identityDigest: const Value('digest'),
+            isActive: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+      ),
+    );
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.badge_outlined).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reauthenticate-account')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reauth-username')), findsOneWidget);
+    expect(find.textContaining('PB****0000'), findsOneWidget);
   });
 
   testWidgets('official website page exposes only allowlisted HTTPS targets', (

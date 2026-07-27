@@ -88,10 +88,12 @@ class SyncCoordinator {
       return SyncSkipped(source, reason: 'fresh_or_backoff');
     }
     if (!await accounts.hasCredentials(account.id)) {
+      final runId = await _startRun(account.id, source, trigger);
       await recordFailure(
         source,
         account.id,
         code: 'reauthentication_required',
+        runId: runId,
       );
       return SyncFailed(source, code: 'reauthentication_required');
     }

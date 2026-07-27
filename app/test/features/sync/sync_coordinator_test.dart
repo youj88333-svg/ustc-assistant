@@ -341,6 +341,9 @@ void main() {
       ),
     );
     expect(bridgeFactoryCalls, 0);
+    final state = await service.stateFor(SyncSource.jw, accountId);
+    expect(state.phase, SyncPhase.failed);
+    expect(state.resultCode, 'reauthentication_required');
   });
 
   test(

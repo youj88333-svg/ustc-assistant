@@ -28,7 +28,9 @@ class _AccountsPageState extends State<AccountsPage> {
   }
 
   void reload() {
-    setState(() => summaries = widget.service.summaries());
+    setState(() {
+      summaries = widget.service.summaries();
+    });
   }
 
   @override
@@ -145,6 +147,7 @@ class _AccountPanel extends StatelessWidget {
               ? const Icon(Icons.check_circle, semanticLabel: '当前活动账号')
               : TextButton(onPressed: onSwitch, child: const Text('切换')),
         ),
+        Text(account.hasCredentials ? '凭据已保存' : '需要重新登录'),
         Text('已保存密码：${account.hasSavedPassword ? '是' : '否'}'),
         Text('教务系统：${_syncStatus(account.jwLastSuccessAt)}'),
         Text('二课平台：${_syncStatus(account.youngLastSuccessAt)}'),
@@ -154,6 +157,7 @@ class _AccountPanel extends StatelessWidget {
           runSpacing: 8,
           children: [
             OutlinedButton.icon(
+              key: Key('reauthenticate-${account.id}'),
               onPressed: onLoginAgain,
               icon: const Icon(Icons.login),
               label: const Text('重新登录'),
@@ -165,7 +169,7 @@ class _AccountPanel extends StatelessWidget {
             ),
             TextButton.icon(
               key: Key('delete-credentials-${account.id}'),
-              onPressed: onDeleteCredentials,
+              onPressed: account.hasCredentials ? onDeleteCredentials : null,
               icon: const Icon(Icons.key_off_outlined),
               label: const Text('删除凭据'),
             ),
