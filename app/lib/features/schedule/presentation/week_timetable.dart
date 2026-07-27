@@ -8,6 +8,7 @@ import '../domain/overlap_engine.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/ustc_periods.dart';
 import 'all_day_band.dart';
+import 'early_morning_band.dart';
 import 'event_block.dart';
 import 'overlap_expansion.dart';
 import 'time_axis.dart';
@@ -60,6 +61,11 @@ class WeekTimetable extends StatelessWidget {
                 ),
                 AllDayBand(
                   eventsByDay: projection.allDayByDay,
+                  dayWidth: dayWidth,
+                  axisWidth: axisWidth,
+                ),
+                EarlyMorningBand(
+                  eventsByDay: projection.earlyMorningByDay,
                   dayWidth: dayWidth,
                   axisWidth: axisWidth,
                 ),
@@ -396,10 +402,13 @@ class _DayColumn extends StatelessWidget {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          for (final period in UstcPeriods.values)
+          // 画每个节次的起始与结束分隔线，使午休（12:10-14:00）、
+          // 晚间隔（18:20-19:30）等大段空白两端都有视觉边界。
+          // 用 Set 去重以避免相邻无间隔节次产生重叠线。
+          for (final boundary in UstcPeriods.boundaries())
             Positioned(
               top:
-                  (period.startMinutes - UstcPeriods.dayStartMinutes) *
+                  (boundary - UstcPeriods.dayStartMinutes) *
                   WeekTimetable.pixelsPerMinute,
               left: 0,
               right: 0,

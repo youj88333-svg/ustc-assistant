@@ -44,6 +44,36 @@ void main() {
   test('official periods expose exact boundaries', () {
     expect(UstcPeriods.byNumber(3).startMinutes, 9 * 60 + 45);
     expect(UstcPeriods.byNumber(4).endMinutes, 11 * 60 + 20);
+    // 官方下午/晚上节次与早期预设不同，固化关键边界防止回退。
+    expect(UstcPeriods.byNumber(6).startMinutes, 14 * 60);
+    expect(UstcPeriods.byNumber(9).endMinutes, 17 * 60 + 30);
+    expect(UstcPeriods.byNumber(10).startMinutes, 17 * 60 + 35);
+    expect(UstcPeriods.byNumber(13).endMinutes, 21 * 60 + 55);
+  });
+
+  test('grid spans 07:00 to 24:00', () {
+    expect(UstcPeriods.dayStartMinutes, 7 * 60);
+    expect(UstcPeriods.dayEndMinutes, 24 * 60);
+  });
+
+  test('boundaries draw start lines plus big-break end lines only', () {
+    final lines = UstcPeriods.boundaries();
+    // 13 个节次起始线全部存在。
+    for (final period in UstcPeriods.values) {
+      expect(lines, contains(period.startMinutes));
+    }
+    // 午休（第5节 12:10 结束）补结束线。
+    expect(lines, contains(12 * 60 + 10));
+    // 晚间间隔（第10节 18:20 结束）补结束线。
+    expect(lines, contains(18 * 60 + 20));
+    // 末节后到网格底（21:55-24:00）也是大空档，补结束线。
+    expect(lines, contains(21 * 60 + 55));
+    // 5 分钟课间不画结束线：第1节 8:35 不应在 lines 中。
+    expect(lines, isNot(contains(8 * 60 + 35)));
+    // 20 分钟课间休息也不画结束线：第2节 9:25 不应在 lines 中。
+    expect(lines, isNot(contains(9 * 60 + 25)));
+    // 共 16 条（13 起始 + 3 大空档结束：12:10、18:20、21:55）。
+    expect(lines.length, 16);
   });
 
   test('geometry uses real minutes rather than rounded periods', () {
@@ -114,6 +144,55 @@ void main() {
     expect(projection.allDayByDay[DateTime.friday], hasLength(1));
     expect(projection.allDayByDay[DateTime.saturday], hasLength(1));
     expect(projection.allDayByDay[DateTime.sunday], hasLength(1));
+  });
+
+  test('events before grid start go to early-morning band, not the grid', () {
+    final projection = buildWeek(
+      ScheduleQuery(
+        selectedDate: DateTime(2026, 7, 20),
+        events: [
+          // 06:30 凌晨事件应进入凌晨带，不进入日网格。
+          event('early', 0, 6, 30, 6, 55),
+          // 07:00 恰为网格下界，应进入日网格（topMinutes=0）。
+          event('at-open', 0, 7, 0, 7, 45),
+          // 23:30 晚间事件仍在网格内（上界 24:00 之前）。
+          event('late', 0, 23, 30, 23, 55),
+        ],
+      ),
+    );
+    final mondayTimed = projection.timedByDay[DateTime.monday]!;
+    expect(mondayTimed.map((p) => p.event.id), containsAll(['at-open', 'late']));
+    expect(
+      mondayTimed.map((p) => p.event.id),
+      isNot(contains('early')),
+    );
+    expect(
+      projection.earlyMorningByDay[DateTime.monday]!.single.event.id,
+      'early',
+    );
+    // 07:00 事件贴在网格顶部。
+    final atOpen = mondayTimed.firstWhere((p) => p.event.id == 'at-open');
+    expect(atOpen.topMinutes, 0);
+  });
+
+  test('early-morning band is empty for days without pre-7am events', () {
+    final projection = buildWeek(
+      ScheduleQuery(
+        selectedDate: DateTime(2026, 7, 20),
+        events: [event('daytime', 0, 9, 0, 10, 0)],
+      ),
+    );
+    for (final day in [
+      DateTime.monday,
+      DateTime.tuesday,
+      DateTime.wednesday,
+      DateTime.thursday,
+      DateTime.friday,
+      DateTime.saturday,
+      DateTime.sunday,
+    ]) {
+      expect(projection.earlyMorningByDay[day], isEmpty);
+    }
   });
 
   test('inactive course preview is projected but not made actionable', () {

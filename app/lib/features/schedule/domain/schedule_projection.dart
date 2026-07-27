@@ -9,6 +9,15 @@ class ScheduleQuery {
   final List<EffectiveEvent> events;
 }
 
+/// 0:00 至网格下界（7:00）之间的定时事件。这类事件不落入日网格，
+/// 改为像全天/截止事项带一样在网格上方按天横排展示，无事件时不渲染。
+class EarlyMorningEvent {
+  const EarlyMorningEvent({required this.event, required this.day});
+
+  final EffectiveEvent event;
+  final DateTime day;
+}
+
 class ProjectedEvent {
   const ProjectedEvent({
     required this.event,
@@ -26,6 +35,7 @@ class ScheduleProjection {
     required this.week,
     required this.timedByDay,
     required this.allDayByDay,
+    required this.earlyMorningByDay,
     required this.previews,
     required this.overlapGroups,
   });
@@ -33,6 +43,7 @@ class ScheduleProjection {
   final WeekRange week;
   final Map<int, List<ProjectedEvent>> timedByDay;
   final Map<int, List<EffectiveEvent>> allDayByDay;
+  final Map<int, List<EarlyMorningEvent>> earlyMorningByDay;
   final List<ProjectedEvent> previews;
   final List<OverlapGroup> overlapGroups;
 }
@@ -43,6 +54,9 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
     for (var day = DateTime.monday; day <= DateTime.sunday; day++) day: [],
   };
   final allDay = <int, List<EffectiveEvent>>{
+    for (var day = DateTime.monday; day <= DateTime.sunday; day++) day: [],
+  };
+  final earlyMorning = <int, List<EarlyMorningEvent>>{
     for (var day = DateTime.monday; day <= DateTime.sunday; day++) day: [],
   };
   final previews = <ProjectedEvent>[];
@@ -59,12 +73,23 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
       continue;
     }
     if (!week.contains(event.startAt!)) continue;
+    final startMinutes =
+        event.startAt!.hour * 60 + event.startAt!.minute;
+    // 0:00 至网格下界（7:00）的事件不落入日网格，改为凌晨事项带横排展示。
+    if (startMinutes < UstcPeriods.dayStartMinutes) {
+      // 取事件所在日对应的周内日期；跨日事件按 startAt 的日期归属。
+      final day = week.days.firstWhere(
+        (d) => d.year == event.startAt!.year && d.month == event.startAt!.month && d.day == event.startAt!.day,
+        orElse: () => week.days.firstWhere(
+          (d) => d.weekday == event.startAt!.weekday,
+        ),
+      );
+      earlyMorning[day.weekday]!.add(EarlyMorningEvent(event: event, day: day));
+      continue;
+    }
     final projected = ProjectedEvent(
       event: event,
-      topMinutes:
-          event.startAt!.hour * 60 +
-          event.startAt!.minute -
-          UstcPeriods.dayStartMinutes,
+      topMinutes: startMinutes - UstcPeriods.dayStartMinutes,
       heightMinutes: event.endAt!.difference(event.startAt!).inMinutes,
     );
     timed[event.startAt!.weekday]!.add(projected);
@@ -77,6 +102,9 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
   for (final values in timed.values) {
     values.sort((a, b) => a.event.startAt!.compareTo(b.event.startAt!));
   }
+  for (final values in earlyMorning.values) {
+    values.sort((a, b) => a.event.startAt!.compareTo(b.event.startAt!));
+  }
   return ScheduleProjection(
     week: week,
     timedByDay: Map<int, List<ProjectedEvent>>.unmodifiable({
@@ -86,6 +114,10 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
     allDayByDay: Map<int, List<EffectiveEvent>>.unmodifiable({
       for (final entry in allDay.entries)
         entry.key: List<EffectiveEvent>.unmodifiable(entry.value),
+    }),
+    earlyMorningByDay: Map<int, List<EarlyMorningEvent>>.unmodifiable({
+      for (final entry in earlyMorning.entries)
+        entry.key: List<EarlyMorningEvent>.unmodifiable(entry.value),
     }),
     previews: List.unmodifiable(previews),
     overlapGroups: groupOverlaps(activeTimed),
