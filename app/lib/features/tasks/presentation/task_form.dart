@@ -27,9 +27,10 @@ class TaskFormSubmission {
 }
 
 class TaskForm extends StatefulWidget {
-  const TaskForm({required this.onSubmit, super.key});
+  const TaskForm({required this.onSubmit, this.initialNow, super.key});
 
   final Future<void> Function(TaskFormSubmission submission) onSubmit;
+  final DateTime? initialNow;
 
   @override
   State<TaskForm> createState() => _TaskFormState();
@@ -39,18 +40,17 @@ class _TaskFormState extends State<TaskForm> {
   final formKey = GlobalKey<FormState>();
   final title = TextEditingController();
   final description = TextEditingController();
-  final deadline = TextEditingController();
   final estimate = TextEditingController();
   final tags = TextEditingController();
   final notes = TextEditingController();
   TaskImportance importance = TaskImportance.normal;
+  DateTime? deadlineAt;
   bool submitting = false;
 
   @override
   void dispose() {
     title.dispose();
     description.dispose();
-    deadline.dispose();
     estimate.dispose();
     tags.dispose();
     notes.dispose();
@@ -76,15 +76,51 @@ class _TaskFormState extends State<TaskForm> {
             decoration: const InputDecoration(labelText: '描述（可选）'),
             maxLines: 3,
           ),
-          TextFormField(
-            key: const Key('task-deadline'),
-            controller: deadline,
-            decoration: const InputDecoration(
-              labelText: '截止时间（可选）',
-              hintText: '2026-07-27 18:00',
-            ),
-            validator: _validateDeadline,
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: ListTile(
+                  key: const Key('task-deadline-date'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('截止日期'),
+                  subtitle: Text(
+                    deadlineAt == null ? '未设置' : _dateText(deadlineAt!),
+                  ),
+                  trailing: const Icon(Icons.calendar_month_outlined),
+                  onTap: _pickDeadlineDate,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: ListTile(
+                  key: const Key('task-deadline-time'),
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('截止时间'),
+                  subtitle: Text(
+                    deadlineAt == null ? '未设置' : _timeText(deadlineAt!),
+                  ),
+                  trailing: const Icon(Icons.schedule),
+                  onTap: _pickDeadlineTime,
+                ),
+              ),
+              if (deadlineAt != null)
+                IconButton(
+                  key: const Key('clear-task-deadline'),
+                  tooltip: '清除截止时间',
+                  onPressed: () => setState(() => deadlineAt = null),
+                  icon: const Icon(Icons.clear),
+                ),
+            ],
           ),
+          if (deadlineAt != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                '北京时间 ${_dateText(deadlineAt!)} ${_timeText(deadlineAt!)}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
           TextFormField(
             key: const Key('task-estimate'),
             controller: estimate,
@@ -124,20 +160,10 @@ class _TaskFormState extends State<TaskForm> {
     );
   }
 
-  String? _validateDeadline(String? value) {
-    if (value == null || value.trim().isEmpty) return null;
-    return _parseDeadline(value) == null ? '请输入有效的北京时间' : null;
-  }
-
   String? _validateEstimate(String? value) {
     if (value == null || value.trim().isEmpty) return null;
     final parsed = int.tryParse(value);
     return parsed == null || parsed <= 0 ? '预计分钟必须大于 0' : null;
-  }
-
-  DateTime? _parseDeadline(String value) {
-    final normalized = value.trim().replaceFirst(' ', 'T');
-    return DateTime.tryParse(normalized);
   }
 
   Future<void> _submit() async {
@@ -148,9 +174,7 @@ class _TaskFormState extends State<TaskForm> {
         TaskFormSubmission(
           title: title.text.trim(),
           description: _blankToNull(description.text),
-          deadlineAt: deadline.text.trim().isEmpty
-              ? null
-              : _parseDeadline(deadline.text),
+          deadlineAt: deadlineAt,
           estimatedMinutes: estimate.text.trim().isEmpty
               ? null
               : int.parse(estimate.text),
@@ -172,4 +196,59 @@ class _TaskFormState extends State<TaskForm> {
     final trimmed = value.trim();
     return trimmed.isEmpty ? null : trimmed;
   }
+
+  Future<void> _pickDeadlineDate() async {
+    final base = deadlineAt ?? widget.initialNow ?? DateTime.now();
+    final date = await showDatePicker(
+      context: context,
+      initialDate: base,
+      firstDate: DateTime(base.year - 1),
+      lastDate: DateTime(base.year + 10),
+    );
+    if (date == null) return;
+    final time = deadlineAt == null
+        ? const TimeOfDay(hour: 23, minute: 59)
+        : TimeOfDay.fromDateTime(deadlineAt!);
+    setState(() {
+      deadlineAt = DateTime(
+        date.year,
+        date.month,
+        date.day,
+        time.hour,
+        time.minute,
+      );
+    });
+  }
+
+  Future<void> _pickDeadlineTime() async {
+    final base = deadlineAt ?? widget.initialNow ?? DateTime.now();
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(base),
+      initialEntryMode: TimePickerEntryMode.input,
+      builder: (context, child) => MediaQuery(
+        data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+        child: child!,
+      ),
+    );
+    if (time == null) return;
+    setState(() {
+      deadlineAt = DateTime(
+        base.year,
+        base.month,
+        base.day,
+        time.hour,
+        time.minute,
+      );
+    });
+  }
+
+  String _dateText(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
+
+  String _timeText(DateTime value) =>
+      '${value.hour.toString().padLeft(2, '0')}:'
+      '${value.minute.toString().padLeft(2, '0')}';
 }

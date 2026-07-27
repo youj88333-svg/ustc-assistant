@@ -105,6 +105,12 @@ void main() {
       ),
     );
     await tester.enterText(find.byKey(const Key('task-estimate')), '0');
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('save-task')),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save-task')));
     await tester.pump();
     expect(find.text('请输入标题'), findsOneWidget);
@@ -112,10 +118,76 @@ void main() {
 
     await tester.enterText(find.byKey(const Key('task-title')), 'Write report');
     await tester.enterText(find.byKey(const Key('task-estimate')), '45');
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('save-task')),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('save-task')));
     await tester.pump();
     expect(submitted?.title, 'Write report');
     expect(submitted?.estimatedMinutes, 45);
+    expect(submitted?.deadlineAt, isNull);
+  });
+
+  testWidgets('task deadline uses date and time pickers and can be cleared', (
+    tester,
+  ) async {
+    TaskFormSubmission? submitted;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: MediaQuery(
+          data: const MediaQueryData(alwaysUse24HourFormat: true),
+          child: Scaffold(
+            body: TaskForm(
+              initialNow: DateTime(2026, 7, 27, 10),
+              onSubmit: (value) async => submitted = value,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.enterText(
+      find.byKey(const Key('task-title')),
+      'Submit report',
+    );
+
+    await tester.tap(find.byKey(const Key('task-deadline-date')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('30'));
+    await tester.tap(find.widgetWithText(TextButton, 'OK'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('task-deadline-time')));
+    await tester.pumpAndSettle();
+    final timeFields = find.descendant(
+      of: find.byType(TimePickerDialog),
+      matching: find.byType(TextField),
+    );
+    expect(timeFields, findsNWidgets(2));
+    await tester.enterText(timeFields.at(0), '18');
+    await tester.enterText(timeFields.at(1), '45');
+    await tester.tap(find.widgetWithText(TextButton, 'OK'));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('save-task')),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('save-task')));
+    await tester.pump();
+    expect(submitted?.deadlineAt, DateTime(2026, 7, 30, 18, 45));
+
+    await tester.tap(find.byKey(const Key('clear-task-deadline')));
+    await tester.scrollUntilVisible(
+      find.byKey(const Key('save-task')),
+      100,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.tap(find.byKey(const Key('save-task')));
+    await tester.pump();
     expect(submitted?.deadlineAt, isNull);
   });
 
