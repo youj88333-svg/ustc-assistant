@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import '../application/settings_service.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({required this.service, super.key});
+  const SettingsPage({required this.service, this.onCompleteReset, super.key});
 
   final SettingsService service;
+  final VoidCallback? onCompleteReset;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -15,6 +16,7 @@ class _SettingsPageState extends State<SettingsPage> {
   final pythonController = TextEditingController();
   bool jwEnabled = true;
   bool youngEnabled = true;
+  bool resetting = false;
 
   @override
   void initState() {
@@ -132,9 +134,11 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           ListTile(
+            key: const Key('complete-reset'),
             leading: const Icon(Icons.warning_amber),
             title: const Text('完全重置'),
-            onTap: _completeReset,
+            enabled: !resetting,
+            onTap: resetting ? null : _completeReset,
           ),
         ],
       ),
@@ -162,15 +166,46 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _completeReset() async {
-    var first = false;
-    await _confirm('完全重置本地数据？', () async => first = true);
-    if (!first || !mounted) return;
-    await _confirm(
-      '再次确认：此操作不可撤回',
-      () => widget.service.completeReset(
+    if (resetting) return;
+    if (!await _ask('完全重置本地数据？') || !mounted) return;
+    if (!await _ask('再次确认：此操作不可撤回') || !mounted) return;
+    setState(() => resetting = true);
+    var accountCleared = false;
+    try {
+      await widget.service.completeReset(
         firstConfirmation: true,
         secondConfirmation: true,
-      ),
-    );
+      );
+      accountCleared = true;
+    } on BrowserSessionClearAfterResetError {
+      accountCleared = true;
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地数据已清除，但浏览器会话清理失败')));
+      }
+    } finally {
+      if (mounted) setState(() => resetting = false);
+    }
+    if (accountCleared && mounted) widget.onCompleteReset?.call();
   }
+
+  Future<bool> _ask(String title) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
 }

@@ -27,6 +27,7 @@ void main() {
   var browserClears = 0;
 
   setUp(() async {
+    browserClears = 0;
     database = AppDatabase(NativeDatabase.memory());
     accounts = AccountService(
       database: database,
@@ -151,6 +152,160 @@ void main() {
       expect(await database.select(database.tasks).get(), isEmpty);
     },
   );
+
+  test('complete reset removes the whole account partition', () async {
+    await database
+        .into(database.calendarEvents)
+        .insert(
+          CalendarEventsCompanion.insert(
+            id: 'event',
+            accountId: accountId,
+            source: 'ustc_jw',
+            externalId: const Value('event'),
+            title: 'course',
+            type: 'course',
+            startAt: const Value(1000),
+            endAt: const Value(2000),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.sourceRecords)
+        .insert(
+          SourceRecordsCompanion.insert(
+            id: 'source-record',
+            accountId: accountId,
+            source: 'ustc_jw',
+            entityType: 'calendar_event',
+            externalId: 'event',
+            localEntityId: 'event',
+            sourceStatus: 'active',
+            presence: 'observed',
+            scopeKey: 'semester',
+            firstObservedAt: 1,
+            lastObservedAt: 1,
+          ),
+        );
+    await database
+        .into(database.userOverlays)
+        .insert(
+          UserOverlaysCompanion.insert(
+            id: 'overlay',
+            accountId: accountId,
+            eventId: const Value('event'),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.tasks)
+        .insert(
+          TasksCompanion.insert(
+            id: 'task',
+            accountId: accountId,
+            title: 'task',
+            state: 'active',
+            importance: 'normal',
+            tagsJson: '[]',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.planBlocks)
+        .insert(
+          PlanBlocksCompanion.insert(
+            id: 'block',
+            accountId: accountId,
+            taskId: 'task',
+            startAt: 1000,
+            endAt: 2000,
+            status: 'accepted',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await database
+        .into(database.reminders)
+        .insert(
+          RemindersCompanion.insert(
+            id: 'reminder',
+            accountId: accountId,
+            targetType: 'task',
+            targetId: 'task',
+            taskId: const Value('task'),
+            triggerAt: 900,
+            state: 'desired',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await settings.setPythonPath(r'E:\python.exe');
+    await database.replaceUndoSlot(
+      commandId: 'undo',
+      payload: '{"accountId":"$accountId"}',
+    );
+
+    await settings.completeReset(
+      firstConfirmation: true,
+      secondConfirmation: false,
+    );
+    expect(await database.select(database.localAccounts).get(), hasLength(1));
+    expect(await database.select(database.tasks).get(), hasLength(1));
+    expect(browserClears, 0);
+
+    await settings.completeReset(
+      firstConfirmation: true,
+      secondConfirmation: true,
+    );
+
+    expect(await database.select(database.localAccounts).get(), isEmpty);
+    expect(await database.select(database.credentialAccounts).get(), isEmpty);
+    expect(await database.select(database.calendarEvents).get(), isEmpty);
+    expect(await database.select(database.sourceRecords).get(), isEmpty);
+    expect(await database.select(database.userOverlays).get(), isEmpty);
+    expect(await database.select(database.tasks).get(), isEmpty);
+    expect(await database.select(database.planBlocks).get(), isEmpty);
+    expect(await database.select(database.reminders).get(), isEmpty);
+    expect(await database.select(database.sourceConfigs).get(), isEmpty);
+    expect(await database.select(database.undoSlot).get(), isEmpty);
+    expect(
+      await (database.select(
+        database.actionLogs,
+      )..where((row) => row.accountId.equals(accountId))).get(),
+      isEmpty,
+    );
+    expect(browserClears, 1);
+  });
+
+  test('browser cleanup failure does not restore a deleted account', () async {
+    final failingAccounts = AccountService(
+      database: database,
+      protector: FakeProtector(),
+      clearBrowserSession: () async => throw StateError('browser locked'),
+      now: () => 300,
+    );
+    final failingSettings = SettingsService(
+      database: database,
+      accounts: failingAccounts,
+      accountId: accountId,
+      now: () => 400,
+    );
+
+    await expectLater(
+      failingSettings.completeReset(
+        firstConfirmation: true,
+        secondConfirmation: true,
+      ),
+      throwsA(isA<BrowserSessionClearAfterResetError>()),
+    );
+
+    expect(await database.select(database.localAccounts).get(), isEmpty);
+    expect(await database.select(database.credentialAccounts).get(), isEmpty);
+  });
 
   test(
     'sync interval is fixed and JW override requires complete triple',

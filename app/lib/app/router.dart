@@ -368,6 +368,7 @@ class _SettingsLoader extends StatelessWidget {
             accounts: accounts,
             accountId: account.id,
           ),
+          onCompleteReset: () => context.go('/sync'),
         );
       },
     );

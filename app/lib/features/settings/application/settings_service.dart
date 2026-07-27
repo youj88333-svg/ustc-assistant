@@ -11,6 +11,12 @@ class SettingsValidationError implements Exception {
   final String code;
 }
 
+class BrowserSessionClearAfterResetError implements Exception {
+  const BrowserSessionClearAfterResetError(this.cause);
+
+  final Object cause;
+}
+
 class SettingsService {
   SettingsService({
     required this.database,
@@ -166,9 +172,20 @@ class SettingsService {
     required bool secondConfirmation,
   }) async {
     if (!firstConfirmation || !secondConfirmation) return;
-    await clearBusinessData(confirmed: true);
-    await clearCredentials(confirmed: true);
-    await clearBrowserSession(confirmed: true);
+    await database.transaction(() async {
+      await (database.delete(
+        database.actionLogs,
+      )..where((row) => row.accountId.equals(accountId))).go();
+      await database.delete(database.undoSlot).go();
+      await (database.delete(
+        database.localAccounts,
+      )..where((row) => row.id.equals(accountId))).go();
+    });
+    try {
+      await accounts.clearDedicatedBrowserSession();
+    } catch (error) {
+      throw BrowserSessionClearAfterResetError(error);
+    }
   }
 
   Future<void> _writeJwConfig(Map<String, Object> config) async {
