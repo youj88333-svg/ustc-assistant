@@ -27,12 +27,16 @@ class AccountSummary {
     required this.maskedHint,
     required this.active,
     required this.hasSavedPassword,
+    this.jwLastSuccessAt,
+    this.youngLastSuccessAt,
   });
 
   final String id;
   final String maskedHint;
   final bool active;
   final bool hasSavedPassword;
+  final int? jwLastSuccessAt;
+  final int? youngLastSuccessAt;
 }
 
 class _StagedLogin {
@@ -264,7 +268,12 @@ class AccountService {
     final credentials = await database
         .select(database.credentialAccounts)
         .get();
+    final sourceConfigs = await database.select(database.sourceConfigs).get();
     final byId = {for (final row in credentials) row.accountId: row};
+    final syncByAccountAndSource = {
+      for (final row in sourceConfigs)
+        '${row.accountId}\u0000${row.source}': row.lastSuccessAt,
+    };
     return [
       for (final account in accounts)
         AccountSummary(
@@ -272,6 +281,10 @@ class AccountService {
           maskedHint: account.maskedHint,
           active: account.isActive,
           hasSavedPassword: byId[account.id]?.passwordCiphertext != null,
+          jwLastSuccessAt: syncByAccountAndSource['${account.id}\u0000ustc_jw'],
+          youngLastSuccessAt:
+              syncByAccountAndSource['${account.id}'
+                  '\u0000ustc_young_my_schedule'],
         ),
     ];
   }

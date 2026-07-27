@@ -1,6 +1,7 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
+import '../domain/overlap_engine.dart';
 
 enum AttendancePolicy { unknown, mustGo, gamble, skip }
 
@@ -106,6 +107,70 @@ class EffectiveEventRepository {
   final AppDatabase database;
   final String accountId;
 
+  Stream<List<EffectiveEvent>> watchDisplayEvents() => database
+      .customSelect(
+        '''
+SELECT
+  e.id,
+  COALESCE(eo.display_title, so.display_title, e.title) AS display_title,
+  COALESCE(eo.display_location, so.display_location, e.location_name)
+    AS display_location,
+  COALESCE(eo.importance, so.importance, e.importance) AS importance,
+  COALESCE(eo.hidden, so.hidden, 0) AS hidden,
+  e.type,
+  e.status,
+  e.start_at,
+  e.end_at,
+  e.all_day,
+  e.start_date,
+  e.end_date_exclusive,
+  cs.id AS course_series_id
+FROM calendar_events e
+LEFT JOIN course_series cs
+  ON cs.account_id = e.account_id
+  AND cs.source = e.source
+  AND cs.external_id = e.source_series_external_id
+LEFT JOIN user_overlays eo
+  ON eo.account_id = e.account_id AND eo.event_id = e.id
+LEFT JOIN user_overlays so
+  ON so.account_id = e.account_id AND so.course_series_id = cs.id
+WHERE e.account_id = ?
+  AND e.deleted_at IS NULL
+  AND e.status NOT IN ('cancelled', 'hidden', 'skipped')
+ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
+''',
+        variables: [Variable.withString(accountId)],
+        readsFrom: {
+          database.calendarEvents,
+          database.userOverlays,
+          database.courseSeries,
+        },
+      )
+      .watch()
+      .map(
+        (rows) => rows
+            .where((row) => row.read<int>('hidden') == 0)
+            .map(_displayEvent)
+            .toList(growable: false),
+      );
+
+  Stream<List<EffectiveEventRecord>> watchAll() => database
+      .customSelect(
+        'SELECT id FROM calendar_events '
+        'WHERE account_id = ? AND deleted_at IS NULL '
+        'ORDER BY COALESCE(start_at, 0), COALESCE(start_date, \'\'), id',
+        variables: [Variable.withString(accountId)],
+        readsFrom: {
+          database.calendarEvents,
+          database.userOverlays,
+          database.courseSeries,
+        },
+      )
+      .watch()
+      .asyncMap(
+        (rows) => Future.wait(rows.map((row) => byId(row.read<String>('id')))),
+      );
+
   Future<EffectiveEventRecord> byId(String eventId) async {
     final event =
         await (database.select(database.calendarEvents)..where(
@@ -183,4 +248,60 @@ class EffectiveEventRepository {
       eventType == 'exam' || eventType == 'second_class'
       ? AttendancePolicy.mustGo
       : AttendancePolicy.unknown;
+
+  EffectiveEvent _displayEvent(QueryRow row) {
+    final importance = switch (row.read<String>('importance')) {
+      'low' => EventImportance.low,
+      'high' => EventImportance.high,
+      'critical' => EventImportance.critical,
+      _ => EventImportance.normal,
+    };
+    final id = row.read<String>('id');
+    final title = row.read<String>('display_title');
+    final location = row.readNullable<String>('display_location');
+    final courseSeriesId = row.readNullable<String>('course_series_id');
+    final eventType = row.read<String>('type');
+    if (row.read<int>('all_day') != 0) {
+      return EffectiveEvent.allDay(
+        id: id,
+        title: title,
+        startDate: DateTime.parse(row.read<String>('start_date')),
+        endDateExclusive: DateTime.parse(
+          row.read<String>('end_date_exclusive'),
+        ),
+        courseSeriesId: courseSeriesId,
+        location: location,
+        importance: importance,
+        eventType: eventType,
+      );
+    }
+    return EffectiveEvent.timed(
+      id: id,
+      title: title,
+      startAt: _beijingDateTime(row.read<int>('start_at')),
+      endAt: _beijingDateTime(row.read<int>('end_at')),
+      courseSeriesId: courseSeriesId,
+      location: location,
+      isInactivePreview: row.read<String>('status') == 'tentative',
+      importance: importance,
+      eventType: eventType,
+    );
+  }
+
+  DateTime _beijingDateTime(int millisecondsSinceEpoch) {
+    final shifted = DateTime.fromMillisecondsSinceEpoch(
+      millisecondsSinceEpoch,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    return DateTime(
+      shifted.year,
+      shifted.month,
+      shifted.day,
+      shifted.hour,
+      shifted.minute,
+      shifted.second,
+      shifted.millisecond,
+      shifted.microsecond,
+    );
+  }
 }

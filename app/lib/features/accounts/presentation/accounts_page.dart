@@ -146,8 +146,8 @@ class _AccountPanel extends StatelessWidget {
               : TextButton(onPressed: onSwitch, child: const Text('切换')),
         ),
         Text('已保存密码：${account.hasSavedPassword ? '是' : '否'}'),
-        const Text('教务系统：等待同步'),
-        const Text('二课平台：等待同步'),
+        Text('教务系统：${_syncStatus(account.jwLastSuccessAt)}'),
+        Text('二课平台：${_syncStatus(account.youngLastSuccessAt)}'),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
@@ -179,5 +179,16 @@ class _AccountPanel extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  String _syncStatus(int? timestamp) {
+    if (timestamp == null) return '等待同步';
+    final shifted = DateTime.fromMillisecondsSinceEpoch(
+      timestamp,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '上次同步成功：${shifted.year}-${two(shifted.month)}-'
+        '${two(shifted.day)} ${two(shifted.hour)}:${two(shifted.minute)}';
   }
 }

@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -63,5 +62,31 @@ void main() {
       await database.select(database.credentialAccounts).get(),
       hasLength(1),
     );
+  });
+
+  testWidgets('account page shows persisted per-source sync success', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final service = AccountService(database: database, protector: Protector());
+    final id = await service.persistVerifiedAccount(username: 'PB00000000');
+    await database
+        .into(database.sourceConfigs)
+        .insert(
+          SourceConfigsCompanion.insert(
+            id: '$id:ustc_jw',
+            accountId: id,
+            source: 'ustc_jw',
+            lastSuccessAt: const Value(123456789),
+            updatedAt: 123456789,
+          ),
+        );
+
+    await tester.pumpWidget(MaterialApp(home: AccountsPage(service: service)));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('教务系统：上次同步成功'), findsOneWidget);
+    expect(find.text('二课平台：等待同步'), findsOneWidget);
   });
 }

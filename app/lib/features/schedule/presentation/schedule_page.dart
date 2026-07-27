@@ -11,6 +11,8 @@ import '../../tasks/application/undo_service.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
+import '../application/effective_event_repository.dart';
+import '../domain/overlap_engine.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/week_range.dart';
 import 'week_timetable.dart';
@@ -150,7 +152,14 @@ class _ScheduleData extends StatelessWidget {
                 .map(TaskItem.fromRow)
                 .toList(growable: false);
             if (section == ScheduleSection.week) {
-              return _week(context, tasks);
+              return StreamBuilder<List<EffectiveEvent>>(
+                stream: EffectiveEventRepository(
+                  database,
+                  accountId: account.id,
+                ).watchDisplayEvents(),
+                builder: (context, eventSnapshot) =>
+                    _week(context, tasks, eventSnapshot.data ?? const []),
+              );
             }
             return _taskCenter(context, account.id, tasks);
           },
@@ -159,9 +168,13 @@ class _ScheduleData extends StatelessWidget {
     );
   }
 
-  Widget _week(BuildContext context, List<TaskItem> tasks) => WeekTimetable(
+  Widget _week(
+    BuildContext context,
+    List<TaskItem> tasks, [
+    List<EffectiveEvent> events = const [],
+  ]) => WeekTimetable(
     projection: buildWeek(
-      ScheduleQuery(selectedDate: selectedDate, events: const []),
+      ScheduleQuery(selectedDate: selectedDate, events: events),
     ),
     tasks: tasks,
     onTaskSelected: (task) {

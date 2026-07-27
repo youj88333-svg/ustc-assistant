@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -96,6 +98,29 @@ EventConflictParticipant participant(
 );
 
 void main() {
+  test('effective event stream emits imports and overlay changes', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final repository = EffectiveEventRepository(database, accountId: 'a');
+    final iterator = StreamIterator(repository.watchAll());
+    addTearDown(iterator.cancel);
+
+    expect(await iterator.moveNext(), isTrue);
+    expect(iterator.current, hasLength(3));
+    await OverlayService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    ).setEventAttendance('event-a', AttendancePolicy.mustGo);
+    expect(await iterator.moveNext(), isTrue);
+    expect(
+      iterator.current
+          .singleWhere((record) => record.source.id == 'event-a')
+          .attendance,
+      AttendancePolicy.mustGo,
+    );
+  });
+
   test('event overlay wins over series and source defaults', () async {
     final database = await fixtureDatabase();
     addTearDown(database.close);
