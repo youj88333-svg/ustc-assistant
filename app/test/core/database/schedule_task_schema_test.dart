@@ -53,32 +53,34 @@ void main() {
     await seedAccount(db, 'a');
 
     expect(
-      db.into(db.calendarEvents).insert(
-        timedEvent(
-          'bad',
-        ).copyWith(startDate: const Value('2026-07-27')),
-      ),
+      db
+          .into(db.calendarEvents)
+          .insert(
+            timedEvent('bad').copyWith(startDate: const Value('2026-07-27')),
+          ),
       throwsA(isA<SqliteException>()),
     );
     expect(
-      db.into(db.calendarEvents).insert(
-        CalendarEventsCompanion.insert(
-          id: 'bad-all-day',
-          accountId: 'a',
-          source: 'user',
-          title: 'Bad',
-          type: 'personal',
-          status: const Value('active'),
-          allDay: true,
-          startDate: const Value('2026-07-27'),
-          endDateExclusive: const Value('2026-07-27'),
-          timezone: 'Asia/Shanghai',
-          importance: const Value('normal'),
-          completionPolicy: const Value('auto_complete'),
-          createdAt: 1,
-          updatedAt: 1,
-        ),
-      ),
+      db
+          .into(db.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'bad-all-day',
+              accountId: 'a',
+              source: 'user',
+              title: 'Bad',
+              type: 'personal',
+              status: const Value('active'),
+              allDay: true,
+              startDate: const Value('2026-07-27'),
+              endDateExclusive: const Value('2026-07-27'),
+              timezone: 'Asia/Shanghai',
+              importance: const Value('normal'),
+              completionPolicy: const Value('auto_complete'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          ),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -110,18 +112,20 @@ void main() {
     await seedAccount(db, 'a');
 
     expect(
-      db.into(db.planBlocks).insert(
-        PlanBlocksCompanion.insert(
-          id: 'p1',
-          accountId: 'a',
-          taskId: 'missing',
-          startAt: 1000,
-          endAt: 2000,
-          reviewState: 'pending',
-          createdAt: 1,
-          updatedAt: 1,
-        ),
-      ),
+      db
+          .into(db.planBlocks)
+          .insert(
+            PlanBlocksCompanion.insert(
+              id: 'p1',
+              accountId: 'a',
+              taskId: 'missing',
+              startAt: 1000,
+              endAt: 2000,
+              reviewState: 'pending',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          ),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -132,9 +136,9 @@ void main() {
     await seedAccount(db, 'a');
 
     expect(
-      db.into(db.tasks).insert(
-        task('done').copyWith(state: const Value('completed')),
-      ),
+      db
+          .into(db.tasks)
+          .insert(task('done').copyWith(state: const Value('completed'))),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -181,12 +185,14 @@ void main() {
     );
     await db.into(db.scheduleRelationRules).insert(rule);
     expect(
-      db.into(db.scheduleRelationRules).insert(
-        rule.copyWith(
-          id: const Value('rule-2'),
-          effectiveThrough: const Value('2026-07-26'),
-        ),
-      ),
+      db
+          .into(db.scheduleRelationRules)
+          .insert(
+            rule.copyWith(
+              id: const Value('rule-2'),
+              effectiveThrough: const Value('2026-07-26'),
+            ),
+          ),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -195,37 +201,38 @@ void main() {
     final db = testDatabase();
     addTearDown(db.close);
     await seedAccount(db, 'a');
-    await db.into(db.calendarEventSeries).insert(
-      CalendarEventSeriesCompanion.insert(
-        id: 's1',
-        accountId: 'a',
-        title: 'Weekly',
-        eventType: 'personal',
-        timezone: 'Asia/Shanghai',
-        startAt: 1000,
-        durationMinutes: 60,
-        recurrenceJson: '{"frequency":"weekly"}',
-        createdAt: 1,
-        updatedAt: 1,
-      ),
-    );
+    await db
+        .into(db.calendarEventSeries)
+        .insert(
+          CalendarEventSeriesCompanion.insert(
+            id: 's1',
+            accountId: 'a',
+            title: 'Weekly',
+            eventType: 'personal',
+            timezone: 'Asia/Shanghai',
+            startAt: const Value(1000),
+            durationMinutes: const Value(60),
+            recurrenceJson: '{"frequency":"weekly"}',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
     final exception = CalendarEventOccurrenceExceptionsCompanion.insert(
       id: 'x1',
       accountId: 'a',
       seriesId: 's1',
       occurrenceKey: '2026-07-27T20:00:00+08:00',
+      originalStartAt: const Value(1000),
       kind: 'override',
       overrideJson: '{"version":1,"fields":["title"],"title":"Changed"}',
       createdAt: 1,
       updatedAt: 1,
     );
-    await db
-        .into(db.calendarEventOccurrenceExceptions)
-        .insert(exception);
+    await db.into(db.calendarEventOccurrenceExceptions).insert(exception);
     expect(
-      db.into(db.calendarEventOccurrenceExceptions).insert(
-        exception.copyWith(id: const Value('x2')),
-      ),
+      db
+          .into(db.calendarEventOccurrenceExceptions)
+          .insert(exception.copyWith(id: const Value('x2'))),
       throwsA(isA<SqliteException>()),
     );
   });
@@ -237,19 +244,21 @@ void main() {
     await db.into(db.calendarEvents).insert(timedEvent('e1'));
 
     expect(
-      db.into(db.reminders).insert(
-        RemindersCompanion.insert(
-          id: 'bad',
-          accountId: 'a',
-          targetType: 'event',
-          targetId: 'e1',
-          eventId: const Value('e1'),
-          triggerAt: 900,
-          state: 'desired',
-          createdAt: 1,
-          updatedAt: 1,
-        ).copyWith(planBlockId: const Value('p1')),
-      ),
+      db
+          .into(db.reminders)
+          .insert(
+            RemindersCompanion.insert(
+              id: 'bad',
+              accountId: 'a',
+              targetType: 'event',
+              targetId: 'e1',
+              eventId: const Value('e1'),
+              triggerAt: 900,
+              state: 'desired',
+              createdAt: 1,
+              updatedAt: 1,
+            ).copyWith(planBlockId: const Value('p1')),
+          ),
       throwsA(isA<SqliteException>()),
     );
   });

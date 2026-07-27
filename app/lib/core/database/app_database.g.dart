@@ -4775,6 +4775,16 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('active'),
+  );
   static const VerificationMeta _timezoneMeta = const VerificationMeta(
     'timezone',
   );
@@ -4786,6 +4796,19 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _allDayMeta = const VerificationMeta('allDay');
+  @override
+  late final GeneratedColumn<bool> allDay = GeneratedColumn<bool>(
+    'all_day',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("all_day" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   static const VerificationMeta _startAtMeta = const VerificationMeta(
     'startAt',
   );
@@ -4793,9 +4816,9 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
   late final GeneratedColumn<int> startAt = GeneratedColumn<int>(
     'start_at',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _durationMinutesMeta = const VerificationMeta(
     'durationMinutes',
@@ -4804,9 +4827,31 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
   late final GeneratedColumn<int> durationMinutes = GeneratedColumn<int>(
     'duration_minutes',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.int,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _anchorStartDateMeta = const VerificationMeta(
+    'anchorStartDate',
+  );
+  @override
+  late final GeneratedColumn<String> anchorStartDate = GeneratedColumn<String>(
+    'anchor_start_date',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _durationDaysMeta = const VerificationMeta(
+    'durationDays',
+  );
+  @override
+  late final GeneratedColumn<int> durationDays = GeneratedColumn<int>(
+    'duration_days',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _recurrenceJsonMeta = const VerificationMeta(
     'recurrenceJson',
@@ -4852,6 +4897,27 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _importanceMeta = const VerificationMeta(
+    'importance',
+  );
+  @override
+  late final GeneratedColumn<String> importance = GeneratedColumn<String>(
+    'importance',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('normal'),
+  );
+  static const VerificationMeta _colorMeta = const VerificationMeta('color');
+  @override
+  late final GeneratedColumn<String> color = GeneratedColumn<String>(
+    'color',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _completionPolicyMeta = const VerificationMeta(
     'completionPolicy',
   );
@@ -4862,22 +4928,41 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: false,
-    defaultValue: const Constant('auto_complete'),
+    defaultValue: const Constant('auto_after_end'),
   );
-  static const VerificationMeta _deletedMeta = const VerificationMeta(
-    'deleted',
+  static const VerificationMeta _tagsJsonMeta = const VerificationMeta(
+    'tagsJson',
   );
   @override
-  late final GeneratedColumn<bool> deleted = GeneratedColumn<bool>(
-    'deleted',
+  late final GeneratedColumn<String> tagsJson = GeneratedColumn<String>(
+    'tags_json',
     aliasedName,
     false,
-    type: DriftSqlType.bool,
+    type: DriftSqlType.string,
     requiredDuringInsert: false,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'CHECK ("deleted" IN (0, 1))',
-    ),
-    defaultValue: const Constant(false),
+    defaultValue: const Constant('[]'),
+  );
+  static const VerificationMeta _userNotesMeta = const VerificationMeta(
+    'userNotes',
+  );
+  @override
+  late final GeneratedColumn<String> userNotes = GeneratedColumn<String>(
+    'user_notes',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
@@ -4908,15 +4993,23 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     title,
     description,
     eventType,
+    status,
     timezone,
+    allDay,
     startAt,
     durationMinutes,
+    anchorStartDate,
+    durationDays,
     recurrenceJson,
     effectiveFrom,
     effectiveThrough,
     locationName,
+    importance,
+    color,
     completionPolicy,
-    deleted,
+    tagsJson,
+    userNotes,
+    deletedAt,
     createdAt,
     updatedAt,
   ];
@@ -4970,6 +5063,12 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     } else if (isInserting) {
       context.missing(_eventTypeMeta);
     }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
     if (data.containsKey('timezone')) {
       context.handle(
         _timezoneMeta,
@@ -4978,13 +5077,17 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     } else if (isInserting) {
       context.missing(_timezoneMeta);
     }
+    if (data.containsKey('all_day')) {
+      context.handle(
+        _allDayMeta,
+        allDay.isAcceptableOrUnknown(data['all_day']!, _allDayMeta),
+      );
+    }
     if (data.containsKey('start_at')) {
       context.handle(
         _startAtMeta,
         startAt.isAcceptableOrUnknown(data['start_at']!, _startAtMeta),
       );
-    } else if (isInserting) {
-      context.missing(_startAtMeta);
     }
     if (data.containsKey('duration_minutes')) {
       context.handle(
@@ -4994,8 +5097,24 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
           _durationMinutesMeta,
         ),
       );
-    } else if (isInserting) {
-      context.missing(_durationMinutesMeta);
+    }
+    if (data.containsKey('anchor_start_date')) {
+      context.handle(
+        _anchorStartDateMeta,
+        anchorStartDate.isAcceptableOrUnknown(
+          data['anchor_start_date']!,
+          _anchorStartDateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('duration_days')) {
+      context.handle(
+        _durationDaysMeta,
+        durationDays.isAcceptableOrUnknown(
+          data['duration_days']!,
+          _durationDaysMeta,
+        ),
+      );
     }
     if (data.containsKey('recurrence_json')) {
       context.handle(
@@ -5035,6 +5154,18 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         ),
       );
     }
+    if (data.containsKey('importance')) {
+      context.handle(
+        _importanceMeta,
+        importance.isAcceptableOrUnknown(data['importance']!, _importanceMeta),
+      );
+    }
+    if (data.containsKey('color')) {
+      context.handle(
+        _colorMeta,
+        color.isAcceptableOrUnknown(data['color']!, _colorMeta),
+      );
+    }
     if (data.containsKey('completion_policy')) {
       context.handle(
         _completionPolicyMeta,
@@ -5044,10 +5175,22 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         ),
       );
     }
-    if (data.containsKey('deleted')) {
+    if (data.containsKey('tags_json')) {
       context.handle(
-        _deletedMeta,
-        deleted.isAcceptableOrUnknown(data['deleted']!, _deletedMeta),
+        _tagsJsonMeta,
+        tagsJson.isAcceptableOrUnknown(data['tags_json']!, _tagsJsonMeta),
+      );
+    }
+    if (data.containsKey('user_notes')) {
+      context.handle(
+        _userNotesMeta,
+        userNotes.isAcceptableOrUnknown(data['user_notes']!, _userNotesMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
       );
     }
     if (data.containsKey('created_at')) {
@@ -5095,18 +5238,34 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         DriftSqlType.string,
         data['${effectivePrefix}event_type'],
       )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
       timezone: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}timezone'],
       )!,
+      allDay: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}all_day'],
+      )!,
       startAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}start_at'],
-      )!,
+      ),
       durationMinutes: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}duration_minutes'],
-      )!,
+      ),
+      anchorStartDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}anchor_start_date'],
+      ),
+      durationDays: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}duration_days'],
+      ),
       recurrenceJson: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}recurrence_json'],
@@ -5123,14 +5282,30 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         DriftSqlType.string,
         data['${effectivePrefix}location_name'],
       ),
+      importance: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}importance'],
+      )!,
+      color: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}color'],
+      ),
       completionPolicy: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}completion_policy'],
       )!,
-      deleted: attachedDatabase.typeMapping.read(
-        DriftSqlType.bool,
-        data['${effectivePrefix}deleted'],
+      tagsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tags_json'],
       )!,
+      userNotes: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}user_notes'],
+      ),
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}created_at'],
@@ -5155,15 +5330,23 @@ class CalendarEventSery extends DataClass
   final String title;
   final String? description;
   final String eventType;
+  final String status;
   final String timezone;
-  final int startAt;
-  final int durationMinutes;
+  final bool allDay;
+  final int? startAt;
+  final int? durationMinutes;
+  final String? anchorStartDate;
+  final int? durationDays;
   final String recurrenceJson;
   final String? effectiveFrom;
   final String? effectiveThrough;
   final String? locationName;
+  final String importance;
+  final String? color;
   final String completionPolicy;
-  final bool deleted;
+  final String tagsJson;
+  final String? userNotes;
+  final int? deletedAt;
   final int createdAt;
   final int updatedAt;
   const CalendarEventSery({
@@ -5172,15 +5355,23 @@ class CalendarEventSery extends DataClass
     required this.title,
     this.description,
     required this.eventType,
+    required this.status,
     required this.timezone,
-    required this.startAt,
-    required this.durationMinutes,
+    required this.allDay,
+    this.startAt,
+    this.durationMinutes,
+    this.anchorStartDate,
+    this.durationDays,
     required this.recurrenceJson,
     this.effectiveFrom,
     this.effectiveThrough,
     this.locationName,
+    required this.importance,
+    this.color,
     required this.completionPolicy,
-    required this.deleted,
+    required this.tagsJson,
+    this.userNotes,
+    this.deletedAt,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -5194,9 +5385,21 @@ class CalendarEventSery extends DataClass
       map['description'] = Variable<String>(description);
     }
     map['event_type'] = Variable<String>(eventType);
+    map['status'] = Variable<String>(status);
     map['timezone'] = Variable<String>(timezone);
-    map['start_at'] = Variable<int>(startAt);
-    map['duration_minutes'] = Variable<int>(durationMinutes);
+    map['all_day'] = Variable<bool>(allDay);
+    if (!nullToAbsent || startAt != null) {
+      map['start_at'] = Variable<int>(startAt);
+    }
+    if (!nullToAbsent || durationMinutes != null) {
+      map['duration_minutes'] = Variable<int>(durationMinutes);
+    }
+    if (!nullToAbsent || anchorStartDate != null) {
+      map['anchor_start_date'] = Variable<String>(anchorStartDate);
+    }
+    if (!nullToAbsent || durationDays != null) {
+      map['duration_days'] = Variable<int>(durationDays);
+    }
     map['recurrence_json'] = Variable<String>(recurrenceJson);
     if (!nullToAbsent || effectiveFrom != null) {
       map['effective_from'] = Variable<String>(effectiveFrom);
@@ -5207,8 +5410,18 @@ class CalendarEventSery extends DataClass
     if (!nullToAbsent || locationName != null) {
       map['location_name'] = Variable<String>(locationName);
     }
+    map['importance'] = Variable<String>(importance);
+    if (!nullToAbsent || color != null) {
+      map['color'] = Variable<String>(color);
+    }
     map['completion_policy'] = Variable<String>(completionPolicy);
-    map['deleted'] = Variable<bool>(deleted);
+    map['tags_json'] = Variable<String>(tagsJson);
+    if (!nullToAbsent || userNotes != null) {
+      map['user_notes'] = Variable<String>(userNotes);
+    }
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
     map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
     return map;
@@ -5223,9 +5436,21 @@ class CalendarEventSery extends DataClass
           ? const Value.absent()
           : Value(description),
       eventType: Value(eventType),
+      status: Value(status),
       timezone: Value(timezone),
-      startAt: Value(startAt),
-      durationMinutes: Value(durationMinutes),
+      allDay: Value(allDay),
+      startAt: startAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(startAt),
+      durationMinutes: durationMinutes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationMinutes),
+      anchorStartDate: anchorStartDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(anchorStartDate),
+      durationDays: durationDays == null && nullToAbsent
+          ? const Value.absent()
+          : Value(durationDays),
       recurrenceJson: Value(recurrenceJson),
       effectiveFrom: effectiveFrom == null && nullToAbsent
           ? const Value.absent()
@@ -5236,8 +5461,18 @@ class CalendarEventSery extends DataClass
       locationName: locationName == null && nullToAbsent
           ? const Value.absent()
           : Value(locationName),
+      importance: Value(importance),
+      color: color == null && nullToAbsent
+          ? const Value.absent()
+          : Value(color),
       completionPolicy: Value(completionPolicy),
-      deleted: Value(deleted),
+      tagsJson: Value(tagsJson),
+      userNotes: userNotes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(userNotes),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -5254,15 +5489,23 @@ class CalendarEventSery extends DataClass
       title: serializer.fromJson<String>(json['title']),
       description: serializer.fromJson<String?>(json['description']),
       eventType: serializer.fromJson<String>(json['eventType']),
+      status: serializer.fromJson<String>(json['status']),
       timezone: serializer.fromJson<String>(json['timezone']),
-      startAt: serializer.fromJson<int>(json['startAt']),
-      durationMinutes: serializer.fromJson<int>(json['durationMinutes']),
+      allDay: serializer.fromJson<bool>(json['allDay']),
+      startAt: serializer.fromJson<int?>(json['startAt']),
+      durationMinutes: serializer.fromJson<int?>(json['durationMinutes']),
+      anchorStartDate: serializer.fromJson<String?>(json['anchorStartDate']),
+      durationDays: serializer.fromJson<int?>(json['durationDays']),
       recurrenceJson: serializer.fromJson<String>(json['recurrenceJson']),
       effectiveFrom: serializer.fromJson<String?>(json['effectiveFrom']),
       effectiveThrough: serializer.fromJson<String?>(json['effectiveThrough']),
       locationName: serializer.fromJson<String?>(json['locationName']),
+      importance: serializer.fromJson<String>(json['importance']),
+      color: serializer.fromJson<String?>(json['color']),
       completionPolicy: serializer.fromJson<String>(json['completionPolicy']),
-      deleted: serializer.fromJson<bool>(json['deleted']),
+      tagsJson: serializer.fromJson<String>(json['tagsJson']),
+      userNotes: serializer.fromJson<String?>(json['userNotes']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
     );
@@ -5276,15 +5519,23 @@ class CalendarEventSery extends DataClass
       'title': serializer.toJson<String>(title),
       'description': serializer.toJson<String?>(description),
       'eventType': serializer.toJson<String>(eventType),
+      'status': serializer.toJson<String>(status),
       'timezone': serializer.toJson<String>(timezone),
-      'startAt': serializer.toJson<int>(startAt),
-      'durationMinutes': serializer.toJson<int>(durationMinutes),
+      'allDay': serializer.toJson<bool>(allDay),
+      'startAt': serializer.toJson<int?>(startAt),
+      'durationMinutes': serializer.toJson<int?>(durationMinutes),
+      'anchorStartDate': serializer.toJson<String?>(anchorStartDate),
+      'durationDays': serializer.toJson<int?>(durationDays),
       'recurrenceJson': serializer.toJson<String>(recurrenceJson),
       'effectiveFrom': serializer.toJson<String?>(effectiveFrom),
       'effectiveThrough': serializer.toJson<String?>(effectiveThrough),
       'locationName': serializer.toJson<String?>(locationName),
+      'importance': serializer.toJson<String>(importance),
+      'color': serializer.toJson<String?>(color),
       'completionPolicy': serializer.toJson<String>(completionPolicy),
-      'deleted': serializer.toJson<bool>(deleted),
+      'tagsJson': serializer.toJson<String>(tagsJson),
+      'userNotes': serializer.toJson<String?>(userNotes),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
     };
@@ -5296,15 +5547,23 @@ class CalendarEventSery extends DataClass
     String? title,
     Value<String?> description = const Value.absent(),
     String? eventType,
+    String? status,
     String? timezone,
-    int? startAt,
-    int? durationMinutes,
+    bool? allDay,
+    Value<int?> startAt = const Value.absent(),
+    Value<int?> durationMinutes = const Value.absent(),
+    Value<String?> anchorStartDate = const Value.absent(),
+    Value<int?> durationDays = const Value.absent(),
     String? recurrenceJson,
     Value<String?> effectiveFrom = const Value.absent(),
     Value<String?> effectiveThrough = const Value.absent(),
     Value<String?> locationName = const Value.absent(),
+    String? importance,
+    Value<String?> color = const Value.absent(),
     String? completionPolicy,
-    bool? deleted,
+    String? tagsJson,
+    Value<String?> userNotes = const Value.absent(),
+    Value<int?> deletedAt = const Value.absent(),
     int? createdAt,
     int? updatedAt,
   }) => CalendarEventSery(
@@ -5313,9 +5572,17 @@ class CalendarEventSery extends DataClass
     title: title ?? this.title,
     description: description.present ? description.value : this.description,
     eventType: eventType ?? this.eventType,
+    status: status ?? this.status,
     timezone: timezone ?? this.timezone,
-    startAt: startAt ?? this.startAt,
-    durationMinutes: durationMinutes ?? this.durationMinutes,
+    allDay: allDay ?? this.allDay,
+    startAt: startAt.present ? startAt.value : this.startAt,
+    durationMinutes: durationMinutes.present
+        ? durationMinutes.value
+        : this.durationMinutes,
+    anchorStartDate: anchorStartDate.present
+        ? anchorStartDate.value
+        : this.anchorStartDate,
+    durationDays: durationDays.present ? durationDays.value : this.durationDays,
     recurrenceJson: recurrenceJson ?? this.recurrenceJson,
     effectiveFrom: effectiveFrom.present
         ? effectiveFrom.value
@@ -5324,8 +5591,12 @@ class CalendarEventSery extends DataClass
         ? effectiveThrough.value
         : this.effectiveThrough,
     locationName: locationName.present ? locationName.value : this.locationName,
+    importance: importance ?? this.importance,
+    color: color.present ? color.value : this.color,
     completionPolicy: completionPolicy ?? this.completionPolicy,
-    deleted: deleted ?? this.deleted,
+    tagsJson: tagsJson ?? this.tagsJson,
+    userNotes: userNotes.present ? userNotes.value : this.userNotes,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -5338,11 +5609,19 @@ class CalendarEventSery extends DataClass
           ? data.description.value
           : this.description,
       eventType: data.eventType.present ? data.eventType.value : this.eventType,
+      status: data.status.present ? data.status.value : this.status,
       timezone: data.timezone.present ? data.timezone.value : this.timezone,
+      allDay: data.allDay.present ? data.allDay.value : this.allDay,
       startAt: data.startAt.present ? data.startAt.value : this.startAt,
       durationMinutes: data.durationMinutes.present
           ? data.durationMinutes.value
           : this.durationMinutes,
+      anchorStartDate: data.anchorStartDate.present
+          ? data.anchorStartDate.value
+          : this.anchorStartDate,
+      durationDays: data.durationDays.present
+          ? data.durationDays.value
+          : this.durationDays,
       recurrenceJson: data.recurrenceJson.present
           ? data.recurrenceJson.value
           : this.recurrenceJson,
@@ -5355,10 +5634,16 @@ class CalendarEventSery extends DataClass
       locationName: data.locationName.present
           ? data.locationName.value
           : this.locationName,
+      importance: data.importance.present
+          ? data.importance.value
+          : this.importance,
+      color: data.color.present ? data.color.value : this.color,
       completionPolicy: data.completionPolicy.present
           ? data.completionPolicy.value
           : this.completionPolicy,
-      deleted: data.deleted.present ? data.deleted.value : this.deleted,
+      tagsJson: data.tagsJson.present ? data.tagsJson.value : this.tagsJson,
+      userNotes: data.userNotes.present ? data.userNotes.value : this.userNotes,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -5372,15 +5657,23 @@ class CalendarEventSery extends DataClass
           ..write('title: $title, ')
           ..write('description: $description, ')
           ..write('eventType: $eventType, ')
+          ..write('status: $status, ')
           ..write('timezone: $timezone, ')
+          ..write('allDay: $allDay, ')
           ..write('startAt: $startAt, ')
           ..write('durationMinutes: $durationMinutes, ')
+          ..write('anchorStartDate: $anchorStartDate, ')
+          ..write('durationDays: $durationDays, ')
           ..write('recurrenceJson: $recurrenceJson, ')
           ..write('effectiveFrom: $effectiveFrom, ')
           ..write('effectiveThrough: $effectiveThrough, ')
           ..write('locationName: $locationName, ')
+          ..write('importance: $importance, ')
+          ..write('color: $color, ')
           ..write('completionPolicy: $completionPolicy, ')
-          ..write('deleted: $deleted, ')
+          ..write('tagsJson: $tagsJson, ')
+          ..write('userNotes: $userNotes, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -5388,24 +5681,32 @@ class CalendarEventSery extends DataClass
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     accountId,
     title,
     description,
     eventType,
+    status,
     timezone,
+    allDay,
     startAt,
     durationMinutes,
+    anchorStartDate,
+    durationDays,
     recurrenceJson,
     effectiveFrom,
     effectiveThrough,
     locationName,
+    importance,
+    color,
     completionPolicy,
-    deleted,
+    tagsJson,
+    userNotes,
+    deletedAt,
     createdAt,
     updatedAt,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -5415,15 +5716,23 @@ class CalendarEventSery extends DataClass
           other.title == this.title &&
           other.description == this.description &&
           other.eventType == this.eventType &&
+          other.status == this.status &&
           other.timezone == this.timezone &&
+          other.allDay == this.allDay &&
           other.startAt == this.startAt &&
           other.durationMinutes == this.durationMinutes &&
+          other.anchorStartDate == this.anchorStartDate &&
+          other.durationDays == this.durationDays &&
           other.recurrenceJson == this.recurrenceJson &&
           other.effectiveFrom == this.effectiveFrom &&
           other.effectiveThrough == this.effectiveThrough &&
           other.locationName == this.locationName &&
+          other.importance == this.importance &&
+          other.color == this.color &&
           other.completionPolicy == this.completionPolicy &&
-          other.deleted == this.deleted &&
+          other.tagsJson == this.tagsJson &&
+          other.userNotes == this.userNotes &&
+          other.deletedAt == this.deletedAt &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -5434,15 +5743,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
   final Value<String> title;
   final Value<String?> description;
   final Value<String> eventType;
+  final Value<String> status;
   final Value<String> timezone;
-  final Value<int> startAt;
-  final Value<int> durationMinutes;
+  final Value<bool> allDay;
+  final Value<int?> startAt;
+  final Value<int?> durationMinutes;
+  final Value<String?> anchorStartDate;
+  final Value<int?> durationDays;
   final Value<String> recurrenceJson;
   final Value<String?> effectiveFrom;
   final Value<String?> effectiveThrough;
   final Value<String?> locationName;
+  final Value<String> importance;
+  final Value<String?> color;
   final Value<String> completionPolicy;
-  final Value<bool> deleted;
+  final Value<String> tagsJson;
+  final Value<String?> userNotes;
+  final Value<int?> deletedAt;
   final Value<int> createdAt;
   final Value<int> updatedAt;
   final Value<int> rowid;
@@ -5452,15 +5769,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     this.title = const Value.absent(),
     this.description = const Value.absent(),
     this.eventType = const Value.absent(),
+    this.status = const Value.absent(),
     this.timezone = const Value.absent(),
+    this.allDay = const Value.absent(),
     this.startAt = const Value.absent(),
     this.durationMinutes = const Value.absent(),
+    this.anchorStartDate = const Value.absent(),
+    this.durationDays = const Value.absent(),
     this.recurrenceJson = const Value.absent(),
     this.effectiveFrom = const Value.absent(),
     this.effectiveThrough = const Value.absent(),
     this.locationName = const Value.absent(),
+    this.importance = const Value.absent(),
+    this.color = const Value.absent(),
     this.completionPolicy = const Value.absent(),
-    this.deleted = const Value.absent(),
+    this.tagsJson = const Value.absent(),
+    this.userNotes = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -5471,15 +5796,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     required String title,
     this.description = const Value.absent(),
     required String eventType,
+    this.status = const Value.absent(),
     required String timezone,
-    required int startAt,
-    required int durationMinutes,
+    this.allDay = const Value.absent(),
+    this.startAt = const Value.absent(),
+    this.durationMinutes = const Value.absent(),
+    this.anchorStartDate = const Value.absent(),
+    this.durationDays = const Value.absent(),
     required String recurrenceJson,
     this.effectiveFrom = const Value.absent(),
     this.effectiveThrough = const Value.absent(),
     this.locationName = const Value.absent(),
+    this.importance = const Value.absent(),
+    this.color = const Value.absent(),
     this.completionPolicy = const Value.absent(),
-    this.deleted = const Value.absent(),
+    this.tagsJson = const Value.absent(),
+    this.userNotes = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     required int createdAt,
     required int updatedAt,
     this.rowid = const Value.absent(),
@@ -5488,8 +5821,6 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
        title = Value(title),
        eventType = Value(eventType),
        timezone = Value(timezone),
-       startAt = Value(startAt),
-       durationMinutes = Value(durationMinutes),
        recurrenceJson = Value(recurrenceJson),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
@@ -5499,15 +5830,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     Expression<String>? title,
     Expression<String>? description,
     Expression<String>? eventType,
+    Expression<String>? status,
     Expression<String>? timezone,
+    Expression<bool>? allDay,
     Expression<int>? startAt,
     Expression<int>? durationMinutes,
+    Expression<String>? anchorStartDate,
+    Expression<int>? durationDays,
     Expression<String>? recurrenceJson,
     Expression<String>? effectiveFrom,
     Expression<String>? effectiveThrough,
     Expression<String>? locationName,
+    Expression<String>? importance,
+    Expression<String>? color,
     Expression<String>? completionPolicy,
-    Expression<bool>? deleted,
+    Expression<String>? tagsJson,
+    Expression<String>? userNotes,
+    Expression<int>? deletedAt,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
     Expression<int>? rowid,
@@ -5518,15 +5857,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
       if (title != null) 'title': title,
       if (description != null) 'description': description,
       if (eventType != null) 'event_type': eventType,
+      if (status != null) 'status': status,
       if (timezone != null) 'timezone': timezone,
+      if (allDay != null) 'all_day': allDay,
       if (startAt != null) 'start_at': startAt,
       if (durationMinutes != null) 'duration_minutes': durationMinutes,
+      if (anchorStartDate != null) 'anchor_start_date': anchorStartDate,
+      if (durationDays != null) 'duration_days': durationDays,
       if (recurrenceJson != null) 'recurrence_json': recurrenceJson,
       if (effectiveFrom != null) 'effective_from': effectiveFrom,
       if (effectiveThrough != null) 'effective_through': effectiveThrough,
       if (locationName != null) 'location_name': locationName,
+      if (importance != null) 'importance': importance,
+      if (color != null) 'color': color,
       if (completionPolicy != null) 'completion_policy': completionPolicy,
-      if (deleted != null) 'deleted': deleted,
+      if (tagsJson != null) 'tags_json': tagsJson,
+      if (userNotes != null) 'user_notes': userNotes,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -5539,15 +5886,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     Value<String>? title,
     Value<String?>? description,
     Value<String>? eventType,
+    Value<String>? status,
     Value<String>? timezone,
-    Value<int>? startAt,
-    Value<int>? durationMinutes,
+    Value<bool>? allDay,
+    Value<int?>? startAt,
+    Value<int?>? durationMinutes,
+    Value<String?>? anchorStartDate,
+    Value<int?>? durationDays,
     Value<String>? recurrenceJson,
     Value<String?>? effectiveFrom,
     Value<String?>? effectiveThrough,
     Value<String?>? locationName,
+    Value<String>? importance,
+    Value<String?>? color,
     Value<String>? completionPolicy,
-    Value<bool>? deleted,
+    Value<String>? tagsJson,
+    Value<String?>? userNotes,
+    Value<int?>? deletedAt,
     Value<int>? createdAt,
     Value<int>? updatedAt,
     Value<int>? rowid,
@@ -5558,15 +5913,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
       title: title ?? this.title,
       description: description ?? this.description,
       eventType: eventType ?? this.eventType,
+      status: status ?? this.status,
       timezone: timezone ?? this.timezone,
+      allDay: allDay ?? this.allDay,
       startAt: startAt ?? this.startAt,
       durationMinutes: durationMinutes ?? this.durationMinutes,
+      anchorStartDate: anchorStartDate ?? this.anchorStartDate,
+      durationDays: durationDays ?? this.durationDays,
       recurrenceJson: recurrenceJson ?? this.recurrenceJson,
       effectiveFrom: effectiveFrom ?? this.effectiveFrom,
       effectiveThrough: effectiveThrough ?? this.effectiveThrough,
       locationName: locationName ?? this.locationName,
+      importance: importance ?? this.importance,
+      color: color ?? this.color,
       completionPolicy: completionPolicy ?? this.completionPolicy,
-      deleted: deleted ?? this.deleted,
+      tagsJson: tagsJson ?? this.tagsJson,
+      userNotes: userNotes ?? this.userNotes,
+      deletedAt: deletedAt ?? this.deletedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -5591,14 +5954,26 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     if (eventType.present) {
       map['event_type'] = Variable<String>(eventType.value);
     }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
     if (timezone.present) {
       map['timezone'] = Variable<String>(timezone.value);
+    }
+    if (allDay.present) {
+      map['all_day'] = Variable<bool>(allDay.value);
     }
     if (startAt.present) {
       map['start_at'] = Variable<int>(startAt.value);
     }
     if (durationMinutes.present) {
       map['duration_minutes'] = Variable<int>(durationMinutes.value);
+    }
+    if (anchorStartDate.present) {
+      map['anchor_start_date'] = Variable<String>(anchorStartDate.value);
+    }
+    if (durationDays.present) {
+      map['duration_days'] = Variable<int>(durationDays.value);
     }
     if (recurrenceJson.present) {
       map['recurrence_json'] = Variable<String>(recurrenceJson.value);
@@ -5612,11 +5987,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     if (locationName.present) {
       map['location_name'] = Variable<String>(locationName.value);
     }
+    if (importance.present) {
+      map['importance'] = Variable<String>(importance.value);
+    }
+    if (color.present) {
+      map['color'] = Variable<String>(color.value);
+    }
     if (completionPolicy.present) {
       map['completion_policy'] = Variable<String>(completionPolicy.value);
     }
-    if (deleted.present) {
-      map['deleted'] = Variable<bool>(deleted.value);
+    if (tagsJson.present) {
+      map['tags_json'] = Variable<String>(tagsJson.value);
+    }
+    if (userNotes.present) {
+      map['user_notes'] = Variable<String>(userNotes.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
@@ -5638,15 +6025,23 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
           ..write('title: $title, ')
           ..write('description: $description, ')
           ..write('eventType: $eventType, ')
+          ..write('status: $status, ')
           ..write('timezone: $timezone, ')
+          ..write('allDay: $allDay, ')
           ..write('startAt: $startAt, ')
           ..write('durationMinutes: $durationMinutes, ')
+          ..write('anchorStartDate: $anchorStartDate, ')
+          ..write('durationDays: $durationDays, ')
           ..write('recurrenceJson: $recurrenceJson, ')
           ..write('effectiveFrom: $effectiveFrom, ')
           ..write('effectiveThrough: $effectiveThrough, ')
           ..write('locationName: $locationName, ')
+          ..write('importance: $importance, ')
+          ..write('color: $color, ')
           ..write('completionPolicy: $completionPolicy, ')
-          ..write('deleted: $deleted, ')
+          ..write('tagsJson: $tagsJson, ')
+          ..write('userNotes: $userNotes, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -7365,6 +7760,29 @@ class $CalendarEventOccurrenceExceptionsTable
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _originalStartAtMeta = const VerificationMeta(
+    'originalStartAt',
+  );
+  @override
+  late final GeneratedColumn<int> originalStartAt = GeneratedColumn<int>(
+    'original_start_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _originalStartDateMeta = const VerificationMeta(
+    'originalStartDate',
+  );
+  @override
+  late final GeneratedColumn<String> originalStartDate =
+      GeneratedColumn<String>(
+        'original_start_date',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
   static const VerificationMeta _kindMeta = const VerificationMeta('kind');
   @override
   late final GeneratedColumn<String> kind = GeneratedColumn<String>(
@@ -7374,6 +7792,18 @@ class $CalendarEventOccurrenceExceptionsTable
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _overriddenFieldsJsonMeta =
+      const VerificationMeta('overriddenFieldsJson');
+  @override
+  late final GeneratedColumn<String> overriddenFieldsJson =
+      GeneratedColumn<String>(
+        'overridden_fields_json',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('[]'),
+      );
   static const VerificationMeta _overrideJsonMeta = const VerificationMeta(
     'overrideJson',
   );
@@ -7384,6 +7814,41 @@ class $CalendarEventOccurrenceExceptionsTable
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _orphanedMeta = const VerificationMeta(
+    'orphaned',
+  );
+  @override
+  late final GeneratedColumn<bool> orphaned = GeneratedColumn<bool>(
+    'orphaned',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("orphaned" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
@@ -7413,8 +7878,14 @@ class $CalendarEventOccurrenceExceptionsTable
     accountId,
     seriesId,
     occurrenceKey,
+    originalStartAt,
+    originalStartDate,
     kind,
+    overriddenFieldsJson,
     overrideJson,
+    status,
+    orphaned,
+    deletedAt,
     createdAt,
     updatedAt,
   ];
@@ -7462,6 +7933,24 @@ class $CalendarEventOccurrenceExceptionsTable
     } else if (isInserting) {
       context.missing(_occurrenceKeyMeta);
     }
+    if (data.containsKey('original_start_at')) {
+      context.handle(
+        _originalStartAtMeta,
+        originalStartAt.isAcceptableOrUnknown(
+          data['original_start_at']!,
+          _originalStartAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('original_start_date')) {
+      context.handle(
+        _originalStartDateMeta,
+        originalStartDate.isAcceptableOrUnknown(
+          data['original_start_date']!,
+          _originalStartDateMeta,
+        ),
+      );
+    }
     if (data.containsKey('kind')) {
       context.handle(
         _kindMeta,
@@ -7469,6 +7958,15 @@ class $CalendarEventOccurrenceExceptionsTable
       );
     } else if (isInserting) {
       context.missing(_kindMeta);
+    }
+    if (data.containsKey('overridden_fields_json')) {
+      context.handle(
+        _overriddenFieldsJsonMeta,
+        overriddenFieldsJson.isAcceptableOrUnknown(
+          data['overridden_fields_json']!,
+          _overriddenFieldsJsonMeta,
+        ),
+      );
     }
     if (data.containsKey('override_json')) {
       context.handle(
@@ -7480,6 +7978,24 @@ class $CalendarEventOccurrenceExceptionsTable
       );
     } else if (isInserting) {
       context.missing(_overrideJsonMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
+    if (data.containsKey('orphaned')) {
+      context.handle(
+        _orphanedMeta,
+        orphaned.isAcceptableOrUnknown(data['orphaned']!, _orphanedMeta),
+      );
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
     }
     if (data.containsKey('created_at')) {
       context.handle(
@@ -7529,14 +8045,38 @@ class $CalendarEventOccurrenceExceptionsTable
         DriftSqlType.string,
         data['${effectivePrefix}occurrence_key'],
       )!,
+      originalStartAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}original_start_at'],
+      ),
+      originalStartDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}original_start_date'],
+      ),
       kind: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}kind'],
+      )!,
+      overriddenFieldsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}overridden_fields_json'],
       )!,
       overrideJson: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}override_json'],
       )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      ),
+      orphaned: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}orphaned'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}created_at'],
@@ -7560,8 +8100,14 @@ class CalendarEventOccurrenceException extends DataClass
   final String accountId;
   final String seriesId;
   final String occurrenceKey;
+  final int? originalStartAt;
+  final String? originalStartDate;
   final String kind;
+  final String overriddenFieldsJson;
   final String overrideJson;
+  final String? status;
+  final bool orphaned;
+  final int? deletedAt;
   final int createdAt;
   final int updatedAt;
   const CalendarEventOccurrenceException({
@@ -7569,8 +8115,14 @@ class CalendarEventOccurrenceException extends DataClass
     required this.accountId,
     required this.seriesId,
     required this.occurrenceKey,
+    this.originalStartAt,
+    this.originalStartDate,
     required this.kind,
+    required this.overriddenFieldsJson,
     required this.overrideJson,
+    this.status,
+    required this.orphaned,
+    this.deletedAt,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -7581,8 +8133,22 @@ class CalendarEventOccurrenceException extends DataClass
     map['account_id'] = Variable<String>(accountId);
     map['series_id'] = Variable<String>(seriesId);
     map['occurrence_key'] = Variable<String>(occurrenceKey);
+    if (!nullToAbsent || originalStartAt != null) {
+      map['original_start_at'] = Variable<int>(originalStartAt);
+    }
+    if (!nullToAbsent || originalStartDate != null) {
+      map['original_start_date'] = Variable<String>(originalStartDate);
+    }
     map['kind'] = Variable<String>(kind);
+    map['overridden_fields_json'] = Variable<String>(overriddenFieldsJson);
     map['override_json'] = Variable<String>(overrideJson);
+    if (!nullToAbsent || status != null) {
+      map['status'] = Variable<String>(status);
+    }
+    map['orphaned'] = Variable<bool>(orphaned);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
     map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
     return map;
@@ -7594,8 +8160,22 @@ class CalendarEventOccurrenceException extends DataClass
       accountId: Value(accountId),
       seriesId: Value(seriesId),
       occurrenceKey: Value(occurrenceKey),
+      originalStartAt: originalStartAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(originalStartAt),
+      originalStartDate: originalStartDate == null && nullToAbsent
+          ? const Value.absent()
+          : Value(originalStartDate),
       kind: Value(kind),
+      overriddenFieldsJson: Value(overriddenFieldsJson),
       overrideJson: Value(overrideJson),
+      status: status == null && nullToAbsent
+          ? const Value.absent()
+          : Value(status),
+      orphaned: Value(orphaned),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -7611,8 +8191,18 @@ class CalendarEventOccurrenceException extends DataClass
       accountId: serializer.fromJson<String>(json['accountId']),
       seriesId: serializer.fromJson<String>(json['seriesId']),
       occurrenceKey: serializer.fromJson<String>(json['occurrenceKey']),
+      originalStartAt: serializer.fromJson<int?>(json['originalStartAt']),
+      originalStartDate: serializer.fromJson<String?>(
+        json['originalStartDate'],
+      ),
       kind: serializer.fromJson<String>(json['kind']),
+      overriddenFieldsJson: serializer.fromJson<String>(
+        json['overriddenFieldsJson'],
+      ),
       overrideJson: serializer.fromJson<String>(json['overrideJson']),
+      status: serializer.fromJson<String?>(json['status']),
+      orphaned: serializer.fromJson<bool>(json['orphaned']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
     );
@@ -7625,8 +8215,14 @@ class CalendarEventOccurrenceException extends DataClass
       'accountId': serializer.toJson<String>(accountId),
       'seriesId': serializer.toJson<String>(seriesId),
       'occurrenceKey': serializer.toJson<String>(occurrenceKey),
+      'originalStartAt': serializer.toJson<int?>(originalStartAt),
+      'originalStartDate': serializer.toJson<String?>(originalStartDate),
       'kind': serializer.toJson<String>(kind),
+      'overriddenFieldsJson': serializer.toJson<String>(overriddenFieldsJson),
       'overrideJson': serializer.toJson<String>(overrideJson),
+      'status': serializer.toJson<String?>(status),
+      'orphaned': serializer.toJson<bool>(orphaned),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
     };
@@ -7637,8 +8233,14 @@ class CalendarEventOccurrenceException extends DataClass
     String? accountId,
     String? seriesId,
     String? occurrenceKey,
+    Value<int?> originalStartAt = const Value.absent(),
+    Value<String?> originalStartDate = const Value.absent(),
     String? kind,
+    String? overriddenFieldsJson,
     String? overrideJson,
+    Value<String?> status = const Value.absent(),
+    bool? orphaned,
+    Value<int?> deletedAt = const Value.absent(),
     int? createdAt,
     int? updatedAt,
   }) => CalendarEventOccurrenceException(
@@ -7646,8 +8248,18 @@ class CalendarEventOccurrenceException extends DataClass
     accountId: accountId ?? this.accountId,
     seriesId: seriesId ?? this.seriesId,
     occurrenceKey: occurrenceKey ?? this.occurrenceKey,
+    originalStartAt: originalStartAt.present
+        ? originalStartAt.value
+        : this.originalStartAt,
+    originalStartDate: originalStartDate.present
+        ? originalStartDate.value
+        : this.originalStartDate,
     kind: kind ?? this.kind,
+    overriddenFieldsJson: overriddenFieldsJson ?? this.overriddenFieldsJson,
     overrideJson: overrideJson ?? this.overrideJson,
+    status: status.present ? status.value : this.status,
+    orphaned: orphaned ?? this.orphaned,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -7661,10 +8273,22 @@ class CalendarEventOccurrenceException extends DataClass
       occurrenceKey: data.occurrenceKey.present
           ? data.occurrenceKey.value
           : this.occurrenceKey,
+      originalStartAt: data.originalStartAt.present
+          ? data.originalStartAt.value
+          : this.originalStartAt,
+      originalStartDate: data.originalStartDate.present
+          ? data.originalStartDate.value
+          : this.originalStartDate,
       kind: data.kind.present ? data.kind.value : this.kind,
+      overriddenFieldsJson: data.overriddenFieldsJson.present
+          ? data.overriddenFieldsJson.value
+          : this.overriddenFieldsJson,
       overrideJson: data.overrideJson.present
           ? data.overrideJson.value
           : this.overrideJson,
+      status: data.status.present ? data.status.value : this.status,
+      orphaned: data.orphaned.present ? data.orphaned.value : this.orphaned,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -7677,8 +8301,14 @@ class CalendarEventOccurrenceException extends DataClass
           ..write('accountId: $accountId, ')
           ..write('seriesId: $seriesId, ')
           ..write('occurrenceKey: $occurrenceKey, ')
+          ..write('originalStartAt: $originalStartAt, ')
+          ..write('originalStartDate: $originalStartDate, ')
           ..write('kind: $kind, ')
+          ..write('overriddenFieldsJson: $overriddenFieldsJson, ')
           ..write('overrideJson: $overrideJson, ')
+          ..write('status: $status, ')
+          ..write('orphaned: $orphaned, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -7691,8 +8321,14 @@ class CalendarEventOccurrenceException extends DataClass
     accountId,
     seriesId,
     occurrenceKey,
+    originalStartAt,
+    originalStartDate,
     kind,
+    overriddenFieldsJson,
     overrideJson,
+    status,
+    orphaned,
+    deletedAt,
     createdAt,
     updatedAt,
   );
@@ -7704,8 +8340,14 @@ class CalendarEventOccurrenceException extends DataClass
           other.accountId == this.accountId &&
           other.seriesId == this.seriesId &&
           other.occurrenceKey == this.occurrenceKey &&
+          other.originalStartAt == this.originalStartAt &&
+          other.originalStartDate == this.originalStartDate &&
           other.kind == this.kind &&
+          other.overriddenFieldsJson == this.overriddenFieldsJson &&
           other.overrideJson == this.overrideJson &&
+          other.status == this.status &&
+          other.orphaned == this.orphaned &&
+          other.deletedAt == this.deletedAt &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -7716,8 +8358,14 @@ class CalendarEventOccurrenceExceptionsCompanion
   final Value<String> accountId;
   final Value<String> seriesId;
   final Value<String> occurrenceKey;
+  final Value<int?> originalStartAt;
+  final Value<String?> originalStartDate;
   final Value<String> kind;
+  final Value<String> overriddenFieldsJson;
   final Value<String> overrideJson;
+  final Value<String?> status;
+  final Value<bool> orphaned;
+  final Value<int?> deletedAt;
   final Value<int> createdAt;
   final Value<int> updatedAt;
   final Value<int> rowid;
@@ -7726,8 +8374,14 @@ class CalendarEventOccurrenceExceptionsCompanion
     this.accountId = const Value.absent(),
     this.seriesId = const Value.absent(),
     this.occurrenceKey = const Value.absent(),
+    this.originalStartAt = const Value.absent(),
+    this.originalStartDate = const Value.absent(),
     this.kind = const Value.absent(),
+    this.overriddenFieldsJson = const Value.absent(),
     this.overrideJson = const Value.absent(),
+    this.status = const Value.absent(),
+    this.orphaned = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -7737,8 +8391,14 @@ class CalendarEventOccurrenceExceptionsCompanion
     required String accountId,
     required String seriesId,
     required String occurrenceKey,
+    this.originalStartAt = const Value.absent(),
+    this.originalStartDate = const Value.absent(),
     required String kind,
+    this.overriddenFieldsJson = const Value.absent(),
     required String overrideJson,
+    this.status = const Value.absent(),
+    this.orphaned = const Value.absent(),
+    this.deletedAt = const Value.absent(),
     required int createdAt,
     required int updatedAt,
     this.rowid = const Value.absent(),
@@ -7755,8 +8415,14 @@ class CalendarEventOccurrenceExceptionsCompanion
     Expression<String>? accountId,
     Expression<String>? seriesId,
     Expression<String>? occurrenceKey,
+    Expression<int>? originalStartAt,
+    Expression<String>? originalStartDate,
     Expression<String>? kind,
+    Expression<String>? overriddenFieldsJson,
     Expression<String>? overrideJson,
+    Expression<String>? status,
+    Expression<bool>? orphaned,
+    Expression<int>? deletedAt,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
     Expression<int>? rowid,
@@ -7766,8 +8432,15 @@ class CalendarEventOccurrenceExceptionsCompanion
       if (accountId != null) 'account_id': accountId,
       if (seriesId != null) 'series_id': seriesId,
       if (occurrenceKey != null) 'occurrence_key': occurrenceKey,
+      if (originalStartAt != null) 'original_start_at': originalStartAt,
+      if (originalStartDate != null) 'original_start_date': originalStartDate,
       if (kind != null) 'kind': kind,
+      if (overriddenFieldsJson != null)
+        'overridden_fields_json': overriddenFieldsJson,
       if (overrideJson != null) 'override_json': overrideJson,
+      if (status != null) 'status': status,
+      if (orphaned != null) 'orphaned': orphaned,
+      if (deletedAt != null) 'deleted_at': deletedAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -7779,8 +8452,14 @@ class CalendarEventOccurrenceExceptionsCompanion
     Value<String>? accountId,
     Value<String>? seriesId,
     Value<String>? occurrenceKey,
+    Value<int?>? originalStartAt,
+    Value<String?>? originalStartDate,
     Value<String>? kind,
+    Value<String>? overriddenFieldsJson,
     Value<String>? overrideJson,
+    Value<String?>? status,
+    Value<bool>? orphaned,
+    Value<int?>? deletedAt,
     Value<int>? createdAt,
     Value<int>? updatedAt,
     Value<int>? rowid,
@@ -7790,8 +8469,14 @@ class CalendarEventOccurrenceExceptionsCompanion
       accountId: accountId ?? this.accountId,
       seriesId: seriesId ?? this.seriesId,
       occurrenceKey: occurrenceKey ?? this.occurrenceKey,
+      originalStartAt: originalStartAt ?? this.originalStartAt,
+      originalStartDate: originalStartDate ?? this.originalStartDate,
       kind: kind ?? this.kind,
+      overriddenFieldsJson: overriddenFieldsJson ?? this.overriddenFieldsJson,
       overrideJson: overrideJson ?? this.overrideJson,
+      status: status ?? this.status,
+      orphaned: orphaned ?? this.orphaned,
+      deletedAt: deletedAt ?? this.deletedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -7813,11 +8498,31 @@ class CalendarEventOccurrenceExceptionsCompanion
     if (occurrenceKey.present) {
       map['occurrence_key'] = Variable<String>(occurrenceKey.value);
     }
+    if (originalStartAt.present) {
+      map['original_start_at'] = Variable<int>(originalStartAt.value);
+    }
+    if (originalStartDate.present) {
+      map['original_start_date'] = Variable<String>(originalStartDate.value);
+    }
     if (kind.present) {
       map['kind'] = Variable<String>(kind.value);
     }
+    if (overriddenFieldsJson.present) {
+      map['overridden_fields_json'] = Variable<String>(
+        overriddenFieldsJson.value,
+      );
+    }
     if (overrideJson.present) {
       map['override_json'] = Variable<String>(overrideJson.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (orphaned.present) {
+      map['orphaned'] = Variable<bool>(orphaned.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
     }
     if (createdAt.present) {
       map['created_at'] = Variable<int>(createdAt.value);
@@ -7838,8 +8543,14 @@ class CalendarEventOccurrenceExceptionsCompanion
           ..write('accountId: $accountId, ')
           ..write('seriesId: $seriesId, ')
           ..write('occurrenceKey: $occurrenceKey, ')
+          ..write('originalStartAt: $originalStartAt, ')
+          ..write('originalStartDate: $originalStartDate, ')
           ..write('kind: $kind, ')
+          ..write('overriddenFieldsJson: $overriddenFieldsJson, ')
           ..write('overrideJson: $overrideJson, ')
+          ..write('status: $status, ')
+          ..write('orphaned: $orphaned, ')
+          ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -20086,15 +20797,23 @@ typedef $$CalendarEventSeriesTableCreateCompanionBuilder =
       required String title,
       Value<String?> description,
       required String eventType,
+      Value<String> status,
       required String timezone,
-      required int startAt,
-      required int durationMinutes,
+      Value<bool> allDay,
+      Value<int?> startAt,
+      Value<int?> durationMinutes,
+      Value<String?> anchorStartDate,
+      Value<int?> durationDays,
       required String recurrenceJson,
       Value<String?> effectiveFrom,
       Value<String?> effectiveThrough,
       Value<String?> locationName,
+      Value<String> importance,
+      Value<String?> color,
       Value<String> completionPolicy,
-      Value<bool> deleted,
+      Value<String> tagsJson,
+      Value<String?> userNotes,
+      Value<int?> deletedAt,
       required int createdAt,
       required int updatedAt,
       Value<int> rowid,
@@ -20106,15 +20825,23 @@ typedef $$CalendarEventSeriesTableUpdateCompanionBuilder =
       Value<String> title,
       Value<String?> description,
       Value<String> eventType,
+      Value<String> status,
       Value<String> timezone,
-      Value<int> startAt,
-      Value<int> durationMinutes,
+      Value<bool> allDay,
+      Value<int?> startAt,
+      Value<int?> durationMinutes,
+      Value<String?> anchorStartDate,
+      Value<int?> durationDays,
       Value<String> recurrenceJson,
       Value<String?> effectiveFrom,
       Value<String?> effectiveThrough,
       Value<String?> locationName,
+      Value<String> importance,
+      Value<String?> color,
       Value<String> completionPolicy,
-      Value<bool> deleted,
+      Value<String> tagsJson,
+      Value<String?> userNotes,
+      Value<int?> deletedAt,
       Value<int> createdAt,
       Value<int> updatedAt,
       Value<int> rowid,
@@ -20226,8 +20953,18 @@ class $$CalendarEventSeriesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get timezone => $composableBuilder(
     column: $table.timezone,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get allDay => $composableBuilder(
+    column: $table.allDay,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -20238,6 +20975,16 @@ class $$CalendarEventSeriesTableFilterComposer
 
   ColumnFilters<int> get durationMinutes => $composableBuilder(
     column: $table.durationMinutes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get anchorStartDate => $composableBuilder(
+    column: $table.anchorStartDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get durationDays => $composableBuilder(
+    column: $table.durationDays,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -20261,13 +21008,33 @@ class $$CalendarEventSeriesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get importance => $composableBuilder(
+    column: $table.importance,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get color => $composableBuilder(
+    column: $table.color,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get completionPolicy => $composableBuilder(
     column: $table.completionPolicy,
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<bool> get deleted => $composableBuilder(
-    column: $table.deleted,
+  ColumnFilters<String> get tagsJson => $composableBuilder(
+    column: $table.tagsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get userNotes => $composableBuilder(
+    column: $table.userNotes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -20388,8 +21155,18 @@ class $$CalendarEventSeriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get timezone => $composableBuilder(
     column: $table.timezone,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get allDay => $composableBuilder(
+    column: $table.allDay,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -20400,6 +21177,16 @@ class $$CalendarEventSeriesTableOrderingComposer
 
   ColumnOrderings<int> get durationMinutes => $composableBuilder(
     column: $table.durationMinutes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get anchorStartDate => $composableBuilder(
+    column: $table.anchorStartDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get durationDays => $composableBuilder(
+    column: $table.durationDays,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -20423,13 +21210,33 @@ class $$CalendarEventSeriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get importance => $composableBuilder(
+    column: $table.importance,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get color => $composableBuilder(
+    column: $table.color,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get completionPolicy => $composableBuilder(
     column: $table.completionPolicy,
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<bool> get deleted => $composableBuilder(
-    column: $table.deleted,
+  ColumnOrderings<String> get tagsJson => $composableBuilder(
+    column: $table.tagsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get userNotes => $composableBuilder(
+    column: $table.userNotes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -20490,14 +21297,30 @@ class $$CalendarEventSeriesTableAnnotationComposer
   GeneratedColumn<String> get eventType =>
       $composableBuilder(column: $table.eventType, builder: (column) => column);
 
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
   GeneratedColumn<String> get timezone =>
       $composableBuilder(column: $table.timezone, builder: (column) => column);
+
+  GeneratedColumn<bool> get allDay =>
+      $composableBuilder(column: $table.allDay, builder: (column) => column);
 
   GeneratedColumn<int> get startAt =>
       $composableBuilder(column: $table.startAt, builder: (column) => column);
 
   GeneratedColumn<int> get durationMinutes => $composableBuilder(
     column: $table.durationMinutes,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get anchorStartDate => $composableBuilder(
+    column: $table.anchorStartDate,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get durationDays => $composableBuilder(
+    column: $table.durationDays,
     builder: (column) => column,
   );
 
@@ -20521,13 +21344,27 @@ class $$CalendarEventSeriesTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<String> get importance => $composableBuilder(
+    column: $table.importance,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get color =>
+      $composableBuilder(column: $table.color, builder: (column) => column);
+
   GeneratedColumn<String> get completionPolicy => $composableBuilder(
     column: $table.completionPolicy,
     builder: (column) => column,
   );
 
-  GeneratedColumn<bool> get deleted =>
-      $composableBuilder(column: $table.deleted, builder: (column) => column);
+  GeneratedColumn<String> get tagsJson =>
+      $composableBuilder(column: $table.tagsJson, builder: (column) => column);
+
+  GeneratedColumn<String> get userNotes =>
+      $composableBuilder(column: $table.userNotes, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   GeneratedColumn<int> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -20658,15 +21495,23 @@ class $$CalendarEventSeriesTableTableManager
                 Value<String> title = const Value.absent(),
                 Value<String?> description = const Value.absent(),
                 Value<String> eventType = const Value.absent(),
+                Value<String> status = const Value.absent(),
                 Value<String> timezone = const Value.absent(),
-                Value<int> startAt = const Value.absent(),
-                Value<int> durationMinutes = const Value.absent(),
+                Value<bool> allDay = const Value.absent(),
+                Value<int?> startAt = const Value.absent(),
+                Value<int?> durationMinutes = const Value.absent(),
+                Value<String?> anchorStartDate = const Value.absent(),
+                Value<int?> durationDays = const Value.absent(),
                 Value<String> recurrenceJson = const Value.absent(),
                 Value<String?> effectiveFrom = const Value.absent(),
                 Value<String?> effectiveThrough = const Value.absent(),
                 Value<String?> locationName = const Value.absent(),
+                Value<String> importance = const Value.absent(),
+                Value<String?> color = const Value.absent(),
                 Value<String> completionPolicy = const Value.absent(),
-                Value<bool> deleted = const Value.absent(),
+                Value<String> tagsJson = const Value.absent(),
+                Value<String?> userNotes = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -20676,15 +21521,23 @@ class $$CalendarEventSeriesTableTableManager
                 title: title,
                 description: description,
                 eventType: eventType,
+                status: status,
                 timezone: timezone,
+                allDay: allDay,
                 startAt: startAt,
                 durationMinutes: durationMinutes,
+                anchorStartDate: anchorStartDate,
+                durationDays: durationDays,
                 recurrenceJson: recurrenceJson,
                 effectiveFrom: effectiveFrom,
                 effectiveThrough: effectiveThrough,
                 locationName: locationName,
+                importance: importance,
+                color: color,
                 completionPolicy: completionPolicy,
-                deleted: deleted,
+                tagsJson: tagsJson,
+                userNotes: userNotes,
+                deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -20696,15 +21549,23 @@ class $$CalendarEventSeriesTableTableManager
                 required String title,
                 Value<String?> description = const Value.absent(),
                 required String eventType,
+                Value<String> status = const Value.absent(),
                 required String timezone,
-                required int startAt,
-                required int durationMinutes,
+                Value<bool> allDay = const Value.absent(),
+                Value<int?> startAt = const Value.absent(),
+                Value<int?> durationMinutes = const Value.absent(),
+                Value<String?> anchorStartDate = const Value.absent(),
+                Value<int?> durationDays = const Value.absent(),
                 required String recurrenceJson,
                 Value<String?> effectiveFrom = const Value.absent(),
                 Value<String?> effectiveThrough = const Value.absent(),
                 Value<String?> locationName = const Value.absent(),
+                Value<String> importance = const Value.absent(),
+                Value<String?> color = const Value.absent(),
                 Value<String> completionPolicy = const Value.absent(),
-                Value<bool> deleted = const Value.absent(),
+                Value<String> tagsJson = const Value.absent(),
+                Value<String?> userNotes = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -20714,15 +21575,23 @@ class $$CalendarEventSeriesTableTableManager
                 title: title,
                 description: description,
                 eventType: eventType,
+                status: status,
                 timezone: timezone,
+                allDay: allDay,
                 startAt: startAt,
                 durationMinutes: durationMinutes,
+                anchorStartDate: anchorStartDate,
+                durationDays: durationDays,
                 recurrenceJson: recurrenceJson,
                 effectiveFrom: effectiveFrom,
                 effectiveThrough: effectiveThrough,
                 locationName: locationName,
+                importance: importance,
+                color: color,
                 completionPolicy: completionPolicy,
-                deleted: deleted,
+                tagsJson: tagsJson,
+                userNotes: userNotes,
+                deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -22258,8 +23127,14 @@ typedef $$CalendarEventOccurrenceExceptionsTableCreateCompanionBuilder =
       required String accountId,
       required String seriesId,
       required String occurrenceKey,
+      Value<int?> originalStartAt,
+      Value<String?> originalStartDate,
       required String kind,
+      Value<String> overriddenFieldsJson,
       required String overrideJson,
+      Value<String?> status,
+      Value<bool> orphaned,
+      Value<int?> deletedAt,
       required int createdAt,
       required int updatedAt,
       Value<int> rowid,
@@ -22270,8 +23145,14 @@ typedef $$CalendarEventOccurrenceExceptionsTableUpdateCompanionBuilder =
       Value<String> accountId,
       Value<String> seriesId,
       Value<String> occurrenceKey,
+      Value<int?> originalStartAt,
+      Value<String?> originalStartDate,
       Value<String> kind,
+      Value<String> overriddenFieldsJson,
       Value<String> overrideJson,
+      Value<String?> status,
+      Value<bool> orphaned,
+      Value<int?> deletedAt,
       Value<int> createdAt,
       Value<int> updatedAt,
       Value<int> rowid,
@@ -22349,13 +23230,43 @@ class $$CalendarEventOccurrenceExceptionsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get originalStartAt => $composableBuilder(
+    column: $table.originalStartAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get originalStartDate => $composableBuilder(
+    column: $table.originalStartDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get kind => $composableBuilder(
     column: $table.kind,
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get overriddenFieldsJson => $composableBuilder(
+    column: $table.overriddenFieldsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get overrideJson => $composableBuilder(
     column: $table.overrideJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get orphaned => $composableBuilder(
+    column: $table.orphaned,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -22435,13 +23346,43 @@ class $$CalendarEventOccurrenceExceptionsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get originalStartAt => $composableBuilder(
+    column: $table.originalStartAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get originalStartDate => $composableBuilder(
+    column: $table.originalStartDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get kind => $composableBuilder(
     column: $table.kind,
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get overriddenFieldsJson => $composableBuilder(
+    column: $table.overriddenFieldsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get overrideJson => $composableBuilder(
     column: $table.overrideJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get orphaned => $composableBuilder(
+    column: $table.orphaned,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -22520,13 +23461,37 @@ class $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
     builder: (column) => column,
   );
 
+  GeneratedColumn<int> get originalStartAt => $composableBuilder(
+    column: $table.originalStartAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get originalStartDate => $composableBuilder(
+    column: $table.originalStartDate,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<String> get kind =>
       $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get overriddenFieldsJson => $composableBuilder(
+    column: $table.overriddenFieldsJson,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get overrideJson => $composableBuilder(
     column: $table.overrideJson,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<bool> get orphaned =>
+      $composableBuilder(column: $table.orphaned, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
 
   GeneratedColumn<int> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
@@ -22628,8 +23593,14 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
                 Value<String> accountId = const Value.absent(),
                 Value<String> seriesId = const Value.absent(),
                 Value<String> occurrenceKey = const Value.absent(),
+                Value<int?> originalStartAt = const Value.absent(),
+                Value<String?> originalStartDate = const Value.absent(),
                 Value<String> kind = const Value.absent(),
+                Value<String> overriddenFieldsJson = const Value.absent(),
                 Value<String> overrideJson = const Value.absent(),
+                Value<String?> status = const Value.absent(),
+                Value<bool> orphaned = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -22638,8 +23609,14 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
                 accountId: accountId,
                 seriesId: seriesId,
                 occurrenceKey: occurrenceKey,
+                originalStartAt: originalStartAt,
+                originalStartDate: originalStartDate,
                 kind: kind,
+                overriddenFieldsJson: overriddenFieldsJson,
                 overrideJson: overrideJson,
+                status: status,
+                orphaned: orphaned,
+                deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -22650,8 +23627,14 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
                 required String accountId,
                 required String seriesId,
                 required String occurrenceKey,
+                Value<int?> originalStartAt = const Value.absent(),
+                Value<String?> originalStartDate = const Value.absent(),
                 required String kind,
+                Value<String> overriddenFieldsJson = const Value.absent(),
                 required String overrideJson,
+                Value<String?> status = const Value.absent(),
+                Value<bool> orphaned = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -22660,8 +23643,14 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
                 accountId: accountId,
                 seriesId: seriesId,
                 occurrenceKey: occurrenceKey,
+                originalStartAt: originalStartAt,
+                originalStartDate: originalStartDate,
                 kind: kind,
+                overriddenFieldsJson: overriddenFieldsJson,
                 overrideJson: overrideJson,
+                status: status,
+                orphaned: orphaned,
+                deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
