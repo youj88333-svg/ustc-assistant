@@ -6,6 +6,9 @@ import unittest
 from pathlib import Path
 
 from ustc_assistant.common.auth import (
+    PASSWORD_SELECTOR,
+    SUBMIT_SELECTOR,
+    USERNAME_SELECTOR,
     AccountMismatch,
     AuthBoundaryError,
     CollectionCancelled,
@@ -26,6 +29,14 @@ class FakeLocator:
     def fill(self, value):
         self.page.fills.append((self.selector, value))
 
+    def click(self, **kwargs):
+        if self.selector in self.page.disabled_selectors:
+            raise Exception(f"{self.selector} is disabled")
+        self.page.clicks.append(self.selector)
+
+    def count(self):
+        return 0 if self.selector in self.page.absent_selectors else 1
+
     def get_attribute(self, name):
         return self.page.account_value if name == "data-ustc-account" else None
 
@@ -34,10 +45,20 @@ class FakeLocator:
 
 
 class FakePage:
-    def __init__(self, url, account_value=None):
+    def __init__(
+        self,
+        url,
+        account_value=None,
+        *,
+        absent_selectors=(),
+        disabled_selectors=(),
+    ):
         self.url = url
         self.account_value = account_value
         self.fills = []
+        self.clicks = []
+        self.absent_selectors = set(absent_selectors)
+        self.disabled_selectors = set(disabled_selectors)
 
     def locator(self, selector):
         return FakeLocator(self, selector)
@@ -53,18 +74,44 @@ class StorageIdentityPage(FakePage):
 
 
 class LoginBoundaryTests(unittest.TestCase):
-    def test_credentials_fill_only_on_official_cas_origin_without_submit(self):
+    def test_credentials_fill_and_submit_on_official_cas_origin(self):
         page = FakePage("https://id.ustc.edu.cn/cas/login?service=redacted")
 
         fill_ustc_login(page, LoginCredentials("PB00000000", "secret"))
 
         self.assertEqual(
             [
-                ('input[name="username"], #username', "PB00000000"),
-                ('input[type="password"]', "secret"),
+                (USERNAME_SELECTOR, "PB00000000"),
+                (PASSWORD_SELECTOR, "secret"),
             ],
             page.fills,
         )
+        self.assertEqual([SUBMIT_SELECTOR], page.clicks)
+
+    def test_credentials_fill_without_password_does_not_submit(self):
+        page = FakePage("https://id.ustc.edu.cn/cas/login?service=redacted")
+
+        fill_ustc_login(page, LoginCredentials("PB00000000", None))
+
+        self.assertEqual([(USERNAME_SELECTOR, "PB00000000")], page.fills)
+        self.assertEqual([], page.clicks)
+
+    def test_submit_click_falls_back_silently_when_button_absent(self):
+        page = FakePage(
+            "https://id.ustc.edu.cn/cas/login?service=redacted",
+            absent_selectors=(SUBMIT_SELECTOR,),
+        )
+
+        fill_ustc_login(page, LoginCredentials("PB00000000", "secret"))
+
+        self.assertEqual(
+            [
+                (USERNAME_SELECTOR, "PB00000000"),
+                (PASSWORD_SELECTOR, "secret"),
+            ],
+            page.fills,
+        )
+        self.assertEqual([], page.clicks)
 
     def test_credentials_are_rejected_on_non_allowlisted_origin(self):
         with self.assertRaises(AuthBoundaryError):

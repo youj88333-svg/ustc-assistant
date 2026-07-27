@@ -15,6 +15,9 @@ from ustc_assistant.common.browser import CollectionError, default_profile_dir
 CAS_HOSTS = frozenset({"id.ustc.edu.cn"})
 USERNAME_SELECTOR = 'input[name="username"], #username'
 PASSWORD_SELECTOR = 'input[type="password"]'
+# USTC 统一身份认证（Angular SPA）渲染出的登录按钮：稳定 id=submitBtn，文本"立即登录"。
+# 按钮在账号密码未填时带 disabled 类，fill() 触发 Angular 响应式表单后启用。
+SUBMIT_SELECTOR = '#submitBtn, button.login-button'
 ACCOUNT_SELECTOR = (
     '[data-ustc-account], input[name="fine_username"], input[name="username"]'
 )
@@ -80,6 +83,17 @@ def fill_ustc_login(page: Any, credentials: LoginCredentials) -> None:
     page.locator(USERNAME_SELECTOR).first.fill(credentials.username)
     if credentials.password is not None:
         page.locator(PASSWORD_SELECTOR).first.fill(credentials.password)
+        # 账号密码已填则尝试自动点击登录按钮，省去用户手动点击这一步。
+        # 首次登录的短信验证码、风控验证码等仍由用户在可见 Edge 窗口完成；
+        # 按钮不存在或不可点击时静默回退，保留"用户手动提交"的既有行为。
+        submit = page.locator(SUBMIT_SELECTOR).first
+        try:
+            if getattr(submit, "count", None) is None or submit.count() > 0:
+                submit.click()
+        except Exception:
+            # 按钮未渲染、仍 disabled 或点击失败都不阻断流程，
+            # 调用方仍会 wait_for_url 等待登录完成或由用户手动操作。
+            pass
 
 
 def _account_from_page(page: Any) -> str | None:
