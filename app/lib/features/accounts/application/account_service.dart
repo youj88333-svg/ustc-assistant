@@ -284,7 +284,7 @@ class AccountService {
           jwLastSuccessAt: syncByAccountAndSource['${account.id}\u0000ustc_jw'],
           youngLastSuccessAt:
               syncByAccountAndSource['${account.id}'
-                  '\u0000ustc_young_my_schedule'],
+                  '\u0000ustc_young_schedule'],
         ),
     ];
   }

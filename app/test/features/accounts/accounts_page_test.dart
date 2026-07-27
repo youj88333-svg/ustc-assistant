@@ -82,11 +82,22 @@ void main() {
             updatedAt: 123456789,
           ),
         );
+    await database
+        .into(database.sourceConfigs)
+        .insert(
+          SourceConfigsCompanion.insert(
+            id: '$id:ustc_young_schedule',
+            accountId: id,
+            source: 'ustc_young_schedule',
+            lastSuccessAt: const Value(223456789),
+            updatedAt: 223456789,
+          ),
+        );
 
     await tester.pumpWidget(MaterialApp(home: AccountsPage(service: service)));
     await tester.pumpAndSettle();
 
     expect(find.textContaining('教务系统：上次同步成功'), findsOneWidget);
-    expect(find.text('二课平台：等待同步'), findsOneWidget);
+    expect(find.textContaining('二课平台：上次同步成功'), findsOneWidget);
   });
 }
