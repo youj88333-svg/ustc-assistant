@@ -121,14 +121,14 @@ class TaskLifecycleService {
             );
       }
       await _log('task_create', 'Created a task.', timestamp);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'task_create',
+          accountId: accountId,
+          payload: {'entity': 'task', 'id': id, 'before': null},
+        ),
+      );
     });
-    await undoRecorder.record(
-      UndoCommand(
-        kind: 'task_create',
-        accountId: accountId,
-        payload: {'taskId': id},
-      ),
-    );
     return id;
   }
 
@@ -222,6 +222,7 @@ class TaskLifecycleService {
       DateTime.fromMillisecondsSinceEpoch(timestamp),
       cancelFutureAccepted: cancelFutureAccepted,
     ),
+    restorePlanBlocksOnUndo: cancelFutureAccepted,
   );
 
   Future<void> cancel(String id, {required int expectedUpdatedAt}) => _mutate(
@@ -247,6 +248,7 @@ class TaskLifecycleService {
       id,
       DateTime.fromMillisecondsSinceEpoch(timestamp),
     ),
+    restorePlanBlocksOnUndo: true,
   );
 
   Future<void> reopen(String id, {required int expectedUpdatedAt}) => _mutate(
@@ -296,6 +298,7 @@ class TaskLifecycleService {
     required String summary,
     required TasksCompanion Function(Task row, int timestamp) companion,
     Future<void> Function(int timestamp)? afterWrite,
+    bool restorePlanBlocksOnUndo = false,
   }) async {
     late Task before;
     final timestamp = now();
@@ -318,14 +321,20 @@ class TaskLifecycleService {
           .write(changes);
       if (afterWrite != null) await afterWrite(timestamp);
       await _log(actionType, summary, timestamp);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: actionType,
+          accountId: accountId,
+          payload: {
+            'entity': 'task',
+            'id': id,
+            'before': _safeBeforeState(before),
+            'transitionAt': timestamp,
+            'restorePlanBlocks': restorePlanBlocksOnUndo,
+          },
+        ),
+      );
     });
-    await undoRecorder.record(
-      UndoCommand(
-        kind: actionType,
-        accountId: accountId,
-        payload: _safeBeforeState(before),
-      ),
-    );
   }
 
   Future<Task?> _find(String id, {bool includeDeleted = false}) =>
@@ -350,13 +359,20 @@ class TaskLifecycleService {
       );
 
   Map<String, Object?> _safeBeforeState(Task task) => {
-    'taskId': task.id,
+    'id': task.id,
+    'accountId': task.accountId,
+    'title': task.title,
+    'description': task.description,
+    'userNotes': task.userNotes,
     'state': task.state,
+    'blockedReason': task.blockedReason,
     'importance': task.importance,
     'deadlineAt': task.deadlineAt,
     'estimatedMinutes': task.estimatedMinutes,
+    'tagsJson': task.tagsJson,
     'completedAt': task.completedAt,
     'cancelledAt': task.cancelledAt,
+    'createdAt': task.createdAt,
     'updatedAt': task.updatedAt,
     'deletedAt': task.deletedAt,
   };

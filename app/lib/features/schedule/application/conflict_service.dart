@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../tasks/application/undo_recorder.dart';
 
 enum ConflictState { unclassified, conflict, nonConflict }
 
@@ -33,8 +34,7 @@ class EventConflictParticipant {
 
   bool get hasStableSeriesIdentity =>
       seriesId != null &&
-      (seriesType == 'course_series' ||
-          seriesType == 'calendar_event_series');
+      (seriesType == 'course_series' || seriesType == 'calendar_event_series');
 }
 
 class ConflictService {
@@ -42,11 +42,14 @@ class ConflictService {
     required this.database,
     required this.accountId,
     int Function()? now,
-  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
+    UndoRecorder? undoRecorder,
+  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+       undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
   final AppDatabase database;
   final String accountId;
   final int Function() now;
+  final UndoRecorder undoRecorder;
   static const _uuid = Uuid();
 
   Future<void> classifyPair(
@@ -89,16 +92,17 @@ class ConflictService {
     }
     final series = _canonicalSeries(a, b);
     final date = _date(a.occurrenceDate);
-    final rules = await (database.select(database.scheduleRelationRules)..where(
-          (row) =>
-              row.accountId.equals(accountId) &
-              row.leftSeriesType.equals(series.$1.seriesType!) &
-              row.leftSeriesId.equals(series.$1.seriesId!) &
-              row.rightSeriesType.equals(series.$2.seriesType!) &
-              row.rightSeriesId.equals(series.$2.seriesId!) &
-              row.effectiveFrom.isSmallerOrEqualValue(date),
-        ))
-        .get();
+    final rules =
+        await (database.select(database.scheduleRelationRules)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.leftSeriesType.equals(series.$1.seriesType!) &
+                  row.leftSeriesId.equals(series.$1.seriesId!) &
+                  row.rightSeriesType.equals(series.$2.seriesType!) &
+                  row.rightSeriesId.equals(series.$2.seriesId!) &
+                  row.effectiveFrom.isSmallerOrEqualValue(date),
+            ))
+            .get();
     for (final rule in rules) {
       if (rule.effectiveThrough == null ||
           rule.effectiveThrough!.compareTo(date) >= 0) {
@@ -121,6 +125,17 @@ class ConflictService {
   ) async {
     final events = _canonicalEvents(a.eventId, b.eventId);
     await database.transaction(() async {
+      final existing =
+          await (database.select(database.scheduleRelations)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    row.leftKind.equals('event') &
+                    row.leftId.equals(events.$1) &
+                    row.rightKind.equals('event') &
+                    row.rightId.equals(events.$2),
+              ))
+              .getSingleOrNull();
+      final relationId = existing?.id ?? _uuid.v4();
       final query = database.delete(database.scheduleRelations)
         ..where(
           (row) =>
@@ -133,35 +148,38 @@ class ConflictService {
       if (state == ConflictState.unclassified) {
         await query.go();
       } else {
-        final existing =
-            await (database.select(database.scheduleRelations)..where(
-                  (row) =>
-                      row.accountId.equals(accountId) &
-                      row.leftKind.equals('event') &
-                      row.leftId.equals(events.$1) &
-                      row.rightKind.equals('event') &
-                      row.rightId.equals(events.$2),
-                ))
-                .getSingleOrNull();
         final timestamp = now();
-        await database.into(database.scheduleRelations).insertOnConflictUpdate(
-          ScheduleRelationsCompanion.insert(
-            id: existing?.id ?? _uuid.v4(),
-            accountId: accountId,
-            leftKind: const Value('event'),
-            leftId: Value(events.$1),
-            leftEventId: Value(events.$1),
-            rightKind: const Value('event'),
-            rightId: Value(events.$2),
-            rightEventId: Value(events.$2),
-            conflictState: Value(_stateStorage(state)),
-            reason: Value(reason),
-            createdAt: existing?.createdAt ?? timestamp,
-            updatedAt: timestamp,
-          ),
-        );
+        await database
+            .into(database.scheduleRelations)
+            .insertOnConflictUpdate(
+              ScheduleRelationsCompanion.insert(
+                id: relationId,
+                accountId: accountId,
+                leftKind: const Value('event'),
+                leftId: Value(events.$1),
+                leftEventId: Value(events.$1),
+                rightKind: const Value('event'),
+                rightId: Value(events.$2),
+                rightEventId: Value(events.$2),
+                conflictState: Value(_stateStorage(state)),
+                reason: Value(reason),
+                createdAt: existing?.createdAt ?? timestamp,
+                updatedAt: timestamp,
+              ),
+            );
       }
       await _logClassification(state);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'conflict_classification',
+          accountId: accountId,
+          payload: {
+            'entity': 'schedule_relation',
+            'id': relationId,
+            'before': existing == null ? null : _relationSnapshot(existing),
+          },
+        ),
+      );
     });
   }
 
@@ -178,43 +196,43 @@ class ConflictService {
     }
     final series = _canonicalSeries(a, b);
     final effectiveFrom = _date(a.occurrenceDate);
-    final ends = [a.finiteSeriesEnd, b.finiteSeriesEnd]
-        .whereType<DateTime>()
-        .toList()
-      ..sort();
+    final ends = [
+      a.finiteSeriesEnd,
+      b.finiteSeriesEnd,
+    ].whereType<DateTime>().toList()..sort();
     final effectiveThrough = ends.isEmpty ? null : _date(ends.first);
     await database.transaction(() async {
-      final matching =
-          database.delete(database.scheduleRelationRules)
-            ..where(
-              (row) =>
-                  row.accountId.equals(accountId) &
-                  row.leftSeriesType.equals(series.$1.seriesType!) &
-                  row.leftSeriesId.equals(series.$1.seriesId!) &
-                  row.rightSeriesType.equals(series.$2.seriesType!) &
-                  row.rightSeriesId.equals(series.$2.seriesId!) &
-                  row.effectiveFrom.equals(effectiveFrom),
-            );
+      final existing =
+          await (database.select(database.scheduleRelationRules)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    row.leftSeriesType.equals(series.$1.seriesType!) &
+                    row.leftSeriesId.equals(series.$1.seriesId!) &
+                    row.rightSeriesType.equals(series.$2.seriesType!) &
+                    row.rightSeriesId.equals(series.$2.seriesId!) &
+                    row.effectiveFrom.equals(effectiveFrom),
+              ))
+              .getSingleOrNull();
+      final ruleId = existing?.id ?? _uuid.v4();
+      final matching = database.delete(database.scheduleRelationRules)
+        ..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              row.leftSeriesType.equals(series.$1.seriesType!) &
+              row.leftSeriesId.equals(series.$1.seriesId!) &
+              row.rightSeriesType.equals(series.$2.seriesType!) &
+              row.rightSeriesId.equals(series.$2.seriesId!) &
+              row.effectiveFrom.equals(effectiveFrom),
+        );
       if (state == ConflictState.unclassified) {
         await matching.go();
       } else {
-        final existing =
-            await (database.select(database.scheduleRelationRules)..where(
-                  (row) =>
-                      row.accountId.equals(accountId) &
-                      row.leftSeriesType.equals(series.$1.seriesType!) &
-                      row.leftSeriesId.equals(series.$1.seriesId!) &
-                      row.rightSeriesType.equals(series.$2.seriesType!) &
-                      row.rightSeriesId.equals(series.$2.seriesId!) &
-                      row.effectiveFrom.equals(effectiveFrom),
-                ))
-                .getSingleOrNull();
         final timestamp = now();
         await database
             .into(database.scheduleRelationRules)
             .insertOnConflictUpdate(
               ScheduleRelationRulesCompanion.insert(
-                id: existing?.id ?? _uuid.v4(),
+                id: ruleId,
                 accountId: accountId,
                 leftSeriesType: series.$1.seriesType!,
                 leftSeriesId: series.$1.seriesId!,
@@ -230,6 +248,17 @@ class ConflictService {
             );
       }
       await _logClassification(state);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'conflict_classification',
+          accountId: accountId,
+          payload: {
+            'entity': 'schedule_relation_rule',
+            'id': ruleId,
+            'before': existing == null ? null : _ruleSnapshot(existing),
+          },
+        ),
+      );
     });
   }
 
@@ -273,4 +302,30 @@ class ConflictService {
       '${value.year.toString().padLeft(4, '0')}-'
       '${value.month.toString().padLeft(2, '0')}-'
       '${value.day.toString().padLeft(2, '0')}';
+
+  Map<String, Object?> _relationSnapshot(ScheduleRelation row) => {
+    'leftKind': row.leftKind,
+    'leftId': row.leftId,
+    'rightKind': row.rightKind,
+    'rightId': row.rightId,
+    'leftEventId': row.leftEventId,
+    'rightEventId': row.rightEventId,
+    'conflictState': row.conflictState,
+    'reason': row.reason,
+    'createdAt': row.createdAt,
+    'updatedAt': row.updatedAt,
+  };
+
+  Map<String, Object?> _ruleSnapshot(ScheduleRelationRule row) => {
+    'leftSeriesType': row.leftSeriesType,
+    'leftSeriesId': row.leftSeriesId,
+    'rightSeriesType': row.rightSeriesType,
+    'rightSeriesId': row.rightSeriesId,
+    'conflictState': row.conflictState,
+    'reason': row.reason,
+    'effectiveFrom': row.effectiveFrom,
+    'effectiveThrough': row.effectiveThrough,
+    'createdAt': row.createdAt,
+    'updatedAt': row.updatedAt,
+  };
 }

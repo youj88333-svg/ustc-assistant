@@ -10784,6 +10784,15 @@ class $PlanBlocksTable extends PlanBlocks
       'REFERENCES tasks (id) ON DELETE CASCADE',
     ),
   );
+  static const VerificationMeta _titleMeta = const VerificationMeta('title');
+  @override
+  late final GeneratedColumn<String> title = GeneratedColumn<String>(
+    'title',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _startAtMeta = const VerificationMeta(
     'startAt',
   );
@@ -10804,16 +10813,27 @@ class $PlanBlocksTable extends PlanBlocks
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _reviewStateMeta = const VerificationMeta(
-    'reviewState',
-  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
   @override
-  late final GeneratedColumn<String> reviewState = GeneratedColumn<String>(
-    'review_state',
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
     aliasedName,
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
+  );
+  static const VerificationMeta _lockedMeta = const VerificationMeta('locked');
+  @override
+  late final GeneratedColumn<bool> locked = GeneratedColumn<bool>(
+    'locked',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("locked" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
   );
   static const VerificationMeta _reviewNoteMeta = const VerificationMeta(
     'reviewNote',
@@ -10837,12 +10857,12 @@ class $PlanBlocksTable extends PlanBlocks
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
-  static const VerificationMeta _replacementPlanBlockIdMeta =
-      const VerificationMeta('replacementPlanBlockId');
+  static const VerificationMeta _rescheduledToPlanBlockIdMeta =
+      const VerificationMeta('rescheduledToPlanBlockId');
   @override
-  late final GeneratedColumn<String> replacementPlanBlockId =
+  late final GeneratedColumn<String> rescheduledToPlanBlockId =
       GeneratedColumn<String>(
-        'replacement_plan_block_id',
+        'rescheduled_to_plan_block_id',
         aliasedName,
         true,
         type: DriftSqlType.string,
@@ -10886,12 +10906,14 @@ class $PlanBlocksTable extends PlanBlocks
     id,
     accountId,
     taskId,
+    title,
     startAt,
     endAt,
-    reviewState,
+    status,
+    locked,
     reviewNote,
     reviewedAt,
-    replacementPlanBlockId,
+    rescheduledToPlanBlockId,
     createdAt,
     updatedAt,
     deletedAt,
@@ -10929,6 +10951,12 @@ class $PlanBlocksTable extends PlanBlocks
     } else if (isInserting) {
       context.missing(_taskIdMeta);
     }
+    if (data.containsKey('title')) {
+      context.handle(
+        _titleMeta,
+        title.isAcceptableOrUnknown(data['title']!, _titleMeta),
+      );
+    }
     if (data.containsKey('start_at')) {
       context.handle(
         _startAtMeta,
@@ -10945,16 +10973,19 @@ class $PlanBlocksTable extends PlanBlocks
     } else if (isInserting) {
       context.missing(_endAtMeta);
     }
-    if (data.containsKey('review_state')) {
+    if (data.containsKey('status')) {
       context.handle(
-        _reviewStateMeta,
-        reviewState.isAcceptableOrUnknown(
-          data['review_state']!,
-          _reviewStateMeta,
-        ),
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
       );
     } else if (isInserting) {
-      context.missing(_reviewStateMeta);
+      context.missing(_statusMeta);
+    }
+    if (data.containsKey('locked')) {
+      context.handle(
+        _lockedMeta,
+        locked.isAcceptableOrUnknown(data['locked']!, _lockedMeta),
+      );
     }
     if (data.containsKey('review_note')) {
       context.handle(
@@ -10968,12 +10999,12 @@ class $PlanBlocksTable extends PlanBlocks
         reviewedAt.isAcceptableOrUnknown(data['reviewed_at']!, _reviewedAtMeta),
       );
     }
-    if (data.containsKey('replacement_plan_block_id')) {
+    if (data.containsKey('rescheduled_to_plan_block_id')) {
       context.handle(
-        _replacementPlanBlockIdMeta,
-        replacementPlanBlockId.isAcceptableOrUnknown(
-          data['replacement_plan_block_id']!,
-          _replacementPlanBlockIdMeta,
+        _rescheduledToPlanBlockIdMeta,
+        rescheduledToPlanBlockId.isAcceptableOrUnknown(
+          data['rescheduled_to_plan_block_id']!,
+          _rescheduledToPlanBlockIdMeta,
         ),
       );
     }
@@ -11020,6 +11051,10 @@ class $PlanBlocksTable extends PlanBlocks
         DriftSqlType.string,
         data['${effectivePrefix}task_id'],
       )!,
+      title: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}title'],
+      ),
       startAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}start_at'],
@@ -11028,9 +11063,13 @@ class $PlanBlocksTable extends PlanBlocks
         DriftSqlType.int,
         data['${effectivePrefix}end_at'],
       )!,
-      reviewState: attachedDatabase.typeMapping.read(
+      status: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
-        data['${effectivePrefix}review_state'],
+        data['${effectivePrefix}status'],
+      )!,
+      locked: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}locked'],
       )!,
       reviewNote: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
@@ -11040,9 +11079,9 @@ class $PlanBlocksTable extends PlanBlocks
         DriftSqlType.int,
         data['${effectivePrefix}reviewed_at'],
       ),
-      replacementPlanBlockId: attachedDatabase.typeMapping.read(
+      rescheduledToPlanBlockId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
-        data['${effectivePrefix}replacement_plan_block_id'],
+        data['${effectivePrefix}rescheduled_to_plan_block_id'],
       ),
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
@@ -11069,12 +11108,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
   final String id;
   final String accountId;
   final String taskId;
+  final String? title;
   final int startAt;
   final int endAt;
-  final String reviewState;
+  final String status;
+  final bool locked;
   final String? reviewNote;
   final int? reviewedAt;
-  final String? replacementPlanBlockId;
+  final String? rescheduledToPlanBlockId;
   final int createdAt;
   final int updatedAt;
   final int? deletedAt;
@@ -11082,12 +11123,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
     required this.id,
     required this.accountId,
     required this.taskId,
+    this.title,
     required this.startAt,
     required this.endAt,
-    required this.reviewState,
+    required this.status,
+    required this.locked,
     this.reviewNote,
     this.reviewedAt,
-    this.replacementPlanBlockId,
+    this.rescheduledToPlanBlockId,
     required this.createdAt,
     required this.updatedAt,
     this.deletedAt,
@@ -11098,18 +11141,22 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
     map['id'] = Variable<String>(id);
     map['account_id'] = Variable<String>(accountId);
     map['task_id'] = Variable<String>(taskId);
+    if (!nullToAbsent || title != null) {
+      map['title'] = Variable<String>(title);
+    }
     map['start_at'] = Variable<int>(startAt);
     map['end_at'] = Variable<int>(endAt);
-    map['review_state'] = Variable<String>(reviewState);
+    map['status'] = Variable<String>(status);
+    map['locked'] = Variable<bool>(locked);
     if (!nullToAbsent || reviewNote != null) {
       map['review_note'] = Variable<String>(reviewNote);
     }
     if (!nullToAbsent || reviewedAt != null) {
       map['reviewed_at'] = Variable<int>(reviewedAt);
     }
-    if (!nullToAbsent || replacementPlanBlockId != null) {
-      map['replacement_plan_block_id'] = Variable<String>(
-        replacementPlanBlockId,
+    if (!nullToAbsent || rescheduledToPlanBlockId != null) {
+      map['rescheduled_to_plan_block_id'] = Variable<String>(
+        rescheduledToPlanBlockId,
       );
     }
     map['created_at'] = Variable<int>(createdAt);
@@ -11125,18 +11172,22 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
       id: Value(id),
       accountId: Value(accountId),
       taskId: Value(taskId),
+      title: title == null && nullToAbsent
+          ? const Value.absent()
+          : Value(title),
       startAt: Value(startAt),
       endAt: Value(endAt),
-      reviewState: Value(reviewState),
+      status: Value(status),
+      locked: Value(locked),
       reviewNote: reviewNote == null && nullToAbsent
           ? const Value.absent()
           : Value(reviewNote),
       reviewedAt: reviewedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(reviewedAt),
-      replacementPlanBlockId: replacementPlanBlockId == null && nullToAbsent
+      rescheduledToPlanBlockId: rescheduledToPlanBlockId == null && nullToAbsent
           ? const Value.absent()
-          : Value(replacementPlanBlockId),
+          : Value(rescheduledToPlanBlockId),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
       deletedAt: deletedAt == null && nullToAbsent
@@ -11154,13 +11205,15 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
       taskId: serializer.fromJson<String>(json['taskId']),
+      title: serializer.fromJson<String?>(json['title']),
       startAt: serializer.fromJson<int>(json['startAt']),
       endAt: serializer.fromJson<int>(json['endAt']),
-      reviewState: serializer.fromJson<String>(json['reviewState']),
+      status: serializer.fromJson<String>(json['status']),
+      locked: serializer.fromJson<bool>(json['locked']),
       reviewNote: serializer.fromJson<String?>(json['reviewNote']),
       reviewedAt: serializer.fromJson<int?>(json['reviewedAt']),
-      replacementPlanBlockId: serializer.fromJson<String?>(
-        json['replacementPlanBlockId'],
+      rescheduledToPlanBlockId: serializer.fromJson<String?>(
+        json['rescheduledToPlanBlockId'],
       ),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
@@ -11174,13 +11227,15 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
       'id': serializer.toJson<String>(id),
       'accountId': serializer.toJson<String>(accountId),
       'taskId': serializer.toJson<String>(taskId),
+      'title': serializer.toJson<String?>(title),
       'startAt': serializer.toJson<int>(startAt),
       'endAt': serializer.toJson<int>(endAt),
-      'reviewState': serializer.toJson<String>(reviewState),
+      'status': serializer.toJson<String>(status),
+      'locked': serializer.toJson<bool>(locked),
       'reviewNote': serializer.toJson<String?>(reviewNote),
       'reviewedAt': serializer.toJson<int?>(reviewedAt),
-      'replacementPlanBlockId': serializer.toJson<String?>(
-        replacementPlanBlockId,
+      'rescheduledToPlanBlockId': serializer.toJson<String?>(
+        rescheduledToPlanBlockId,
       ),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
@@ -11192,12 +11247,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
     String? id,
     String? accountId,
     String? taskId,
+    Value<String?> title = const Value.absent(),
     int? startAt,
     int? endAt,
-    String? reviewState,
+    String? status,
+    bool? locked,
     Value<String?> reviewNote = const Value.absent(),
     Value<int?> reviewedAt = const Value.absent(),
-    Value<String?> replacementPlanBlockId = const Value.absent(),
+    Value<String?> rescheduledToPlanBlockId = const Value.absent(),
     int? createdAt,
     int? updatedAt,
     Value<int?> deletedAt = const Value.absent(),
@@ -11205,14 +11262,16 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
     taskId: taskId ?? this.taskId,
+    title: title.present ? title.value : this.title,
     startAt: startAt ?? this.startAt,
     endAt: endAt ?? this.endAt,
-    reviewState: reviewState ?? this.reviewState,
+    status: status ?? this.status,
+    locked: locked ?? this.locked,
     reviewNote: reviewNote.present ? reviewNote.value : this.reviewNote,
     reviewedAt: reviewedAt.present ? reviewedAt.value : this.reviewedAt,
-    replacementPlanBlockId: replacementPlanBlockId.present
-        ? replacementPlanBlockId.value
-        : this.replacementPlanBlockId,
+    rescheduledToPlanBlockId: rescheduledToPlanBlockId.present
+        ? rescheduledToPlanBlockId.value
+        : this.rescheduledToPlanBlockId,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
@@ -11222,20 +11281,20 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
       id: data.id.present ? data.id.value : this.id,
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
       taskId: data.taskId.present ? data.taskId.value : this.taskId,
+      title: data.title.present ? data.title.value : this.title,
       startAt: data.startAt.present ? data.startAt.value : this.startAt,
       endAt: data.endAt.present ? data.endAt.value : this.endAt,
-      reviewState: data.reviewState.present
-          ? data.reviewState.value
-          : this.reviewState,
+      status: data.status.present ? data.status.value : this.status,
+      locked: data.locked.present ? data.locked.value : this.locked,
       reviewNote: data.reviewNote.present
           ? data.reviewNote.value
           : this.reviewNote,
       reviewedAt: data.reviewedAt.present
           ? data.reviewedAt.value
           : this.reviewedAt,
-      replacementPlanBlockId: data.replacementPlanBlockId.present
-          ? data.replacementPlanBlockId.value
-          : this.replacementPlanBlockId,
+      rescheduledToPlanBlockId: data.rescheduledToPlanBlockId.present
+          ? data.rescheduledToPlanBlockId.value
+          : this.rescheduledToPlanBlockId,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
@@ -11248,12 +11307,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('taskId: $taskId, ')
+          ..write('title: $title, ')
           ..write('startAt: $startAt, ')
           ..write('endAt: $endAt, ')
-          ..write('reviewState: $reviewState, ')
+          ..write('status: $status, ')
+          ..write('locked: $locked, ')
           ..write('reviewNote: $reviewNote, ')
           ..write('reviewedAt: $reviewedAt, ')
-          ..write('replacementPlanBlockId: $replacementPlanBlockId, ')
+          ..write('rescheduledToPlanBlockId: $rescheduledToPlanBlockId, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt')
@@ -11266,12 +11327,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
     id,
     accountId,
     taskId,
+    title,
     startAt,
     endAt,
-    reviewState,
+    status,
+    locked,
     reviewNote,
     reviewedAt,
-    replacementPlanBlockId,
+    rescheduledToPlanBlockId,
     createdAt,
     updatedAt,
     deletedAt,
@@ -11283,12 +11346,14 @@ class PlanBlock extends DataClass implements Insertable<PlanBlock> {
           other.id == this.id &&
           other.accountId == this.accountId &&
           other.taskId == this.taskId &&
+          other.title == this.title &&
           other.startAt == this.startAt &&
           other.endAt == this.endAt &&
-          other.reviewState == this.reviewState &&
+          other.status == this.status &&
+          other.locked == this.locked &&
           other.reviewNote == this.reviewNote &&
           other.reviewedAt == this.reviewedAt &&
-          other.replacementPlanBlockId == this.replacementPlanBlockId &&
+          other.rescheduledToPlanBlockId == this.rescheduledToPlanBlockId &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt &&
           other.deletedAt == this.deletedAt);
@@ -11298,12 +11363,14 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
   final Value<String> id;
   final Value<String> accountId;
   final Value<String> taskId;
+  final Value<String?> title;
   final Value<int> startAt;
   final Value<int> endAt;
-  final Value<String> reviewState;
+  final Value<String> status;
+  final Value<bool> locked;
   final Value<String?> reviewNote;
   final Value<int?> reviewedAt;
-  final Value<String?> replacementPlanBlockId;
+  final Value<String?> rescheduledToPlanBlockId;
   final Value<int> createdAt;
   final Value<int> updatedAt;
   final Value<int?> deletedAt;
@@ -11312,12 +11379,14 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
     this.taskId = const Value.absent(),
+    this.title = const Value.absent(),
     this.startAt = const Value.absent(),
     this.endAt = const Value.absent(),
-    this.reviewState = const Value.absent(),
+    this.status = const Value.absent(),
+    this.locked = const Value.absent(),
     this.reviewNote = const Value.absent(),
     this.reviewedAt = const Value.absent(),
-    this.replacementPlanBlockId = const Value.absent(),
+    this.rescheduledToPlanBlockId = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.deletedAt = const Value.absent(),
@@ -11327,12 +11396,14 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
     required String id,
     required String accountId,
     required String taskId,
+    this.title = const Value.absent(),
     required int startAt,
     required int endAt,
-    required String reviewState,
+    required String status,
+    this.locked = const Value.absent(),
     this.reviewNote = const Value.absent(),
     this.reviewedAt = const Value.absent(),
-    this.replacementPlanBlockId = const Value.absent(),
+    this.rescheduledToPlanBlockId = const Value.absent(),
     required int createdAt,
     required int updatedAt,
     this.deletedAt = const Value.absent(),
@@ -11342,19 +11413,21 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
        taskId = Value(taskId),
        startAt = Value(startAt),
        endAt = Value(endAt),
-       reviewState = Value(reviewState),
+       status = Value(status),
        createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<PlanBlock> custom({
     Expression<String>? id,
     Expression<String>? accountId,
     Expression<String>? taskId,
+    Expression<String>? title,
     Expression<int>? startAt,
     Expression<int>? endAt,
-    Expression<String>? reviewState,
+    Expression<String>? status,
+    Expression<bool>? locked,
     Expression<String>? reviewNote,
     Expression<int>? reviewedAt,
-    Expression<String>? replacementPlanBlockId,
+    Expression<String>? rescheduledToPlanBlockId,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
     Expression<int>? deletedAt,
@@ -11364,13 +11437,15 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
       if (id != null) 'id': id,
       if (accountId != null) 'account_id': accountId,
       if (taskId != null) 'task_id': taskId,
+      if (title != null) 'title': title,
       if (startAt != null) 'start_at': startAt,
       if (endAt != null) 'end_at': endAt,
-      if (reviewState != null) 'review_state': reviewState,
+      if (status != null) 'status': status,
+      if (locked != null) 'locked': locked,
       if (reviewNote != null) 'review_note': reviewNote,
       if (reviewedAt != null) 'reviewed_at': reviewedAt,
-      if (replacementPlanBlockId != null)
-        'replacement_plan_block_id': replacementPlanBlockId,
+      if (rescheduledToPlanBlockId != null)
+        'rescheduled_to_plan_block_id': rescheduledToPlanBlockId,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (deletedAt != null) 'deleted_at': deletedAt,
@@ -11382,12 +11457,14 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
     Value<String>? id,
     Value<String>? accountId,
     Value<String>? taskId,
+    Value<String?>? title,
     Value<int>? startAt,
     Value<int>? endAt,
-    Value<String>? reviewState,
+    Value<String>? status,
+    Value<bool>? locked,
     Value<String?>? reviewNote,
     Value<int?>? reviewedAt,
-    Value<String?>? replacementPlanBlockId,
+    Value<String?>? rescheduledToPlanBlockId,
     Value<int>? createdAt,
     Value<int>? updatedAt,
     Value<int?>? deletedAt,
@@ -11397,13 +11474,15 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
       id: id ?? this.id,
       accountId: accountId ?? this.accountId,
       taskId: taskId ?? this.taskId,
+      title: title ?? this.title,
       startAt: startAt ?? this.startAt,
       endAt: endAt ?? this.endAt,
-      reviewState: reviewState ?? this.reviewState,
+      status: status ?? this.status,
+      locked: locked ?? this.locked,
       reviewNote: reviewNote ?? this.reviewNote,
       reviewedAt: reviewedAt ?? this.reviewedAt,
-      replacementPlanBlockId:
-          replacementPlanBlockId ?? this.replacementPlanBlockId,
+      rescheduledToPlanBlockId:
+          rescheduledToPlanBlockId ?? this.rescheduledToPlanBlockId,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       deletedAt: deletedAt ?? this.deletedAt,
@@ -11423,14 +11502,20 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
     if (taskId.present) {
       map['task_id'] = Variable<String>(taskId.value);
     }
+    if (title.present) {
+      map['title'] = Variable<String>(title.value);
+    }
     if (startAt.present) {
       map['start_at'] = Variable<int>(startAt.value);
     }
     if (endAt.present) {
       map['end_at'] = Variable<int>(endAt.value);
     }
-    if (reviewState.present) {
-      map['review_state'] = Variable<String>(reviewState.value);
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (locked.present) {
+      map['locked'] = Variable<bool>(locked.value);
     }
     if (reviewNote.present) {
       map['review_note'] = Variable<String>(reviewNote.value);
@@ -11438,9 +11523,9 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
     if (reviewedAt.present) {
       map['reviewed_at'] = Variable<int>(reviewedAt.value);
     }
-    if (replacementPlanBlockId.present) {
-      map['replacement_plan_block_id'] = Variable<String>(
-        replacementPlanBlockId.value,
+    if (rescheduledToPlanBlockId.present) {
+      map['rescheduled_to_plan_block_id'] = Variable<String>(
+        rescheduledToPlanBlockId.value,
       );
     }
     if (createdAt.present) {
@@ -11464,12 +11549,14 @@ class PlanBlocksCompanion extends UpdateCompanion<PlanBlock> {
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('taskId: $taskId, ')
+          ..write('title: $title, ')
           ..write('startAt: $startAt, ')
           ..write('endAt: $endAt, ')
-          ..write('reviewState: $reviewState, ')
+          ..write('status: $status, ')
+          ..write('locked: $locked, ')
           ..write('reviewNote: $reviewNote, ')
           ..write('reviewedAt: $reviewedAt, ')
-          ..write('replacementPlanBlockId: $replacementPlanBlockId, ')
+          ..write('rescheduledToPlanBlockId: $rescheduledToPlanBlockId, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('deletedAt: $deletedAt, ')
@@ -25514,12 +25601,14 @@ typedef $$PlanBlocksTableCreateCompanionBuilder =
       required String id,
       required String accountId,
       required String taskId,
+      Value<String?> title,
       required int startAt,
       required int endAt,
-      required String reviewState,
+      required String status,
+      Value<bool> locked,
       Value<String?> reviewNote,
       Value<int?> reviewedAt,
-      Value<String?> replacementPlanBlockId,
+      Value<String?> rescheduledToPlanBlockId,
       required int createdAt,
       required int updatedAt,
       Value<int?> deletedAt,
@@ -25530,12 +25619,14 @@ typedef $$PlanBlocksTableUpdateCompanionBuilder =
       Value<String> id,
       Value<String> accountId,
       Value<String> taskId,
+      Value<String?> title,
       Value<int> startAt,
       Value<int> endAt,
-      Value<String> reviewState,
+      Value<String> status,
+      Value<bool> locked,
       Value<String?> reviewNote,
       Value<int?> reviewedAt,
-      Value<String?> replacementPlanBlockId,
+      Value<String?> rescheduledToPlanBlockId,
       Value<int> createdAt,
       Value<int> updatedAt,
       Value<int?> deletedAt,
@@ -25662,6 +25753,11 @@ class $$PlanBlocksTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<int> get startAt => $composableBuilder(
     column: $table.startAt,
     builder: (column) => ColumnFilters(column),
@@ -25672,8 +25768,13 @@ class $$PlanBlocksTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get reviewState => $composableBuilder(
-    column: $table.reviewState,
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get locked => $composableBuilder(
+    column: $table.locked,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -25687,8 +25788,8 @@ class $$PlanBlocksTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get replacementPlanBlockId => $composableBuilder(
-    column: $table.replacementPlanBlockId,
+  ColumnFilters<String> get rescheduledToPlanBlockId => $composableBuilder(
+    column: $table.rescheduledToPlanBlockId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -25843,6 +25944,11 @@ class $$PlanBlocksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get title => $composableBuilder(
+    column: $table.title,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get startAt => $composableBuilder(
     column: $table.startAt,
     builder: (column) => ColumnOrderings(column),
@@ -25853,8 +25959,13 @@ class $$PlanBlocksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get reviewState => $composableBuilder(
-    column: $table.reviewState,
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get locked => $composableBuilder(
+    column: $table.locked,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -25868,8 +25979,8 @@ class $$PlanBlocksTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get replacementPlanBlockId => $composableBuilder(
-    column: $table.replacementPlanBlockId,
+  ColumnOrderings<String> get rescheduledToPlanBlockId => $composableBuilder(
+    column: $table.rescheduledToPlanBlockId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -25947,16 +26058,20 @@ class $$PlanBlocksTableAnnotationComposer
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
 
+  GeneratedColumn<String> get title =>
+      $composableBuilder(column: $table.title, builder: (column) => column);
+
   GeneratedColumn<int> get startAt =>
       $composableBuilder(column: $table.startAt, builder: (column) => column);
 
   GeneratedColumn<int> get endAt =>
       $composableBuilder(column: $table.endAt, builder: (column) => column);
 
-  GeneratedColumn<String> get reviewState => $composableBuilder(
-    column: $table.reviewState,
-    builder: (column) => column,
-  );
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<bool> get locked =>
+      $composableBuilder(column: $table.locked, builder: (column) => column);
 
   GeneratedColumn<String> get reviewNote => $composableBuilder(
     column: $table.reviewNote,
@@ -25968,8 +26083,8 @@ class $$PlanBlocksTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get replacementPlanBlockId => $composableBuilder(
-    column: $table.replacementPlanBlockId,
+  GeneratedColumn<String> get rescheduledToPlanBlockId => $composableBuilder(
+    column: $table.rescheduledToPlanBlockId,
     builder: (column) => column,
   );
 
@@ -26143,12 +26258,14 @@ class $$PlanBlocksTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> accountId = const Value.absent(),
                 Value<String> taskId = const Value.absent(),
+                Value<String?> title = const Value.absent(),
                 Value<int> startAt = const Value.absent(),
                 Value<int> endAt = const Value.absent(),
-                Value<String> reviewState = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<bool> locked = const Value.absent(),
                 Value<String?> reviewNote = const Value.absent(),
                 Value<int?> reviewedAt = const Value.absent(),
-                Value<String?> replacementPlanBlockId = const Value.absent(),
+                Value<String?> rescheduledToPlanBlockId = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int?> deletedAt = const Value.absent(),
@@ -26157,12 +26274,14 @@ class $$PlanBlocksTableTableManager
                 id: id,
                 accountId: accountId,
                 taskId: taskId,
+                title: title,
                 startAt: startAt,
                 endAt: endAt,
-                reviewState: reviewState,
+                status: status,
+                locked: locked,
                 reviewNote: reviewNote,
                 reviewedAt: reviewedAt,
-                replacementPlanBlockId: replacementPlanBlockId,
+                rescheduledToPlanBlockId: rescheduledToPlanBlockId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,
@@ -26173,12 +26292,14 @@ class $$PlanBlocksTableTableManager
                 required String id,
                 required String accountId,
                 required String taskId,
+                Value<String?> title = const Value.absent(),
                 required int startAt,
                 required int endAt,
-                required String reviewState,
+                required String status,
+                Value<bool> locked = const Value.absent(),
                 Value<String?> reviewNote = const Value.absent(),
                 Value<int?> reviewedAt = const Value.absent(),
-                Value<String?> replacementPlanBlockId = const Value.absent(),
+                Value<String?> rescheduledToPlanBlockId = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
                 Value<int?> deletedAt = const Value.absent(),
@@ -26187,12 +26308,14 @@ class $$PlanBlocksTableTableManager
                 id: id,
                 accountId: accountId,
                 taskId: taskId,
+                title: title,
                 startAt: startAt,
                 endAt: endAt,
-                reviewState: reviewState,
+                status: status,
+                locked: locked,
                 reviewNote: reviewNote,
                 reviewedAt: reviewedAt,
-                replacementPlanBlockId: replacementPlanBlockId,
+                rescheduledToPlanBlockId: rescheduledToPlanBlockId,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 deletedAt: deletedAt,

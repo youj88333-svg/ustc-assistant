@@ -1,9 +1,10 @@
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 DateTime instant(int hour, {int day = 27}) => DateTime(2026, 7, day, hour);
 
@@ -207,4 +208,41 @@ void main() {
       expect(logs.every((log) => !log.safeSummary.contains('打游戏')), isTrue);
     },
   );
+
+  test('personal event edit uses the global one-step undo slot', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    var clock = 200;
+    final undo = UndoService(
+      database: database,
+      accountId: 'a',
+      now: () => ++clock,
+    );
+    final service = CalendarEventService(
+      database: database,
+      accountId: 'a',
+      now: () => ++clock,
+      undoRecorder: undo,
+    );
+    final id = await service.create(
+      PersonalEvent.timed(
+        title: 'Before',
+        startAt: instant(9),
+        endAt: instant(10),
+      ),
+    );
+    await service.edit(
+      id,
+      PersonalEvent.timed(
+        title: 'After',
+        startAt: instant(9),
+        endAt: instant(10),
+      ),
+    );
+
+    await undo.undo();
+
+    expect((await service.byId(id)).title, 'Before');
+    expect(await undo.canUndo(), isFalse);
+  });
 }

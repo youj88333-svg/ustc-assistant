@@ -47,12 +47,14 @@ class PlanBlocks extends Table {
       text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get taskId =>
       text().references(Tasks, #id, onDelete: KeyAction.cascade)();
+  TextColumn get title => text().nullable()();
   IntColumn get startAt => integer()();
   IntColumn get endAt => integer()();
-  TextColumn get reviewState => text()();
+  TextColumn get status => text()();
+  BoolColumn get locked => boolean().withDefault(const Constant(false))();
   TextColumn get reviewNote => text().nullable()();
   IntColumn get reviewedAt => integer().nullable()();
-  TextColumn get replacementPlanBlockId => text().nullable()();
+  TextColumn get rescheduledToPlanBlockId => text().nullable()();
   IntColumn get createdAt => integer()();
   IntColumn get updatedAt => integer()();
   IntColumn get deletedAt => integer().nullable()();
@@ -66,9 +68,14 @@ class PlanBlocks extends Table {
   @override
   List<String> get customConstraints => [
     'CHECK (end_at > start_at)',
-    "CHECK (review_state IN ('pending','executed','skipped','rescheduled'))",
-    "CHECK ((review_state = 'pending' AND reviewed_at IS NULL) "
-        "OR (review_state != 'pending' AND reviewed_at IS NOT NULL))",
+    "CHECK (status IN "
+        "('suggested','accepted','done','skipped','rescheduled','cancelled'))",
+    "CHECK ((status IN ('suggested','accepted') AND reviewed_at IS NULL) "
+        "OR (status NOT IN ('suggested','accepted') AND reviewed_at IS NOT NULL))",
+    "CHECK ((status = 'rescheduled' AND "
+        "rescheduled_to_plan_block_id IS NOT NULL) OR "
+        "(status != 'rescheduled' AND "
+        "rescheduled_to_plan_block_id IS NULL))",
   ];
 }
 

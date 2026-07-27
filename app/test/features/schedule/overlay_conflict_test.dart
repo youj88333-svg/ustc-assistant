@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -7,43 +7,50 @@ import 'package:ustc_assistant_app/features/schedule/application/conflict_servic
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/conflict_editor.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 Future<AppDatabase> fixtureDatabase() async {
   final database = AppDatabase(NativeDatabase.memory());
-  await database.into(database.localAccounts).insert(
-    LocalAccountsCompanion.insert(
-      id: 'a',
-      maskedHint: 'PB****0000',
-      createdAt: 1,
-      updatedAt: 1,
-    ),
-  );
-  await database.into(database.courseSeries).insert(
-    CourseSeriesCompanion.insert(
-      id: 'series-a',
-      accountId: 'a',
-      source: 'ustc_jw',
-      externalId: 'lesson-a',
-      title: '电路基本理论',
-      semesterKey: '2026fall',
-      sourceDetailsJson: '{}',
-      createdAt: 1,
-      updatedAt: 1,
-    ),
-  );
-  await database.into(database.courseSeries).insert(
-    CourseSeriesCompanion.insert(
-      id: 'series-b',
-      accountId: 'a',
-      source: 'ustc_jw',
-      externalId: 'lesson-b',
-      title: '量子物理 B',
-      semesterKey: '2026fall',
-      sourceDetailsJson: '{}',
-      createdAt: 1,
-      updatedAt: 1,
-    ),
-  );
+  await database
+      .into(database.localAccounts)
+      .insert(
+        LocalAccountsCompanion.insert(
+          id: 'a',
+          maskedHint: 'PB****0000',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+  await database
+      .into(database.courseSeries)
+      .insert(
+        CourseSeriesCompanion.insert(
+          id: 'series-a',
+          accountId: 'a',
+          source: 'ustc_jw',
+          externalId: 'lesson-a',
+          title: '电路基本理论',
+          semesterKey: '2026fall',
+          sourceDetailsJson: '{}',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+  await database
+      .into(database.courseSeries)
+      .insert(
+        CourseSeriesCompanion.insert(
+          id: 'series-b',
+          accountId: 'a',
+          source: 'ustc_jw',
+          externalId: 'lesson-b',
+          title: '量子物理 B',
+          semesterKey: '2026fall',
+          sourceDetailsJson: '{}',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
   await _insertEvent(database, 'event-a', 'lesson-a', 10);
   await _insertEvent(database, 'event-a-next', 'lesson-a', 17);
   await _insertEvent(database, 'event-b', 'lesson-b', 10);
@@ -55,24 +62,26 @@ Future<void> _insertEvent(
   String id,
   String seriesExternalId,
   int day,
-) => database.into(database.calendarEvents).insert(
-  CalendarEventsCompanion.insert(
-    id: id,
-    accountId: 'a',
-    source: 'ustc_jw',
-    externalId: Value(id),
-    sourceSeriesExternalId: Value(seriesExternalId),
-    title: id,
-    type: 'course',
-    startAt: Value(DateTime(2026, 8, day, 9, 45).millisecondsSinceEpoch),
-    endAt: Value(DateTime(2026, 8, day, 11, 20).millisecondsSinceEpoch),
-    allDay: false,
-    timezone: 'Asia/Shanghai',
-    importance: const Value('normal'),
-    createdAt: 1,
-    updatedAt: 1,
-  ),
-);
+) => database
+    .into(database.calendarEvents)
+    .insert(
+      CalendarEventsCompanion.insert(
+        id: id,
+        accountId: 'a',
+        source: 'ustc_jw',
+        externalId: Value(id),
+        sourceSeriesExternalId: Value(seriesExternalId),
+        title: id,
+        type: 'course',
+        startAt: Value(DateTime(2026, 8, day, 9, 45).millisecondsSinceEpoch),
+        endAt: Value(DateTime(2026, 8, day, 11, 20).millisecondsSinceEpoch),
+        allDay: false,
+        timezone: 'Asia/Shanghai',
+        importance: const Value('normal'),
+        createdAt: 1,
+        updatedAt: 1,
+      ),
+    );
 
 EventConflictParticipant participant(
   String eventId,
@@ -97,14 +106,8 @@ void main() {
     );
     final repository = EffectiveEventRepository(database, accountId: 'a');
 
-    await overlays.setSeriesAttendance(
-      'series-a',
-      AttendancePolicy.skip,
-    );
-    await overlays.setEventAttendance(
-      'event-a',
-      AttendancePolicy.mustGo,
-    );
+    await overlays.setSeriesAttendance('series-a', AttendancePolicy.skip);
+    await overlays.setEventAttendance('event-a', AttendancePolicy.mustGo);
 
     expect(
       (await repository.byId('event-a')).attendance,
@@ -126,10 +129,7 @@ void main() {
     );
     final repository = EffectiveEventRepository(database, accountId: 'a');
 
-    await overlays.recordAttendanceDecision(
-      'event-a',
-      AttendanceDecision.skip,
-    );
+    await overlays.recordAttendanceDecision('event-a', AttendanceDecision.skip);
 
     expect(
       (await repository.byId('event-a')).attendanceDecision,
@@ -178,82 +178,87 @@ void main() {
     expect(await service.showConflictWarning(a, b), isTrue);
   });
 
-  test('current-and-future classification stores one structured rule', () async {
-    final database = await fixtureDatabase();
-    addTearDown(database.close);
-    final service = ConflictService(
-      database: database,
-      accountId: 'a',
-      now: () => 100,
-    );
-    final a = participant(
-      'event-a',
-      'series-a',
-      finiteSeriesEnd: DateTime(2026, 12, 31),
-    );
-    final b = participant(
-      'event-b',
-      'series-b',
-      finiteSeriesEnd: DateTime(2026, 11, 30),
-    );
+  test(
+    'current-and-future classification stores one structured rule',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final a = participant(
+        'event-a',
+        'series-a',
+        finiteSeriesEnd: DateTime(2026, 12, 31),
+      );
+      final b = participant(
+        'event-b',
+        'series-b',
+        finiteSeriesEnd: DateTime(2026, 11, 30),
+      );
 
-    await service.classifyPair(
-      a,
-      b,
-      ConflictState.nonConflict,
-      scope: ConflictScope.currentAndFuture,
-    );
-
-    final rule = (await database.select(
-      database.scheduleRelationRules,
-    ).get()).single;
-    expect(rule.leftSeriesId, 'series-a');
-    expect(rule.rightSeriesId, 'series-b');
-    expect(rule.effectiveFrom, '2026-08-10');
-    expect(rule.effectiveThrough, '2026-11-30');
-    expect(await database.select(database.scheduleRelations).get(), isEmpty);
-  });
-
-  test('unbounded series keeps null end and missing identity is rejected', () async {
-    final database = await fixtureDatabase();
-    addTearDown(database.close);
-    final service = ConflictService(
-      database: database,
-      accountId: 'a',
-      now: () => 100,
-    );
-    final a = participant('event-a', 'series-a');
-    final b = participant('event-b', 'series-b');
-    await service.classifyPair(
-      a,
-      b,
-      ConflictState.conflict,
-      scope: ConflictScope.currentAndFuture,
-    );
-    expect(
-      (await database.select(database.scheduleRelationRules).get())
-          .single
-          .effectiveThrough,
-      isNull,
-    );
-
-    expect(
-      service.classifyPair(
+      await service.classifyPair(
         a,
-        EventConflictParticipant(
-          eventId: 'event-b',
-          occurrenceDate: DateTime(2026, 8, 10),
-        ),
+        b,
+        ConflictState.nonConflict,
+        scope: ConflictScope.currentAndFuture,
+      );
+
+      final rule =
+          (await database.select(database.scheduleRelationRules).get()).single;
+      expect(rule.leftSeriesId, 'series-a');
+      expect(rule.rightSeriesId, 'series-b');
+      expect(rule.effectiveFrom, '2026-08-10');
+      expect(rule.effectiveThrough, '2026-11-30');
+      expect(await database.select(database.scheduleRelations).get(), isEmpty);
+    },
+  );
+
+  test(
+    'unbounded series keeps null end and missing identity is rejected',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+      await service.classifyPair(
+        a,
+        b,
         ConflictState.conflict,
         scope: ConflictScope.currentAndFuture,
-      ),
-      throwsA(isA<ConflictValidationError>()),
-    );
-    expect(
-      await database.select(database.scheduleRelationRules).get(),
-      hasLength(1),
-    );
-  });
+      );
+      expect(
+        (await database.select(database.scheduleRelationRules).get())
+            .single
+            .effectiveThrough,
+        isNull,
+      );
+
+      expect(
+        service.classifyPair(
+          a,
+          EventConflictParticipant(
+            eventId: 'event-b',
+            occurrenceDate: DateTime(2026, 8, 10),
+          ),
+          ConflictState.conflict,
+          scope: ConflictScope.currentAndFuture,
+        ),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      expect(
+        await database.select(database.scheduleRelationRules).get(),
+        hasLength(1),
+      );
+    },
+  );
 
   testWidgets('conflict editor saves independent unclassified pairs', (
     tester,
@@ -297,5 +302,46 @@ void main() {
       'event-a:event-b:unclassified',
       'event-b:event-a-next:nonConflict',
     ]);
+  });
+
+  test('overlay edit uses the global one-step undo slot', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final undo = UndoService(database: database, accountId: 'a');
+    final overlays = OverlayService(
+      database: database,
+      accountId: 'a',
+      undoRecorder: undo,
+    );
+    await overlays.setForegroundPreference('event-a', 1);
+    await overlays.setForegroundPreference('event-a', 9);
+
+    await undo.undo();
+
+    expect(
+      (await database.select(database.userOverlays).get())
+          .single
+          .foregroundPriority,
+      1,
+    );
+  });
+
+  test('conflict edit uses the global one-step undo slot', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final undo = UndoService(database: database, accountId: 'a');
+    final service = ConflictService(
+      database: database,
+      accountId: 'a',
+      undoRecorder: undo,
+    );
+    final a = participant('event-a', 'series-a');
+    final b = participant('event-b', 'series-b');
+    await service.classifyPair(a, b, ConflictState.nonConflict);
+    await service.classifyPair(a, b, ConflictState.conflict);
+
+    await undo.undo();
+
+    expect(await service.stateForPair(a, b), ConflictState.nonConflict);
   });
 }

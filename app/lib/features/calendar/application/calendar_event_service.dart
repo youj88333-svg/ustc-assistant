@@ -4,6 +4,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../tasks/application/undo_recorder.dart';
 import '../domain/personal_event.dart';
 
 class SourceOwnedEventError implements Exception {
@@ -18,11 +19,14 @@ class CalendarEventService {
     required this.database,
     required this.accountId,
     int Function()? now,
-  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
+    UndoRecorder? undoRecorder,
+  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
+       undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
   final AppDatabase database;
   final String accountId;
   final int Function() now;
+  final UndoRecorder undoRecorder;
   static const _uuid = Uuid();
 
   Future<String> create(
@@ -56,6 +60,7 @@ class CalendarEventService {
             );
       }
       await _log('calendar_event_create', 'Created a personal event.');
+      await _recordUndo('calendar_event_create', id, null);
     });
     return id;
   }
@@ -124,6 +129,7 @@ class CalendarEventService {
         }
       }
       await _log('calendar_event_edit', 'Updated a personal event.');
+      await _recordUndo('calendar_event_edit', id, _eventSnapshot(current));
       if (current.deletedAt != null) {
         throw StateError('deleted event must be restored before editing');
       }
@@ -147,7 +153,7 @@ class CalendarEventService {
 
   Future<void> softDelete(String id) async {
     await database.transaction(() async {
-      await _ownedRow(id);
+      final current = await _ownedRow(id);
       final timestamp = now();
       await (database.update(
         database.calendarEvents,
@@ -159,6 +165,7 @@ class CalendarEventService {
       );
       await _cancelReminders(id, timestamp);
       await _log('calendar_event_delete', 'Deleted a personal event.');
+      await _recordUndo('calendar_event_delete', id, _eventSnapshot(current));
     });
   }
 
@@ -176,6 +183,7 @@ class CalendarEventService {
         ),
       );
       await _log('calendar_event_restore', 'Restored a personal event.');
+      await _recordUndo('calendar_event_restore', id, _eventSnapshot(row));
     });
   }
 
@@ -185,7 +193,7 @@ class CalendarEventService {
     String actionType,
   ) async {
     await database.transaction(() async {
-      await _ownedRow(id);
+      final current = await _ownedRow(id);
       final timestamp = now();
       final terminal =
           status == EventStatus.completed ||
@@ -204,6 +212,7 @@ class CalendarEventService {
         await _cancelReminders(id, timestamp);
       }
       await _log(actionType, 'Updated a personal event state.');
+      await _recordUndo(actionType, id, _eventSnapshot(current));
     });
   }
 
@@ -340,6 +349,50 @@ class CalendarEventService {
         safeSummary: summary,
         occurredAt: now(),
       );
+
+  Future<void> _recordUndo(
+    String kind,
+    String id,
+    Map<String, Object?>? before,
+  ) => undoRecorder.record(
+    UndoCommand(
+      kind: kind,
+      accountId: accountId,
+      payload: {'entity': 'calendar_event', 'id': id, 'before': before},
+    ),
+  );
+
+  Map<String, Object?> _eventSnapshot(CalendarEvent row) => {
+    'id': row.id,
+    'source': row.source,
+    'externalId': row.externalId,
+    'sourceSeriesExternalId': row.sourceSeriesExternalId,
+    'personalSeriesId': row.personalSeriesId,
+    'occurrenceKey': row.occurrenceKey,
+    'title': row.title,
+    'description': row.description,
+    'type': row.type,
+    'status': row.status,
+    'startAt': row.startAt,
+    'endAt': row.endAt,
+    'allDay': row.allDay,
+    'startDate': row.startDate,
+    'endDateExclusive': row.endDateExclusive,
+    'timezone': row.timezone,
+    'locationName': row.locationName,
+    'buildingName': row.buildingName,
+    'campusName': row.campusName,
+    'participantsJson': row.participantsJson,
+    'sourceDetailsJson': row.sourceDetailsJson,
+    'importance': row.importance,
+    'completionPolicy': row.completionPolicy,
+    'completedAt': row.completedAt,
+    'color': row.color,
+    'tagsJson': row.tagsJson,
+    'createdAt': row.createdAt,
+    'updatedAt': row.updatedAt,
+    'deletedAt': row.deletedAt,
+  };
 
   String? _dateText(DateTime? value) => value == null
       ? null
