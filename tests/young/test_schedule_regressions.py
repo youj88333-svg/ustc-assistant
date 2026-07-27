@@ -74,6 +74,7 @@ class FakeLocator:
         self.page = page
         self.selector = selector
         self.visible = visible
+        self.first = self
 
     def is_visible(self):
         return self.visible
@@ -92,6 +93,17 @@ class FakeLocator:
 
     def filter(self, **kwargs):
         return FakeLocator(self.page, f"{self.selector}:text({kwargs['has_text']})")
+
+    def count(self):
+        return 1
+
+    def get_attribute(self, name):
+        if name == "data-ustc-account":
+            return getattr(self.page, "account_value", None)
+        return None
+
+    def input_value(self):
+        return getattr(self.page, "account_value", None)
 
 
 class FakePage:
@@ -180,6 +192,23 @@ class RepeatedScheduleRedirectPage(FakePage):
                 "https://young.ustc.edu.cn/login/"
                 "sc-wisdom-group-learning/dataAnalysis/visual"
             )
+
+
+class DelayedCalendarPage(FakePage):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.account_value = "PB22222222"
+        self.calendar_visible = False
+
+    def locator(self, selector):
+        if selector == collector.CALENDAR_SELECTOR:
+            locator = FakeLocator(self, selector, visible=False)
+            locator.is_visible = lambda: self.calendar_visible
+            return locator
+        return FakeLocator(self, selector)
+
+    def wait_for_timeout(self, timeout):
+        self.calendar_visible = True
 
 
 class FakeBrowserContext:
@@ -288,6 +317,21 @@ class ResponseContractTests(unittest.TestCase):
 
 @unittest.skipIf(collector is None, "collector module not implemented yet")
 class BrowserFlowTests(unittest.TestCase):
+    def test_does_not_fill_credentials_while_young_calendar_is_loading(self):
+        page = DelayedCalendarPage([FakeResponse(page_payload([]))])
+
+        result = collector.collect_from_page(
+            page,
+            today=date(2026, 7, 21),
+            queried_from=date(2026, 7, 21),
+            queried_through=date(2026, 7, 21),
+            login_timeout_ms=1000,
+            credentials=collector.LoginCredentials("PB22222222", "secret"),
+            status=lambda message: None,
+        )
+
+        self.assertEqual(1, result.queried_dates)
+
     def test_retries_schedule_navigation_after_repeated_login_redirects(self):
         page = RepeatedScheduleRedirectPage(
             [FakeResponse(page_payload([]))]

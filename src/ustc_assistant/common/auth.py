@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -47,6 +48,11 @@ class LoginCredentials:
             raise ValueError("password must be text or None")
 
 
+def is_ustc_cas_origin(url: str) -> bool:
+    parsed = urlsplit(url)
+    return parsed.scheme == "https" and parsed.hostname in CAS_HOSTS
+
+
 def profile_dir_for_account(
     account_id: str, *, base_dir: Path | None = None
 ) -> Path:
@@ -69,8 +75,7 @@ def raise_if_cancelled(
 
 
 def fill_ustc_login(page: Any, credentials: LoginCredentials) -> None:
-    parsed = urlsplit(str(getattr(page, "url", "")))
-    if parsed.scheme != "https" or parsed.hostname not in CAS_HOSTS:
+    if not is_ustc_cas_origin(str(getattr(page, "url", ""))):
         raise AuthBoundaryError("login page is not an allowlisted USTC CAS origin")
     page.locator(USERNAME_SELECTOR).first.fill(credentials.username)
     if credentials.password is not None:
@@ -93,6 +98,38 @@ def _account_from_page(page: Any) -> str | None:
     return None
 
 
+def _contains_exact_account(
+    candidate: Any,
+    expected: str,
+    *,
+    depth: int = 0,
+) -> bool:
+    if depth > 8:
+        return False
+    if isinstance(candidate, str):
+        value = candidate.strip()
+        if value.casefold() == expected.casefold():
+            return True
+        if not value or len(value) > 65_536:
+            return False
+        try:
+            decoded = json.loads(value)
+        except (TypeError, ValueError):
+            return False
+        return _contains_exact_account(decoded, expected, depth=depth + 1)
+    if isinstance(candidate, dict):
+        return any(
+            _contains_exact_account(value, expected, depth=depth + 1)
+            for value in candidate.values()
+        )
+    if isinstance(candidate, list):
+        return any(
+            _contains_exact_account(value, expected, depth=depth + 1)
+            for value in candidate
+        )
+    return False
+
+
 def verify_ustc_account(page: Any, expected_username: str) -> None:
     actual = _account_from_page(page)
     expected = expected_username.strip()
@@ -100,9 +137,8 @@ def verify_ustc_account(page: Any, expected_username: str) -> None:
         return
     evaluate = getattr(page, "evaluate", None)
     if callable(evaluate):
-        matches_resource = evaluate(
-            """expected => {
-              const normalized = expected.toLocaleLowerCase();
+        candidates = evaluate(
+            """() => {
               const values = [];
               for (const entry of performance.getEntriesByType('resource')) {
                 try {
@@ -121,13 +157,12 @@ def verify_ustc_account(page: Any, expected_username: str) -> None:
                   }
                 }
               }
-              return values.some(
-                value => typeof value === 'string'
-                  && value.trim().toLocaleLowerCase() === normalized
-              );
-            }""",
-            expected,
+              return values.filter(value => typeof value === 'string');
+            }"""
         )
-        if matches_resource is True:
+        if isinstance(candidates, list) and any(
+            _contains_exact_account(candidate, expected)
+            for candidate in candidates
+        ):
             return
     raise AccountMismatch("authenticated school account could not be verified")

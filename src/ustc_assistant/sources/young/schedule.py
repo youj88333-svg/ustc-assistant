@@ -26,6 +26,7 @@ from ustc_assistant.common.auth import (
     LoginCredentials,
     UserActionRequired,
     fill_ustc_login,
+    is_ustc_cas_origin,
     profile_dir_for_account,
     raise_if_cancelled,
     verify_ustc_account,
@@ -215,6 +216,7 @@ def _open_schedule_after_login(
     deadline = time.monotonic() + max(login_timeout_ms, 0) / 1000
     last_schedule_navigation = time.monotonic()
     announced_login_wait = False
+    login_filled = False
 
     while True:
         if calendar_view.is_visible():
@@ -248,8 +250,13 @@ def _open_schedule_after_login(
                 "second-classroom application ..."
             )
             announced_login_wait = True
-            if credentials is not None:
-                fill_ustc_login(page, credentials)
+        if (
+            credentials is not None
+            and not login_filled
+            and is_ustc_cas_origin(page.url)
+        ):
+            fill_ustc_login(page, credentials)
+            login_filled = True
         raise_if_cancelled(cancel_check)
         page.wait_for_timeout(min(250, remaining_ms))
 
