@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/database/app_database.dart';
+import '../core/security/windows_dpapi_protector.dart';
+import '../features/accounts/application/account_service.dart';
+import '../features/accounts/presentation/accounts_page.dart';
 import '../features/calendar/application/calendar_event_service.dart';
 import '../features/calendar/presentation/calendar_event_form.dart';
 import '../features/calendar/presentation/personal_event_management_page.dart';
@@ -63,8 +66,18 @@ GoRouter buildRouter(
         builder: (context, state) =>
             _PersonalEventManagementLoader(database: database),
       ),
+      GoRoute(
+        path: '/accounts',
+        builder: (context, state) => AccountsPage(
+          service: AccountService(
+            database: database,
+            protector: WindowsDpapiProtector(),
+          ),
+          onLoginAgain: (_) => context.go('/sync'),
+          onOpenOfficialPage: () => context.go('/official-websites'),
+        ),
+      ),
       for (final route in const [
-        (path: '/accounts', title: '账号'),
         (path: '/sync', title: '同步'),
         (path: '/history', title: '操作历史'),
         (path: '/settings', title: '设置'),

@@ -20,6 +20,9 @@ class CredentialAccounts extends Table {
   BlobColumn get usernameCiphertext => blob()();
   BlobColumn get passwordCiphertext => blob().nullable()();
   TextColumn get scheme => text()();
+  IntColumn get protectionVersion => integer().withDefault(const Constant(1))();
+  TextColumn get protectionMetadata =>
+      text().withDefault(const Constant('{}'))();
   IntColumn get updatedAt => integer()();
 
   @override

@@ -420,6 +420,30 @@ class $CredentialAccountsTable extends CredentialAccounts
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _protectionVersionMeta = const VerificationMeta(
+    'protectionVersion',
+  );
+  @override
+  late final GeneratedColumn<int> protectionVersion = GeneratedColumn<int>(
+    'protection_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _protectionMetadataMeta =
+      const VerificationMeta('protectionMetadata');
+  @override
+  late final GeneratedColumn<String> protectionMetadata =
+      GeneratedColumn<String>(
+        'protection_metadata',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('{}'),
+      );
   static const VerificationMeta _updatedAtMeta = const VerificationMeta(
     'updatedAt',
   );
@@ -437,6 +461,8 @@ class $CredentialAccountsTable extends CredentialAccounts
     usernameCiphertext,
     passwordCiphertext,
     scheme,
+    protectionVersion,
+    protectionMetadata,
     updatedAt,
   ];
   @override
@@ -487,6 +513,24 @@ class $CredentialAccountsTable extends CredentialAccounts
     } else if (isInserting) {
       context.missing(_schemeMeta);
     }
+    if (data.containsKey('protection_version')) {
+      context.handle(
+        _protectionVersionMeta,
+        protectionVersion.isAcceptableOrUnknown(
+          data['protection_version']!,
+          _protectionVersionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('protection_metadata')) {
+      context.handle(
+        _protectionMetadataMeta,
+        protectionMetadata.isAcceptableOrUnknown(
+          data['protection_metadata']!,
+          _protectionMetadataMeta,
+        ),
+      );
+    }
     if (data.containsKey('updated_at')) {
       context.handle(
         _updatedAtMeta,
@@ -520,6 +564,14 @@ class $CredentialAccountsTable extends CredentialAccounts
         DriftSqlType.string,
         data['${effectivePrefix}scheme'],
       )!,
+      protectionVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}protection_version'],
+      )!,
+      protectionMetadata: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}protection_metadata'],
+      )!,
       updatedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}updated_at'],
@@ -539,12 +591,16 @@ class CredentialAccount extends DataClass
   final Uint8List usernameCiphertext;
   final Uint8List? passwordCiphertext;
   final String scheme;
+  final int protectionVersion;
+  final String protectionMetadata;
   final int updatedAt;
   const CredentialAccount({
     required this.accountId,
     required this.usernameCiphertext,
     this.passwordCiphertext,
     required this.scheme,
+    required this.protectionVersion,
+    required this.protectionMetadata,
     required this.updatedAt,
   });
   @override
@@ -556,6 +612,8 @@ class CredentialAccount extends DataClass
       map['password_ciphertext'] = Variable<Uint8List>(passwordCiphertext);
     }
     map['scheme'] = Variable<String>(scheme);
+    map['protection_version'] = Variable<int>(protectionVersion);
+    map['protection_metadata'] = Variable<String>(protectionMetadata);
     map['updated_at'] = Variable<int>(updatedAt);
     return map;
   }
@@ -568,6 +626,8 @@ class CredentialAccount extends DataClass
           ? const Value.absent()
           : Value(passwordCiphertext),
       scheme: Value(scheme),
+      protectionVersion: Value(protectionVersion),
+      protectionMetadata: Value(protectionMetadata),
       updatedAt: Value(updatedAt),
     );
   }
@@ -586,6 +646,10 @@ class CredentialAccount extends DataClass
         json['passwordCiphertext'],
       ),
       scheme: serializer.fromJson<String>(json['scheme']),
+      protectionVersion: serializer.fromJson<int>(json['protectionVersion']),
+      protectionMetadata: serializer.fromJson<String>(
+        json['protectionMetadata'],
+      ),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
     );
   }
@@ -597,6 +661,8 @@ class CredentialAccount extends DataClass
       'usernameCiphertext': serializer.toJson<Uint8List>(usernameCiphertext),
       'passwordCiphertext': serializer.toJson<Uint8List?>(passwordCiphertext),
       'scheme': serializer.toJson<String>(scheme),
+      'protectionVersion': serializer.toJson<int>(protectionVersion),
+      'protectionMetadata': serializer.toJson<String>(protectionMetadata),
       'updatedAt': serializer.toJson<int>(updatedAt),
     };
   }
@@ -606,6 +672,8 @@ class CredentialAccount extends DataClass
     Uint8List? usernameCiphertext,
     Value<Uint8List?> passwordCiphertext = const Value.absent(),
     String? scheme,
+    int? protectionVersion,
+    String? protectionMetadata,
     int? updatedAt,
   }) => CredentialAccount(
     accountId: accountId ?? this.accountId,
@@ -614,6 +682,8 @@ class CredentialAccount extends DataClass
         ? passwordCiphertext.value
         : this.passwordCiphertext,
     scheme: scheme ?? this.scheme,
+    protectionVersion: protectionVersion ?? this.protectionVersion,
+    protectionMetadata: protectionMetadata ?? this.protectionMetadata,
     updatedAt: updatedAt ?? this.updatedAt,
   );
   CredentialAccount copyWithCompanion(CredentialAccountsCompanion data) {
@@ -626,6 +696,12 @@ class CredentialAccount extends DataClass
           ? data.passwordCiphertext.value
           : this.passwordCiphertext,
       scheme: data.scheme.present ? data.scheme.value : this.scheme,
+      protectionVersion: data.protectionVersion.present
+          ? data.protectionVersion.value
+          : this.protectionVersion,
+      protectionMetadata: data.protectionMetadata.present
+          ? data.protectionMetadata.value
+          : this.protectionMetadata,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
   }
@@ -637,6 +713,8 @@ class CredentialAccount extends DataClass
           ..write('usernameCiphertext: $usernameCiphertext, ')
           ..write('passwordCiphertext: $passwordCiphertext, ')
           ..write('scheme: $scheme, ')
+          ..write('protectionVersion: $protectionVersion, ')
+          ..write('protectionMetadata: $protectionMetadata, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
         .toString();
@@ -648,6 +726,8 @@ class CredentialAccount extends DataClass
     $driftBlobEquality.hash(usernameCiphertext),
     $driftBlobEquality.hash(passwordCiphertext),
     scheme,
+    protectionVersion,
+    protectionMetadata,
     updatedAt,
   );
   @override
@@ -664,6 +744,8 @@ class CredentialAccount extends DataClass
             this.passwordCiphertext,
           ) &&
           other.scheme == this.scheme &&
+          other.protectionVersion == this.protectionVersion &&
+          other.protectionMetadata == this.protectionMetadata &&
           other.updatedAt == this.updatedAt);
 }
 
@@ -672,6 +754,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
   final Value<Uint8List> usernameCiphertext;
   final Value<Uint8List?> passwordCiphertext;
   final Value<String> scheme;
+  final Value<int> protectionVersion;
+  final Value<String> protectionMetadata;
   final Value<int> updatedAt;
   final Value<int> rowid;
   const CredentialAccountsCompanion({
@@ -679,6 +763,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
     this.usernameCiphertext = const Value.absent(),
     this.passwordCiphertext = const Value.absent(),
     this.scheme = const Value.absent(),
+    this.protectionVersion = const Value.absent(),
+    this.protectionMetadata = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -687,6 +773,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
     required Uint8List usernameCiphertext,
     this.passwordCiphertext = const Value.absent(),
     required String scheme,
+    this.protectionVersion = const Value.absent(),
+    this.protectionMetadata = const Value.absent(),
     required int updatedAt,
     this.rowid = const Value.absent(),
   }) : accountId = Value(accountId),
@@ -698,6 +786,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
     Expression<Uint8List>? usernameCiphertext,
     Expression<Uint8List>? passwordCiphertext,
     Expression<String>? scheme,
+    Expression<int>? protectionVersion,
+    Expression<String>? protectionMetadata,
     Expression<int>? updatedAt,
     Expression<int>? rowid,
   }) {
@@ -706,6 +796,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
       if (usernameCiphertext != null) 'username_ciphertext': usernameCiphertext,
       if (passwordCiphertext != null) 'password_ciphertext': passwordCiphertext,
       if (scheme != null) 'scheme': scheme,
+      if (protectionVersion != null) 'protection_version': protectionVersion,
+      if (protectionMetadata != null) 'protection_metadata': protectionMetadata,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -716,6 +808,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
     Value<Uint8List>? usernameCiphertext,
     Value<Uint8List?>? passwordCiphertext,
     Value<String>? scheme,
+    Value<int>? protectionVersion,
+    Value<String>? protectionMetadata,
     Value<int>? updatedAt,
     Value<int>? rowid,
   }) {
@@ -724,6 +818,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
       usernameCiphertext: usernameCiphertext ?? this.usernameCiphertext,
       passwordCiphertext: passwordCiphertext ?? this.passwordCiphertext,
       scheme: scheme ?? this.scheme,
+      protectionVersion: protectionVersion ?? this.protectionVersion,
+      protectionMetadata: protectionMetadata ?? this.protectionMetadata,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
     );
@@ -748,6 +844,12 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
     if (scheme.present) {
       map['scheme'] = Variable<String>(scheme.value);
     }
+    if (protectionVersion.present) {
+      map['protection_version'] = Variable<int>(protectionVersion.value);
+    }
+    if (protectionMetadata.present) {
+      map['protection_metadata'] = Variable<String>(protectionMetadata.value);
+    }
     if (updatedAt.present) {
       map['updated_at'] = Variable<int>(updatedAt.value);
     }
@@ -764,6 +866,8 @@ class CredentialAccountsCompanion extends UpdateCompanion<CredentialAccount> {
           ..write('usernameCiphertext: $usernameCiphertext, ')
           ..write('passwordCiphertext: $passwordCiphertext, ')
           ..write('scheme: $scheme, ')
+          ..write('protectionVersion: $protectionVersion, ')
+          ..write('protectionMetadata: $protectionMetadata, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -17394,6 +17498,8 @@ typedef $$CredentialAccountsTableCreateCompanionBuilder =
       required Uint8List usernameCiphertext,
       Value<Uint8List?> passwordCiphertext,
       required String scheme,
+      Value<int> protectionVersion,
+      Value<String> protectionMetadata,
       required int updatedAt,
       Value<int> rowid,
     });
@@ -17403,6 +17509,8 @@ typedef $$CredentialAccountsTableUpdateCompanionBuilder =
       Value<Uint8List> usernameCiphertext,
       Value<Uint8List?> passwordCiphertext,
       Value<String> scheme,
+      Value<int> protectionVersion,
+      Value<String> protectionMetadata,
       Value<int> updatedAt,
       Value<int> rowid,
     });
@@ -17463,6 +17571,16 @@ class $$CredentialAccountsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<int> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
     builder: (column) => ColumnFilters(column),
@@ -17516,6 +17634,16 @@ class $$CredentialAccountsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get updatedAt => $composableBuilder(
     column: $table.updatedAt,
     builder: (column) => ColumnOrderings(column),
@@ -17566,6 +17694,16 @@ class $$CredentialAccountsTableAnnotationComposer
 
   GeneratedColumn<String> get scheme =>
       $composableBuilder(column: $table.scheme, builder: (column) => column);
+
+  GeneratedColumn<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
@@ -17631,6 +17769,8 @@ class $$CredentialAccountsTableTableManager
                 Value<Uint8List> usernameCiphertext = const Value.absent(),
                 Value<Uint8List?> passwordCiphertext = const Value.absent(),
                 Value<String> scheme = const Value.absent(),
+                Value<int> protectionVersion = const Value.absent(),
+                Value<String> protectionMetadata = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CredentialAccountsCompanion(
@@ -17638,6 +17778,8 @@ class $$CredentialAccountsTableTableManager
                 usernameCiphertext: usernameCiphertext,
                 passwordCiphertext: passwordCiphertext,
                 scheme: scheme,
+                protectionVersion: protectionVersion,
+                protectionMetadata: protectionMetadata,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),
@@ -17647,6 +17789,8 @@ class $$CredentialAccountsTableTableManager
                 required Uint8List usernameCiphertext,
                 Value<Uint8List?> passwordCiphertext = const Value.absent(),
                 required String scheme,
+                Value<int> protectionVersion = const Value.absent(),
+                Value<String> protectionMetadata = const Value.absent(),
                 required int updatedAt,
                 Value<int> rowid = const Value.absent(),
               }) => CredentialAccountsCompanion.insert(
@@ -17654,6 +17798,8 @@ class $$CredentialAccountsTableTableManager
                 usernameCiphertext: usernameCiphertext,
                 passwordCiphertext: passwordCiphertext,
                 scheme: scheme,
+                protectionVersion: protectionVersion,
+                protectionMetadata: protectionMetadata,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),
