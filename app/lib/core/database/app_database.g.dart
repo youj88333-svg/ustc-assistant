@@ -5276,6 +5276,10 @@ class $AgentRunsTable extends AgentRuns
   @override
   Set<GeneratedColumn> get $primaryKey => {id};
   @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {id, accountId},
+  ];
+  @override
   AgentRun map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
     return AgentRun(
@@ -5689,9 +5693,6 @@ class $ChatMessagesTable extends ChatMessages
     true,
     type: DriftSqlType.string,
     requiredDuringInsert: false,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'REFERENCES agent_runs (id) ON DELETE CASCADE',
-    ),
   );
   static const VerificationMeta _ordinalMeta = const VerificationMeta(
     'ordinal',
@@ -6254,9 +6255,6 @@ class $ToolInvocationsTable extends ToolInvocations
     false,
     type: DriftSqlType.string,
     requiredDuringInsert: true,
-    defaultConstraints: GeneratedColumn.constraintIsAlways(
-      'REFERENCES agent_runs (id) ON DELETE CASCADE',
-    ),
   );
   static const VerificationMeta _toolNameMeta = const VerificationMeta(
     'toolName',
@@ -18478,21 +18476,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
-        'agent_runs',
-        limitUpdateKind: UpdateKind.delete,
-      ),
-      result: [TableUpdate('chat_messages', kind: UpdateKind.delete)],
-    ),
-    WritePropagation(
-      on: TableUpdateQuery.onTableName(
         'local_accounts',
-        limitUpdateKind: UpdateKind.delete,
-      ),
-      result: [TableUpdate('tool_invocations', kind: UpdateKind.delete)],
-    ),
-    WritePropagation(
-      on: TableUpdateQuery.onTableName(
-        'agent_runs',
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('tool_invocations', kind: UpdateKind.delete)],
@@ -25075,44 +25059,6 @@ final class $$AgentRunsTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
-
-  static MultiTypedResultKey<$ChatMessagesTable, List<ChatMessage>>
-  _chatMessagesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
-    db.chatMessages,
-    aliasName: 'agent_runs__id__chat_messages__run_id',
-  );
-
-  $$ChatMessagesTableProcessedTableManager get chatMessagesRefs {
-    final manager = $$ChatMessagesTableTableManager(
-      $_db,
-      $_db.chatMessages,
-    ).filter((f) => f.runId.id.sqlEquals($_itemColumn<String>('id')!));
-
-    final cache = $_typedResult.readTableOrNull(_chatMessagesRefsTable($_db));
-    return ProcessedTableManager(
-      manager.$state.copyWith(prefetchedData: cache),
-    );
-  }
-
-  static MultiTypedResultKey<$ToolInvocationsTable, List<ToolInvocation>>
-  _toolInvocationsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
-    db.toolInvocations,
-    aliasName: 'agent_runs__id__tool_invocations__run_id',
-  );
-
-  $$ToolInvocationsTableProcessedTableManager get toolInvocationsRefs {
-    final manager = $$ToolInvocationsTableTableManager(
-      $_db,
-      $_db.toolInvocations,
-    ).filter((f) => f.runId.id.sqlEquals($_itemColumn<String>('id')!));
-
-    final cache = $_typedResult.readTableOrNull(
-      _toolInvocationsRefsTable($_db),
-    );
-    return ProcessedTableManager(
-      manager.$state.copyWith(prefetchedData: cache),
-    );
-  }
 }
 
 class $$AgentRunsTableFilterComposer
@@ -25185,56 +25131,6 @@ class $$AgentRunsTableFilterComposer
           ),
     );
     return composer;
-  }
-
-  Expression<bool> chatMessagesRefs(
-    Expression<bool> Function($$ChatMessagesTableFilterComposer f) f,
-  ) {
-    final $$ChatMessagesTableFilterComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.id,
-      referencedTable: $db.chatMessages,
-      getReferencedColumn: (t) => t.runId,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$ChatMessagesTableFilterComposer(
-            $db: $db,
-            $table: $db.chatMessages,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return f(composer);
-  }
-
-  Expression<bool> toolInvocationsRefs(
-    Expression<bool> Function($$ToolInvocationsTableFilterComposer f) f,
-  ) {
-    final $$ToolInvocationsTableFilterComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.id,
-      referencedTable: $db.toolInvocations,
-      getReferencedColumn: (t) => t.runId,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$ToolInvocationsTableFilterComposer(
-            $db: $db,
-            $table: $db.toolInvocations,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return f(composer);
   }
 }
 
@@ -25372,56 +25268,6 @@ class $$AgentRunsTableAnnotationComposer
     );
     return composer;
   }
-
-  Expression<T> chatMessagesRefs<T extends Object>(
-    Expression<T> Function($$ChatMessagesTableAnnotationComposer a) f,
-  ) {
-    final $$ChatMessagesTableAnnotationComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.id,
-      referencedTable: $db.chatMessages,
-      getReferencedColumn: (t) => t.runId,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$ChatMessagesTableAnnotationComposer(
-            $db: $db,
-            $table: $db.chatMessages,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return f(composer);
-  }
-
-  Expression<T> toolInvocationsRefs<T extends Object>(
-    Expression<T> Function($$ToolInvocationsTableAnnotationComposer a) f,
-  ) {
-    final $$ToolInvocationsTableAnnotationComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.id,
-      referencedTable: $db.toolInvocations,
-      getReferencedColumn: (t) => t.runId,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$ToolInvocationsTableAnnotationComposer(
-            $db: $db,
-            $table: $db.toolInvocations,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return f(composer);
-  }
 }
 
 class $$AgentRunsTableTableManager
@@ -25437,11 +25283,7 @@ class $$AgentRunsTableTableManager
           $$AgentRunsTableUpdateCompanionBuilder,
           (AgentRun, $$AgentRunsTableReferences),
           AgentRun,
-          PrefetchHooks Function({
-            bool accountId,
-            bool chatMessagesRefs,
-            bool toolInvocationsRefs,
-          })
+          PrefetchHooks Function({bool accountId})
         > {
   $$AgentRunsTableTableManager(_$AppDatabase db, $AgentRunsTable table)
     : super(
@@ -25510,98 +25352,47 @@ class $$AgentRunsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback:
-              ({
-                accountId = false,
-                chatMessagesRefs = false,
-                toolInvocationsRefs = false,
-              }) {
-                return PrefetchHooks(
-                  db: db,
-                  explicitlyWatchedTables: [
-                    if (chatMessagesRefs) db.chatMessages,
-                    if (toolInvocationsRefs) db.toolInvocations,
-                  ],
-                  addJoins:
-                      <
-                        T extends TableManagerState<
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic,
-                          dynamic
-                        >
-                      >(state) {
-                        if (accountId) {
-                          state =
-                              state.withJoin(
-                                    currentTable: table,
-                                    currentColumn: table.accountId,
-                                    referencedTable: $$AgentRunsTableReferences
-                                        ._accountIdTable(db),
-                                    referencedColumn: $$AgentRunsTableReferences
-                                        ._accountIdTable(db)
-                                        .id,
-                                  )
-                                  as T;
-                        }
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$AgentRunsTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$AgentRunsTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
 
-                        return state;
-                      },
-                  getPrefetchedDataCallback: (items) async {
-                    return [
-                      if (chatMessagesRefs)
-                        await $_getPrefetchedData<
-                          AgentRun,
-                          $AgentRunsTable,
-                          ChatMessage
-                        >(
-                          currentTable: table,
-                          referencedTable: $$AgentRunsTableReferences
-                              ._chatMessagesRefsTable(db),
-                          managerFromTypedResult: (p0) =>
-                              $$AgentRunsTableReferences(
-                                db,
-                                table,
-                                p0,
-                              ).chatMessagesRefs,
-                          referencedItemsForCurrentItem:
-                              (item, referencedItems) => referencedItems.where(
-                                (e) => e.runId == item.id,
-                              ),
-                          typedResults: items,
-                        ),
-                      if (toolInvocationsRefs)
-                        await $_getPrefetchedData<
-                          AgentRun,
-                          $AgentRunsTable,
-                          ToolInvocation
-                        >(
-                          currentTable: table,
-                          referencedTable: $$AgentRunsTableReferences
-                              ._toolInvocationsRefsTable(db),
-                          managerFromTypedResult: (p0) =>
-                              $$AgentRunsTableReferences(
-                                db,
-                                table,
-                                p0,
-                              ).toolInvocationsRefs,
-                          referencedItemsForCurrentItem:
-                              (item, referencedItems) => referencedItems.where(
-                                (e) => e.runId == item.id,
-                              ),
-                          typedResults: items,
-                        ),
-                    ];
+                    return state;
                   },
-                );
+              getPrefetchedDataCallback: (items) async {
+                return [];
               },
+            );
+          },
         ),
       );
 }
@@ -25618,11 +25409,7 @@ typedef $$AgentRunsTableProcessedTableManager =
       $$AgentRunsTableUpdateCompanionBuilder,
       (AgentRun, $$AgentRunsTableReferences),
       AgentRun,
-      PrefetchHooks Function({
-        bool accountId,
-        bool chatMessagesRefs,
-        bool toolInvocationsRefs,
-      })
+      PrefetchHooks Function({bool accountId})
     >;
 typedef $$ChatMessagesTableCreateCompanionBuilder =
     ChatMessagesCompanion Function({
@@ -25672,23 +25459,6 @@ final class $$ChatMessagesTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
-
-  static $AgentRunsTable _runIdTable(_$AppDatabase db) =>
-      db.agentRuns.createAlias('chat_messages__run_id__agent_runs__id');
-
-  $$AgentRunsTableProcessedTableManager? get runId {
-    final $_column = $_itemColumn<String>('run_id');
-    if ($_column == null) return null;
-    final manager = $$AgentRunsTableTableManager(
-      $_db,
-      $_db.agentRuns,
-    ).filter((f) => f.id.sqlEquals($_column));
-    final item = $_typedResult.readTableOrNull(_runIdTable($_db));
-    if (item == null) return manager;
-    return ProcessedTableManager(
-      manager.$state.copyWith(prefetchedData: [item]),
-    );
-  }
 }
 
 class $$ChatMessagesTableFilterComposer
@@ -25702,6 +25472,11 @@ class $$ChatMessagesTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get runId => $composableBuilder(
+    column: $table.runId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -25757,29 +25532,6 @@ class $$ChatMessagesTableFilterComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableFilterComposer get runId {
-    final $$AgentRunsTableFilterComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableFilterComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ChatMessagesTableOrderingComposer
@@ -25793,6 +25545,11 @@ class $$ChatMessagesTableOrderingComposer
   });
   ColumnOrderings<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get runId => $composableBuilder(
+    column: $table.runId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -25848,29 +25605,6 @@ class $$ChatMessagesTableOrderingComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableOrderingComposer get runId {
-    final $$AgentRunsTableOrderingComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableOrderingComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ChatMessagesTableAnnotationComposer
@@ -25884,6 +25618,9 @@ class $$ChatMessagesTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get runId =>
+      $composableBuilder(column: $table.runId, builder: (column) => column);
 
   GeneratedColumn<int> get ordinal =>
       $composableBuilder(column: $table.ordinal, builder: (column) => column);
@@ -25925,29 +25662,6 @@ class $$ChatMessagesTableAnnotationComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableAnnotationComposer get runId {
-    final $$AgentRunsTableAnnotationComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableAnnotationComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ChatMessagesTableTableManager
@@ -25963,7 +25677,7 @@ class $$ChatMessagesTableTableManager
           $$ChatMessagesTableUpdateCompanionBuilder,
           (ChatMessage, $$ChatMessagesTableReferences),
           ChatMessage,
-          PrefetchHooks Function({bool accountId, bool runId})
+          PrefetchHooks Function({bool accountId})
         > {
   $$ChatMessagesTableTableManager(_$AppDatabase db, $ChatMessagesTable table)
     : super(
@@ -26032,7 +25746,7 @@ class $$ChatMessagesTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({accountId = false, runId = false}) {
+          prefetchHooksCallback: ({accountId = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [],
@@ -26065,19 +25779,6 @@ class $$ChatMessagesTableTableManager
                               )
                               as T;
                     }
-                    if (runId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.runId,
-                                referencedTable: $$ChatMessagesTableReferences
-                                    ._runIdTable(db),
-                                referencedColumn: $$ChatMessagesTableReferences
-                                    ._runIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
 
                     return state;
                   },
@@ -26102,7 +25803,7 @@ typedef $$ChatMessagesTableProcessedTableManager =
       $$ChatMessagesTableUpdateCompanionBuilder,
       (ChatMessage, $$ChatMessagesTableReferences),
       ChatMessage,
-      PrefetchHooks Function({bool accountId, bool runId})
+      PrefetchHooks Function({bool accountId})
     >;
 typedef $$ToolInvocationsTableCreateCompanionBuilder =
     ToolInvocationsCompanion Function({
@@ -26157,23 +25858,6 @@ final class $$ToolInvocationsTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
-
-  static $AgentRunsTable _runIdTable(_$AppDatabase db) =>
-      db.agentRuns.createAlias('tool_invocations__run_id__agent_runs__id');
-
-  $$AgentRunsTableProcessedTableManager get runId {
-    final $_column = $_itemColumn<String>('run_id')!;
-
-    final manager = $$AgentRunsTableTableManager(
-      $_db,
-      $_db.agentRuns,
-    ).filter((f) => f.id.sqlEquals($_column));
-    final item = $_typedResult.readTableOrNull(_runIdTable($_db));
-    if (item == null) return manager;
-    return ProcessedTableManager(
-      manager.$state.copyWith(prefetchedData: [item]),
-    );
-  }
 }
 
 class $$ToolInvocationsTableFilterComposer
@@ -26187,6 +25871,11 @@ class $$ToolInvocationsTableFilterComposer
   });
   ColumnFilters<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get runId => $composableBuilder(
+    column: $table.runId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -26242,29 +25931,6 @@ class $$ToolInvocationsTableFilterComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableFilterComposer get runId {
-    final $$AgentRunsTableFilterComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableFilterComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ToolInvocationsTableOrderingComposer
@@ -26278,6 +25944,11 @@ class $$ToolInvocationsTableOrderingComposer
   });
   ColumnOrderings<String> get id => $composableBuilder(
     column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get runId => $composableBuilder(
+    column: $table.runId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -26333,29 +26004,6 @@ class $$ToolInvocationsTableOrderingComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableOrderingComposer get runId {
-    final $$AgentRunsTableOrderingComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableOrderingComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ToolInvocationsTableAnnotationComposer
@@ -26369,6 +26017,9 @@ class $$ToolInvocationsTableAnnotationComposer
   });
   GeneratedColumn<String> get id =>
       $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get runId =>
+      $composableBuilder(column: $table.runId, builder: (column) => column);
 
   GeneratedColumn<String> get toolName =>
       $composableBuilder(column: $table.toolName, builder: (column) => column);
@@ -26416,29 +26067,6 @@ class $$ToolInvocationsTableAnnotationComposer
     );
     return composer;
   }
-
-  $$AgentRunsTableAnnotationComposer get runId {
-    final $$AgentRunsTableAnnotationComposer composer = $composerBuilder(
-      composer: this,
-      getCurrentColumn: (t) => t.runId,
-      referencedTable: $db.agentRuns,
-      getReferencedColumn: (t) => t.id,
-      builder:
-          (
-            joinBuilder, {
-            $addJoinBuilderToRootComposer,
-            $removeJoinBuilderFromRootComposer,
-          }) => $$AgentRunsTableAnnotationComposer(
-            $db: $db,
-            $table: $db.agentRuns,
-            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
-            joinBuilder: joinBuilder,
-            $removeJoinBuilderFromRootComposer:
-                $removeJoinBuilderFromRootComposer,
-          ),
-    );
-    return composer;
-  }
 }
 
 class $$ToolInvocationsTableTableManager
@@ -26454,7 +26082,7 @@ class $$ToolInvocationsTableTableManager
           $$ToolInvocationsTableUpdateCompanionBuilder,
           (ToolInvocation, $$ToolInvocationsTableReferences),
           ToolInvocation,
-          PrefetchHooks Function({bool accountId, bool runId})
+          PrefetchHooks Function({bool accountId})
         > {
   $$ToolInvocationsTableTableManager(
     _$AppDatabase db,
@@ -26525,7 +26153,7 @@ class $$ToolInvocationsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({accountId = false, runId = false}) {
+          prefetchHooksCallback: ({accountId = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [],
@@ -26560,21 +26188,6 @@ class $$ToolInvocationsTableTableManager
                               )
                               as T;
                     }
-                    if (runId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.runId,
-                                referencedTable:
-                                    $$ToolInvocationsTableReferences
-                                        ._runIdTable(db),
-                                referencedColumn:
-                                    $$ToolInvocationsTableReferences
-                                        ._runIdTable(db)
-                                        .id,
-                              )
-                              as T;
-                    }
 
                     return state;
                   },
@@ -26599,7 +26212,7 @@ typedef $$ToolInvocationsTableProcessedTableManager =
       $$ToolInvocationsTableUpdateCompanionBuilder,
       (ToolInvocation, $$ToolInvocationsTableReferences),
       ToolInvocation,
-      PrefetchHooks Function({bool accountId, bool runId})
+      PrefetchHooks Function({bool accountId})
     >;
 typedef $$ConversationSummariesTableCreateCompanionBuilder =
     ConversationSummariesCompanion Function({

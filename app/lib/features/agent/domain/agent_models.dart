@@ -100,3 +100,20 @@ class ConversationSummaryRecord {
   final String model;
   final int createdAt;
 }
+
+/// Thrown when an operation references an [AgentRunRecord] that is not owned by
+/// the supplied account. Account A must not append messages to, or finalize, a
+/// run that belongs to account B. See handoff §3 blocker 2.
+class RunOwnershipException implements Exception {
+  const RunOwnershipException({
+    required this.accountId,
+    required this.runId,
+  });
+
+  final String accountId;
+  final String runId;
+
+  @override
+  String toString() =>
+      'RunOwnershipException: run $runId is not owned by account $accountId';
+}
