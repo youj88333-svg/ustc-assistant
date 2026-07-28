@@ -71,65 +71,45 @@ class AgentConfigurationService {
 
   /// Upserts the model field for exactly one account, preserving the other
   /// fields (or their defaults if the row does not yet exist).
-  Future<void> setModel(String accountId, String model) async {
-    final existing = await _row(accountId);
-    final timestamp = now();
-    await _database
-        .into(_database.agentSettings)
-        .insertOnConflictUpdate(
-          AgentSettingsCompanion.insert(
-            accountId: accountId,
-            model: Value(model),
-            enabled: Value(existing?.enabled ?? defaultEnabled),
-            icourseConsent: Value(
-              existing?.icourseConsent ?? defaultIcourseConsent,
-            ),
-            systemPromptVersion: Value(
-              existing?.systemPromptVersion ?? defaultSystemPromptVersion,
-            ),
-            updatedAt: timestamp,
-          ),
-        );
-  }
+  Future<void> setModel(String accountId, String model) =>
+      _upsert(accountId, model: model);
 
   /// Upserts the icourse-consent flag for exactly one account.
-  Future<void> setIcourseConsent(String accountId, bool consent) async {
-    final existing = await _row(accountId);
-    final timestamp = now();
-    await _database
-        .into(_database.agentSettings)
-        .insertOnConflictUpdate(
-          AgentSettingsCompanion.insert(
-            accountId: accountId,
-            model: Value(existing?.model ?? defaultModel),
-            enabled: Value(existing?.enabled ?? defaultEnabled),
-            icourseConsent: Value(consent),
-            systemPromptVersion: Value(
-              existing?.systemPromptVersion ?? defaultSystemPromptVersion,
-            ),
-            updatedAt: timestamp,
-          ),
-        );
-  }
+  Future<void> setIcourseConsent(String accountId, bool consent) =>
+      _upsert(accountId, consent: consent);
 
   /// Upserts the enabled flag for exactly one account.
-  Future<void> enable(String accountId, bool enabled) async {
+  Future<void> enable(String accountId, bool enabled) =>
+      _upsert(accountId, enabled: enabled);
+
+  /// Reads the existing row once and writes a single
+  /// `insertOnConflictUpdate`, applying each provided override and falling
+  /// back to `existing?.X ?? defaultX` for the rest. Centralizing this keeps
+  /// the three public upserts in lockstep when the schema grows a new column.
+  Future<void> _upsert(
+    String accountId, {
+    String? model,
+    bool? enabled,
+    bool? consent,
+    int? systemPromptVersion,
+  }) async {
     final existing = await _row(accountId);
-    final timestamp = now();
     await _database
         .into(_database.agentSettings)
         .insertOnConflictUpdate(
           AgentSettingsCompanion.insert(
             accountId: accountId,
-            model: Value(existing?.model ?? defaultModel),
-            enabled: Value(enabled),
+            model: Value(model ?? existing?.model ?? defaultModel),
+            enabled: Value(enabled ?? existing?.enabled ?? defaultEnabled),
             icourseConsent: Value(
-              existing?.icourseConsent ?? defaultIcourseConsent,
+              consent ?? existing?.icourseConsent ?? defaultIcourseConsent,
             ),
             systemPromptVersion: Value(
-              existing?.systemPromptVersion ?? defaultSystemPromptVersion,
+              systemPromptVersion ??
+                  existing?.systemPromptVersion ??
+                  defaultSystemPromptVersion,
             ),
-            updatedAt: timestamp,
+            updatedAt: now(),
           ),
         );
   }
