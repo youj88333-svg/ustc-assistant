@@ -8,11 +8,11 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 
 void main() {
   test(
-    'schema version two creates the complete constrained database',
+    'schema version three creates the complete constrained database',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      expect(database.schemaVersion, 2);
+      expect(database.schemaVersion, 3);
       final foreignKeys = await database
           .customSelect('PRAGMA foreign_keys')
           .getSingle();
@@ -48,6 +48,12 @@ void main() {
           'action_logs',
           'undo_slot',
           'agent_permission_policies',
+          'agent_settings',
+          'agent_secrets',
+          'agent_runs',
+          'chat_messages',
+          'tool_invocations',
+          'conversation_summaries',
         }),
       );
       expect(

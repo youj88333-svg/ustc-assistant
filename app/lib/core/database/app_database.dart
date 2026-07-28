@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import 'tables/account_tables.dart';
+import 'tables/agent_tables.dart';
 import 'tables/operation_tables.dart';
 import 'tables/schedule_tables.dart';
 import 'tables/source_tables.dart';
@@ -19,6 +20,12 @@ part 'app_database.g.dart';
     SyncRuns,
     ActionLogs,
     AgentPermissionPolicies,
+    AgentSettings,
+    AgentSecrets,
+    AgentRuns,
+    ChatMessages,
+    ToolInvocations,
+    ConversationSummaries,
     CourseSeries,
     CalendarEventSeries,
     CalendarEvents,
@@ -37,7 +44,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
@@ -65,6 +72,14 @@ class AppDatabase extends _$AppDatabase {
     onUpgrade: (migrator, from, to) async {
       if (from < 2) {
         await migrator.addColumn(localAccounts, localAccounts.identityDigest);
+      }
+      if (from < 3) {
+        await migrator.createTable(agentSettings);
+        await migrator.createTable(agentSecrets);
+        await migrator.createTable(agentRuns);
+        await migrator.createTable(chatMessages);
+        await migrator.createTable(toolInvocations);
+        await migrator.createTable(conversationSummaries);
       }
     },
     beforeOpen: (details) async {
