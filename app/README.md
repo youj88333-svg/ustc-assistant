@@ -41,4 +41,4 @@ Release 目录，不能只保留 `ustc_assistant_app.exe`。
 产品边界和当前交接状态分别见：
 
 - `../docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`
-- `../docs/project-status.md`
+- `../docs/read-only-agent-handoff.md`

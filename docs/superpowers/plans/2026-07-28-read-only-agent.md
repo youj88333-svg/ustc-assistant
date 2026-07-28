@@ -1169,7 +1169,7 @@ git commit -m "test: verify read-only agent safety flows"
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 - Modify: `docs/architecture.md`
-- Modify: `docs/project-status.md`
+- Modify: `docs/read-only-agent-handoff.md`
 - Modify: `app/README.md`
 
 **Interfaces:**
@@ -1198,7 +1198,8 @@ Do not place a real API Key, account, title from private schedule, or raw respon
 
 Record Flutter Agent core, Windows QuerySourceGateway, Anthropic endpoint boundary, current
 read-only tool set, mobile replacement points, and explicit exclusions. Historical plans remain
-historical; update `docs/project-status.md` with actual test counts only after running them.
+historical; update `docs/read-only-agent-handoff.md` with actual test counts only after running
+them.
 
 - [ ] **Step 3: Run complete Python verification**
 
@@ -1243,7 +1244,7 @@ DPAPI, or process imports.
 - [ ] **Step 6: Commit documentation**
 
 ```powershell
-git add README.md AGENTS.md app/README.md docs/acceptance/read-only-agent.md docs/architecture.md docs/project-status.md
+git add README.md AGENTS.md app/README.md docs/acceptance/read-only-agent.md docs/architecture.md docs/read-only-agent-handoff.md
 git commit -m "docs: hand off the read-only campus agent"
 ```
 

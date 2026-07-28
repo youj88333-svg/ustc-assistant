@@ -6,7 +6,7 @@ Flutter 首版，以及教务课程与考试、二课报名中活动、已报名
 
 Windows 首版暂不接入 LLM，已经提供账号与同步、七日周课表、个人日程、
 Task/PlanBlock、冲突与用户覆盖、提醒、操作历史和设置。当前实现与接手说明见
-`docs/project-status.md`。
+`docs/read-only-agent-handoff.md`。
 
 ## 安装
 

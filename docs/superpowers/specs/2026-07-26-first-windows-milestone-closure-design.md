@@ -19,7 +19,7 @@ docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md
 
 > 实现状态更新（2026-07-28）：本文定义的 Windows 首版已经实现并通过自动测试、
 > 静态分析和 Release 构建。本文后续内容仍作为规范性设计保留；当前人工验收状态、
-> 已知限制和接手顺序见 `docs/project-status.md`。
+> 已知限制和接手顺序见 `docs/read-only-agent-handoff.md`。
 
 ## 2. 首版定位
 

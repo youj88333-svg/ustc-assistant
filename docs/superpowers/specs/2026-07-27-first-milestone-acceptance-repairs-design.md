@@ -2,7 +2,7 @@
 
 > 实现状态更新（2026-07-28）：本文定义的修复已经完成并通过自动回归、静态分析
 > 和 Windows Release 构建；完整人工复测仍待用户执行。当前状态见
-> `docs/project-status.md`。
+> `docs/read-only-agent-handoff.md`。
 
 ## 1. 背景与目标
 

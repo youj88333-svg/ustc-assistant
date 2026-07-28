@@ -17,7 +17,7 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
    覆盖、提醒、操作历史、设置和一步撤回。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
-`README.md`，当前交接状态见 `docs/project-status.md`，稳定来源契约见
+`README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
 `docs/data-sources/`，日程产品模型见 `docs/schedule-data-model.md`。
 
 正式导入边界为 `docs/data-sources/source-bundle-v1.md` 与
@@ -38,7 +38,7 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
 - Windows C++ 工具链已安装，Release 可构建。最近自动验证通过 Python 267 项测试、
   Flutter 203 项测试、Flutter 静态分析和 Windows Release 构建。
 - 第一轮真实手工验收已经完成并产生修复；修复后的完整人工复测仍未结束。不得把
-  自动测试通过写成人工验收通过，详情见 `docs/project-status.md`。
+  自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md`。
 - 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
   删除现有 service、测试或真实故障回归样例。
 
@@ -81,7 +81,7 @@ docs/
   architecture.md          Python、Bridge、Flutter 与未来移动端边界
   data-sources/            已实现来源契约及 SourceBundle 正式契约
   schedule-data-model.md   Flutter 本地日程领域模型
-  project-status.md        当前实现、验证、已知限制和接手顺序
+  read-only-agent-handoff.md 当前实现、Agent 计划、验证边界和接手顺序
   superpowers/specs/       首版设计及后续设计依据
   superpowers/plans/       已执行的历史实施计划；复选框不是实时进度
 
@@ -135,7 +135,8 @@ source service
 - SourceBundle 迁移：先读 `docs/data-sources/source-bundle-v1.md`、Schema 与
   `tests/fixtures/source-bundle/` 和 `app/test/fixtures/source_bundle/`，再同步修改
   Python 生产者与 Flutter 消费者；不要让 Flutter 兼容 legacy。
-- 接手当前项目：先读 `docs/project-status.md`，再读本文件和 `README.md`。历史
+- 接手当前项目：先读 `docs/read-only-agent-handoff.md`，再读本文件和
+  `README.md`。历史
   plan 中未勾选的复选框不代表代码未实现，以代码、测试和当前状态文档为准。
 - Flutter 日程和 App 修改：先读
   `docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`

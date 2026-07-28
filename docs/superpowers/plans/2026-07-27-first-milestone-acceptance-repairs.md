@@ -4,7 +4,7 @@
 
 > **状态更新（2026-07-28）：** Task 1-10 的代码、自动测试、静态分析和 Release
 > 构建已经完成。本文复选框是历史实施步骤，不是实时进度；修复后的完整人工复测仍
-> 待用户执行，当前结论见 `docs/project-status.md`。
+> 待用户执行，当前结论见 `docs/read-only-agent-handoff.md`。
 
 **Goal:** 修复 Windows 首版第一轮人工验收发现的数据可见性、顺序同步、日程详情、Task/PlanBlock、重新认证和完全重置问题。
 
