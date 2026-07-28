@@ -211,11 +211,19 @@ class AgentSessionService {
       return;
     }
 
-    // 2. Persist the run and user message before network I/O.
+    // 2. Persist the run before network I/O, then fetch the PRIOR-turn history
+    //    BEFORE appending the current user message. AgentContextBuilder.build's
+    //    contract is: `history` = prior turns, `currentUserText` = the new
+    //    turn (which it appends as the final user message). If we appended the
+    //    user message first, recentMessages would include it and build() would
+    //    duplicate the current question in the first model request.
     final runId = await _chatRepository.startRun(
       accountId: accountId,
       model: _model,
     );
+    final history = await _chatRepository.recentMessages(accountId, limit: 200);
+    final summary = await _chatRepository.latestSummary(accountId);
+    // Now persist the current user message (still before any network I/O).
     await _chatRepository.appendMessage(
       accountId: accountId,
       runId: runId,
@@ -227,9 +235,7 @@ class AgentSessionService {
     var viewState = AgentRunViewState(runId: runId, state: AgentRunState.running);
     controller.add(viewState);
 
-    // 3. Build the initial request from history + summary + current text.
-    final history = await _chatRepository.recentMessages(accountId, limit: 200);
-    final summary = await _chatRepository.latestSummary(accountId);
+    // 3. Build the initial request from prior history + summary + current text.
     final declarations = _registry.schemas;
 
     // The conversation accumulates assistant turns (with tool_use) and user

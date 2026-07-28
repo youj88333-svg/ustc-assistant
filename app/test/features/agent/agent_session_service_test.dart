@@ -31,6 +31,10 @@ class _ScriptedProvider implements LlmProvider {
   int streamCallCount = 0;
   String? _lastSeenKey;
 
+  /// Every `LlmRequest` passed to `stream()`, in call order, so tests can
+  /// assert on the exact conversation sent to the model.
+  final List<LlmRequest> requests = <LlmRequest>[];
+
   @override
   Future<List<String>> listModels({
     required String apiKey,
@@ -44,6 +48,7 @@ class _ScriptedProvider implements LlmProvider {
     required CancellationSignal cancellation,
   }) async* {
     _lastSeenKey = apiKey;
+    requests.add(request);
     streamCallCount++;
     final index = streamCallCount - 1;
     if (index >= _script.length) {
@@ -349,6 +354,74 @@ void main() {
         expect(ref.ref, isNot(contains('catalog-')));
       }
     });
+  });
+
+  group('first model request shape', () {
+    test(
+      'the current user question appears exactly once in the first request',
+      () async {
+        // Seed one prior completed turn so history is non-empty and distinct
+        // from the current question.
+        final priorRun = await chatRepository.startRun(
+          accountId: account,
+          model: 'deepseek-v4-flash',
+        );
+        await chatRepository.appendMessage(
+          accountId: account,
+          runId: priorRun,
+          role: ChatRole.user,
+          state: ChatMessageState.completed,
+          content: '上学期有几门课？',
+        );
+        await chatRepository.appendMessage(
+          accountId: account,
+          runId: priorRun,
+          role: ChatRole.assistant,
+          state: ChatMessageState.completed,
+          content: '上学期有五门课。',
+        );
+
+        const currentQuestion = '明天有什么课？图书馆在哪？';
+        final provider = _ScriptedProvider(_canonicalLoop());
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
+
+        await service
+            .send(accountId: account, userText: currentQuestion)
+            .toList();
+
+        // The provider recorded the first request.
+        expect(provider.requests, isNotEmpty);
+        final firstRequest = provider.requests.first;
+
+        // Collect every user-text block across all messages in the request.
+        final userTexts = firstRequest.messages
+            .where((m) => m.role == 'user')
+            .expand((m) => m.content)
+            .whereType<LlmTextBlock>()
+            .map((b) => b.text)
+            .toList();
+
+        // The current question must appear EXACTLY once (regression guard
+        // against the build() duplication bug where the just-persisted user
+        // message was also in `history`).
+        final occurrences =
+            userTexts.where((t) => t == currentQuestion).length;
+        expect(occurrences, 1,
+            reason: 'current question must appear exactly once; '
+                'got $occurrences in $userTexts');
+
+        // Prior-turn history is present and separate from the current question.
+        expect(userTexts, contains('上学期有几门课？'));
+        // The current question is the LAST user text block (build appends it
+        // as the final user message).
+        expect(userTexts.last, currentQuestion);
+      },
+    );
   });
 
   group('tool_not_allowed', () {
