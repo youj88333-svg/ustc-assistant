@@ -34,8 +34,9 @@ class EnrolmentServiceTests(unittest.TestCase):
             "2026-07-31 23:59:00",
         )
         self.assertEqual(
-            normalized["activities"][0]["descriptionHtml"], "<p>Description</p>"
+            normalized["activities"][0]["descriptionText"], "Description"
         )
+        self.assertNotIn("descriptionHtml", normalized["activities"][0])
         self.assertNotIn("userId", normalized["activities"][0])
         self.assertNotIn("unknownSensitiveField", normalized["activities"][0])
 

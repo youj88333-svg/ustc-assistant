@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
@@ -17,8 +18,20 @@ from ustc_assistant.common.browser import (
     default_profile_dir,
     run_in_edge,
 )
+from ustc_assistant.common.auth import (
+    CollectionCancelled,
+    LoginCredentials,
+    UserActionRequired,
+    fill_ustc_login,
+    is_ustc_cas_origin,
+    profile_dir_for_account,
+    raise_if_cancelled,
+    verify_ustc_account,
+)
+from ustc_assistant.sources.young.schedule import _html_to_text
 
 
+BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 YOUNG_HOST = "young.ustc.edu.cn"
 SIGN_UP_URL = (
     "https://young.ustc.edu.cn/login/"
@@ -31,6 +44,10 @@ APP_PATH_PREFIX = "/login/sc-wisdom-group-learning/"
 NEXT_PAGE_SELECTOR = "li.ant-pagination-next"
 DEFAULT_LOGIN_TIMEOUT_MS = 5 * 60 * 1000
 DEFAULT_RESPONSE_TIMEOUT_MS = 30 * 1000
+# Bound for the plain-text rendering of enrolment HTML fields. The Query Result
+# envelope rejects unbounded text; this cap keeps a malicious or oversized
+# activity description from flooding the Agent context.
+MAX_DESCRIPTION_TEXT_CHARS = 4000
 
 
 @dataclass(frozen=True)
@@ -148,29 +165,45 @@ def _open_sign_up_after_login(
     *,
     login_timeout_ms: int,
     status: Callable[[str], None],
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> Any:
+    raise_if_cancelled(cancel_check)
     page.goto(SIGN_UP_URL, wait_until="domcontentloaded")
     enrolment_tab = page.get_by_text("报名中", exact=True)
     deadline = time.monotonic() + max(login_timeout_ms, 0) / 1000
+    last_sign_up_navigation = time.monotonic()
     reopened_after_login = False
     announced_login_wait = False
+    login_filled = False
 
     while True:
         if enrolment_tab.is_visible():
+            if credentials is not None:
+                verify_ustc_account(page, credentials.username)
             return enrolment_tab
 
+        if not allow_interactive_login:
+            raise UserActionRequired(
+                "second-classroom login requires user action"
+            )
+
+        now = time.monotonic()
         if (
             not reopened_after_login
             and _is_young_app_url(page.url)
             and not _is_sign_up_url(page.url)
+            and now - last_sign_up_navigation >= 0.25
         ):
             status("Login completed; opening the open-activity page ...")
             page.goto(SIGN_UP_URL, wait_until="domcontentloaded")
             enrolment_tab = page.get_by_text("报名中", exact=True)
             reopened_after_login = True
+            last_sign_up_navigation = time.monotonic()
             continue
 
-        remaining_ms = int((deadline - time.monotonic()) * 1000)
+        remaining_ms = int((deadline - now) * 1000)
         if remaining_ms <= 0:
             raise CollectionError(
                 "second-classroom login was not completed before timeout"
@@ -181,6 +214,14 @@ def _open_sign_up_after_login(
                 "second-classroom application ..."
             )
             announced_login_wait = True
+        if (
+            credentials is not None
+            and not login_filled
+            and is_ustc_cas_origin(page.url)
+        ):
+            fill_ustc_login(page, credentials)
+            login_filled = True
+        raise_if_cancelled(cancel_check)
         page.wait_for_timeout(min(250, remaining_ms))
 
 
@@ -189,12 +230,18 @@ def collect_from_page(
     *,
     login_timeout_ms: int = DEFAULT_LOGIN_TIMEOUT_MS,
     response_timeout_ms: int = DEFAULT_RESPONSE_TIMEOUT_MS,
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     status: Callable[[str], None] = print,
 ) -> CollectedEnrolmentActivities:
     enrolment_tab = _open_sign_up_after_login(
         page,
         login_timeout_ms=login_timeout_ms,
         status=status,
+        allow_interactive_login=allow_interactive_login,
+        credentials=credentials,
+        cancel_check=cancel_check,
     )
 
     status("Collecting the first page of open second-classroom activities ...")
@@ -209,6 +256,7 @@ def collect_from_page(
 
     next_button = page.locator(NEXT_PAGE_SELECTOR)
     for page_number in range(2, first_page.pages + 1):
+        raise_if_cancelled(cancel_check)
         status(f"Collecting open-activity page {page_number} of {first_page.pages} ...")
         current_page = _capture_page_after_click(
             page,
@@ -223,6 +271,7 @@ def collect_from_page(
             raise CollectionError("enrolment pagination metadata changed during collection")
         _merge_records(records_by_id, current_page.records)
 
+    raise_if_cancelled(cancel_check)
     collected_count = len(records_by_id)
     if collected_count != first_page.total:
         raise CollectionError(
@@ -239,19 +288,30 @@ def collect_from_page(
 def collect_activities(
     *,
     profile_dir: Path | None = None,
+    account_id: str | None = None,
     login_timeout_ms: int = DEFAULT_LOGIN_TIMEOUT_MS,
     response_timeout_ms: int = DEFAULT_RESPONSE_TIMEOUT_MS,
     playwright_factory: Callable[[], Any] | None = None,
+    allow_interactive_login: bool = True,
+    credentials: LoginCredentials | None = None,
+    cancel_check: Callable[[], bool] | None = None,
     status: Callable[[str], None] = print,
 ) -> CollectedEnrolmentActivities:
+    resolved_profile = profile_dir
+    if resolved_profile is None and account_id is not None:
+        resolved_profile = profile_dir_for_account(account_id)
     return run_in_edge(
         lambda page: collect_from_page(
             page,
             login_timeout_ms=login_timeout_ms,
             response_timeout_ms=response_timeout_ms,
+            allow_interactive_login=allow_interactive_login,
+            credentials=credentials,
+            cancel_check=cancel_check,
             status=status,
         ),
-        profile_dir=profile_dir,
+        profile_dir=resolved_profile,
+        headless=not allow_interactive_login,
         playwright_factory=playwright_factory,
     )
 
@@ -283,17 +343,40 @@ NORMALIZED_FIELDS = {
     "form_dictText": "formLabel",
     "serviceHour": "serviceHours",
     "validHour": "validHours",
-    "baseContent": "descriptionHtml",
-    "conceive": "requirementsHtml",
     "pic": "imagePath",
 }
 
 
+def _bounded_text(value: Any) -> str | None:
+    """Convert an HTML enrolment field to bounded plain text.
+
+    Reuses schedule._html_to_text so HTML-to-text rules stay in one place,
+    then truncates to MAX_DESCRIPTION_TEXT_CHARS so a prompt-injection payload
+    cannot flood the Agent context with unbounded text. The Query Result
+    envelope validator separately rejects raw HTML.
+    """
+    if value is None:
+        return None
+    text = _html_to_text(value)
+    if text is None:
+        return None
+    if len(text) > MAX_DESCRIPTION_TEXT_CHARS:
+        return text[:MAX_DESCRIPTION_TEXT_CHARS]
+    return text
+
+
 def _normalize_record(record: dict[str, Any]) -> dict[str, Any]:
-    return {
+    normalized = {
         normalized_name: record.get(source_name)
         for source_name, normalized_name in NORMALIZED_FIELDS.items()
     }
+    # Convert raw HTML enrolment fields to bounded plain text so the Agent
+    # never receives raw HTML or unbounded text. The source fields
+    # baseContent/conceive are intentionally NOT exposed under their original
+    # HTML names to avoid smuggling markup into the Agent context.
+    normalized["descriptionText"] = _bounded_text(record.get("baseContent"))
+    normalized["requirementsText"] = _bounded_text(record.get("conceive"))
+    return normalized
 
 
 def normalize_enrolments(
@@ -301,7 +384,7 @@ def normalize_enrolments(
     *,
     collected_at: str | None = None,
 ) -> dict[str, Any]:
-    timestamp = collected_at or datetime.now().astimezone().isoformat(timespec="seconds")
+    timestamp = collected_at or datetime.now(BEIJING_TZ).isoformat(timespec="seconds")
     activities = [_normalize_record(record) for record in collection.records]
     return {
         "schemaVersion": "1.0",
