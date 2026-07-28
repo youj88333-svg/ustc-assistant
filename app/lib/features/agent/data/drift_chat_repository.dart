@@ -282,6 +282,14 @@ class DriftChatRepository {
     });
   }
 
+  /// Deletes the account's conversation summary only, preserving chat
+  /// messages, runs, tool invocations, `agent_settings`, and `agent_secrets`.
+  Future<void> clearSummary(String accountId) async {
+    await (_database.delete(
+      _database.conversationSummaries,
+    )..where((row) => row.accountId.equals(accountId))).go();
+  }
+
   /// Startup recovery: marks stale `running` runs as `interrupted` and their
   /// `streaming` assistant messages as `interrupted`. Called by the session
   /// service on app start to reconcile runs that never reached a terminal
