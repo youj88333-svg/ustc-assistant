@@ -3,9 +3,18 @@ import 'package:flutter/material.dart';
 import '../application/history_repository.dart';
 
 class HistoryPage extends StatefulWidget {
-  const HistoryPage({required this.repository, super.key});
+  const HistoryPage({
+    required this.repository,
+    required this.accountId,
+    super.key,
+  });
 
   final HistoryRepository repository;
+
+  /// The account whose action log is shown. History is scoped to this account
+  /// inside the database query before sanitizing, so other accounts' safe
+  /// summaries never surface here.
+  final String accountId;
 
   @override
   State<HistoryPage> createState() => _HistoryPageState();
@@ -36,7 +45,10 @@ class _HistoryPageState extends State<HistoryPage> {
           ),
           Expanded(
             child: FutureBuilder<List<HistoryEntry>>(
-              future: widget.repository.query(HistoryFilter(result: result)),
+              future: widget.repository.query(
+                widget.accountId,
+                filter: HistoryFilter(result: result),
+              ),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());

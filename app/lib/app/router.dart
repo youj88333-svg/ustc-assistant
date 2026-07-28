@@ -139,7 +139,7 @@ GoRouter buildRouter(
       GoRoute(
         path: '/history',
         builder: (context, state) =>
-            HistoryPage(repository: HistoryRepository(database)),
+            _HistoryLoader(database: database),
       ),
       GoRoute(
         path: '/settings',
@@ -385,3 +385,31 @@ class _SettingsLoader extends StatelessWidget {
 Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(
   database.localAccounts,
 )..where((row) => row.isActive.equals(true))).getSingleOrNull();
+
+class _HistoryLoader extends StatelessWidget {
+  const _HistoryLoader({required this.database});
+
+  final AppDatabase database;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LocalAccount?>(
+      future: _activeAccount(database),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final account = snapshot.data;
+        if (account == null) {
+          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
+        }
+        return HistoryPage(
+          repository: HistoryRepository(database),
+          accountId: account.id,
+        );
+      },
+    );
+  }
+}
