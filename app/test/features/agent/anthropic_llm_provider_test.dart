@@ -556,6 +556,36 @@ void main() {
         throwsA(isA<Exception>()),
       );
     });
+
+    test(
+      'probeText throws LlmProtocolException (not StateError) when the '
+      'stream closes empty because cancellation fired before the first event',
+      () async {
+        // With a pre-cancelled signal the provider's _runStream returns at
+        // the top of its loop without ever calling send, so the LlmEvent
+        // stream closes empty and the probe sees an empty event list.
+        final fake = _FakeClient();
+        final provider = AnthropicLlmProvider(
+          client: fake,
+          backoff: (_) => Duration.zero,
+        );
+        final cancellation = CancellationSignal()..cancel();
+        await expectLater(
+          provider.probeText(
+            apiKey: apiKey,
+            model: 'deepseek-v4-flash',
+            cancellation: cancellation,
+          ),
+          throwsA(
+            isA<LlmProtocolException>().having(
+              (e) => e.code,
+              'code',
+              'probe_incomplete',
+            ),
+          ),
+        );
+      },
+    );
   });
 
   test('API key is never stored in a field that outlives the call', () async {

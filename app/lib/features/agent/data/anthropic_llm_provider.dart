@@ -438,6 +438,9 @@ class AnthropicLlmProvider implements LlmProvider {
   }
 
   void _requireProbeSuccess(List<LlmEvent> events, {required bool expectText}) {
+    if (events.isEmpty) {
+      throw const LlmProtocolException('probe_incomplete');
+    }
     if (events.last is ErrorEvent) {
       throw LlmProtocolException((events.last as ErrorEvent).code);
     }
