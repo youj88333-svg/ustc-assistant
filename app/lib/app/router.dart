@@ -25,6 +25,7 @@ import '../features/schedule/presentation/conflict_management_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
+import '../features/sync/data/python_locator.dart';
 import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
@@ -524,16 +525,32 @@ class _AgentChatCompositionBuilderState
   @override
   void initState() {
     super.initState();
-    // Build the composition once for this route entry. The username is
-    // resolved as the first step of the single cached future so a rebuild
-    // never re-runs `_resolveUsername` nor re-issues the Bridge handshake.
+    // Build the composition once for this route entry. The username and the
+    // Python executable are resolved as the first steps of the single cached
+    // future so a rebuild never re-runs `_resolveUsername`/`PythonLocator` nor
+    // re-issues the Bridge handshake. The Python path mirrors the sync flow
+    // (PythonLocator.locate with the saved SettingsService.pythonPath); an
+    // empty string here would make `Process.start('')` fail and surface as
+    // "无法加载 Agent 服务".
     _compositionFuture = _resolveUsername(widget.database, widget.accountId)
-        .then((resolvedUsername) {
+        .then((resolvedUsername) async {
       if (resolvedUsername.isEmpty) {
         // Signals the "无法获取学校账号" branch below; AgentComposition.build
         // would otherwise receive an empty username.
         throw const _NoResolvedUsername();
       }
+      final accounts = AccountService(
+        database: widget.database,
+        protector: WindowsDpapiProtector(),
+      );
+      final savedPythonPath = await SettingsService(
+        database: widget.database,
+        accounts: accounts,
+        accountId: widget.accountId,
+      ).pythonPath();
+      final pythonExecutable = await PythonLocator().locate(
+        savedExecutable: savedPythonPath,
+      );
       return AgentComposition.build(
         database: widget.database,
         accountId: widget.accountId,
@@ -543,7 +560,7 @@ class _AgentChatCompositionBuilderState
           protector: WindowsDpapiProtector(),
         ),
         queryGatewayFactory: (db, _) => WindowsPythonQueryGateway.start(
-          pythonExecutable: '',
+          pythonExecutable: pythonExecutable,
         ),
       );
     });
