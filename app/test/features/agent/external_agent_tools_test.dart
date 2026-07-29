@@ -187,6 +187,7 @@ class _Harness {
     required this.config,
     required this.accountId,
     required this.references,
+    this.usernameResolver,
   }) : privacyFilter = OutboundPrivacyFilter(
           protectedAccount: 'PB12345678',
           toolBuilders: agentToolPayloadBuilders(),
@@ -198,8 +199,18 @@ class _Harness {
   final RunReferenceStore references;
   final OutboundPrivacyFilter privacyFilter;
 
+  /// The username resolver for the Young tool. Defaults to a test username so
+  /// the Young tool proceeds; pass a resolver returning '' to test the
+  /// invalid_configuration guard.
+  UsernameResolver? usernameResolver;
+
   AgentToolRegistry registry() => AgentToolRegistry(
-        tools: externalAgentTools(gateway: gateway, config: config),
+        tools: externalAgentTools(
+          gateway: gateway,
+          config: config,
+          usernameResolver:
+              usernameResolver ?? ((_) => 'PB12345678'),
+        ),
         privacyFilter: privacyFilter,
       );
 
@@ -400,15 +411,23 @@ void main() {
       final results = search.payload['results']! as List;
       final ref = (results.first! as Map<String, Object?>)['ref']! as String;
 
-      // The "one discovered-link level" limit is modeled as a max of 3
-      // followLinkIds (a flat list of discovered links at one level).
-      // Passing more than 3 followLinkIds is rejected with invalid_arguments.
+      // "One discovered-link level" is a depth bound: at most ONE followed
+      // link per call. Passing two followLinkIds is rejected with
+      // invalid_arguments, BEFORE any gateway detail call is made.
+      final requestsBefore = harness.gateway.requests.length;
       final detail = await harness.execute('read_campus_detail', {
         'ref': ref,
-        'followLinkIds': ['link_1', 'link_2', 'link_3', 'link_4'],
+        'followLinkIds': ['link_1', 'link_2'],
       });
       expect(detail.status, AgentToolStatus.error);
       expect(detail.errorCode, 'invalid_arguments');
+      expect(detail.payload['guidance'], isNotNull);
+      // No gateway request was made for the rejected detail call.
+      expect(harness.gateway.requests.length, requestsBefore);
+      expect(
+        harness.gateway.requests.whereType<CampusDetailQueryRequest>(),
+        isEmpty,
+      );
     });
   });
 
@@ -462,6 +481,28 @@ void main() {
       expect(encoded, isNot(contains('cancel')));
       expect(encoded, isNot(contains('报名')));
     });
+
+    test('empty expectedUsername returns invalid_configuration, no gateway call',
+        () async {
+      final gateway = FakeQueryGateway()
+        ..nextYoung = YoungBehaviour.complete();
+      final harness = _Harness(
+        gateway: gateway,
+        config: FakeAgentConfigurationService(icourseConsent: true),
+        accountId: 'a',
+        references: RunReferenceStore(runId: 'run-a'),
+        usernameResolver: (_) => '',
+      );
+
+      final result = await harness.execute(
+        'search_current_second_class_activities',
+        {},
+      );
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_configuration');
+      // The gateway was never called: no empty username was forwarded.
+      expect(gateway.requests, isEmpty);
+    });
   });
 
   group('no tool can enrol or cancel an activity', () {
@@ -469,6 +510,7 @@ void main() {
       final tools = externalAgentTools(
         gateway: FakeQueryGateway(),
         config: FakeAgentConfigurationService(),
+        usernameResolver: (_) => 'PB12345678',
       );
       for (final tool in tools) {
         // No input schema property names an enrol/cancel/subscribe/register

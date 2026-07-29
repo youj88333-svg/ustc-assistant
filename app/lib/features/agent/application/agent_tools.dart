@@ -1199,6 +1199,7 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'read_campus_detail': (raw) => {
             'details': raw['details'],
             'generatedAt': raw['generatedAt'],
+            'guidance': raw['guidance'],
           },
     };
 
@@ -1226,8 +1227,16 @@ List<AgentTool> localAgentTools(AgentLocalDataGateway gateway) => [
 const int campusDetailEntryLimit = 3;
 
 /// The maximum number of discovered-link ids `read_campus_detail` will follow
-/// per call (the brief's "one discovered-link level" hard limit).
-const int campusDetailFollowLinkLimit = 3;
+/// per call. The brief requires "one discovered-link level" — a DEPTH bound,
+/// not a breadth bound: a detail page may surface candidate links, and the
+/// tool may follow at most ONE of them. The Python `read_detail` reader does
+/// not recurse into links discovered within followed pages (it parses each
+/// followed page with `_parse_followed_html`, which sets `depth: 1` and
+/// extracts no further links — see `src/ustc_assistant/sources/campus/detail.py`),
+/// so following one link is exactly one level deep. Capping at 1 keeps the
+/// Dart tool's contract faithful to "one discovered-link level" regardless of
+/// how many entries are read.
+const int campusDetailFollowLinkLimit = 1;
 
 /// Collects the terminal event (or needs-login pause) from a [QuerySourceGateway]
 /// stream, cancelling the subscription once a terminal/pause event arrives.
@@ -1287,10 +1296,20 @@ class SearchCurrentSecondClassActivitiesTool implements AgentTool {
   ) async {
     // The expectedUsername is resolved by the injected resolver (the
     // composition layer owns the protected username). The tool itself never
-    // receives the password or the model API Key.
+    // receives the password or the model API Key. The resolver is required at
+    // the factory; this runtime guard makes a misconfigured (empty) username a
+    // loud, safe failure rather than forwarding '' to the Bridge, which could
+    // otherwise mask an account-mismatch bug.
+    final expectedUsername = _usernameResolver(context);
+    if (expectedUsername.isEmpty) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_configuration',
+      );
+    }
     final request = YoungEnrolmentQueryRequest(
       accountId: context.accountId,
-      expectedUsername: _usernameResolver(context),
+      expectedUsername: expectedUsername,
     );
     final events = await _collectQueryEvents(
       _gateway.execute(request, cancellation: context.cancellation),
@@ -1651,17 +1670,22 @@ class ReadCampusDetailTool implements AgentTool {
       }
       entryIds.add(entryId);
     }
-    // followLinkIds: at most one discovered-link level = at most
-    // campusDetailFollowLinkLimit link ids.
+    // followLinkIds: "one discovered-link level" is a depth bound — at most
+    // campusDetailFollowLinkLimit (1) followed link per call. More than that
+    // is rejected before any gateway call.
     final followLinkIds = <String>[];
     final followRaw = arguments['followLinkIds'];
     if (followRaw is List) {
       followLinkIds.addAll(followRaw.whereType<String>());
     }
     if (followLinkIds.length > campusDetailFollowLinkLimit) {
-      return const AgentToolResult(
+      return AgentToolResult(
         status: AgentToolStatus.error,
         errorCode: 'invalid_arguments',
+        payload: {
+          'guidance': 'At most $campusDetailFollowLinkLimit discovered link '
+              'may be followed per call (one discovered-link level).',
+        },
       );
     }
     // Issue one detail request per entry id (the Bridge takes a single
@@ -1739,16 +1763,17 @@ Map<String, Object?> _mapCampusDetail(
 /// [usernameResolver] resolves the protected school username for the active
 /// account; it is injected by the composition layer (Task 11) and is the only
 /// credential-adjacent input the tools receive. The tools never receive the
-/// model API Key or the school password. It defaults to an empty string,
-/// which is adequate only for tests that do not assert the username.
+/// model API Key or the school password. This parameter is REQUIRED: there is
+/// no empty-string default, so a composition site that forgets to wire the
+/// resolver fails to compile rather than silently sending an empty
+/// `expectedUsername` to the Bridge.
 List<AgentTool> externalAgentTools({
   required QuerySourceGateway gateway,
   required AgentConfigurationService config,
-  UsernameResolver? usernameResolver,
+  required UsernameResolver usernameResolver,
 }) {
-  final resolver = usernameResolver ?? ((_) => '');
   return [
-    SearchCurrentSecondClassActivitiesTool(gateway, resolver),
+    SearchCurrentSecondClassActivitiesTool(gateway, usernameResolver),
     SearchIcourseTool(gateway, config),
     SearchCampusCatalogTool(gateway),
     ReadCampusDetailTool(gateway),
