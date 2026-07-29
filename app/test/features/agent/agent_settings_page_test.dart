@@ -8,7 +8,6 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_configuration_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
-import 'package:ustc_assistant_app/features/agent/data/anthropic_llm_provider.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
@@ -187,6 +186,7 @@ void main() {
       tester,
     ) async {
       await secrets.saveKey('account-a', 'super-secret');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
@@ -204,50 +204,30 @@ void main() {
       expect(textField.controller!.text, isEmpty);
     });
 
-    testWidgets('unconfigured state shows 未设置 indicator', (tester) async {
-      final provider = _FakeLlmProvider();
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
-      expect(find.text('未设置'), findsOneWidget);
-      expect(find.text('已设置'), findsNothing);
-    });
-  });
-
-  group('AgentSettingsPage save/replace/delete Key', () {
-    testWidgets('save runs both probes then saves Key and enables', (
+    testWidgets('unconfigured state shows the embedded setup panel', (
       tester,
     ) async {
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
-
-      await tester.enterText(
-        find.byKey(const Key('agent-api-key-field')),
-        'new-key',
+      // Unconfigured => the reusable setup panel is shown (not the full
+      // configured UI), and its obscured key field is present and empty.
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+      expect(find.byKey(const Key('agent-setup-save')), findsOneWidget);
+      expect(find.byKey(const Key('agent-api-key-field')), findsNothing);
+      expect(find.byKey(const Key('agent-save-key')), findsNothing);
+      final textField = tester.widget<TextField>(
+        find.byKey(const Key('agent-setup-key-field')),
       );
-      await tester.tap(find.byKey(const Key('agent-save-key')));
-      await tester.pumpAndSettle();
-
-      expect(provider.probeTextCalls, 1);
-      expect(provider.probeToolsCalls, 1);
-      expect(provider.lastProbeApiKey, 'new-key');
-      expect(provider.lastProbeModel, AgentConfigurationService.defaultModel);
-      expect(await secrets.hasKey('account-a'), isTrue);
-      expect(await secrets.readKey('account-a'), 'new-key');
-      final snapshot = await config.load('account-a');
-      expect(snapshot.enabled, isTrue);
-      // Field cleared from memory after save.
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('agent-api-key-field')))
-            .controller!
-            .text,
-        isEmpty,
-      );
+      expect(textField.obscureText, isTrue);
+      expect(textField.controller!.text, isEmpty);
     });
+  });
 
+  group('AgentSettingsPage save/replace/delete Key', () {
     testWidgets('replace updates the stored key', (tester) async {
       await secrets.saveKey('account-a', 'old-key');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
@@ -259,74 +239,51 @@ void main() {
       await tester.tap(find.byKey(const Key('agent-save-key')));
       await tester.pumpAndSettle();
 
+      expect(provider.probeTextCalls, 1);
+      expect(provider.probeToolsCalls, 1);
+      expect(provider.lastProbeApiKey, 'replacement-key');
       expect(await secrets.readKey('account-a'), 'replacement-key');
       final snapshot = await config.load('account-a');
       expect(snapshot.enabled, isTrue);
     });
 
-    testWidgets('failed text probe blocks save and shows safe error copy', (
-      tester,
-    ) async {
-      final provider = _FakeLlmProvider(
-        textShouldThrow: const LlmProtocolException('auth_failed'),
-      );
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'replace with a bad key blocks overwrite and shows safe error copy',
+      (tester) async {
+        await secrets.saveKey('account-a', 'good-key');
+        await config.enable('account-a', true);
+        final provider = _FakeLlmProvider(
+          textShouldThrow: const LlmProtocolException('auth_failed'),
+        );
+        await tester.pumpWidget(harness(provider));
+        await tester.pumpAndSettle();
 
-      await tester.enterText(
-        find.byKey(const Key('agent-api-key-field')),
-        'bad-key',
-      );
-      await tester.tap(find.byKey(const Key('agent-save-key')));
-      await tester.pumpAndSettle();
+        await tester.enterText(
+          find.byKey(const Key('agent-api-key-field')),
+          'bad-replacement',
+        );
+        await tester.tap(find.byKey(const Key('agent-save-key')));
+        await tester.pumpAndSettle();
 
-      expect(await secrets.hasKey('account-a'), isFalse);
-      final snapshot = await config.load('account-a');
-      expect(snapshot.enabled, isFalse);
-      expect(find.text('API Key 无效或已过期'), findsOneWidget);
-      // The error copy never echoes the raw key (the only non-field text
-      // referencing it would be a leak).
-      expect(
-        find.byWidgetPredicate(
-          (w) => w is Text && w.data != null && w.data!.contains('bad-key'),
-        ),
-        findsNothing,
-      );
-      // The entry field remains obscured.
-      expect(
-        tester
-            .widget<TextField>(find.byKey(const Key('agent-api-key-field')))
-            .obscureText,
-        isTrue,
-      );
-    });
-
-    testWidgets('failed tools probe blocks save with safe error copy', (
-      tester,
-    ) async {
-      final provider = _FakeLlmProvider(
-        toolsShouldThrow: const LlmProtocolException('probe_tool_not_emitted'),
-      );
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-        find.byKey(const Key('agent-api-key-field')),
-        'bad-key',
-      );
-      await tester.tap(find.byKey(const Key('agent-save-key')));
-      await tester.pumpAndSettle();
-
-      expect(await secrets.hasKey('account-a'), isFalse);
-      expect(find.textContaining('工具'), findsWidgets);
-      // The error copy is safe text only; no Text widget echoes the raw key.
-      expect(
-        find.byWidgetPredicate(
-          (w) => w is Text && w.data != null && w.data!.contains('bad-key'),
-        ),
-        findsNothing,
-      );
-    });
+        // The existing key is preserved; the bad replacement is not saved.
+        expect(await secrets.readKey('account-a'), 'good-key');
+        expect(find.text('API Key 无效或已过期'), findsOneWidget);
+        // No Text widget echoes the raw replacement key.
+        expect(
+          find.byWidgetPredicate(
+            (w) =>
+                w is Text && w.data != null && w.data!.contains('bad-replacement'),
+          ),
+          findsNothing,
+        );
+        expect(
+          tester
+              .widget<TextField>(find.byKey(const Key('agent-api-key-field')))
+              .obscureText,
+          isTrue,
+        );
+      },
+    );
 
     testWidgets('delete Key leaves chat but disables sending', (tester) async {
       await secrets.saveKey('account-a', 'k');
@@ -344,7 +301,111 @@ void main() {
       expect(await secrets.hasKey('account-a'), isFalse);
       final snapshot = await config.load('account-a');
       expect(snapshot.enabled, isFalse);
-      expect(find.text('未设置'), findsOneWidget);
+      // After delete the page is unconfigured again, so the setup panel
+      // reappears (the configured Key section is gone).
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+      expect(find.byKey(const Key('agent-delete-key')), findsNothing);
+    });
+  });
+
+  group('AgentSettingsPage embedded setup panel', () {
+    // The page embeds AgentSetupPanel when unconfigured (no key). These tests
+    // exercise the panel's own _saveAndEnable flow through the page so its
+    // security-critical path (probe-gating, safe error copy, field clear) is
+    // covered and would fail if a probe were skipped or the key leaked.
+
+    testWidgets('panel save runs both probes then saves Key and enables', (
+      tester,
+    ) async {
+      // No key stored => unconfigured => panel is shown.
+      final provider = _FakeLlmProvider();
+      await tester.pumpWidget(harness(provider));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'setup-key',
+      );
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
+      await tester.pumpAndSettle();
+
+      expect(provider.probeTextCalls, 1);
+      expect(provider.probeToolsCalls, 1);
+      expect(provider.lastProbeApiKey, 'setup-key');
+      expect(provider.lastProbeModel, AgentConfigurationService.defaultModel);
+      expect(await secrets.hasKey('account-a'), isTrue);
+      expect(await secrets.readKey('account-a'), 'setup-key');
+      expect((await config.load('account-a')).enabled, isTrue);
+      // After a successful save the panel is replaced by the configured UI,
+      // which means the ephemeral key field (and its controller) is gone.
+      expect(find.byKey(const Key('agent-setup-key-field')), findsNothing);
+    });
+
+    testWidgets('panel failed probe blocks save, shows safe copy, no leak', (
+      tester,
+    ) async {
+      final provider = _FakeLlmProvider(
+        textShouldThrow: const LlmProtocolException('auth_failed'),
+      );
+      await tester.pumpWidget(harness(provider));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'leak-check',
+      );
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
+      await tester.pumpAndSettle();
+
+      expect(await secrets.hasKey('account-a'), isFalse);
+      expect((await config.load('account-a')).enabled, isFalse);
+      expect(find.text('API Key 无效或已过期'), findsOneWidget);
+      // No Text widget echoes the raw key (the field stays obscured).
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Text && w.data != null && w.data!.contains('leak-check'),
+        ),
+        findsNothing,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.byKey(const Key('agent-setup-key-field')))
+            .obscureText,
+        isTrue,
+      );
+      // Panel remains visible because configuration failed.
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+    });
+
+    testWidgets('panel failed tools probe blocks save with safe copy', (
+      tester,
+    ) async {
+      final provider = _FakeLlmProvider(
+        toolsShouldThrow: const LlmProtocolException('probe_tool_not_emitted'),
+      );
+      await tester.pumpWidget(harness(provider));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'leak-check',
+      );
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
+      await tester.pumpAndSettle();
+
+      // probeText succeeded but probeTools failed: nothing is persisted.
+      expect(provider.probeTextCalls, 1);
+      expect(provider.probeToolsCalls, 1);
+      expect(await secrets.hasKey('account-a'), isFalse);
+      expect((await config.load('account-a')).enabled, isFalse);
+      expect(find.textContaining('工具'), findsWidgets);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is Text && w.data != null && w.data!.contains('leak-check'),
+        ),
+        findsNothing,
+      );
     });
   });
 
@@ -353,6 +414,7 @@ void main() {
       tester,
     ) async {
       await secrets.saveKey('account-a', 'k');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
@@ -369,6 +431,7 @@ void main() {
       tester,
     ) async {
       await secrets.saveKey('account-a', 'stored-key');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
@@ -387,6 +450,7 @@ void main() {
 
     testWidgets('failed model-change probe reverts selection', (tester) async {
       await secrets.saveKey('account-a', 'stored-key');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider(
         textShouldThrow: const LlmProtocolException('server_error'),
       );
@@ -415,10 +479,10 @@ void main() {
       await tester.pumpAndSettle();
 
       await tester.enterText(
-        find.byKey(const Key('agent-api-key-field')),
+        find.byKey(const Key('agent-setup-key-field')),
         'k',
       );
-      await tester.tap(find.byKey(const Key('agent-save-key')));
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
       expect(await secrets.hasKey('account-a'), isFalse);
@@ -436,8 +500,8 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-api-key-field')), 'k');
-      await tester.tap(find.byKey(const Key('agent-save-key')));
+      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
       expect(find.text('请求过于频繁，请稍后重试'), findsOneWidget);
@@ -450,8 +514,8 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-api-key-field')), 'k');
-      await tester.tap(find.byKey(const Key('agent-save-key')));
+      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
       expect(
@@ -467,8 +531,8 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-api-key-field')), 'k');
-      await tester.tap(find.byKey(const Key('agent-save-key')));
+      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
       expect(find.text('学校模型服务返回了非预期的响应'), findsOneWidget);
@@ -478,6 +542,7 @@ void main() {
   group('AgentSettingsPage iCourse consent', () {
     testWidgets('consent toggle grants and revokes', (tester) async {
       await secrets.saveKey('account-a', 'k');
+      await config.enable('account-a', true);
       final provider = _FakeLlmProvider();
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
@@ -500,6 +565,7 @@ void main() {
       tester,
     ) async {
       await secrets.saveKey('account-a', 'k');
+      await config.enable('account-a', true);
       await _seedSummary(database, 'account-a', content: '本周讨论了高等数学');
       final provider = _FakeLlmProvider();
       await pumpTall(tester, provider);
@@ -516,6 +582,7 @@ void main() {
 
     testWidgets('clear summary leaves messages', (tester) async {
       await secrets.saveKey('account-a', 'k');
+      await config.enable('account-a', true);
       await _seedSummary(database, 'account-a');
       final provider = _FakeLlmProvider();
       await pumpTall(tester, provider);
@@ -532,6 +599,7 @@ void main() {
   group('AgentSettingsPage conversation clear', () {
     testWidgets('clear conversation requires confirmation', (tester) async {
       await secrets.saveKey('account-a', 'k');
+      await config.enable('account-a', true);
       await _seedSummary(database, 'account-a');
       final provider = _FakeLlmProvider();
       await pumpTall(tester, provider);
@@ -561,9 +629,12 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('https://api.llm.ustc.edu.cn'), findsOneWidget);
-      expect(find.textContaining('校园网'), findsOneWidget);
-      expect(find.textContaining('iWAN'), findsOneWidget);
+      expect(
+        find.textContaining('https://api.llm.ustc.edu.cn'),
+        findsWidgets,
+      );
+      expect(find.textContaining('校园网'), findsWidgets);
+      expect(find.textContaining('iWAN'), findsWidgets);
     });
 
     testWidgets('does not expose arbitrary Base URL/temperature/max-token/system-prompt fields', (

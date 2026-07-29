@@ -256,3 +256,19 @@ abstract interface class LlmProvider {
     required CancellationSignal cancellation,
   });
 }
+
+/// A safe exception type used to carry an opaque error code through the probe
+/// paths. The [code] is one of the safe strings defined by the provider; it
+/// never contains the API key, request body, or remote response text.
+///
+/// Defined in the domain layer so presentation and application code can catch
+/// it without importing the concrete provider (which pulls in `package:http`
+/// and network concerns).
+class LlmProtocolException implements Exception {
+  const LlmProtocolException(this.code);
+
+  final String code;
+
+  @override
+  String toString() => 'LlmProtocolException($code)';
+}

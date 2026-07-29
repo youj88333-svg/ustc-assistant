@@ -496,15 +496,3 @@ class _BlockMeta {
 
 /// Outcome of processing an SSE stream.
 enum _SseStreamOutcome { completed, error, cancelled, protocolError }
-
-/// A private, safe exception type used to carry an opaque error code through
-/// the probe paths. The [code] is one of the safe strings defined by the
-/// provider; it never contains remote text.
-class LlmProtocolException implements Exception {
-  const LlmProtocolException(this.code);
-
-  final String code;
-
-  @override
-  String toString() => 'LlmProtocolException($code)';
-}

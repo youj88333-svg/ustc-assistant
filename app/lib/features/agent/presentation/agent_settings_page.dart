@@ -2,10 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../application/agent_configuration_service.dart';
 import '../application/cancellation_signal.dart';
-import '../data/anthropic_llm_provider.dart';
 import '../data/drift_chat_repository.dart';
 import '../data/protected_agent_secret_store.dart';
 import '../domain/llm_protocol.dart';
+import 'agent_setup_panel.dart';
 
 /// Maps a [LlmProtocolException] code to user-friendly Chinese copy that never
 /// echoes the API key, the raw error, request headers, or response body.
@@ -349,115 +349,127 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
               'https://api.llm.ustc.edu.cn\n需连接校园网或 iWAN 后使用',
             ),
           ),
-          const Divider(),
-          // API Key section.
-          ListTile(
-            leading: const Icon(Icons.key),
-            title: const Text('API Key'),
-            subtitle: Text(_hasKey ? '已设置' : '未设置'),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: TextField(
-              key: const Key('agent-api-key-field'),
-              controller: _keyController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: 'API Key',
-                hintText: '输入学校模型服务 API Key',
-              ),
+          if (!configured) ...[
+            // Unconfigured onboarding: the reusable setup panel guides initial
+            // Key entry + probe + enable. Task 11's chat page reuses the same
+            // widget for its "setup action".
+            AgentSetupPanel(
+              accountId: widget.accountId,
+              config: widget.config,
+              secrets: widget.secrets,
+              provider: widget.provider,
+              onConfigured: _refreshSnapshot,
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Wrap(
-              spacing: 8,
-              children: [
-                FilledButton(
-                  key: const Key('agent-save-key'),
-                  onPressed: _busy ? null : _saveKey,
-                  child: const Text('保存并启用'),
-                ),
-                if (_hasKey)
-                  OutlinedButton(
-                    key: const Key('agent-delete-key'),
-                    onPressed: _busy ? null : _deleteKey,
-                    child: const Text('删除'),
-                  ),
-              ],
+          ] else ...[
+            const Divider(),
+            // API Key section (replace/delete).
+            ListTile(
+              leading: const Icon(Icons.key),
+              title: const Text('API Key'),
+              subtitle: Text(_hasKey ? '已设置' : '未设置'),
             ),
-          ),
-          if (_error != null)
             Padding(
-              key: const Key('agent-error'),
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(
-                _error!,
-                style: TextStyle(
-                  color: Theme.of(context).colorScheme.error,
+              child: TextField(
+                key: const Key('agent-api-key-field'),
+                controller: _keyController,
+                obscureText: true,
+                decoration: const InputDecoration(
+                  labelText: 'API Key',
+                  hintText: '输入学校模型服务 API Key',
                 ),
               ),
             ),
-          // Model selection.
-          ListTile(
-            leading: const Icon(Icons.tune),
-            title: const Text('模型'),
-            subtitle: const Text('默认 deepseek-v4-flash'),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: DropdownButton<String>(
-              key: const Key('agent-model-dropdown'),
-              value: _selectedModel,
-              items: _models
-                  .map(
-                    (m) => DropdownMenuItem<String>(
-                      value: m,
-                      child: Text(m),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Wrap(
+                spacing: 8,
+                children: [
+                  FilledButton(
+                    key: const Key('agent-save-key'),
+                    onPressed: _busy ? null : _saveKey,
+                    child: const Text('保存并启用'),
+                  ),
+                  if (_hasKey)
+                    OutlinedButton(
+                      key: const Key('agent-delete-key'),
+                      onPressed: _busy ? null : _deleteKey,
+                      child: const Text('删除'),
                     ),
-                  )
-                  .toList(),
-              onChanged: _busy ? null : _changeModel,
-              isExpanded: true,
+                ],
+              ),
             ),
-          ),
-          // iCourse consent.
-          SwitchListTile(
-            key: const Key('agent-icourse-consent'),
-            secondary: const Icon(Icons.school),
-            title: const Text('允许 Agent 查询我的 iCourse 信息'),
-            subtitle: const Text('关闭后 Agent 不会读取你的 iCourse 数据'),
-            value: snapshot?.icourseConsent ?? false,
-            onChanged: _toggleConsent,
-          ),
-          const Divider(),
-          // Summary section.
-          ListTile(
-            key: const Key('agent-view-summary'),
-            leading: const Icon(Icons.summarize),
-            title: const Text('当前会话摘要'),
-            subtitle: const Text('查看将随请求发送的摘要'),
-            onTap: _viewSummary,
-          ),
-          ListTile(
-            key: const Key('agent-clear-summary'),
-            leading: const Icon(Icons.cleaning_services_outlined),
-            title: const Text('清除摘要'),
-            subtitle: const Text('保留聊天消息'),
-            onTap: _clearSummary,
-          ),
-          ListTile(
-            key: const Key('agent-clear-conversation'),
-            leading: const Icon(Icons.delete_sweep_outlined),
-            title: const Text('清除会话'),
-            subtitle: const Text('保留 API Key 与业务数据'),
-            onTap: _clearConversation,
-          ),
-          if (configured)
+            if (_error != null)
+              Padding(
+                key: const Key('agent-error'),
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Text(
+                  _error!,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            // Model selection.
+            ListTile(
+              leading: const Icon(Icons.tune),
+              title: const Text('模型'),
+              subtitle: const Text('默认 deepseek-v4-flash'),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: DropdownButton<String>(
+                key: const Key('agent-model-dropdown'),
+                value: _selectedModel,
+                items: _models
+                    .map(
+                      (m) => DropdownMenuItem<String>(
+                        value: m,
+                        child: Text(m),
+                      ),
+                    )
+                    .toList(),
+                onChanged: _busy ? null : _changeModel,
+                isExpanded: true,
+              ),
+            ),
+            // iCourse consent.
+            SwitchListTile(
+              key: const Key('agent-icourse-consent'),
+              secondary: const Icon(Icons.school),
+              title: const Text('允许 Agent 查询我的 iCourse 信息'),
+              subtitle: const Text('关闭后 Agent 不会读取你的 iCourse 数据'),
+              value: snapshot?.icourseConsent ?? false,
+              onChanged: _toggleConsent,
+            ),
+            const Divider(),
+            // Summary section.
+            ListTile(
+              key: const Key('agent-view-summary'),
+              leading: const Icon(Icons.summarize),
+              title: const Text('当前会话摘要'),
+              subtitle: const Text('查看将随请求发送的摘要'),
+              onTap: _viewSummary,
+            ),
+            ListTile(
+              key: const Key('agent-clear-summary'),
+              leading: const Icon(Icons.cleaning_services_outlined),
+              title: const Text('清除摘要'),
+              subtitle: const Text('保留聊天消息'),
+              onTap: _clearSummary,
+            ),
+            ListTile(
+              key: const Key('agent-clear-conversation'),
+              leading: const Icon(Icons.delete_sweep_outlined),
+              title: const Text('清除会话'),
+              subtitle: const Text('保留 API Key 与业务数据'),
+              onTap: _clearConversation,
+            ),
             const Padding(
               padding: EdgeInsets.all(16),
               child: Text('Agent 已配置，可在聊天中使用。'),
             ),
+          ],
         ],
       ),
     );

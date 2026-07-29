@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 
 import '../application/agent_configuration_service.dart';
 import '../application/cancellation_signal.dart';
-import '../data/anthropic_llm_provider.dart';
 import '../data/protected_agent_secret_store.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_settings_page.dart';
