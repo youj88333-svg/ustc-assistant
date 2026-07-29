@@ -86,6 +86,22 @@ abstract interface class BridgeGateway {
   Future<void> shutdown();
 }
 
+/// The query side of the Bridge, kept separate from [BridgeGateway] so the
+/// collection methods stay stable. [BridgeClient] implements both interfaces
+/// over the same process + HTTP transport.
+abstract interface class BridgeQueryGateway {
+  /// Performs an authenticated GET against the Bridge and returns the decoded
+  /// JSON body.
+  Future<Map<String, dynamic>> getQuery(String path);
+
+  /// Performs an authenticated POST against the Bridge with [body] and returns
+  /// the decoded JSON body.
+  Future<Map<String, dynamic>> postQuery(
+    String path,
+    Map<String, Object?> body,
+  );
+}
+
 abstract interface class BridgeChildProcess {
   Stream<List<int>> get stdout;
   Stream<List<int>> get stderr;
@@ -127,7 +143,7 @@ class IoBridgeProcessLauncher implements BridgeProcessLauncher {
   );
 }
 
-class BridgeClient implements BridgeGateway {
+class BridgeClient implements BridgeGateway, BridgeQueryGateway {
   BridgeClient._({
     required this.process,
     required this.client,
@@ -271,6 +287,18 @@ class BridgeClient implements BridgeGateway {
       process.kill();
     }
   }
+
+  // --- BridgeQueryGateway ------------------------------------------------
+
+  @override
+  Future<Map<String, dynamic>> getQuery(String path) => _get(path);
+
+  @override
+  Future<Map<String, dynamic>> postQuery(
+    String path,
+    Map<String, Object?> body,
+  ) =>
+      _post(path, body);
 
   Future<Map<String, dynamic>> _get(String path) async {
     final response = await client.get(baseUri.resolve(path), headers: _headers);

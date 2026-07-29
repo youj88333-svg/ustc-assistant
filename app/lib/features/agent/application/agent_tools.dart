@@ -7,6 +7,8 @@ import '../../sync/domain/sync_state.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task_projection.dart';
 import '../domain/agent_tool.dart';
+import '../domain/query_source.dart';
+import 'agent_configuration_service.dart';
 import 'agent_local_data_gateway.dart';
 import 'outbound_privacy_filter.dart';
 
@@ -1173,6 +1175,31 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
           {'pending': raw['pending'], 'guidance': raw['guidance']},
       'get_sync_status': (raw) => {'sources': raw['sources']},
       'get_safe_action_history': (raw) => {'history': raw['history']},
+      // External (Task 9) tools: minimal allowlists. Only normalized fields
+      // and ref_* tokens survive; no raw ids, no URLs (the envelope's trusted
+      // references are not surfaced to the model).
+      'search_current_second_class_activities': (raw) => {
+            'activities': raw['activities'],
+            'generatedAt': raw['generatedAt'],
+            'jobId': raw['jobId'],
+          },
+      'search_icourse': (raw) => {
+            'course': raw['course'],
+            'teachers': raw['teachers'],
+            'summary': raw['summary'],
+            'reviewCount': raw['reviewCount'],
+            'rating': raw['rating'],
+            'generatedAt': raw['generatedAt'],
+          },
+      'search_campus_catalog': (raw) => {
+            'query': raw['query'],
+            'results': raw['results'],
+            'generatedAt': raw['generatedAt'],
+          },
+      'read_campus_detail': (raw) => {
+            'details': raw['details'],
+            'generatedAt': raw['generatedAt'],
+          },
     };
 
 /// Builds the full list of local read-only Agent tools backed by [gateway].
@@ -1189,3 +1216,541 @@ List<AgentTool> localAgentTools(AgentLocalDataGateway gateway) => [
       GetSyncStatusTool(gateway),
       GetSafeActionHistoryTool(gateway),
     ];
+
+// ===========================================================================
+// External tools (Task 9): backed by the Python Bridge query endpoints.
+// ===========================================================================
+
+/// The maximum number of campus entries `read_campus_detail` will read per
+/// call (the brief's hard limit).
+const int campusDetailEntryLimit = 3;
+
+/// The maximum number of discovered-link ids `read_campus_detail` will follow
+/// per call (the brief's "one discovered-link level" hard limit).
+const int campusDetailFollowLinkLimit = 3;
+
+/// Collects the terminal event (or needs-login pause) from a [QuerySourceGateway]
+/// stream, cancelling the subscription once a terminal/pause event arrives.
+/// Returns the collected events.
+Future<List<SourceQueryEvent>> _collectQueryEvents(
+  Stream<SourceQueryEvent> stream,
+) async {
+  final events = <SourceQueryEvent>[];
+  await for (final event in stream) {
+    events.add(event);
+    if (event is SourceQueryCompleted ||
+        event is SourceQueryFailed ||
+        event is SourceQueryNeedsLogin) {
+      break;
+    }
+  }
+  return events;
+}
+
+// --- Tool: search_current_second_class_activities -------------------------
+
+/// Resolves the protected school username for a tool context's account. The
+/// composition layer (Task 11) injects a real resolver backed by
+/// `AccountService.usernameForSync`; tests inject a stub. The resolver never
+/// exposes the password and never receives the model API Key.
+typedef UsernameResolver = String Function(AgentToolContext context);
+
+class SearchCurrentSecondClassActivitiesTool implements AgentTool {
+  const SearchCurrentSecondClassActivitiesTool(
+    this._gateway,
+    this._usernameResolver,
+  );
+  final QuerySourceGateway _gateway;
+  final UsernameResolver _usernameResolver;
+
+  @override
+  String get name => 'search_current_second_class_activities';
+
+  @override
+  String get description =>
+      'Read the current second-class-activity (青年日程) enrolment snapshot for '
+      'the signed-in account. Returns normalized activity titles, categories, '
+      'and open/closed status. Read-only: cannot enrol or cancel an activity. '
+      'May pause for an interactive login if the school session has expired; '
+      'the user must explicitly resume.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+        'type': 'object',
+        'properties': {},
+      };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    // The expectedUsername is resolved by the injected resolver (the
+    // composition layer owns the protected username). The tool itself never
+    // receives the password or the model API Key.
+    final request = YoungEnrolmentQueryRequest(
+      accountId: context.accountId,
+      expectedUsername: _usernameResolver(context),
+    );
+    final events = await _collectQueryEvents(
+      _gateway.execute(request, cancellation: context.cancellation),
+    );
+    for (final event in events) {
+      if (event is SourceQueryNeedsLogin) {
+        // Pause the run: return an error result with the jobId so the UI can
+        // call gateway.resumeLogin(jobId, password:). The tool never
+        // auto-resumes and never receives a password.
+        return AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'needs_user_login',
+          payload: {'jobId': event.jobId},
+        );
+      }
+      if (event is SourceQueryFailed) {
+        return AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: event.code,
+          payload: {'jobId': event.jobId},
+        );
+      }
+      if (event is SourceQueryCompleted) {
+        return _mapYoungEnrolmentResult(event.result);
+      }
+    }
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'query_failed',
+    );
+  }
+
+  /// The expected username is not available on the tool context (which has no
+}
+
+AgentToolResult _mapYoungEnrolmentResult(QueryResultEnvelope envelope) {
+  final data = envelope.data;
+  final activitiesRaw = data['activities'];
+  if (activitiesRaw is! List) {
+    return AgentToolResult(
+      payload: {
+        'activities': const <Map<String, Object?>>[],
+        'generatedAt': envelope.generatedAt,
+      },
+    );
+  }
+  final activities = <Map<String, Object?>>[];
+  for (final raw in activitiesRaw) {
+    if (raw is! Map<String, dynamic>) continue;
+    final dto = <String, Object?>{
+      'title': raw['title'],
+      'category': raw['category'],
+      'status': raw['status'],
+    };
+    if (raw['capacity'] != null) dto['capacity'] = raw['capacity'];
+    if (raw['enrolledCount'] != null) {
+      dto['enrolledCount'] = raw['enrolledCount'];
+    }
+    activities.add(dto);
+  }
+  return AgentToolResult(
+    payload: {
+      'activities': activities,
+      'generatedAt': envelope.generatedAt,
+    },
+  );
+}
+
+// --- Tool: search_icourse -------------------------------------------------
+
+class SearchIcourseTool implements AgentTool {
+  const SearchIcourseTool(this._gateway, this._config);
+  final QuerySourceGateway _gateway;
+  final AgentConfigurationService _config;
+
+  @override
+  String get name => 'search_icourse';
+
+  @override
+  String get description =>
+      'Search public iCourse (评课社区) course reviews by course name and '
+      'optional teacher names. Returns normalized course summaries and review '
+      'counts. Requires the user to have granted iCourse consent. Read-only.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+        'type': 'object',
+        'properties': {
+          'course': {
+            'type': 'string',
+            'description': 'The course name to search for.',
+          },
+          'teachers': {
+            'type': 'array',
+            'items': {'type': 'string'},
+            'description':
+                'Optional list of teacher names to narrow the search.',
+          },
+        },
+        'required': ['course'],
+      };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final snapshot = await _config.load(context.accountId);
+    if (!snapshot.icourseConsent) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'consent_required',
+      );
+    }
+    final course = arguments['course'] as String?;
+    if (course == null || course.trim().isEmpty) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    final teachersRaw = arguments['teachers'];
+    final teachers = teachersRaw is List
+        ? teachersRaw.whereType<String>().toList(growable: false)
+        : const <String>[];
+    // SECURITY: send ONLY course + necessary teacher terms. No schedule
+    // times, locations, user identity, or JW bundle. The request type itself
+    // carries no such fields.
+    final request = IcourseQueryRequest(course: course, teachers: teachers);
+    final events = await _collectQueryEvents(
+      _gateway.execute(request, cancellation: context.cancellation),
+    );
+    for (final event in events) {
+      if (event is SourceQueryFailed) {
+        return AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: event.code,
+        );
+      }
+      if (event is SourceQueryCompleted) {
+        return _mapIcourseResult(event.result);
+      }
+    }
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'query_failed',
+    );
+  }
+}
+
+AgentToolResult _mapIcourseResult(QueryResultEnvelope envelope) {
+  final data = envelope.data;
+  final dto = <String, Object?>{
+    'course': data['course'],
+    'generatedAt': envelope.generatedAt,
+  };
+  if (data['teachers'] is List) {
+    dto['teachers'] = data['teachers'];
+  }
+  if (data['summary'] != null) dto['summary'] = data['summary'];
+  if (data['reviewCount'] != null) dto['reviewCount'] = data['reviewCount'];
+  if (data['rating'] != null) dto['rating'] = data['rating'];
+  return AgentToolResult(payload: dto);
+}
+
+// --- Tool: search_campus_catalog ------------------------------------------
+
+class SearchCampusCatalogTool implements AgentTool {
+  const SearchCampusCatalogTool(this._gateway);
+  final QuerySourceGateway _gateway;
+
+  @override
+  String get name => 'search_campus_catalog';
+
+  @override
+  String get description =>
+      'Search the public campus catalog (通知公告/财务信息) for entries '
+      'matching a free-text query. Returns run-local refs for each entry; use '
+      'read_campus_detail with a ref to read the full entry. Read-only.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+        'type': 'object',
+        'properties': {
+          'query': {
+            'type': 'string',
+            'description': 'The free-text search query.',
+          },
+          'limit': {
+            'type': 'integer',
+            'description':
+                'Optional max results (1-100, default 20).',
+          },
+        },
+        'required': ['query'],
+      };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final query = arguments['query'] as String?;
+    if (query == null || query.trim().isEmpty) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    var limit = 20;
+    final limitArg = arguments['limit'];
+    if (limitArg is int && limitArg >= 1 && limitArg <= 100) {
+      limit = limitArg;
+    }
+    final request = CampusSearchQueryRequest(query: query, limit: limit);
+    final events = await _collectQueryEvents(
+      _gateway.execute(request, cancellation: context.cancellation),
+    );
+    for (final event in events) {
+      if (event is SourceQueryFailed) {
+        return AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: event.code,
+        );
+      }
+      if (event is SourceQueryCompleted) {
+        return _mapCampusSearchResult(event.result, context);
+      }
+    }
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'query_failed',
+    );
+  }
+}
+
+AgentToolResult _mapCampusSearchResult(
+  QueryResultEnvelope envelope,
+  AgentToolContext context,
+) {
+  final data = envelope.data;
+  final resultsRaw = data['results'];
+  final dtos = <Map<String, Object?>>[];
+  final references = <AgentToolReference>[];
+  if (resultsRaw is List) {
+    for (final raw in resultsRaw) {
+      if (raw is! Map<String, dynamic>) continue;
+      final entryId = raw['entryId'];
+      if (entryId is! String) continue;
+      // Bind a run-local ref for this catalog entry. The model gets the ref,
+      // never the raw entryId.
+      final ref = context.references.bind(kind: 'campus_entry', localId: entryId);
+      dtos.add({
+        'ref': ref,
+        'title': raw['title'],
+        'category': raw['category'],
+      });
+      references.add(
+        AgentToolReference(kind: 'campus_entry', ref: ref, localId: entryId),
+      );
+    }
+  }
+  return AgentToolResult(
+    payload: {
+      'query': data['query'],
+      'results': dtos,
+      'generatedAt': envelope.generatedAt,
+    },
+    references: references,
+  );
+}
+
+// --- Tool: read_campus_detail ---------------------------------------------
+
+class ReadCampusDetailTool implements AgentTool {
+  const ReadCampusDetailTool(this._gateway);
+  final QuerySourceGateway _gateway;
+
+  @override
+  String get name => 'read_campus_detail';
+
+  @override
+  String get description =>
+      'Read the full detail of a campus catalog entry by its run-local ref '
+      '(from search_campus_catalog). Accepts up to 3 entry refs and follows at '
+      'most one level of discovered links. Read-only; never enrols or cancels.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+        'type': 'object',
+        'properties': {
+          'ref': {
+            'type': 'string',
+            'description':
+                'A single run-local ref_* for a campus entry (from '
+                'search_campus_catalog).',
+          },
+          'refs': {
+            'type': 'array',
+            'items': {'type': 'string'},
+            'description':
+                'Optional list of up to 3 run-local refs for campus entries.',
+          },
+          'followLinkIds': {
+            'type': 'array',
+            'items': {'type': 'string'},
+            'description':
+                'Optional discovered-link ids to follow (at most one level).',
+          },
+        },
+      };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    // Collect refs from either `ref` (single) or `refs` (list). The model
+    // passes ref_* tokens, never raw ids or URLs.
+    final refs = <String>[];
+    final single = arguments['ref'];
+    if (single is String) refs.add(single);
+    final multi = arguments['refs'];
+    if (multi is List) {
+      refs.addAll(multi.whereType<String>());
+    }
+    if (refs.isEmpty) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    if (refs.length > campusDetailEntryLimit) {
+      return AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'result_too_large',
+        payload: {
+          'guidance': 'Too many entries (${refs.length} > '
+              '$campusDetailEntryLimit). Read at most '
+              '$campusDetailEntryLimit entries at a time.',
+        },
+      );
+    }
+    // Resolve each ref to an entryId. A ref not bound in this run (or bound
+    // under a different kind) yields null → reference_not_found. A raw URL
+    // passed as a ref also fails to resolve.
+    final entryIds = <String>[];
+    for (final ref in refs) {
+      final entryId = context.references.resolve(
+        ref: ref,
+        kind: 'campus_entry',
+      );
+      if (entryId == null) {
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'reference_not_found',
+        );
+      }
+      entryIds.add(entryId);
+    }
+    // followLinkIds: at most one discovered-link level = at most
+    // campusDetailFollowLinkLimit link ids.
+    final followLinkIds = <String>[];
+    final followRaw = arguments['followLinkIds'];
+    if (followRaw is List) {
+      followLinkIds.addAll(followRaw.whereType<String>());
+    }
+    if (followLinkIds.length > campusDetailFollowLinkLimit) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    // Issue one detail request per entry id (the Bridge takes a single
+    // entryId per request). Results are merged.
+    final details = <Map<String, Object?>>[];
+    final references = <AgentToolReference>[];
+    for (final entryId in entryIds) {
+      final request = CampusDetailQueryRequest(
+        entryIds: [entryId],
+        followLinkIds: followLinkIds,
+      );
+      final events = await _collectQueryEvents(
+        _gateway.execute(request, cancellation: context.cancellation),
+      );
+      for (final event in events) {
+        if (event is SourceQueryFailed) {
+          return AgentToolResult(
+            status: AgentToolStatus.error,
+            errorCode: event.code,
+          );
+        }
+        if (event is SourceQueryCompleted) {
+          final dto = _mapCampusDetail(event.result, context, entryId);
+          details.add(dto);
+          references.add(
+            AgentToolReference(
+              kind: 'campus_entry',
+              ref: context.references.bind(kind: 'campus_entry', localId: entryId),
+              localId: entryId,
+            ),
+          );
+        }
+      }
+    }
+    return AgentToolResult(
+      payload: {
+        'details': details,
+        'generatedAt': eventsResultGeneratedAt(details),
+      },
+      references: references,
+    );
+  }
+}
+
+String? eventsResultGeneratedAt(List<Map<String, Object?>> details) {
+  for (final d in details) {
+    final g = d['generatedAt'];
+    if (g is String) return g;
+  }
+  return null;
+}
+
+Map<String, Object?> _mapCampusDetail(
+  QueryResultEnvelope envelope,
+  AgentToolContext context,
+  String entryId,
+) {
+  final data = envelope.data;
+  final ref = context.references.bind(kind: 'campus_entry', localId: entryId);
+  final dto = <String, Object?>{
+    'ref': ref,
+    'title': data['title'],
+  };
+  if (data['body'] != null) dto['body'] = data['body'];
+  if (data['category'] != null) dto['category'] = data['category'];
+  if (data['publishedAt'] != null) dto['publishedAt'] = data['publishedAt'];
+  dto['generatedAt'] = envelope.generatedAt;
+  return dto;
+}
+
+/// Builds the external read-only Agent tools backed by the [gateway] (Bridge
+/// query endpoints) and the [config] service (iCourse consent). These plug
+/// into the same registry as the local tools.
+///
+/// [usernameResolver] resolves the protected school username for the active
+/// account; it is injected by the composition layer (Task 11) and is the only
+/// credential-adjacent input the tools receive. The tools never receive the
+/// model API Key or the school password. It defaults to an empty string,
+/// which is adequate only for tests that do not assert the username.
+List<AgentTool> externalAgentTools({
+  required QuerySourceGateway gateway,
+  required AgentConfigurationService config,
+  UsernameResolver? usernameResolver,
+}) {
+  final resolver = usernameResolver ?? ((_) => '');
+  return [
+    SearchCurrentSecondClassActivitiesTool(gateway, resolver),
+    SearchIcourseTool(gateway, config),
+    SearchCampusCatalogTool(gateway),
+    ReadCampusDetailTool(gateway),
+  ];
+}
