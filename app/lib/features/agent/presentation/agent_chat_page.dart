@@ -87,10 +87,27 @@ class _AgentChatPageState extends State<AgentChatPage> {
   bool _nearBottom = true;
   String? _lastRunId;
 
+  /// Resolved ONCE in [initState] and reused by the [build] FutureBuilder.
+  ///
+  /// This MUST NOT be recomputed in `build`: a fresh future every rebuild
+  /// resets the FutureBuilder to `waiting`, which temporarily swaps the
+  /// message ListView for a spinner. When the ListView is unmounted and
+  /// remounted its ScrollController re-attaches at offset 0 — so any
+  /// `setState` that follows (e.g. `_nearBottom` flipping while the user
+  /// scrolls up past 200px) yanks the view back to the top. Caching the
+  /// future keeps the ListView mounted across rebuilds and preserves the
+  /// scroll offset.
+  late final Future<bool> _configuredFuture;
+
   @override
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    _configuredFuture = AgentSettingsPage.isConfigured(
+      accountId: widget.accountId,
+      config: widget.config,
+      secrets: widget.secrets,
+    );
     _loadHistory();
   }
 
@@ -327,11 +344,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
     final isWide = MediaQuery.of(context).size.width >= 600;
 
     return FutureBuilder<bool>(
-      future: AgentSettingsPage.isConfigured(
-        accountId: widget.accountId,
-        config: widget.config,
-        secrets: widget.secrets,
-      ),
+      future: _configuredFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());

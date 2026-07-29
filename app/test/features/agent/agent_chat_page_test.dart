@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -624,6 +623,108 @@ void main() {
       expect(find.text('需要登录校园账号以继续'), findsOneWidget);
       expect(find.text('打开登录窗口并继续'), findsOneWidget);
     });
+
+    testWidgets(
+      'scroll offset survives a _nearBottom flip (no snap back to top)',
+      (tester) async {
+        // Regression guard for the "drag down -> jumps back to top" bug.
+        // Root cause: `build` created a NEW `isConfigured` future every
+        // rebuild, so any setState (here the `_nearBottom` flip when the
+        // user scrolls up past 200px) reset the FutureBuilder to `waiting`,
+        // unmounting the ListView. On remount the ScrollController
+        // re-attached at offset 0. The fix caches the configured future in
+        // initState so the ListView stays mounted and the offset is kept.
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        // The chat_messages table has a foreign key on account_id, so seed
+        // the account row before inserting history.
+        await database.into(database.localAccounts).insert(
+              LocalAccountsCompanion.insert(
+                id: 'test',
+                maskedHint: 'PB****0000',
+                isActive: const Value(true),
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+
+        // Seed enough history to make the list scrollable.
+        for (var i = 0; i < 60; i++) {
+          await chatRepository.appendMessage(
+            accountId: 'test',
+            role: i % 2 == 0 ? ChatRole.user : ChatRole.assistant,
+            content: '历史消息 $i，内容稍长以撑高列表便于滚动测试。',
+            runId: null,
+            state: ChatMessageState.completed,
+          );
+        }
+
+        await tester.pumpWidget(_buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ));
+        await _pump(tester);
+        await tester.pumpAndSettle();
+
+        final listViewFinder = find.byType(ListView);
+        expect(listViewFinder, findsOneWidget);
+        // ListView itself is stateless; the scroll state lives on the
+        // descendant Scrollable. The first such Scrollable is the list's
+        // own viewport (markdown bubbles may nest additional Scrollables).
+        final scrollableFinder = find
+            .descendant(
+              of: listViewFinder,
+              matching: find.byType(Scrollable),
+            )
+            .first;
+
+        // Scroll up by a large amount, well past the 200px nearBottom
+        // threshold, to force _nearBottom to flip false -> setState.
+        final gesture = await tester.startGesture(
+          tester.getCenter(listViewFinder),
+        );
+        // Drag UP on the list (moves content up = scroll towards bottom) is
+        // not what we want; we want to first move down to a non-zero offset,
+        // then drag back up past the threshold. Start by scrolling down.
+        for (var i = 0; i < 20; i++) {
+          await gesture.moveBy(const Offset(0, -40));
+          await tester.pump();
+        }
+        await gesture.up();
+        await tester.pumpAndSettle();
+
+        final scrolledOffset = tester
+            .state<ScrollableState>(scrollableFinder)
+            .position
+            .pixels;
+        expect(scrolledOffset, greaterThan(300),
+            reason: 'list should have scrolled down significantly');
+
+        // Now drag back UP past the 200px nearBottom threshold, which flips
+        // _nearBottom to false and triggers setState. The offset must NOT
+        // reset to 0 (the bug).
+        final gesture2 = await tester.startGesture(
+          tester.getCenter(listViewFinder),
+        );
+        for (var i = 0; i < 8; i++) {
+          await gesture2.moveBy(const Offset(0, 40));
+          await tester.pump();
+        }
+        await gesture2.up();
+        await tester.pumpAndSettle();
+
+        final offsetAfterNearBottomFlip = tester
+            .state<ScrollableState>(scrollableFinder)
+            .position
+            .pixels;
+        expect(offsetAfterNearBottomFlip, greaterThan(200),
+            reason: 'scroll position must be preserved across a _nearBottom '
+                'flip; snapping back to 0 is the regression');
+      },
+    );
   });
 
   group('Step 2: safe markdown and link tests', () {
