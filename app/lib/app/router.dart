@@ -5,15 +5,17 @@ import '../core/database/app_database.dart';
 import '../core/security/windows_dpapi_protector.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/presentation/accounts_page.dart';
+import '../features/agent/application/agent_composition.dart';
 import '../features/agent/application/agent_configuration_service.dart';
 import '../features/agent/data/anthropic_llm_provider.dart';
 import '../features/agent/data/drift_chat_repository.dart';
 import '../features/agent/data/protected_agent_secret_store.dart';
+import '../features/agent/data/windows_python_query_gateway.dart';
+import '../features/agent/presentation/agent_chat_page.dart';
 import '../features/agent/presentation/agent_settings_page.dart';
 import '../features/calendar/application/calendar_event_service.dart';
 import '../features/calendar/presentation/calendar_event_form.dart';
 import '../features/calendar/presentation/personal_event_management_page.dart';
-import '../features/chat/presentation/chat_shell_page.dart';
 import '../features/import/application/reminder_reconciler.dart';
 import '../features/history/application/history_repository.dart';
 import '../features/history/presentation/history_page.dart';
@@ -46,7 +48,10 @@ GoRouter buildRouter(
             routes: [
               GoRoute(
                 path: '/chat',
-                builder: (context, state) => const ChatShellPage(),
+                builder: (context, state) => _AgentChatLoader(
+                  database: database,
+                  websiteLauncher: websiteLauncher,
+                ),
               ),
             ],
           ),
@@ -427,6 +432,128 @@ class _AgentSettingsLoader extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+/// Loader for the Agent chat page: resolves the active account, builds the
+/// AgentComposition, and renders AgentChatPage.
+class _AgentChatLoader extends StatelessWidget {
+  const _AgentChatLoader({
+    required this.database,
+    required this.websiteLauncher,
+  });
+
+  final AppDatabase database;
+  final OfficialWebsiteLauncher websiteLauncher;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LocalAccount?>(
+      future: _activeAccount(database),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final account = snapshot.data;
+        if (account == null) {
+          return const Scaffold(
+            body: Center(child: Text('请先配置学校账号')),
+          );
+        }
+
+        return _AgentChatCompositionBuilder(
+          database: database,
+          accountId: account.id,
+          websiteLauncher: websiteLauncher,
+        );
+      },
+    );
+  }
+}
+
+/// Builds the AgentComposition for the active account and renders AgentChatPage.
+class _AgentChatCompositionBuilder extends StatelessWidget {
+  const _AgentChatCompositionBuilder({
+    required this.database,
+    required this.accountId,
+    required this.websiteLauncher,
+  });
+
+  final AppDatabase database;
+  final String accountId;
+  final OfficialWebsiteLauncher websiteLauncher;
+
+  @override
+  Widget build(BuildContext context) {
+    // Resolve the username synchronously before building the composition.
+    return FutureBuilder<String>(
+      future: _resolveUsername(database, accountId),
+      builder: (context, usernameSnapshot) {
+        if (usernameSnapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final resolvedUsername = usernameSnapshot.data;
+        if (resolvedUsername == null || resolvedUsername.isEmpty) {
+          return const Scaffold(
+            body: Center(child: Text('无法获取学校账号')),
+          );
+        }
+
+        return FutureBuilder<AgentCompositionResult>(
+          future: AgentComposition.build(
+            database: database,
+            accountId: accountId,
+            resolvedUsername: resolvedUsername,
+            secretStoreFactory: (db) => ProtectedAgentSecretStore(
+              database: db,
+              protector: WindowsDpapiProtector(),
+            ),
+            queryGatewayFactory: (db, _) => WindowsPythonQueryGateway.start(
+              pythonExecutable: '',
+            ),
+          ),
+          builder: (context, compositionSnapshot) {
+            if (compositionSnapshot.connectionState != ConnectionState.done) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final composition = compositionSnapshot.data;
+            if (composition == null) {
+              return const Scaffold(
+                body: Center(child: Text('无法加载 Agent 服务')),
+              );
+            }
+
+            return AgentChatPage(
+              accountId: accountId,
+              config: composition.configService,
+              secrets: composition.secretStore,
+              provider: composition.provider,
+              sessionService: composition.sessionService,
+              chatRepository: composition.chatRepository,
+              websiteLauncher: websiteLauncher,
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<String> _resolveUsername(AppDatabase db, String id) async {
+    try {
+      final service = AccountService(
+        database: db,
+        protector: WindowsDpapiProtector(),
+      );
+      return await service.usernameForSync(id);
+    } catch (_) {
+      return '';
+    }
   }
 }
 

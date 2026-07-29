@@ -47,7 +47,7 @@ void main() {
     expect(find.byType(NavigationDestination), findsNWidgets(2));
   });
 
-  testWidgets('chat composer is disabled without fake messages', (
+  testWidgets('chat shows unconfigured state without active account', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -56,10 +56,11 @@ void main() {
         database: database,
       ),
     );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
-    expect(tester.widget<TextField>(find.byType(TextField)).enabled, isFalse);
-    expect(find.text('智能体尚未接入'), findsOneWidget);
-    expect(find.byType(ListTile), findsNothing);
+    // Without an active account, the chat shows "请先配置学校账号".
+    expect(find.text('请先配置学校账号'), findsOneWidget);
   });
 
   testWidgets('schedule keeps week and task choices inside one destination', (
