@@ -4,9 +4,11 @@
 Flutter 首版，以及教务课程与考试、二课报名中活动、已报名二课日程、评课社区
 公开内容和校内公开信息目录五条 Python 只读数据链路。
 
-Windows 首版暂不接入 LLM，已经提供账号与同步、七日周课表、个人日程、
-Task/PlanBlock、冲突与用户覆盖、提醒、操作历史和设置。当前实现与接手说明见
-`docs/read-only-agent-handoff.md`。
+Windows 首版已接入学校大模型公共服务平台，提供按学校账号隔离的只读校园 Agent：
+能读取本地日程、Task 和全部查询型来源，通过可见、可停止的工具调用回答问题，但不
+修改本地业务数据、发起同步或执行任何外部写操作。此外已提供账号与同步、七日周课表、
+个人日程、Task/PlanBlock、冲突与用户覆盖、提醒、操作历史和设置。当前实现与接手
+说明见 `docs/read-only-agent-handoff.md`，架构见 `docs/architecture.md`。
 
 ## 安装
 
@@ -84,6 +86,24 @@ DLL，不能只复制单独的 `.exe`。
 登录仍由用户完成。Python Bridge 由 Flutter 按需启动，直接调用来源 service，
 不会解析 CLI 终端文本。
 
+### 只读校园 Agent
+
+聊天页已接入学校 Anthropic 兼容模型服务（`https://api.llm.ustc.edu.cn`，默认模型
+`deepseek-v4-flash`）。首次使用前在“设置 → 模型服务”输入学校 API Key，通过最小
+文本与 Tool Calling 测试后启用聊天。Key 由 Windows DPAPI 保护，不写入 SQLite 明文
+字段、源码、日志或提交。
+
+Agent 提供 15 个只读工具：本地日程（`get_schedule` 等 5 个）、本地任务（`get_tasks`
+等 4 个）、本地状态（`get_sync_status`、`get_safe_action_history`）、按需来源
+（二课报名中、评课、校园目录/详情 4 个，经 Python Bridge Query Protocol 1.0）。
+工具过程默认折叠，可停止和重试。单次请求最多 8 轮模型调用、12 次工具调用。Agent
+不能修改本地业务数据、发起同步或执行任何外部写操作。详见
+`docs/architecture.md`“只读 Agent 架构”一节。
+
+校内校园网直接访问学校 API；校外由用户自行启动 Panabit iWAN。App 不启动、配置或
+管理系统代理、TUN 或 iWAN。真实 Key、完整账号、私人课表和原始模型请求不得写入
+验收文档；人工验收清单见 `docs/acceptance/read-only-agent.md`。
+
 ## 隐私
 
 - 默认只保存规范化结果；原始响应仅在显式使用 `--save-raw` 时写入 `tmp/private/`。
@@ -107,9 +127,9 @@ Flutter 工程位于 `app/`，使用 Flutter 3.44.5 和 Dart 3.12.2。由于 Flu
 3.44.5 固定的 `meta` 版本与原计划的新生成器不兼容，当前锁定
 `drift_dev 2.34.0` 与 `build_runner 2.10.5`；运行时 `drift` 保持 2.34.2。
 
-2026-07-28 的最近自动验证结果为 Python 267 项测试通过、Flutter 203 项测试
-通过、静态分析无问题、Windows Release 构建成功。自动验证不代替需要学校登录的
-人工验收。
+2026-07-29 的最近自动验证结果为 Python 369 项测试通过、`compileall` 退出码 0、
+Flutter 432 项测试通过、静态分析无问题、Windows Release 构建成功。自动验证不代替
+需要学校登录和真实 API Key 的人工验收。
 
 架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。`collect jw`
 与 `collect young-schedule` 默认输出
@@ -118,8 +138,14 @@ Flutter 导入层的输入。报名中活动、评课和校园公开信息继续
 
 ## 当前边界
 
-- LLM、每日简报和 Agent 工具调用尚未接入，聊天页目前是禁用外壳。
-- Android/iOS 工程脚手架已存在，但移动端登录与来源采集适配器尚未实现。
+- 只读 Agent 已接入学校 Anthropic 模型服务，但写工具、每日简报、视觉能力
+  （`qwen3.6-chat`）、多会话/多 Agent/MCP、通用 HTTP/任意 URL/文件/Shell/SQL 工具
+  仍不在本里程碑范围。引用 chip 当前不可交互（临时引用到来源 URL 的解析为合并后
+  工作）。
+- 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；自动测试不代替人工
+  验收。清单见 `docs/acceptance/read-only-agent.md`。
+- Android/iOS 工程脚手架已存在，但移动端登录与来源采集适配器尚未实现；共享 Agent
+  核心可复用。
 - Windows 首版不是安装包，不捆绑 Python runtime。
 - App 关闭后的可靠 Windows 通知投递与取消尚未实现。
 - 二课报名和取消报名始终由用户在学校官方页面完成。

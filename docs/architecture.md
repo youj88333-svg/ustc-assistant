@@ -22,6 +22,7 @@
   PlanBlock 业务核心。
 - `app/lib/features/accounts|sync|reminders`：Windows 账号安全、Bridge 编排和
   平台提醒适配。
+- `app/lib/features/agent`：共享只读 Agent 核心（见下文“只读 Agent 架构”）。
 
 来源 service 返回结构化字典和必要的内存原始对象。只有需要导入 Flutter
 本地数据库的完整来源快照使用 `SourceBundle`；报名中二课、评课社区、校园目录
@@ -41,6 +42,124 @@ Task 逻辑不需要随采集实现重写。Python Bridge 是 Windows 平台适�
 
 该 Windows 链路已经实现。Android/iOS 目录目前只有 Flutter 平台脚手架，移动端
 `SourceGateway` 仍是后续工作。
+
+## 只读 Agent 架构
+
+只读 Agent 已实现并接入聊天页。Agent 能读取本地日程、Task 和全部查询型来源，通过
+可见、可停止的工具调用回答问题，但不能修改本地业务数据、发起账号同步或执行任何外部
+写操作。完整设计与范围见
+`docs/superpowers/specs/2026-07-28-read-only-agent-design.md`。
+
+### Flutter 共享 Agent 核心
+
+以下代码是平台无关的共享核心，不得依赖 Windows、Python、DPAPI 或 `dart:io`：
+
+- `domain/`：`agent_models.dart`、`agent_tool.dart`、`llm_protocol.dart`、
+  `query_source.dart`。定义工具接口、模型协议、查询来源网关接口和引用模型。
+- `application/`：`agent_session_service.dart`（有界模型调用/工具调用循环、停止、
+  重试、运行状态、摘要调度）、`agent_tool_registry.dart`（工具 Schema 与调用预算
+  校验）、`agent_context_builder.dart`（滚动摘要 + 最近消息上下文）、
+  `outbound_privacy_filter.dart`（确定性隐私过滤）、`agent_system_prompt.dart`
+  （版本化系统规则）、`agent_local_data_gateway.dart`（经 Application Service 读取
+  本地业务数据）、`agent_configuration_service.dart`（模型、启用、评课授权、摘要
+  位置）、`agent_tools.dart`（15 个只读工具 + 脱敏 payload 构建器）、
+  `agent_composition.dart`（组合服务，平台工厂注入）、`cancellation_signal.dart`、
+  `run_reference_store.dart`。
+- `data/`：`drift_chat_repository.dart`（按账号保存主会话、消息、运行、摘要和脱敏
+  工具记录）、`anthropic_llm_provider.dart`（基于 `package:http` 的 SSE 流式
+  Provider，无 `dart:io`）、`sse_decoder.dart`。
+- `presentation/`：`agent_chat_page.dart`、`agent_tool_run_tile.dart`、
+  `safe_markdown_message.dart`、`agent_settings_page.dart`、`agent_setup_panel.dart`。
+
+`AgentComposition.build` 通过注入的 `SecretStoreFactory` 和 `QueryGatewayFactory`
+组装全部服务，自身只导入纯 Dart Agent 接口，不持有 `dart:io`、DPAPI 或 Win32 引用。
+
+### Windows 平台适配器
+
+Windows 专属适配器位于 `data/` 层，由 `router.dart` 的 `_AgentChatLoader` /
+`_AgentSettingsLoader` 通过工厂注入，不进入共享核心：
+
+- `protected_agent_secret_store.dart` + `WindowsDpapiProtector`：DPAPI 保护 API Key。
+- `windows_python_query_gateway.dart` + `BridgeClient` + `PythonLocator`：通过
+  `dart:io` 进程启动本机临时 Python Bridge，调用现有 `ustc_assistant.sources.*`
+  service 实现按需来源查询。
+
+### Anthropic 端点边界
+
+`AnthropicLlmProvider` 只允许访问 `https://api.llm.ustc.edu.cn`：
+
+- `POST /v1/messages`（SSE 流式）和 `GET /v1/models`。
+- 请求头 `anthropic-version: 2023-06-01`，默认模型 `deepseek-v4-flash`。
+- SSE 事件含 `tool_use` / `tool_result` 循环。
+- API Key 作为每调用的临时局部参数传入，不持久化为字段，不写入日志、异常、数据库或
+  网络诊断。篡改的 Host 会被拒绝（`protocol_error`，不发请求）。
+- 不忽略 TLS 证书错误，不自动切换到第三方云模型。
+
+### 当前只读工具集（15 个）
+
+本地日程：`get_schedule`、`get_event_details`、`get_free_time`、
+`get_pending_event_reviews`、`get_conflicts`。
+
+本地任务：`get_tasks`、`get_task_details`、`get_plan_blocks`、
+`get_pending_planblock_reviews`。
+
+本地状态：`get_sync_status`、`get_safe_action_history`。
+
+按需来源（经 Python Bridge Query Protocol 1.0）：
+`search_current_second_class_activities`、`search_icourse`、
+`search_campus_catalog`、`read_campus_detail`。
+
+工具向模型只返回本轮临时引用（`ref_*`，`Random.secure` 128 位），不返回数据库主键。
+单次请求最多 8 轮模型调用、12 次工具调用。结果过大时返回可缩小的条件，不截断冒充
+完整结果。
+
+### Python Bridge Query Protocol 1.0
+
+只读 Agent 的按需来源查询复用扩展后的 Windows 临时 Python Bridge，与既有采集作业
+分离：
+
+- `POST /queries`：按类型启动查询作业（4 种查询类型）。
+- `GET /query-jobs/{id}/events`：轮询作业事件。
+- `POST /query-jobs/{id}/resume-login`：恢复需要登录的作业。
+- `POST /query-jobs/{id}/cancel`：取消作业。
+- `/capabilities` 声明 `queryProtocolVersion: 1.0` 和 4 种查询类型。
+- `ReadQueryJobManager` 与既有 `CollectionJob` 分离，独立管理查询作业状态机。
+- 每个查询结果经 `validate_query_result` 校验，拒绝未知字段、原始 HTML、无界文本、
+  外部 URL 和私有报名字段。公开查询从不接收凭证；密码从不存储在作业上。
+
+### 移动端替换点
+
+未来迁移到 Android/iOS 时保持以下共享核心不变：Chat UI 与 `AgentSessionService`、
+`AnthropicLlmProvider` 和 Tool Registry、聊天数据库、上下文、隐私过滤和工具契约、
+Flutter 本地日程/Task 工具。移动端只替换：
+
+- `AgentSecretStore`：DPAPI → 平台安全存储（如 `flutter_secure_storage`）。
+- `QuerySourceGateway`：`WindowsPythonQueryGateway` → `MobileQuerySourceGateway`
+  （WebView 登录会话 + 移动端 HTTP/页面适配器）。
+- 登录会话和少量平台生命周期适配器。
+
+### 显式排除（本里程碑）
+
+“只读”表示不修改本地业务事实，也不对学校或外部系统执行写操作。本里程碑不包含：
+
+- 创建、修改或删除 CalendarEvent、Task、PlanBlock、冲突、备注或提醒的写工具；
+- `AgentPermissionPolicy` 风险分级与权限设置；
+- Agent 发起教务或已报名二课同步；
+- 二课报名或取消报名；
+- 每日简报和其他主动消息；
+- 图片、文件、语音或视觉模型（`qwen3.6-chat` 视觉路由）；
+- 多会话、多 Agent 或 MCP 服务端；
+- 通用 HTTP、任意 URL、文件、Shell 或 SQL 工具；
+- Android/iOS 来源采集实现；
+- 云同步。
+
+### 已知限制与后续工作
+
+- 引用 chip 当前不可交互：尚未实现临时引用到来源 URL 的解析。为避免伪造 URL，
+  chip 渲染为纯文本（引用真实性通过“不启动伪造 URL”保证）。真实解析为合并后工作。
+- 各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类（见
+  `docs/read-only-agent-handoff.md`）。
+- 学校 API 与学校网站是人工验收依赖，从不进入自动测试。
 
 ## 数据流
 

@@ -15,6 +15,13 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
 5. 校园公开信息：教务处和财务处目录、本地检索、按需详情读取和附件缓存。
 6. Windows App：账号与同步、七日周课表、个人日程、Task/PlanBlock、冲突与用户
    覆盖、提醒、操作历史、设置和一步撤回。
+7. 只读校园 Agent：按学校账号隔离的长期主会话，接入学校 Anthropic 兼容模型服务
+   （`https://api.llm.ustc.edu.cn`，默认模型 `deepseek-v4-flash`，SSE 流式 +
+   `tool_use`/`tool_result`），15 个只读工具（11 本地 + 4 按需来源），工具过程
+   默认折叠、可停止、可重试，API Key 由 DPAPI 保护，确定性隐私过滤，滚动摘要，
+   重启恢复。Agent 不能修改本地业务数据、发起同步或执行任何外部写操作。架构见
+   `docs/architecture.md`“只读 Agent 架构”一节，人工验收清单见
+   `docs/acceptance/read-only-agent.md`。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
 `README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
@@ -33,12 +40,19 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
   `ImportService`、本地账号分区、同步、周日程、个人日程、Task/PlanBlock、提醒、
   历史、设置及对应测试。Android/iOS 目录目前只有 Flutter 平台脚手架，移动端采集
   适配器尚未实现。
-- `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消；
-  移动端 `SourceGateway` 尚未实现。
-- Windows C++ 工具链已安装，Release 可构建。最近自动验证通过 Python 267 项测试、
-  Flutter 203 项测试、Flutter 静态分析和 Windows Release 构建。
-- 第一轮真实手工验收已经完成并产生修复；修复后的完整人工复测仍未结束。不得把
-  自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md`。
+- `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消，
+  以及只读 Agent 使用的 Bridge Query Protocol 1.0 查询作业（`ReadQueryJobManager`，
+  与采集作业分离）；移动端 `SourceGateway` 尚未实现。
+- 只读校园 Agent 已实现（`app/lib/features/agent/`）：共享平台无关核心 + Windows
+  适配器（DPAPI 保护 Key、Python 查询网关）。Task 1–13 已全部提交，HEAD `ac995e6`。
+  引用 chip 当前不可交互（临时引用到来源 URL 的解析为合并后工作）。
+- Windows C++ 工具链已安装，Release 可构建。2026-07-29 自动验证通过 Python 369 项
+  测试、`compileall` 退出码 0、Flutter 432 项测试、Flutter 静态分析无问题、
+  Windows Release 构建成功。
+- 第一轮 Windows 首版真实手工验收已经完成并产生修复；修复后的完整人工复测仍未
+  结束。只读 Agent 的人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行。不得
+  把自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md` 和
+  `docs/acceptance/read-only-agent.md`。
 - 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
   删除现有 service、测试或真实故障回归样例。
 
@@ -92,7 +106,9 @@ README.md                  安装、CLI 命令和输出路径
 pyproject.toml             Python 包、依赖和命令入口
 app/
   lib/core/                Drift 数据库、安全与北京时间工具
-  lib/features/            账号、同步、导入、日程、Task、提醒、历史和设置
+  lib/features/            账号、同步、导入、日程、Task、提醒、历史、设置和只读 Agent
+  lib/features/agent/      共享只读 Agent 核心（domain/application 平台无关 +
+                           data/presentation Windows 适配器）
   test/                    Flutter 单元、数据库、Widget、Golden 和流程测试
   windows|android|ios/     Flutter 平台工程；当前真实运行目标是 Windows
 tmp/、temp.md              私有调试数据，不是代码或正式契约
@@ -188,6 +204,15 @@ Pop-Location
 ```
 
 涉及学校页面的改动还必须由真实 Edge 登录会话验收。自动测试不得访问学校网站。
+
+### 只读 Agent 自动验证（2026-07-29，HEAD ac995e6）
+
+- Python：369 项测试通过，`compileall` 退出码 0。
+- Flutter：432 项测试通过，`flutter analyze` 无问题。
+- Windows：Release 构建成功，输出目录为
+  `app/build/windows/x64/runner/Release/`。
+- 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；清单见
+  `docs/acceptance/read-only-agent.md`。自动测试不代替人工验收。
 
 ### Windows 首版自动验证（2026-07-28）
 

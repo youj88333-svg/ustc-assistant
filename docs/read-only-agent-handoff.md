@@ -1,6 +1,24 @@
 # USTC Assistant 只读 Agent 实施交接
 
-更新时间：2026-07-28
+更新时间：2026-07-29
+
+## 0. 当前状态（2026-07-29 更新）
+
+只读 Agent 的 Task 1–13 已在 `feature/read-only-agent` 分支上全部实现、审查并提交。
+HEAD 为 `ac995e6`。完整只读 Agent 已落地：Agent 数据库表、DPAPI 保护 API Key 与配置、
+Anthropic SSE Provider、隐私过滤与上下文构建、工具注册表与会话运行时、15 个只读工具
+（11 本地 + 4 按需来源）、Python 稳定查询 API、Bridge Query Protocol 1.0 查询作业、
+Flutter 查询网关与 4 个外部工具、设置 UI、聊天 UI 与组合、端到端安全测试。
+
+**真实人工验收（Task 13 Step 7）尚未执行**：下文第 9 节的人工验收清单
+（`docs/acceptance/read-only-agent.md`）需由用户在真实校园网 / Panabit iWAN / 真实
+API Key 环境下逐项执行。自动测试通过不等于人工验收通过。
+
+**最终整分支审查尚未执行**：各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类，
+由控制器在 Task 13 之后单独执行，不在本交接范围内。
+
+以下第 1–9 节保留原始交接基线信息（实施前的状态描述），仅在第 7、8 节追加实际验证
+结果与已知边界。历史基线不应被当作“功能未实现”——以本节和代码为准。
 
 ## 1. 交接目标
 
@@ -72,10 +90,13 @@ Python 正式入口是 `python -m ustc_assistant`。`scripts/` 没有正式运�
 - Task、PlanBlock、截止风险、结束后确认和一步撤回；
 - 重叠事件、主事件、人工冲突/不冲突关系和用户覆盖；
 - Reminder、操作历史、设置、清理与完全重置；
-- 聊天页目前仍是禁用外壳。
+- 只读 Agent：聊天页已替换为校园 Agent，支持学校 Anthropic 模型、SSE 流式回答、
+  15 个只读工具（11 本地 + 4 按需来源）、按账号隔离的长期主会话、滚动摘要、工具
+  过程默认折叠、停止与重试、重启恢复、设置页模型服务配置。详见
+  `docs/architecture.md`“只读 Agent 架构”一节。
 
-Android/iOS 目录只有 Flutter 平台脚手架。共享本地模型和 ImportService 可复用，
-移动端登录、来源采集和安全存储适配尚未实现。
+Android/iOS 目录只有 Flutter 平台脚手架。共享 Agent 核心、本地模型和 ImportService
+可复用，移动端登录、来源采集和安全存储适配尚未实现。
 
 ## 4. 已确认的 Agent 范围
 
@@ -197,21 +218,22 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 
 ## 7. 验证基线
 
-交接前最近一次记录的完整自动验证为：
+只读 Agent Task 1–13 完成后，在 `feature/read-only-agent` 分支 HEAD `ac995e6` 上
+重新运行完整自动验证（2026-07-29），实际结果为：
 
 ```text
-Python unittest: 267 passed
-Python compileall: passed
-Flutter tests: 203 passed
-Flutter analyze: no issues
-Windows Release build: passed
+Python unittest: 369 passed
+Python compileall: exit 0
+Flutter analyze: No issues found!
+Flutter test: 432 passed
+Windows Release build: passed (build\windows\x64\runner\Release\ustc_assistant_app.exe)
 ```
 
-但这组完整验证早于最近的 CAS 自动提交和官方节次/凌晨事项带提交。因此新 Agent
-创建隔离工作区后必须重新运行完整基线；不能直接把上述数字当作当前 HEAD 的新鲜
-证据。
+Python 测试必须在 worktree 下运行（editable install 指向主工作区 `E:/107/src`，
+不是 worktree），命令为：
 
 ```powershell
+$env:PYTHONPATH='E:/107/.worktrees/read-only-agent/src'
 conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 Push-Location app
@@ -221,18 +243,46 @@ E:\flutter\flutter\bin\flutter.bat build windows --release
 Pop-Location
 ```
 
+实施前的交接基线（保留用于历史对照，早于只读 Agent 实施）为：
+
+```text
+Python unittest: 267 passed
+Python compileall: passed
+Flutter tests: 203 passed
+Flutter analyze: no issues
+Windows Release build: passed
+```
+
 学校 API 和学校网站不能进入自动测试。真实验收由用户在可见 Edge、校园网或
-Panabit iWAN环境中执行，API Key 只通过 App 设置界面输入。
+Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。人工验收清单见
+`docs/acceptance/read-only-agent.md`。
 
 ## 8. 已知文档边界
 
 - `docs/acceptance/windows-first-milestone.md` 是第一轮人工结果归档，不是修复后
   的最终验收结论；其中仍有旧的 `461 / 2026fall` 测试文字；
+- `docs/acceptance/read-only-agent.md` 是只读 Agent 的人工验收清单，`完成：`留空
+  待用户在真实验收后填写；自动测试通过不等于人工验收通过；
 - 当前教务默认配置以 `config/source-defaults.json` 为准：
   `421 / 2026spring / 2026 春季学期`；
 - 历史 implementation plan 中的复选框不是实时状态；
-- 只读 Agent plan 的 13 个 Task 当前全部未执行；
+- 只读 Agent plan 的 13 个 Task 已全部执行并提交（Task 1–13），HEAD `ac995e6`；
 - 真实 Key、完整账号、私人课表和原始模型请求不得写入验收文档。
+
+### 只读 Agent 已知限制与后续工作
+
+- 引用 chip 当前不可交互：尚未实现临时引用（`ref_*`）到来源 URL 的解析。为避免
+  伪造 URL，chip 渲染为纯文本（引用真实性通过“不启动伪造 URL”保证）。真实解析为
+  合并后工作，不在本里程碑范围。
+- 各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类：Task 2（3 项）、Task 3
+  （4 项）、Task 4（9 项）、Task 5（5 项）、Task 6（5 项）、Task 7（5 项）、
+  Task 8（3 项）、Task 9（5 项）、Task 10（1 项）、Task 11（7 项）、Task 12
+  （3 项）。逐项明细见
+  `.superpowers/sdd/2026-07-28-read-only-agent/progress.md`（gitignored，仅本机）。
+  最终整分支审查由控制器在 Task 13 之后单独执行，决定哪些必须在合并前修复。
+- 真实人工验收（Task 13 Step 7）尚未执行，需用户在真实校园网 / Panabit iWAN /
+  真实 API Key 环境下按 `docs/acceptance/read-only-agent.md` 逐项执行。
+- 学校 API 与学校网站是人工验收依赖，从不进入自动测试。
 
 ## 9. 实施完成后的下一阶段
 
