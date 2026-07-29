@@ -26,9 +26,13 @@ class AgentContextBuilder {
   static const int summaryThreshold = 18000;
 
   /// Conservative chars-per-token estimate for the deterministic fallback.
-  /// CJK characters dominate campus text and average ~1.5 chars/token, so we
-  /// round down to 1.5 to over-estimate tokens and stay conservative.
-  static const double _charsPerToken = 1.5;
+  /// CJK characters dominate campus text and Chinese BPE tokenizers yield
+  /// roughly 1 token per character, so `length / 1.0` ≈ tokens. We use 1.0
+  /// (rather than >1.0) to stay conservative: any denominator <1 would
+  /// over-estimate, and 1.0 already rounds up via `ceil`, so a 1000-char
+  /// Chinese string estimates ≥1000 tokens, not ~667. This only affects the
+  /// first-run estimate before the real provider `inputTokens` is preferred.
+  static const double _charsPerToken = 1.0;
 
   /// Maximum output tokens for a summary request.
   static const int summaryMaxTokens = 1024;

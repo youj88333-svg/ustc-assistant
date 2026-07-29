@@ -164,6 +164,14 @@ class OutboundPrivacyFilter {
       _cookieRegex,
       (_) => _cookieRedaction,
     );
+    redacted = redacted.replaceAllMapped(
+      _passwordRegex,
+      (_) => _passwordRedaction,
+    );
+    redacted = redacted.replaceAllMapped(
+      _verificationCodeRegex,
+      (_) => _verificationCodeRedaction,
+    );
     return redacted;
   }
 
@@ -204,6 +212,8 @@ class OutboundPrivacyFilter {
   static const _secretRedaction = '[疑似密钥已隐去]';
   static const _bearerRedaction = '[授权令牌已隐去]';
   static const _cookieRedaction = '[Cookie已隐去]';
+  static const _passwordRedaction = '[疑似密码已隐去]';
+  static const _verificationCodeRedaction = '[验证码已隐去]';
 
   /// Recursively redacts secret canaries from an already-sanitized payload.
   /// This is a defensive backstop; the builder's allowlist is the primary
@@ -236,6 +246,15 @@ class OutboundPrivacyFilter {
       }
       if (_cookieRegex.hasMatch(s)) {
         s = s.replaceAllMapped(_cookieRegex, (_) => _cookieRedaction);
+      }
+      if (_passwordRegex.hasMatch(s)) {
+        s = s.replaceAllMapped(_passwordRegex, (_) => _passwordRedaction);
+      }
+      if (_verificationCodeRegex.hasMatch(s)) {
+        s = s.replaceAllMapped(
+          _verificationCodeRegex,
+          (_) => _verificationCodeRedaction,
+        );
       }
       return s;
     }

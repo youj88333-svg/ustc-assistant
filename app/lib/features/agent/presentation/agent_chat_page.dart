@@ -466,7 +466,16 @@ class _AgentChatPageState extends State<AgentChatPage> {
 
   Widget _buildAssistantBubble(_AssistantMessage msg) {
     final theme = Theme.of(context);
-    final isTerminal = msg.state == AgentRunState.completed;
+    // A terminal message is one whose run has stopped: completed, failed,
+    // cancelled, or interrupted. The copy button renders for ANY terminal
+    // state with non-empty text (a failed/interrupted run may have partial
+    // text worth copying), not only `completed`. The spinner guard below
+    // (`_isRunning && !isTerminal`) is unaffected: a `running` message is
+    // still non-terminal, so the spinner still shows while streaming.
+    final isTerminal = msg.state == AgentRunState.completed ||
+        msg.state == AgentRunState.failed ||
+        msg.state == AgentRunState.cancelled ||
+        msg.state == AgentRunState.interrupted;
     final isError = msg.state == AgentRunState.failed;
 
     return Padding(

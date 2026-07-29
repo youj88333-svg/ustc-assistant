@@ -13,9 +13,12 @@ const Duration _pollInterval = Duration(milliseconds: 200);
 /// open until a new event arrives or this timeout elapses.
 const int _pollWaitMs = 2000;
 
-/// The maximum total time a single [execute] stream will wait for a terminal
-/// event before giving up (defensive backstop; the Bridge normally completes).
-const Duration _maxWait = Duration(minutes: 10);
+/// The default maximum total time a single [execute] stream will wait for a
+/// terminal event before giving up (defensive backstop; the Bridge normally
+/// completes). Overridable via [WindowsPythonQueryGateway.start]'s `maxWait`
+/// parameter so tests can inject a short deadline without waiting 10 real
+/// minutes; production callers use this default.
+const Duration _defaultMaxWait = Duration(minutes: 10);
 
 /// Windows-specific [QuerySourceGateway] backed by the Python Bridge.
 ///
@@ -45,9 +48,13 @@ const Duration _maxWait = Duration(minutes: 10);
 /// APIs (via [BridgeClient]); the shared-core domain types and tools depend
 /// only on [QuerySourceGateway].
 class WindowsPythonQueryGateway implements QuerySourceGateway {
-  WindowsPythonQueryGateway._(this._client);
+  WindowsPythonQueryGateway._(this._client, this._maxWait);
 
   final BridgeClient _client;
+
+  /// The per-instance deadline for a single [execute] stream. Defaults to
+  /// [_defaultMaxWait]; overridden by tests via [start]'s `maxWait` parameter.
+  final Duration _maxWait;
 
   /// Completers keyed by jobId, completed when [resumeLogin] is called for a
   /// paused job. The [execute] stream awaits this before resuming polling.
@@ -62,6 +69,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     http.Client? httpClient,
     int? parentPid,
     Duration handshakeTimeout = const Duration(seconds: 10),
+    Duration maxWait = _defaultMaxWait,
   }) async {
     final client = await BridgeClient.start(
       pythonExecutable: pythonExecutable,
@@ -70,7 +78,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
       parentPid: parentPid,
       handshakeTimeout: handshakeTimeout,
     );
-    return WindowsPythonQueryGateway._(client);
+    return WindowsPythonQueryGateway._(client, maxWait);
   }
 
   @override
@@ -100,6 +108,11 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
           return;
         }
         if (DateTime.now().isAfter(deadline)) {
+          // Cancel the orphaned Bridge job before yielding the timeout, so it
+          // does not keep consuming Bridge resources until process exit. This
+          // mirrors the cancellation, paused-login, and idle exit paths, which
+          // all call `_safeCancel` before terminating the stream.
+          await _safeCancel(jobId);
           yield SourceQueryFailed(jobId: jobId, code: 'query_timeout');
           return;
         }

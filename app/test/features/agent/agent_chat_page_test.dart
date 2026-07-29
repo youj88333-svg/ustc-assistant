@@ -456,6 +456,77 @@ void main() {
     });
 
     testWidgets(
+      'copy button shows for any terminal state with non-empty text, '
+      'not only completed',
+      (tester) async {
+        // Regression guard: an interrupted/failed/cancelled run may have
+        // substantial partial text the user wants to copy. The copy button
+        // must render for ANY terminal state with non-empty text, not only
+        // `completed`. A running message, or a terminal message with empty
+        // text, must NOT show the copy button.
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(_buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ));
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '查询');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        // 1. Interrupted with partial text -> copy button visible.
+        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'));
+        await _pump(tester);
+        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.interrupted, text: '部分结果文本'));
+        script.closeStream();
+        await _pump(tester);
+
+        expect(find.byIcon(Icons.copy), findsOneWidget,
+            reason: 'interrupted run with partial text should allow copy');
+        expect(find.byIcon(Icons.refresh), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'copy button hidden for running message and for empty-text terminal message',
+      (tester) async {
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(_buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ));
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '查询');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        // Running (non-terminal) with text -> no copy button.
+        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '正在生成...'));
+        await _pump(tester);
+        expect(find.byIcon(Icons.copy), findsNothing,
+            reason: 'running message must not show copy');
+
+        // Terminal (failed) with EMPTY text -> no copy button (nothing to copy).
+        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.failed, text: '', errorCode: 'upstream_error'));
+        script.closeStream();
+        await _pump(tester);
+        expect(find.byIcon(Icons.copy), findsNothing,
+            reason: 'terminal message with empty text must not show copy');
+        expect(find.byIcon(Icons.refresh), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'stream erroring mid-flight without a terminal state recovers with retry',
       (tester) async {
         // Regression guard: if the stream errors without emitting a terminal

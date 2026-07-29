@@ -187,5 +187,51 @@ void main() {
       const summary = '用户询问了本周的冲突课程，已建议核对考勤与听课记录。';
       expect(filter.sanitizeSafeSummary(summary), summary);
     });
+
+    test('redacts a leaked password assignment from a summary', () {
+      const summary = '登录信息 password=secret123 已记录，请核实。';
+      final sanitized = filter.sanitizeSafeSummary(summary);
+      expect(sanitized, isNot(contains('secret123')));
+      expect(sanitized, contains('[疑似密码已隐去]'));
+    });
+
+    test('redacts a leaked verification code from a summary', () {
+      const summary = '短信验证码 123456 已收到，五分钟内有效。';
+      final sanitized = filter.sanitizeSafeSummary(summary);
+      expect(sanitized, isNot(contains('123456')));
+      expect(sanitized, contains('[验证码已隐去]'));
+    });
+  });
+
+  // Defense-layer symmetry: the backstop `_redactValue` (used by
+  // `sanitizeToolPayload`) must redact password and verification-code canaries
+  // the same way `inspectUserText` rejects them — so a buggy builder that
+  // accidentally let a `password=` or `验证码` field through is still caught.
+  group('backstop redaction symmetry', () {
+    test('redacts password and verification-code canaries a buggy builder kept', () {
+      // A deliberately buggy builder that passes through a free-form `note`
+      // field containing both canaries. The allowlist is the primary boundary;
+      // the backstop must still redact these if they slip through.
+      final buggyFilter = OutboundPrivacyFilter(
+        protectedAccount: _account,
+        toolBuilders: {
+          'buggy_tool': (raw) => {'note': raw['note']},
+        },
+      );
+      final raw = <String, Object?>{
+        'note': 'creds: password=secret123 and 验证码: 654321 ok',
+      };
+
+      final sanitized = buggyFilter.sanitizeToolPayload(
+        toolName: 'buggy_tool',
+        rawPayload: raw,
+      );
+
+      final out = sanitized.toString();
+      expect(out, isNot(contains('secret123')));
+      expect(out, isNot(contains('654321')));
+      expect(out, contains('[疑似密码已隐去]'));
+      expect(out, contains('[验证码已隐去]'));
+    });
   });
 }

@@ -241,7 +241,7 @@ void main() {
       // Build a large history: many turns with long, UNIQUE content so the
       // total exceeds the budget. The builder must drop the oldest turns first
       // and keep the newest plus the current message under the budget.
-      const charsPerMessage = 2000; // ~1,333 tokens each at 1.5 chars/token
+      const charsPerMessage = 2000; // ~2,000 tokens each at 1.0 chars/token
       final history = <ChatMessageRecord>[];
       var ordinal = 1;
       for (var i = 0; i < 60; i++) {
@@ -521,6 +521,54 @@ void main() {
       expect(preamble.toLowerCase(), isNot(contains('user')));
       expect(preamble.toLowerCase(), isNot(contains('custom')));
       expect(preamble.toLowerCase(), isNot(contains('config')));
+    });
+  });
+
+  // The deterministic fallback estimator (used on the first run before the
+  // real provider `inputTokens` is available) must be conservative for CJK
+  // text. Chinese BPE tokenizers yield ~1 token per character, so a 1.0
+  // chars/token denominator estimates ≈ tokens (not ~0.67× as a 1.5 divisor
+  // would). This guards against a first-run over-context that exceeds the
+  // 24k budget.
+  group('CJK token estimator (fallback)', () {
+    test('estimates ~1 token per CJK char, not ~0.67 (no under-estimate)', () {
+      // The deterministic fallback estimator (chars / _charsPerToken, ceil) is
+      // used when no real provider usage is available (first run). Chinese BPE
+      // tokenizers yield ~1 token per char, so a 1.0 divisor is conservative.
+      // We assert this via the public needsSummary API: a ~26,400-char CJK
+      // history should reach the 18,000-token threshold at the 1.0 ratio
+      // (26,400 >= 18,000 => true). The old 1.5 divisor would under-estimate
+      // to 17,600 (< 18,000 => false), the regression this test guards.
+      final bigCjk = '明天下雨课程冲突考勤听课记录笔记日程查询教室' * 1200; // 22 chars * 1200 = 26,400
+      expect(bigCjk.length, 26400);
+      final bigHistory = [
+        ChatMessageRecord(
+          id: 'u-2',
+          accountId: 'a',
+          runId: 'run-2',
+          ordinal: 1,
+          role: ChatRole.user,
+          state: ChatMessageState.completed,
+          content: bigCjk,
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      ];
+      // Conservative 1.0 ratio: 26,400 chars => 26,400 tokens >= 18,000 => true.
+      // The old 1.5 ratio: 26,400 / 1.5 = 17,600 < 18,000 => false (under-estimate,
+      // the regression this test guards against).
+      expect(
+        builder.needsSummary(
+          accountId: 'a',
+          history: bigHistory,
+          summary: null,
+          lastRunUsage: null,
+        ),
+        isTrue,
+        reason: '26,400 CJK chars must estimate >= 18,000 tokens (1.0 ratio); '
+            'the old 1.5 divisor would under-estimate to 17,600 and miss the '
+            'threshold, risking first-run over-context.',
+      );
     });
   });
 }

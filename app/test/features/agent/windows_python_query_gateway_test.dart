@@ -626,5 +626,73 @@ void main() {
       expect(bodyJson, isNot(contains('"path"')));
       expect(bodyJson, isNot(contains('"sourceUrl"')));
     });
+
+    test(
+      'deadline (maxWait) cancels the orphaned Bridge job before query_timeout',
+      () async {
+        // Regression guard: the _maxWait deadline path must cancel the
+        // orphaned Bridge job (POST /cancel) before yielding query_timeout,
+        // mirroring the cancellation/paused-login/idle exit paths. Without
+        // this, a job that never reaches a terminal phase would leak as a
+        // zombie consuming Bridge resources until process exit.
+        final process = FakeProcess(handshake());
+        final launcher = FakeLauncher(process);
+        final requests = <http.Request>[];
+        final httpClient = MockClient((request) async {
+          requests.add(request);
+          if (request.url.path == '/queries') {
+            return http.Response(
+              jsonEncode({'jobId': 'timeout-1', 'phase': 'starting'}),
+              202,
+            );
+          }
+          if (request.url.path == '/query-jobs/timeout-1/events') {
+            // Never terminal: keeps returning a `starting` phase batch.
+            return http.Response(
+              jsonEncode(_batch(sequence: 1, phase: 'starting')),
+              200,
+            );
+          }
+          if (request.url.path == '/query-jobs/timeout-1/cancel') {
+            return http.Response(
+              jsonEncode({'jobId': 'timeout-1', 'phase': 'cancelled'}),
+              202,
+            );
+          }
+          if (request.url.path == '/shutdown') {
+            return http.Response('{"ok":true}', 200);
+          }
+          return http.Response('{"error":"not_found"}', 404);
+        });
+        // Inject a tiny deadline so the test is deterministic and does not
+        // wait the real 10-minute _defaultMaxWait.
+        final gateway = await WindowsPythonQueryGateway.start(
+          pythonExecutable: 'python',
+          launcher: launcher,
+          httpClient: httpClient,
+          parentPid: 99,
+          maxWait: const Duration(milliseconds: 300),
+        );
+        addTearDown(gateway.shutdown);
+
+        final events = await gateway
+            .execute(
+              const CampusSearchQueryRequest(query: 'lib'),
+              cancellation: CancellationSignal(),
+            )
+            .toList();
+
+        // The deadline fired and yielded a query_timeout failure.
+        expect(events.last, isA<SourceQueryFailed>());
+        expect((events.last as SourceQueryFailed).code, 'query_timeout');
+        // The orphaned job was cancelled — the cancel route was hit.
+        expect(
+          requests.map((r) => r.url.path),
+          contains('/query-jobs/timeout-1/cancel'),
+          reason: 'deadline path must cancel the orphaned Bridge job, '
+              'not leave it as a zombie',
+        );
+      },
+    );
   });
 }
