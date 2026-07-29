@@ -5,6 +5,11 @@ import '../core/database/app_database.dart';
 import '../core/security/windows_dpapi_protector.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/presentation/accounts_page.dart';
+import '../features/agent/application/agent_configuration_service.dart';
+import '../features/agent/data/anthropic_llm_provider.dart';
+import '../features/agent/data/drift_chat_repository.dart';
+import '../features/agent/data/protected_agent_secret_store.dart';
+import '../features/agent/presentation/agent_settings_page.dart';
 import '../features/calendar/application/calendar_event_service.dart';
 import '../features/calendar/presentation/calendar_event_form.dart';
 import '../features/calendar/presentation/personal_event_management_page.dart';
@@ -144,6 +149,11 @@ GoRouter buildRouter(
       GoRoute(
         path: '/settings',
         builder: (context, state) => _SettingsLoader(database: database),
+      ),
+      GoRoute(
+        path: '/settings/agent',
+        builder: (context, state) =>
+            _AgentSettingsLoader(database: database),
       ),
       GoRoute(
         path: '/official-websites',
@@ -376,6 +386,44 @@ class _SettingsLoader extends StatelessWidget {
             accountId: account.id,
           ),
           onCompleteReset: () => context.go('/sync'),
+        );
+      },
+    );
+  }
+}
+
+class _AgentSettingsLoader extends StatelessWidget {
+  const _AgentSettingsLoader({required this.database});
+
+  final AppDatabase database;
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<LocalAccount?>(
+      future: _activeAccount(database),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final account = snapshot.data;
+        if (account == null) {
+          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
+        }
+        final chatRepository = DriftChatRepository(database);
+        return AgentSettingsPage(
+          accountId: account.id,
+          config: AgentConfigurationService(
+            database: database,
+            chatRepository: chatRepository,
+          ),
+          secrets: ProtectedAgentSecretStore(
+            database: database,
+            protector: WindowsDpapiProtector(),
+          ),
+          provider: AnthropicLlmProvider(),
+          chatRepository: chatRepository,
         );
       },
     );

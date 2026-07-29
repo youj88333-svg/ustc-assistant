@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../application/settings_service.dart';
 
@@ -50,6 +51,13 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          ListTile(
+            leading: const Icon(Icons.smart_toy_outlined),
+            title: const Text('模型服务'),
+            subtitle: const Text('配置学校模型服务 API Key 与模型'),
+            onTap: () => context.push('/settings/agent'),
+          ),
+          const Divider(),
           const ListTile(
             leading: Icon(Icons.schedule),
             title: Text('自动同步'),
