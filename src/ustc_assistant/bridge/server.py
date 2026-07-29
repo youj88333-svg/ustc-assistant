@@ -457,6 +457,10 @@ class BridgeServer:
                 raise InvalidQueryJobState(
                     "only young_enrolment can resume login"
                 )
+            if job.phase != "needs_user_login":
+                raise InvalidQueryJobState(
+                    "job is not waiting for login"
+                )
             self.query_jobs.resume_login(
                 job.id,
                 credentials=LoginCredentials(

@@ -463,7 +463,12 @@ class YoungEnrolmentQueryTests(unittest.TestCase):
         payload = json.loads(events[1])
         validate_query_result(payload["result"])
 
-    def test_young_resume_rejects_wrong_username(self):
+    def test_young_resume_completes_with_fixed_username(self):
+        # resume-login does not carry a username; the job's expected_username is
+        # fixed at creation. Verify the young job resumes with the correct
+        # fixed username and completes. (A username mismatch cannot be
+        # expressed over HTTP; the manager-level mismatch guard is covered in
+        # test_query_jobs.ResumeGuardTests.)
         def query_fn(**kwargs):
             if not kwargs["allow_interactive_login"]:
                 raise UserActionRequired("login")
@@ -488,10 +493,6 @@ class YoungEnrolmentQueryTests(unittest.TestCase):
             self.assertEqual(
                 "needs_user_login", job.wait_for_terminal_or_pause()
             )
-            # resume-login does not carry a username; the job's expected_username
-            # is fixed at creation. A mismatched resume is impossible via the
-            # endpoint, but a non-young job resume is rejected. Verify the
-            # young job resumes with the correct fixed username.
             resumed = _resume_login(
                 server,
                 job_id,
@@ -503,6 +504,45 @@ class YoungEnrolmentQueryTests(unittest.TestCase):
             )
 
         self.assertEqual(202, resumed[0])
+
+    def test_young_resume_on_completed_job_returns_409(self):
+        # Regression: resume-login on a young job that is NOT in
+        # needs_user_login (already completed) must return 409
+        # invalid_job_state with a safe body — not drop the connection or
+        # leak a stack trace. On the buggy code the manager raised NameError
+        # (undefined InvalidQueryState), which escaped do_POST and dropped the
+        # connection with RemoteDisconnected.
+        def query_fn(**kwargs):
+            return VALID_YOUNG_ENVELOPE, object()
+
+        with RunningServer(
+            _server_with_query_manager(young_enrolment_query=query_fn)
+        ) as server:
+            started = _post_query(
+                server,
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "queryProtocolVersion": QUERY_PROTOCOL_VERSION,
+                    "accountId": "acct_fixture",
+                    "expectedUsername": "PB00000000",
+                    "query": {"type": "young_enrolment"},
+                },
+                token=server.token,
+            )
+            job_id = json.loads(started[1])["jobId"]
+            job = server.query_jobs.get(job_id)
+            self.assertEqual("complete", job.wait_for_terminal_or_pause())
+            response = _resume_login(
+                server,
+                job_id,
+                {"protocolVersion": PROTOCOL_VERSION, "password": "secret"},
+                token=server.token,
+            )
+
+        self.assertEqual(409, response[0])
+        self.assertEqual(
+            "invalid_job_state", json.loads(response[1])["error"]
+        )
 
     def test_young_query_without_account_id_rejected(self):
         with RunningServer(_server_with_query_manager()) as server:

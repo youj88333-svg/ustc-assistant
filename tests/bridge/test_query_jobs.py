@@ -163,6 +163,55 @@ class YoungEnrolmentJobTests(unittest.TestCase):
         self.assertEqual("cancelled", job.wait_for_terminal_or_pause())
         self.assertIsNone(job.result)
 
+    def test_resume_login_on_completed_young_job_rejected(self):
+        # A young job that has already completed is not in needs_user_login;
+        # resume_login must reject it with InvalidQueryJobState (locked to the
+        # safe code do_POST maps to 409 invalid_job_state). This is the
+        # manager-level regression guard for the phase check.
+        def query_fn(**kwargs):
+            return VALID_YOUNG_ENVELOPE, object()
+
+        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
+        job = manager.start_young_enrolment(
+            YoungEnrolmentQuery(
+                account_id="acct_fixture",
+                expected_username="PB00000000",
+            )
+        )
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        with self.assertRaises(InvalidQueryJobState):
+            manager.resume_login(
+                job.id,
+                credentials=LoginCredentials("PB00000000", "secret"),
+            )
+
+    def test_resume_login_on_paused_young_job_with_mismatched_username_rejected(
+        self,
+    ):
+        # The username-match guard is defense-in-depth: the HTTP endpoint
+        # fixes the username at job.request.expected_username, but the
+        # manager must still reject a mismatched resume with AccountMismatch.
+        def query_fn(**kwargs):
+            if not kwargs["allow_interactive_login"]:
+                raise UserActionRequired("login required")
+            return VALID_YOUNG_ENVELOPE, object()
+
+        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
+        job = manager.start_young_enrolment(
+            YoungEnrolmentQuery(
+                account_id="acct_fixture",
+                expected_username="PB00000000",
+            )
+        )
+        self.assertEqual("needs_user_login", job.wait_for_terminal_or_pause())
+        with self.assertRaises(AccountMismatch):
+            manager.resume_login(
+                job.id,
+                credentials=LoginCredentials("ZZ00000000", "secret"),
+            )
+        # The job must remain paused, not started.
+        self.assertEqual("needs_user_login", job.phase)
+
 
 class IcourseJobTests(unittest.TestCase):
     def test_icourse_job_completes_with_validated_envelope(self):

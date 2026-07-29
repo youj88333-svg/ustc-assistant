@@ -603,7 +603,7 @@ class ReadQueryJobManager:
         if job.query_type != YOUNG_ENROLMENT:
             raise InvalidQueryJobState("only young_enrolment can resume login")
         if job.phase != "needs_user_login":
-            raise InvalidQueryState("job is not waiting for login")
+            raise InvalidQueryJobState("job is not waiting for login")
         if (
             credentials.username.casefold()
             != job.request.expected_username.casefold()
