@@ -134,6 +134,47 @@ class PackageEntryTests(unittest.TestCase):
         self.assertEqual([], read.follow_link_ids)
         self.assertEqual(Path("tmp/campus-detail.generated.json"), read.output)
 
+    def test_task7_stable_query_callables_remain_importable_and_callable(self):
+        # Task 12 regression: the Task 7 stable query entry points the CLI
+        # dispatches to must stay importable and callable after the Task 8
+        # bridge wiring landed. We assert presence + callability without
+        # invoking them (they would hit the network).
+        self.assertTrue(callable(campus.search_catalog))
+        self.assertTrue(callable(campus.read_detail))
+        self.assertTrue(callable(icourse_service.run_query))
+
+    def test_cli_query_read_collect_subcommands_still_parse(self):
+        # Task 12 regression: the query / read / collect subcommands the bridge
+        # (Task 8) and CLI share must continue to parse after the bridge work.
+        parser = cli.build_parser()
+
+        query_icourse = parser.parse_args(
+            ["query", "icourse", "--course", "量子物理B"]
+        )
+        query_campus = parser.parse_args(["query", "campus", "--text", "缓考"])
+        read_campus = parser.parse_args(
+            ["read", "campus", "--entry-id", "campus_abc"]
+        )
+        collect_jw = parser.parse_args(
+            ["collect", "jw", "--account-id", "acct_cli"]
+        )
+
+        # Each subcommand parses and dispatches to the right top-level command.
+        self.assertEqual("query", query_icourse.command)
+        self.assertEqual("icourse", query_icourse.source)
+        self.assertEqual("query", query_campus.command)
+        self.assertEqual("缓考", query_campus.text)
+        self.assertEqual("read", read_campus.command)
+        self.assertEqual("campus", read_campus.source)
+        self.assertEqual("campus_abc", read_campus.entry_id)
+        self.assertEqual("collect", collect_jw.command)
+        self.assertEqual("jw", collect_jw.source)
+        # Each carries a dispatch handler (the bridge work did not remove it).
+        self.assertTrue(callable(query_icourse.handler))
+        self.assertTrue(callable(query_campus.handler))
+        self.assertTrue(callable(read_campus.handler))
+        self.assertTrue(callable(collect_jw.handler))
+
     def test_campus_repeatable_and_safety_options_are_parsed(self):
         parser = cli.build_parser()
 
