@@ -221,16 +221,35 @@ class _BlockingQueryGateway implements QuerySourceGateway {
   }) async* {
     requests.add(request);
     started = true;
-    yield SourceQueryProgress(jobId: 'blocked-1', phase: 'fetching');
-    // Wait until released or cancelled.
-    while (!release.isCompleted && !cancellation.isCancelled) {
-      await Future<void>.delayed(const Duration(milliseconds: 5));
+    const jobId = 'blocked-1';
+    yield SourceQueryProgress(jobId: jobId, phase: 'fetching');
+    // Faithfully model WindowsPythonQueryGateway.execute: it subscribes to
+    // cancellation.onCancel and, when cancellation fires mid-query, calls
+    // _safeCancel(jobId) (POSTing /cancel to the Bridge) before yielding
+    // SourceQueryFailed and returning. This fake's cancel(jobId) records into
+    // cancelCalls so the test can assert the gateway-level cancel was invoked
+    // — the property the brief calls "gateway.cancelCalls recorded". Without
+    // this, the fake would only observe the CancellationSignal flag but never
+    // record a gateway-level cancel, diverging from the production gateway.
+    final cancelled = Completer<void>();
+    final cancelSub = cancellation.onCancel.listen((_) {
+      if (!cancelled.isCompleted) cancelled.complete();
+    });
+    try {
+      // Wait until released or cancelled (flag/event-based, not a wall-clock
+      // race: onCancel fires synchronously when the signal is cancelled).
+      while (!release.isCompleted && !cancelled.isCompleted) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      if (cancellation.isCancelled) {
+        await cancel(jobId);
+        yield SourceQueryFailed(jobId: jobId, code: 'cancelled');
+        return;
+      }
+      yield SourceQueryCompleted(jobId: jobId, result: _emptySearch());
+    } finally {
+      await cancelSub.cancel();
     }
-    if (cancellation.isCancelled) {
-      yield SourceQueryFailed(jobId: 'blocked-1', code: 'cancelled');
-      return;
-    }
-    yield SourceQueryCompleted(jobId: 'blocked-1', result: _emptySearch());
   }
 }
 
@@ -688,10 +707,17 @@ void main() {
       expect(provider.streamCallCount, 1);
       // The public query was initiated against the gateway.
       expect(blockingGateway.requests, hasLength(1));
-      // The run terminated safely (cancelled or failed), never left running.
-      expect(collected.last.state, isNot(AgentRunState.running));
+      // The brief's "gateway.cancelCalls recorded" guarantee: cancellation
+      // propagated to a cancellable tool AND triggered a gateway-level cancel
+      // (mirroring WindowsPythonQueryGateway calling _safeCancel(jobId) on
+      // cancel). The cancel was for the jobId the gateway emitted.
+      expect(blockingGateway.cancelCalls, isNotEmpty);
+      expect(blockingGateway.cancelCalls.last, 'blocked-1');
+      // The run terminated as cancelled (not merely "not running") — matching
+      // the SSE-cancel test's explicit terminal-state assertion.
+      expect(collected.last.state, AgentRunState.cancelled);
       final runs = await (database.select(database.agentRuns)).get();
-      expect(runs.single.status, isNot(AgentRunState.running.name));
+      expect(runs.single.status, AgentRunState.cancelled.name);
     });
 
     test('Young needs_user_login: no auto browser/resume; explicit resume completes', () async {
