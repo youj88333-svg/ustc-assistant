@@ -200,6 +200,12 @@ class _AgentChatPageState extends State<AgentChatPage> {
           ];
         }
       });
+      // Follow the streaming text: when the user is already near the bottom,
+      // keep the view pinned to the latest delta during the stream (not only
+      // at stream completion).
+      if (_nearBottom) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      }
     }
   }
 
@@ -208,6 +214,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
       setState(() {
         _isRunning = false;
         _streamSubscription = null;
+        _finalizeStuckRunningMessage();
       });
       if (_nearBottom) {
         WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
@@ -220,7 +227,36 @@ class _AgentChatPageState extends State<AgentChatPage> {
       setState(() {
         _isRunning = false;
         _streamSubscription = null;
+        // The stream errored without (necessarily) emitting a terminal state.
+        // Force the last assistant message to a terminal state so the retry
+        // button appears and the bubble shows a terminal marker instead of
+        // leaving the user stuck on a "正在思考..." bubble with no recovery.
+        // No raw error text is echoed — only a safe desensitized label.
+        _finalizeStuckRunningMessage();
       });
+    }
+  }
+
+  /// Marks the last assistant message as [AgentRunState.interrupted] if it is
+  /// still [AgentRunState.running]. This recovers from streams that ended
+  /// (done or error) without emitting a terminal state, so the retry button
+  /// shows and the bubble no longer claims to be thinking. Safe by design:
+  /// already-terminal messages are left untouched, and no raw error text is
+  /// surfaced — only the `interrupted` state, which the action row treats as
+  /// retryable.
+  void _finalizeStuckRunningMessage() {
+    if (_messages.isEmpty) return;
+    final last = _messages.last;
+    if (last is _AssistantMessage && last.state == AgentRunState.running) {
+      _messages[_messages.length - 1] = _AssistantMessage(
+        text: last.text,
+        runId: last.runId,
+        ordinal: last.ordinal,
+        toolSummaries: last.toolSummaries,
+        sourceReferences: last.sourceReferences,
+        state: AgentRunState.interrupted,
+        errorCode: last.errorCode,
+      );
     }
   }
 
@@ -354,7 +390,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
             ),
           ),
         ),
-        if (!_nearBottom && _isRunning)
+        if (!_nearBottom)
           Padding(
             padding: const EdgeInsets.only(bottom: 4),
             child: FloatingActionButton.small(

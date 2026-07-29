@@ -437,7 +437,14 @@ class _AgentSettingsLoader extends StatelessWidget {
 
 /// Loader for the Agent chat page: resolves the active account, builds the
 /// AgentComposition, and renders AgentChatPage.
-class _AgentChatLoader extends StatelessWidget {
+///
+/// The active-account lookup is cached in [initState] so a rebuild (e.g. from
+/// an inset `setState` in a descendant) does NOT re-query the database. The
+/// expensive composition (secret store, DPAPI protector, Bridge handshake via
+/// `WindowsPythonQueryGateway.start`) is cached one level down in
+/// [_AgentChatCompositionBuilder], also in `initState`. Both happen once per
+/// route entry, not per rebuild.
+class _AgentChatLoader extends StatefulWidget {
   const _AgentChatLoader({
     required this.database,
     required this.websiteLauncher,
@@ -447,9 +454,22 @@ class _AgentChatLoader extends StatelessWidget {
   final OfficialWebsiteLauncher websiteLauncher;
 
   @override
+  State<_AgentChatLoader> createState() => _AgentChatLoaderState();
+}
+
+class _AgentChatLoaderState extends State<_AgentChatLoader> {
+  late final Future<LocalAccount?> _accountFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _accountFuture = _activeAccount(widget.database);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<LocalAccount?>(
-      future: _activeAccount(database),
+      future: _accountFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return const Scaffold(
@@ -464,9 +484,9 @@ class _AgentChatLoader extends StatelessWidget {
         }
 
         return _AgentChatCompositionBuilder(
-          database: database,
+          database: widget.database,
           accountId: account.id,
-          websiteLauncher: websiteLauncher,
+          websiteLauncher: widget.websiteLauncher,
         );
       },
     );
@@ -474,7 +494,14 @@ class _AgentChatLoader extends StatelessWidget {
 }
 
 /// Builds the AgentComposition for the active account and renders AgentChatPage.
-class _AgentChatCompositionBuilder extends StatelessWidget {
+///
+/// The composition future (username resolution + `AgentComposition.build`,
+/// which constructs the secret store/DPAPI protector and runs the Bridge
+/// handshake via `WindowsPythonQueryGateway.start`) is created ONCE in
+/// [initState] and reused across rebuilds. This is critical: creating it in
+/// `build` would re-run the full composition — including the Bridge handshake
+/// and DB queries — on every rebuild.
+class _AgentChatCompositionBuilder extends StatefulWidget {
   const _AgentChatCompositionBuilder({
     required this.database,
     required this.accountId,
@@ -486,59 +513,72 @@ class _AgentChatCompositionBuilder extends StatelessWidget {
   final OfficialWebsiteLauncher websiteLauncher;
 
   @override
+  State<_AgentChatCompositionBuilder> createState() =>
+      _AgentChatCompositionBuilderState();
+}
+
+class _AgentChatCompositionBuilderState
+    extends State<_AgentChatCompositionBuilder> {
+  late final Future<AgentCompositionResult> _compositionFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    // Build the composition once for this route entry. The username is
+    // resolved as the first step of the single cached future so a rebuild
+    // never re-runs `_resolveUsername` nor re-issues the Bridge handshake.
+    _compositionFuture = _resolveUsername(widget.database, widget.accountId)
+        .then((resolvedUsername) {
+      if (resolvedUsername.isEmpty) {
+        // Signals the "无法获取学校账号" branch below; AgentComposition.build
+        // would otherwise receive an empty username.
+        throw const _NoResolvedUsername();
+      }
+      return AgentComposition.build(
+        database: widget.database,
+        accountId: widget.accountId,
+        resolvedUsername: resolvedUsername,
+        secretStoreFactory: (db) => ProtectedAgentSecretStore(
+          database: db,
+          protector: WindowsDpapiProtector(),
+        ),
+        queryGatewayFactory: (db, _) => WindowsPythonQueryGateway.start(
+          pythonExecutable: '',
+        ),
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    // Resolve the username synchronously before building the composition.
-    return FutureBuilder<String>(
-      future: _resolveUsername(database, accountId),
-      builder: (context, usernameSnapshot) {
-        if (usernameSnapshot.connectionState != ConnectionState.done) {
+    return FutureBuilder<AgentCompositionResult>(
+      future: _compositionFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator()),
           );
         }
-        final resolvedUsername = usernameSnapshot.data;
-        if (resolvedUsername == null || resolvedUsername.isEmpty) {
+        if (snapshot.hasError && snapshot.error is _NoResolvedUsername) {
           return const Scaffold(
             body: Center(child: Text('无法获取学校账号')),
           );
         }
+        final composition = snapshot.data;
+        if (composition == null) {
+          return const Scaffold(
+            body: Center(child: Text('无法加载 Agent 服务')),
+          );
+        }
 
-        return FutureBuilder<AgentCompositionResult>(
-          future: AgentComposition.build(
-            database: database,
-            accountId: accountId,
-            resolvedUsername: resolvedUsername,
-            secretStoreFactory: (db) => ProtectedAgentSecretStore(
-              database: db,
-              protector: WindowsDpapiProtector(),
-            ),
-            queryGatewayFactory: (db, _) => WindowsPythonQueryGateway.start(
-              pythonExecutable: '',
-            ),
-          ),
-          builder: (context, compositionSnapshot) {
-            if (compositionSnapshot.connectionState != ConnectionState.done) {
-              return const Scaffold(
-                body: Center(child: CircularProgressIndicator()),
-              );
-            }
-            final composition = compositionSnapshot.data;
-            if (composition == null) {
-              return const Scaffold(
-                body: Center(child: Text('无法加载 Agent 服务')),
-              );
-            }
-
-            return AgentChatPage(
-              accountId: accountId,
-              config: composition.configService,
-              secrets: composition.secretStore,
-              provider: composition.provider,
-              sessionService: composition.sessionService,
-              chatRepository: composition.chatRepository,
-              websiteLauncher: websiteLauncher,
-            );
-          },
+        return AgentChatPage(
+          accountId: widget.accountId,
+          config: composition.configService,
+          secrets: composition.secretStore,
+          provider: composition.provider,
+          sessionService: composition.sessionService,
+          chatRepository: composition.chatRepository,
+          websiteLauncher: widget.websiteLauncher,
         );
       },
     );
@@ -555,6 +595,13 @@ class _AgentChatCompositionBuilder extends StatelessWidget {
       return '';
     }
   }
+}
+
+/// Sentinel thrown when the active account's username cannot be resolved, so
+/// the composition future fails fast with a recognizable error instead of
+/// building a composition with an empty username.
+class _NoResolvedUsername implements Exception {
+  const _NoResolvedUsername();
 }
 
 Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(

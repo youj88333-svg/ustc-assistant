@@ -143,6 +143,12 @@ class _ScriptedSessionService extends AgentSessionService {
   void addState(AgentRunViewState state) => _controller.add(state);
   void closeStream() { if (!_controller.isClosed) _controller.close(); }
 
+  /// Simulates a stream that errors mid-flight WITHOUT first emitting a
+  /// terminal state, so the page's error/done handlers must produce one.
+  void emitError(Object error) {
+    if (!_controller.isClosed) _controller.addError(error);
+  }
+
   @override
   Stream<AgentRunViewState> send({
     required String accountId,
@@ -449,6 +455,79 @@ void main() {
       expect(find.byIcon(Icons.refresh), findsOneWidget);
     });
 
+    testWidgets(
+      'stream erroring mid-flight without a terminal state recovers with retry',
+      (tester) async {
+        // Regression guard: if the stream errors without emitting a terminal
+        // state, the last assistant message MUST reach a terminal state
+        // (interrupted/failed) so the retry button appears and the user is
+        // not stuck on a "正在思考..." bubble with no recovery path.
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(_buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ));
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '查询');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        // Only a running state arrives, then the stream errors — no terminal.
+        script.addState(
+          AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'),
+        );
+        await _pump(tester);
+        script.emitError(StateError('boom'));
+        await _pump(tester);
+
+        // No stop button (not running) and a retry button is visible.
+        expect(find.byIcon(Icons.stop), findsNothing);
+        expect(find.byIcon(Icons.refresh), findsOneWidget);
+        // The bubble must not still claim to be thinking.
+        expect(find.text('正在思考...'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'stream completing without a terminal state recovers with retry',
+      (tester) async {
+        // Regression guard: if the stream completes (onDone) without ever
+        // emitting a terminal state, the last assistant message MUST reach a
+        // terminal state so the retry button appears.
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(_buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ));
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '查询');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        script.addState(
+          AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'),
+        );
+        await _pump(tester);
+        // Close WITHOUT a terminal state — abnormal empty completion.
+        script.closeStream();
+        await _pump(tester);
+
+        expect(find.byIcon(Icons.stop), findsNothing);
+        expect(find.byIcon(Icons.refresh), findsOneWidget);
+        expect(find.text('正在思考...'), findsNothing);
+      },
+    );
+
     testWidgets('needs-login shows resume UI', (tester) async {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
@@ -505,28 +584,36 @@ void main() {
       expect(launcher.launched, isEmpty);
     });
 
-    testWidgets('trusted source reference chips launch https URLs', (tester) async {
-      final launcher = _FakeWebsiteLauncher();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SafeMarkdownMessage(
-            text: '根据查询结果...',
-            sourceReferences: const [AgentSourceReference(kind: 'event', ref: 'ref_abc')],
-            launcher: launcher,
+    testWidgets(
+      'trusted source reference chips are non-interactive until a real URL is resolvable',
+      (tester) async {
+        // Until a ref -> real-source-URL resolution path exists at the UI
+        // layer, citation chips MUST NOT launch a hardcoded placeholder URL
+        // pretending to be the tool-returned source. They render as inert
+        // text so clicking never opens a page that is not the actual source.
+        final launcher = _FakeWebsiteLauncher();
+        await tester.pumpWidget(MaterialApp(
+          home: Scaffold(
+            body: SafeMarkdownMessage(
+              text: '根据查询结果...',
+              sourceReferences: const [
+                AgentSourceReference(kind: 'event', ref: 'ref_abc'),
+              ],
+              launcher: launcher,
+            ),
           ),
-        ),
-      ));
-      await tester.pump();
+        ));
+        await tester.pump();
 
-      expect(find.text('查看日程'), findsOneWidget);
-
-      final chip = tester.widget<ActionChip>(find.byType(ActionChip));
-      chip.onPressed!();
-      await tester.pump();
-
-      expect(launcher.launched, hasLength(1));
-      expect(launcher.launched.single.scheme, 'https');
-    });
+        expect(find.text('查看日程'), findsOneWidget);
+        // No tappable ActionChip — the citation is plain inert text.
+        expect(find.byType(ActionChip), findsNothing);
+        // Tapping the label must not launch any URL.
+        await tester.tap(find.text('查看日程'));
+        await tester.pump();
+        expect(launcher.launched, isEmpty);
+      },
+    );
 
     testWidgets('empty text and refs renders nothing', (tester) async {
       await tester.pumpWidget(MaterialApp(

@@ -11,8 +11,10 @@ import '../../agent/domain/agent_tool.dart';
 /// - Model-authored inline links [text](url) are rendered with onTapLink set to
 ///   a no-op, so they display as styled text but are NOT clickable.
 /// - Trusted source references (from tool returns) are rendered separately as
-///   clickable chips/links below the answer, launching only their https URL
-///   via [launcher].
+///   NON-INTERACTIVE chips below the answer. The UI only has the opaque `ref`
+///   token and `kind`, not the tool-actually-returned source URL, so the chips
+///   are inert text until a real ref -> source-URL resolution path exists
+///   (Task 12/13). They never launch a hardcoded placeholder URL.
 class SafeMarkdownMessage extends StatelessWidget {
   const SafeMarkdownMessage({
     required this.text,
@@ -27,8 +29,9 @@ class SafeMarkdownMessage extends StatelessWidget {
   /// Trusted source references returned by tools. Only these may be clickable.
   final List<AgentSourceReference> sourceReferences;
 
-  /// The official website launcher for trusted citation links. When null,
-  /// citations are displayed as non-interactive text.
+  /// Reserved for future trusted citation links. Currently unused: citations
+  /// are always non-interactive text until a ref -> real-source-URL resolution
+  /// path exists (Task 12/13), so no URL is ever launched from here.
   final OfficialWebsiteLauncher? launcher;
 
   @override
@@ -48,30 +51,29 @@ class SafeMarkdownMessage extends StatelessWidget {
               // No-op: model-authored URLs are never clickable.
             },
           ),
-        // Trusted source reference citations — only these are clickable.
+        // Trusted source reference citations — rendered as inert text.
         if (sourceReferences.isNotEmpty) ...[
           const SizedBox(height: 8),
-          _SourceCitations(
-            references: sourceReferences,
-            launcher: launcher,
-          ),
+          _SourceCitations(references: sourceReferences),
         ],
       ],
     );
   }
 }
 
-/// Renders trusted source reference citations as clickable chips.
+/// Renders trusted source reference citations as NON-INTERACTIVE chips.
 ///
-/// Only https URLs from tool-returned references are launchable.
+/// The UI layer only receives the opaque `ref_*` token and the reference
+/// `kind` — NOT the tool-actually-returned source URL (see
+/// `AgentSourceReference`). Until a ref -> real-source-URL resolution path
+/// exists, the citations are rendered as inert text. They MUST NOT launch a
+/// hardcoded placeholder URL pretending to be the tool-returned source: that
+/// would break citation authenticity (a "查看日程" chip would always open the
+/// JW home page, not the actual source).
 class _SourceCitations extends StatelessWidget {
-  const _SourceCitations({
-    required this.references,
-    this.launcher,
-  });
+  const _SourceCitations({required this.references});
 
   final List<AgentSourceReference> references;
-  final OfficialWebsiteLauncher? launcher;
 
   @override
   Widget build(BuildContext context) {
@@ -81,41 +83,23 @@ class _SourceCitations extends StatelessWidget {
       runSpacing: 4,
       children: [
         for (final ref in references)
-          _buildChip(context, theme, ref),
+          _buildChip(theme, ref),
       ],
     );
   }
 
-  Widget _buildChip(
-    BuildContext context,
-    ThemeData theme,
-    AgentSourceReference ref,
-  ) {
+  Widget _buildChip(ThemeData theme, AgentSourceReference ref) {
     final label = _friendlyLabel(ref);
-    final uri = _uriForRef(ref);
-
-    if (launcher == null || uri == null) {
-      return Chip(
-        label: Text(
-          label,
-          style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
-        ),
-        materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-      );
-    }
-
-    return ActionChip(
-      avatar: const Icon(Icons.open_in_new, size: 14),
+    // Always non-interactive: a plain Chip is not tappable, so no URL is
+    // launched. This holds regardless of whether a launcher is supplied.
+    return Chip(
       label: Text(
         label,
-        style: TextStyle(fontSize: 12, color: theme.colorScheme.primary),
+        style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurfaceVariant),
       ),
       materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
       visualDensity: VisualDensity.compact,
       padding: EdgeInsets.zero,
-      onPressed: () => launcher!.launch(uri),
     );
   }
 
@@ -130,30 +114,6 @@ class _SourceCitations extends StatelessWidget {
         return '查看校园信息';
       default:
         return '查看来源';
-    }
-  }
-
-  /// Builds a clickable Uri for a trusted reference, or null if the ref kind
-  /// has no resolvable URL.
-  Uri? _uriForRef(AgentSourceReference ref) {
-    // Only known kinds with trusted https URLs are resolved.
-    // The raw local id is not available here (sourceReferences carry only
-    // kind+ref), so we return a safe https URL that the launcher handles.
-    // For now, return the school homepage as a placeholder — Task 12/13
-    // will add proper resolution when the run-reference store is available
-    // at the UI layer.
-    //
-    // SECURITY: despite the placeholder, the key invariant holds: only the
-    // launcher decides the actual URL, and only https URLs reach the user.
-    switch (ref.kind) {
-      case 'event':
-        return Uri.https('jw.ustc.edu.cn', '/home');
-      case 'task':
-        return Uri.https('jw.ustc.edu.cn', '/home');
-      case 'campus_entry':
-        return Uri.https('www.teach.ustc.edu.cn', '/');
-      default:
-        return Uri.https('www.ustc.edu.cn', '/');
     }
   }
 }
