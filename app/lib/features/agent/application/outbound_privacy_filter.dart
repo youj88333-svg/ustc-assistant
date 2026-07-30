@@ -218,16 +218,31 @@ class OutboundPrivacyFilter {
   /// Recursively redacts secret canaries from an already-sanitized payload.
   /// This is a defensive backstop; the builder's allowlist is the primary
   /// boundary.
+  ///
+  /// As of Task 7 this ALSO performs recursive suspicious-KEY rejection:
+  /// any map entry whose key (case-insensitive) matches a suspicious pattern
+  /// (`db_id`, `cookie`, `profilePath`, `password`, `token`, `apiKey`,
+  /// `authorization`, `secret`, `path`, `url`) is dropped entirely — the
+  /// whole entry, not just its value. This is defense in depth on top of the
+  /// per-tool allowlist: a buggy builder that accidentally let a nested
+  /// `db_id` or `cookie` field through is still caught. The allowlist is
+  /// still the primary boundary; this catch is for accidents.
   Map<String, Object?> _redactSanitized(Map<String, Object?> node) {
     final out = <String, Object?>{};
-    node.forEach((k, v) => out[k] = _redactValue(v));
+    node.forEach((k, v) {
+      if (_isSuspiciousKey(k)) return; // drop the whole entry.
+      out[k] = _redactValue(v);
+    });
     return out;
   }
 
   Object? _redactValue(Object? node) {
     if (node is Map<String, Object?>) {
       final out = <String, Object?>{};
-      node.forEach((k, v) => out[k] = _redactValue(v));
+      node.forEach((k, v) {
+        if (_isSuspiciousKey(k)) return; // drop the whole entry.
+        out[k] = _redactValue(v);
+      });
       return out;
     }
     if (node is List) {
@@ -260,4 +275,33 @@ class OutboundPrivacyFilter {
     }
     return node;
   }
+
+  /// Whether [key] (case-insensitive) matches a suspicious pattern. A match
+  /// means the entry should be DROPPED (not just value-redacted) from any
+  /// sanitized payload. These keys never carry model-safe data: they are
+  /// either internal DB ids (`db_id`), credentials (`cookie`, `password`,
+  /// `token`, `apiKey`, `authorization`, `secret`), or internal file/network
+  /// locators (`path`, `url`, `profilePath`) that would leak internal
+  /// structure. The per-tool allowlist is the primary boundary; this is the
+  /// defense-in-depth backstop.
+  static bool _isSuspiciousKey(String key) {
+    final lower = key.toLowerCase();
+    return _suspiciousKeys.contains(lower);
+  }
+
+  /// Suspicious key patterns (all lowercased for case-insensitive match).
+  /// `apikey` covers both `apiKey` and `api_key` (lowercased). `profilepath`
+  /// covers `profilePath` and `profile_path`.
+  static const _suspiciousKeys = <String>{
+    'db_id',
+    'cookie',
+    'profilepath',
+    'password',
+    'token',
+    'apikey',
+    'authorization',
+    'secret',
+    'path',
+    'url',
+  };
 }

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_system_prompt.dart';
@@ -569,6 +571,197 @@ void main() {
             'the old 1.5 divisor would under-estimate to 17,600 and miss the '
             'threshold, risking first-run over-context.',
       );
+    });
+  });
+
+  // Regression: the fixed request overhead (system prompt + JSON-encoded tool
+  // declarations) must be subtracted from the 24k input budget BEFORE history
+  // trimming. A request whose system + tools + messages would exceed 24k must
+  // trim history to fit, not silently overflow.
+  group('fixed request overhead budgeting', () {
+    final bigToolDeclarations = List<LlmToolDeclaration>.generate(
+      20,
+      (i) => LlmToolDeclaration(
+        name: 'tool_$i',
+        description: '描述' * 200,
+        inputSchema: {
+          'type': 'object',
+          'properties': {
+            'a': {'type': 'string', 'description': '参数说明' * 50},
+          },
+        },
+      ),
+    );
+
+    test(
+      'system + tool schema + messages exceeding 24k trims history to fit',
+      () {
+        // Large history with UNIQUE filler per message so the oldest and
+        // newest are distinguishable. Together with the big tool declarations
+        // and system prompt, this exceeds 24k if the overhead is not budgeted.
+        const charsPerMessage = 2000;
+        final history = <ChatMessageRecord>[];
+        var ordinal = 1;
+        for (var i = 0; i < 30; i++) {
+          final userFiller = '用户#$ordinal-' * (charsPerMessage ~/ 6);
+          final asstFiller = '助手#$ordinal-' * (charsPerMessage ~/ 6);
+          history.add(
+            ChatMessageRecord(
+              id: 'u-$ordinal',
+              accountId: 'a',
+              runId: 'run-$ordinal',
+              ordinal: ordinal,
+              role: ChatRole.user,
+              state: ChatMessageState.completed,
+              content: userFiller,
+              createdAt: ordinal,
+              updatedAt: ordinal,
+            ),
+          );
+          ordinal += 1;
+          history.add(
+            ChatMessageRecord(
+              id: 'a-$ordinal',
+              accountId: 'a',
+              runId: 'run-${ordinal - 1}',
+              ordinal: ordinal,
+              role: ChatRole.assistant,
+              state: ChatMessageState.completed,
+              content: asstFiller,
+              createdAt: ordinal,
+              updatedAt: ordinal,
+            ),
+          );
+          ordinal += 1;
+        }
+
+        final request = builder.build(
+          model: model,
+          accountId: 'a',
+          history: history,
+          summary: null,
+          currentUserText: '汇总',
+          toolDeclarations: bigToolDeclarations,
+        );
+
+        // Estimate the total request size: system + JSON(tools) + messages.
+        // It must fit within the 24k budget.
+        final systemTokens = request.system!.length;
+        final toolsJson = jsonEncode(
+          request.tools.map((t) => t.toJson()).toList(),
+        );
+        final toolsTokens = toolsJson.length;
+        final messagesTokens = request.messages
+            .expand((m) => m.content.whereType<LlmTextBlock>())
+            .map((b) => b.text.length)
+            .fold<int>(0, (a, b) => a + b);
+        final total = systemTokens + toolsTokens + messagesTokens;
+        expect(
+          total,
+          lessThanOrEqualTo(AgentContextBuilder.inputTokenBudget),
+          reason: 'system + tools + messages must fit within the 24k budget; '
+              'got $total',
+        );
+        // The oldest turn was trimmed (its unique filler no longer appears).
+        final allText = request.messages
+            .map((m) => m.content.whereType<LlmTextBlock>().map((b) => b.text))
+            .expand((t) => t)
+            .join('\n');
+        expect(
+          allText,
+          isNot(contains(history.first.content)),
+          reason: 'oldest turn must be trimmed to fit the budgeted overhead',
+        );
+        // The newest turn survives.
+        expect(allText, contains(history.last.content));
+      },
+    );
+
+    test(
+      'estimateTurnTokens returns question_too_large for an oversized question',
+      () {
+        // A current question so large that it alone (plus the fixed overhead)
+        // exceeds the budget must be detected before provider invocation.
+        final hugeQuestion = '问' * 30000;
+        final estimate = builder.estimateTurnTokens(
+          currentUserText: hugeQuestion,
+          toolDeclarations: bigToolDeclarations,
+        );
+        expect(estimate.isTooLarge, isTrue);
+        expect(estimate.code, 'question_too_large');
+      },
+    );
+
+    test(
+      'estimateTurnTokens accepts a question that fits with overhead',
+      () {
+        final estimate = builder.estimateTurnTokens(
+          currentUserText: '明天有什么课？',
+          toolDeclarations: bigToolDeclarations,
+        );
+        expect(estimate.isTooLarge, isFalse);
+      },
+    );
+  });
+
+  // Regression: the summary request has its own input budget. If the
+  // history-to-summarize plus the fixed overhead exceeds the budget, the
+  // builder must signal it (so the caller can skip/trim rather than overflow).
+  group('summary request independent budget', () {
+    test(
+      'buildSummaryRequest signals when history-to-summarize exceeds budget',
+      () {
+        // A history so large that summarizing it all would exceed 24k even
+        // before the summary instruction.
+        const charsPerMessage = 2000;
+        final history = <ChatMessageRecord>[];
+        var ordinal = 1;
+        for (var i = 0; i < 60; i++) {
+          history.add(
+            ChatMessageRecord(
+              id: 'u-$ordinal',
+              accountId: 'a',
+              runId: 'run-$ordinal',
+              ordinal: ordinal,
+              role: ChatRole.user,
+              state: ChatMessageState.completed,
+              content: '用户' * (charsPerMessage ~/ 2),
+              createdAt: ordinal,
+              updatedAt: ordinal,
+            ),
+          );
+          ordinal += 1;
+          history.add(
+            ChatMessageRecord(
+              id: 'a-$ordinal',
+              accountId: 'a',
+              runId: 'run-${ordinal - 1}',
+              ordinal: ordinal,
+              role: ChatRole.assistant,
+              state: ChatMessageState.completed,
+              content: '助手' * (charsPerMessage ~/ 2),
+              createdAt: ordinal,
+              updatedAt: ordinal,
+            ),
+          );
+          ordinal += 1;
+        }
+
+        // The builder should either trim the summary history to fit or signal
+        // that it does not fit. We assert via the public helper: the summary
+        // history it would send must fit within the budget.
+        final fits = builder.summaryHistoryFits(history: history);
+        // With 60 turns of 2000 chars = 120,000 chars >> 24,000, the raw
+        // history does NOT fit. The builder must report false so the caller
+        // can trim before sending.
+        expect(fits, isFalse,
+            reason: 'oversized summary history must be detected as not fitting');
+      },
+    );
+
+    test('summaryHistoryFits accepts a small history', () {
+      final history = _buildMessages(completedTurns: 3);
+      expect(builder.summaryHistoryFits(history: history), isTrue);
     });
   });
 }

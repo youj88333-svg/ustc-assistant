@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../features/settings/presentation/official_websites_page.dart';
 import '../../agent/application/agent_configuration_service.dart';
@@ -72,6 +73,7 @@ class _AssistantMessage extends _ChatMessage {
     required this.ordinal,
     this.toolSummaries = const [],
     this.sourceReferences = const [],
+    this.localActions = const [],
     this.state = AgentRunState.completed,
     this.errorCode,
     this.userAction,
@@ -82,6 +84,7 @@ class _AssistantMessage extends _ChatMessage {
   final int ordinal;
   final List<AgentToolSummary> toolSummaries;
   final List<AgentSourceReference> sourceReferences;
+  final List<AgentLocalAction> localActions;
   final AgentRunState state;
   final String? errorCode;
   final AgentUserActionMetadata? userAction;
@@ -259,6 +262,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
             ordinal: lastMsg.ordinal,
             toolSummaries: state.toolSummaries,
             sourceReferences: state.sourceReferences,
+            localActions: state.localActions,
             state: state.state,
             errorCode: state.errorCode,
             userAction: state.userAction,
@@ -273,6 +277,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
               ordinal: 0,
               toolSummaries: state.toolSummaries,
               sourceReferences: state.sourceReferences,
+              localActions: state.localActions,
               state: state.state,
               errorCode: state.errorCode,
               userAction: state.userAction,
@@ -337,6 +342,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
         ordinal: last.ordinal,
         toolSummaries: last.toolSummaries,
         sourceReferences: last.sourceReferences,
+        localActions: last.localActions,
         state: AgentRunState.interrupted,
         errorCode: last.errorCode,
         userAction: last.userAction,
@@ -379,6 +385,23 @@ class _AgentChatPageState extends State<AgentChatPage> {
     await widget.sessionService
         .resumeUserAction(accountId: widget.accountId, runId: runId)
         .drain<void>();
+  }
+
+  /// Routes a local navigation action chip tap to the relevant management
+  /// screen via GoRouter. `schedule` pushes `/schedule`; `tasks` pushes the
+  /// task management screen (the schedule page owns task management in this
+  /// app, so it routes to `/schedule` as well — the task list lives there).
+  /// This is the fix for the "一堆查看日程 chip 不可点击" defect: local-action
+  /// chips are clickable `ActionChip`s, not inert `Chip`s.
+  void _handleLocalAction(AgentLocalActionKind kind) {
+    switch (kind) {
+      case AgentLocalActionKind.schedule:
+        context.push('/schedule');
+      case AgentLocalActionKind.tasks:
+        // The schedule page is the task management entry in this app (it
+        // surfaces tasks and routes to `/tasks/:taskId` for details).
+        context.push('/schedule');
+    }
   }
 
   Future<void> _copyText(String text) async {
@@ -604,6 +627,8 @@ class _AgentChatPageState extends State<AgentChatPage> {
             child: SafeMarkdownMessage(
               text: msg.text.isEmpty ? '正在思考...' : msg.text,
               sourceReferences: msg.sourceReferences,
+              localActions: msg.localActions,
+              onLocalAction: _handleLocalAction,
               launcher: widget.websiteLauncher,
             ),
           ),

@@ -1211,5 +1211,95 @@ void main() {
       expect(find.byType(Chip), findsOneWidget);
       expect(find.byType(ActionChip), findsNothing);
     });
+
+    // Regression: local-action chips MUST be clickable ActionChips that route
+    // to the management screen, while public citation chips remain inert.
+    // This fixes the "一堆查看日程 chip 不可点击" defect.
+    testWidgets(
+      'local schedule action renders a clickable ActionChip and invokes onLocalAction',
+      (tester) async {
+        final tapped = <AgentLocalActionKind>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SafeMarkdownMessage(
+                text: '查询结果',
+                localActions: const [AgentLocalAction.schedule],
+                onLocalAction: tapped.add,
+                sourceReferences: const [
+                  AgentSourceReference(kind: 'campus_entry', ref: 'ref_c1'),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // The local action renders as a clickable ActionChip labelled 查看日程.
+        final actionChipFinder = find.byType(ActionChip);
+        expect(actionChipFinder, findsOneWidget);
+        expect(find.text('查看日程'), findsOneWidget);
+
+        // The public citation renders as an inert Chip (NOT ActionChip).
+        // The campus_entry label is 查看校园信息.
+        expect(find.text('查看校园信息'), findsOneWidget);
+        // The citation is a plain Chip, not an ActionChip.
+        expect(find.byType(Chip), findsOneWidget);
+
+        // Tapping the local-action chip invokes onLocalAction with schedule.
+        await tester.tap(actionChipFinder);
+        await tester.pump();
+        expect(tapped, [AgentLocalActionKind.schedule]);
+      },
+    );
+
+    testWidgets(
+      'local tasks action renders a clickable ActionChip and invokes onLocalAction',
+      (tester) async {
+        final tapped = <AgentLocalActionKind>[];
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SafeMarkdownMessage(
+                text: '查询结果',
+                localActions: const [AgentLocalAction.tasks],
+                onLocalAction: tapped.add,
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.byType(ActionChip), findsOneWidget);
+        expect(find.text('查看任务'), findsOneWidget);
+        await tester.tap(find.byType(ActionChip));
+        await tester.pump();
+        expect(tapped, [AgentLocalActionKind.tasks]);
+      },
+    );
+
+    testWidgets(
+      'local action chip is non-tappable when onLocalAction is null',
+      (tester) async {
+        // When no router is wired (onLocalAction null), the chip renders as
+        // an ActionChip visually but is NOT tappable — it must not crash or
+        // fire a route.
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SafeMarkdownMessage(
+                text: '查询结果',
+                localActions: const [AgentLocalAction.schedule],
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(find.byType(ActionChip), findsOneWidget);
+        // The ActionChip's onPressed is null, so tapping is a no-op (no tap
+        // target). We just verify it renders without error.
+        expect(find.text('查看日程'), findsOneWidget);
+      },
+    );
   });
 }

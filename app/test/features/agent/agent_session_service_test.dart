@@ -349,6 +349,77 @@ class _GuidanceScheduleTool implements AgentTool {
   );
 }
 
+/// A schedule tool that binds [eventCount] event refs, simulating a large
+/// schedule query. Used to verify deduplication of local navigation actions.
+class _ManyEventRefsScheduleTool implements AgentTool {
+  _ManyEventRefsScheduleTool({this.eventCount = 241});
+
+  final int eventCount;
+
+  @override
+  String get name => 'get_schedule';
+
+  @override
+  String get description => 'Binds many event refs.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final refs = <AgentToolReference>[];
+    for (var i = 0; i < eventCount; i++) {
+      final localId = 'event-$i';
+      final ref = context.references.bind(kind: 'event', localId: localId);
+      refs.add(AgentToolReference(kind: 'event', ref: ref, localId: localId));
+    }
+    return AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: const {'events': <Map<String, Object?>>[]},
+      references: refs,
+    );
+  }
+}
+
+/// A tasks tool that binds many task refs, simulating a large task query.
+class _ManyEventRefsTasksTool implements AgentTool {
+  @override
+  String get name => 'get_tasks';
+
+  @override
+  String get description => 'Binds many task refs.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final refs = <AgentToolReference>[];
+    for (var i = 0; i < 50; i++) {
+      final localId = 'task-$i';
+      final ref = context.references.bind(kind: 'task', localId: localId);
+      refs.add(AgentToolReference(kind: 'task', ref: ref, localId: localId));
+    }
+    return AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: const {'tasks': <Map<String, Object?>>[]},
+      references: refs,
+    );
+  }
+}
+
 class _ConcurrentBlockingProvider implements LlmProvider {
   final Map<String, Completer<void>> _started = {};
   final Map<String, Completer<void>> _release = {};
@@ -672,13 +743,126 @@ void main() {
           .toList();
 
       final terminal = states.last;
-      expect(terminal.sourceReferences, hasLength(2));
+      // As of Task 7, local-tool refs are NOT forwarded to sourceReferences
+      // (they would spam inert chips). Only the external catalog tool's ref
+      // is forwarded as a public citation. The schedule tool instead emits a
+      // deduplicated local action.
+      expect(terminal.sourceReferences, hasLength(1));
+      expect(terminal.sourceReferences.single.kind, 'catalog');
       // Refs are opaque ref_* tokens, never raw local ids.
       for (final ref in terminal.sourceReferences) {
         expect(ref.ref, startsWith('ref_'));
         expect(ref.ref, isNot(contains('schedule-')));
         expect(ref.ref, isNot(contains('catalog-')));
       }
+      // One deduplicated local schedule action (not one per event ref).
+      expect(terminal.localActions, hasLength(1));
+      expect(terminal.localActions.single, AgentLocalAction.schedule);
+    });
+  });
+
+  group('local navigation actions (deduplication)', () {
+    // Regression: 241 event refs must produce ONE local "查看日程" action,
+    // not 241 inert chips. The root cause was the session service copying
+    // every per-event AgentToolReference into sourceReferences with no
+    // dedup. The fix: local tools emit one deduplicated AgentLocalAction
+    // per data domain; sourceReferences is reserved for public citations.
+    test(
+      '241 event refs produce one local schedule action and no source refs',
+      () async {
+        // A schedule tool that binds 241 event refs across multiple calls.
+        final tool = _ManyEventRefsScheduleTool(eventCount: 241);
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {'date': '2026-07-29'},
+            ),
+            const CompletedEvent(),
+          ],
+          // A second call to the same tool — must NOT add a second action.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-2',
+              name: 'get_schedule',
+              input: {'date': '2026-07-30'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('这是你的日程。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '查日程')
+            .toList();
+
+        final terminal = states.last;
+        // Exactly ONE schedule action, despite 241 refs across two calls.
+        expect(terminal.localActions, hasLength(1));
+        expect(terminal.localActions.single, AgentLocalAction.schedule);
+        // ZERO source references from the local schedule tool.
+        expect(terminal.sourceReferences, isEmpty);
+      },
+    );
+
+    test('schedule + tasks tools produce one action each, deduplicated', () async {
+      final scheduleTool = _FakeScheduleTool();
+      final tasksTool = _ManyEventRefsTasksTool();
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-1',
+            name: 'get_schedule',
+            input: {},
+          ),
+          const ToolUseCompletedEvent(
+            id: 'tu-2',
+            name: 'get_tasks',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+        // Call both AGAIN — must NOT duplicate the actions.
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-3',
+            name: 'get_schedule',
+            input: {},
+          ),
+          const ToolUseCompletedEvent(
+            id: 'tu-4',
+            name: 'get_tasks',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+        [const TextDeltaEvent('done'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [scheduleTool, tasksTool],
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '查日程和任务')
+          .toList();
+
+      final terminal = states.last;
+      // One schedule + one tasks, despite each being called twice.
+      expect(terminal.localActions, hasLength(2));
+      expect(terminal.localActions, contains(AgentLocalAction.schedule));
+      expect(terminal.localActions, contains(AgentLocalAction.tasks));
+      // No local refs forwarded to sourceReferences.
+      expect(terminal.sourceReferences, isEmpty);
     });
   });
 

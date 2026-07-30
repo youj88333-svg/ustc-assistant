@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/outbound_privacy_filter.dart';
 
 /// Canary secrets used across the privacy tests. Each is unique to this file
@@ -232,6 +233,165 @@ void main() {
       expect(out, isNot(contains('654321')));
       expect(out, contains('[疑似密码已隐去]'));
       expect(out, contains('[验证码已隐去]'));
+    });
+  });
+
+  // Regression: nested db_id/Cookie/ProfilePath inside events/tasks/history
+  // must be rejected. The per-tool payload builders must map every list item
+  // to an explicit field map (no raw nested list passthrough), and the filter
+  // must recursively DROP any map entry whose key (case-insensitive) matches a
+  // suspicious pattern, as defense in depth.
+  group('nested suspicious-key rejection (per-tool builders)', () {
+    late OutboundPrivacyFilter filter;
+
+    setUp(() {
+      filter = OutboundPrivacyFilter(
+        protectedAccount: _account,
+        toolBuilders: agentToolPayloadBuilders(),
+      );
+    });
+
+    test(
+      'get_schedule drops nested db_id/cookie/profilePath inside event items',
+      () {
+        // A raw schedule payload where one event item smuggles in suspicious
+        // nested keys. The builder must re-derive a clean map per item, and
+        // the recursive suspicious-key rejection must drop any that survive.
+        final raw = <String, Object?>{
+          'from': '2026-07-29',
+          'through': '2026-08-04',
+          'events': <Object?>[
+            <String, Object?>{
+              'ref': 'ref_ev1',
+              'title': '线性代数',
+              'startAt': '2026-07-29T08:40:00',
+              'endAt': '2026-07-29T09:25:00',
+              // Smuggled suspicious keys on the item itself.
+              'db_id': 987654,
+              'cookie': 'session=COOKIE_CANARY',
+              'profilePath': '/profile/PB12345678',
+              'password': 'secret123',
+              'apiKey': 'sk-school-CANARY-1234567890',
+            },
+          ],
+        };
+        final sanitized = filter.sanitizeToolPayload(
+          toolName: 'get_schedule',
+          rawPayload: raw,
+        );
+        final out = sanitized.toString();
+        // The allowlisted fields survive.
+        expect(out, contains('线性代数'));
+        // Suspicious keys are dropped, not passed through.
+        expect(out, isNot(contains('db_id')));
+        expect(out, isNot(contains('cookie')));
+        expect(out, isNot(contains('profilePath')));
+        expect(out, isNot(contains('profile_path')));
+        expect(out, isNot(contains('password')));
+        expect(out, isNot(contains('apiKey')));
+        expect(out, isNot(contains('api_key')));
+        // Canary values never leak.
+        expect(out, isNot(contains('COOKIE_CANARY')));
+        expect(out, isNot(contains('secret123')));
+        expect(out, isNot(contains('sk-school-CANARY')));
+        expect(out, isNot(contains(_account)));
+      },
+    );
+
+    test('get_tasks drops nested db_id/cookie inside task items', () {
+      final raw = <String, Object?>{
+        'tasks': <Object?>[
+          <String, Object?>{
+            'ref': 'ref_t1',
+            'title': '准备考试',
+            'state': 'active',
+            'db_id': 111,
+            'token': 'TOKEN_CANARY',
+          },
+        ],
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_tasks',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, contains('准备考试'));
+      expect(out, isNot(contains('db_id')));
+      expect(out, isNot(contains('token')));
+      expect(out, isNot(contains('TOKEN_CANARY')));
+    });
+
+    test('get_safe_action_history drops nested cookie inside history items', () {
+      final raw = <String, Object?>{
+        'history': <Object?>[
+          <String, Object?>{
+            'source': 'user',
+            'actionType': 'task_create',
+            'result': 'success',
+            'safeSummary': 'Created a task.',
+            'occurredAt': '2026-07-29T08:00:00',
+            'cookie': 'session=COOKIE_CANARY',
+            'authorization': 'Bearer TOKEN_CANARY',
+          },
+        ],
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_safe_action_history',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, contains('Created a task.'));
+      expect(out, isNot(contains('cookie')));
+      expect(out, isNot(contains('authorization')));
+      expect(out, isNot(contains('COOKIE_CANARY')));
+      expect(out, isNot(contains('TOKEN_CANARY')));
+    });
+
+    test(
+      'get_event_details drops smuggled path/url/secret on the DTO',
+      () {
+        final raw = <String, Object?>{
+          'ref': 'ref_ev1',
+          'title': '线性代数',
+          'path': '/internal/db/row/987654',
+          'url': 'https://internal.example.com/raw/987654',
+          'secret': 'shhh',
+        };
+        final sanitized = filter.sanitizeToolPayload(
+          toolName: 'get_event_details',
+          rawPayload: raw,
+        );
+        final out = sanitized.toString();
+        expect(out, contains('线性代数'));
+        expect(out, isNot(contains('path')));
+        expect(out, isNot(contains('url')));
+        expect(out, isNot(contains('secret')));
+        expect(out, isNot(contains('/internal/db/row/987654')));
+      },
+    );
+
+    test('suspicious keys are rejected case-insensitively', () {
+      final raw = <String, Object?>{
+        'events': <Object?>[
+          <String, Object?>{
+            'ref': 'ref_ev1',
+            'title': '课',
+            'DB_ID': 5,
+            'Cookie': 'c',
+            'PROFILEPATH': 'p',
+            'Api-Key': 'k',
+          },
+        ],
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_schedule',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, isNot(contains('DB_ID')));
+      expect(out, isNot(contains('Cookie')));
+      expect(out, isNot(contains('PROFILEPATH')));
+      expect(out, isNot(contains('Api-Key')));
     });
   });
 }

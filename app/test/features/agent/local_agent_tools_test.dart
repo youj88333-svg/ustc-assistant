@@ -247,12 +247,17 @@ Future<void> _insertTimedEvent(
   required String type,
   required DateTime start,
   required DateTime end,
+  String source = 'user',
+  String? seriesExternalId,
+  String? externalId,
 }) async {
   await database.into(database.calendarEvents).insert(
         CalendarEventsCompanion.insert(
           id: id,
           accountId: accountId,
-          source: 'user',
+          source: source,
+          externalId: Value(externalId),
+          sourceSeriesExternalId: Value(seriesExternalId),
           title: title,
           type: type,
           startAt: Value(start.toUtc().millisecondsSinceEpoch),
@@ -262,6 +267,62 @@ Future<void> _insertTimedEvent(
           locationName: Value(location),
           createdAt: 1,
           updatedAt: 1,
+        ),
+      );
+}
+
+/// Inserts a course-series row for [accountId]. The [participantsJson] is a
+/// JSON list of `{role, name}` objects (matching the import fixture shape).
+Future<void> _insertCourseSeries(
+  AppDatabase database,
+  String id,
+  String accountId, {
+  required String source,
+  required String externalId,
+  required String title,
+  String semesterKey = '2026spring',
+  String participantsJson = '[]',
+}) async {
+  await database.into(database.courseSeries).insert(
+        CourseSeriesCompanion.insert(
+          id: id,
+          accountId: accountId,
+          source: source,
+          externalId: externalId,
+          title: title,
+          semesterKey: semesterKey,
+          participantsJson: Value(participantsJson),
+          sourceDetailsJson: '{}',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+}
+
+/// Inserts a `source_records` row marking [localEntityId] as present for
+/// [accountId]/[source]. Required for non-`user`-source events to appear in
+/// `EffectiveEventRepository.watchDisplayEvents` (which filters out events
+/// with no present source record).
+Future<void> _insertSourceRecord(
+  AppDatabase database,
+  String accountId, {
+  required String source,
+  required String externalId,
+  required String localEntityId,
+}) async {
+  await database.into(database.sourceRecords).insert(
+        SourceRecordsCompanion.insert(
+          id: 'sr-$localEntityId',
+          accountId: accountId,
+          source: source,
+          entityType: 'calendar_event',
+          externalId: externalId,
+          localEntityId: localEntityId,
+          sourceStatus: 'active',
+          presence: 'present',
+          scopeKey: 'scope',
+          firstObservedAt: 1,
+          lastObservedAt: 1,
         ),
       );
 }
@@ -423,6 +484,243 @@ void main() {
       expect(result.errorCode, 'result_too_large');
       expect(result.payload['guidance'], isNotNull);
     });
+
+    // Regression: 201 out-of-range events plus one requested-range event must
+    // NOT return result_too_large. The 200-limit must apply to IN-RANGE events
+    // (already post-filter), not to all events.
+    test(
+      '201 out-of-range events plus one in-range event is not result_too_large',
+      () async {
+        // 201 events far outside the requested range (August 10).
+        for (var i = 0; i < 201; i++) {
+          await _insertTimedEvent(
+            database,
+            'b-far-$i',
+            'b',
+            'Far$i',
+            type: 'personal',
+            start: DateTime(2026, 8, 10, 7, 50).add(Duration(minutes: i)),
+            end: DateTime(2026, 8, 10, 7, 51).add(Duration(minutes: i)),
+          );
+        }
+        // One event in the requested range.
+        await _insertTimedEvent(
+          database,
+          'b-in',
+          'b',
+          'InRange',
+          type: 'personal',
+          start: DateTime(2026, 7, 29, 9, 0),
+          end: DateTime(2026, 7, 29, 10, 0),
+        );
+        final harness = _harness(database, 'b');
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-07-29',
+          'through': '2026-07-29',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final events = result.payload['events']! as List;
+        expect(events, hasLength(1));
+        expect(
+          (events.first! as Map<String, Object?>)['title'],
+          'InRange',
+        );
+      },
+    );
+
+    // Regression: 2026-02-31 must be rejected as invalid_range (DateTime
+    // normalizes overflow, so round-trip year/month/day must be verified).
+    test('rejects 2026-02-31 as invalid_range', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'from': '2026-02-31',
+        'through': '2026-02-28',
+      });
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_range');
+    });
+
+    test('rejects 2026-02-30 as invalid_range', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'from': '2026-02-30',
+        'through': '2026-02-28',
+      });
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_range');
+    });
+
+    // Regression: a 2026 spring grouped summary must return course groups
+    // under 200 items even when there are many occurrences. The 200-limit
+    // applies AFTER grouping in summary mode. Semester is derived from the
+    // series metadata, never hardcoded.
+    test(
+      'course_summary mode groups 2026 spring occurrences under 200 items',
+      () async {
+        // Seed a course series for 2026 spring with two teachers.
+        await _insertCourseSeries(
+          database,
+          'series-math',
+          'a',
+          source: 'ustc_jw',
+          externalId: 'lesson-math',
+          title: '线性代数',
+          semesterKey: '2026spring',
+          participantsJson:
+              '[{"role":"teacher","name":"张老师"},{"role":"teacher","name":"李老师"}]',
+        );
+        // 10 occurrences of the same course within Feb 2026 (Mon/Wed pattern).
+        // They should collapse to ONE group.
+        final mathDays = [2, 4, 9, 11, 16, 18, 23, 25, 27];
+        for (var i = 0; i < mathDays.length; i++) {
+          final day = mathDays[i];
+          await _insertTimedEvent(
+            database,
+            'math-occ-$i',
+            'a',
+            '线性代数',
+            source: 'ustc_jw',
+            externalId: 'math-occ-$i',
+            seriesExternalId: 'lesson-math',
+            type: 'course',
+            location: '三教101',
+            start: DateTime(2026, 2, day, 8, 40),
+            end: DateTime(2026, 2, day, 9, 25),
+          );
+          await _insertSourceRecord(
+            database,
+            'a',
+            source: 'ustc_jw',
+            externalId: 'math-occ-$i',
+            localEntityId: 'math-occ-$i',
+          );
+        }
+        // A second course series in the same semester → a second group.
+        await _insertCourseSeries(
+          database,
+          'series-phys',
+          'a',
+          source: 'ustc_jw',
+          externalId: 'lesson-phys',
+          title: '大学物理',
+          semesterKey: '2026spring',
+          participantsJson: '[{"role":"teacher","name":"王老师"}]',
+        );
+        await _insertTimedEvent(
+          database,
+          'phys-occ-0',
+          'a',
+          '大学物理',
+          source: 'ustc_jw',
+          externalId: 'phys-occ-0',
+          seriesExternalId: 'lesson-phys',
+          type: 'course',
+          location: '四教202',
+          start: DateTime(2026, 2, 10, 10, 35),
+          end: DateTime(2026, 2, 10, 11, 20),
+        );
+        await _insertSourceRecord(
+          database,
+          'a',
+          source: 'ustc_jw',
+          externalId: 'phys-occ-0',
+          localEntityId: 'phys-occ-0',
+        );
+
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-02-01',
+          'through': '2026-02-28',
+          'view': 'course_summary',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final groups = result.payload['groups']! as List;
+        // Two courses → two groups, well under the 200 limit.
+        expect(groups.length, lessThanOrEqualTo(200));
+        expect(groups, hasLength(2));
+        final byTitle = {
+          for (final g in groups)
+            (g! as Map<String, Object?>)['title'] as String: g,
+        };
+        expect(byTitle.keys, containsAll(['线性代数', '大学物理']));
+        final math = byTitle['线性代数']! as Map<String, Object?>;
+        // Teachers derived from CourseSery.participantsJson.
+        expect(math['teachers'], ['张老师', '李老师']);
+        // Distinct locations.
+        expect(math['locations'], ['三教101']);
+        // Occurrence count.
+        expect(math['occurrenceCount'], mathDays.length);
+        // Active date range over in-range occurrences.
+        expect(math['activeFrom'], isNotNull);
+        expect(math['activeThrough'], isNotNull);
+        // Weekday/period patterns present.
+        expect(math['patterns'], isA<List>());
+        // SECURITY: no raw local ids or semester literals leak.
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('series-math')));
+        expect(encoded, isNot(contains('lesson-math')));
+        expect(encoded, isNot(contains('2026spring')));
+        // The summary contributes NO per-event refs (it is a summary).
+        expect(result.references, isEmpty);
+      },
+    );
+
+    test(
+      'course_summary mode with 241 occurrences of one course yields one group',
+      () async {
+        // 241 occurrences of one course — would blow the 200 limit in events
+        // mode, but in summary mode it collapses to a single group. Spread
+        // 8 per day across Jan 1-30, 2026 (240) plus one more, all within a
+        // 31-day range so the range itself is valid.
+        await _insertCourseSeries(
+          database,
+          'series-big',
+          'a',
+          source: 'ustc_jw',
+          externalId: 'lesson-big',
+          title: '大课',
+          semesterKey: '2026spring',
+        );
+        for (var i = 0; i < 241; i++) {
+          final id = 'big-occ-$i';
+          // 8 occurrences per day, each 30 min apart, across 30 days + 1.
+          final day = (i ~/ 8) + 1;
+          final slot = i % 8;
+          await _insertTimedEvent(
+            database,
+            id,
+            'a',
+            '大课',
+            source: 'ustc_jw',
+            externalId: id,
+            seriesExternalId: 'lesson-big',
+            type: 'course',
+            start: DateTime(2026, 1, day, 8, 0 + slot * 30),
+            end: DateTime(2026, 1, day, 8, 25 + slot * 30),
+          );
+          await _insertSourceRecord(
+            database,
+            'a',
+            source: 'ustc_jw',
+            externalId: id,
+            localEntityId: id,
+          );
+        }
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-01-01',
+          'through': '2026-01-31',
+          'view': 'course_summary',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final groups = result.payload['groups']! as List;
+        expect(groups, hasLength(1));
+        expect(
+          (groups.first! as Map<String, Object?>)['occurrenceCount'],
+          241,
+        );
+      },
+    );
   });
 
   group('get_event_details', () {
@@ -484,6 +782,37 @@ void main() {
       expect(encoded, isNot(contains('conflictState')));
       expect(encoded, isNot(contains('"conflict"')));
     });
+
+    // Regression: a 23:00-08:00 event (spanning midnight) must block the
+    // next morning's 07:00-08:00 slot. The old per-day logic filtered events
+    // by startAt same-day only, missing the overnight overlap.
+    test(
+      '23:00-08:00 overnight event blocks next-day 07:00-08:00 slot',
+      () async {
+        // An event from 2026-07-29 23:00 to 2026-07-30 08:00.
+        await _insertTimedEvent(
+          database,
+          'event-overnight',
+          'a',
+          '夜间活动',
+          type: 'personal',
+          start: DateTime(2026, 7, 29, 23, 0),
+          end: DateTime(2026, 7, 30, 8, 0),
+        );
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_free_time', {
+          'from': '2026-07-30',
+          'through': '2026-07-30',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final gaps = result.payload['gaps']! as List;
+        // On 2026-07-30 the overnight event occupies 07:00-08:00 (its
+        // intersection with the day grid [07:00, 24:00)). So the first free
+        // gap must NOT start at 07:00 — it must start at 08:00.
+        final firstGap = gaps.first! as Map<String, Object?>;
+        expect(firstGap['startAt'], '2026-07-30T08:00:00');
+      },
+    );
   });
 
   group('get_pending_event_reviews', () {
@@ -500,6 +829,57 @@ void main() {
       final encoded = jsonEncode(result.payload);
       expect(encoded, isNot(contains('event-ended-pending')));
     });
+
+    // Regression: more than 200 pending reviews must be paged via
+    // offset/limit instead of returning result_too_large.
+    test(
+      'more than 200 pending reviews can be paged with offset/limit',
+      () async {
+        // Seed 202 ended course events with undecided attendance for account
+        // 'b' (each ended before `now`).
+        for (var i = 0; i < 202; i++) {
+          await _insertTimedEvent(
+            database,
+            'b-pending-$i',
+            'b',
+            'Pending$i',
+            type: 'course',
+            start: DateTime(2026, 7, 1, 8, 0).add(Duration(minutes: i)),
+            end: DateTime(2026, 7, 1, 9, 0).add(Duration(minutes: i)),
+          );
+          await OverlayService(database: database, accountId: 'b', now: () => 100)
+              .setEventOverlay(
+            'b-pending-$i',
+            const OverlayMutation(),
+          );
+        }
+        final harness = _harness(database, 'b');
+        // First page of 100.
+        final page1 = await harness.execute('get_pending_event_reviews', {
+          'limit': 100,
+          'offset': 0,
+        });
+        expect(page1.status, AgentToolStatus.success);
+        expect(page1.payload['pending']! as List, hasLength(100));
+        expect(page1.payload['hasMore'], isTrue);
+        // Second page of 100.
+        final page2 = await harness.execute('get_pending_event_reviews', {
+          'limit': 100,
+          'offset': 100,
+        });
+        expect(page2.status, AgentToolStatus.success);
+        expect(page2.payload['pending']! as List, hasLength(100));
+        expect(page2.payload['hasMore'], isTrue);
+        // Final page of 2.
+        final page3 = await harness.execute('get_pending_event_reviews', {
+          'limit': 100,
+          'offset': 200,
+        });
+        expect(page3.status, AgentToolStatus.success);
+        expect(page3.payload['pending']! as List, hasLength(2));
+        expect(page3.payload['hasMore'], isFalse);
+      },
+    );
   });
 
   group('get_conflicts', () {
@@ -645,6 +1025,44 @@ void main() {
       final encoded = jsonEncode(result.payload);
       expect(encoded, isNot(contains('pb-pending')));
     });
+
+    // Regression: more than 200 pending plan-block reviews must be paged via
+    // offset/limit instead of returning result_too_large.
+    test(
+      'more than 200 pending plan-block reviews can be paged',
+      () async {
+        // Seed a task for account 'b', then 202 expired-accepted plan blocks.
+        await _insertTask(database, 'task-b', 'b', '任务B',
+            state: 'active', importance: 'normal');
+        for (var i = 0; i < 202; i++) {
+          await _insertPlanBlock(
+            database,
+            'b-pb-$i',
+            'b',
+            'task-b',
+            title: 'Block$i',
+            start: DateTime(2026, 7, 1, 19, 0).add(Duration(minutes: i)),
+            end: DateTime(2026, 7, 1, 21, 0).add(Duration(minutes: i)),
+            status: 'accepted',
+          );
+        }
+        final harness = _harness(database, 'b');
+        final page1 = await harness.execute('get_pending_planblock_reviews', {
+          'limit': 100,
+          'offset': 0,
+        });
+        expect(page1.status, AgentToolStatus.success);
+        expect(page1.payload['pending']! as List, hasLength(100));
+        expect(page1.payload['hasMore'], isTrue);
+        final page3 = await harness.execute('get_pending_planblock_reviews', {
+          'limit': 100,
+          'offset': 200,
+        });
+        expect(page3.status, AgentToolStatus.success);
+        expect(page3.payload['pending']! as List, hasLength(2));
+        expect(page3.payload['hasMore'], isFalse);
+      },
+    );
   });
 
   group('get_sync_status', () {

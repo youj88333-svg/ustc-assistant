@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../domain/agent_models.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_system_prompt.dart';
@@ -80,11 +82,16 @@ class AgentContextBuilder {
       );
     }
 
-    // 2. Recent turns, trimmed from the oldest to fit the budget. Reserve
-    //    room for the summary note and the current message.
+    // 2. Recent turns, trimmed from the oldest to fit the budget. As of Task 7
+    //    the budget accounts for the FIXED request overhead — the system
+    //    prompt and the JSON-encoded tool declarations — which is subtracted
+    //    BEFORE history trimming. Reserve room for the summary note, the
+    //    current message, and the fixed overhead.
+    final fixedOverhead = _fixedOverheadTokens(toolDeclarations);
     final summaryOverhead = _estimateTokens(_summaryNoteText(summary));
     final currentOverhead = _estimateTokens(currentUserText);
-    final available = inputTokenBudget - summaryOverhead - currentOverhead;
+    final available =
+        inputTokenBudget - fixedOverhead - summaryOverhead - currentOverhead;
     final trimmed = _trimToBudget(history, available);
 
     for (final record in trimmed) {
@@ -105,6 +112,82 @@ class AgentContextBuilder {
       system: AgentSystemPrompt.version1,
       tools: toolDeclarations,
     );
+  }
+
+  /// Estimates the token cost of a single Agent turn's request, so the
+  /// session service can reject an oversized CURRENT question BEFORE invoking
+  /// the provider.
+  ///
+  /// Returns a [TurnTokenEstimate] whose [TurnTokenEstimate.isTooLarge] is
+  /// true when `currentUserText` alone plus the fixed overhead (system prompt
+  /// + JSON-encoded tool declarations) would exceed [inputTokenBudget]. In
+  /// that case [TurnTokenEstimate.code] is `question_too_large` and the
+  /// session service should surface that error rather than calling the
+  /// provider. This is a pure method the caller invokes before `build`.
+  TurnTokenEstimate estimateTurnTokens({
+    required String currentUserText,
+    required List<LlmToolDeclaration> toolDeclarations,
+  }) {
+    final fixedOverhead = _fixedOverheadTokens(toolDeclarations);
+    final currentOverhead = _estimateTokens(currentUserText);
+    final total = fixedOverhead + currentOverhead;
+    if (total > inputTokenBudget) {
+      return const TurnTokenEstimate(isTooLarge: true, code: 'question_too_large');
+    }
+    return const TurnTokenEstimate(isTooLarge: false, code: null);
+  }
+
+  /// Whether the [history] to be summarized fits within [inputTokenBudget]
+  /// after accounting for the fixed overhead (system prompt, applied here
+  /// without tool declarations since the summary request is tool-disabled).
+  ///
+  /// The summary request has its own independent input budget: even if the
+  /// user run fit, the summary request replays the history-to-summarize plus
+  /// the summary instruction plus the system prompt. If that exceeds the
+  /// budget the caller must trim the history before summarizing (or skip the
+  /// summary). This is a pure method the caller invokes before
+  /// `buildSummaryRequest`.
+  bool summaryHistoryFits({required List<ChatMessageRecord> history}) {
+    // Summary requests are tool-disabled, so the fixed overhead is the system
+    // prompt only (no tool declarations).
+    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version1);
+    final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
+    var historyTokens = 0;
+    for (final record in history) {
+      if (!_isIncludable(record)) continue;
+      historyTokens += _estimateTokens(record.content);
+    }
+    final total = fixedOverhead + summaryInstructionOverhead + historyTokens;
+    return total <= inputTokenBudget;
+  }
+
+  /// Returns a (possibly trimmed) copy of [history] that fits within
+  /// [inputTokenBudget] for a summary request, dropping the OLDEST turns
+  /// first. Used when [summaryHistoryFits] returns false: the caller trims
+  /// to the newest turns that fit rather than sending an oversized summary
+  /// request or skipping the summary entirely. Returns an empty list if even
+  /// the newest single turn does not fit (caller should then skip).
+  List<ChatMessageRecord> trimSummaryHistory({
+    required List<ChatMessageRecord> history,
+  }) {
+    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version1);
+    final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
+    final available =
+        inputTokenBudget - fixedOverhead - summaryInstructionOverhead;
+    return _trimToBudget(history, available);
+  }
+
+  /// The fixed request overhead in tokens: the system prompt plus the
+  /// JSON-encoded tool declarations. This is subtracted from the input budget
+  /// before history trimming so a request with many/large tool declarations
+  /// does not silently overflow the budget.
+  int _fixedOverheadTokens(List<LlmToolDeclaration> toolDeclarations) {
+    final system = _estimateTokens(AgentSystemPrompt.version1);
+    final toolsJson = jsonEncode(
+      toolDeclarations.map((t) => t.toJson()).toList(),
+    );
+    final tools = _estimateTokens(toolsJson);
+    return system + tools;
   }
 
   /// Returns true when the conversation has grown large enough that a summary
@@ -245,4 +328,26 @@ class AgentContextBuilder {
     if (text.isEmpty) return 0;
     return (text.length / _charsPerToken).ceil();
   }
+
+  /// The fixed summary-instruction text used by `buildSummaryRequest`, kept
+  /// here so `summaryHistoryFits` can budget for it consistently.
+  static const _summaryInstructionText =
+      '请将以上对话归纳为一份简洁的中文摘要，用于在后续轮次中作为上下文。'
+      '只保留与校园学习、课程、考勤相关的事实，不要写入任何账号、密钥或'
+      '验证码等敏感信息。直接输出摘要正文。';
+}
+
+/// The result of [AgentContextBuilder.estimateTurnTokens]. A pure value the
+/// session service inspects before invoking the provider: when [isTooLarge]
+/// is true it surfaces [code] (e.g. `question_too_large`) instead of sending
+/// an oversized request.
+class TurnTokenEstimate {
+  const TurnTokenEstimate({required this.isTooLarge, required this.code});
+
+  /// True when the current question plus fixed overhead exceeds the input
+  /// budget; the caller MUST NOT invoke the provider.
+  final bool isTooLarge;
+
+  /// A safe error code when [isTooLarge] is true, else `null`.
+  final String? code;
 }

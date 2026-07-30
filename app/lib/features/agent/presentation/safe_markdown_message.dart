@@ -10,15 +10,25 @@ import '../../agent/domain/agent_tool.dart';
 /// - Raw HTML/script is inert by default (flutter_markdown does not render it).
 /// - Model-authored inline links [text](url) are rendered with onTapLink set to
 ///   a no-op, so they display as styled text but are NOT clickable.
-/// - Trusted source references (from tool returns) are rendered separately as
-///   NON-INTERACTIVE chips below the answer. The UI only has the opaque `ref`
-///   token and `kind`, not the tool-actually-returned source URL, so the chips
-///   are inert text until a real ref -> source-URL resolution path exists
-///   (Task 12/13). They never launch a hardcoded placeholder URL.
+/// - Local navigation actions ([AgentLocalAction], e.g. one per data domain
+///   used in the run) are rendered as CLICKABLE `ActionChip`s below the answer.
+///   The chat page routes these to the relevant management screen via GoRouter
+///   (`/schedule`, the task management screen). This fixes the
+///   "一堆查看日程 chip 不可点击" defect: local tools no longer spam one inert
+///   chip per event; instead there is one deduplicated clickable chip per
+///   data domain.
+/// - Public citations ([AgentSourceReference], e.g. `campus_entry` from
+///   external catalog tools) are rendered separately as NON-INTERACTIVE chips.
+///   The UI only has the opaque `ref` token and `kind`, not the
+///   tool-actually-returned source URL, so the chips are inert text until a
+///   real ref -> source-URL resolution path exists (Task 12/13). They never
+///   launch a hardcoded placeholder URL.
 class SafeMarkdownMessage extends StatelessWidget {
   const SafeMarkdownMessage({
     required this.text,
     this.sourceReferences = const [],
+    this.localActions = const [],
+    this.onLocalAction,
     this.launcher,
     super.key,
   });
@@ -26,8 +36,21 @@ class SafeMarkdownMessage extends StatelessWidget {
   /// The markdown text to render.
   final String text;
 
-  /// Trusted source references returned by tools. Only these may be clickable.
+  /// Public citation references (e.g. `campus_entry` from external tools).
+  /// Rendered as NON-INTERACTIVE chips — never clickable until a ref -> real
+  /// source-URL resolution path exists.
   final List<AgentSourceReference> sourceReferences;
+
+  /// Deduplicated local navigation actions for the run (e.g. one
+  /// [AgentLocalAction.schedule] if schedule tools ran). Rendered as CLICKABLE
+  /// `ActionChip`s; [onLocalAction] is invoked on tap.
+  final List<AgentLocalAction> localActions;
+
+  /// Invoked when the user taps a local-action chip. The chat page routes to
+  /// the relevant management screen via GoRouter. If null, the chips render as
+  /// inert `ActionChip`s (still visually distinct from `Chip` citations, but
+  /// non-tappable).
+  final void Function(AgentLocalActionKind kind)? onLocalAction;
 
   /// Reserved for future trusted citation links. Currently unused: citations
   /// are always non-interactive text until a ref -> real-source-URL resolution
@@ -36,7 +59,9 @@ class SafeMarkdownMessage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (text.isEmpty && sourceReferences.isEmpty) return const SizedBox.shrink();
+    if (text.isEmpty && sourceReferences.isEmpty && localActions.isEmpty) {
+      return const SizedBox.shrink();
+    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -51,7 +76,16 @@ class SafeMarkdownMessage extends StatelessWidget {
               // No-op: model-authored URLs are never clickable.
             },
           ),
-        // Trusted source reference citations — rendered as inert text.
+        // Local navigation actions — CLICKABLE ActionChips routing to the
+        // management screen. These are the fix for the inert-chip defect.
+        if (localActions.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          _LocalActionChips(
+            actions: localActions,
+            onTap: onLocalAction,
+          ),
+        ],
+        // Public citation references — rendered as inert text.
         if (sourceReferences.isNotEmpty) ...[
           const SizedBox(height: 8),
           _SourceCitations(references: sourceReferences),
@@ -61,6 +95,51 @@ class SafeMarkdownMessage extends StatelessWidget {
   }
 }
 
+/// Renders deduplicated local navigation actions as CLICKABLE `ActionChip`s.
+///
+/// Tapping invokes [onLocalAction] with the action kind; the chat page routes
+/// to the relevant management screen (`/schedule`, the task management screen).
+/// If [onLocalAction] is null the chips are visually ActionChips but do not
+/// route (e.g. in an isolated widget test that does not wire a router).
+class _LocalActionChips extends StatelessWidget {
+  const _LocalActionChips({required this.actions, required this.onTap});
+
+  final List<AgentLocalAction> actions;
+  final void Function(AgentLocalActionKind kind)? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Wrap(
+      spacing: 6,
+      runSpacing: 4,
+      children: [
+        for (final action in actions)
+          ActionChip(
+            label: Text(
+              _localActionLabel(action),
+              style: TextStyle(
+                fontSize: 12,
+                color: theme.colorScheme.onPrimaryContainer,
+              ),
+            ),
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+            visualDensity: VisualDensity.compact,
+            padding: EdgeInsets.zero,
+            onPressed: onTap == null
+                ? null
+                : () => onTap!(action.kind),
+          ),
+      ],
+    );
+  }
+
+  String _localActionLabel(AgentLocalAction action) => switch (action.kind) {
+        AgentLocalActionKind.schedule => '查看日程',
+        AgentLocalActionKind.tasks => '查看任务',
+      };
+}
+
 /// Renders trusted source reference citations as NON-INTERACTIVE chips.
 ///
 /// The UI layer only receives the opaque `ref_*` token and the reference
@@ -68,8 +147,8 @@ class SafeMarkdownMessage extends StatelessWidget {
 /// `AgentSourceReference`). Until a ref -> real-source-URL resolution path
 /// exists, the citations are rendered as inert text. They MUST NOT launch a
 /// hardcoded placeholder URL pretending to be the tool-returned source: that
-/// would break citation authenticity (a "查看日程" chip would always open the
-/// JW home page, not the actual source).
+/// would break citation authenticity (a "查看校园信息" chip would always open a
+/// hardcoded page, not the actual source).
 class _SourceCitations extends StatelessWidget {
   const _SourceCitations({required this.references});
 
@@ -103,7 +182,10 @@ class _SourceCitations extends StatelessWidget {
     );
   }
 
-  /// Builds a friendly label from the reference kind.
+  /// Builds a friendly label from the reference kind. Local kinds (`event`,
+  /// `task`) are no longer forwarded here by the session service (they use
+  /// local actions instead), but the labels remain for any legacy ref that
+  /// does surface.
   String _friendlyLabel(AgentSourceReference ref) {
     switch (ref.kind) {
       case 'event':

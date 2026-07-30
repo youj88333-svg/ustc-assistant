@@ -456,6 +456,35 @@ class AgentSessionService {
     // 3. Build the initial request from prior history + summary + current text.
     final declarations = _registry.schemas;
 
+    // As of Task 7: reject an oversized CURRENT question BEFORE invoking the
+    // provider. If the question alone plus the fixed overhead (system prompt +
+    // JSON-encoded tool declarations) exceeds the input budget, surface a safe
+    // `question_too_large` error rather than sending a request that cannot
+    // fit. This is a pure check the context builder exposes for the caller.
+    final turnEstimate = _contextBuilder.estimateTurnTokens(
+      currentUserText: userText,
+      toolDeclarations: declarations,
+    );
+    if (turnEstimate.isTooLarge) {
+      await _chatRepository.finishRun(
+        accountId: accountId,
+        runId: runId,
+        state: AgentRunState.failed,
+        errorCode: turnEstimate.code,
+        inputTokens: null,
+        outputTokens: null,
+      );
+      controller.add(
+        AgentRunViewState(
+          runId: runId,
+          state: AgentRunState.failed,
+          errorCode: turnEstimate.code,
+        ),
+      );
+      onTerminalEmitted();
+      return;
+    }
+
     // The conversation accumulates assistant turns (with tool_use) and user
     // turns (with tool_result) across model calls within this run.
     final conversation = <LlmMessage>[];
@@ -624,6 +653,11 @@ class AgentSessionService {
         final toolResults = <LlmContentBlock>[];
         final newSourceRefs = <AgentSourceReference>[];
         final newToolSummaries = <AgentToolSummary>[];
+        // As of Task 7: local data-domain tools emit a deduplicated
+        // AgentLocalAction (one per domain) instead of forwarding per-event
+        // refs to sourceReferences. This fixes the "一堆查看日程 chip 不可点击"
+        // defect where the session service accumulated one ref per event.
+        final newLocalActions = <AgentLocalAction>{};
 
         for (var toolIndex = 0; toolIndex < toolUses.length; toolIndex++) {
           final tu = toolUses[toolIndex];
@@ -718,10 +752,38 @@ class AgentSessionService {
           }
 
           // Surface references bound by the tool.
-          for (final ref in result.references) {
-            newSourceRefs.add(
-              AgentSourceReference(kind: ref.kind, ref: ref.ref),
-            );
+          //
+          // As of Task 7: local data-domain tools (get_schedule,
+          // get_event_details, get_free_time, get_conflicts,
+          // get_pending_event_reviews, get_tasks, get_task_details,
+          // get_plan_blocks, get_pending_planblock_reviews) do NOT forward
+          // their per-event/per-task refs to sourceReferences — that caused
+          // the "一堆查看日程 chip 不可点击" defect (one inert chip per event,
+          // accumulating across all tool calls with no dedup). Instead, a
+          // successful local tool emits ONE deduplicated AgentLocalAction per
+          // data domain (schedule / tasks), which the chat page renders as a
+          // clickable ActionChip routing to the management screen.
+          //
+          // `campus_entry` refs from external catalog tools
+          // (search_campus_catalog, read_campus_detail) ARE forwarded to
+          // sourceReferences as public citations — these are the only
+          // sourceReferences, and they remain inert Chips unless they carry a
+          // trusted tool-returned HTTPS URL (URL resolution is NOT implemented
+          // now; they stay inert).
+          //
+          // `result.references` is STILL used for run-local ref resolution
+          // within the same run (the model calls get_event_details by ref),
+          // so the tool keeps binding them; we just do not forward local ones
+          // to the UI as citations.
+          final localAction = _localActionForTool(tu.name);
+          if (result.status == AgentToolStatus.success && localAction != null) {
+            newLocalActions.add(localAction);
+          } else if (_forwardsToSourceReferences(tu.name)) {
+            for (final ref in result.references) {
+              newSourceRefs.add(
+                AgentSourceReference(kind: ref.kind, ref: ref.ref),
+              );
+            }
           }
           newToolSummaries.add(
             AgentToolSummary(toolName: tu.name, status: result.status),
@@ -752,10 +814,15 @@ class AgentSessionService {
         // Append the user turn carrying tool_result blocks.
         conversation.add(LlmMessage(role: 'user', content: toolResults));
 
-        // Emit an updated view with the new tool summaries and source refs.
+        // Emit an updated view with the new tool summaries, source refs, and
+        // deduplicated local actions.
         viewState = viewState.copyWith(
           toolSummaries: [...viewState.toolSummaries, ...newToolSummaries],
           sourceReferences: [...viewState.sourceReferences, ...newSourceRefs],
+          localActions: {
+            ...viewState.localActions,
+            ...newLocalActions,
+          }.toList(growable: false),
         );
         controller.add(viewState);
 
@@ -892,10 +959,22 @@ class AgentSessionService {
         return;
       }
 
+      // As of Task 7: the summary request has its own independent input
+      // budget. If the history-to-summarize plus the fixed overhead exceeds
+      // the budget, trim to the newest turns that fit (rather than sending an
+      // oversized request or skipping). If nothing fits, skip the summary.
+      var summaryHistory = freshHistory;
+      if (!_contextBuilder.summaryHistoryFits(history: freshHistory)) {
+        summaryHistory = _contextBuilder.trimSummaryHistory(
+          history: freshHistory,
+        );
+        if (summaryHistory.isEmpty) return;
+      }
+
       final summaryRequest = _contextBuilder.buildSummaryRequest(
         model: _model,
         accountId: accountId,
-        history: freshHistory,
+        history: summaryHistory,
         previousSummary: previousSummary,
       );
 
@@ -946,4 +1025,53 @@ class AgentSessionService {
   /// content field. The payload is already allowlisted by the registry, so
   /// this is a pure transformation.
   String _encodePayload(Map<String, Object?> payload) => jsonEncode(payload);
+
+  /// Maps a local data-domain tool name to its [AgentLocalAction] kind, or
+  /// null if the tool is not a local data-domain tool. Used to build the
+  /// deduplicated local-actions set: a successful schedule-domain tool emits
+  /// one `AgentLocalAction.schedule`; a successful task-domain tool emits one
+  /// `AgentLocalAction.tasks`. The mapping is by TOOL NAME (not ref kind) so
+  /// the decision is independent of what the tool chose to bind.
+  static AgentLocalAction? _localActionForTool(String toolName) {
+    if (_scheduleDomainTools.contains(toolName)) {
+      return AgentLocalAction.schedule;
+    }
+    if (_taskDomainTools.contains(toolName)) {
+      return AgentLocalAction.tasks;
+    }
+    return null;
+  }
+
+  /// Whether a tool's bound references should be forwarded to
+  /// `sourceReferences` as public citations. Only the external catalog tools
+  /// (search_campus_catalog, read_campus_detail) forward their `campus_entry`
+  /// refs; local data-domain tools do NOT (they emit local actions instead).
+  static bool _forwardsToSourceReferences(String toolName) =>
+      _catalogTools.contains(toolName);
+
+  /// Schedule-domain local tools: a successful call emits one
+  /// `AgentLocalAction.schedule`.
+  static const _scheduleDomainTools = <String>{
+    'get_schedule',
+    'get_event_details',
+    'get_free_time',
+    'get_conflicts',
+    'get_pending_event_reviews',
+  };
+
+  /// Task-domain local tools: a successful call emits one
+  /// `AgentLocalAction.tasks`.
+  static const _taskDomainTools = <String>{
+    'get_tasks',
+    'get_task_details',
+    'get_plan_blocks',
+    'get_pending_planblock_reviews',
+  };
+
+  /// External catalog tools whose `campus_entry` refs ARE forwarded to
+  /// `sourceReferences` as public citations.
+  static const _catalogTools = <String>{
+    'search_campus_catalog',
+    'read_campus_detail',
+  };
 }

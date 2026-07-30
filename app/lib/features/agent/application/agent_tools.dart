@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 
 import '../../../core/time/beijing_clock.dart';
+import '../../../core/database/app_database.dart';
 import '../../history/application/history_repository.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/domain/overlap_engine.dart';
@@ -95,7 +97,14 @@ DateTime? _parseDate(String value, BeijingClock clock) {
   final m = int.parse(match.group(2)!);
   final d = int.parse(match.group(3)!);
   if (m < 1 || m > 12 || d < 1 || d > 31) return null;
-  return DateTime(y, m, d);
+  // Round-trip via DateTime and verify: DateTime normalizes overflow (e.g.
+  // 2026-02-30 becomes 2026-03-02), so an invalid calendar date like
+  // 2026-02-31 must be rejected by checking the normalized fields match the
+  // requested fields. The old check only tested m/d ranges, accepting
+  // 2026-02-31.
+  final rounded = DateTime(y, m, d);
+  if (rounded.year != y || rounded.month != m || rounded.day != d) return null;
+  return rounded;
 }
 
 /// Whether [event] overlaps the inclusive [from]..[through] calendar range.
@@ -267,7 +276,11 @@ class GetScheduleTool implements AgentTool {
       'List the effective schedule events for the current account within an '
       'optional date range (default: today through the next 6 days). Returns '
       'run-local refs (not raw ids), normalized titles/times/locations, and '
-      'the authoritative conflict state for each event.';
+      'the authoritative conflict state for each event. Set view='
+      '"course_summary" to collapse in-range course occurrences into one '
+      'group per course offering (teachers, locations, active range, weekday/'
+      'period patterns, occurrence count); the 200-item limit applies after '
+      'grouping in summary mode.';
 
   @override
   Map<String, Object?> get inputSchema => const {
@@ -280,6 +293,14 @@ class GetScheduleTool implements AgentTool {
           'through': {
             'type': 'string',
             'description': 'End date (YYYY-MM-DD), inclusive. Beijing time.',
+          },
+          'view': {
+            'type': 'string',
+            'enum': ['events', 'course_summary'],
+            'default': 'events',
+            'description': 'events (default) lists each occurrence; '
+                'course_summary collapses course occurrences into one group '
+                'per offering.',
           },
         },
       };
@@ -301,9 +322,13 @@ class GetScheduleTool implements AgentTool {
       );
     }
     final range = parsed.range!;
+    final view = (arguments['view'] as String?) ?? 'events';
     final events = await _gateway.displayEvents(context.accountId);
     final inRange =
         events.where((e) => _eventInRange(e, range)).toList(growable: false);
+    if (view == 'course_summary') {
+      return _courseSummary(inRange, range, context, _gateway);
+    }
     if (inRange.length > agentEventLimit) {
       return _tooLarge(
         'events',
@@ -334,6 +359,187 @@ class GetScheduleTool implements AgentTool {
       references: references,
     );
   }
+}
+
+/// Builds the grouped course-summary payload for `get_schedule` in
+/// `course_summary` mode.
+///
+/// Groups in-range events by stable course/offering identity: the
+/// `courseSeriesId` when present, else the event `title` (non-course events
+/// have no series). For each group returns: course name (title), teachers
+/// (derived from `CourseSery.participantsJson` — a JSON list of `{role,name}`
+/// objects; teacher names extracted when present, else omitted), distinct
+/// locations, active date range (min startAt..max endAt over in-range
+/// occurrences), weekday/period patterns (weekday from startAt weekday, period
+/// number from `UstcPeriods` by matching startAt/endAt minutes), and
+/// occurrence count. The 200-item limit applies AFTER grouping in summary
+/// mode (so 241 occurrences of one course → 1 group, not result_too_large).
+///
+/// The summary contributes NO per-event refs (it is a summary); the session
+/// service instead emits the single `AgentLocalAction.schedule`.
+/// Semester is derived from the series metadata (`CourseSery.semesterKey`),
+/// never a hardcoded literal — and the semester value is NOT placed in the
+/// model-facing payload (it would be a leaky internal key); only the
+/// course-level summary fields above are returned.
+Future<AgentToolResult> _courseSummary(
+  List<EffectiveEvent> inRange,
+  AgentDateRange range,
+  AgentToolContext context,
+  AgentLocalDataGateway gateway,
+) async {
+  // Group by stable identity: courseSeriesId when present, else title.
+  final groups = <String, List<EffectiveEvent>>{};
+  for (final event in inRange) {
+    final key = event.courseSeriesId ?? event.title;
+    groups.putIfAbsent(key, () => []).add(event);
+  }
+  if (groups.length > agentEventLimit) {
+    return _tooLarge(
+      'course groups',
+      groups.length,
+      agentEventLimit,
+      'narrow the date range',
+    );
+  }
+  // Cache series lookups (one per distinct series id). The gateway call is
+  // async, so we await on a miss and store the resolved value.
+  final seriesCache = <String, CourseSery?>{};
+  final dtos = <Map<String, Object?>>[];
+  for (final entry in groups.entries) {
+    final occurrences = entry.value;
+    final first = occurrences.first;
+    final seriesId = first.courseSeriesId;
+    CourseSery? series;
+    if (seriesId != null) {
+      if (seriesCache.containsKey(seriesId)) {
+        series = seriesCache[seriesId];
+      } else {
+        series = await gateway.courseSeriesById(context.accountId, seriesId);
+        seriesCache[seriesId] = series;
+      }
+    }
+    // Course name: prefer the series title (canonical), else the event title.
+    final title = series?.title ?? first.title;
+    // Teachers from CourseSery.participantsJson (a JSON list of {role,name}).
+    final teachers = _extractTeacherNames(series?.participantsJson);
+    // Distinct locations (non-null), preserving first-seen order.
+    final locations = <String>{};
+    for (final e in occurrences) {
+      if (e.location != null && e.location!.isNotEmpty) {
+        locations.add(e.location!);
+      }
+    }
+    // Active date range over in-range occurrences (min startAt..max endAt).
+    DateTime? activeFrom;
+    DateTime? activeThrough;
+    for (final e in occurrences) {
+      final s = e.startAt ?? e.startDate;
+      final en = e.endAt ?? e.endDateExclusive;
+      if (s != null) {
+        activeFrom = activeFrom == null ? s : (s.isBefore(activeFrom) ? s : activeFrom);
+      }
+      if (en != null) {
+        activeThrough = activeThrough == null
+            ? en
+            : (en.isAfter(activeThrough) ? en : activeThrough);
+      }
+    }
+    // Weekday/period patterns: derive weekday from startAt weekday, period
+    // number from UstcPeriods by matching startAt/endAt minutes.
+    final patterns = _deriveWeekdayPeriodPatterns(occurrences);
+    final dto = <String, Object?>{
+      'title': title,
+      'occurrenceCount': occurrences.length,
+      if (teachers.isNotEmpty) 'teachers': teachers,
+      if (locations.isNotEmpty) 'locations': locations.toList(growable: false),
+      if (activeFrom != null) 'activeFrom': _formatDateTime(activeFrom),
+      if (activeThrough != null) 'activeThrough': _formatDateTime(activeThrough),
+      if (patterns.isNotEmpty) 'patterns': patterns,
+    };
+    dtos.add(dto);
+  }
+  return AgentToolResult(
+    payload: {
+      'from': _formatDate(range.from),
+      'through': _formatDate(range.through),
+      'groups': dtos,
+    },
+    // Summary mode binds NO per-event refs: it is a summary. The session
+    // service emits the single AgentLocalAction.schedule for the run.
+    references: const [],
+  );
+}
+
+/// Extracts teacher names from a `CourseSery.participantsJson` string — a JSON
+/// list of `{role, name}` objects. Returns the names of participants whose
+/// `role` is `teacher` (case-insensitive), preserving order. Returns an empty
+/// list if the JSON is missing, malformed, or has no teachers. Never throws.
+List<String> _extractTeacherNames(String? participantsJson) {
+  if (participantsJson == null || participantsJson.isEmpty) return const [];
+  try {
+    final decoded = jsonDecode(participantsJson);
+    if (decoded is! List) return const [];
+    final names = <String>[];
+    for (final item in decoded) {
+      if (item is Map<String, dynamic>) {
+        final role = item['role'];
+        final name = item['name'];
+        if (role is String &&
+            role.toLowerCase() == 'teacher' &&
+            name is String &&
+            name.isNotEmpty) {
+          names.add(name);
+        }
+      }
+    }
+    return names;
+  } catch (_) {
+    return const [];
+  }
+}
+
+/// Derives weekday/period patterns for a group of course occurrences.
+/// Each pattern is `{weekday: <1-7>, period: <n>}` where weekday is the
+/// ISO weekday (Monday=1..Sunday=7) of the occurrence start, and period is
+/// the `UstcPeriod` number whose [startMinutes, endMinutes] contains the
+/// occurrence's start/end minutes-of-day. Patterns are deduplicated.
+List<Map<String, Object?>> _deriveWeekdayPeriodPatterns(
+  List<EffectiveEvent> occurrences,
+) {
+  final seen = <String>{};
+  final patterns = <Map<String, Object?>>[];
+  for (final e in occurrences) {
+    final start = e.startAt;
+    if (start == null) continue;
+    final weekday = start.weekday; // Monday=1..Sunday=7.
+    final periodNumber = _matchPeriodNumber(e);
+    final key = '$weekday:$periodNumber';
+    if (seen.contains(key)) continue;
+    seen.add(key);
+    final pattern = <String, Object?>{'weekday': weekday};
+    if (periodNumber != null) pattern['period'] = periodNumber;
+    patterns.add(pattern);
+  }
+  return patterns;
+}
+
+/// Matches an occurrence's start/end minutes-of-day to a `UstcPeriod` number.
+/// Returns the period number whose [startMinutes, endMinutes] contains both
+/// the start and end minutes, else null (e.g. an event outside the period
+/// grid).
+int? _matchPeriodNumber(EffectiveEvent event) {
+  final start = event.startAt;
+  final end = event.endAt;
+  if (start == null || end == null) return null;
+  final startMinutes = start.hour * 60 + start.minute;
+  final endMinutes = end.hour * 60 + end.minute;
+  for (final period in UstcPeriods.values) {
+    if (startMinutes >= period.startMinutes &&
+        endMinutes <= period.endMinutes) {
+      return period.number;
+    }
+  }
+  return null;
 }
 
 // ===========================================================================
@@ -476,12 +682,16 @@ class GetFreeTimeTool implements AgentTool {
     }
     final range = parsed.range!;
     final events = await _gateway.displayEvents(context.accountId);
-    if (events.length > agentEventLimit) {
-      return _tooLarge('events', events.length, agentEventLimit, 'narrow the date range');
+    // As of Task 7: filter to the requested range BEFORE the 200-event limit.
+    // The old code checked the limit on ALL events before filtering, so 201
+    // out-of-range events plus one in-range event wrongly returned
+    // result_too_large. The limit applies to in-range events (consistent with
+    // get_schedule).
+    final inRange = events.where((e) => _eventInRange(e, range)).toList();
+    if (inRange.length > agentEventLimit) {
+      return _tooLarge('events', inRange.length, agentEventLimit, 'narrow the date range');
     }
-    final timed = events
-        .where((e) => !e.allDay && _eventInRange(e, range))
-        .toList();
+    final timed = inRange.where((e) => !e.allDay).toList();
     final gaps = <Map<String, Object?>>[];
     for (var dayOffset = 0; dayOffset < range.dayCount; dayOffset++) {
       final day = range.from.add(Duration(days: dayOffset));
@@ -499,17 +709,27 @@ class GetFreeTimeTool implements AgentTool {
         UstcPeriods.dayEndMinutes ~/ 60,
         UstcPeriods.dayEndMinutes % 60,
       );
-      final dayEvents = timed.where((e) {
+      // Occupancy as INTERVAL INTERSECTION with the day grid [dayStart,
+      // dayEnd): an event contributes its intersection with the day if
+      // eventStart.isBefore(dayEnd) && eventEnd.isAfter(dayStart). This
+      // catches a 23:00-08:00 overnight event blocking the next morning's
+      // 07:00-08:00 slot, which the old same-day-startAt filter missed.
+      final dayOccupied = <(DateTime, DateTime)>[];
+      for (final e in timed) {
         final s = e.startAt!;
-        return s.year == day.year && s.month == day.month && s.day == day.day;
-      }).toList()
-        ..sort((a, b) => a.startAt!.compareTo(b.startAt!));
+        final en = e.endAt!;
+        if (s.isBefore(dayEnd) && en.isAfter(dayStart)) {
+          final clipStart = s.isBefore(dayStart) ? dayStart : s;
+          final clipEnd = en.isAfter(dayEnd) ? dayEnd : en;
+          dayOccupied.add((clipStart, clipEnd));
+        }
+      }
+      dayOccupied.sort((a, b) => a.$1.compareTo(b.$1));
       var cursor = dayStart;
-      for (final event in dayEvents) {
-        final start = event.startAt!;
-        final end = event.endAt!;
-        if (end.isAfter(cursor) && start.isAfter(cursor) &&
-            start.isBefore(dayEnd)) {
+      for (final occ in dayOccupied) {
+        final start = occ.$1;
+        final end = occ.$2;
+        if (start.isAfter(cursor) && start.isBefore(dayEnd)) {
           gaps.add({
             'date': _formatDate(day),
             'startAt': _formatDateTime(cursor),
@@ -551,7 +771,16 @@ class GetPendingEventReviewsTool implements AgentTool {
   @override
   Map<String, Object?> get inputSchema => const {
         'type': 'object',
-        'properties': {},
+        'properties': {
+          'limit': {
+            'type': 'integer',
+            'description': 'Optional page size (1-200, default 200).',
+          },
+          'offset': {
+            'type': 'integer',
+            'description': 'Optional zero-based offset for paging.',
+          },
+        },
       };
 
   @override
@@ -561,17 +790,16 @@ class GetPendingEventReviewsTool implements AgentTool {
   ) async {
     final pending =
         await _pendingEventReviews(_gateway, context.accountId, context.clock);
-    if (pending.length > agentEventLimit) {
-      return _tooLarge(
-        'pending events',
-        pending.length,
-        agentEventLimit,
-        'review older events separately',
-      );
-    }
+    // As of Task 7: support offset/limit paging so >200 pending reviews can be
+    // paged instead of returning result_too_large. The page size is capped at
+    // agentEventLimit (200); offset is zero-based.
+    final limit = _pageLimit(arguments['limit'], agentEventLimit);
+    final offset = _pageOffset(arguments['offset']);
+    final hasMore = offset + limit < pending.length;
+    final page = pending.skip(offset).take(limit).toList(growable: false);
     final dtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
-    for (final item in pending) {
+    for (final item in page) {
       final record = item.record;
       final event = record.source;
       final ref = context.references.bind(kind: 'event', localId: event.id);
@@ -595,7 +823,10 @@ class GetPendingEventReviewsTool implements AgentTool {
         AgentToolReference(kind: 'event', ref: ref, localId: event.id),
       );
     }
-    return AgentToolResult(payload: {'pending': dtos}, references: references);
+    return AgentToolResult(
+      payload: {'pending': dtos, 'hasMore': hasMore},
+      references: references,
+    );
   }
 }
 
@@ -927,7 +1158,16 @@ class GetPendingPlanBlockReviewsTool implements AgentTool {
   @override
   Map<String, Object?> get inputSchema => const {
         'type': 'object',
-        'properties': {},
+        'properties': {
+          'limit': {
+            'type': 'integer',
+            'description': 'Optional page size (1-200, default 200).',
+          },
+          'offset': {
+            'type': 'integer',
+            'description': 'Optional zero-based offset for paging.',
+          },
+        },
       };
 
   @override
@@ -940,12 +1180,15 @@ class GetPendingPlanBlockReviewsTool implements AgentTool {
     final pending = all
         .where((b) => projectPlanBlock(b, now).awaitingReview)
         .toList(growable: false);
-    if (pending.length > agentPlanBlockLimit) {
-      return _tooLarge('pending plan blocks', pending.length, agentPlanBlockLimit, 'review older blocks separately');
-    }
+    // As of Task 7: support offset/limit paging so >200 pending plan-block
+    // reviews can be paged instead of returning result_too_large.
+    final limit = _pageLimit(arguments['limit'], agentPlanBlockLimit);
+    final offset = _pageOffset(arguments['offset']);
+    final hasMore = offset + limit < pending.length;
+    final page = pending.skip(offset).take(limit).toList(growable: false);
     final dtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
-    for (final b in pending) {
+    for (final b in page) {
       final bRef = context.references.bind(kind: 'planblock', localId: b.id);
       final dto = _planBlockDto(b, bRef, now);
       dto['taskRef'] =
@@ -955,7 +1198,10 @@ class GetPendingPlanBlockReviewsTool implements AgentTool {
         AgentToolReference(kind: 'planblock', ref: bRef, localId: b.id),
       );
     }
-    return AgentToolResult(payload: {'pending': dtos}, references: references);
+    return AgentToolResult(
+      payload: {'pending': dtos, 'hasMore': hasMore},
+      references: references,
+    );
   }
 }
 
@@ -1111,6 +1357,20 @@ AgentToolResult _tooLarge(
       },
     );
 
+/// Parses a paging `limit` argument: an int in [1, max]. Defaults to [max]
+/// when absent or invalid. Used by the pending-review tools so >200 rows can
+/// be paged instead of returning result_too_large.
+int _pageLimit(Object? raw, int max) {
+  if (raw is int && raw >= 1 && raw <= max) return raw;
+  return max;
+}
+
+/// Parses a paging `offset` argument: a non-negative int. Defaults to 0.
+int _pageOffset(Object? raw) {
+  if (raw is int && raw >= 0) return raw;
+  return 0;
+}
+
 // ===========================================================================
 // Payload builders (the OutboundPrivacyFilter allowlists)
 // ===========================================================================
@@ -1118,89 +1378,299 @@ AgentToolResult _tooLarge(
 /// Builds the per-tool payload builders the registry needs. Each builder is the
 /// single allowlist that decides which raw payload fields survive to the model.
 /// Builders are intentionally minimal: only normalized, model-safe fields.
+///
+/// As of Task 7, NO builder returns a raw nested list or map from tool output.
+/// Every list-valued field (`events`, `tasks`, `pending`, `history`,
+/// `planBlocks`, `conflicts`, `gaps`, `sources`, `groups`, `activities`,
+/// `results`, `details`) is re-derived item-by-item through an explicit
+/// per-item allowlist: each item must be a `Map<String,Object?>` and only the
+/// allowlisted string keys survive, copied into a fresh map. This means a
+/// smuggled `db_id`/`cookie`/`profilePath` on a nested item is dropped at the
+/// builder layer, before the `OutboundPrivacyFilter` backstop recursive
+/// suspicious-key rejection even runs. The backstop is still present as
+/// defense in depth.
 Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'get_schedule': (raw) => {
             'from': raw['from'],
             'through': raw['through'],
-            'events': raw['events'],
+            'events': _filterItems(
+              raw['events'],
+              _eventItemKeys,
+            ),
+            'groups': _filterItems(
+              raw['groups'],
+              _courseSummaryGroupKeys,
+            ),
             'guidance': raw['guidance'],
           },
-      'get_event_details': (raw) => {
-            'ref': raw['ref'],
-            'title': raw['title'],
-            'allDay': raw['allDay'],
-            'eventType': raw['eventType'],
-            'importance': raw['importance'],
-            'location': raw['location'],
-            'startAt': raw['startAt'],
-            'endAt': raw['endAt'],
-            'startDate': raw['startDate'],
-            'endDateExclusive': raw['endDateExclusive'],
-            'attendancePolicy': raw['attendancePolicy'],
-            'attendanceDecision': raw['attendanceDecision'],
-            'attendanceOutcome': raw['attendanceOutcome'],
-            'attendanceNote': raw['attendanceNote'],
-            'listeningMode': raw['listeningMode'],
-            'listeningNote': raw['listeningNote'],
-            'userNotes': raw['userNotes'],
-            'conflictState': raw['conflictState'],
-            'hidden': raw['hidden'],
+      'get_event_details': (raw) => _pick(raw, _eventDetailsKeys),
+      'get_free_time': (raw) => {
+            'gaps': _filterItems(raw['gaps'], _gapItemKeys),
+            'guidance': raw['guidance'],
           },
-      'get_free_time': (raw) => {'gaps': raw['gaps'], 'guidance': raw['guidance']},
-      'get_pending_event_reviews': (raw) =>
-          {'pending': raw['pending'], 'guidance': raw['guidance']},
+      'get_pending_event_reviews': (raw) => {
+            'pending': _filterItems(raw['pending'], _pendingEventItemKeys),
+            'hasMore': raw['hasMore'],
+            'guidance': raw['guidance'],
+          },
       'get_conflicts': (raw) => {
             'from': raw['from'],
             'through': raw['through'],
-            'conflicts': raw['conflicts'],
+            'conflicts': _filterItems(raw['conflicts'], _eventItemKeys),
             'guidance': raw['guidance'],
           },
-      'get_tasks': (raw) => {'tasks': raw['tasks'], 'guidance': raw['guidance']},
-      'get_task_details': (raw) => {
-            'ref': raw['ref'],
-            'title': raw['title'],
-            'state': raw['state'],
-            'importance': raw['importance'],
-            'description': raw['description'],
-            'userNotes': raw['userNotes'],
-            'blockedReason': raw['blockedReason'],
-            'deadlineAt': raw['deadlineAt'],
-            'estimatedMinutes': raw['estimatedMinutes'],
-            'tags': raw['tags'],
-            'planning': raw['planning'],
-            'deadline': raw['deadline'],
-            'confirmation': raw['confirmation'],
-            'planBlocks': raw['planBlocks'],
+      'get_tasks': (raw) => {
+            'tasks': _filterItems(raw['tasks'], _taskItemKeys),
+            'guidance': raw['guidance'],
           },
-      'get_plan_blocks': (raw) =>
-          {'planBlocks': raw['planBlocks'], 'guidance': raw['guidance']},
-      'get_pending_planblock_reviews': (raw) =>
-          {'pending': raw['pending'], 'guidance': raw['guidance']},
-      'get_sync_status': (raw) => {'sources': raw['sources']},
-      'get_safe_action_history': (raw) => {'history': raw['history']},
+      'get_task_details': (raw) {
+            final out = _pick(raw, _taskDetailsKeys);
+            // planBlocks is a nested list with its own per-item allowlist.
+            out['planBlocks'] = _filterItems(raw['planBlocks'], _planBlockItemKeys);
+            return out;
+          },
+      'get_plan_blocks': (raw) => {
+            'planBlocks': _filterItems(raw['planBlocks'], _planBlockItemKeys),
+            'guidance': raw['guidance'],
+          },
+      'get_pending_planblock_reviews': (raw) => {
+            'pending': _filterItems(raw['pending'], _planBlockItemKeys),
+            'hasMore': raw['hasMore'],
+            'guidance': raw['guidance'],
+          },
+      'get_sync_status': (raw) => {
+            'sources': _filterItems(raw['sources'], _syncSourceItemKeys),
+          },
+      'get_safe_action_history': (raw) => {
+            'history': _filterItems(raw['history'], _historyItemKeys),
+          },
       // External (Task 9) tools: minimal allowlists. Only normalized fields
       // and ref_* tokens survive; no raw ids, no URLs (the envelope's trusted
       // references are not surfaced to the model).
       'search_current_second_class_activities': (raw) => {
-            'activities': raw['activities'],
+            'activities': _filterItems(
+              raw['activities'],
+              _activityItemKeys,
+            ),
             'generatedAt': raw['generatedAt'],
           },
-  'search_icourse': (raw) => {
-    'query': raw['query'],
-    'results': raw['results'],
-    'generatedAt': raw['generatedAt'],
-  },
+      'search_icourse': (raw) => {
+            'query': raw['query'],
+            'results': _filterItems(raw['results'], _icourseResultItemKeys),
+            'generatedAt': raw['generatedAt'],
+          },
       'search_campus_catalog': (raw) => {
             'query': raw['query'],
-            'results': raw['results'],
+            'results': _filterItems(
+              raw['results'],
+              _campusCatalogResultItemKeys,
+            ),
             'generatedAt': raw['generatedAt'],
           },
       'read_campus_detail': (raw) => {
-            'details': raw['details'],
+            'details': _filterItems(raw['details'], _campusDetailItemKeys),
             'generatedAt': raw['generatedAt'],
             'guidance': raw['guidance'],
           },
     };
+
+/// Copies only the allowlisted [keys] from [raw] into a fresh map. Keys not
+/// present in [raw] are omitted (no null insertion). This is the per-field
+/// allowlist for a flat DTO (e.g. `get_event_details`).
+Map<String, Object?> _pick(Map<String, Object?> raw, Set<String> keys) {
+  final out = <String, Object?>{};
+  for (final key in keys) {
+    if (raw.containsKey(key)) out[key] = raw[key];
+  }
+  return out;
+}
+
+/// Re-derives a clean list from [raw]: each item must be a
+/// `Map<String,Object?>`; only the allowlisted [keys] survive, copied into a
+/// fresh map. Non-map items are dropped. This is the per-item allowlist for a
+/// nested list (e.g. `events`). No raw nested list or map is passed through:
+/// the output is always a freshly-built list of freshly-built maps.
+List<Map<String, Object?>> _filterItems(Object? raw, Set<String> keys) {
+  if (raw is! List) return const [];
+  final out = <Map<String, Object?>>[];
+  for (final item in raw) {
+    if (item is! Map<String, Object?>) continue;
+    final cleaned = <String, Object?>{};
+    for (final key in keys) {
+      if (item.containsKey(key)) cleaned[key] = item[key];
+    }
+    out.add(cleaned);
+  }
+  return out;
+}
+
+// Per-item allowlisted string keys for each nested list DTO. These are the
+// ONLY fields that survive from a nested item; anything else (e.g. a smuggled
+// `db_id`) is dropped here, before the OutboundPrivacyFilter backstop.
+
+const _eventItemKeys = <String>{
+  'ref',
+  'title',
+  'allDay',
+  'eventType',
+  'importance',
+  'conflictState',
+  'location',
+  'startDate',
+  'endDateExclusive',
+  'startAt',
+  'endAt',
+  'isInactivePreview',
+  'attendancePolicy',
+  'attendanceDecision',
+  'listeningMode',
+  'attendanceNote',
+  'listeningNote',
+};
+
+const _eventDetailsKeys = <String>{
+  'ref',
+  'title',
+  'allDay',
+  'eventType',
+  'importance',
+  'location',
+  'startAt',
+  'endAt',
+  'startDate',
+  'endDateExclusive',
+  'attendancePolicy',
+  'attendanceDecision',
+  'attendanceOutcome',
+  'attendanceNote',
+  'listeningMode',
+  'listeningNote',
+  'userNotes',
+  'conflictState',
+  'hidden',
+};
+
+const _pendingEventItemKeys = <String>{
+  'ref',
+  'title',
+  'eventType',
+  'reasons',
+  'attendanceDecision',
+  'startDate',
+  'startAt',
+  'attendanceNote',
+};
+
+const _taskItemKeys = <String>{
+  'ref',
+  'title',
+  'state',
+  'importance',
+  'planning',
+  'deadline',
+  'confirmation',
+  'description',
+  'userNotes',
+  'blockedReason',
+  'deadlineAt',
+  'estimatedMinutes',
+};
+
+const _taskDetailsKeys = <String>{
+  'ref',
+  'title',
+  'state',
+  'importance',
+  'description',
+  'userNotes',
+  'blockedReason',
+  'deadlineAt',
+  'estimatedMinutes',
+  'tags',
+  'planning',
+  'deadline',
+  'confirmation',
+};
+
+const _planBlockItemKeys = <String>{
+  'ref',
+  'startAt',
+  'endAt',
+  'status',
+  'locked',
+  'awaitingReview',
+  'title',
+  'reviewNote',
+  'taskRef',
+};
+
+const _gapItemKeys = <String>{
+  'date',
+  'startAt',
+  'endAt',
+};
+
+const _syncSourceItemKeys = <String>{
+  'source',
+  'phase',
+  'lastAttemptAt',
+  'lastSuccessfulAt',
+  'resultCode',
+};
+
+const _historyItemKeys = <String>{
+  'source',
+  'actionType',
+  'result',
+  'safeSummary',
+  'occurredAt',
+};
+
+const _courseSummaryGroupKeys = <String>{
+  'title',
+  'teachers',
+  'locations',
+  'activeFrom',
+  'activeThrough',
+  'patterns',
+  'occurrenceCount',
+};
+
+const _activityItemKeys = <String>{
+  'name',
+  'category',
+  'status',
+};
+
+const _icourseResultItemKeys = <String>{
+  'name',
+  'teachers',
+  'terms',
+  'averageScore',
+  'reviewCount',
+  'aggregate',
+  'siteAiSummary',
+  'reviews',
+  'teacherLinks',
+  'ranking',
+  'relationStrength',
+};
+
+const _campusCatalogResultItemKeys = <String>{
+  'ref',
+  'source',
+  'kind',
+  'title',
+  'publishedAt',
+};
+
+const _campusDetailItemKeys = <String>{
+  'ref',
+  'source',
+  'title',
+  'content',
+  'generatedAt',
+};
 
 /// Builds the full list of local read-only Agent tools backed by [gateway].
 List<AgentTool> localAgentTools(AgentLocalDataGateway gateway) => [

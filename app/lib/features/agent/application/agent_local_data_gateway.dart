@@ -34,6 +34,11 @@ abstract interface class AgentLocalDataGateway {
   /// Every effective record for the account (used for pending-review scans).
   Future<List<EffectiveEventRecord>> allEventRecords(String accountId);
 
+  /// A single course series by id (must belong to the account). Returns null
+  /// if the series is missing. Used by the grouped course-summary mode to
+  /// derive teachers/semester from the series metadata rather than the events.
+  Future<CourseSery?> courseSeriesById(String accountId, String seriesId);
+
   /// All non-deleted tasks for the account.
   Future<List<TaskItem>> tasks(String accountId);
 
@@ -88,6 +93,17 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
   Future<List<EffectiveEventRecord>> allEventRecords(String accountId) {
     final repository = EffectiveEventRepository(_database, accountId: accountId);
     return repository.watchAll().first;
+  }
+
+  @override
+  Future<CourseSery?> courseSeriesById(String accountId, String seriesId) async {
+    final row = await (_database.select(_database.courseSeries)
+          ..where(
+            (row) =>
+                row.id.equals(seriesId) & row.accountId.equals(accountId),
+          ))
+        .getSingleOrNull();
+    return row;
   }
 
   @override
