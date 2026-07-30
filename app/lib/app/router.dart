@@ -558,6 +558,7 @@ class _AgentChatCompositionBuilderState
         database: widget.database,
         accountId: widget.accountId,
         resolvedUsername: resolvedUsername,
+        accounts: accounts,
         secretStoreFactory: (db) => ProtectedAgentSecretStore(
           database: db,
           protector: WindowsDpapiProtector(),

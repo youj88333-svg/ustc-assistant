@@ -28,6 +28,34 @@ extension _LastWhereOrNull<T> on Iterable<T> {
   }
 }
 
+typedef AgentUserActionResumeCallback = Future<void> Function({
+  required String accountId,
+  required AgentUserAction action,
+});
+
+class _PausedRun {
+  _PausedRun({
+    required this.accountId,
+    required this.runId,
+    required this.action,
+    required this.pendingInvocation,
+    required this.conversation,
+    required this.toolUseId,
+    required this.references,
+    required this.signal,
+  });
+
+  final String accountId;
+  final String runId;
+  final AgentUserAction action;
+  final AgentPendingToolInvocation pendingInvocation;
+  final List<LlmMessage> conversation;
+  final String toolUseId;
+  final RunReferenceStore references;
+  final CancellationSignal signal;
+  bool resumeStarted = false;
+}
+
 /// Orchestrates the bounded, read-only Agent run loop.
 ///
 /// The session service sits between the user and the LLM. For each [send] it:
@@ -66,6 +94,7 @@ class AgentSessionService {
     required this._clock,
     required this._model,
     required this._apiKeyProvider,
+    this.userActionResumer,
   });
 
   final DriftChatRepository _chatRepository;
@@ -77,6 +106,7 @@ class AgentSessionService {
   final BeijingClock _clock;
   final String _model;
   final Future<String> Function({required String accountId}) _apiKeyProvider;
+  final AgentUserActionResumeCallback? userActionResumer;
 
   /// Hard limit on model calls per run.
   static const int maxModelCalls = 8;
@@ -87,6 +117,9 @@ class AgentSessionService {
   /// The most recent run's cancellation signal, keyed by account id, so
   /// [cancel] can target the in-flight run. Cleared when a run terminates.
   CancellationSignal? _activeSignal;
+  String? _activeAccountId;
+  bool _disposed = false;
+  final Map<({String accountId, String runId}), _PausedRun> _pausedRuns = {};
 
   /// Sends [userText] as a new user turn and runs the Agent loop.
   ///
@@ -96,23 +129,38 @@ class AgentSessionService {
     required String accountId,
     required String userText,
   }) {
-    // Use a StreamController so we can drive the loop imperatively and emit
-    // states from both the stream pump and the tool-execution phases.
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
-    _activeSignal = signal;
 
-    // Run the loop off-stream so exceptions are contained and always produce a
-    // terminal state + ActionLog.
     () async {
-      await _runLoop(
-        controller: controller,
-        accountId: accountId,
-        userText: userText,
-        signal: signal,
-      );
-      _activeSignal = null;
-      await controller.close();
+      if (_disposed) {
+        controller.add(
+          const AgentRunViewState(
+            runId: '',
+            state: AgentRunState.failed,
+            errorCode: 'service_disposed',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+      await _cancelForAccountSwitch(accountId);
+      _activeSignal = signal;
+      _activeAccountId = accountId;
+      try {
+        await _runLoop(
+          controller: controller,
+          accountId: accountId,
+          userText: userText,
+          signal: signal,
+        );
+      } finally {
+        if (identical(_activeSignal, signal)) {
+          _activeSignal = null;
+          _activeAccountId = null;
+        }
+        await controller.close();
+      }
     }();
     return controller.stream;
   }
@@ -123,7 +171,10 @@ class AgentSessionService {
   /// started; the run terminates as `cancelled` with any streamed draft text
   /// preserved.
   Future<void> cancel({required String accountId}) async {
-    _activeSignal?.cancel();
+    if (_activeAccountId == accountId) _activeSignal?.cancel();
+    await _cancelPausedRuns(
+      (paused) => paused.accountId == accountId,
+    );
   }
 
   /// Retries the last user turn as a brand-new run.
@@ -134,8 +185,21 @@ class AgentSessionService {
   Stream<AgentRunViewState> retryLast({required String accountId}) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
-    _activeSignal = signal;
     () async {
+      if (_disposed) {
+        controller.add(
+          const AgentRunViewState(
+            runId: '',
+            state: AgentRunState.failed,
+            errorCode: 'service_disposed',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+      await _cancelForAccountSwitch(accountId);
+      _activeSignal = signal;
+      _activeAccountId = accountId;
       // Find the most recent completed user message to replay.
       final history = await _chatRepository.recentMessages(accountId, limit: 200);
       final lastUser = history.lastWhereOrNull(
@@ -149,18 +213,27 @@ class AgentSessionService {
             errorCode: 'nothing_to_retry',
           ),
         );
-        _activeSignal = null;
+        if (identical(_activeSignal, signal)) {
+          _activeSignal = null;
+          _activeAccountId = null;
+        }
         await controller.close();
         return;
       }
-      await _runLoop(
-        controller: controller,
-        accountId: accountId,
-        userText: lastUser.content,
-        signal: signal,
-      );
-      _activeSignal = null;
-      await controller.close();
+      try {
+        await _runLoop(
+          controller: controller,
+          accountId: accountId,
+          userText: lastUser.content,
+          signal: signal,
+        );
+      } finally {
+        if (identical(_activeSignal, signal)) {
+          _activeSignal = null;
+          _activeAccountId = null;
+        }
+        await controller.close();
+      }
     }();
     return controller.stream;
   }
@@ -177,16 +250,82 @@ class AgentSessionService {
   }) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     () async {
-      controller.add(
-        AgentRunViewState(
-          runId: runId,
-          state: AgentRunState.failed,
-          errorCode: 'resume_not_implemented',
-        ),
-      );
-      await controller.close();
+      final key = (accountId: accountId, runId: runId);
+      final paused = _pausedRuns[key];
+      if (paused == null) {
+        controller.add(
+          AgentRunViewState(
+            runId: runId,
+            state: AgentRunState.failed,
+            errorCode: 'paused_run_not_found',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+      if (paused.resumeStarted) {
+        controller.add(
+          AgentRunViewState(
+            runId: runId,
+            state: AgentRunState.failed,
+            errorCode: 'resume_already_started',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+      paused.resumeStarted = true;
+      final resume = userActionResumer;
+      if (resume == null) {
+        paused.signal.cancel();
+        await paused.pendingInvocation.cancel();
+        controller.add(
+          AgentRunViewState(
+            runId: runId,
+            state: AgentRunState.failed,
+            errorCode: 'resume_unavailable',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+      try {
+        await resume(accountId: accountId, action: paused.action);
+        await paused.pendingInvocation.result;
+      } catch (_) {
+        paused.signal.cancel();
+        await paused.pendingInvocation.cancel();
+      } finally {
+        await controller.close();
+      }
     }();
     return controller.stream;
+  }
+
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _activeSignal?.cancel();
+    await _cancelPausedRuns((_) => true);
+  }
+
+  Future<void> _cancelForAccountSwitch(String accountId) async {
+    final activeAccountId = _activeAccountId;
+    if (activeAccountId == null || activeAccountId == accountId) return;
+    _activeSignal?.cancel();
+    await _cancelPausedRuns(
+      (paused) => paused.accountId != accountId,
+    );
+  }
+
+  Future<void> _cancelPausedRuns(
+    bool Function(_PausedRun paused) shouldCancel,
+  ) async {
+    final matches = _pausedRuns.values.where(shouldCancel).toList();
+    for (final paused in matches) {
+      paused.signal.cancel();
+      await paused.pendingInvocation.cancel();
+    }
   }
 
   // --- The loop ---------------------------------------------------------
@@ -423,11 +562,58 @@ class AgentSessionService {
           totalToolCalls++;
           toolCallCount.update(tu.name, (v) => v + 1, ifAbsent: () => 1);
 
-          final result = await _registry.execute(
+          var result = await _registry.execute(
             toolName: tu.name,
             arguments: tu.input,
             context: context,
           );
+
+          if (result.status == AgentToolStatus.needsUserAction) {
+            final action = result.userAction;
+            final pendingInvocation = result.pendingInvocation;
+            if (action == null || pendingInvocation == null) {
+              result = const AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'invalid_user_action',
+              );
+            } else if (signal.isCancelled) {
+              await pendingInvocation.cancel();
+              result = const AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'cancelled',
+              );
+            } else {
+              final key = (accountId: accountId, runId: runId);
+              final paused = _PausedRun(
+                accountId: accountId,
+                runId: runId,
+                action: action,
+                pendingInvocation: pendingInvocation,
+                conversation: conversation,
+                toolUseId: tu.id,
+                references: references,
+                signal: signal,
+              );
+              _pausedRuns[key] = paused;
+              viewState = viewState.copyWith(
+                state: AgentRunState.waitingForUser,
+                userAction: action.metadata,
+              );
+              controller.add(viewState);
+              try {
+                result = await pendingInvocation.result;
+              } finally {
+                if (identical(_pausedRuns[key], paused)) {
+                  _pausedRuns.remove(key);
+                }
+              }
+              viewState = viewState.copyWith(
+                state: AgentRunState.running,
+                clearUserAction: true,
+              );
+              controller.add(viewState);
+            }
+          }
 
           // Surface references bound by the tool.
           for (final ref in result.references) {
@@ -508,6 +694,7 @@ class AgentSessionService {
         state: terminalState,
         text: assistantText,
         errorCode: errorCode,
+        clearUserAction: true,
       ),
     );
 
@@ -542,6 +729,7 @@ class AgentSessionService {
       AgentRunState.failed => 'failed',
       AgentRunState.interrupted => 'interrupted',
       AgentRunState.running => 'interrupted',
+      AgentRunState.waitingForUser => 'interrupted',
     };
     // Build a tool-category count summary with NO user text and NO raw results.
     final parts = <String>[];

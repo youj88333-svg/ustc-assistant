@@ -39,7 +39,7 @@ import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 
 // Reuse the battle-tested fakes from the external tools test (single source of
 // truth for the FakeQueryGateway scripting surface).
-import '../features/agent/external_agent_tools_test.dart' show FakeQueryGateway, YoungBehaviour;
+import '../features/agent/external_agent_tools_test.dart' show FakeQueryGateway;
 
 // ---------------------------------------------------------------------------
 // Scripted provider with request capture
@@ -252,6 +252,95 @@ class _BlockingQueryGateway implements QuerySourceGateway {
     }
   }
 }
+
+/// A Young gateway that keeps one query stream open across a login pause.
+class _ResumableYoungQueryGateway implements QuerySourceGateway {
+  final List<SourceQuery> requests = [];
+  final List<String> resumedJobIds = [];
+  final List<String> cancelCalls = [];
+  final Completer<void> paused = Completer<void>();
+  bool passwordWasProvided = false;
+
+  StreamController<SourceQueryEvent>? _controller;
+  StreamSubscription<void>? _cancelSubscription;
+  int startedJobs = 0;
+
+  @override
+  Stream<SourceQueryEvent> execute(
+    SourceQuery request, {
+    required CancellationSignal cancellation,
+  }) {
+    requests.add(request);
+    startedJobs++;
+    const jobId = 'young-1';
+    final controller = StreamController<SourceQueryEvent>(sync: true);
+    _controller = controller;
+    _cancelSubscription = cancellation.onCancel.listen((_) {
+      unawaited(cancel(jobId));
+    });
+    controller.onCancel = () async {
+      await _cancelSubscription?.cancel();
+      _cancelSubscription = null;
+    };
+    scheduleMicrotask(() {
+      if (controller.isClosed) return;
+      controller.add(
+        const SourceQueryProgress(jobId: jobId, phase: 'starting'),
+      );
+      controller.add(const SourceQueryNeedsLogin(jobId: jobId));
+      if (!paused.isCompleted) paused.complete();
+    });
+    return controller.stream;
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    resumedJobIds.add(jobId);
+    passwordWasProvided = password != null;
+    final controller = _controller;
+    if (controller == null || controller.isClosed) return;
+    controller.add(
+      SourceQueryCompleted(jobId: jobId, result: _resumedYoungEnvelope()),
+    );
+    await controller.close();
+    await _cancelSubscription?.cancel();
+    _cancelSubscription = null;
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    cancelCalls.add(jobId);
+    final controller = _controller;
+    if (controller == null || controller.isClosed) return;
+    controller.add(SourceQueryFailed(jobId: jobId, code: 'cancelled'));
+    await controller.close();
+    await _cancelSubscription?.cancel();
+    _cancelSubscription = null;
+  }
+}
+
+QueryResultEnvelope _resumedYoungEnvelope() => QueryResultEnvelope(
+      json: {
+        'schemaVersion': '1.0',
+        'queryType': 'young_enrolment',
+        'generatedAt': '2026-07-29T09:00:00+08:00',
+        'data': <String, dynamic>{
+          'activities': <Map<String, Object?>>[
+            {
+              'name': '志愿活动一',
+              'category': 'service',
+              'status': 'open',
+            },
+          ],
+        },
+        'metadata': <String, dynamic>{
+          'activityCount': 1,
+          'reportedTotal': 1,
+          'pages': 1,
+        },
+        'references': <String>[],
+      },
+    );
 
 QueryResultEnvelope _emptySearch() => QueryResultEnvelope(json: {
       'schemaVersion': '1.0',
@@ -720,15 +809,15 @@ void main() {
       expect(runs.single.status, AgentRunState.cancelled.name);
     });
 
-    test('Young needs_user_login: no auto browser/resume; explicit resume completes', () async {
+    test('Young login resumes the same query job and Agent run', () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
       const account = 'a';
       await _seedAccount(database, account);
 
-      // First Young query pauses with needs_user_login.
-      final gateway = FakeQueryGateway()
-        ..nextYoung = const YoungBehaviour.needsLogin();
+      const protectedPassword = 'protected-school-password';
+      final gateway = _ResumableYoungQueryGateway();
+      addTearDown(() => gateway.cancel('young-1'));
       final provider = _ScriptedProvider([
         _ScriptedCall(() => [
               const ToolUseCompletedEvent(
@@ -738,70 +827,78 @@ void main() {
               ),
               const CompletedEvent(),
             ]),
-        // After the needs-login tool_result, the model emits a safe message.
         _ScriptedCall(() => [
-              const TextDeltaEvent('需要你登录后才能查询二课活动。'),
+              const TextDeltaEvent('已查询到一项可报名的志愿活动。'),
               const CompletedEvent(),
             ]),
       ]);
       final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
+      final service = _buildServiceWithGateway(
         database: database,
         provider: provider,
         gateway: gateway,
         clock: clock,
+        resumeLogin: (jobId) =>
+            gateway.resumeLogin(jobId, password: protectedPassword),
       );
 
-      final states = await service
-          .send(accountId: account, userText: '查我的二课活动')
-          .toList();
+      final states = <AgentRunViewState>[];
+      final subscription = service
+          .send(accountId: account, userText: '查询报名中的二课')
+          .listen(states.add);
 
-      // The tool returned needs_user_login; the run completed (did not hang).
-      final toolNames = states
-          .expand((s) => s.toolSummaries.map((t) => t.toolName))
-          .toSet();
-      expect(toolNames, contains('search_current_second_class_activities'));
+      await gateway.paused.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(states.last.state, AgentRunState.waitingForUser);
+      final runId = states.last.runId;
+
+      final resumeDone = service
+          .resumeUserAction(accountId: account, runId: runId)
+          .drain<void>();
+      await resumeDone.timeout(const Duration(seconds: 5));
+      await subscription.asFuture<void>().timeout(const Duration(seconds: 5));
+
+      expect(gateway.startedJobs, 1);
+      expect(gateway.resumedJobIds, ['young-1']);
+      expect(gateway.passwordWasProvided, isTrue);
+      expect(states.map((state) => state.runId).toSet(), {runId});
       expect(states.last.state, AgentRunState.completed);
-
-      // SECURITY: the gateway did NOT auto-resume and received NO password.
-      expect(gateway.resumeCalls, isEmpty);
-
-      // Now exercise the gateway-level explicit resume (the brief's "invoke
-      // explicit continue and complete with a fake result"): a second Young
-      // query scripted to complete, then resumeLogin records the password for
-      // the resumed job only.
-      gateway.nextYoung = YoungBehaviour.complete();
-      // Simulate the explicit resume the UI would trigger for the paused job.
-      await gateway.resumeLogin('young-1', password: 'user-provided-pwd');
-      expect(gateway.resumeCalls['young-1'], ['user-provided-pwd']);
-
-      // A fresh completed Young query returns activities with no enrol/cancel.
-      gateway.nextYoung = YoungBehaviour.complete();
-      final provider2 = _ScriptedProvider([
-        _ScriptedCall(() => [
-              const ToolUseCompletedEvent(
-                id: 'tu-y2',
-                name: 'search_current_second_class_activities',
-                input: {},
-              ),
-              const CompletedEvent(),
-            ]),
-        _ScriptedCall(() => [
-              const TextDeltaEvent('你有一项可报名的志愿活动。'),
-              const CompletedEvent(),
-            ]),
-      ]);
-      final service2 = _buildService(
-        database: database,
-        provider: provider2,
-        gateway: gateway,
-        clock: clock,
-      );
-      final states2 = await service2
-          .send(accountId: account, userText: '再查一次二课')
+      expect(provider.streamCallCount, 2);
+      final resumedToolResults = provider.requests.last.messages
+          .expand((message) => message.content)
+          .whereType<LlmToolResultBlock>()
           .toList();
-      expect(states2.last.state, AgentRunState.completed);
-      expect(states2.last.text, contains('志愿活动'));
+      expect(resumedToolResults, hasLength(1));
+      expect(resumedToolResults.single.toolUseId, 'tu-1');
+      expect(resumedToolResults.single.isError, isFalse);
+
+      final capturedRequests = jsonEncode(
+        provider.requests.map((request) => request.toJson()).toList(),
+      );
+      expect(capturedRequests, isNot(contains(protectedPassword)));
+      expect(capturedRequests, isNot(contains('young-1')));
+      final safeStateSnapshot = jsonEncode([
+        for (final state in states)
+          {
+            'runId': state.runId,
+            'state': state.state.name,
+            'text': state.text,
+            'errorCode': state.errorCode,
+            'userAction': state.userAction?.type.name,
+          },
+      ]);
+      expect(safeStateSnapshot, isNot(contains(protectedPassword)));
+      expect(safeStateSnapshot, isNot(contains('young-1')));
+      final messages = await DriftChatRepository(
+        database,
+      ).recentMessages(account, limit: 20);
+      final logs = await (database.select(database.actionLogs)).get();
+      final persistedSnapshot = jsonEncode({
+        'messages': messages.map((message) => message.content).toList(),
+        'logs': logs.map((log) => log.safeSummary).toList(),
+      });
+      expect(persistedSnapshot, isNot(contains(protectedPassword)));
+      expect(persistedSnapshot, isNot(contains('young-1')));
     });
   });
 }
@@ -814,9 +911,16 @@ AgentSessionService _buildServiceWithGateway({
   required LlmProvider provider,
   required QuerySourceGateway gateway,
   required BeijingClock clock,
+  Future<void> Function(String jobId)? resumeLogin,
   String model = 'deepseek-v4-flash',
   String protectedAccount = 'PB12345678',
 }) {
+  final AgentUserActionResumeCallback? resumeCallback = resumeLogin == null
+      ? null
+      : ({
+          required String accountId,
+          required AgentUserAction action,
+        }) => resumeLogin(action.opaqueHandle);
   final chatRepository = DriftChatRepository(database);
   final localGateway = DriftAgentLocalDataGateway(database);
   final config = _StubConfigService();
@@ -843,5 +947,6 @@ AgentSessionService _buildServiceWithGateway({
     clock: clock,
     model: model,
     apiKeyProvider: ({required String accountId}) async => 'ephemeral-test-key',
+    userActionResumer: resumeCallback,
   );
 }

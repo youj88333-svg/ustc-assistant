@@ -138,6 +138,7 @@ class _ScriptedSessionService extends AgentSessionService {
   }
 
   late final StreamController<AgentRunViewState> _controller;
+  final List<({String accountId, String runId})> resumeCalls = [];
 
   void addState(AgentRunViewState state) => _controller.add(state);
   void closeStream() { if (!_controller.isClosed) _controller.close(); }
@@ -166,8 +167,7 @@ class _ScriptedSessionService extends AgentSessionService {
     required String runId,
     Map<String, Object?>? userActionPayload,
   }) async* {
-    yield AgentRunViewState(runId: runId, state: AgentRunState.running);
-    yield AgentRunViewState(runId: runId, state: AgentRunState.completed, text: 'resumed');
+    resumeCalls.add((accountId: accountId, runId: runId));
   }
 }
 
@@ -616,12 +616,26 @@ void main() {
 
       script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '登录中...'));
       await _pump(tester);
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.failed, text: '', errorCode: 'needs_user_login'));
-      script.closeStream();
+      script.addState(
+        const AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.waitingForUser,
+          userAction: AgentUserActionMetadata(
+            type: AgentUserActionType.youngLogin,
+          ),
+        ),
+      );
       await _pump(tester);
 
       expect(find.text('需要登录校园账号以继续'), findsOneWidget);
       expect(find.text('打开登录窗口并继续'), findsOneWidget);
+      await tester.tap(find.text('打开登录窗口并继续'));
+      await _pump(tester);
+      expect(
+        script.resumeCalls,
+        [(accountId: 'test', runId: 'r1')],
+      );
+      script.closeStream();
     });
 
     testWidgets(

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../../../core/time/beijing_clock.dart';
 import '../../history/application/history_repository.dart';
 import '../../schedule/application/effective_event_repository.dart';
@@ -1181,7 +1183,6 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'search_current_second_class_activities': (raw) => {
             'activities': raw['activities'],
             'generatedAt': raw['generatedAt'],
-            'jobId': raw['jobId'],
           },
   'search_icourse': (raw) => {
     'query': raw['query'],
@@ -1253,6 +1254,106 @@ Future<List<SourceQueryEvent>> _collectQueryEvents(
   return events;
 }
 
+class _YoungQueryInvocation {
+  _YoungQueryInvocation({
+    required this._gateway,
+    required this._stream,
+  });
+
+  final QuerySourceGateway _gateway;
+  final Stream<SourceQueryEvent> _stream;
+  final Completer<AgentToolResult> _initial = Completer<AgentToolResult>();
+  final Completer<AgentToolResult> _terminal = Completer<AgentToolResult>();
+  late final StreamSubscription<SourceQueryEvent> _subscription;
+  String? _jobId;
+  bool _finished = false;
+
+  Future<AgentToolResult> start() {
+    _subscription = _stream.listen(
+      _onEvent,
+      onError: (Object _, StackTrace _) {
+        _finish(
+          const AgentToolResult(
+            status: AgentToolStatus.error,
+            errorCode: 'query_failed',
+          ),
+        );
+      },
+      onDone: () {
+        if (!_finished) {
+          _finish(
+            const AgentToolResult(
+              status: AgentToolStatus.error,
+              errorCode: 'query_failed',
+            ),
+          );
+        }
+      },
+    );
+    return _initial.future;
+  }
+
+  void _onEvent(SourceQueryEvent event) {
+    _jobId = event.jobId;
+    switch (event) {
+      case SourceQueryProgress():
+        return;
+      case SourceQueryNeedsLogin():
+        if (_initial.isCompleted) return;
+        _initial.complete(
+          AgentToolResult(
+            status: AgentToolStatus.needsUserAction,
+            errorCode: 'needs_user_login',
+            userAction: AgentUserAction(
+              type: AgentUserActionType.youngLogin,
+              opaqueHandle: event.jobId,
+            ),
+            pendingInvocation: AgentPendingToolInvocation(
+              result: _terminal.future,
+              cancel: cancel,
+            ),
+          ),
+        );
+      case SourceQueryFailed():
+        _finish(
+          AgentToolResult(
+            status: AgentToolStatus.error,
+            errorCode: event.code,
+          ),
+        );
+      case SourceQueryCompleted():
+        _finish(_mapYoungEnrolmentResult(event.result));
+    }
+  }
+
+  void _finish(AgentToolResult result) {
+    if (_finished) return;
+    _finished = true;
+    if (_initial.isCompleted) {
+      if (!_terminal.isCompleted) _terminal.complete(result);
+    } else {
+      _initial.complete(result);
+    }
+    scheduleMicrotask(() => _subscription.cancel());
+  }
+
+  Future<void> cancel() async {
+    if (_finished) return;
+    final jobId = _jobId;
+    try {
+      if (jobId != null) await _gateway.cancel(jobId);
+    } finally {
+      await _subscription.cancel();
+      _finish(
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'cancelled',
+        ),
+      );
+    }
+  }
+}
+
 // --- Tool: search_current_second_class_activities -------------------------
 
 /// Resolves the protected school username for a tool context's account. The
@@ -1308,35 +1409,13 @@ class SearchCurrentSecondClassActivitiesTool implements AgentTool {
       accountId: context.accountId,
       expectedUsername: expectedUsername,
     );
-    final events = await _collectQueryEvents(
-      _gateway.execute(request, cancellation: context.cancellation),
-    );
-    for (final event in events) {
-      if (event is SourceQueryNeedsLogin) {
-        // Pause the run: return an error result with the jobId so the UI can
-        // call gateway.resumeLogin(jobId, password:). The tool never
-        // auto-resumes and never receives a password.
-        return AgentToolResult(
-          status: AgentToolStatus.error,
-          errorCode: 'needs_user_login',
-          payload: {'jobId': event.jobId},
-        );
-      }
-      if (event is SourceQueryFailed) {
-        return AgentToolResult(
-          status: AgentToolStatus.error,
-          errorCode: event.code,
-          payload: {'jobId': event.jobId},
-        );
-      }
-      if (event is SourceQueryCompleted) {
-        return _mapYoungEnrolmentResult(event.result);
-      }
-    }
-    return const AgentToolResult(
-      status: AgentToolStatus.error,
-      errorCode: 'query_failed',
-    );
+    return _YoungQueryInvocation(
+      gateway: _gateway,
+      stream: _gateway.execute(
+        request,
+        cancellation: context.cancellation,
+      ),
+    ).start();
   }
 
   /// The expected username is not available on the tool context (which has no

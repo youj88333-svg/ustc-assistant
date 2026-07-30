@@ -217,24 +217,46 @@ class ReadQueryJob:
 
     def _emit(self, phase: str, *, safe_count: int | None = None) -> None:
         with self._condition:
-            self.phase = phase
-            event: dict[str, Any] = {
-                "sequence": len(self._events) + 1,
-                "phase": phase,
-            }
-            if safe_count is not None:
-                event["safeCount"] = safe_count
-            self._events.append(event)
-            self._condition.notify_all()
+            self._emit_locked(phase, safe_count=safe_count)
+
+    def _emit_locked(
+        self, phase: str, *, safe_count: int | None = None
+    ) -> None:
+        self.phase = phase
+        event: dict[str, Any] = {
+            "sequence": len(self._events) + 1,
+            "phase": phase,
+        }
+        if safe_count is not None:
+            event["safeCount"] = safe_count
+        self._events.append(event)
+        self._condition.notify_all()
 
     def start(self, *, interactive: bool, credentials: Any) -> None:
-        self._emit("waiting_for_user" if interactive else "checking_session")
-        thread = threading.Thread(
-            target=self._run,
-            kwargs={"interactive": interactive, "credentials": credentials},
-            daemon=True,
-        )
-        thread.start()
+        with self._condition:
+            self._emit_locked(
+                "waiting_for_user" if interactive else "checking_session"
+            )
+            thread = threading.Thread(
+                target=self._run,
+                kwargs={
+                    "interactive": interactive,
+                    "credentials": credentials,
+                },
+                daemon=True,
+            )
+            thread.start()
+
+    def resume_login(self, *, credentials: LoginCredentials) -> None:
+        with self._condition:
+            if self.phase != "needs_user_login":
+                raise InvalidQueryJobState("job is not waiting for login")
+            if (
+                credentials.username.casefold()
+                != self.request.expected_username.casefold()
+            ):
+                raise AccountMismatch("resume account did not match")
+            self.start(interactive=True, credentials=credentials)
 
     def _run(self, *, interactive: bool, credentials: Any) -> None:
         try:
@@ -244,16 +266,30 @@ class ReadQueryJob:
                 credentials=credentials,
                 cancel_check=self._cancelled.is_set,
             )
-            self._emit("validating")
-            self._validator(value)
-            if self._cancelled.is_set():
-                raise CollectionCancelled("query cancelled")
             with self._condition:
+                if self._cancelled.is_set():
+                    raise CollectionCancelled("query cancelled")
+                self._emit_locked("validating")
+            self._validator(value)
+            with self._condition:
+                if self._cancelled.is_set():
+                    raise CollectionCancelled("query cancelled")
                 self.result = value
-            self._emit("complete")
+                self._emit_locked("complete")
             self._release(self)
         except UserActionRequired:
-            self._emit("needs_user_login")
+            release = False
+            with self._condition:
+                if self._cancelled.is_set():
+                    release = self._finish_error_locked(
+                        "cancelled",
+                        "cancelled",
+                        "Query cancelled",
+                    )
+                elif self.phase not in TERMINAL_PHASES:
+                    self._emit_locked("needs_user_login")
+            if release:
+                self._release(self)
         except CollectionCancelled:
             self._finish_error("cancelled", "cancelled", "Query cancelled")
         except QueryResultValidationError:
@@ -275,17 +311,34 @@ class ReadQueryJob:
 
     def _finish_error(self, phase: str, code: str, message: str) -> None:
         with self._condition:
-            self.result = None
-            self.error = {"code": code, "message": message}
-        self._emit(phase)
-        self._release(self)
+            release = self._finish_error_locked(phase, code, message)
+        if release:
+            self._release(self)
+
+    def _finish_error_locked(
+        self, phase: str, code: str, message: str
+    ) -> bool:
+        if self.phase in TERMINAL_PHASES:
+            return False
+        self.result = None
+        self.error = {"code": code, "message": message}
+        self._emit_locked(phase)
+        return True
 
     def cancel(self) -> None:
-        if self.phase in TERMINAL_PHASES:
-            raise InvalidQueryJobState("job is already terminal")
-        self._cancelled.set()
-        if self.phase in PAUSE_PHASES:
-            self._finish_error("cancelled", "cancelled", "Query cancelled")
+        release = False
+        with self._condition:
+            if self.phase in TERMINAL_PHASES:
+                raise InvalidQueryJobState("job is already terminal")
+            self._cancelled.set()
+            if self.phase in PAUSE_PHASES:
+                release = self._finish_error_locked(
+                    "cancelled",
+                    "cancelled",
+                    "Query cancelled",
+                )
+        if release:
+            self._release(self)
 
     def wait_for_terminal_or_pause(self, timeout: float = 3) -> str:
         with self._condition:
@@ -607,14 +660,7 @@ class ReadQueryJobManager:
         job = self.get(job_id)
         if job.query_type != YOUNG_ENROLMENT:
             raise InvalidQueryJobState("only young_enrolment can resume login")
-        if job.phase != "needs_user_login":
-            raise InvalidQueryJobState("job is not waiting for login")
-        if (
-            credentials.username.casefold()
-            != job.request.expected_username.casefold()
-        ):
-            raise AccountMismatch("resume account did not match")
-        job.start(interactive=True, credentials=credentials)
+        job.resume_login(credentials=credentials)
         return job
 
     def cancel(self, job_id: str) -> ReadQueryJob:

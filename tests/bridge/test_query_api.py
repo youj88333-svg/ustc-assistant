@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import time
 import unittest
 
 from ustc_assistant.bridge.protocol import PROTOCOL_VERSION
@@ -15,7 +16,7 @@ from ustc_assistant.bridge.query_contracts import (
     validate_query_result,
 )
 from ustc_assistant.bridge.query_jobs import ReadQueryJobManager
-from ustc_assistant.bridge.server import BridgeServer
+from ustc_assistant.bridge.server import BridgeServer, IDLE_TIMEOUT_SECONDS
 from ustc_assistant.common.auth import UserActionRequired
 from tests.bridge.test_server import RunningServer, request
 
@@ -504,6 +505,42 @@ class YoungEnrolmentQueryTests(unittest.TestCase):
             )
 
         self.assertEqual(202, resumed[0])
+
+    def test_paused_young_query_prevents_idle_shutdown(self):
+        now = [0.0]
+
+        def query_fn(**kwargs):
+            raise UserActionRequired("login")
+
+        server = BridgeServer(
+            parent_pid=None,
+            monotonic=lambda: now[0],
+            query_job_manager=ReadQueryJobManager(
+                young_enrolment_query=query_fn
+            ),
+        )
+        with RunningServer(server):
+            started = _post_query(
+                server,
+                {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "queryProtocolVersion": QUERY_PROTOCOL_VERSION,
+                    "accountId": "acct_fixture",
+                    "expectedUsername": "PB00000000",
+                    "query": {"type": "young_enrolment"},
+                },
+                token=server.token,
+            )
+            job_id = json.loads(started[1])["jobId"]
+            job = server.query_jobs.get(job_id)
+            self.assertEqual(
+                "needs_user_login", job.wait_for_terminal_or_pause()
+            )
+
+            now[0] = IDLE_TIMEOUT_SECONDS + 1
+            time.sleep(0.35)
+
+            self.assertFalse(server._stopping.is_set())
 
     def test_young_resume_on_completed_job_returns_409(self):
         # Regression: resume-login on a young job that is NOT in

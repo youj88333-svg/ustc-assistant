@@ -584,7 +584,7 @@ void main() {
   });
 
   group('search_current_second_class_activities Young login pause', () {
-    test('needs_user_login pauses the run; tool returns needs_user_login code',
+    test('needs_user_login returns a local pending invocation without job payload',
         () async {
       final gateway = FakeQueryGateway()
         ..nextYoung = const YoungBehaviour.needsLogin();
@@ -600,12 +600,15 @@ void main() {
         {},
       );
 
-      expect(result.status, AgentToolStatus.error);
+      expect(result.status, AgentToolStatus.needsUserAction);
       expect(result.errorCode, 'needs_user_login');
-      // The payload carries the jobId so the UI can resume.
-      expect(result.payload['jobId'], 'young-1');
+      expect(result.payload, isNot(contains('jobId')));
+      expect(result.userAction?.type, AgentUserActionType.youngLogin);
+      expect(result.userAction?.opaqueHandle, 'young-1');
+      expect(result.pendingInvocation, isNotNull);
       // The tool did NOT auto-resume and did NOT receive a password.
       expect(gateway.resumeCalls, isEmpty);
+      await result.pendingInvocation!.cancel();
     });
 
     test('completed young query returns activities, no raw ids', () async {

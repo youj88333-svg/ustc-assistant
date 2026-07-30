@@ -1,5 +1,6 @@
 import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
+import '../../accounts/application/account_service.dart';
 import '../data/anthropic_llm_provider.dart';
 import '../data/drift_chat_repository.dart';
 import '../data/protected_agent_secret_store.dart';
@@ -47,6 +48,7 @@ class AgentComposition {
     required AppDatabase database,
     required String accountId,
     required String resolvedUsername,
+    required AccountService accounts,
     required SecretStoreFactory secretStoreFactory,
     required QueryGatewayFactory queryGatewayFactory,
   }) async {
@@ -101,6 +103,21 @@ class AgentComposition {
       model: model,
       apiKeyProvider: ({required String accountId}) async =>
           (await secretStore.readKey(accountId)) ?? '',
+      userActionResumer: ({
+        required String accountId,
+        required AgentUserAction action,
+      }) async {
+        switch (action.type) {
+          case AgentUserActionType.youngLogin:
+            final password = await accounts.passwordForInteractiveLogin(
+              accountId,
+            );
+            await queryGateway.resumeLogin(
+              action.opaqueHandle,
+              password: password,
+            );
+        }
+      },
     );
 
     return AgentCompositionResult(

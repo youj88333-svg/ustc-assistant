@@ -627,7 +627,9 @@ class BridgeServer:
         while not self._stopping.wait(0.25):
             with self._lock:
                 last_activity = self._last_activity
-                active_jobs = self.jobs.active_jobs
+                active_jobs = (
+                    self.jobs.active_jobs + self.query_jobs.active_jobs
+                )
             if should_stop(
                 parent_pid=self.parent_pid,
                 parent_alive=self._parent_alive,

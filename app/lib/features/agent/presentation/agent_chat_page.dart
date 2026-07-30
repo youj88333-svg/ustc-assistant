@@ -66,6 +66,7 @@ class _AssistantMessage extends _ChatMessage {
     this.sourceReferences = const [],
     this.state = AgentRunState.completed,
     this.errorCode,
+    this.userAction,
   });
   final String text;
   final String? runId;
@@ -74,6 +75,7 @@ class _AssistantMessage extends _ChatMessage {
   final List<AgentSourceReference> sourceReferences;
   final AgentRunState state;
   final String? errorCode;
+  final AgentUserActionMetadata? userAction;
 }
 
 class _AgentChatPageState extends State<AgentChatPage> {
@@ -114,6 +116,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
   @override
   void dispose() {
     _streamSubscription?.cancel();
+    unawaited(widget.sessionService.dispose());
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -201,6 +204,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
             sourceReferences: state.sourceReferences,
             state: state.state,
             errorCode: state.errorCode,
+            userAction: state.userAction,
           );
         } else {
           _messages = [
@@ -213,6 +217,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
               sourceReferences: state.sourceReferences,
               state: state.state,
               errorCode: state.errorCode,
+              userAction: state.userAction,
             ),
           ];
         }
@@ -273,6 +278,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
         sourceReferences: last.sourceReferences,
         state: AgentRunState.interrupted,
         errorCode: last.errorCode,
+        userAction: last.userAction,
       );
     }
   }
@@ -300,14 +306,12 @@ class _AgentChatPageState extends State<AgentChatPage> {
   Future<void> _resumeLogin() async {
     final runId = _lastRunId;
     if (runId == null || runId.isEmpty) return;
-    setState(() => _isRunning = true);
-
-    _streamSubscription = widget.sessionService
+    await widget.sessionService
         .resumeUserAction(
           accountId: widget.accountId,
           runId: runId,
         )
-        .listen(_onViewState, onDone: _onStreamDone, onError: _onStreamError);
+        .drain<void>();
   }
 
   Future<void> _copyText(String text) async {
@@ -317,26 +321,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
         const SnackBar(content: Text('已复制到剪贴板'), duration: Duration(seconds: 2)),
       );
     }
-  }
-
-  AgentRunViewState? _terminalState() {
-    if (_messages.isEmpty) return null;
-    final last = _messages.last;
-    if (last is _AssistantMessage) {
-      if (last.state == AgentRunState.failed ||
-          last.state == AgentRunState.cancelled ||
-          last.state == AgentRunState.interrupted) {
-        return AgentRunViewState(
-          runId: last.runId ?? '',
-          state: last.state,
-          text: last.text,
-          toolSummaries: last.toolSummaries,
-          sourceReferences: last.sourceReferences,
-          errorCode: last.errorCode,
-        );
-      }
-    }
-    return null;
   }
 
   @override
@@ -418,8 +402,11 @@ class _AgentChatPageState extends State<AgentChatPage> {
   }
 
   Widget _buildMessageList() {
-    final terminal = _terminalState();
-    final needsLogin = terminal?.errorCode == 'needs_user_login';
+    final last = _messages.isEmpty ? null : _messages.last;
+    final needsLogin =
+        last is _AssistantMessage &&
+        last.state == AgentRunState.waitingForUser &&
+        last.userAction?.type == AgentUserActionType.youngLogin;
 
     if (_messages.isEmpty && !_isRunning) {
       return Center(
@@ -512,7 +499,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              if (_isRunning && !isTerminal) ...[
+              if (_isRunning && msg.state == AgentRunState.running) ...[
                 const SizedBox(width: 8),
                 SizedBox(
                   width: 12,

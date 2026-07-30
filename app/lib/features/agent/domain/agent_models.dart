@@ -4,6 +4,7 @@
 /// shared-core tasks can import them without pulling the database stack.
 enum AgentRunState {
   running,
+  waitingForUser,
   completed,
   failed,
   cancelled,

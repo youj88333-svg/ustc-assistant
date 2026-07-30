@@ -75,19 +75,7 @@ class AgentToolRegistry {
 
     try {
       final raw = await tool.execute(arguments, context);
-      // Sanitize the raw payload through the allowlist builder for this tool.
-      // Unknown tools are already rejected above, so a missing builder means
-      // an allowlist gap — fall back to an empty payload rather than leaking.
-      final sanitized = _privacyFilter.sanitizeToolPayload(
-        toolName: toolName,
-        rawPayload: raw.payload,
-      );
-      return AgentToolResult(
-        status: raw.status,
-        payload: sanitized,
-        references: raw.references,
-        errorCode: raw.errorCode,
-      );
+      return _sanitizeResult(toolName, raw);
     } catch (_) {
       // Contain tool failures so the run continues with an error tool_result.
       return const AgentToolResult(
@@ -95,5 +83,28 @@ class AgentToolRegistry {
         errorCode: 'tool_execution_failed',
       );
     }
+  }
+
+  AgentToolResult _sanitizeResult(String toolName, AgentToolResult raw) {
+    final sanitized = _privacyFilter.sanitizeToolPayload(
+      toolName: toolName,
+      rawPayload: raw.payload,
+    );
+    final pending = raw.pendingInvocation;
+    return AgentToolResult(
+      status: raw.status,
+      payload: sanitized,
+      references: raw.references,
+      errorCode: raw.errorCode,
+      userAction: raw.userAction,
+      pendingInvocation: pending == null
+          ? null
+          : AgentPendingToolInvocation(
+              result: pending.result.then(
+                (result) => _sanitizeResult(toolName, result),
+              ),
+              cancel: pending.cancel,
+            ),
+    );
   }
 }

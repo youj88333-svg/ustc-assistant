@@ -173,6 +173,55 @@ class _FakeCatalogTool implements AgentTool {
   }
 }
 
+class _PausingTool implements AgentTool {
+  final Completer<void> paused = Completer<void>();
+  final Completer<AgentToolResult> _terminal =
+      Completer<AgentToolResult>();
+  int cancelCount = 0;
+
+  @override
+  String get name => 'pause_tool';
+
+  @override
+  String get description => 'Pauses for a local user action.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    if (!paused.isCompleted) paused.complete();
+    return AgentToolResult(
+      status: AgentToolStatus.needsUserAction,
+      errorCode: 'needs_user_login',
+      userAction: const AgentUserAction(
+        type: AgentUserActionType.youngLogin,
+        opaqueHandle: 'local-job',
+      ),
+      pendingInvocation: AgentPendingToolInvocation(
+        result: _terminal.future,
+        cancel: () async {
+          cancelCount++;
+          if (!_terminal.isCompleted) {
+            _terminal.complete(
+              const AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'cancelled',
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+}
+
 Map<String, Object?> _scheduleBuilder(Map<String, Object?> raw) =>
     {'courses': raw['courses'], 'semester': raw['semester']};
 
@@ -907,7 +956,7 @@ void main() {
   });
 
   group('resumeUserAction', () {
-    test('is exposed and returns a not-implemented-yet state for now', () async {
+    test('unknown paused run fails without starting work', () async {
       final provider = _ScriptedProvider(_canonicalLoop());
       final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
       final service = _buildService(
@@ -915,8 +964,123 @@ void main() {
         provider: provider,
         clock: clock,
       );
-      // The interface must exist; full Young integration is Task 9.
-      expect(service.resumeUserAction, isNotNull);
+
+      final states = await service
+          .resumeUserAction(accountId: account, runId: 'missing')
+          .toList();
+
+      expect(states.single.state, AgentRunState.failed);
+      expect(states.single.errorCode, 'paused_run_not_found');
+      expect(provider.streamCallCount, 0);
+    });
+
+    test('cancel terminates a paused invocation and the owning run', () async {
+      final tool = _PausingTool();
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-pause',
+            name: 'pause_tool',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+      );
+      final states = <AgentRunViewState>[];
+      final subscription = service
+          .send(accountId: account, userText: 'pause')
+          .listen(states.add);
+      final done = subscription.asFuture<void>();
+
+      await tool.paused.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(states.last.state, AgentRunState.waitingForUser);
+      await service.cancel(accountId: account);
+      await done;
+
+      expect(tool.cancelCount, 1);
+      expect(states.last.state, AgentRunState.cancelled);
+      expect(provider.streamCallCount, 1);
+    });
+
+    test('dispose terminates a paused invocation', () async {
+      final tool = _PausingTool();
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-pause',
+            name: 'pause_tool',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+      );
+      final states = <AgentRunViewState>[];
+      final subscription = service
+          .send(accountId: account, userText: 'pause')
+          .listen(states.add);
+      final done = subscription.asFuture<void>();
+
+      await tool.paused.future;
+      await service.dispose();
+      await done;
+
+      expect(tool.cancelCount, 1);
+      expect(states.last.state, AgentRunState.cancelled);
+    });
+
+    test('account switch cancels the previous paused run', () async {
+      const secondAccount = 'b';
+      await _seedAccount(database, secondAccount);
+      final tool = _PausingTool();
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-pause',
+            name: 'pause_tool',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+        [
+          const TextDeltaEvent('account b'),
+          const CompletedEvent(),
+        ],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+      );
+      final firstStates = <AgentRunViewState>[];
+      final firstSubscription = service
+          .send(accountId: account, userText: 'pause')
+          .listen(firstStates.add);
+      final firstDone = firstSubscription.asFuture<void>();
+      await tool.paused.future;
+
+      final secondStates = await service
+          .send(accountId: secondAccount, userText: 'continue')
+          .toList();
+      await firstDone;
+
+      expect(tool.cancelCount, 1);
+      expect(firstStates.last.state, AgentRunState.cancelled);
+      expect(secondStates.last.state, AgentRunState.completed);
+      expect(provider.streamCallCount, 2);
     });
   });
 

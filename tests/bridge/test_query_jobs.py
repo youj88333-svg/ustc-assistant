@@ -19,8 +19,10 @@ from ustc_assistant.bridge.query_contracts import (
 from ustc_assistant.bridge.query_jobs import (
     BridgeQueryBusy,
     InvalidQueryJobState,
+    PAUSE_PHASES,
     QueryJobNotFound,
     ReadQueryJobManager,
+    TERMINAL_PHASES,
     YoungEnrolmentQuery,
     IcourseQuery,
     CampusSearchQuery,
@@ -208,6 +210,36 @@ class YoungEnrolmentJobTests(unittest.TestCase):
         manager.cancel(job.id)
         self.assertEqual("cancelled", job.wait_for_terminal_or_pause())
         self.assertIsNone(job.result)
+
+    def test_cancel_wins_when_login_requirement_arrives_concurrently(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def query_fn(**kwargs):
+            entered.set()
+            release.wait(1)
+            raise UserActionRequired("login required")
+
+        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
+        job = manager.start_young_enrolment(
+            YoungEnrolmentQuery(
+                account_id="acct_fixture",
+                expected_username="PB00000000",
+            )
+        )
+        self.assertTrue(entered.wait(1))
+        manager.cancel(job.id)
+        release.set()
+
+        self.assertEqual("cancelled", job.wait_for_terminal_or_pause())
+        self.assertEqual(
+            ["cancelled"],
+            [
+                event["phase"]
+                for event in job.events
+                if event["phase"] in TERMINAL_PHASES | PAUSE_PHASES
+            ],
+        )
 
     def test_resume_login_on_completed_young_job_rejected(self):
         # A young job that has already completed is not in needs_user_login;
@@ -524,6 +556,71 @@ class ConcurrencyTests(unittest.TestCase):
                 job.id,
                 credentials=LoginCredentials("PB00000000", "secret"),
             )
+
+    def test_concurrent_resume_starts_only_one_interactive_thread(self):
+        def query_fn(**kwargs):
+            if not kwargs["allow_interactive_login"]:
+                raise UserActionRequired("login required")
+            return VALID_YOUNG_ENVELOPE, object()
+
+        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
+        job = manager.start_young_enrolment(
+            YoungEnrolmentQuery(
+                account_id="acct_fixture",
+                expected_username="PB00000000",
+            )
+        )
+        self.assertEqual("needs_user_login", job.wait_for_terminal_or_pause())
+
+        original_start = job.start
+        first_resume_entered = threading.Event()
+        second_resume_entered = threading.Event()
+        release_first_resume = threading.Event()
+        start_call_lock = threading.Lock()
+        start_calls = 0
+
+        def delayed_start(*, interactive, credentials):
+            nonlocal start_calls
+            if interactive:
+                with start_call_lock:
+                    start_calls += 1
+                    call_number = start_calls
+                if call_number == 1:
+                    first_resume_entered.set()
+                    release_first_resume.wait(1)
+                else:
+                    second_resume_entered.set()
+            original_start(
+                interactive=interactive,
+                credentials=credentials,
+            )
+
+        job.start = delayed_start
+        outcomes = []
+
+        def resume():
+            try:
+                manager.resume_login(
+                    job.id,
+                    credentials=LoginCredentials("PB00000000", "secret"),
+                )
+                outcomes.append("started")
+            except InvalidQueryJobState:
+                outcomes.append("rejected")
+
+        first = threading.Thread(target=resume)
+        second = threading.Thread(target=resume)
+        first.start()
+        self.assertTrue(first_resume_entered.wait(1))
+        second.start()
+        second_started = second_resume_entered.wait(0.1)
+        release_first_resume.set()
+        first.join(1)
+        second.join(1)
+
+        self.assertFalse(second_started)
+        self.assertEqual(["rejected", "started"], sorted(outcomes))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
 
 
 class NotFoundTests(unittest.TestCase):

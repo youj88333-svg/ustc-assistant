@@ -21,6 +21,8 @@ class AgentToolResult {
     this.payload = const <String, Object?>{},
     this.references = const <AgentToolReference>[],
     this.errorCode,
+    this.userAction,
+    this.pendingInvocation,
   });
 
   /// Whether the tool call succeeded. Error results are still folded into the
@@ -39,10 +41,49 @@ class AgentToolResult {
   /// A short, safe error code for error results (e.g. `tool_not_allowed`,
   /// `tool_execution_failed`). `null` on success.
   final String? errorCode;
+
+  /// Local-only metadata for a tool invocation that is waiting on the user.
+  /// The opaque handle is never encoded into an LLM tool result.
+  final AgentUserAction? userAction;
+
+  /// The still-active invocation that will produce the terminal tool result.
+  /// It owns the source stream while the run is paused.
+  final AgentPendingToolInvocation? pendingInvocation;
 }
 
 /// The status of a tool execution outcome.
-enum AgentToolStatus { success, error }
+enum AgentToolStatus { success, error, needsUserAction }
+
+enum AgentUserActionType { youngLogin }
+
+class AgentUserAction {
+  const AgentUserAction({
+    required this.type,
+    required this.opaqueHandle,
+  });
+
+  final AgentUserActionType type;
+  final String opaqueHandle;
+
+  AgentUserActionMetadata get metadata =>
+      AgentUserActionMetadata(type: type);
+}
+
+class AgentUserActionMetadata {
+  const AgentUserActionMetadata({required this.type});
+
+  final AgentUserActionType type;
+}
+
+class AgentPendingToolInvocation {
+  const AgentPendingToolInvocation({
+    required this.result,
+    required this.cancel,
+  });
+
+  final Future<AgentToolResult> result;
+  final Future<void> Function() cancel;
+}
 
 /// A run-local reference bound by a tool, pairing the opaque `ref_*` token
 /// (what the model sees) with the underlying kind and local id (what the tool
@@ -185,6 +226,7 @@ class AgentRunViewState {
     this.toolSummaries = const <AgentToolSummary>[],
     this.sourceReferences = const <AgentSourceReference>[],
     this.errorCode,
+    this.userAction,
   });
 
   /// The run this state belongs to.
@@ -207,6 +249,10 @@ class AgentRunViewState {
   /// A safe error code on failure, e.g. `upstream_error`. `null` otherwise.
   final String? errorCode;
 
+  /// Safe UI metadata for a paused action. Opaque source handles stay inside
+  /// the session service and are not exposed to widgets or the model.
+  final AgentUserActionMetadata? userAction;
+
   /// Returns a copy with the provided fields overridden.
   AgentRunViewState copyWith({
     AgentRunState? state,
@@ -214,6 +260,8 @@ class AgentRunViewState {
     List<AgentToolSummary>? toolSummaries,
     List<AgentSourceReference>? sourceReferences,
     String? errorCode,
+    AgentUserActionMetadata? userAction,
+    bool clearUserAction = false,
   }) => AgentRunViewState(
     runId: runId,
     state: state ?? this.state,
@@ -221,5 +269,6 @@ class AgentRunViewState {
     toolSummaries: toolSummaries ?? this.toolSummaries,
     sourceReferences: sourceReferences ?? this.sourceReferences,
     errorCode: errorCode ?? this.errorCode,
+    userAction: clearUserAction ? null : userAction ?? this.userAction,
   );
 }
