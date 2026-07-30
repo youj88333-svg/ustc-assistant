@@ -26,13 +26,23 @@ Date: 2026-07-31
 
 ### 架构
 
-仍是单段字符串常量 `AgentSystemPrompt.version2`，由 `AgentContextBuilder.build()` 直接赋给 `LlmRequest.system`，无动态拼接。`AgentSystemPrompt.version` 从 `1` 改为 `2`。`AgentSettings.systemPromptVersion` 列的默认值同步为 `2`（`agent_tables.dart` 的 `systemPromptVersion => integer().withDefault(const Constant(1))()` 改为 `2`）。
+`AgentSystemPrompt.version2` 仍是静态字符串常量（规则文本本身不含日期）。`AgentContextBuilder.build()` 在赋值 `LlmRequest.system` 时，把当前时间动态拼接到 `version2` 末尾，精确到秒：
+
+```
+{AgentSystemPrompt.version2}
+
+当前时间：2026-07-31T14:30:05（周五），Asia/Shanghai。
+```
+
+时间取自 `AgentContextBuilder.build` 新增的 `clock` 参数（`BeijingClock`），格式 `YYYY-MM-DDTHH:mm:ss（周X）`，周X 用周一..周日。`buildSummaryRequest()` 同样拼接（摘要也需要时间锚点）。`AgentSystemPrompt.version` 从 `1` 改为 `2`。`AgentSettings.systemPromptVersion` 列的默认值同步为 `2`（`agent_tables.dart` 的 `systemPromptVersion => integer().withDefault(const Constant(1))()` 改为 `2`）。
+
+`AgentContextBuilder` 当前是无状态 `const` 类，`build`/`buildSummaryRequest` 没有 `clock` 参数。需给这两个方法加 `required BeijingClock clock` 参数，调用方 `AgentSessionService` 传入 `self._clock`（已有）。token 预算估算 `_fixedOverheadTokens` 要把这段动态时间文本的长度也计入（约 40 字符，固定开销）。
 
 ### 提示词内容（6 节）
 
 **§1 角色与风格（友善引导型学长）**
 - 你是中国科学技术大学校园助手 Agent，像一个耐心的学长：用口语化中文、主动引导用户该做什么，但专业上不夸大、不编造。
-- 默认中文；相对日期（"明天""下周"）按 Asia/Shanghai 解释。
+- 默认中文。系统会在提示词末尾给出当前时间（精确到秒，Asia/Shanghai）；相对日期（"今天""明天""下周"）以该时间为锚点解释，并据此给工具传 `from`/`through`（YYYY-MM-DD）。
 
 **§2 工具使用规范（一句话意图 + 直接调用 + 场景映射）**
 - 调用工具前最多说一句简短意图（如"我帮你查一下二课"），然后立即调用，不重复、不铺垫空话；禁止"好的，我来看看…""让我试试"之类的重复铺垫。
@@ -79,15 +89,18 @@ Date: 2026-07-31
 
 ## 受影响文件
 
-- `app/lib/features/agent/application/agent_system_prompt.dart`：`version1` → `version2`（新增常量，保留 `version1` 供历史摘要重生成对照？决定：直接替换为 `version2`，`version` 常量改 `2`；`version1` 不保留，因为 `agent_settings.systemPromptVersion` 只存版本号，不回放旧 prompt 文本）。
+- `app/lib/features/agent/application/agent_system_prompt.dart`：`version1` → `version2`（直接替换，`version` 常量改 `2`；不保留 `version1`，因为 `agent_settings.systemPromptVersion` 只存版本号，不回放旧 prompt 文本）。
+- `app/lib/features/agent/application/agent_context_builder.dart`：`build`/`buildSummaryRequest` 加 `required BeijingClock clock` 参数；`LlmRequest.system` 改为 `version2` + 动态当前时间拼接；`_fixedOverheadTokens` 估算纳入时间文本长度。
+- `app/lib/features/agent/application/agent_session_service.dart`：调用 `build`/`buildSummaryRequest` 处传入 `_clock`。
 - `app/lib/core/database/tables/agent_tables.dart`：`systemPromptVersion` 默认 `1` → `2`。
-- 测试：`app/test/features/agent/agent_context_builder_test.dart` 里 `AgentSystemPrompt` 相关断言（`version == 1`、七条规则逐字断言）需更新为 version2 的内容。
+- 测试：`app/test/features/agent/agent_context_builder_test.dart`（`version == 1`、七条规则逐字断言、`build` 的 system 断言）需更新为 version2 + 时间拼接；`agent_session_service_test.dart` 若有 `build` 调用需补 `clock` 参数。
 
 ## 测试策略
 
-- 单元测试：`AgentSystemPrompt.version == 2`；`version2` 包含每节的关键约束句（角色、一句话意图+直接调用、场景映射含全部 15 工具名、外部硬/本地柔、未同步/需要登录引导、能力边界）。
-- 回归：`agent_context_builder_test.dart` 现有"version1 含七条规则"测试更新为 version2 的等价断言；`build` 仍把 `version2` 赋给 `LlmRequest.system`。
-- 不改工具集与运行时，故 `agent_session_service_test.dart` 等行为测试不受影响（除非有断言引用了 `version1` 文本）。
+- 单元测试：`AgentSystemPrompt.version == 2`；`version2` 包含每节关键约束句（角色、一句话意图+直接调用、场景映射含全部 15 工具名、外部硬/本地柔、未同步/需要登录引导、能力边界）。
+- `build` 测试：注入固定 `BeijingClock`（如 `FixedBeijingClock(DateTime(2026,7,31,14,30,5))`），断言 `LlmRequest.system` 同时包含 `version2` 文本和 `2026-07-31T14:30:05` 及周几；断言 `_fixedOverheadTokens` 估算包含该时间文本。
+- 回归：现有"version1 含七条规则"测试更新为 version2 等价断言；`buildSummaryRequest` 同样断言含时间。
+- 不改工具集与运行时，故 `agent_session_service_test.dart` 行为测试不受影响（仅可能需补 `clock` 参数）。
 
 ## 验证
 
