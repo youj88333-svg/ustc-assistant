@@ -38,6 +38,22 @@ Date: 2026-07-31
 
 `AgentContextBuilder` 当前是无状态 `const` 类，`build`/`buildSummaryRequest` 没有 `clock` 参数。需给这两个方法加 `required BeijingClock clock` 参数，调用方 `AgentSessionService` 传入 `self._clock`（已有）。token 预算估算 `_fixedOverheadTokens` 要把这段动态时间文本的长度也计入（约 40 字符，固定开销）。
 
+### 历史消息时间戳前缀
+
+`ChatMessageRecord` 有 `createdAt`（毫秒时间戳），但 `build()` 回放历史时只取 `content`，时间被丢弃，模型无法判断历史回复的时效（昨天说的"明天"vs今天说的"明天"分不清，也无法判断历史数据是否仍有效）。
+
+`build()` 回放历史时，给每条历史消息文本前加一个简短时间戳前缀 `[YYYY-MM-DDTHH:mm] `（精确到分钟，北京时区），例如：
+```
+[2026-07-30T14:30] 我明天有什么课
+```
+- 只对**历史回放**的消息加前缀（`record.createdAt` 来自数据库）。
+- **当前用户消息**不加前缀（它就是"现在"，system 里已有当前时间锚点）。
+- **摘要消息**不加前缀（聚合文本，时间无意义）。
+- 时间戳取 `record.createdAt`（毫秒），转北京时区，格式 `YYYY-MM-DDTHH:mm`。
+- token 预算估算：`_estimateTokens(record.content)` 改为估算带前缀的文本长度（前缀固定约 18 字符）。
+
+这配合 system 里的"当前时间"锚点，让模型能对齐历史与当前的时间关系，减轻跨轮时间错位幻觉。
+
 ### 提示词内容（6 节）
 
 **§1 角色与风格（友善引导型学长）**

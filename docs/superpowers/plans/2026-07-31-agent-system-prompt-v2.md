@@ -250,6 +250,47 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
     });
 ```
 
+再在 `group('build', ...)` 内新增一个历史时间戳前缀测试：
+
+```dart
+    test('history messages carry a YYYY-MM-DDTHH:mm timestamp prefix', () {
+      final builder = const AgentContextBuilder();
+      final clock = FixedBeijingClock(DateTime(2026, 7, 31, 14, 30, 5));
+      // 一条历史用户消息，createdAt = 2026-07-30 14:30 北京时间（毫秒）。
+      final history = [
+        ChatMessageRecord(
+          id: 'u-1',
+          accountId: 'a',
+          runId: 'run-1',
+          ordinal: 1,
+          role: ChatRole.user,
+          state: ChatMessageState.completed,
+          content: '我明天有什么课',
+          createdAt: DateTime(2026, 7, 30, 14, 30).millisecondsSinceEpoch,
+          updatedAt: DateTime(2026, 7, 30, 14, 30).millisecondsSinceEpoch,
+        ),
+      ];
+      final request = builder.build(
+        model: model,
+        accountId: 'a',
+        history: history,
+        summary: null,
+        currentUserText: '今天呢',
+        toolDeclarations: const [],
+        clock: clock,
+      );
+      // 历史用户消息文本前带 [2026-07-30T14:30] 前缀。
+      final userTexts = request.messages
+          .where((m) => m.role == 'user')
+          .map((m) => m.content.whereType<LlmTextBlock>().map((b) => b.text))
+          .expand((t) => t)
+          .toList();
+      expect(userTexts, anyElement(contains('[2026-07-30T14:30] 我明天有什么课')));
+      // 当前用户消息不带前缀。
+      expect(userTexts, anyElement(equals('今天呢')));
+    });
+```
+
 同样在 `group('buildSummaryRequest', ...)` 内新增：
 
 ```dart
@@ -310,6 +351,20 @@ import '../../../core/time/beijing_clock.dart';
     final anchor = _timeAnchor(clock);
     return '${AgentSystemPrompt.version2}\n\n当前时间：$anchor，Asia/Shanghai。';
   }
+
+  /// Formats a history message with a `[YYYY-MM-DDTHH:mm] ` timestamp prefix
+  /// (Beijing time, to the minute) so the model can tell when each past
+  /// message was sent and judge whether a historical reply is still valid.
+  /// [createdAtMillis] is the record's `createdAt` (ms since epoch, UTC).
+  String _historyText(int createdAtMillis) {
+    final utc = DateTime.fromMillisecondsSinceEpoch(createdAtMillis, isUtc: true);
+    final beijing = utc.add(const Duration(hours: 8));
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp =
+        '${beijing.year}-${two(beijing.month)}-${two(beijing.day)}'
+        'T${two(beijing.hour)}:${two(beijing.minute)}';
+    return '[$stamp] ';
+  }
 ```
 
 `build` 方法签名加 `required BeijingClock clock`，并把第 112 行 `system: AgentSystemPrompt.version1,` 改为：
@@ -336,6 +391,24 @@ import '../../../core/time/beijing_clock.dart';
 （`build` 内第 90、131 行调用 `_fixedOverheadTokens(toolDeclarations)` 改为 `_fixedOverheadTokens(toolDeclarations, clock)`。若 `LlmToolDeclaration.toJson` 不存在，用现有等价序列化方式——保持与原 `_fixedOverheadTokens` 内部一致，只把 `AgentSystemPrompt.version1` 那一项换成 `_systemPrompt(clock)`。）
 
 `build` 内 `available` 计算（第 90-94 行）保持结构不变，只是 `fixedOverhead` 现在含时间文本。
+
+**历史消息时间戳前缀**：`build()` 回放历史的那段（`for (final record in trimmed)` 循环，把 record 变成 `LlmMessage`）改为给文本加 `_historyText(record.createdAt)` 前缀：
+
+```dart
+    for (final record in trimmed) {
+      if (!_isIncludable(record)) continue;
+      final prefix = _historyText(record.createdAt);
+      messages.add(
+        record.role == ChatRole.user
+            ? LlmMessage.user(text: '$prefix${record.content}')
+            : LlmMessage.assistant(text: '$prefix${record.content}'),
+      );
+    }
+```
+
+`_trimToBudget` 内部的 token 估算（`_estimateTokens(record.content)`）也要把前缀长度算进去——前缀固定 18 字符（`[2026-07-30T14:30] `），把 `_estimateTokens(record.content)` 改为 `_estimateTokens('${_historyText(record.createdAt)}${record.content}')`，保证预算估算与实际发送一致。`buildSummaryRequest` 回放历史（第 167-174 行那段 `for (final record in history)`）**同样**加 `_historyText` 前缀，保持摘要请求与主请求的历史视图一致。
+
+当前用户消息（`build` 第 100 行 `LlmMessage.user(text: currentUserText)`）和摘要消息都**不加**前缀。
 
 - [ ] **Step 4: 调用方传入 clock**
 
