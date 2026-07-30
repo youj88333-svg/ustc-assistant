@@ -109,7 +109,7 @@ class AgentContextBuilder {
     return LlmRequest(
       model: model,
       messages: messages,
-      system: AgentSystemPrompt.version1,
+      system: AgentSystemPrompt.version2,
       tools: toolDeclarations,
     );
   }
@@ -150,7 +150,7 @@ class AgentContextBuilder {
   bool summaryHistoryFits({required List<ChatMessageRecord> history}) {
     // Summary requests are tool-disabled, so the fixed overhead is the system
     // prompt only (no tool declarations).
-    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version1);
+    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version2);
     final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
     var historyTokens = 0;
     for (final record in history) {
@@ -170,7 +170,7 @@ class AgentContextBuilder {
   List<ChatMessageRecord> trimSummaryHistory({
     required List<ChatMessageRecord> history,
   }) {
-    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version1);
+    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version2);
     final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
     final available =
         inputTokenBudget - fixedOverhead - summaryInstructionOverhead;
@@ -182,7 +182,7 @@ class AgentContextBuilder {
   /// before history trimming so a request with many/large tool declarations
   /// does not silently overflow the budget.
   int _fixedOverheadTokens(List<LlmToolDeclaration> toolDeclarations) {
-    final system = _estimateTokens(AgentSystemPrompt.version1);
+    final system = _estimateTokens(AgentSystemPrompt.version2);
     final toolsJson = jsonEncode(
       toolDeclarations.map((t) => t.toJson()).toList(),
     );
@@ -269,7 +269,7 @@ class AgentContextBuilder {
     return LlmRequest(
       model: model,
       messages: messages,
-      system: AgentSystemPrompt.version1,
+      system: AgentSystemPrompt.version2,
       tools: const [],
       temperature: 0,
       maxTokens: summaryMaxTokens,

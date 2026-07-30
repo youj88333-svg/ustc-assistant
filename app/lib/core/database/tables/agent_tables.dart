@@ -11,7 +11,7 @@ class AgentSettings extends Table {
   BoolColumn get icourseConsent =>
       boolean().withDefault(const Constant(false))();
   IntColumn get systemPromptVersion =>
-      integer().withDefault(const Constant(1))();
+      integer().withDefault(const Constant(2))();
   IntColumn get updatedAt => integer()();
 
   @override

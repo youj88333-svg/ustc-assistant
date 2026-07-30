@@ -38,7 +38,7 @@ class AgentConfigurationService {
   static const defaultModel = 'deepseek-v4-flash';
   static const defaultEnabled = false;
   static const defaultIcourseConsent = false;
-  static const defaultSystemPromptVersion = 1;
+  static const defaultSystemPromptVersion = 2;
 
   final AppDatabase _database;
   final DriftChatRepository _chatRepository;
