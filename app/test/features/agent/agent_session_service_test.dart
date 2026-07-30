@@ -294,6 +294,18 @@ Future<void> _seedAccount(AppDatabase database, String accountId) => database
       ),
     );
 
+Future<void> _failAgentActionLogWrites(AppDatabase database) =>
+    database.customStatement(
+      '''
+CREATE TRIGGER fail_agent_action_log
+BEFORE INSERT ON action_logs
+WHEN NEW.source = 'agent' AND NEW.action_type = 'read_only_run'
+BEGIN
+  SELECT RAISE(FAIL, 'terminal action log failure');
+END
+''',
+    );
+
 AgentSessionService _buildService({
   required AppDatabase database,
   required LlmProvider provider,
@@ -719,6 +731,120 @@ void main() {
   });
 
   group('aggregated ActionLog', () {
+    test(
+      'completed send emits one stable terminal when ActionLog write fails',
+      () async {
+        await _failAgentActionLogWrites(database);
+        final provider = _ScriptedProvider([
+          [
+            const TextDeltaEvent('completed answer'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: 'complete')
+            .toList()
+            .timeout(const Duration(seconds: 1));
+
+        final terminals = states
+            .where(
+              (state) => const {
+                AgentRunState.completed,
+                AgentRunState.cancelled,
+                AgentRunState.failed,
+                AgentRunState.interrupted,
+              }.contains(state.state),
+            )
+            .toList();
+        expect(terminals, hasLength(1));
+        expect(terminals.single.state, AgentRunState.completed);
+        expect(terminals.single.runId, isNotEmpty);
+        expect(
+          states.every((state) => state.runId == terminals.single.runId),
+          isTrue,
+        );
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs.single.id, terminals.single.runId);
+        expect(runs.single.status, AgentRunState.completed.name);
+      },
+    );
+
+    test(
+      'cancelled send emits one stable terminal when ActionLog write fails',
+      () async {
+        await _failAgentActionLogWrites(database);
+        final provider = _CancellableProvider();
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+        final states = <AgentRunViewState>[];
+        final subscription = service
+            .send(accountId: account, userText: 'cancel')
+            .listen(states.add);
+        final done = subscription.asFuture<void>();
+
+        await provider.firstToolUseFired.future;
+        await service.cancel(accountId: account);
+        await done.timeout(const Duration(seconds: 1));
+
+        final terminals = states
+            .where(
+              (state) => const {
+                AgentRunState.completed,
+                AgentRunState.cancelled,
+                AgentRunState.failed,
+                AgentRunState.interrupted,
+              }.contains(state.state),
+            )
+            .toList();
+        expect(terminals, hasLength(1));
+        expect(terminals.single.state, AgentRunState.cancelled);
+        expect(terminals.single.runId, isNotEmpty);
+        expect(
+          states.every((state) => state.runId == terminals.single.runId),
+          isTrue,
+        );
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs.single.id, terminals.single.runId);
+        expect(runs.single.status, AgentRunState.cancelled.name);
+      },
+    );
+
+    test('pre-terminal persistence failure emits one safe failure and closes',
+        () async {
+      await database.customStatement(
+        '''
+CREATE TRIGGER fail_agent_run_start
+BEFORE INSERT ON agent_runs
+BEGIN
+  SELECT RAISE(FAIL, 'run start failure');
+END
+''',
+      );
+      final service = _buildService(
+        database: database,
+        provider: _ScriptedProvider(const []),
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: 'fail before terminal')
+          .toList()
+          .timeout(const Duration(seconds: 1));
+
+      expect(states, hasLength(1));
+      expect(states.single.state, AgentRunState.failed);
+      expect(states.single.errorCode, 'runtime_error');
+    });
+
     test('a completed run appends exactly one safe ActionLog with no user text', () async {
       final provider = _ScriptedProvider(_canonicalLoop());
       final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));

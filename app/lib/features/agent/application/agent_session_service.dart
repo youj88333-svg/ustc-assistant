@@ -71,8 +71,9 @@ class _PausedRun {
 ///    and appends a `tool_result` block for the next turn.
 /// 6. Continues until the model emits a final text turn with no tool calls, or
 ///    a budget/stop/error boundary is hit.
-/// 7. Writes exactly one aggregated `ActionLog` (source `agent`, action type
-///    `read_only_run`) with a tool-category count and no user text.
+/// 7. Attempts exactly one aggregated `ActionLog` (source `agent`, action type
+///    `read_only_run`) with a tool-category count and no user text. A log write
+///    failure cannot rewrite an already-published business result.
 /// 8. After a successful run, schedules a tool-disabled summary request when
 ///    `AgentContextBuilder.needsSummary` is true; summary failure is swallowed.
 ///
@@ -131,6 +132,7 @@ class AgentSessionService {
   }) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
+    var terminalEmitted = false;
 
     () async {
       try {
@@ -142,6 +144,7 @@ class AgentSessionService {
               errorCode: 'service_disposed',
             ),
           );
+          terminalEmitted = true;
           return;
         }
         await _cancelForAccountSwitch(accountId);
@@ -152,9 +155,10 @@ class AgentSessionService {
           accountId: accountId,
           userText: userText,
           signal: signal,
+          onTerminalEmitted: () => terminalEmitted = true,
         );
       } catch (_) {
-        if (!controller.isClosed) {
+        if (!terminalEmitted && !controller.isClosed) {
           controller.add(
             const AgentRunViewState(
               runId: '',
@@ -194,6 +198,7 @@ class AgentSessionService {
   Stream<AgentRunViewState> retryLast({required String accountId}) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
+    var terminalEmitted = false;
     () async {
       try {
         if (_disposed) {
@@ -204,6 +209,7 @@ class AgentSessionService {
               errorCode: 'service_disposed',
             ),
           );
+          terminalEmitted = true;
           return;
         }
         await _cancelForAccountSwitch(accountId);
@@ -225,6 +231,7 @@ class AgentSessionService {
               errorCode: 'nothing_to_retry',
             ),
           );
+          terminalEmitted = true;
           return;
         }
         await _runLoop(
@@ -232,9 +239,10 @@ class AgentSessionService {
           accountId: accountId,
           userText: lastUser.content,
           signal: signal,
+          onTerminalEmitted: () => terminalEmitted = true,
         );
       } catch (_) {
-        if (!controller.isClosed) {
+        if (!terminalEmitted && !controller.isClosed) {
           controller.add(
             const AgentRunViewState(
               runId: '',
@@ -366,6 +374,7 @@ class AgentSessionService {
     required String accountId,
     required String userText,
     required CancellationSignal signal,
+    required void Function() onTerminalEmitted,
   }) async {
     // 1. Privacy-inspect the user text BEFORE any persistence or I/O.
     final decision = _privacyFilter.inspectUserText(userText);
@@ -377,6 +386,7 @@ class AgentSessionService {
           errorCode: 'privacy_rejected',
         ),
       );
+      onTerminalEmitted();
       // Rejected text is not persisted and not logged as a read_only_run.
       return;
     }
@@ -733,13 +743,19 @@ class AgentSessionService {
         clearUserAction: true,
       ),
     );
+    onTerminalEmitted();
 
-    // 7. Write exactly one aggregated ActionLog.
-    await _writeActionLog(
-      accountId: accountId,
-      state: terminalState,
-      toolCallCount: toolCallCount,
-    );
+    // 7. Attempt exactly one aggregated ActionLog. Logging is ancillary: a
+    // local write failure must not replace an already-published run result.
+    try {
+      await _writeActionLog(
+        accountId: accountId,
+        state: terminalState,
+        toolCallCount: toolCallCount,
+      );
+    } catch (_) {
+      // The persisted run and emitted terminal view remain authoritative.
+    }
 
     // 8. Summary scheduling (success only). Summary failure is swallowed.
     if (terminalState == AgentRunState.completed) {
