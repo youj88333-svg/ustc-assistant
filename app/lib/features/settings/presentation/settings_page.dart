@@ -103,7 +103,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             leading: const Icon(Icons.restore),
             title: const Text('恢复默认教务学期'),
-            subtitle: const Text('421 / 2026spring / 2026 春季学期'),
+            subtitle: const Text('461 / 2026fall / 2026 秋季学期'),
             onTap: widget.service.resetJwSemester,
           ),
           const ListTile(

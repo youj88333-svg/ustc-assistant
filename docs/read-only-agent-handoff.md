@@ -274,7 +274,7 @@ Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。人工
 - `docs/acceptance/read-only-agent.md` 是只读 Agent 的人工验收清单，`完成：`留空
   待用户在真实验收后填写；自动测试通过不等于人工验收通过；
 - 当前教务默认配置以 `config/source-defaults.json` 为准：
-  `421 / 2026spring / 2026 春季学期`；
+  `461 / 2026fall / 2026 秋季学期`；
 - 历史 implementation plan 中的复选框不是实时状态；
 - 只读 Agent 修复轮各 Task 在 `feature/read-only-agent` 分支上实现并提交；最终修复后
   的精确 HEAD 在第 7 节最终验证时记录，不在本节硬编码（Task 9 等后续提交会改写哈希）；

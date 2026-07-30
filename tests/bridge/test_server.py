@@ -73,7 +73,7 @@ class HttpBoundaryTests(unittest.TestCase):
 
         self.assertEqual(200, health[0])
         payload = json.loads(capabilities[1])
-        self.assertEqual(421, payload["jwSemester"]["semesterId"])
+        self.assertEqual(461, payload["jwSemester"]["semesterId"])
         self.assertEqual(404, missing[0])
 
     def test_invalid_shutdown_json_is_redacted(self):

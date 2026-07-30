@@ -331,8 +331,8 @@ void main() {
       config = await (database.select(
         database.sourceConfigs,
       )..where((row) => row.source.equals('ustc_jw'))).getSingle();
-      expect(config.configJson, contains('"semesterId":421'));
-      expect(config.configJson, contains('2026spring'));
+      expect(config.configJson, contains('"semesterId":461'));
+      expect(config.configJson, contains('2026fall'));
       expect(
         await database.select(database.agentPermissionPolicies).get(),
         isEmpty,
