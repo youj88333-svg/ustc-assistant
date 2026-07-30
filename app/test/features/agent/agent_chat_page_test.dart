@@ -269,6 +269,49 @@ void main() {
       expect(tester.widget<TextField>(find.byType(TextField)).enabled, isTrue);
     });
 
+    testWidgets(
+      'persisted interrupted assistant text stays visible and retryable',
+      (tester) async {
+        config.setConfigured();
+        await database.into(database.localAccounts).insert(
+              LocalAccountsCompanion.insert(
+                id: 'test',
+                maskedHint: 'PB****0000',
+                isActive: const Value(true),
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        final runId = await chatRepository.startRun(
+          accountId: 'test',
+          model: 'deepseek-v4-flash',
+        );
+        await chatRepository.appendMessage(
+          accountId: 'test',
+          runId: runId,
+          role: ChatRole.assistant,
+          state: ChatMessageState.interrupted,
+          content: 'partial persisted answer',
+        );
+
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: _ScriptedSessionService(
+              database,
+              chatRepository,
+            ),
+            chatRepository: chatRepository,
+          ),
+        );
+        await _pump(tester);
+
+        expect(find.text('partial persisted answer'), findsOneWidget);
+        expect(find.byTooltip('重新发送'), findsOneWidget);
+      },
+    );
+
     testWidgets('streaming: send button becomes stop icon', (tester) async {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);

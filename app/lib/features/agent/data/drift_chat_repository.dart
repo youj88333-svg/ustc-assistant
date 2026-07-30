@@ -182,8 +182,8 @@ class DriftChatRepository {
 
   /// Returns the most recent chat messages for an account, ordered by ordinal
   /// ascending (oldest first) for display. Includes completed user messages
-  /// and completed or streaming assistant messages; excludes failed,
-  /// cancelled, and interrupted assistant drafts per design §6.
+  /// and completed, streaming, or interrupted assistant messages. Failed and
+  /// cancelled assistant drafts remain excluded.
   ///
   /// Eligibility is filtered inside the SQL query, then the newest [limit]
   /// eligible rows are taken by `ordinal DESC` and reversed to ascending order
@@ -196,7 +196,9 @@ class DriftChatRepository {
   }) async {
     final query = _database.select(_database.chatMessages)
       ..where((row) => row.accountId.equals(accountId))
-      ..where((row) => _eligibleForRecentExpression(row.role, row.state))
+      ..where(
+        (row) => _eligibleForRecentExpression(row.role, row.state, row.content),
+      )
       ..orderBy([(row) => OrderingTerm.desc(row.ordinal)])
       ..limit(limit);
     final rows = await query.get();
@@ -208,16 +210,19 @@ class DriftChatRepository {
   static Expression<bool> _eligibleForRecentExpression(
     GeneratedColumn<String> role,
     GeneratedColumn<String> state,
+    GeneratedColumn<String> content,
   ) {
-    // User rows: only completed. Assistant rows: completed or streaming.
-    // Failed, cancelled, and interrupted assistant drafts are excluded.
+    // User rows: only completed. Assistant rows: completed, streaming, or
+    // interrupted with partial text. Failed/cancelled drafts remain hidden.
     final userCompleted =
         role.equals(ChatRole.user.name) &
         state.equals(ChatMessageState.completed.name);
     final assistantEligible =
         role.equals(ChatRole.assistant.name) &
         (state.equals(ChatMessageState.completed.name) |
-            state.equals(ChatMessageState.streaming.name));
+            state.equals(ChatMessageState.streaming.name) |
+            (state.equals(ChatMessageState.interrupted.name) &
+                content.isNotValue('')));
     return userCompleted | assistantEligible;
   }
 

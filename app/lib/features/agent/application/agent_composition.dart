@@ -26,10 +26,8 @@ typedef SecretStoreFactory = AgentSecretStore Function(AppDatabase database);
 ///
 /// Windows: `WindowsPythonQueryGateway.start(...)`. Android/iOS: inject a
 /// no-op or mock stub — the gateway is Windows-only for Task 5.
-typedef QueryGatewayFactory = Future<QuerySourceGateway> Function(
-  AppDatabase database,
-  String accountId,
-);
+typedef QueryGatewayFactory =
+    Future<QuerySourceGateway> Function(AppDatabase database, String accountId);
 
 /// Composed Agent services for the active account.
 ///
@@ -54,6 +52,7 @@ class AgentComposition {
   }) async {
     final clock = const SystemBeijingClock();
     final chatRepository = DriftChatRepository(database);
+    await chatRepository.recoverInterrupted();
     final secretStore = secretStoreFactory(database);
     final provider = AnthropicLlmProvider();
     final localGateway = DriftAgentLocalDataGateway(database);
@@ -103,21 +102,19 @@ class AgentComposition {
       model: model,
       apiKeyProvider: ({required String accountId}) async =>
           (await secretStore.readKey(accountId)) ?? '',
-      userActionResumer: ({
-        required String accountId,
-        required AgentUserAction action,
-      }) async {
-        switch (action.type) {
-          case AgentUserActionType.youngLogin:
-            final password = await accounts.passwordForInteractiveLogin(
-              accountId,
-            );
-            await queryGateway.resumeLogin(
-              action.opaqueHandle,
-              password: password,
-            );
-        }
-      },
+      userActionResumer:
+          ({required String accountId, required AgentUserAction action}) async {
+            switch (action.type) {
+              case AgentUserActionType.youngLogin:
+                final password = await accounts.passwordForInteractiveLogin(
+                  accountId,
+                );
+                await queryGateway.resumeLogin(
+                  action.opaqueHandle,
+                  password: password,
+                );
+            }
+          },
     );
 
     return AgentCompositionResult(

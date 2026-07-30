@@ -22,7 +22,10 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
+import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_configuration_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_local_data_gateway.dart';
@@ -32,6 +35,7 @@ import 'package:ustc_assistant_app/features/agent/application/agent_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/outbound_privacy_filter.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dart';
+import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
@@ -392,6 +396,20 @@ class _SequenceClock implements BeijingClock {
   }
 }
 
+class _NoopProtector implements CredentialProtector {
+  @override
+  Future<ProtectedSecret> protect(Uint8List plaintext) async =>
+      ProtectedSecret(
+        bytes: Uint8List.fromList(plaintext),
+        scheme: 'test',
+        version: 1,
+      );
+
+  @override
+  Future<Uint8List> unprotect(ProtectedSecret protected) async =>
+      Uint8List.fromList(protected.bytes);
+}
+
 Future<void> _seedAccount(AppDatabase database, String accountId) => database
     .into(database.localAccounts)
     .insert(
@@ -512,6 +530,56 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('Step 1: deterministic full-flow integration', () {
+    test(
+      'composition recovers interrupted runs before loading history',
+      () async {
+        final database = AppDatabase(NativeDatabase.memory());
+        addTearDown(database.close);
+        const account = 'a';
+        await _seedAccount(database, account);
+        final repository = DriftChatRepository(database);
+        final runId = await repository.startRun(
+          accountId: account,
+          model: 'deepseek-v4-flash',
+        );
+        await repository.appendMessage(
+          accountId: account,
+          runId: runId,
+          role: ChatRole.assistant,
+          state: ChatMessageState.streaming,
+          content: 'partial answer',
+        );
+
+        final composition = await AgentComposition.build(
+          database: database,
+          accountId: account,
+          resolvedUsername: 'PB12345678',
+          accounts: AccountService(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          secretStoreFactory: (database) => ProtectedAgentSecretStore(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          queryGatewayFactory: (_, _) async => FakeQueryGateway(),
+        );
+        addTearDown(composition.sessionService.dispose);
+
+        final run = await (database.select(
+          database.agentRuns,
+        )..where((row) => row.id.equals(runId))).getSingle();
+        final history = await composition.chatRepository.recentMessages(
+          account,
+          limit: 20,
+        );
+
+        expect(run.status, AgentRunState.interrupted.name);
+        expect(history.single.state, ChatMessageState.interrupted);
+        expect(history.single.content, 'partial answer');
+      },
+    );
+
     test('configure -> schedule -> catalog search -> detail -> cited answer', () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);

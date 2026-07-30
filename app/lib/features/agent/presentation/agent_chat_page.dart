@@ -51,7 +51,11 @@ sealed class _ChatMessage {
 }
 
 class _UserMessage extends _ChatMessage {
-  const _UserMessage({required this.text, required this.runId, required this.ordinal});
+  const _UserMessage({
+    required this.text,
+    required this.runId,
+    required this.ordinal,
+  });
   final String text;
   final String? runId;
   final int ordinal;
@@ -150,19 +154,29 @@ class _AgentChatPageState extends State<AgentChatPage> {
       final messages = <_ChatMessage>[];
       for (final record in history) {
         if (record.role == ChatRole.user) {
-          messages.add(_UserMessage(
-            text: record.content,
-            runId: record.runId,
-            ordinal: record.ordinal,
-          ));
+          messages.add(
+            _UserMessage(
+              text: record.content,
+              runId: record.runId,
+              ordinal: record.ordinal,
+            ),
+          );
         } else if (record.role == ChatRole.assistant) {
-          final isStreaming = record.state == ChatMessageState.streaming;
-          messages.add(_AssistantMessage(
-            text: record.content,
-            runId: record.runId,
-            ordinal: record.ordinal,
-            state: isStreaming ? AgentRunState.running : AgentRunState.completed,
-          ));
+          final state = switch (record.state) {
+            ChatMessageState.streaming => AgentRunState.running,
+            ChatMessageState.interrupted => AgentRunState.interrupted,
+            ChatMessageState.failed => AgentRunState.failed,
+            ChatMessageState.cancelled => AgentRunState.cancelled,
+            ChatMessageState.completed => AgentRunState.completed,
+          };
+          messages.add(
+            _AssistantMessage(
+              text: record.content,
+              runId: record.runId,
+              ordinal: record.ordinal,
+              state: state,
+            ),
+          );
         }
       }
       if (mounted) {
@@ -307,10 +321,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
     final runId = _lastRunId;
     if (runId == null || runId.isEmpty) return;
     await widget.sessionService
-        .resumeUserAction(
-          accountId: widget.accountId,
-          runId: runId,
-        )
+        .resumeUserAction(accountId: widget.accountId, runId: runId)
         .drain<void>();
   }
 
@@ -318,7 +329,10 @@ class _AgentChatPageState extends State<AgentChatPage> {
     await Clipboard.setData(ClipboardData(text: text));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('已复制到剪贴板'), duration: Duration(seconds: 2)),
+        const SnackBar(
+          content: Text('已复制到剪贴板'),
+          duration: Duration(seconds: 2),
+        ),
       );
     }
   }
@@ -348,17 +362,19 @@ class _AgentChatPageState extends State<AgentChatPage> {
       child: Column(
         children: [
           const SizedBox(height: 48),
-          Icon(Icons.chat_bubble_outline, size: 64,
-              color: Theme.of(context).colorScheme.onSurfaceVariant),
-          const SizedBox(height: 16),
-          Text(
-            'Agent 未配置',
-            style: Theme.of(context).textTheme.titleLarge,
+          Icon(
+            Icons.chat_bubble_outline,
+            size: 64,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
+          const SizedBox(height: 16),
+          Text('Agent 未配置', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(height: 8),
           Text(
             '请先配置学校模型服务以使用聊天功能。',
-            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 24),
@@ -451,9 +467,9 @@ class _AgentChatPageState extends State<AgentChatPage> {
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: theme.colorScheme.primaryContainer,
-            borderRadius: BorderRadius.circular(18).copyWith(
-              bottomRight: const Radius.circular(4),
-            ),
+            borderRadius: BorderRadius.circular(
+              18,
+            ).copyWith(bottomRight: const Radius.circular(4)),
           ),
           child: Text(
             msg.text,
@@ -472,7 +488,8 @@ class _AgentChatPageState extends State<AgentChatPage> {
     // text worth copying), not only `completed`. The spinner guard below
     // (`_isRunning && !isTerminal`) is unaffected: a `running` message is
     // still non-terminal, so the spinner still shows while streaming.
-    final isTerminal = msg.state == AgentRunState.completed ||
+    final isTerminal =
+        msg.state == AgentRunState.completed ||
         msg.state == AgentRunState.failed ||
         msg.state == AgentRunState.cancelled ||
         msg.state == AgentRunState.interrupted;
@@ -488,8 +505,11 @@ class _AgentChatPageState extends State<AgentChatPage> {
               CircleAvatar(
                 radius: 12,
                 backgroundColor: theme.colorScheme.secondaryContainer,
-                child: Icon(Icons.smart_toy_outlined,
-                    size: 14, color: theme.colorScheme.onSecondaryContainer),
+                child: Icon(
+                  Icons.smart_toy_outlined,
+                  size: 14,
+                  color: theme.colorScheme.onSecondaryContainer,
+                ),
               ),
               const SizedBox(width: 8),
               Text(
@@ -509,7 +529,11 @@ class _AgentChatPageState extends State<AgentChatPage> {
               ],
               if (isError) ...[
                 const SizedBox(width: 8),
-                Icon(Icons.error_outline, size: 14, color: theme.colorScheme.error),
+                Icon(
+                  Icons.error_outline,
+                  size: 14,
+                  color: theme.colorScheme.error,
+                ),
               ],
             ],
           ),
@@ -549,7 +573,9 @@ class _AgentChatPageState extends State<AgentChatPage> {
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
-        if (isError || msg.state == AgentRunState.cancelled || msg.state == AgentRunState.interrupted)
+        if (isError ||
+            msg.state == AgentRunState.cancelled ||
+            msg.state == AgentRunState.interrupted)
           IconButton(
             icon: const Icon(Icons.refresh, size: 16),
             tooltip: '重新发送',
@@ -570,12 +596,17 @@ class _AgentChatPageState extends State<AgentChatPage> {
           padding: const EdgeInsets.all(12),
           child: Row(
             children: [
-              Icon(Icons.login, color: Theme.of(context).colorScheme.onErrorContainer),
+              Icon(
+                Icons.login,
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
                   '需要登录校园账号以继续',
-                  style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
                 ),
               ),
               TextButton(

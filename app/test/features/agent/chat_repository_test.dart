@@ -679,4 +679,33 @@ void main() {
       expect(assistantRow.state, ChatMessageState.interrupted.name);
     },
   );
+
+  test(
+    'recentMessages includes interrupted assistant partial text for display',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      await repository.appendMessage(
+        accountId: 'a',
+        runId: runId,
+        role: ChatRole.user,
+        state: ChatMessageState.completed,
+        content: 'question',
+      );
+      await repository.appendMessage(
+        accountId: 'a',
+        runId: runId,
+        role: ChatRole.assistant,
+        state: ChatMessageState.streaming,
+        content: 'partial answer',
+      );
+
+      await repository.recoverInterrupted();
+      final recent = await repository.recentMessages('a', limit: 20);
+
+      expect(recent, hasLength(2));
+      expect(recent.last.role, ChatRole.assistant);
+      expect(recent.last.state, ChatMessageState.interrupted);
+      expect(recent.last.content, 'partial answer');
+    },
+  );
 }

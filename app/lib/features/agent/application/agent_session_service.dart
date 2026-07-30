@@ -28,10 +28,11 @@ extension _LastWhereOrNull<T> on Iterable<T> {
   }
 }
 
-typedef AgentUserActionResumeCallback = Future<void> Function({
-  required String accountId,
-  required AgentUserAction action,
-});
+typedef AgentUserActionResumeCallback =
+    Future<void> Function({
+      required String accountId,
+      required AgentUserAction action,
+    });
 
 class _PausedRun {
   _PausedRun({
@@ -54,6 +55,13 @@ class _PausedRun {
   final RunReferenceStore references;
   final CancellationSignal signal;
   bool resumeStarted = false;
+}
+
+class _ActiveRun {
+  _ActiveRun({required this.signal});
+
+  final CancellationSignal signal;
+  String? runId;
 }
 
 /// Orchestrates the bounded, read-only Agent run loop.
@@ -115,10 +123,9 @@ class AgentSessionService {
   /// Hard limit on tool calls per run.
   static const int maxToolCalls = 12;
 
-  /// The most recent run's cancellation signal, keyed by account id, so
-  /// [cancel] can target the in-flight run. Cleared when a run terminates.
-  CancellationSignal? _activeSignal;
-  String? _activeAccountId;
+  /// Active user runs keyed by account. Cleanup compares the exact run object
+  /// so a late summary from an older run cannot clear a newer run.
+  final Map<String, _ActiveRun> _activeRuns = {};
   bool _disposed = false;
   final Map<({String accountId, String runId}), _PausedRun> _pausedRuns = {};
 
@@ -132,6 +139,7 @@ class AgentSessionService {
   }) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
+    final active = _ActiveRun(signal: signal);
     var terminalEmitted = false;
 
     () async {
@@ -147,15 +155,28 @@ class AgentSessionService {
           terminalEmitted = true;
           return;
         }
-        await _cancelForAccountSwitch(accountId);
-        _activeSignal = signal;
-        _activeAccountId = accountId;
+        if (_activeRuns.containsKey(accountId)) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'run_already_active',
+            ),
+          );
+          terminalEmitted = true;
+          return;
+        }
+        _activeRuns[accountId] = active;
         await _runLoop(
           controller: controller,
           accountId: accountId,
           userText: userText,
           signal: signal,
-          onTerminalEmitted: () => terminalEmitted = true,
+          onRunStarted: (runId) => active.runId = runId,
+          onTerminalEmitted: () {
+            terminalEmitted = true;
+            _releaseActive(accountId, active);
+          },
         );
       } catch (_) {
         if (!terminalEmitted && !controller.isClosed) {
@@ -168,10 +189,7 @@ class AgentSessionService {
           );
         }
       } finally {
-        if (identical(_activeSignal, signal)) {
-          _activeSignal = null;
-          _activeAccountId = null;
-        }
+        _releaseActive(accountId, active);
         await controller.close();
       }
     }();
@@ -184,10 +202,8 @@ class AgentSessionService {
   /// started; the run terminates as `cancelled` with any streamed draft text
   /// preserved.
   Future<void> cancel({required String accountId}) async {
-    if (_activeAccountId == accountId) _activeSignal?.cancel();
-    await _cancelPausedRuns(
-      (paused) => paused.accountId == accountId,
-    );
+    _activeRuns[accountId]?.signal.cancel();
+    await _cancelPausedRuns((paused) => paused.accountId == accountId);
   }
 
   /// Retries the last user turn as a brand-new run.
@@ -198,6 +214,7 @@ class AgentSessionService {
   Stream<AgentRunViewState> retryLast({required String accountId}) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
+    final active = _ActiveRun(signal: signal);
     var terminalEmitted = false;
     () async {
       try {
@@ -212,16 +229,26 @@ class AgentSessionService {
           terminalEmitted = true;
           return;
         }
-        await _cancelForAccountSwitch(accountId);
-        _activeSignal = signal;
-        _activeAccountId = accountId;
+        if (_activeRuns.containsKey(accountId)) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'run_already_active',
+            ),
+          );
+          terminalEmitted = true;
+          return;
+        }
+        _activeRuns[accountId] = active;
         // Find the most recent completed user message to replay.
-        final history =
-            await _chatRepository.recentMessages(accountId, limit: 200);
+        final history = await _chatRepository.recentMessages(
+          accountId,
+          limit: 200,
+        );
         final lastUser = history.lastWhereOrNull(
           (m) =>
-              m.role == ChatRole.user &&
-              m.state == ChatMessageState.completed,
+              m.role == ChatRole.user && m.state == ChatMessageState.completed,
         );
         if (lastUser == null) {
           controller.add(
@@ -239,7 +266,12 @@ class AgentSessionService {
           accountId: accountId,
           userText: lastUser.content,
           signal: signal,
-          onTerminalEmitted: () => terminalEmitted = true,
+          excludeHistoryMessageId: lastUser.id,
+          onRunStarted: (runId) => active.runId = runId,
+          onTerminalEmitted: () {
+            terminalEmitted = true;
+            _releaseActive(accountId, active);
+          },
         );
       } catch (_) {
         if (!terminalEmitted && !controller.isClosed) {
@@ -252,10 +284,7 @@ class AgentSessionService {
           );
         }
       } finally {
-        if (identical(_activeSignal, signal)) {
-          _activeSignal = null;
-          _activeAccountId = null;
-        }
+        _releaseActive(accountId, active);
         await controller.close();
       }
     }();
@@ -326,17 +355,17 @@ class AgentSessionService {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
-    _activeSignal?.cancel();
+    for (final active in _activeRuns.values.toList()) {
+      active.signal.cancel();
+    }
     await _cancelPausedRuns((_) => true);
   }
 
-  Future<void> _cancelForAccountSwitch(String accountId) async {
-    final activeAccountId = _activeAccountId;
-    if (activeAccountId == null || activeAccountId == accountId) return;
-    _activeSignal?.cancel();
-    await _cancelPausedRuns(
-      (paused) => paused.accountId != accountId,
-    );
+  void _releaseActive(String accountId, _ActiveRun active) {
+    final current = _activeRuns[accountId];
+    if (identical(current, active) && current?.runId == active.runId) {
+      _activeRuns.remove(accountId);
+    }
   }
 
   Future<void> _cancelPausedRuns(
@@ -374,7 +403,9 @@ class AgentSessionService {
     required String accountId,
     required String userText,
     required CancellationSignal signal,
+    required void Function(String runId) onRunStarted,
     required void Function() onTerminalEmitted,
+    String? excludeHistoryMessageId,
   }) async {
     // 1. Privacy-inspect the user text BEFORE any persistence or I/O.
     final decision = _privacyFilter.inspectUserText(userText);
@@ -401,7 +432,11 @@ class AgentSessionService {
       accountId: accountId,
       model: _model,
     );
-    final history = await _chatRepository.recentMessages(accountId, limit: 200);
+    onRunStarted(runId);
+    final history = (await _chatRepository.recentMessages(
+      accountId,
+      limit: 200,
+    )).where((message) => message.id != excludeHistoryMessageId).toList();
     final summary = await _chatRepository.latestSummary(accountId);
     // Now persist the current user message (still before any network I/O).
     await _chatRepository.appendMessage(
@@ -412,7 +447,10 @@ class AgentSessionService {
       content: userText,
     );
 
-    var viewState = AgentRunViewState(runId: runId, state: AgentRunState.running);
+    var viewState = AgentRunViewState(
+      runId: runId,
+      state: AgentRunState.running,
+    );
     controller.add(viewState);
 
     // 3. Build the initial request from prior history + summary + current text.
@@ -570,7 +608,9 @@ class AgentSessionService {
             LlmToolUseBlock(id: tu.id, name: tu.name, input: tu.input),
           );
         }
-        conversation.add(LlmMessage(role: 'assistant', content: assistantBlocks));
+        conversation.add(
+          LlmMessage(role: 'assistant', content: assistantBlocks),
+        );
 
         // Build the tool context for this run.
         final context = AgentToolContext(
@@ -585,7 +625,21 @@ class AgentSessionService {
         final newSourceRefs = <AgentSourceReference>[];
         final newToolSummaries = <AgentToolSummary>[];
 
-        for (final tu in toolUses) {
+        for (var toolIndex = 0; toolIndex < toolUses.length; toolIndex++) {
+          final tu = toolUses[toolIndex];
+          if (signal.isCancelled) {
+            terminalState = AgentRunState.cancelled;
+            for (final unstarted in toolUses.skip(toolIndex)) {
+              toolResults.add(
+                LlmToolResultBlock(
+                  toolUseId: unstarted.id,
+                  content: _encodePayload(const {'code': 'cancelled'}),
+                  isError: true,
+                ),
+              );
+            }
+            break;
+          }
           // Budget: never execute a tool past the limit.
           if (totalToolCalls >= maxToolCalls) {
             terminalState = AgentRunState.failed;
@@ -594,7 +648,9 @@ class AgentSessionService {
             toolResults.add(
               LlmToolResultBlock(
                 toolUseId: tu.id,
-                content: 'tool_call_budget_exceeded',
+                content: _encodePayload(const {
+                  'code': 'tool_call_budget_exceeded',
+                }),
                 isError: true,
               ),
             );
@@ -668,17 +724,19 @@ class AgentSessionService {
             );
           }
           newToolSummaries.add(
-            AgentToolSummary(
-              toolName: tu.name,
-              status: result.status,
-            ),
+            AgentToolSummary(toolName: tu.name, status: result.status),
           );
 
           // Build the tool_result content. On error, send a short safe code.
           // On success, send the sanitized payload as a JSON string.
           final Object content;
           if (result.status == AgentToolStatus.error) {
-            content = result.errorCode ?? 'tool_error';
+            final guidance = result.payload['guidance'];
+            content = _encodePayload({
+              'code': result.errorCode ?? 'tool_error',
+              if (guidance is String && guidance.isNotEmpty)
+                'guidance': guidance,
+            });
           } else {
             content = _encodePayload(result.payload);
           }
@@ -697,15 +755,12 @@ class AgentSessionService {
         // Emit an updated view with the new tool summaries and source refs.
         viewState = viewState.copyWith(
           toolSummaries: [...viewState.toolSummaries, ...newToolSummaries],
-          sourceReferences: [
-            ...viewState.sourceReferences,
-            ...newSourceRefs,
-          ],
+          sourceReferences: [...viewState.sourceReferences, ...newSourceRefs],
         );
         controller.add(viewState);
 
         // If a budget boundary fired mid-tool, stop now.
-        if (terminalState == AgentRunState.failed) break;
+        if (terminalState != AgentRunState.completed) break;
       }
     } catch (_) {
       // Any unexpected failure terminates the run safely.

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
@@ -127,7 +128,9 @@ class _FakeScheduleTool implements AgentTool {
   @override
   Map<String, Object?> get inputSchema => const {
     'type': 'object',
-    'properties': {'date': {'type': 'string'}},
+    'properties': {
+      'date': {'type': 'string'},
+    },
   };
 
   @override
@@ -136,14 +139,20 @@ class _FakeScheduleTool implements AgentTool {
     AgentToolContext context,
   ) async {
     // Bind a run-local reference the model can later resolve.
-    final ref = context.references.bind(kind: 'schedule', localId: 'schedule-2026-07-29');
+    final ref = context.references.bind(
+      kind: 'schedule',
+      localId: 'schedule-2026-07-29',
+    );
     return AgentToolResult(
       status: AgentToolStatus.success,
-      payload: const {
-        'courses': <Map<String, Object?>>[],
-        'semester': '2026春',
-      },
-      references: [AgentToolReference(kind: 'schedule', ref: ref, localId: 'schedule-2026-07-29')],
+      payload: const {'courses': <Map<String, Object?>>[], 'semester': '2026春'},
+      references: [
+        AgentToolReference(
+          kind: 'schedule',
+          ref: ref,
+          localId: 'schedule-2026-07-29',
+        ),
+      ],
     );
   }
 }
@@ -156,7 +165,9 @@ class _FakeCatalogTool implements AgentTool {
   @override
   Map<String, Object?> get inputSchema => const {
     'type': 'object',
-    'properties': {'q': {'type': 'string'}},
+    'properties': {
+      'q': {'type': 'string'},
+    },
   };
 
   @override
@@ -164,11 +175,16 @@ class _FakeCatalogTool implements AgentTool {
     Map<String, Object?> arguments,
     AgentToolContext context,
   ) async {
-    final ref = context.references.bind(kind: 'catalog', localId: 'catalog-lib');
+    final ref = context.references.bind(
+      kind: 'catalog',
+      localId: 'catalog-lib',
+    );
     return AgentToolResult(
       status: AgentToolStatus.success,
       payload: const {'results': <Map<String, Object?>>[]},
-      references: [AgentToolReference(kind: 'catalog', ref: ref, localId: 'catalog-lib')],
+      references: [
+        AgentToolReference(kind: 'catalog', ref: ref, localId: 'catalog-lib'),
+      ],
     );
   }
 }
@@ -182,8 +198,7 @@ class _PausingTool implements AgentTool {
   final bool includeUserAction;
   final bool throwOnPendingCancel;
   final Completer<void> paused = Completer<void>();
-  final Completer<AgentToolResult> _terminal =
-      Completer<AgentToolResult>();
+  final Completer<AgentToolResult> _terminal = Completer<AgentToolResult>();
   int cancelCount = 0;
   int signalCancelCount = 0;
   int activeCancellationSubscriptions = 0;
@@ -253,11 +268,219 @@ class _PausingTool implements AgentTool {
   }
 }
 
-Map<String, Object?> _scheduleBuilder(Map<String, Object?> raw) =>
-    {'courses': raw['courses'], 'semester': raw['semester']};
+class _CancellingScheduleTool implements AgentTool {
+  int executeCount = 0;
 
-Map<String, Object?> _catalogBuilder(Map<String, Object?> raw) =>
-    {'results': raw['results']};
+  @override
+  String get name => 'get_schedule';
+
+  @override
+  String get description => 'Cancels the run after the first tool starts.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    context.cancellation.cancel();
+    return const AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: {'courses': <Object?>[]},
+    );
+  }
+}
+
+class _CountingCatalogTool implements AgentTool {
+  int executeCount = 0;
+
+  @override
+  String get name => 'search_campus_catalog';
+
+  @override
+  String get description => 'Counts executions.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    return const AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: {'results': <Object?>[]},
+    );
+  }
+}
+
+class _GuidanceScheduleTool implements AgentTool {
+  @override
+  String get name => 'get_schedule';
+
+  @override
+  String get description => 'Returns bounded narrowing guidance.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async => const AgentToolResult(
+    status: AgentToolStatus.error,
+    errorCode: 'result_too_large',
+    payload: {'guidance': 'Narrow the date range and retry.'},
+  );
+}
+
+class _ConcurrentBlockingProvider implements LlmProvider {
+  final Map<String, Completer<void>> _started = {};
+  final Map<String, Completer<void>> _release = {};
+  final Set<String> cancelledLabels = {};
+
+  Future<void> waitStarted(String label) =>
+      (_started[label] ??= Completer<void>()).future;
+
+  void release(String label) {
+    final completer = _release[label] ??= Completer<void>();
+    if (!completer.isCompleted) completer.complete();
+  }
+
+  @override
+  Future<List<String>> listModels({
+    required String apiKey,
+    required CancellationSignal cancellation,
+  }) async => const ['deepseek-v4-flash'];
+
+  @override
+  Stream<LlmEvent> stream({
+    required String apiKey,
+    required LlmRequest request,
+    required CancellationSignal cancellation,
+  }) async* {
+    final label = request.messages
+        .expand((message) => message.content)
+        .whereType<LlmTextBlock>()
+        .last
+        .text;
+    final started = _started[label] ??= Completer<void>();
+    if (!started.isCompleted) started.complete();
+    final release = _release[label] ??= Completer<void>();
+    while (!release.isCompleted && !cancellation.isCancelled) {
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    if (cancellation.isCancelled) {
+      cancelledLabels.add(label);
+      yield const CompletedEvent();
+      return;
+    }
+    yield TextDeltaEvent('done:$label');
+    yield const CompletedEvent();
+  }
+
+  @override
+  Future<void> probeText({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+
+  @override
+  Future<void> probeTools({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+}
+
+class _SummaryOverlapProvider implements LlmProvider {
+  final Completer<void> summaryStarted = Completer<void>();
+  final Completer<void> runBStarted = Completer<void>();
+  final Completer<void> _releaseSummary = Completer<void>();
+
+  void releaseSummary() {
+    if (!_releaseSummary.isCompleted) _releaseSummary.complete();
+  }
+
+  @override
+  Future<List<String>> listModels({
+    required String apiKey,
+    required CancellationSignal cancellation,
+  }) async => const ['deepseek-v4-flash'];
+
+  @override
+  Stream<LlmEvent> stream({
+    required String apiKey,
+    required LlmRequest request,
+    required CancellationSignal cancellation,
+  }) async* {
+    if (request.tools.isEmpty) {
+      if (!summaryStarted.isCompleted) summaryStarted.complete();
+      await _releaseSummary.future;
+      yield const TextDeltaEvent('summary');
+      yield const CompletedEvent();
+      return;
+    }
+
+    final userText = request.messages
+        .expand((message) => message.content)
+        .whereType<LlmTextBlock>()
+        .last
+        .text;
+    if (userText == 'run-a') {
+      yield const TextDeltaEvent('done-a');
+      yield const UsageEvent(inputTokens: 20000, outputTokens: 10);
+      yield const CompletedEvent();
+      return;
+    }
+
+    if (!runBStarted.isCompleted) runBStarted.complete();
+    while (!cancellation.isCancelled) {
+      await Future<void>.delayed(const Duration(milliseconds: 2));
+    }
+    yield const CompletedEvent();
+  }
+
+  @override
+  Future<void> probeText({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+
+  @override
+  Future<void> probeTools({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+}
+
+Map<String, Object?> _scheduleBuilder(Map<String, Object?> raw) => {
+  'courses': raw['courses'],
+  'semester': raw['semester'],
+  'guidance': raw['guidance'],
+};
+
+Map<String, Object?> _catalogBuilder(Map<String, Object?> raw) => {
+  'results': raw['results'],
+};
 
 /// The default tool set used by the harness when a test does not override it.
 final List<AgentTool> _defaultTools = [_FakeScheduleTool(), _FakeCatalogTool()];
@@ -295,16 +518,14 @@ Future<void> _seedAccount(AppDatabase database, String accountId) => database
     );
 
 Future<void> _failAgentActionLogWrites(AppDatabase database) =>
-    database.customStatement(
-      '''
+    database.customStatement('''
 CREATE TRIGGER fail_agent_action_log
 BEFORE INSERT ON action_logs
 WHEN NEW.source = 'agent' AND NEW.action_type = 'read_only_run'
 BEGIN
   SELECT RAISE(FAIL, 'terminal action log failure');
 END
-''',
-    );
+''');
 
 AgentSessionService _buildService({
   required AppDatabase database,
@@ -314,14 +535,17 @@ AgentSessionService _buildService({
   String model = 'deepseek-v4-flash',
   String protectedAccount = 'PB12345678',
   AgentUserActionResumeCallback? userActionResumer,
+  Map<String, ToolPayloadBuilder>? payloadBuilders,
 }) {
   final chatRepository = DriftChatRepository(database);
   final privacyFilter = OutboundPrivacyFilter(
     protectedAccount: protectedAccount,
-    toolBuilders: {
-      'get_schedule': _scheduleBuilder,
-      'search_campus_catalog': _catalogBuilder,
-    },
+    toolBuilders:
+        payloadBuilders ??
+        {
+          'get_schedule': _scheduleBuilder,
+          'search_campus_catalog': _catalogBuilder,
+        },
   );
   final registry = AgentToolRegistry(
     tools: tools ?? _defaultTools,
@@ -355,49 +579,57 @@ void main() {
   });
 
   group('AgentSessionService.send — canonical scripted loop', () {
-    test('completes the 3-call loop and persists final assistant text', () async {
-      final provider = _ScriptedProvider(_canonicalLoop());
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'completes the 3-call loop and persists final assistant text',
+      () async {
+        final provider = _ScriptedProvider(_canonicalLoop());
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      final states = await service
-          .send(accountId: account, userText: '明天有什么课？图书馆在哪？')
-          .toList();
+        final states = await service
+            .send(accountId: account, userText: '明天有什么课？图书馆在哪？')
+            .toList();
 
-      // Exactly three model calls were made.
-      expect(provider.streamCallCount, 3);
+        // Exactly three model calls were made.
+        expect(provider.streamCallCount, 3);
 
-      // The final view state is completed with the streamed final text.
-      final terminal = states.last;
-      expect(terminal.state, AgentRunState.completed);
-      expect(terminal.text, contains('明天没有课'));
-      expect(terminal.text, contains('图书馆在东区'));
+        // The final view state is completed with the streamed final text.
+        final terminal = states.last;
+        expect(terminal.state, AgentRunState.completed);
+        expect(terminal.text, contains('明天没有课'));
+        expect(terminal.text, contains('图书馆在东区'));
 
-      // The run record is persisted as completed.
-      final runs = await (database.select(database.agentRuns)).get();
-      expect(runs, hasLength(1));
-      expect(runs.single.status, AgentRunState.completed.name);
-      expect(runs.single.model, 'deepseek-v4-flash');
-      expect(runs.single.errorCode, isNull);
-      // Token usage from the last UsageEvent is recorded.
-      expect(runs.single.inputTokens, 300);
-      expect(runs.single.outputTokens, 30);
+        // The run record is persisted as completed.
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs, hasLength(1));
+        expect(runs.single.status, AgentRunState.completed.name);
+        expect(runs.single.model, 'deepseek-v4-flash');
+        expect(runs.single.errorCode, isNull);
+        // Token usage from the last UsageEvent is recorded.
+        expect(runs.single.inputTokens, 300);
+        expect(runs.single.outputTokens, 30);
 
-      // The user message and the final assistant message are persisted.
-      final messages = await chatRepository.recentMessages(account, limit: 50);
-      expect(messages.where((m) => m.role == ChatRole.user), hasLength(1));
-      expect(
-        messages.where((m) => m.role == ChatRole.user).single.content,
-        '明天有什么课？图书馆在哪？',
-      );
-      final assistant = messages.where((m) => m.role == ChatRole.assistant).single;
-      expect(assistant.state, ChatMessageState.completed);
-      expect(assistant.content, contains('明天没有课'));
-    });
+        // The user message and the final assistant message are persisted.
+        final messages = await chatRepository.recentMessages(
+          account,
+          limit: 50,
+        );
+        expect(messages.where((m) => m.role == ChatRole.user), hasLength(1));
+        expect(
+          messages.where((m) => m.role == ChatRole.user).single.content,
+          '明天有什么课？图书馆在哪？',
+        );
+        final assistant = messages
+            .where((m) => m.role == ChatRole.assistant)
+            .single;
+        expect(assistant.state, ChatMessageState.completed);
+        expect(assistant.content, contains('明天没有课'));
+      },
+    );
 
     test('emits tool-running states between model calls', () async {
       final provider = _ScriptedProvider(_canonicalLoop());
@@ -503,11 +735,14 @@ void main() {
         // The current question must appear EXACTLY once (regression guard
         // against the build() duplication bug where the just-persisted user
         // message was also in `history`).
-        final occurrences =
-            userTexts.where((t) => t == currentQuestion).length;
-        expect(occurrences, 1,
-            reason: 'current question must appear exactly once; '
-                'got $occurrences in $userTexts');
+        final occurrences = userTexts.where((t) => t == currentQuestion).length;
+        expect(
+          occurrences,
+          1,
+          reason:
+              'current question must appear exactly once; '
+              'got $occurrences in $userTexts',
+        );
 
         // Prior-turn history is present and separate from the current question.
         expect(userTexts, contains('上学期有几门课？'));
@@ -519,79 +754,79 @@ void main() {
   });
 
   group('tool_not_allowed', () {
-    test('an unregistered tool call returns tool_not_allowed and the run completes', () async {
-      // Script a call that requests a tool the registry does not know.
-      final script = [
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-1',
-            name: 'delete_everything',
-            input: {},
-          ),
-          const CompletedEvent(),
-        ],
-        // After the tool_result error, the model emits final text.
-        [
-          const TextDeltaEvent('我无法执行该操作。'),
-          const CompletedEvent(),
-        ],
-      ];
-      final provider = _ScriptedProvider(script);
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      // Register only the schedule tool; delete_everything is unknown.
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-        tools: [_FakeScheduleTool()],
-      );
+    test(
+      'an unregistered tool call returns tool_not_allowed and the run completes',
+      () async {
+        // Script a call that requests a tool the registry does not know.
+        final script = [
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'delete_everything',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          // After the tool_result error, the model emits final text.
+          [const TextDeltaEvent('我无法执行该操作。'), const CompletedEvent()],
+        ];
+        final provider = _ScriptedProvider(script);
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        // Register only the schedule tool; delete_everything is unknown.
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+          tools: [_FakeScheduleTool()],
+        );
 
-      final states = await service
-          .send(accountId: account, userText: '删除所有数据')
-          .toList();
+        final states = await service
+            .send(accountId: account, userText: '删除所有数据')
+            .toList();
 
-      expect(provider.streamCallCount, 2);
-      expect(states.last.state, AgentRunState.completed);
-      // The run reached a safe terminal state.
-      final runs = await (database.select(database.agentRuns)).get();
-      expect(runs.single.status, AgentRunState.completed.name);
-    });
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.completed);
+        // The run reached a safe terminal state.
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs.single.status, AgentRunState.completed.name);
+      },
+    );
   });
 
   group('invalid JSON fails safely', () {
-    test('a tool_use whose input is not a map is contained as an error result', () async {
-      // The fake provider always emits input as a Map (per the protocol), so
-      // we simulate invalid arguments by having a tool whose schema rejects
-      // them. The registry must not throw and the loop must continue.
-      final script = [
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-1',
-            name: 'get_schedule',
-            input: {'unexpected': 'garbage'},
-          ),
-          const CompletedEvent(),
-        ],
-        [
-          const TextDeltaEvent('抱歉，参数有误。'),
-          const CompletedEvent(),
-        ],
-      ];
-      final provider = _ScriptedProvider(script);
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'a tool_use whose input is not a map is contained as an error result',
+      () async {
+        // The fake provider always emits input as a Map (per the protocol), so
+        // we simulate invalid arguments by having a tool whose schema rejects
+        // them. The registry must not throw and the loop must continue.
+        final script = [
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {'unexpected': 'garbage'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('抱歉，参数有误。'), const CompletedEvent()],
+        ];
+        final provider = _ScriptedProvider(script);
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      final states = await service
-          .send(accountId: account, userText: '查课表')
-          .toList();
+        final states = await service
+            .send(accountId: account, userText: '查课表')
+            .toList();
 
-      expect(states.last.state, AgentRunState.completed);
-      expect(provider.streamCallCount, 2);
-    });
+        expect(states.last.state, AgentRunState.completed);
+        expect(provider.streamCallCount, 2);
+      },
+    );
   });
 
   group('temporary references expire with the run', () {
@@ -697,37 +932,40 @@ void main() {
   });
 
   group('stop prevents a new call', () {
-    test('cancel mid-run finishes the in-flight stream then stops before the next call', () async {
-      // A provider that, on the first call, emits a tool_use then waits for
-      // cancellation before completing; the runtime should finish the tool,
-      // then NOT start call 2.
-      final provider = _CancellableProvider();
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'cancel mid-run finishes the in-flight stream then stops before the next call',
+      () async {
+        // A provider that, on the first call, emits a tool_use then waits for
+        // cancellation before completing; the runtime should finish the tool,
+        // then NOT start call 2.
+        final provider = _CancellableProvider();
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      // Start the run and cancel shortly after the first tool use fires.
-      final collected = <AgentRunViewState>[];
-      final sub = service
-          .send(accountId: account, userText: '查课表')
-          .listen(collected.add);
+        // Start the run and cancel shortly after the first tool use fires.
+        final collected = <AgentRunViewState>[];
+        final sub = service
+            .send(accountId: account, userText: '查课表')
+            .listen(collected.add);
 
-      // Wait for the first tool use to land, then cancel.
-      await provider.firstToolUseFired.future;
-      await service.cancel(accountId: account);
-      await sub.asFuture<void>(null);
-      await sub.cancel();
+        // Wait for the first tool use to land, then cancel.
+        await provider.firstToolUseFired.future;
+        await service.cancel(accountId: account);
+        await sub.asFuture<void>(null);
+        await sub.cancel();
 
-      // Only one model call was started; the second was never initiated.
-      expect(provider.streamCallCount, 1);
-      // The run is cancelled, not completed.
-      final runs = await (database.select(database.agentRuns)).get();
-      expect(runs.single.status, AgentRunState.cancelled.name);
-      expect(collected.last.state, AgentRunState.cancelled);
-    });
+        // Only one model call was started; the second was never initiated.
+        expect(provider.streamCallCount, 1);
+        // The run is cancelled, not completed.
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs.single.status, AgentRunState.cancelled.name);
+        expect(collected.last.state, AgentRunState.cancelled);
+      },
+    );
   });
 
   group('aggregated ActionLog', () {
@@ -736,10 +974,7 @@ void main() {
       () async {
         await _failAgentActionLogWrites(database);
         final provider = _ScriptedProvider([
-          [
-            const TextDeltaEvent('completed answer'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('completed answer'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -818,86 +1053,94 @@ void main() {
       },
     );
 
-    test('pre-terminal persistence failure emits one safe failure and closes',
-        () async {
-      await database.customStatement(
-        '''
+    test(
+      'pre-terminal persistence failure emits one safe failure and closes',
+      () async {
+        await database.customStatement('''
 CREATE TRIGGER fail_agent_run_start
 BEFORE INSERT ON agent_runs
 BEGIN
   SELECT RAISE(FAIL, 'run start failure');
 END
-''',
-      );
-      final service = _buildService(
-        database: database,
-        provider: _ScriptedProvider(const []),
-        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
-      );
+''');
+        final service = _buildService(
+          database: database,
+          provider: _ScriptedProvider(const []),
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
 
-      final states = await service
-          .send(accountId: account, userText: 'fail before terminal')
-          .toList()
-          .timeout(const Duration(seconds: 1));
+        final states = await service
+            .send(accountId: account, userText: 'fail before terminal')
+            .toList()
+            .timeout(const Duration(seconds: 1));
 
-      expect(states, hasLength(1));
-      expect(states.single.state, AgentRunState.failed);
-      expect(states.single.errorCode, 'runtime_error');
-    });
+        expect(states, hasLength(1));
+        expect(states.single.state, AgentRunState.failed);
+        expect(states.single.errorCode, 'runtime_error');
+      },
+    );
 
-    test('a completed run appends exactly one safe ActionLog with no user text', () async {
-      final provider = _ScriptedProvider(_canonicalLoop());
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'a completed run appends exactly one safe ActionLog with no user text',
+      () async {
+        final provider = _ScriptedProvider(_canonicalLoop());
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      await service
-          .send(accountId: account, userText: '明天有什么课？图书馆在哪？')
-          .toList();
+        await service
+            .send(accountId: account, userText: '明天有什么课？图书馆在哪？')
+            .toList();
 
-      final logs = await (database.select(database.actionLogs)
-            ..where((row) => row.actionType.equals('read_only_run')))
-          .get();
-      expect(logs, hasLength(1));
-      final log = logs.single;
-      expect(log.source, 'agent');
-      expect(log.actionType, 'read_only_run');
-      expect(log.result, 'success');
-      // The safe summary is a tool-category count, NOT user text or raw
-      // results.
-      expect(log.safeSummary, contains('get_schedule'));
-      expect(log.safeSummary, contains('search_campus_catalog'));
-      expect(log.safeSummary, isNot(contains('明天有什么课')));
-      expect(log.safeSummary, isNot(contains('图书馆在东区')));
-      // Account is attributed.
-      expect(log.accountId, account);
-    });
+        final logs = await (database.select(
+          database.actionLogs,
+        )..where((row) => row.actionType.equals('read_only_run'))).get();
+        expect(logs, hasLength(1));
+        final log = logs.single;
+        expect(log.source, 'agent');
+        expect(log.actionType, 'read_only_run');
+        expect(log.result, 'success');
+        // The safe summary is a tool-category count, NOT user text or raw
+        // results.
+        expect(log.safeSummary, contains('get_schedule'));
+        expect(log.safeSummary, contains('search_campus_catalog'));
+        expect(log.safeSummary, isNot(contains('明天有什么课')));
+        expect(log.safeSummary, isNot(contains('图书馆在东区')));
+        // Account is attributed.
+        expect(log.accountId, account);
+      },
+    );
 
-    test('a cancelled run appends one ActionLog with result cancelled', () async {
-      final provider = _CancellableProvider();
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'a cancelled run appends one ActionLog with result cancelled',
+      () async {
+        final provider = _CancellableProvider();
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      final sub = service.send(accountId: account, userText: '查课表').listen((_) {});
-      await provider.firstToolUseFired.future;
-      await service.cancel(accountId: account);
-      await sub.asFuture<void>(null);
-      await sub.cancel();
+        final sub = service
+            .send(accountId: account, userText: '查课表')
+            .listen((_) {});
+        await provider.firstToolUseFired.future;
+        await service.cancel(accountId: account);
+        await sub.asFuture<void>(null);
+        await sub.cancel();
 
-      final logs = await (database.select(database.actionLogs)
-            ..where((row) => row.actionType.equals('read_only_run')))
-          .get();
-      expect(logs, hasLength(1));
-      expect(logs.single.result, 'cancelled');
-      expect(logs.single.safeSummary, isNot(contains('查课表')));
-    });
+        final logs = await (database.select(
+          database.actionLogs,
+        )..where((row) => row.actionType.equals('read_only_run'))).get();
+        expect(logs, hasLength(1));
+        expect(logs.single.result, 'cancelled');
+        expect(logs.single.safeSummary, isNot(contains('查课表')));
+      },
+    );
 
     test('a failed run appends one ActionLog with result failed', () async {
       final script = [
@@ -916,9 +1159,9 @@ END
           .toList();
 
       expect(states.last.state, AgentRunState.failed);
-      final logs = await (database.select(database.actionLogs)
-            ..where((row) => row.actionType.equals('read_only_run')))
-          .get();
+      final logs = await (database.select(
+        database.actionLogs,
+      )..where((row) => row.actionType.equals('read_only_run'))).get();
       expect(logs, hasLength(1));
       expect(logs.single.result, 'failed');
       expect(logs.single.safeSummary, isNot(contains('查课表')));
@@ -926,124 +1169,338 @@ END
   });
 
   group('retry', () {
-    test('retryLast creates a new run and never overwrites the failed run', () async {
-      // First run fails.
-      var provider = _ScriptedProvider([
-        [const ErrorEvent('upstream_error')],
-      ]);
-      var clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      var service = _buildService(database: database, provider: provider, clock: clock);
-      await service.send(accountId: account, userText: '查课表').toList();
+    test(
+      'retryLast creates a new run and never overwrites the failed run',
+      () async {
+        // First run fails.
+        var provider = _ScriptedProvider([
+          [const ErrorEvent('upstream_error')],
+        ]);
+        var clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        var service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
+        await service.send(accountId: account, userText: '查课表').toList();
 
-      var runs = await (database.select(database.agentRuns)).get();
-      expect(runs, hasLength(1));
-      final failedRunId = runs.single.id;
-      expect(runs.single.status, AgentRunState.failed.name);
+        var runs = await (database.select(database.agentRuns)).get();
+        expect(runs, hasLength(1));
+        final failedRunId = runs.single.id;
+        expect(runs.single.status, AgentRunState.failed.name);
 
-      // Retry: new provider that succeeds.
-      provider = _ScriptedProvider(_canonicalLoop());
-      clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      service = _buildService(database: database, provider: provider, clock: clock);
-      final states = await service.retryLast(accountId: account).toList();
+        // Retry: new provider that succeeds.
+        provider = _ScriptedProvider(_canonicalLoop());
+        clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
+        final states = await service.retryLast(accountId: account).toList();
 
-      expect(states.last.state, AgentRunState.completed);
-      runs = await (database.select(database.agentRuns)).get();
-      // The failed run is preserved AND a new run exists.
-      expect(runs, hasLength(2));
-      expect(runs.map((r) => r.id), contains(failedRunId));
-      expect(
-        runs.where((r) => r.status == AgentRunState.failed.name),
-        hasLength(1),
-      );
-      expect(
-        runs.where((r) => r.status == AgentRunState.completed.name),
-        hasLength(1),
-      );
-    });
+        expect(states.last.state, AgentRunState.completed);
+        runs = await (database.select(database.agentRuns)).get();
+        // The failed run is preserved AND a new run exists.
+        expect(runs, hasLength(2));
+        expect(runs.map((r) => r.id), contains(failedRunId));
+        expect(
+          runs.where((r) => r.status == AgentRunState.failed.name),
+          hasLength(1),
+        );
+        expect(
+          runs.where((r) => r.status == AgentRunState.completed.name),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'retry does not duplicate the replayed user message in context',
+      () async {
+        const original = 'retry this exact message';
+        final failedProvider = _ScriptedProvider([
+          [const ErrorEvent('upstream_error')],
+        ]);
+        var service = _buildService(
+          database: database,
+          provider: failedProvider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+        await service.send(accountId: account, userText: original).toList();
+
+        final retryProvider = _ScriptedProvider([
+          [const TextDeltaEvent('done'), const CompletedEvent()],
+        ]);
+        service = _buildService(
+          database: database,
+          provider: retryProvider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 13)),
+        );
+        await service.retryLast(accountId: account).toList();
+
+        final replayed = retryProvider.requests.single.messages
+            .expand((message) => message.content)
+            .whereType<LlmTextBlock>()
+            .where((block) => block.text == original);
+        expect(replayed, hasLength(1));
+      },
+    );
   });
 
-  group('summary scheduling', () {
-    test('after a successful run, schedules a tool-disabled summary when needsSummary is true', () async {
-      // Seed a large history so AgentContextBuilder.needsSummary returns true.
-      // We insert many completed turns directly via the repository.
-      for (var i = 0; i < 60; i++) {
-        final runId = await chatRepository.startRun(accountId: account, model: 'deepseek-v4-flash');
-        await chatRepository.appendMessage(
-          accountId: account,
-          runId: runId,
-          role: ChatRole.user,
-          state: ChatMessageState.completed,
-          content: '这是一段很长的用户消息用于撑大上下文窗口 ${'x' * 200} 编号 $i',
-        );
-        await chatRepository.appendMessage(
-          accountId: account,
-          runId: runId,
-          role: ChatRole.assistant,
-          state: ChatMessageState.completed,
-          content: '这是助手的回复 ${'y' * 200} 编号 $i',
-        );
-      }
+  group('account-scoped lifecycle and tool cancellation', () {
+    test('second run for the same account is rejected', () async {
+      final provider = _ConcurrentBlockingProvider();
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+      );
+      final firstStates = <AgentRunViewState>[];
+      final firstSubscription = service
+          .send(accountId: account, userText: 'run-a')
+          .listen(firstStates.add);
+      final firstDone = firstSubscription.asFuture<void>();
+      await provider.waitStarted('run-a');
 
-      // The canonical loop succeeds with a LARGE reported input-token count
-      // (>= 18000) so AgentContextBuilder.needsSummary returns true via the
-      // real-usage path. Then a summary request is appended by the service.
-      // The provider script must cover the user run (3 calls) plus the
-      // summary request (1 call).
+      final rejected = await service
+          .send(accountId: account, userText: 'run-a-second')
+          .toList();
+
+      expect(rejected, hasLength(1));
+      expect(rejected.single.state, AgentRunState.failed);
+      expect(rejected.single.errorCode, 'run_already_active');
+      await service.cancel(accountId: account);
+      await firstDone.timeout(const Duration(seconds: 1));
+      expect(firstStates.last.state, AgentRunState.cancelled);
+    });
+
+    test('cancel for account A cannot cancel account B', () async {
+      const accountB = 'b';
+      await _seedAccount(database, accountB);
+      final provider = _ConcurrentBlockingProvider();
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+      );
+      final statesA = <AgentRunViewState>[];
+      final statesB = <AgentRunViewState>[];
+      final subA = service
+          .send(accountId: account, userText: 'run-a')
+          .listen(statesA.add);
+      final doneA = subA.asFuture<void>();
+      await provider.waitStarted('run-a');
+      final subB = service
+          .send(accountId: accountB, userText: 'run-b')
+          .listen(statesB.add);
+      final doneB = subB.asFuture<void>();
+      await provider.waitStarted('run-b');
+
+      expect(provider.cancelledLabels, isNot(contains('run-a')));
+      await service.cancel(accountId: account);
+      provider.release('run-b');
+      await Future.wait([
+        doneA.timeout(const Duration(seconds: 1)),
+        doneB.timeout(const Duration(seconds: 1)),
+      ]);
+
+      expect(statesA.last.state, AgentRunState.cancelled);
+      expect(statesB.last.state, AgentRunState.completed);
+      expect(provider.cancelledLabels, contains('run-a'));
+      expect(provider.cancelledLabels, isNot(contains('run-b')));
+    });
+
+    test('finishing summary A cannot clear active run B', () async {
+      final provider = _SummaryOverlapProvider();
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+      );
+      final statesA = <AgentRunViewState>[];
+      final statesB = <AgentRunViewState>[];
+      final subA = service
+          .send(accountId: account, userText: 'run-a')
+          .listen(statesA.add);
+      final doneA = subA.asFuture<void>();
+      await provider.summaryStarted.future;
+
+      final subB = service
+          .send(accountId: account, userText: 'run-b')
+          .listen(statesB.add);
+      final doneB = subB.asFuture<void>();
+      await provider.runBStarted.future;
+
+      provider.releaseSummary();
+      await doneA.timeout(const Duration(seconds: 1));
+      await service.cancel(accountId: account);
+      await doneB.timeout(const Duration(seconds: 1));
+
+      expect(statesA.last.state, AgentRunState.completed);
+      expect(statesB.last.state, AgentRunState.cancelled);
+    });
+
+    test('cancel between two tool uses prevents tool two', () async {
+      final cancelling = _CancellingScheduleTool();
+      final second = _CountingCatalogTool();
       final provider = _ScriptedProvider([
         [
           const ToolUseCompletedEvent(
             id: 'tu-1',
             name: 'get_schedule',
-            input: {'date': '2026-07-29'},
+            input: {},
           ),
-          const CompletedEvent(),
-        ],
-        [
           const ToolUseCompletedEvent(
             id: 'tu-2',
             name: 'search_campus_catalog',
-            input: {'q': '图书馆'},
+            input: {},
           ),
           const CompletedEvent(),
         ],
-        [
-          const TextDeltaEvent('这是最终回复。'),
-          // Large real usage so needsSummary triggers via the real-usage path.
-          const UsageEvent(inputTokens: 20000, outputTokens: 30),
-          const CompletedEvent(),
-        ],
-        // Summary request: final text only, no tools.
-        [
-          const TextDeltaEvent('这是一份简洁的摘要。'),
-          const UsageEvent(inputTokens: 500, outputTokens: 50),
-          const CompletedEvent(),
-        ],
       ]);
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
       final service = _buildService(
         database: database,
         provider: provider,
-        clock: clock,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [cancelling, second],
+      );
+
+      final states = await service
+          .send(accountId: account, userText: 'cancel between tools')
+          .toList();
+
+      expect(cancelling.executeCount, 1);
+      expect(second.executeCount, 0);
+      expect(provider.streamCallCount, 1);
+      expect(states.last.state, AgentRunState.cancelled);
+    });
+
+    test('result_too_large guidance reaches the next model request', () async {
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-guidance',
+            name: 'get_schedule',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+        [const TextDeltaEvent('narrowed'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [_GuidanceScheduleTool()],
       );
 
       await service
-          .send(accountId: account, userText: '再问一个问题')
+          .send(accountId: account, userText: 'show a large range')
           .toList();
 
-      // 3 calls for the user run + 1 for the summary.
-      expect(provider.streamCallCount, 4);
-
-      // The summary was persisted.
-      final summary = await chatRepository.latestSummary(account);
-      expect(summary, isNotNull);
-      expect(summary!.content, contains('摘要'));
-      expect(summary.model, 'deepseek-v4-flash');
+      final toolResult = provider.requests[1].messages
+          .expand((message) => message.content)
+          .whereType<LlmToolResultBlock>()
+          .single;
+      final payload =
+          jsonDecode(toolResult.content as String) as Map<String, Object?>;
+      expect(payload, {
+        'code': 'result_too_large',
+        'guidance': 'Narrow the date range and retry.',
+      });
     });
+  });
+
+  group('summary scheduling', () {
+    test(
+      'after a successful run, schedules a tool-disabled summary when needsSummary is true',
+      () async {
+        // Seed a large history so AgentContextBuilder.needsSummary returns true.
+        // We insert many completed turns directly via the repository.
+        for (var i = 0; i < 60; i++) {
+          final runId = await chatRepository.startRun(
+            accountId: account,
+            model: 'deepseek-v4-flash',
+          );
+          await chatRepository.appendMessage(
+            accountId: account,
+            runId: runId,
+            role: ChatRole.user,
+            state: ChatMessageState.completed,
+            content: '这是一段很长的用户消息用于撑大上下文窗口 ${'x' * 200} 编号 $i',
+          );
+          await chatRepository.appendMessage(
+            accountId: account,
+            runId: runId,
+            role: ChatRole.assistant,
+            state: ChatMessageState.completed,
+            content: '这是助手的回复 ${'y' * 200} 编号 $i',
+          );
+        }
+
+        // The canonical loop succeeds with a LARGE reported input-token count
+        // (>= 18000) so AgentContextBuilder.needsSummary returns true via the
+        // real-usage path. Then a summary request is appended by the service.
+        // The provider script must cover the user run (3 calls) plus the
+        // summary request (1 call).
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {'date': '2026-07-29'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-2',
+              name: 'search_campus_catalog',
+              input: {'q': '图书馆'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const TextDeltaEvent('这是最终回复。'),
+            // Large real usage so needsSummary triggers via the real-usage path.
+            const UsageEvent(inputTokens: 20000, outputTokens: 30),
+            const CompletedEvent(),
+          ],
+          // Summary request: final text only, no tools.
+          [
+            const TextDeltaEvent('这是一份简洁的摘要。'),
+            const UsageEvent(inputTokens: 500, outputTokens: 50),
+            const CompletedEvent(),
+          ],
+        ]);
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
+
+        await service.send(accountId: account, userText: '再问一个问题').toList();
+
+        // 3 calls for the user run + 1 for the summary.
+        expect(provider.streamCallCount, 4);
+
+        // The summary was persisted.
+        final summary = await chatRepository.latestSummary(account);
+        expect(summary, isNotNull);
+        expect(summary!.content, contains('摘要'));
+        expect(summary.model, 'deepseek-v4-flash');
+      },
+    );
 
     test('summary failure does not block the chat', () async {
       // Seed large history.
       for (var i = 0; i < 60; i++) {
-        final runId = await chatRepository.startRun(accountId: account, model: 'deepseek-v4-flash');
+        final runId = await chatRepository.startRun(
+          accountId: account,
+          model: 'deepseek-v4-flash',
+        );
         await chatRepository.appendMessage(
           accountId: account,
           runId: runId,
@@ -1101,14 +1558,17 @@ END
       // The user run still completed despite the summary failure.
       expect(states.last.state, AgentRunState.completed);
       final runs = await (database.select(database.agentRuns)).get();
-      expect(runs.where((r) => r.status == AgentRunState.completed.name), isNotEmpty);
+      expect(
+        runs.where((r) => r.status == AgentRunState.completed.name),
+        isNotEmpty,
+      );
       // No summary persisted (the failure was swallowed).
       final summary = await chatRepository.latestSummary(account);
       expect(summary, isNull);
       // Still only ONE ActionLog for the user run (summary does not log).
-      final logs = await (database.select(database.actionLogs)
-            ..where((row) => row.actionType.equals('read_only_run')))
-          .get();
+      final logs = await (database.select(
+        database.actionLogs,
+      )..where((row) => row.actionType.equals('read_only_run'))).get();
       expect(logs, hasLength(1));
       expect(logs.single.result, 'success');
     });
@@ -1200,57 +1660,62 @@ END
       expect(states.last.state, AgentRunState.cancelled);
     });
 
-    test('account switch cancels the previous paused run', () async {
-      const secondAccount = 'b';
-      await _seedAccount(database, secondAccount);
-      final tool = _PausingTool();
-      final provider = _ScriptedProvider([
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-pause',
-            name: 'pause_tool',
-            input: {},
-          ),
-          const CompletedEvent(),
-        ],
-        [
-          const TextDeltaEvent('account b'),
-          const CompletedEvent(),
-        ],
-      ]);
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
-        tools: [tool],
-      );
-      final firstStates = <AgentRunViewState>[];
-      final firstSubscription = service
-          .send(accountId: account, userText: 'pause')
-          .listen(firstStates.add);
-      final firstDone = firstSubscription.asFuture<void>();
-      await tool.paused.future;
+    test(
+      'starting account B does not cancel the previous paused account A',
+      () async {
+        const secondAccount = 'b';
+        await _seedAccount(database, secondAccount);
+        final tool = _PausingTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pause',
+              name: 'pause_tool',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('account b'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+        final firstStates = <AgentRunViewState>[];
+        final firstSubscription = service
+            .send(accountId: account, userText: 'pause')
+            .listen(firstStates.add);
+        final firstDone = firstSubscription.asFuture<void>();
+        await tool.paused.future;
 
-      final secondStates = await service
-          .send(accountId: secondAccount, userText: 'continue')
-          .toList();
-      await firstDone;
+        final secondStates = await service
+            .send(accountId: secondAccount, userText: 'continue')
+            .toList();
+        expect(tool.cancelCount, 0);
+        expect(firstStates.last.state, AgentRunState.waitingForUser);
 
-      expect(tool.cancelCount, 1);
-      expect(firstStates.last.state, AgentRunState.cancelled);
-      expect(secondStates.last.state, AgentRunState.completed);
-      expect(provider.streamCallCount, 2);
-    });
+        await service.cancel(accountId: account);
+        await firstDone;
+
+        expect(tool.cancelCount, 1);
+        expect(firstStates.last.state, AgentRunState.cancelled);
+        expect(secondStates.last.state, AgentRunState.completed);
+        expect(provider.streamCallCount, 2);
+      },
+    );
 
     test(
-      'duplicate local cancel conflict cannot break cancel dispose or account switch',
+      'duplicate local cancel conflict cannot break cancel dispose or another account',
       () async {
         Future<void> exercise(
           Future<void> Function(
             AgentSessionService service,
             StreamSubscription<AgentRunViewState> subscription,
             List<AgentRunViewState> states,
-          ) action,
+          )
+          action,
         ) async {
           final tool = _PausingTool(throwOnPendingCancel: true);
           final provider = _ScriptedProvider([
@@ -1306,10 +1771,7 @@ END
             ),
             const CompletedEvent(),
           ],
-          [
-            const TextDeltaEvent('account b'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('account b'), const CompletedEvent()],
         ]);
         final switchService = _buildService(
           database: database,
@@ -1328,6 +1790,8 @@ END
             .send(accountId: secondAccount, userText: 'continue')
             .toList()
             .timeout(const Duration(seconds: 1));
+        expect(switchTool.cancelCount, 0);
+        await switchService.cancel(accountId: account);
         await firstDone.timeout(const Duration(seconds: 1));
 
         expect(switchTool.signalCancelCount, 1);
@@ -1380,54 +1844,58 @@ END
       },
     );
 
-    test('resume callback failure cancels the pending invocation and run', () async {
-      final tool = _PausingTool();
-      final provider = _ScriptedProvider([
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-pause',
-            name: 'pause_tool',
-            input: {},
-          ),
-          const CompletedEvent(),
-        ],
-      ]);
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
-        tools: [tool],
-        userActionResumer: ({
-          required String accountId,
-          required AgentUserAction action,
-        }) async {
-          throw StateError('interactive_login_failed');
-        },
-      );
-      final states = <AgentRunViewState>[];
-      final subscription = service
-          .send(accountId: account, userText: 'pause')
-          .listen(states.add);
-      final done = subscription.asFuture<void>();
-      await tool.paused.future;
-      await Future<void>.delayed(Duration.zero);
-      final runId = states.last.runId;
+    test(
+      'resume callback failure cancels the pending invocation and run',
+      () async {
+        final tool = _PausingTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pause',
+              name: 'pause_tool',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          userActionResumer:
+              ({
+                required String accountId,
+                required AgentUserAction action,
+              }) async {
+                throw StateError('interactive_login_failed');
+              },
+        );
+        final states = <AgentRunViewState>[];
+        final subscription = service
+            .send(accountId: account, userText: 'pause')
+            .listen(states.add);
+        final done = subscription.asFuture<void>();
+        await tool.paused.future;
+        await Future<void>.delayed(Duration.zero);
+        final runId = states.last.runId;
 
-      await service
-          .resumeUserAction(accountId: account, runId: runId)
-          .drain<void>()
-          .timeout(const Duration(seconds: 1));
-      await done.timeout(const Duration(seconds: 1));
+        await service
+            .resumeUserAction(accountId: account, runId: runId)
+            .drain<void>()
+            .timeout(const Duration(seconds: 1));
+        await done.timeout(const Duration(seconds: 1));
 
-      expect(tool.signalCancelCount, 1);
-      expect(tool.cancelCount, 1);
-      expect(tool.activeCancellationSubscriptions, 0);
-      expect(states.last.state, AgentRunState.cancelled);
-      final resumeStates = await service
-          .resumeUserAction(accountId: account, runId: runId)
-          .toList();
-      expect(resumeStates.single.errorCode, 'paused_run_not_found');
-    });
+        expect(tool.signalCancelCount, 1);
+        expect(tool.cancelCount, 1);
+        expect(tool.activeCancellationSubscriptions, 0);
+        expect(states.last.state, AgentRunState.cancelled);
+        final resumeStates = await service
+            .resumeUserAction(accountId: account, runId: runId)
+            .toList();
+        expect(resumeStates.single.errorCode, 'paused_run_not_found');
+      },
+    );
   });
 
   group('privacy and key handling', () {
@@ -1454,28 +1922,31 @@ END
       }
     });
 
-    test('user text that fails privacy inspection is rejected before any run starts', () async {
-      final provider = _ScriptedProvider(_canonicalLoop());
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: clock,
-      );
+    test(
+      'user text that fails privacy inspection is rejected before any run starts',
+      () async {
+        final provider = _ScriptedProvider(_canonicalLoop());
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
 
-      final states = await service
-          .send(accountId: account, userText: '我的账号是 PB12345678 帮我查')
-          .toList();
+        final states = await service
+            .send(accountId: account, userText: '我的账号是 PB12345678 帮我查')
+            .toList();
 
-      // No model call was made.
-      expect(provider.streamCallCount, 0);
-      // No run was persisted.
-      final runs = await (database.select(database.agentRuns)).get();
-      expect(runs, isEmpty);
-      // The view reflects a failed/rejected state.
-      expect(states.last.state, AgentRunState.failed);
-      expect(states.last.text, isNot(contains('PB12345678')));
-    });
+        // No model call was made.
+        expect(provider.streamCallCount, 0);
+        // No run was persisted.
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs, isEmpty);
+        // The view reflects a failed/rejected state.
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.text, isNot(contains('PB12345678')));
+      },
+    );
   });
 }
 
