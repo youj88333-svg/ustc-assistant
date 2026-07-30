@@ -345,13 +345,21 @@ class AgentContextBuilder {
   /// Formats [clock.now()] as `YYYY-MM-DDTHH:mm:ss（周X）` for the system
   /// prompt's time anchor. The model uses this to resolve relative dates
   /// like "明天" / "下周". Monday=周一 .. Sunday=周日.
+  /// Pads an integer to two digits with a leading zero (e.g. 5 -> "05").
+  static String _two(int v) => v.toString().padLeft(2, '0');
+
+  /// Formats a Beijing-naive [DateTime] as `YYYY-MM-DDTHH:mm` (to the minute).
+  /// Shared by [_timeAnchor] and [_historyText] so the date format cannot
+  /// drift between them.
+  static String _formatBeijingMinute(DateTime beijing) =>
+      '${beijing.year}-${_two(beijing.month)}-${_two(beijing.day)}'
+      'T${_two(beijing.hour)}:${_two(beijing.minute)}';
+
   String _timeAnchor(BeijingClock clock) {
     final now = clock.now();
-    String two(int v) => v.toString().padLeft(2, '0');
     const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
     final weekday = weekdays[now.weekday - 1];
-    return '${now.year}-${two(now.month)}-${two(now.day)}'
-        'T${two(now.hour)}:${two(now.minute)}:${two(now.second)}'
+    return '${_formatBeijingMinute(now)}:${_two(now.second)}'
         '（$weekday）';
   }
 
@@ -368,11 +376,7 @@ class AgentContextBuilder {
   String _historyText(int createdAtMillis) {
     final utc = DateTime.fromMillisecondsSinceEpoch(createdAtMillis, isUtc: true);
     final beijing = utc.add(const Duration(hours: 8));
-    String two(int v) => v.toString().padLeft(2, '0');
-    final stamp =
-        '${beijing.year}-${two(beijing.month)}-${two(beijing.day)}'
-        'T${two(beijing.hour)}:${two(beijing.minute)}';
-    return '[$stamp] ';
+    return '[${_formatBeijingMinute(beijing)}] ';
   }
 
   /// The fixed summary-instruction text used by `buildSummaryRequest`, kept
