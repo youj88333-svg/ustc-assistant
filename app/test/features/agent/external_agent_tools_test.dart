@@ -159,34 +159,6 @@ QueryResultEnvelope _defaultIcourseEnvelope() => _envelope({
   'summary': 'A course.',
 });
 
-QueryResultEnvelope _defaultYoungEnvelope() => QueryResultEnvelope(json: {
-  'schemaVersion': '1.0',
-  'queryType': 'young_enrolment',
-  'generatedAt': '2026-07-29T09:00:00+08:00',
-  'data': <String, dynamic>{
-    'activities': <Map<String, Object?>>[
-      {'title': '志愿活动一', 'category': '志愿', 'status': 'open'},
-    ],
-  },
-  'metadata': <String, dynamic>{},
-  'references': <String>[],
-});
-
-QueryResultEnvelope _defaultCampusSearchEnvelope() => QueryResultEnvelope(json: {
-  'schemaVersion': '1.0',
-  'queryType': 'campus_search',
-  'generatedAt': '2026-07-29T09:00:00+08:00',
-  'data': <String, dynamic>{
-    'query': 'lib',
-    'results': <Map<String, Object?>>[
-      {'entryId': 'campus_1', 'title': 'Library notice', 'category': 'notice'},
-      {'entryId': 'campus_2', 'title': 'Library hours', 'category': 'notice'},
-    ],
-  },
-  'metadata': <String, dynamic>{'resultCount': 2},
-  'references': <String>['https://teach.ustc.edu.cn/x'],
-});
-
 QueryResultEnvelope _defaultCampusDetailEnvelope() => QueryResultEnvelope(json: {
   'schemaVersion': '1.0',
   'queryType': 'campus_detail',

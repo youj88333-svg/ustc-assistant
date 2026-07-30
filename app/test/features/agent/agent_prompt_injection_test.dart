@@ -217,7 +217,7 @@ QueryResultEnvelope _maliciousSearchEnvelope() => QueryResultEnvelope(json: {
         'query': '通知',
         'results': <Map<String, Object?>>[
           {
-            'entryId': 'campus_evil',
+            'id': 'campus_evil',
             // The canary in a PASSED field — must be redacted to [账号已隐去].
             'title': 'Notice for $_canary',
             'category': 'notice',
@@ -346,7 +346,7 @@ void main() {
       expect(toolResultEncoded, contains('[账号已隐去]'),
           reason: 'canary in the title must be redacted');
       expect(toolResultEncoded, isNot(contains('campus_evil')),
-          reason: 'raw entryId must not reach the model');
+          reason: 'raw id must not reach the model');
 
       // The terminal text is the scripted safe refusal — no canary, no echo.
       final terminal = states.last;
