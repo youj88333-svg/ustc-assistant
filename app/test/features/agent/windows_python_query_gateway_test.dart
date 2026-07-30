@@ -701,6 +701,128 @@ void main() {
       expect(cancelBody['protocolVersion'], '1.0');
     });
 
+    test('cancellation does not swallow non-terminal Bridge errors', () async {
+      final process = FakeProcess(handshake());
+      final launcher = FakeLauncher(process);
+      final httpClient = MockClient((request) async {
+        if (request.url.path == '/queries') {
+          return http.Response(
+            jsonEncode({'jobId': 'cancel-error-1', 'phase': 'starting'}),
+            202,
+          );
+        }
+        if (request.url.path == '/query-jobs/cancel-error-1/events') {
+          return http.Response(
+            jsonEncode(_batch(sequence: 1, phase: 'starting')),
+            200,
+          );
+        }
+        if (request.url.path == '/query-jobs/cancel-error-1/cancel') {
+          return http.Response(
+            jsonEncode({'error': 'request_failed'}),
+            500,
+          );
+        }
+        if (request.url.path == '/shutdown') {
+          return http.Response('{"ok":true}', 200);
+        }
+        return http.Response('{"error":"not_found"}', 404);
+      });
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: launcher,
+        httpClient: httpClient,
+        parentPid: 99,
+      );
+      addTearDown(gateway.shutdown);
+      final cancellation = CancellationSignal();
+      final errors = <Object>[];
+      final done = Completer<void>();
+      gateway
+          .execute(
+            const CampusSearchQueryRequest(query: 'lib'),
+            cancellation: cancellation,
+          )
+          .listen(
+            (_) {},
+            onError: errors.add,
+            onDone: done.complete,
+          );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      cancellation.cancel();
+      await done.future.timeout(const Duration(seconds: 5));
+
+      expect(errors, hasLength(1));
+      expect(
+        errors.single,
+        isA<BridgeProtocolError>().having(
+          (error) => error.code,
+          'code',
+          'request_failed',
+        ),
+      );
+    });
+
+    test('cancellation tolerates only already-terminal invalid_job_state',
+        () async {
+      final process = FakeProcess(handshake());
+      final launcher = FakeLauncher(process);
+      final httpClient = MockClient((request) async {
+        if (request.url.path == '/queries') {
+          return http.Response(
+            jsonEncode({'jobId': 'cancel-terminal-1', 'phase': 'starting'}),
+            202,
+          );
+        }
+        if (request.url.path == '/query-jobs/cancel-terminal-1/events') {
+          return http.Response(
+            jsonEncode(_batch(sequence: 1, phase: 'starting')),
+            200,
+          );
+        }
+        if (request.url.path == '/query-jobs/cancel-terminal-1/cancel') {
+          return http.Response(
+            jsonEncode({'error': 'invalid_job_state'}),
+            409,
+          );
+        }
+        if (request.url.path == '/shutdown') {
+          return http.Response('{"ok":true}', 200);
+        }
+        return http.Response('{"error":"not_found"}', 404);
+      });
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: launcher,
+        httpClient: httpClient,
+        parentPid: 99,
+      );
+      addTearDown(gateway.shutdown);
+      final cancellation = CancellationSignal();
+      final events = <SourceQueryEvent>[];
+      final errors = <Object>[];
+      final done = Completer<void>();
+      gateway
+          .execute(
+            const CampusSearchQueryRequest(query: 'lib'),
+            cancellation: cancellation,
+          )
+          .listen(
+            events.add,
+            onError: errors.add,
+            onDone: done.complete,
+          );
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      cancellation.cancel();
+      await done.future.timeout(const Duration(seconds: 5));
+
+      expect(errors, isEmpty);
+      expect(events.last, isA<SourceQueryFailed>());
+      expect((events.last as SourceQueryFailed).code, 'cancelled');
+    });
+
     test('shutdown POSTs /shutdown then kills the process', () async {
       final process = FakeProcess(handshake());
       final launcher = FakeLauncher(process);

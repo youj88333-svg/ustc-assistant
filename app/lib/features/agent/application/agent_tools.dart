@@ -11,6 +11,7 @@ import '../../tasks/domain/task_projection.dart';
 import '../domain/agent_tool.dart';
 import '../domain/query_source.dart';
 import 'agent_configuration_service.dart';
+import 'cancellation_signal.dart';
 import 'agent_local_data_gateway.dart';
 import 'outbound_privacy_filter.dart';
 
@@ -1256,16 +1257,17 @@ Future<List<SourceQueryEvent>> _collectQueryEvents(
 
 class _YoungQueryInvocation {
   _YoungQueryInvocation({
-    required this._gateway,
     required this._stream,
+    required this._cancellation,
   });
 
-  final QuerySourceGateway _gateway;
   final Stream<SourceQueryEvent> _stream;
+  final CancellationSignal _cancellation;
   final Completer<AgentToolResult> _initial = Completer<AgentToolResult>();
   final Completer<AgentToolResult> _terminal = Completer<AgentToolResult>();
   late final StreamSubscription<SourceQueryEvent> _subscription;
-  String? _jobId;
+  Future<void>? _cancelFuture;
+  Future<void>? _subscriptionCloseFuture;
   bool _finished = false;
 
   Future<AgentToolResult> start() {
@@ -1294,7 +1296,6 @@ class _YoungQueryInvocation {
   }
 
   void _onEvent(SourceQueryEvent event) {
-    _jobId = event.jobId;
     switch (event) {
       case SourceQueryProgress():
         return;
@@ -1334,24 +1335,33 @@ class _YoungQueryInvocation {
     } else {
       _initial.complete(result);
     }
-    scheduleMicrotask(() => _subscription.cancel());
+    scheduleMicrotask(() {
+      unawaited(_closeSubscription().catchError((Object _) {}));
+    });
   }
 
-  Future<void> cancel() async {
+  Future<void> cancel() => _cancelFuture ??= _cancel();
+
+  Future<void> _cancel() async {
     if (_finished) return;
-    final jobId = _jobId;
+    _cancellation.cancel();
+    var result = const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'cancelled',
+    );
     try {
-      if (jobId != null) await _gateway.cancel(jobId);
-    } finally {
-      await _subscription.cancel();
-      _finish(
-        const AgentToolResult(
-          status: AgentToolStatus.error,
-          errorCode: 'cancelled',
-        ),
+      await _closeSubscription();
+    } catch (_) {
+      result = const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'query_failed',
       );
     }
+    _finish(result);
   }
+
+  Future<void> _closeSubscription() =>
+      _subscriptionCloseFuture ??= _subscription.cancel();
 }
 
 // --- Tool: search_current_second_class_activities -------------------------
@@ -1410,11 +1420,11 @@ class SearchCurrentSecondClassActivitiesTool implements AgentTool {
       expectedUsername: expectedUsername,
     );
     return _YoungQueryInvocation(
-      gateway: _gateway,
       stream: _gateway.execute(
         request,
         cancellation: context.cancellation,
       ),
+      cancellation: context.cancellation,
     ).start();
   }
 

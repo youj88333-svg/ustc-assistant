@@ -359,8 +359,9 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
   Future<void> _safeCancel(String jobId) async {
     try {
       await cancel(jobId);
-    } catch (_) {
-      // Best-effort: a failed cancel must not break the stream teardown.
+    } on BridgeProtocolError catch (error) {
+      if (error.code != 'invalid_job_state') rethrow;
+      // A concurrent terminal transition already ended the same Bridge job.
     }
   }
 }

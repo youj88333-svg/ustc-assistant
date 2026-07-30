@@ -133,27 +133,36 @@ class AgentSessionService {
     final signal = CancellationSignal();
 
     () async {
-      if (_disposed) {
-        controller.add(
-          const AgentRunViewState(
-            runId: '',
-            state: AgentRunState.failed,
-            errorCode: 'service_disposed',
-          ),
-        );
-        await controller.close();
-        return;
-      }
-      await _cancelForAccountSwitch(accountId);
-      _activeSignal = signal;
-      _activeAccountId = accountId;
       try {
+        if (_disposed) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'service_disposed',
+            ),
+          );
+          return;
+        }
+        await _cancelForAccountSwitch(accountId);
+        _activeSignal = signal;
+        _activeAccountId = accountId;
         await _runLoop(
           controller: controller,
           accountId: accountId,
           userText: userText,
           signal: signal,
         );
+      } catch (_) {
+        if (!controller.isClosed) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'runtime_error',
+            ),
+          );
+        }
       } finally {
         if (identical(_activeSignal, signal)) {
           _activeSignal = null;
@@ -186,47 +195,54 @@ class AgentSessionService {
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
     () async {
-      if (_disposed) {
-        controller.add(
-          const AgentRunViewState(
-            runId: '',
-            state: AgentRunState.failed,
-            errorCode: 'service_disposed',
-          ),
-        );
-        await controller.close();
-        return;
-      }
-      await _cancelForAccountSwitch(accountId);
-      _activeSignal = signal;
-      _activeAccountId = accountId;
-      // Find the most recent completed user message to replay.
-      final history = await _chatRepository.recentMessages(accountId, limit: 200);
-      final lastUser = history.lastWhereOrNull(
-        (m) => m.role == ChatRole.user && m.state == ChatMessageState.completed,
-      );
-      if (lastUser == null) {
-        controller.add(
-          const AgentRunViewState(
-            runId: '',
-            state: AgentRunState.failed,
-            errorCode: 'nothing_to_retry',
-          ),
-        );
-        if (identical(_activeSignal, signal)) {
-          _activeSignal = null;
-          _activeAccountId = null;
-        }
-        await controller.close();
-        return;
-      }
       try {
+        if (_disposed) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'service_disposed',
+            ),
+          );
+          return;
+        }
+        await _cancelForAccountSwitch(accountId);
+        _activeSignal = signal;
+        _activeAccountId = accountId;
+        // Find the most recent completed user message to replay.
+        final history =
+            await _chatRepository.recentMessages(accountId, limit: 200);
+        final lastUser = history.lastWhereOrNull(
+          (m) =>
+              m.role == ChatRole.user &&
+              m.state == ChatMessageState.completed,
+        );
+        if (lastUser == null) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'nothing_to_retry',
+            ),
+          );
+          return;
+        }
         await _runLoop(
           controller: controller,
           accountId: accountId,
           userText: lastUser.content,
           signal: signal,
         );
+      } catch (_) {
+        if (!controller.isClosed) {
+          controller.add(
+            const AgentRunViewState(
+              runId: '',
+              state: AgentRunState.failed,
+              errorCode: 'runtime_error',
+            ),
+          );
+        }
       } finally {
         if (identical(_activeSignal, signal)) {
           _activeSignal = null;
@@ -250,51 +266,48 @@ class AgentSessionService {
   }) {
     final controller = StreamController<AgentRunViewState>(sync: true);
     () async {
-      final key = (accountId: accountId, runId: runId);
-      final paused = _pausedRuns[key];
-      if (paused == null) {
-        controller.add(
-          AgentRunViewState(
-            runId: runId,
-            state: AgentRunState.failed,
-            errorCode: 'paused_run_not_found',
-          ),
-        );
-        await controller.close();
-        return;
-      }
-      if (paused.resumeStarted) {
-        controller.add(
-          AgentRunViewState(
-            runId: runId,
-            state: AgentRunState.failed,
-            errorCode: 'resume_already_started',
-          ),
-        );
-        await controller.close();
-        return;
-      }
-      paused.resumeStarted = true;
-      final resume = userActionResumer;
-      if (resume == null) {
-        paused.signal.cancel();
-        await paused.pendingInvocation.cancel();
-        controller.add(
-          AgentRunViewState(
-            runId: runId,
-            state: AgentRunState.failed,
-            errorCode: 'resume_unavailable',
-          ),
-        );
-        await controller.close();
-        return;
-      }
       try {
-        await resume(accountId: accountId, action: paused.action);
-        await paused.pendingInvocation.result;
-      } catch (_) {
-        paused.signal.cancel();
-        await paused.pendingInvocation.cancel();
+        final key = (accountId: accountId, runId: runId);
+        final paused = _pausedRuns[key];
+        if (paused == null) {
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'paused_run_not_found',
+            ),
+          );
+          return;
+        }
+        if (paused.resumeStarted) {
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'resume_already_started',
+            ),
+          );
+          return;
+        }
+        paused.resumeStarted = true;
+        final resume = userActionResumer;
+        if (resume == null) {
+          await _cancelPausedRun(paused);
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'resume_unavailable',
+            ),
+          );
+          return;
+        }
+        try {
+          await resume(accountId: accountId, action: paused.action);
+          await paused.pendingInvocation.result;
+        } catch (_) {
+          await _cancelPausedRun(paused);
+        }
       } finally {
         await controller.close();
       }
@@ -323,8 +336,26 @@ class AgentSessionService {
   ) async {
     final matches = _pausedRuns.values.where(shouldCancel).toList();
     for (final paused in matches) {
-      paused.signal.cancel();
-      await paused.pendingInvocation.cancel();
+      await _cancelPausedRun(paused);
+    }
+  }
+
+  Future<void> _cancelPausedRun(_PausedRun paused) async {
+    final key = (accountId: paused.accountId, runId: paused.runId);
+    if (identical(_pausedRuns[key], paused)) {
+      _pausedRuns.remove(key);
+    }
+    paused.signal.cancel();
+    await _cancelPendingInvocation(paused.pendingInvocation);
+  }
+
+  Future<void> _cancelPendingInvocation(
+    AgentPendingToolInvocation pendingInvocation,
+  ) async {
+    try {
+      await pendingInvocation.cancel();
+    } catch (_) {
+      // The owning run receives a bounded terminal result from the invocation.
     }
   }
 
@@ -572,12 +603,17 @@ class AgentSessionService {
             final action = result.userAction;
             final pendingInvocation = result.pendingInvocation;
             if (action == null || pendingInvocation == null) {
+              if (pendingInvocation != null) {
+                await _cancelPendingInvocation(pendingInvocation);
+              }
+              terminalState = AgentRunState.failed;
+              errorCode = 'invalid_user_action';
               result = const AgentToolResult(
                 status: AgentToolStatus.error,
                 errorCode: 'invalid_user_action',
               );
             } else if (signal.isCancelled) {
-              await pendingInvocation.cancel();
+              await _cancelPendingInvocation(pendingInvocation);
               result = const AgentToolResult(
                 status: AgentToolStatus.error,
                 errorCode: 'cancelled',

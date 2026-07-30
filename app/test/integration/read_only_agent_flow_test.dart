@@ -36,6 +36,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
+import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 
 // Reuse the battle-tested fakes from the external tools test (single source of
 // truth for the FakeQueryGateway scripting surface).
@@ -255,11 +256,19 @@ class _BlockingQueryGateway implements QuerySourceGateway {
 
 /// A Young gateway that keeps one query stream open across a login pause.
 class _ResumableYoungQueryGateway implements QuerySourceGateway {
+  _ResumableYoungQueryGateway({
+    this.rejectDuplicateCancel = false,
+    this.failResume = false,
+  });
+
+  final bool rejectDuplicateCancel;
+  final bool failResume;
   final List<SourceQuery> requests = [];
   final List<String> resumedJobIds = [];
   final List<String> cancelCalls = [];
   final Completer<void> paused = Completer<void>();
   bool passwordWasProvided = false;
+  int effectiveCancelCount = 0;
 
   StreamController<SourceQueryEvent>? _controller;
   StreamSubscription<void>? _cancelSubscription;
@@ -275,10 +284,15 @@ class _ResumableYoungQueryGateway implements QuerySourceGateway {
     const jobId = 'young-1';
     final controller = StreamController<SourceQueryEvent>(sync: true);
     _controller = controller;
+    Future<void>? signalCancelFuture;
     _cancelSubscription = cancellation.onCancel.listen((_) {
-      unawaited(cancel(jobId));
+      // Production wakes its async polling loop before POSTing the signal-owned
+      // cancel. Delay one microtask so a second direct cancel is deterministic.
+      signalCancelFuture =
+          Future<void>.delayed(Duration.zero).then((_) => cancel(jobId));
     });
     controller.onCancel = () async {
+      await signalCancelFuture;
       await _cancelSubscription?.cancel();
       _cancelSubscription = null;
     };
@@ -297,6 +311,9 @@ class _ResumableYoungQueryGateway implements QuerySourceGateway {
   Future<void> resumeLogin(String jobId, {String? password}) async {
     resumedJobIds.add(jobId);
     passwordWasProvided = password != null;
+    if (failResume) {
+      throw const BridgeProtocolError('request_failed');
+    }
     final controller = _controller;
     if (controller == null || controller.isClosed) return;
     controller.add(
@@ -310,6 +327,11 @@ class _ResumableYoungQueryGateway implements QuerySourceGateway {
   @override
   Future<void> cancel(String jobId) async {
     cancelCalls.add(jobId);
+    if (rejectDuplicateCancel && cancelCalls.length > 1) {
+      // Mirrors Bridge HTTP 409 -> BridgeProtocolError(invalid_job_state).
+      throw const BridgeProtocolError('invalid_job_state');
+    }
+    effectiveCancelCount++;
     final controller = _controller;
     if (controller == null || controller.isClosed) return;
     controller.add(SourceQueryFailed(jobId: jobId, code: 'cancelled'));
@@ -899,6 +921,102 @@ void main() {
       });
       expect(persistedSnapshot, isNot(contains(protectedPassword)));
       expect(persistedSnapshot, isNot(contains('young-1')));
+    });
+
+    test(
+      'paused Young cancel sends one effective remote cancel when duplicate is 409',
+      () async {
+        final database = AppDatabase(NativeDatabase.memory());
+        addTearDown(database.close);
+        const account = 'a';
+        await _seedAccount(database, account);
+        final gateway = _ResumableYoungQueryGateway(
+          rejectDuplicateCancel: true,
+        );
+        final provider = _ScriptedProvider([
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-1',
+                  name: 'search_current_second_class_activities',
+                  input: {},
+                ),
+                const CompletedEvent(),
+              ]),
+        ]);
+        final service = _buildServiceWithGateway(
+          database: database,
+          provider: provider,
+          gateway: gateway,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+        final states = <AgentRunViewState>[];
+        final subscription = service
+            .send(accountId: account, userText: 'cancel paused query')
+            .listen(states.add);
+        final done = subscription.asFuture<void>();
+        await gateway.paused.future;
+        await Future<void>.delayed(Duration.zero);
+
+        await service.cancel(accountId: account);
+        await done.timeout(const Duration(seconds: 1));
+
+        expect(gateway.cancelCalls, ['young-1']);
+        expect(gateway.effectiveCancelCount, 1);
+        expect(states.last.state, AgentRunState.cancelled);
+      },
+    );
+
+    test('resume callback failure closes the Young job and original run', () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const account = 'a';
+      await _seedAccount(database, account);
+      final gateway = _ResumableYoungQueryGateway(
+        rejectDuplicateCancel: true,
+        failResume: true,
+      );
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-1',
+                name: 'search_current_second_class_activities',
+                input: {},
+              ),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final service = _buildServiceWithGateway(
+        database: database,
+        provider: provider,
+        gateway: gateway,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        resumeLogin: (jobId) => gateway.resumeLogin(
+          jobId,
+          password: 'protected-school-password',
+        ),
+      );
+      final states = <AgentRunViewState>[];
+      final subscription = service
+          .send(accountId: account, userText: 'resume paused query')
+          .listen(states.add);
+      final done = subscription.asFuture<void>();
+      await gateway.paused.future;
+      await Future<void>.delayed(Duration.zero);
+      final runId = states.last.runId;
+
+      await service
+          .resumeUserAction(accountId: account, runId: runId)
+          .drain<void>()
+          .timeout(const Duration(seconds: 1));
+      await done.timeout(const Duration(seconds: 1));
+
+      expect(gateway.cancelCalls, ['young-1']);
+      expect(gateway.effectiveCancelCount, 1);
+      expect(states.last.state, AgentRunState.cancelled);
+      final retry = await service
+          .resumeUserAction(accountId: account, runId: runId)
+          .toList();
+      expect(retry.single.errorCode, 'paused_run_not_found');
     });
   });
 }
