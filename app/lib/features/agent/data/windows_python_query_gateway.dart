@@ -318,6 +318,9 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
         (error != null && error is! Map<String, dynamic>)) {
       throw const FormatException('poll_fields');
     }
+    if (rawResult != null && !_isQueryResultEnvelope(rawResult)) {
+      throw const FormatException('query_result_envelope');
+    }
     final errorCode = error?['code'];
     if (errorCode != null && errorCode is! String) {
       throw const FormatException('error_code');
@@ -329,6 +332,19 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
       result: rawResult,
       errorCode: errorCode as String?,
     );
+  }
+
+  bool _isQueryResultEnvelope(Map<String, dynamic> envelope) {
+    final references = envelope['references'];
+    return envelope['schemaVersion'] == queryResultSchemaVersion &&
+        envelope['queryType'] is String &&
+        (envelope['queryType'] as String).isNotEmpty &&
+        envelope['generatedAt'] is String &&
+        (envelope['generatedAt'] as String).isNotEmpty &&
+        envelope['data'] is Map<String, dynamic> &&
+        envelope['metadata'] is Map<String, dynamic> &&
+        references is List &&
+        references.every((reference) => reference is String);
   }
 
   String _parseStartJobId(Map<String, dynamic> response) {

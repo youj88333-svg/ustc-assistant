@@ -450,6 +450,62 @@ void main() {
       }
     });
 
+    test('maps malformed terminal Query Result envelopes to invalid_response',
+        () async {
+      final malformedResults = <Map<String, dynamic>>[
+        {..._envelope, 'data': <Object?>[]},
+        {
+          'schemaVersion': '1.0',
+          'queryType': 'campus_search',
+          'generatedAt': '2026-07-29T09:00:00+08:00',
+          'data': <String, dynamic>{},
+          'references': <String>[],
+        },
+        {..._envelope, 'schemaVersion': 1},
+        {..._envelope, 'queryType': 1},
+        {..._envelope, 'generatedAt': 1},
+        {..._envelope, 'metadata': <Object?>[]},
+        {..._envelope, 'references': <Object?>[1]},
+      ];
+
+      for (final malformedResult in malformedResults) {
+        final poll = _PollScript([
+          _batch(
+            sequence: 1,
+            phase: 'complete',
+            terminal: true,
+            result: malformedResult,
+          ),
+        ]);
+        final gateway = await WindowsPythonQueryGateway.start(
+          pythonExecutable: 'python',
+          launcher: FakeLauncher(FakeProcess(handshake())),
+          httpClient: MockClient((request) async {
+            if (request.url.path == '/queries') {
+              return http.Response(
+                '{"jobId":"qjob-invalid-envelope","phase":"starting"}',
+                202,
+              );
+            }
+            if (request.url.path ==
+                '/query-jobs/qjob-invalid-envelope/events') {
+              return http.Response(jsonEncode(poll.next()), 200);
+            }
+            return http.Response('{"ok":true}', 200);
+          }),
+        );
+        addTearDown(gateway.shutdown);
+
+        final events = await gateway.execute(
+          const CampusSearchQueryRequest(query: 'lib'),
+          cancellation: CancellationSignal(),
+        ).toList();
+
+        expect(events.single, isA<SourceQueryFailed>());
+        expect((events.single as SourceQueryFailed).code, 'invalid_response');
+      }
+    });
+
     test('needs_user_login pauses the stream, resumeLogin uses fixed route',
         () async {
       final process = FakeProcess(handshake());
