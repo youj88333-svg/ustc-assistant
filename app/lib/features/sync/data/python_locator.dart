@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 class PythonLocationError implements Exception {
@@ -48,7 +49,10 @@ class PythonLocator {
   final PythonCommandRunner runner;
   final Map<String, String> environment;
 
-  Future<String> locate({String? savedExecutable}) async {
+  Future<String> locate({
+    String? savedExecutable,
+    String requiredModule = 'ustc_assistant.bridge',
+  }) async {
     final candidates = <String>[];
     if (savedExecutable != null && savedExecutable.trim().isNotEmpty) {
       candidates.add(savedExecutable.trim());
@@ -63,7 +67,7 @@ class PythonLocator {
       );
     }
     for (final candidate in candidates.toSet()) {
-      if (await _canImport(candidate)) return candidate;
+      if (await _canImport(candidate, requiredModule)) return candidate;
     }
     final resolved = await runner.run('conda', const [
       'run',
@@ -77,16 +81,16 @@ class PythonLocator {
       throw const PythonLocationError('conda_resolution_failed');
     }
     final path = resolved.stdout.trim().split(RegExp(r'\r?\n')).last.trim();
-    if (path.isEmpty || !await _canImport(path)) {
+    if (path.isEmpty || !await _canImport(path, requiredModule)) {
       throw const PythonLocationError('bridge_import_failed');
     }
     return path;
   }
 
-  Future<bool> _canImport(String executable) async {
-    final result = await runner.run(executable, const [
+  Future<bool> _canImport(String executable, String requiredModule) async {
+    final result = await runner.run(executable, [
       '-c',
-      'import ustc_assistant.bridge',
+      'import importlib; importlib.import_module(${jsonEncode(requiredModule)})',
     ]);
     return result.exitCode == 0;
   }

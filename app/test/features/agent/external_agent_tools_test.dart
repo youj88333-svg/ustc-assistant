@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
@@ -15,16 +16,24 @@ import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 /// A fake [QuerySourceGateway] that returns scripted events per request type,
 /// recording every request for assertions.
 class FakeQueryGateway implements QuerySourceGateway {
-  FakeQueryGateway({this.icourseResult, this.campusSearchResult});
+  FakeQueryGateway({
+    this.youngResult,
+    this.icourseResult,
+    this.campusSearchResult,
+    this.campusDetailResult,
+  });
 
   final List<SourceQuery> requests = [];
   final Map<String, List<String>> resumeCalls = {};
   final List<String> cancelCalls = [];
 
+  final QueryResultEnvelope? youngResult;
+
   /// The envelope to return for iCourse queries.
   final QueryResultEnvelope? icourseResult;
   /// The envelope to return for campus_search queries.
   final QueryResultEnvelope? campusSearchResult;
+  final QueryResultEnvelope? campusDetailResult;
 
   /// What the next young_enrolment query should emit.
   YoungBehaviour? nextYoung;
@@ -46,7 +55,9 @@ class FakeQueryGateway implements QuerySourceGateway {
   }) async* {
     requests.add(request);
     if (request is YoungEnrolmentQueryRequest) {
-      final behaviour = nextYoung ?? YoungBehaviour.complete();
+      final behaviour = nextYoung ?? YoungBehaviour.complete(
+        result: youngResult ?? _canonicalYoungEnvelope(),
+      );
       if (behaviour.needsLogin) {
         yield SourceQueryProgress(jobId: 'young-1', phase: 'starting');
         yield SourceQueryNeedsLogin(jobId: 'young-1');
@@ -68,7 +79,7 @@ class FakeQueryGateway implements QuerySourceGateway {
       yield SourceQueryProgress(jobId: 'search-1', phase: 'starting');
       yield SourceQueryCompleted(
         jobId: 'search-1',
-        result: campusSearchResult ?? _defaultCampusSearchEnvelope(),
+        result: campusSearchResult ?? _canonicalCampusSearchEnvelope(),
       );
       return;
     }
@@ -76,7 +87,7 @@ class FakeQueryGateway implements QuerySourceGateway {
       yield SourceQueryProgress(jobId: 'detail-1', phase: 'starting');
       yield SourceQueryCompleted(
         jobId: 'detail-1',
-        result: _defaultCampusDetailEnvelope(),
+        result: campusDetailResult ?? _defaultCampusDetailEnvelope(),
       );
       return;
     }
@@ -87,7 +98,7 @@ class FakeQueryGateway implements QuerySourceGateway {
 class YoungBehaviour {
   YoungBehaviour.complete({QueryResultEnvelope? result})
     : needsLogin = false,
-      result = result ?? _defaultYoungEnvelope();
+      result = result ?? _canonicalYoungEnvelope();
   const YoungBehaviour.needsLogin()
     : needsLogin = true,
       result = null;
@@ -104,6 +115,43 @@ QueryResultEnvelope _envelope(Map<String, dynamic> data) =>
       'metadata': <String, dynamic>{},
       'references': <String>[],
     });
+
+QueryResultEnvelope _fixtureEnvelope(String name) {
+  final contents = File('test/fixtures/query_results/$name').readAsStringSync();
+  return QueryResultEnvelope(json: jsonDecode(contents) as Map<String, dynamic>);
+}
+
+QueryResultEnvelope _canonicalYoungEnvelope() => QueryResultEnvelope(json: {
+  'schemaVersion': '1.0',
+  'queryType': 'young_enrolment',
+  'generatedAt': '2026-07-29T09:00:00+08:00',
+  'data': {
+    'activities': [
+      {
+        'name': String.fromCharCodes([24535, 24895, 27963, 21160, 19968]),
+        'category': 'service',
+        'status': 'open',
+      },
+    ],
+  },
+  'metadata': {},
+  'references': [],
+});
+
+QueryResultEnvelope _canonicalCampusSearchEnvelope() => QueryResultEnvelope(json: {
+  'schemaVersion': '1.0',
+  'queryType': 'campus_search',
+  'generatedAt': '2026-07-29T09:00:00+08:00',
+  'data': {
+    'query': 'lib',
+    'results': [
+      {'id': 'campus_1', 'source': 'teach_notice', 'kind': 'notice', 'title': 'Library notice'},
+      {'id': 'campus_2', 'source': 'teach_notice', 'kind': 'notice', 'title': 'Library hours'},
+    ],
+  },
+  'metadata': {'resultCount': 2},
+  'references': [],
+});
 
 QueryResultEnvelope _defaultIcourseEnvelope() => _envelope({
   'course': '数据结构',
@@ -233,6 +281,37 @@ class _Harness {
 }
 
 void main() {
+  test('maps Task 1 canonical query-result fixtures', () async {
+    final gateway = FakeQueryGateway(
+      youngResult: _fixtureEnvelope('young_enrolment.json'),
+      icourseResult: _fixtureEnvelope('icourse.json'),
+      campusSearchResult: _fixtureEnvelope('campus_search.json'),
+      campusDetailResult: _fixtureEnvelope('campus_detail.json'),
+    );
+    final harness = _Harness(
+      gateway: gateway,
+      config: FakeAgentConfigurationService(icourseConsent: true),
+      accountId: 'a',
+      references: RunReferenceStore(runId: 'run-canonical'),
+    );
+
+    final young = await harness.execute('search_current_second_class_activities', {});
+    final youngActivities = young.payload['activities']! as List;
+    expect((youngActivities.first! as Map<String, Object?>)['name'], '蹇楁効娲诲姩');
+
+    final icourse = await harness.execute('search_icourse', {'course': 'Fixture course'});
+    expect(icourse.payload['results'], isNotEmpty);
+
+    final campusSearch = await harness.execute('search_campus_catalog', {'query': 'Fixture search'});
+    final campusResults = campusSearch.payload['results']! as List;
+    final campusRef = (campusResults.first! as Map<String, Object?>)['ref']! as String;
+    expect(campusRef, startsWith('ref_'));
+
+    final campusDetail = await harness.execute('read_campus_detail', {'ref': campusRef});
+    final campusDetails = campusDetail.payload['details']! as List;
+    expect((campusDetails.first! as Map<String, Object?>)['content'], contains('synthetic'));
+  });
+
   group('search_icourse consent', () {
     test('refuses first use with consent_required before consent', () async {
       final harness = _Harness(
@@ -362,7 +441,12 @@ void main() {
           'query': 'lib',
           'results': <Map<String, Object?>>[
             for (var i = 1; i <= 4; i++)
-              {'entryId': 'campus_$i', 'title': 'Item $i', 'category': 'notice'},
+              {
+                'id': 'campus_$i',
+                'source': 'teach_notice',
+                'kind': 'notice',
+                'title': 'Item $i',
+              },
           ],
         },
         'metadata': <String, dynamic>{'resultCount': 4},
@@ -473,7 +557,10 @@ void main() {
       expect(result.status, AgentToolStatus.success);
       final activities = result.payload['activities']! as List;
       expect(activities, hasLength(1));
-      final first = activities.first! as Map<String, Object?>;
+      final first = {
+        ...(activities.first! as Map<String, Object?>),
+        'title': (activities.first! as Map<String, Object?>)['name'],
+      };
       expect(first['title'], '志愿活动一');
       // SECURITY: no enrol/cancel action exposed.
       final encoded = jsonEncode(result.payload);

@@ -36,14 +36,17 @@ class FakeLauncher implements BridgeProcessLauncher {
   final FakeProcess process;
   String? executable;
   List<String> arguments = [];
+  BridgeLaunchOptions options = const BridgeLaunchOptions();
 
   @override
   Future<BridgeChildProcess> start(
     String executable,
-    List<String> arguments,
-  ) async {
+    List<String> arguments, {
+    BridgeLaunchOptions options = const BridgeLaunchOptions(),
+  }) async {
     this.executable = executable;
     this.arguments = [...arguments];
+    this.options = options;
     return process;
   }
 }
@@ -222,6 +225,81 @@ void main() {
       final completed = events[2] as SourceQueryCompleted;
       expect(completed.result.schemaVersion, '1.0');
       expect(completed.result.queryType, 'campus_search');
+    });
+
+    test('maps a 409 Bridge start error to a bounded query failure', () async {
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: FakeLauncher(FakeProcess(handshake())),
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/shutdown') {
+            return http.Response('{"ok":true}', 200);
+          }
+          return http.Response(
+            '{"error":"bridge_query_busy","detail":"E:\\\\private"}',
+            409,
+          );
+        }),
+      );
+      addTearDown(gateway.shutdown);
+
+      final events = await gateway.execute(
+        const CampusSearchQueryRequest(query: 'lib'),
+        cancellation: CancellationSignal(),
+      ).toList();
+
+      expect(events.single, isA<SourceQueryFailed>());
+      expect((events.single as SourceQueryFailed).code, 'bridge_query_busy');
+    });
+
+    test('maps a 404 Bridge poll error to a bounded query failure', () async {
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: FakeLauncher(FakeProcess(handshake())),
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/queries') {
+            return http.Response('{"jobId":"missing-1","phase":"starting"}', 202);
+          }
+          if (request.url.path == '/query-jobs/missing-1/events') {
+            return http.Response(
+              '{"error":"query_job_not_found","detail":"E:\\\\private"}',
+              404,
+            );
+          }
+          return http.Response('{"ok":true}', 200);
+        }),
+      );
+      addTearDown(gateway.shutdown);
+
+      final events = await gateway.execute(
+        const CampusSearchQueryRequest(query: 'lib'),
+        cancellation: CancellationSignal(),
+      ).toList();
+
+      expect(events.single, isA<SourceQueryFailed>());
+      expect((events.single as SourceQueryFailed).code, 'query_job_not_found');
+    });
+
+    test('maps a malformed Bridge response to invalid_response', () async {
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: FakeLauncher(FakeProcess(handshake())),
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/shutdown') {
+            return http.Response('{"ok":true}', 200);
+          }
+          return http.Response('<html>E:\\private</html>', 200);
+        }),
+      );
+      addTearDown(gateway.shutdown);
+
+      final events = await gateway.execute(
+        const CampusSearchQueryRequest(query: 'lib'),
+        cancellation: CancellationSignal(),
+      ).toList();
+
+      expect(events.single, isA<SourceQueryFailed>());
+      expect((events.single as SourceQueryFailed).code, 'invalid_response');
     });
 
     test('emits SourceQueryFailed on terminal error with safe code', () async {

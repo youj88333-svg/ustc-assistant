@@ -70,6 +70,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     int? parentPid,
     Duration handshakeTimeout = const Duration(seconds: 10),
     Duration maxWait = _defaultMaxWait,
+    BridgeLaunchOptions launchOptions = const BridgeLaunchOptions(),
   }) async {
     final client = await BridgeClient.start(
       pythonExecutable: pythonExecutable,
@@ -77,6 +78,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
       httpClient: httpClient,
       parentPid: parentPid,
       handshakeTimeout: handshakeTimeout,
+      launchOptions: launchOptions,
     );
     return WindowsPythonQueryGateway._(client, maxWait);
   }
@@ -87,7 +89,13 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     required CancellationSignal cancellation,
   }) async* {
     final body = _buildRequestBody(request);
-    final startResponse = await _post('/queries', body);
+    late final Map<String, dynamic> startResponse;
+    try {
+      startResponse = await _post('/queries', body);
+    } on BridgeProtocolError catch (error) {
+      yield SourceQueryFailed(jobId: 'bridge', code: error.code);
+      return;
+    }
     final jobId = startResponse['jobId'] as String;
     // Do not emit a progress event for the start-response phase: the first
     // poll batch will emit the authoritative starting event. Emitting both
@@ -116,7 +124,13 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
           yield SourceQueryFailed(jobId: jobId, code: 'query_timeout');
           return;
         }
-        final poll = await _poll(jobId, afterSequence);
+        late final _QueryPoll poll;
+        try {
+          poll = await _poll(jobId, afterSequence);
+        } on BridgeProtocolError catch (error) {
+          yield SourceQueryFailed(jobId: jobId, code: error.code);
+          return;
+        }
         var pausedForLogin = false;
         for (final event in poll.events) {
           final phase = event['phase'] as String?;

@@ -34,20 +34,26 @@ class FakeLauncher implements BridgeProcessLauncher {
   final FakeProcess process;
   String? executable;
   List<String> arguments = [];
+  BridgeLaunchOptions options = const BridgeLaunchOptions();
 
   @override
   Future<BridgeChildProcess> start(
     String executable,
-    List<String> arguments,
-  ) async {
+    List<String> arguments, {
+    BridgeLaunchOptions options = const BridgeLaunchOptions(),
+  }) async {
     this.executable = executable;
     this.arguments = [...arguments];
+    this.options = options;
     return process;
   }
 }
 
 class FakePythonRunner implements PythonCommandRunner {
+  FakePythonRunner({this.queryJobsImportSucceeds = true});
+
   final calls = <(String, List<String>)>[];
+  final bool queryJobsImportSucceeds;
 
   @override
   Future<ProcessResultValue> run(
@@ -61,6 +67,9 @@ class FakePythonRunner implements PythonCommandRunner {
         stdout: 'C:\\envs\\ustc_assistant\\python.exe\n',
         stderr: '',
       );
+    }
+    if (arguments.join(' ').contains('query_jobs') && !queryJobsImportSucceeds) {
+      return const ProcessResultValue(exitCode: 1, stdout: '', stderr: '');
     }
     return const ProcessResultValue(exitCode: 0, stdout: '', stderr: '');
   }
@@ -199,7 +208,46 @@ void main() {
     final path = await locator.locate();
     expect(path, r'C:\envs\ustc_assistant\python.exe');
     expect(runner.calls.first.$1, 'conda');
-    expect(runner.calls.last.$2, contains('import ustc_assistant.bridge'));
+    expect(runner.calls.last.$2.join(' '), contains('ustc_assistant.bridge'));
+  });
+
+  test('python locator rejects a legacy Bridge without query jobs', () async {
+    final runner = FakePythonRunner(queryJobsImportSucceeds: false);
+    final locator = PythonLocator(runner: runner, environment: const {});
+    final legacyBridge = await runner.run('legacy-python.exe', const [
+      '-c',
+      'import ustc_assistant.bridge',
+    ]);
+    expect(legacyBridge.exitCode, 0);
+
+    await expectLater(
+      locator.locate(
+        savedExecutable: 'legacy-python.exe',
+        requiredModule: 'ustc_assistant.bridge.query_jobs',
+      ),
+      throwsA(isA<PythonLocationError>().having(
+        (error) => error.code,
+        'code',
+        'bridge_import_failed',
+      )),
+    );
+  });
+
+  test('BridgeClient passes explicit working directory and environment', () async {
+    final launcher = FakeLauncher(FakeProcess(handshake()));
+    final client = await BridgeClient.start(
+      pythonExecutable: 'python',
+      launcher: launcher,
+      httpClient: MockClient((_) async => http.Response('{"ok":true}', 200)),
+      launchOptions: const BridgeLaunchOptions(
+        workingDirectory: r'C:\worktree',
+        environment: {'PYTHONPATH': r'C:\worktree\src'},
+      ),
+    );
+    addTearDown(client.shutdown);
+
+    expect(launcher.options.workingDirectory, r'C:\worktree');
+    expect(launcher.options.environment!['PYTHONPATH'], r'C:\worktree\src');
   });
 
   test('BridgeQueryGateway uses fixed query routes and bearer token', () async {

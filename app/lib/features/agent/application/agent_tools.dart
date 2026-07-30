@@ -1183,14 +1183,11 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
             'generatedAt': raw['generatedAt'],
             'jobId': raw['jobId'],
           },
-      'search_icourse': (raw) => {
-            'course': raw['course'],
-            'teachers': raw['teachers'],
-            'summary': raw['summary'],
-            'reviewCount': raw['reviewCount'],
-            'rating': raw['rating'],
-            'generatedAt': raw['generatedAt'],
-          },
+  'search_icourse': (raw) => {
+    'query': raw['query'],
+    'results': raw['results'],
+    'generatedAt': raw['generatedAt'],
+  },
       'search_campus_catalog': (raw) => {
             'query': raw['query'],
             'results': raw['results'],
@@ -1359,16 +1356,11 @@ AgentToolResult _mapYoungEnrolmentResult(QueryResultEnvelope envelope) {
   final activities = <Map<String, Object?>>[];
   for (final raw in activitiesRaw) {
     if (raw is! Map<String, dynamic>) continue;
-    final dto = <String, Object?>{
-      'title': raw['title'],
+    activities.add({
+      'name': raw['name'],
       'category': raw['category'],
       'status': raw['status'],
-    };
-    if (raw['capacity'] != null) dto['capacity'] = raw['capacity'];
-    if (raw['enrolledCount'] != null) {
-      dto['enrolledCount'] = raw['enrolledCount'];
-    }
-    activities.add(dto);
+    });
   }
   return AgentToolResult(
     payload: {
@@ -1462,17 +1454,49 @@ class SearchIcourseTool implements AgentTool {
 
 AgentToolResult _mapIcourseResult(QueryResultEnvelope envelope) {
   final data = envelope.data;
-  final dto = <String, Object?>{
-    'course': data['course'],
-    'generatedAt': envelope.generatedAt,
-  };
-  if (data['teachers'] is List) {
-    dto['teachers'] = data['teachers'];
-  }
-  if (data['summary'] != null) dto['summary'] = data['summary'];
-  if (data['reviewCount'] != null) dto['reviewCount'] = data['reviewCount'];
-  if (data['rating'] != null) dto['rating'] = data['rating'];
-  return AgentToolResult(payload: dto);
+  return AgentToolResult(
+    payload: {
+      'query': data['query'],
+      'results': _selectIcourseResults(data['results']),
+      'generatedAt': envelope.generatedAt,
+    },
+  );
+}
+
+List<Map<String, Object?>> _selectIcourseResults(Object? rawResults) {
+  if (rawResults is! List) return const [];
+  return [
+    for (final raw in rawResults)
+      if (raw is Map<String, dynamic>)
+        {
+          'name': raw['name'],
+          'teachers': raw['teachers'],
+          'terms': raw['terms'],
+          'averageScore': raw['averageScore'],
+          'reviewCount': raw['reviewCount'],
+          'aggregate': _selectIcourseFields(raw['aggregate'], const ['difficulty', 'homework', 'grading', 'gain']),
+          'siteAiSummary': _selectIcourseFields(raw['siteAiSummary'], const ['source', 'text']),
+          'reviews': raw['reviews'],
+          'teacherLinks': _selectIcourseListFields(raw['teacherLinks'], const ['label']),
+          'ranking': _selectIcourseFields(raw['ranking'], const ['score', 'reasons']),
+          'selectedEvidence': raw['selectedEvidence'],
+          'relationStrength': raw['relationStrength'],
+        },
+  ];
+}
+
+Map<String, Object?>? _selectIcourseFields(Object? value, List<String> keys) {
+  if (value is! Map<String, dynamic>) return null;
+  return {for (final key in keys) if (value[key] != null) key: value[key]};
+}
+
+List<Map<String, Object?>> _selectIcourseListFields(Object? value, List<String> keys) {
+  if (value is! List) return const [];
+  return [
+    for (final item in value)
+      if (item is Map<String, dynamic>)
+        {for (final key in keys) if (item[key] != null) key: item[key]},
+  ];
 }
 
 // --- Tool: search_campus_catalog ------------------------------------------
@@ -1557,15 +1581,17 @@ AgentToolResult _mapCampusSearchResult(
   if (resultsRaw is List) {
     for (final raw in resultsRaw) {
       if (raw is! Map<String, dynamic>) continue;
-      final entryId = raw['entryId'];
+      final entryId = raw['id'];
       if (entryId is! String) continue;
       // Bind a run-local ref for this catalog entry. The model gets the ref,
       // never the raw entryId.
       final ref = context.references.bind(kind: 'campus_entry', localId: entryId);
       dtos.add({
         'ref': ref,
+        'source': raw['source'],
+        'kind': raw['kind'],
         'title': raw['title'],
-        'category': raw['category'],
+        'publishedAt': raw['publishedAt'],
       });
       references.add(
         AgentToolReference(kind: 'campus_entry', ref: ref, localId: entryId),
@@ -1747,11 +1773,10 @@ Map<String, Object?> _mapCampusDetail(
   final ref = context.references.bind(kind: 'campus_entry', localId: entryId);
   final dto = <String, Object?>{
     'ref': ref,
+    'source': data['source'],
     'title': data['title'],
   };
-  if (data['body'] != null) dto['body'] = data['body'];
-  if (data['category'] != null) dto['category'] = data['category'];
-  if (data['publishedAt'] != null) dto['publishedAt'] = data['publishedAt'];
+  if (data['content'] != null) dto['content'] = data['content'];
   dto['generatedAt'] = envelope.generatedAt;
   return dto;
 }
