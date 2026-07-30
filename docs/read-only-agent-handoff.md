@@ -2,20 +2,25 @@
 
 更新时间：2026-07-29
 
-## 0. 当前状态（2026-07-29 更新）
+## 0. 当前状态（2026-07-30 更新）
 
-只读 Agent 的 Task 1–13 已在 `feature/read-only-agent` 分支上全部实现、审查并提交。
-HEAD 为 `ac995e6`。完整只读 Agent 已落地：Agent 数据库表、DPAPI 保护 API Key 与配置、
-Anthropic SSE Provider、隐私过滤与上下文构建、工具注册表与会话运行时、15 个只读工具
-（11 本地 + 4 按需来源）、Python 稳定查询 API、Bridge Query Protocol 1.0 查询作业、
-Flutter 查询网关与 4 个外部工具、设置 UI、聊天 UI 与组合、端到端安全测试。
+只读 Agent 的 Task 1–8 已在 `feature/read-only-agent` 分支上实现、审查并提交；Task 9
+及最终整分支审查尚未执行，因此本节不硬编码最终 HEAD 哈希——最终修复后的精确 HEAD 在
+最终验证时记录于本文件第 7 节，Task 9 之前任何哈希都会被后续提交改写。完整只读 Agent
+已落地：Agent 数据库表、DPAPI 保护 API Key 与配置、Anthropic SSE Provider、隐私过滤
+与上下文构建、工具注册表与会话运行时、15 个只读工具（11 本地 + 4 按需来源）、Python
+稳定查询 API、Bridge Query Protocol 1.0 查询作业、Flutter 查询网关与 4 个外部工具、
+设置 UI、聊天 UI 与组合、端到端安全测试，以及 Task 8 新增的组合级集成测试（真实路由
++ 注入式组合覆盖配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、网关释放与
+捕获请求隐私断言）。
 
-**真实人工验收（Task 13 Step 7）尚未执行**：下文第 9 节的人工验收清单
+**真实人工验收尚未执行**：下文第 9 节的人工验收清单
 （`docs/acceptance/read-only-agent.md`）需由用户在真实校园网 / Panabit iWAN / 真实
-API Key 环境下逐项执行。自动测试通过不等于人工验收通过。
+API Key 环境下逐项执行。自动测试通过不等于人工验收通过——学校 API 与学校网站从不进入
+自动测试，组合级集成测试只验证代码行为。
 
 **最终整分支审查尚未执行**：各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类，
-由控制器在 Task 13 之后单独执行，不在本交接范围内。
+由控制器在最终验证后单独执行，不在本交接范围内。
 
 以下第 1–9 节保留原始交接基线信息（实施前的状态描述），仅在第 7、8 节追加实际验证
 结果与已知边界。历史基线不应被当作“功能未实现”——以本节和代码为准。
@@ -116,7 +121,9 @@ Tool calling:  tool_use / tool_result
 - 校内校园网直接访问；
 - 校外由用户自行开启 Panabit iWAN；
 - App 不启动或配置 iWAN、系统代理或 TUN；
-- 当前外部代理影响校园路由时，用户自行将学校 API Host 配置为直连；
+- 学校 API Host 由 `AnthropicLlmProvider` 固定为 `https://api.llm.ustc.edu.cn`，不在
+  App 内提供 Host 配置项；当前外部代理影响校园路由时，由用户在系统层面将该 Host 走
+  直连（系统代理或 PAC），App 不管理系统代理；
 - 不自动切换到第三方云模型；
 - 首版只使用文本模型，不启用 `qwen3.6-chat` 视觉路由。
 
@@ -218,16 +225,19 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 
 ## 7. 验证基线
 
-只读 Agent Task 1–13 完成后，在 `feature/read-only-agent` 分支 HEAD `ac995e6` 上
-重新运行完整自动验证（2026-07-29），实际结果为：
+只读 Agent 修复轮（Tasks 1–8）在 `feature/read-only-agent` 分支上推进；最终修复后的
+精确 HEAD 在最终验证时记录于此（Task 9 之前不硬编码，因为后续提交会改写哈希）。Task 8
+新增的组合级集成测试聚焦命令与结果：
 
 ```text
-Python unittest: 369 passed
-Python compileall: exit 0
-Flutter analyze: No issues found!
-Flutter test: 432 passed
-Windows Release build: passed (build\windows\x64\runner\Release\ustc_assistant_app.exe)
+Push-Location app
+E:\flutter\flutter\bin\flutter.bat test test/integration/agent_composition_flow_test.dart test/integration/read_only_agent_flow_test.dart test/accessibility/milestone_accessibility_test.dart
+Pop-Location
 ```
+
+该聚焦套件全部通过（组合级集成测试 + 既有只读 Agent 流程测试 + 里程碑可访问性测试）。
+完整自动验证（Python unittest / compileall / Flutter analyze / Flutter test / Windows
+Release build）在最终验证时重新运行并记录于此。自动测试只验证代码行为，不代替人工验收。
 
 Python 测试必须在 worktree 下运行（editable install 指向主工作区 `E:/107/src`，
 不是 worktree），命令为：
@@ -266,14 +276,25 @@ Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。人工
 - 当前教务默认配置以 `config/source-defaults.json` 为准：
   `421 / 2026spring / 2026 春季学期`；
 - 历史 implementation plan 中的复选框不是实时状态；
-- 只读 Agent plan 的 13 个 Task 已全部执行并提交（Task 1–13），HEAD `ac995e6`；
+- 只读 Agent 修复轮各 Task 在 `feature/read-only-agent` 分支上实现并提交；最终修复后
+  的精确 HEAD 在第 7 节最终验证时记录，不在本节硬编码（Task 9 等后续提交会改写哈希）；
 - 真实 Key、完整账号、私人课表和原始模型请求不得写入验收文档。
 
 ### 只读 Agent 已知限制与后续工作
 
-- 引用 chip 当前不可交互：尚未实现临时引用（`ref_*`）到来源 URL 的解析。为避免
-  伪造 URL，chip 渲染为纯文本（引用真实性通过“不启动伪造 URL”保证）。真实解析为
-  合并后工作，不在本里程碑范围。
+- 本地导航 chip 可交互，公开引用 chip 仍不可交互：本地日程/任务工具返回数据时会话
+  生成去重的 `AgentLocalAction`，聊天页渲染为可点击 `ActionChip`（`查看日程`/
+  `查看任务`）经 GoRouter 跳转；公开目录引用（`campus_entry`）仍为不可交互 `Chip`，
+  因为临时引用（`ref_*`）到来源 URL 的解析尚未实现（引用真实性通过“不启动伪造 URL”
+  保证）。真实解析为合并后工作，不在本里程碑范围。
+- 查询网关惰性启动：`LazyQuerySourceGateway` 在首次外部来源工具调用时才启动 Python
+  Bridge，启动失败归一化为 `bridge_unavailable` 且可重试；Python Bridge 使用显式数据
+  根，不在用户主目录隐式写入。
+- 报名中二课同作业恢复：需要登录时返回 `needs_user_login` 暂停运行；用户点击
+  “打开登录窗口并继续”后会话对同一作业调用 `resumeLogin`，密码从受保护凭据按账号
+  读取，仅传给网关，从不写入工具结果、模型请求或持久日志。
+- 学校 API Host 固定为 `https://api.llm.ustc.edu.cn`，不在 App 内提供 Host 配置项；
+  篡改的 Host 被拒绝（`protocol_error`，不发请求）。
 - 各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类：Task 2（3 项）、Task 3
   （4 项）、Task 4（9 项）、Task 5（5 项）、Task 6（5 项）、Task 7（5 项）、
   Task 8（3 项）、Task 9（5 项）、Task 10（1 项）、Task 11（7 项）、Task 12

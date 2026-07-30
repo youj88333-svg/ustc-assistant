@@ -18,6 +18,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/agent_chat_page.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/agent_settings_page.dart';
+import 'package:ustc_assistant_app/features/agent/presentation/safe_markdown_message.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/week_timetable.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
@@ -274,6 +275,29 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pump();
     expect(FocusManager.instance.primaryFocus, isNotNull);
+  });
+
+  // Task 7/8: the local-action chip (rendered when a schedule/task tool ran)
+  // exposes an accessible label via its ActionChip text, so assistive tech
+  // announces the navigation target. Minimal semantics assertion matching the
+  // existing lightweight style.
+  testWidgets('local action chip exposes an accessible label', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SafeMarkdownMessage(
+            text: '查询结果',
+            localActions: const [AgentLocalAction.schedule],
+            onLocalAction: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    // The chip's label text is the accessible name (ActionChip surfaces its
+    // Text label as semantics).
+    expect(find.bySemanticsLabel('查看日程'), findsOneWidget);
+    expect(find.byType(ActionChip), findsOneWidget);
   });
 
   // Task 12: the Agent settings page exposes semantics for its key controls

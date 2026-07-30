@@ -127,9 +127,10 @@ Flutter 工程位于 `app/`，使用 Flutter 3.44.5 和 Dart 3.12.2。由于 Flu
 3.44.5 固定的 `meta` 版本与原计划的新生成器不兼容，当前锁定
 `drift_dev 2.34.0` 与 `build_runner 2.10.5`；运行时 `drift` 保持 2.34.2。
 
-2026-07-29 的最近自动验证结果为 Python 369 项测试通过、`compileall` 退出码 0、
-Flutter 432 项测试通过、静态分析无问题、Windows Release 构建成功。自动验证不代替
-需要学校登录和真实 API Key 的人工验收。
+只读 Agent 修复轮的最近自动验证结果（Python / Flutter 测试计数、静态分析、Windows
+Release 构建）在最终验证时记录于 `docs/read-only-agent-handoff.md` 第 7 节；本文件不
+硬编码计数与 HEAD 哈希，因为后续提交会改写。自动验证不代替需要学校登录和真实 API Key
+的人工验收。
 
 架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。`collect jw`
 与 `collect young-schedule` 默认输出

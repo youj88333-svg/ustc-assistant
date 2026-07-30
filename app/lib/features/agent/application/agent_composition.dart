@@ -127,12 +127,18 @@ class AgentComposition {
     required AccountService accounts,
     required SecretStoreFactory secretStoreFactory,
     required QueryGatewayFactory queryGatewayFactory,
+    LlmProvider Function()? providerFactory,
   }) async {
     final clock = const SystemBeijingClock();
     final chatRepository = DriftChatRepository(database);
     await chatRepository.recoverInterrupted();
     final secretStore = secretStoreFactory(database);
-    final provider = AnthropicLlmProvider();
+    // Production constructs the real Anthropic gateway. The optional factory is
+    // the test-injection seam: composition-level tests pump the real router with
+    // a scripted provider (capturing requests) without touching the network.
+    final provider = providerFactory == null
+        ? AnthropicLlmProvider()
+        : providerFactory();
     final localGateway = DriftAgentLocalDataGateway(database);
     final queryGateway = await queryGatewayFactory(database, accountId);
     final configService = AgentConfigurationService(

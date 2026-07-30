@@ -44,11 +44,13 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
   以及只读 Agent 使用的 Bridge Query Protocol 1.0 查询作业（`ReadQueryJobManager`，
   与采集作业分离）；移动端 `SourceGateway` 尚未实现。
 - 只读校园 Agent 已实现（`app/lib/features/agent/`）：共享平台无关核心 + Windows
-  适配器（DPAPI 保护 Key、Python 查询网关）。Task 1–13 已全部提交，HEAD `ac995e6`。
-  引用 chip 当前不可交互（临时引用到来源 URL 的解析为合并后工作）。
-- Windows C++ 工具链已安装，Release 可构建。2026-07-29 自动验证通过 Python 369 项
-  测试、`compileall` 退出码 0、Flutter 432 项测试、Flutter 静态分析无问题、
-  Windows Release 构建成功。
+  适配器（DPAPI 保护 Key、Python 查询网关）。修复轮各 Task 在 `feature/read-only-agent`
+  分支上实现并提交；最终修复后的精确 HEAD 在 `docs/read-only-agent-handoff.md` 第 7 节
+  最终验证时记录，不在本文件硬编码（后续提交会改写哈希）。本地导航 chip 可交互
+  （`ActionChip` 经 GoRouter 跳转），公开引用 chip 仍不可交互（临时引用到来源 URL 的
+  解析为合并后工作）。
+- Windows C++ 工具链已安装，Release 可构建。自动验证结果在最终验证时更新记录于
+  `docs/read-only-agent-handoff.md` 第 7 节；自动测试只验证代码行为，不代替人工验收。
 - 第一轮 Windows 首版真实手工验收已经完成并产生修复；修复后的完整人工复测仍未
   结束。只读 Agent 的人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行。不得
   把自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md` 和
@@ -205,14 +207,18 @@ Pop-Location
 
 涉及学校页面的改动还必须由真实 Edge 登录会话验收。自动测试不得访问学校网站。
 
-### 只读 Agent 自动验证（2026-07-29，HEAD ac995e6）
+### 只读 Agent 自动验证
 
-- Python：369 项测试通过，`compileall` 退出码 0。
-- Flutter：432 项测试通过，`flutter analyze` 无问题。
-- Windows：Release 构建成功，输出目录为
-  `app/build/windows/x64/runner/Release/`。
+只读 Agent 修复轮的精确 HEAD 与完整自动验证结果在最终验证时记录于
+`docs/read-only-agent-handoff.md` 第 7 节（不在本文件硬编码哈希，后续提交会改写）。
+Task 8 新增的组合级集成测试聚焦套件（`agent_composition_flow_test.dart` +
+`read_only_agent_flow_test.dart` + `milestone_accessibility_test.dart`）全部通过，
+覆盖真实路由 + 注入式组合的配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、
+网关释放与捕获请求隐私。
+
 - 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；清单见
-  `docs/acceptance/read-only-agent.md`。自动测试不代替人工验收。
+  `docs/acceptance/read-only-agent.md`。自动测试不代替人工验收：学校 API 与学校网站
+  从不进入自动测试。
 
 ### Windows 首版自动验证（2026-07-28）
 
