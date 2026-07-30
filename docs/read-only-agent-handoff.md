@@ -226,7 +226,8 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 ## 7. 验证基线
 
 只读 Agent 修复轮（Tasks 1–9）在 `feature/read-only-agent` 分支上推进。Task 9 最终
-验证时的精确 HEAD：`6378be5`（`config: switch default JW semester to 2026 fall`）。
+验证时的精确 HEAD：`9935bd6`（`docs: hand off reviewed agent repairs`，本节即为该提交）；
+最后一个代码提交为 `6378be5`（`config: switch default JW semester to 2026 fall`）。
 后续若再提交，需重跑本节命令并刷新哈希。
 
 Task 9 实测的完整自动验证结果（2026-07-31，worktree `E:/107/.worktrees/read-only-agent`）：
