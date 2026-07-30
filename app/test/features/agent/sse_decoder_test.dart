@@ -123,6 +123,12 @@ void main() {
       expect(events.single.data, '{}');
     });
 
+    test('a standalone keepalive comment does not start an event', () {
+      final decoder = SseDecoder();
+      expect(decoder.feed(utf8.encode(': keepalive\n\n')), isEmpty);
+      expect(decoder.close(), isEmpty);
+    });
+
     test('treats [DONE] sentinel as a terminal data marker', () {
       const source =
           'event: message_stop\n'

@@ -99,7 +99,6 @@ class SseDecoder {
     }
     if (line.startsWith(':')) {
       // Comment / keep-alive: ignore.
-      _eventStarted = true;
       return;
     }
     final colon = line.indexOf(':');

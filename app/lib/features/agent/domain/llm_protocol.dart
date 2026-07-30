@@ -249,7 +249,8 @@ abstract interface class LlmProvider {
 
   /// Sends a request declaring exactly one tool
   /// (`ustc_agent_capability_probe`) and succeeds only if the model emits a
-  /// `tool_use` for that exact name with a provided input. Throws otherwise.
+  /// completed stream containing exactly one call to that tool with the exact
+  /// input `{'ok': true}` and no error event. Throws otherwise.
   Future<void> probeTools({
     required String apiKey,
     required String model,

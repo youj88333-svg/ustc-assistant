@@ -17,8 +17,11 @@ import 'sse_decoder.dart';
 class AnthropicLlmProvider implements LlmProvider {
   AnthropicLlmProvider({
     http.Client? client,
+    http.Client Function()? clientFactory,
     Duration Function(int attempt)? backoff,
-  }) : _client = client ?? http.Client(),
+  }) : assert(client == null || clientFactory == null),
+       _clientFactory =
+           clientFactory ?? (client == null ? http.Client.new : () => client),
        _backoff = backoff ?? _defaultBackoff;
 
   /// Test-only constructor that pins the gateway origin. Used by tests to
@@ -26,10 +29,11 @@ class AnthropicLlmProvider implements LlmProvider {
   /// differ from [apiOrigin] but [_isApiOrigin] still checks the request URI
   /// against the canonical [apiOrigin], so a tampered origin is rejected.
   AnthropicLlmProvider.test({
-    required this._client,
+    required http.Client client,
     required this._backoff,
     required Uri origin,
-  }) : _originOverride = origin;
+  }) : _clientFactory = (() => client),
+       _originOverride = origin;
 
   static final Uri apiOrigin = Uri.parse('https://api.llm.ustc.edu.cn');
   static const String messagesPath = '/v1/messages';
@@ -37,7 +41,7 @@ class AnthropicLlmProvider implements LlmProvider {
   static const String _anthropicVersion = '2023-06-01';
   static const int _maxRetries = 2;
 
-  final http.Client _client;
+  final http.Client Function() _clientFactory;
   final Duration Function(int attempt) _backoff;
   Uri? _originOverride;
 
@@ -62,12 +66,22 @@ class AnthropicLlmProvider implements LlmProvider {
       ..headers['anthropic-version'] = _anthropicVersion
       ..headers['accept'] = 'application/json';
 
+    final client = _clientFactory();
+    final cancellationSubscription = cancellation.onCancel.listen((_) {
+      client.close();
+    });
     http.Response response;
     try {
-      final streamed = await _client.send(request);
+      final streamed = await client.send(request);
       response = await http.Response.fromStream(streamed);
     } on http.ClientException {
+      if (cancellation.isCancelled) {
+        throw const LlmProtocolException('cancelled');
+      }
       throw const LlmProtocolException('transport_error');
+    } finally {
+      await cancellationSubscription.cancel();
+      client.close();
     }
     if (cancellation.isCancelled) {
       throw const LlmProtocolException('cancelled');
@@ -113,6 +127,31 @@ class AnthropicLlmProvider implements LlmProvider {
     LlmRequest request,
     CancellationSignal cancellation,
   ) async {
+    final client = _clientFactory();
+    final cancellationSubscription = cancellation.onCancel.listen((_) {
+      client.close();
+    });
+    try {
+      await _runStreamWithClient(
+        controller,
+        client,
+        apiKey,
+        request,
+        cancellation,
+      );
+    } finally {
+      await cancellationSubscription.cancel();
+      client.close();
+    }
+  }
+
+  Future<void> _runStreamWithClient(
+    StreamController<LlmEvent> controller,
+    http.Client client,
+    String apiKey,
+    LlmRequest request,
+    CancellationSignal cancellation,
+  ) async {
     final uri = _origin.resolve(messagesPath);
     if (!_isApiOrigin(uri)) {
       controller.add(const ErrorEvent('protocol_error'));
@@ -138,8 +177,11 @@ class AnthropicLlmProvider implements LlmProvider {
 
       http.StreamedResponse response;
       try {
-        response = await _client.send(req);
+        response = await client.send(req);
       } on http.ClientException {
+        if (cancellation.isCancelled) {
+          return;
+        }
         // Transport failure: retryable.
         if (attempt < _maxRetries &&
             !emittedContent &&
@@ -219,6 +261,7 @@ class AnthropicLlmProvider implements LlmProvider {
     final blockInputFragments = <int, StringBuffer>{};
     final blockMeta = <int, _BlockMeta>{};
     var sawAnyEvent = false;
+    var sawMessageStop = false;
 
     try {
       await for (final chunk in byteStream) {
@@ -236,6 +279,7 @@ class AnthropicLlmProvider implements LlmProvider {
             blockInputFragments,
             blockMeta,
             onContentEmitted,
+            onMessageStop: () => sawMessageStop = true,
           );
           if (outcome != null) {
             return outcome;
@@ -254,6 +298,7 @@ class AnthropicLlmProvider implements LlmProvider {
           blockInputFragments,
           blockMeta,
           onContentEmitted,
+          onMessageStop: () => sawMessageStop = true,
         );
         if (outcome != null) {
           return outcome;
@@ -261,13 +306,23 @@ class AnthropicLlmProvider implements LlmProvider {
         sawAnyEvent = true;
       }
     } on http.ClientException {
-      return _SseStreamOutcome.error; // transport error handled by caller
+      if (cancellation.isCancelled) {
+        return _SseStreamOutcome.cancelled;
+      }
+      controller.add(
+        const ErrorEvent('stream_transport_error', retryable: true),
+      );
+      return _SseStreamOutcome.error;
     } on FormatException {
       return _SseStreamOutcome.protocolError;
     }
 
     if (!sawAnyEvent) {
       return _SseStreamOutcome.protocolError;
+    }
+    if (!sawMessageStop) {
+      controller.add(const ErrorEvent('stream_incomplete'));
+      return _SseStreamOutcome.error;
     }
     return _SseStreamOutcome.completed;
   }
@@ -279,11 +334,12 @@ class AnthropicLlmProvider implements LlmProvider {
     StreamController<LlmEvent> controller,
     Map<int, StringBuffer> blockInputFragments,
     Map<int, _BlockMeta> blockMeta,
-    void Function() onContentEmitted,
-  ) {
+    void Function() onContentEmitted, {
+    required void Function() onMessageStop,
+  }) {
     if (evt.data == '[DONE]') {
-      // Sentinel: treat as terminal success.
-      return _SseStreamOutcome.completed;
+      // Anthropic streams are complete only after an explicit message_stop.
+      return null;
     }
     Map<String, Object?> json;
     try {
@@ -297,7 +353,12 @@ class AnthropicLlmProvider implements LlmProvider {
     final type = json['type'] as String?;
     switch (type) {
       case 'message_start':
-        // No event emitted; the message envelope is not surfaced.
+        final message = json['message'] as Map<String, Object?>?;
+        final usage = message?['usage'] as Map<String, Object?>?;
+        final input = (usage?['input_tokens'] as num?)?.toInt();
+        if (input != null) {
+          controller.add(UsageEvent(inputTokens: input));
+        }
         return null;
       case 'content_block_start':
         final index = (json['index'] as num?)?.toInt() ?? 0;
@@ -365,12 +426,14 @@ class AnthropicLlmProvider implements LlmProvider {
       case 'message_delta':
         final usage = json['usage'] as Map<String, Object?>?;
         if (usage != null) {
-          final input = (usage['input_tokens'] as num?)?.toInt();
           final output = (usage['output_tokens'] as num?)?.toInt();
-          controller.add(UsageEvent(inputTokens: input, outputTokens: output));
+          if (output != null) {
+            controller.add(UsageEvent(outputTokens: output));
+          }
         }
         return null;
       case 'message_stop':
+        onMessageStop();
         return _SseStreamOutcome.completed;
       case 'error':
         // Remote error: never echo the remote text. Use a safe code.
@@ -428,12 +491,13 @@ class AnthropicLlmProvider implements LlmProvider {
       ),
       cancellation: cancellation,
     ).toList();
-    final tool = events.whereType<ToolUseCompletedEvent>().firstOrNull;
-    if (tool == null || tool.name != _probeToolName) {
+    _requireProbeSuccess(events, expectText: false);
+    final tools = events.whereType<ToolUseCompletedEvent>().toList();
+    if (tools.length != 1 || tools.single.name != _probeToolName) {
       throw const LlmProtocolException('probe_tool_not_emitted');
     }
-    if (tool.input.isEmpty) {
-      throw const LlmProtocolException('probe_tool_empty_input');
+    if (tools.single.input.length != 1 || tools.single.input['ok'] != true) {
+      throw const LlmProtocolException('probe_tool_invalid_input');
     }
   }
 
@@ -441,8 +505,9 @@ class AnthropicLlmProvider implements LlmProvider {
     if (events.isEmpty) {
       throw const LlmProtocolException('probe_incomplete');
     }
-    if (events.last is ErrorEvent) {
-      throw LlmProtocolException((events.last as ErrorEvent).code);
+    final error = events.whereType<ErrorEvent>().firstOrNull;
+    if (error != null) {
+      throw LlmProtocolException(error.code);
     }
     if (events.last is! CompletedEvent) {
       throw const LlmProtocolException('probe_incomplete');

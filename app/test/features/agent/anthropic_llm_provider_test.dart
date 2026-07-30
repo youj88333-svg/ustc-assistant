@@ -316,6 +316,79 @@ void main() {
         expect((events.last as ErrorEvent).code, 'protocol_error');
       },
     );
+
+    test('EOF without message_stop emits stream_incomplete', () async {
+      final fake = _FakeClient(
+        responder: (req) => _sseResponse(
+          'event: message_start\n'
+          'data: {"type":"message_start","message":{"usage":{"input_tokens":4}}}\n\n'
+          'event: content_block_delta\n'
+          'data: {"type":"content_block_delta","index":0,'
+          '"delta":{"type":"text_delta","text":"partial"}}\n\n',
+        ),
+      );
+      final provider = AnthropicLlmProvider(
+        client: fake,
+        backoff: (_) => Duration.zero,
+      );
+
+      final events = await provider
+          .stream(
+            apiKey: apiKey,
+            request: LlmRequest(
+              model: 'deepseek-v4-flash',
+              messages: [LlmMessage.user(text: 'hi')],
+            ),
+            cancellation: CancellationSignal(),
+          )
+          .toList();
+
+      expect(events.whereType<TextDeltaEvent>().single.text, 'partial');
+      expect(events.last, isA<ErrorEvent>());
+      expect((events.last as ErrorEvent).code, 'stream_incomplete');
+      expect(events.whereType<CompletedEvent>(), isEmpty);
+    });
+
+    test(
+      'body ClientException after content emits stream_transport_error',
+      () async {
+        final body = StreamController<List<int>>();
+        final fake = _FakeClient(responder: (req) => _controlledResponse(body));
+        final provider = AnthropicLlmProvider(
+          client: fake,
+          backoff: (_) => Duration.zero,
+        );
+        final eventsFuture = provider
+            .stream(
+              apiKey: apiKey,
+              request: LlmRequest(
+                model: 'deepseek-v4-flash',
+                messages: [LlmMessage.user(text: 'hi')],
+              ),
+              cancellation: CancellationSignal(),
+            )
+            .toList();
+
+        body.add(
+          utf8.encode(
+            'event: message_start\n'
+            'data: {"type":"message_start"}\n\n'
+            'event: content_block_delta\n'
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"partial"}}\n\n',
+          ),
+        );
+        await Future<void>.delayed(Duration.zero);
+        body.addError(http.ClientException('body disconnected'));
+        await body.close();
+
+        final events = await eventsFuture.timeout(const Duration(seconds: 1));
+        expect(events.whereType<TextDeltaEvent>().single.text, 'partial');
+        expect(events.last, isA<ErrorEvent>());
+        expect((events.last as ErrorEvent).code, 'stream_transport_error');
+        expect(events.whereType<CompletedEvent>(), isEmpty);
+      },
+    );
   });
 
   group('cancellation', () {
@@ -358,7 +431,10 @@ void main() {
         ),
       );
       await controller.close();
-      await sub.asFuture<void>().catchError((_) {});
+      await sub
+          .asFuture<void>()
+          .timeout(const Duration(seconds: 1))
+          .catchError((_) {});
       await Future<void>.delayed(Duration.zero);
 
       expect(received.whereType<TextDeltaEvent>(), isNotEmpty);
@@ -366,11 +442,6 @@ void main() {
         received.whereType<TextDeltaEvent>().map((e) => e.text),
         isNot(contains('after-cancel')),
       );
-      // The stream must terminate (no hanging subscription).
-      expect(
-        sub.isPaused || !sub.isPaused,
-        true,
-      ); // tautology; real check is no hang
     });
 
     test('cancellation before any event emits nothing and stops', () async {
@@ -402,6 +473,32 @@ void main() {
       await sub.asFuture<void>().catchError((_) {});
       await Future<void>.delayed(Duration.zero);
       expect(received, isEmpty);
+    });
+
+    test('cancellation closes an idle response body and terminates', () async {
+      final fake = _CloseAwareClient();
+      final provider = AnthropicLlmProvider(
+        client: fake,
+        backoff: (_) => Duration.zero,
+      );
+      final cancel = CancellationSignal();
+      final eventsFuture = provider
+          .stream(
+            apiKey: apiKey,
+            request: LlmRequest(
+              model: 'deepseek-v4-flash',
+              messages: [LlmMessage.user(text: 'hi')],
+            ),
+            cancellation: cancel,
+          )
+          .toList();
+
+      await fake.sent.future.timeout(const Duration(seconds: 1));
+      cancel.cancel();
+      final events = await eventsFuture.timeout(const Duration(seconds: 1));
+
+      expect(fake.closed, isTrue);
+      expect(events, isEmpty);
     });
   });
 
@@ -459,27 +556,31 @@ void main() {
       expect(err.toString(), isNot(contains('not-json')));
     });
 
-    test('usage event is surfaced with token counts', () async {
-      final fake = _FakeClient(responder: (req) => _sseResponse(_okSse));
-      final provider = AnthropicLlmProvider(
-        client: fake,
-        backoff: (_) => Duration.zero,
-      );
-      final events = await provider
-          .stream(
-            apiKey: apiKey,
-            request: LlmRequest(
-              model: 'deepseek-v4-flash',
-              messages: [LlmMessage.user(text: 'hi')],
-            ),
-            cancellation: CancellationSignal(),
-          )
-          .toList();
-      final usage = events.whereType<UsageEvent>().toList();
-      expect(usage, isNotEmpty);
-      expect(usage.last.inputTokens, 10);
-      expect(usage.last.outputTokens, 5);
-    });
+    test(
+      'usage follows Anthropic message_start and message_delta fields',
+      () async {
+        final fake = _FakeClient(
+          responder: (req) => _sseResponse(_standardUsageSse),
+        );
+        final provider = AnthropicLlmProvider(
+          client: fake,
+          backoff: (_) => Duration.zero,
+        );
+        final events = await provider
+            .stream(
+              apiKey: apiKey,
+              request: LlmRequest(
+                model: 'deepseek-v4-flash',
+                messages: [LlmMessage.user(text: 'hi')],
+              ),
+              cancellation: CancellationSignal(),
+            )
+            .toList();
+        final usage = events.whereType<UsageEvent>().toList();
+        expect(usage.any((event) => event.inputTokens == 10), isTrue);
+        expect(usage.any((event) => event.outputTokens == 5), isTrue);
+      },
+    );
   });
 
   group('probes', () {
@@ -554,6 +655,65 @@ void main() {
           cancellation: CancellationSignal(),
         ),
         throwsA(isA<Exception>()),
+      );
+    });
+
+    test('probeTools rejects an exact probe call with ok false', () async {
+      final fake = _FakeClient(
+        responder: (req) => _sseResponse(
+          _probeToolSse.replaceFirst(r'{\"ok\":true}', r'{\"ok\":false}'),
+        ),
+      );
+      final provider = AnthropicLlmProvider(
+        client: fake,
+        backoff: (_) => Duration.zero,
+      );
+
+      await expectLater(
+        provider.probeTools(
+          apiKey: apiKey,
+          model: 'deepseek-v4-flash',
+          cancellation: CancellationSignal(),
+        ),
+        throwsA(
+          isA<LlmProtocolException>().having(
+            (e) => e.code,
+            'code',
+            'probe_tool_invalid_input',
+          ),
+        ),
+      );
+    });
+
+    test('probeTools rejects a tool call followed by a stream error', () async {
+      final fake = _FakeClient(
+        responder: (req) => _sseResponse(
+          _probeToolSse.replaceFirst(
+            'event: message_stop\n'
+                'data: {"type":"message_stop"}',
+            'event: error\n'
+                'data: {"type":"error","error":{"type":"overloaded_error"}}',
+          ),
+        ),
+      );
+      final provider = AnthropicLlmProvider(
+        client: fake,
+        backoff: (_) => Duration.zero,
+      );
+
+      await expectLater(
+        provider.probeTools(
+          apiKey: apiKey,
+          model: 'deepseek-v4-flash',
+          cancellation: CancellationSignal(),
+        ),
+        throwsA(
+          isA<LlmProtocolException>().having(
+            (e) => e.code,
+            'code',
+            'server_error',
+          ),
+        ),
       );
     });
 
@@ -641,6 +801,26 @@ class _FakeClient extends http.BaseClient {
   }
 }
 
+class _CloseAwareClient extends http.BaseClient {
+  final sent = Completer<void>();
+  final StreamController<List<int>> _body = StreamController<List<int>>();
+  bool closed = false;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) async {
+    if (!sent.isCompleted) sent.complete();
+    return _controlledResponse(_body);
+  }
+
+  @override
+  void close() {
+    if (closed) return;
+    closed = true;
+    _body.addError(http.ClientException('cancelled'));
+    unawaited(_body.close());
+  }
+}
+
 /// A provider subclass that points at a tampered host to prove the provider
 /// refuses non-api origins.
 class _TamperedOriginProvider extends AnthropicLlmProvider {
@@ -711,6 +891,26 @@ data: {"type":"content_block_stop","index":0}
 
 event: message_delta
 data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":10,"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+''';
+
+const _standardUsageSse = '''event: message_start
+data: {"type":"message_start","message":{"id":"msg_usage","model":"deepseek-v4-flash","usage":{"input_tokens":10,"output_tokens":0}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"OK"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}
 
 event: message_stop
 data: {"type":"message_stop"}
