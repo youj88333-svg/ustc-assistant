@@ -31,6 +31,8 @@ class AgentChatPage extends StatefulWidget {
     required this.sessionService,
     required this.chatRepository,
     required this.websiteLauncher,
+    this.sessionModel = AgentConfigurationService.defaultModel,
+    this.onSessionModelChanged,
     super.key,
   });
 
@@ -41,6 +43,8 @@ class AgentChatPage extends StatefulWidget {
   final AgentSessionService sessionService;
   final DriftChatRepository chatRepository;
   final OfficialWebsiteLauncher websiteLauncher;
+  final String sessionModel;
+  final VoidCallback? onSessionModelChanged;
 
   @override
   State<AgentChatPage> createState() => _AgentChatPageState();
@@ -71,6 +75,7 @@ class _AssistantMessage extends _ChatMessage {
     this.state = AgentRunState.completed,
     this.errorCode,
     this.userAction,
+    this.hasGeneratedText = true,
   });
   final String text;
   final String? runId;
@@ -80,6 +85,7 @@ class _AssistantMessage extends _ChatMessage {
   final AgentRunState state;
   final String? errorCode;
   final AgentUserActionMetadata? userAction;
+  final bool hasGeneratedText;
 }
 
 class _AgentChatPageState extends State<AgentChatPage> {
@@ -90,8 +96,10 @@ class _AgentChatPageState extends State<AgentChatPage> {
   List<_ChatMessage> _messages = [];
   bool _isRunning = false;
   StreamSubscription<AgentRunViewState>? _streamSubscription;
+  StreamSubscription<AgentSettingsSnapshot>? _settingsSubscription;
   bool _nearBottom = true;
   String? _lastRunId;
+  String? _requestedModel;
 
   /// Resolved ONCE in [initState] and reused by the [build] FutureBuilder.
   ///
@@ -103,7 +111,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
   /// scrolls up past 200px) yanks the view back to the top. Caching the
   /// future keeps the ListView mounted across rebuilds and preserves the
   /// scroll offset.
-  late final Future<bool> _configuredFuture;
+  late Future<bool> _configuredFuture;
 
   @override
   void initState() {
@@ -114,17 +122,41 @@ class _AgentChatPageState extends State<AgentChatPage> {
       config: widget.config,
       secrets: widget.secrets,
     );
+    _settingsSubscription = widget.config
+        .watch(widget.accountId)
+        .listen(_onSettingsChanged);
     _loadHistory();
   }
 
   @override
   void dispose() {
     _streamSubscription?.cancel();
+    _settingsSubscription?.cancel();
     unawaited(widget.sessionService.dispose());
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
     super.dispose();
+  }
+
+  void _onSettingsChanged(AgentSettingsSnapshot snapshot) {
+    if (snapshot.model != widget.sessionModel &&
+        snapshot.model != _requestedModel) {
+      _requestedModel = snapshot.model;
+      widget.onSessionModelChanged?.call();
+    }
+    _reloadConfigured();
+  }
+
+  void _reloadConfigured() {
+    if (!mounted) return;
+    setState(() {
+      _configuredFuture = AgentSettingsPage.isConfigured(
+        accountId: widget.accountId,
+        config: widget.config,
+        secrets: widget.secrets,
+      );
+    });
   }
 
   void _onScroll() {
@@ -175,12 +207,20 @@ class _AgentChatPageState extends State<AgentChatPage> {
               runId: record.runId,
               ordinal: record.ordinal,
               state: state,
+              hasGeneratedText: record.content.isNotEmpty,
             ),
           );
         }
       }
       if (mounted) {
         setState(() => _messages = messages);
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted && _scrollController.hasClients) {
+            _scrollController.jumpTo(
+              _scrollController.position.maxScrollExtent,
+            );
+          }
+        });
       }
     } catch (_) {
       // Silently handle history load failure.
@@ -206,12 +246,15 @@ class _AgentChatPageState extends State<AgentChatPage> {
 
   void _onViewState(AgentRunViewState state) {
     _lastRunId = state.runId;
+    final visibleText = state.text.isEmpty
+        ? _emptyTerminalText(state.state)
+        : state.text;
     if (mounted) {
       setState(() {
         final lastMsg = _messages.isNotEmpty ? _messages.last : null;
         if (lastMsg is _AssistantMessage && lastMsg.runId == state.runId) {
           _messages[_messages.length - 1] = _AssistantMessage(
-            text: state.text,
+            text: visibleText,
             runId: state.runId,
             ordinal: lastMsg.ordinal,
             toolSummaries: state.toolSummaries,
@@ -219,12 +262,13 @@ class _AgentChatPageState extends State<AgentChatPage> {
             state: state.state,
             errorCode: state.errorCode,
             userAction: state.userAction,
+            hasGeneratedText: state.text.isNotEmpty,
           );
         } else {
           _messages = [
             ..._messages,
             _AssistantMessage(
-              text: state.text,
+              text: visibleText,
               runId: state.runId,
               ordinal: 0,
               toolSummaries: state.toolSummaries,
@@ -232,6 +276,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
               state: state.state,
               errorCode: state.errorCode,
               userAction: state.userAction,
+              hasGeneratedText: state.text.isNotEmpty,
             ),
           ];
         }
@@ -285,7 +330,9 @@ class _AgentChatPageState extends State<AgentChatPage> {
     final last = _messages.last;
     if (last is _AssistantMessage && last.state == AgentRunState.running) {
       _messages[_messages.length - 1] = _AssistantMessage(
-        text: last.text,
+        text: last.text.isEmpty
+            ? _emptyTerminalText(AgentRunState.interrupted)
+            : last.text,
         runId: last.runId,
         ordinal: last.ordinal,
         toolSummaries: last.toolSummaries,
@@ -293,9 +340,18 @@ class _AgentChatPageState extends State<AgentChatPage> {
         state: AgentRunState.interrupted,
         errorCode: last.errorCode,
         userAction: last.userAction,
+        hasGeneratedText: last.hasGeneratedText,
       );
     }
   }
+
+  String _emptyTerminalText(AgentRunState state) => switch (state) {
+    AgentRunState.failed => '请求失败，未生成回答。',
+    AgentRunState.cancelled => '本次回答已取消。',
+    AgentRunState.interrupted => '本次回答意外中断。',
+    AgentRunState.completed => '本次回答没有文字内容。',
+    AgentRunState.running || AgentRunState.waitingForUser => '',
+  };
 
   Future<void> _cancel() async {
     await widget.sessionService.cancel(accountId: widget.accountId);
@@ -383,7 +439,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
             config: widget.config,
             secrets: widget.secrets,
             provider: widget.provider,
-            onConfigured: () => setState(() {}),
+            onConfigured: _reloadConfigured,
           ),
         ],
       ),
@@ -565,7 +621,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
   Widget _buildActionRow(bool isTerminal, bool isError, _AssistantMessage msg) {
     return Row(
       children: [
-        if (isTerminal && msg.text.isNotEmpty)
+        if (isTerminal && msg.hasGeneratedText && msg.text.isNotEmpty)
           IconButton(
             icon: const Icon(Icons.copy, size: 16),
             tooltip: '复制回答',
@@ -632,6 +688,7 @@ class _AgentChatPageState extends State<AgentChatPage> {
               children: [
                 Expanded(
                   child: TextField(
+                    key: const Key('agent-chat-input'),
                     controller: _textController,
                     focusNode: _focusNode,
                     enabled: !_isRunning,

@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
 import '../data/drift_chat_repository.dart';
+import '../data/protected_agent_secret_store.dart';
 
 /// Snapshot of an account's agent settings row, with the same defaults as the
 /// `agent_settings` table schema.
@@ -49,25 +50,13 @@ class AgentConfigurationService {
     final row = await (_database.select(
       _database.agentSettings,
     )..where((row) => row.accountId.equals(accountId))).getSingleOrNull();
-    if (row == null) {
-      return AgentSettingsSnapshot(
-        accountId: accountId,
-        model: defaultModel,
-        enabled: defaultEnabled,
-        icourseConsent: defaultIcourseConsent,
-        systemPromptVersion: defaultSystemPromptVersion,
-        updatedAt: null,
-      );
-    }
-    return AgentSettingsSnapshot(
-      accountId: row.accountId,
-      model: row.model,
-      enabled: row.enabled,
-      icourseConsent: row.icourseConsent,
-      systemPromptVersion: row.systemPromptVersion,
-      updatedAt: row.updatedAt,
-    );
+    return _snapshot(accountId, row);
   }
+
+  Stream<AgentSettingsSnapshot> watch(String accountId) => _database
+      .agentSettingsChanges
+      .where((changedAccountId) => changedAccountId == accountId)
+      .asyncMap((_) => load(accountId));
 
   /// Upserts the model field for exactly one account, preserving the other
   /// fields (or their defaults if the row does not yet exist).
@@ -82,11 +71,54 @@ class AgentConfigurationService {
   Future<void> enable(String accountId, bool enabled) =>
       _upsert(accountId, enabled: enabled);
 
+  Future<void> configureWithKey({
+    required String accountId,
+    required String apiKey,
+    required String model,
+    required AgentSecretStore secrets,
+  }) async {
+    await _database.transaction(() async {
+      await secrets.saveKey(accountId, apiKey);
+      await _upsertRow(accountId, model: model, enabled: true);
+    });
+    _database.notifyAgentSettingsChanged(accountId);
+  }
+
+  Future<void> deleteKeyAndDisable({
+    required String accountId,
+    required AgentSecretStore secrets,
+  }) async {
+    await _database.transaction(() async {
+      await secrets.deleteKey(accountId);
+      await _upsertRow(accountId, enabled: false);
+    });
+    _database.notifyAgentSettingsChanged(accountId);
+  }
+
   /// Reads the existing row once and writes a single
   /// `insertOnConflictUpdate`, applying each provided override and falling
   /// back to `existing?.X ?? defaultX` for the rest. Centralizing this keeps
   /// the three public upserts in lockstep when the schema grows a new column.
   Future<void> _upsert(
+    String accountId, {
+    String? model,
+    bool? enabled,
+    bool? consent,
+    int? systemPromptVersion,
+  }) async {
+    await _database.transaction(
+      () => _upsertRow(
+        accountId,
+        model: model,
+        enabled: enabled,
+        consent: consent,
+        systemPromptVersion: systemPromptVersion,
+      ),
+    );
+    _database.notifyAgentSettingsChanged(accountId);
+  }
+
+  Future<void> _upsertRow(
     String accountId, {
     String? model,
     bool? enabled,
@@ -128,4 +160,25 @@ class AgentConfigurationService {
   Future<AgentSetting?> _row(String accountId) => (_database.select(
     _database.agentSettings,
   )..where((row) => row.accountId.equals(accountId))).getSingleOrNull();
+
+  AgentSettingsSnapshot _snapshot(String accountId, AgentSetting? row) {
+    if (row == null) {
+      return AgentSettingsSnapshot(
+        accountId: accountId,
+        model: defaultModel,
+        enabled: defaultEnabled,
+        icourseConsent: defaultIcourseConsent,
+        systemPromptVersion: defaultSystemPromptVersion,
+        updatedAt: null,
+      );
+    }
+    return AgentSettingsSnapshot(
+      accountId: row.accountId,
+      model: row.model,
+      enabled: row.enabled,
+      icourseConsent: row.icourseConsent,
+      systemPromptVersion: row.systemPromptVersion,
+      updatedAt: row.updatedAt,
+    );
+  }
 }

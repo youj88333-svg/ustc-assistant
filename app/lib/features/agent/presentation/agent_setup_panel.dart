@@ -62,18 +62,32 @@ class _AgentSetupPanelState extends State<AgentSetupPanel> {
     final cancellation = CancellationSignal();
     _activeCancellation = cancellation;
     try {
+      final models = await widget.provider.listModels(
+        apiKey: key,
+        cancellation: cancellation,
+      );
+      if (models.isEmpty) {
+        throw const LlmProtocolException('model_unavailable');
+      }
+      final model = models.contains(AgentConfigurationService.defaultModel)
+          ? AgentConfigurationService.defaultModel
+          : models.first;
       await widget.provider.probeText(
         apiKey: key,
-        model: AgentConfigurationService.defaultModel,
+        model: model,
         cancellation: cancellation,
       );
       await widget.provider.probeTools(
         apiKey: key,
-        model: AgentConfigurationService.defaultModel,
+        model: model,
         cancellation: cancellation,
       );
-      await widget.secrets.saveKey(widget.accountId, key);
-      await widget.config.enable(widget.accountId, true);
+      await widget.config.configureWithKey(
+        accountId: widget.accountId,
+        apiKey: key,
+        model: model,
+        secrets: widget.secrets,
+      );
       _keyController.clear();
       if (!mounted) return;
       widget.onConfigured?.call();

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -33,11 +35,20 @@ import '../features/tasks/presentation/task_form.dart';
 import '../features/tasks/presentation/task_detail_loader.dart';
 import 'app_drawer.dart';
 
+typedef AgentCompositionLoader =
+    Future<AgentCompositionResult> Function(
+      AppDatabase database,
+      String accountId,
+    );
+
 GoRouter buildRouter(
   OfficialWebsiteLauncher websiteLauncher,
   AppDatabase database, [
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
+  AgentCompositionLoader? agentCompositionLoader,
 ]) {
+  final loadAgentComposition =
+      agentCompositionLoader ?? _buildWindowsAgentComposition;
   return GoRouter(
     initialLocation: '/chat',
     routes: [
@@ -52,6 +63,7 @@ GoRouter buildRouter(
                 builder: (context, state) => _AgentChatLoader(
                   database: database,
                   websiteLauncher: websiteLauncher,
+                  compositionLoader: loadAgentComposition,
                 ),
               ),
             ],
@@ -149,8 +161,7 @@ GoRouter buildRouter(
       ),
       GoRoute(
         path: '/history',
-        builder: (context, state) =>
-            _HistoryLoader(database: database),
+        builder: (context, state) => _HistoryLoader(database: database),
       ),
       GoRoute(
         path: '/settings',
@@ -158,8 +169,7 @@ GoRouter buildRouter(
       ),
       GoRoute(
         path: '/settings/agent',
-        builder: (context, state) =>
-            _AgentSettingsLoader(database: database),
+        builder: (context, state) => _AgentSettingsLoader(database: database),
       ),
       GoRoute(
         path: '/official-websites',
@@ -449,22 +459,38 @@ class _AgentChatLoader extends StatefulWidget {
   const _AgentChatLoader({
     required this.database,
     required this.websiteLauncher,
+    required this.compositionLoader,
   });
 
   final AppDatabase database;
   final OfficialWebsiteLauncher websiteLauncher;
+  final AgentCompositionLoader compositionLoader;
 
   @override
   State<_AgentChatLoader> createState() => _AgentChatLoaderState();
 }
 
 class _AgentChatLoaderState extends State<_AgentChatLoader> {
-  late final Future<LocalAccount?> _accountFuture;
+  late Future<LocalAccount?> _accountFuture;
+  StreamSubscription<void>? _accountSubscription;
 
   @override
   void initState() {
     super.initState();
     _accountFuture = _activeAccount(widget.database);
+    _accountSubscription = widget.database.activeAccountChanges.listen((_) {
+      if (mounted) {
+        setState(() {
+          _accountFuture = _activeAccount(widget.database);
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(_accountSubscription?.cancel());
+    super.dispose();
   }
 
   @override
@@ -479,15 +505,15 @@ class _AgentChatLoaderState extends State<_AgentChatLoader> {
         }
         final account = snapshot.data;
         if (account == null) {
-          return const Scaffold(
-            body: Center(child: Text('请先配置学校账号')),
-          );
+          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
         }
 
         return _AgentChatCompositionBuilder(
+          key: ValueKey(account.id),
           database: widget.database,
           accountId: account.id,
           websiteLauncher: widget.websiteLauncher,
+          compositionLoader: widget.compositionLoader,
         );
       },
     );
@@ -507,11 +533,14 @@ class _AgentChatCompositionBuilder extends StatefulWidget {
     required this.database,
     required this.accountId,
     required this.websiteLauncher,
+    required this.compositionLoader,
+    super.key,
   });
 
   final AppDatabase database;
   final String accountId;
   final OfficialWebsiteLauncher websiteLauncher;
+  final AgentCompositionLoader compositionLoader;
 
   @override
   State<_AgentChatCompositionBuilder> createState() =>
@@ -520,55 +549,48 @@ class _AgentChatCompositionBuilder extends StatefulWidget {
 
 class _AgentChatCompositionBuilderState
     extends State<_AgentChatCompositionBuilder> {
-  late final Future<AgentCompositionResult> _compositionFuture;
+  late Future<AgentCompositionResult> _compositionFuture;
+  AgentCompositionResult? _composition;
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
-    // Build the composition once for this route entry. The username and the
-    // Python executable are resolved as the first steps of the single cached
-    // future so a rebuild never re-runs `_resolveUsername`/`PythonLocator` nor
-    // re-issues the Bridge handshake. The Python path mirrors the sync flow
-    // (PythonLocator.locate with the saved SettingsService.pythonPath); an
-    // empty string here would make `Process.start('')` fail and surface as
-    // "无法加载 Agent 服务".
-    _compositionFuture = _resolveUsername(widget.database, widget.accountId)
-        .then((resolvedUsername) async {
-      if (resolvedUsername.isEmpty) {
-        // Signals the "无法获取学校账号" branch below; AgentComposition.build
-        // would otherwise receive an empty username.
-        throw const _NoResolvedUsername();
-      }
-      final accounts = AccountService(
-        database: widget.database,
-        protector: WindowsDpapiProtector(),
-      );
-      final savedPythonPath = await SettingsService(
-        database: widget.database,
-        accounts: accounts,
-        accountId: widget.accountId,
-      ).pythonPath();
-      final launchOptions = resolveBridgeLaunchOptions();
-      final pythonExecutable = await PythonLocator().locate(
-        savedExecutable: savedPythonPath,
-        requiredModule: 'ustc_assistant.bridge.query_jobs',
-        importEnvironment: launchOptions.environment,
-      );
-      return AgentComposition.build(
-        database: widget.database,
-        accountId: widget.accountId,
-        resolvedUsername: resolvedUsername,
-        accounts: accounts,
-        secretStoreFactory: (db) => ProtectedAgentSecretStore(
-          database: db,
-          protector: WindowsDpapiProtector(),
-        ),
-        queryGatewayFactory: (db, _) => WindowsPythonQueryGateway.start(
-          pythonExecutable: pythonExecutable,
-          launchOptions: launchOptions,
-        ),
+    _compositionFuture = _trackComposition(
+      widget.compositionLoader(widget.database, widget.accountId),
+    );
+  }
+
+  Future<AgentCompositionResult> _trackComposition(
+    Future<AgentCompositionResult> future,
+  ) async {
+    final composition = await future;
+    if (_disposed) {
+      await composition.dispose();
+      throw StateError('composition_disposed');
+    }
+    _composition = composition;
+    return composition;
+  }
+
+  Future<void> _reloadComposition() async {
+    final previous = _composition;
+    _composition = null;
+    if (previous != null) await previous.dispose();
+    if (!mounted) return;
+    setState(() {
+      _compositionFuture = _trackComposition(
+        widget.compositionLoader(widget.database, widget.accountId),
       );
     });
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    final composition = _composition;
+    if (composition != null) unawaited(composition.dispose());
+    super.dispose();
   }
 
   @override
@@ -582,15 +604,11 @@ class _AgentChatCompositionBuilderState
           );
         }
         if (snapshot.hasError && snapshot.error is _NoResolvedUsername) {
-          return const Scaffold(
-            body: Center(child: Text('无法获取学校账号')),
-          );
+          return const Scaffold(body: Center(child: Text('无法获取学校账号')));
         }
         final composition = snapshot.data;
         if (composition == null) {
-          return const Scaffold(
-            body: Center(child: Text('无法加载 Agent 服务')),
-          );
+          return const Scaffold(body: Center(child: Text('无法加载 Agent 服务')));
         }
 
         return AgentChatPage(
@@ -601,21 +619,11 @@ class _AgentChatCompositionBuilderState
           sessionService: composition.sessionService,
           chatRepository: composition.chatRepository,
           websiteLauncher: widget.websiteLauncher,
+          sessionModel: composition.model,
+          onSessionModelChanged: _reloadComposition,
         );
       },
     );
-  }
-
-  Future<String> _resolveUsername(AppDatabase db, String id) async {
-    try {
-      final service = AccountService(
-        database: db,
-        protector: WindowsDpapiProtector(),
-      );
-      return await service.usernameForSync(id);
-    } catch (_) {
-      return '';
-    }
   }
 }
 
@@ -624,6 +632,59 @@ class _AgentChatCompositionBuilderState
 /// building a composition with an empty username.
 class _NoResolvedUsername implements Exception {
   const _NoResolvedUsername();
+}
+
+Future<AgentCompositionResult> _buildWindowsAgentComposition(
+  AppDatabase database,
+  String accountId,
+) async {
+  final accounts = AccountService(
+    database: database,
+    protector: WindowsDpapiProtector(),
+  );
+  final resolvedUsername = await _resolvedUsername(accounts, accountId);
+  if (resolvedUsername.isEmpty) throw const _NoResolvedUsername();
+
+  final queryGateway = LazyQuerySourceGateway(() async {
+    final savedPythonPath = await SettingsService(
+      database: database,
+      accounts: accounts,
+      accountId: accountId,
+    ).pythonPath();
+    final launchOptions = resolveBridgeLaunchOptions();
+    final pythonExecutable = await PythonLocator().locate(
+      savedExecutable: savedPythonPath,
+      requiredModule: 'ustc_assistant.bridge.query_jobs',
+      importEnvironment: launchOptions.environment,
+    );
+    return WindowsPythonQueryGateway.start(
+      pythonExecutable: pythonExecutable,
+      launchOptions: launchOptions,
+    );
+  });
+
+  return AgentComposition.build(
+    database: database,
+    accountId: accountId,
+    resolvedUsername: resolvedUsername,
+    accounts: accounts,
+    secretStoreFactory: (db) => ProtectedAgentSecretStore(
+      database: db,
+      protector: WindowsDpapiProtector(),
+    ),
+    queryGatewayFactory: (_, _) async => queryGateway,
+  );
+}
+
+Future<String> _resolvedUsername(
+  AccountService accounts,
+  String accountId,
+) async {
+  try {
+    return await accounts.usernameForSync(accountId);
+  } catch (_) {
+    return '';
+  }
 }
 
 Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(

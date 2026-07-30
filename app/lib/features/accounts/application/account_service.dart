@@ -229,6 +229,7 @@ class AccountService {
           accountId: accountId,
         );
       });
+      database.notifyActiveAccountChanged();
       return accountId;
     } finally {
       staged.discard();
@@ -313,6 +314,7 @@ class AccountService {
         accountId: accountId,
       );
     });
+    database.notifyActiveAccountChanged();
   }
 
   Future<List<AccountSummary>> summaries() async {

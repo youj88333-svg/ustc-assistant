@@ -47,7 +47,7 @@ const Duration _defaultMaxWait = Duration(minutes: 10);
 /// This is the one place in the Agent stack that may import `dart:io`/process
 /// APIs (via [BridgeClient]); the shared-core domain types and tools depend
 /// only on [QuerySourceGateway].
-class WindowsPythonQueryGateway implements QuerySourceGateway {
+class WindowsPythonQueryGateway implements DisposableQuerySourceGateway {
   WindowsPythonQueryGateway._(this._client, this._maxWait);
 
   final BridgeClient _client;
@@ -162,9 +162,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
           if (poll.result != null) {
             yield SourceQueryCompleted(
               jobId: jobId,
-              result: QueryResultEnvelope(
-                json: poll.result!,
-              ),
+              result: QueryResultEnvelope(json: poll.result!),
             );
           } else {
             yield SourceQueryFailed(
@@ -179,10 +177,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
           final resumeCompleter = Completer<void>();
           _resumeCompleters[jobId] = resumeCompleter;
           try {
-            await Future.any([
-              resumeCompleter.future,
-              cancelled.future,
-            ]);
+            await Future.any([resumeCompleter.future, cancelled.future]);
           } finally {
             _resumeCompleters.remove(jobId);
           }
@@ -279,10 +274,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     }
   }
 
-  Future<Map<String, dynamic>> _post(
-    String path,
-    Map<String, Object?> body,
-  ) =>
+  Future<Map<String, dynamic>> _post(String path, Map<String, Object?> body) =>
       _client.postQuery(path, body);
 
   Future<_QueryPoll> _poll(String jobId, int afterSequence) async {
@@ -299,7 +291,8 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
       final sequence = rawEvent['sequence'];
       final phase = rawEvent['phase'];
       final safeCount = rawEvent['safeCount'];
-      if (sequence is! int || phase is! String ||
+      if (sequence is! int ||
+          phase is! String ||
           (safeCount != null && safeCount is! int)) {
         throw const FormatException('event_fields');
       }
@@ -313,7 +306,8 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     final terminal = result['terminal'];
     final rawResult = result['result'];
     final error = result['error'];
-    if (nextSequence is! int || terminal is! bool ||
+    if (nextSequence is! int ||
+        terminal is! bool ||
         (rawResult != null && rawResult is! Map<String, dynamic>) ||
         (error != null && error is! Map<String, dynamic>)) {
       throw const FormatException('poll_fields');
@@ -364,6 +358,9 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
       // A concurrent terminal transition already ended the same Bridge job.
     }
   }
+
+  @override
+  Future<void> dispose() => _client.shutdown();
 }
 
 class _QueryPoll {

@@ -45,11 +45,14 @@ class _FakeLlmProvider implements LlmProvider {
   _FakeLlmProvider({
     this.textShouldThrow,
     this.toolsShouldThrow,
+    this.availableModels = models,
   });
 
   static const models = ['deepseek-v4-flash', 'deepseek-v4-pro'];
   final Object? textShouldThrow;
   final Object? toolsShouldThrow;
+  final List<String> availableModels;
+  final callOrder = <String>[];
   var listModelsCalls = 0;
   var probeTextCalls = 0;
   var probeToolsCalls = 0;
@@ -62,8 +65,9 @@ class _FakeLlmProvider implements LlmProvider {
     required CancellationSignal cancellation,
   }) async {
     listModelsCalls++;
+    callOrder.add('list');
     lastProbeApiKey = apiKey;
-    return List<String>.from(models);
+    return List<String>.from(availableModels);
   }
 
   @override
@@ -73,6 +77,7 @@ class _FakeLlmProvider implements LlmProvider {
     required CancellationSignal cancellation,
   }) async {
     probeTextCalls++;
+    callOrder.add('text');
     lastProbeApiKey = apiKey;
     lastProbeModel = model;
     final error = textShouldThrow;
@@ -86,6 +91,7 @@ class _FakeLlmProvider implements LlmProvider {
     required CancellationSignal cancellation,
   }) async {
     probeToolsCalls++;
+    callOrder.add('tools');
     lastProbeApiKey = apiKey;
     lastProbeModel = model;
     final error = toolsShouldThrow;
@@ -121,7 +127,9 @@ Future<void> _seedSummary(
   AppDatabase database,
   String accountId, {
   String content = '本周讨论了高等数学',
-}) => database.into(database.conversationSummaries).insert(
+}) => database
+    .into(database.conversationSummaries)
+    .insert(
       ConversationSummariesCompanion.insert(
         id: 'summary-1',
         accountId: accountId,
@@ -170,10 +178,7 @@ void main() {
   /// Pumps the page inside a tall viewport so every ListView child is built
   /// (Flutter lazily builds off-screen children, which would make bottom
   /// tiles unfindable in the default 800x600 surface).
-  Future<void> pumpTall(
-    WidgetTester tester,
-    _FakeLlmProvider provider,
-  ) async {
+  Future<void> pumpTall(WidgetTester tester, _FakeLlmProvider provider) async {
     tester.view.physicalSize = const Size(800, 2400);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
@@ -272,7 +277,9 @@ void main() {
         expect(
           find.byWidgetPredicate(
             (w) =>
-                w is Text && w.data != null && w.data!.contains('bad-replacement'),
+                w is Text &&
+                w.data != null &&
+                w.data!.contains('bad-replacement'),
           ),
           findsNothing,
         );
@@ -342,6 +349,30 @@ void main() {
       expect(find.byKey(const Key('agent-setup-key-field')), findsNothing);
     });
 
+    testWidgets(
+      'panel lists models first and selects an available non-default model',
+      (tester) async {
+        final provider = _FakeLlmProvider(
+          availableModels: const ['campus-model'],
+        );
+        await tester.pumpWidget(harness(provider));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('agent-setup-key-field')),
+          'setup-key',
+        );
+        await tester.tap(find.byKey(const Key('agent-setup-save')));
+        await tester.pumpAndSettle();
+
+        expect(provider.callOrder.take(3), ['list', 'text', 'tools']);
+        expect(provider.lastProbeModel, 'campus-model');
+        final snapshot = await config.load('account-a');
+        expect(snapshot.model, 'campus-model');
+        expect(snapshot.enabled, isTrue);
+      },
+    );
+
     testWidgets('panel failed probe blocks save, shows safe copy, no leak', (
       tester,
     ) async {
@@ -410,22 +441,23 @@ void main() {
   });
 
   group('AgentSettingsPage model list', () {
-    testWidgets('model dropdown lists models and defaults to deepseek-v4-flash', (
-      tester,
-    ) async {
-      await secrets.saveKey('account-a', 'k');
-      await config.enable('account-a', true);
-      final provider = _FakeLlmProvider();
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'model dropdown lists models and defaults to deepseek-v4-flash',
+      (tester) async {
+        await secrets.saveKey('account-a', 'k');
+        await config.enable('account-a', true);
+        final provider = _FakeLlmProvider();
+        await tester.pumpWidget(harness(provider));
+        await tester.pumpAndSettle();
 
-      // Default model is shown as the selected value.
-      expect(find.text('deepseek-v4-flash'), findsOneWidget);
-      // Open the dropdown and confirm both models are listed.
-      await tester.tap(find.byKey(const Key('agent-model-dropdown')));
-      await tester.pumpAndSettle();
-      expect(find.text('deepseek-v4-pro'), findsOneWidget);
-    });
+        // Default model is shown as the selected value.
+        expect(find.text('deepseek-v4-flash'), findsOneWidget);
+        // Open the dropdown and confirm both models are listed.
+        await tester.tap(find.byKey(const Key('agent-model-dropdown')));
+        await tester.pumpAndSettle();
+        expect(find.text('deepseek-v4-pro'), findsOneWidget);
+      },
+    );
 
     testWidgets('model change requires both probes with existing key', (
       tester,
@@ -500,7 +532,10 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'k',
+      );
       await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
@@ -514,14 +549,14 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'k',
+      );
       await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
-      expect(
-        find.text('无法连接学校模型服务，请检查校园网或 iWAN'),
-        findsOneWidget,
-      );
+      expect(find.text('无法连接学校模型服务，请检查校园网或 iWAN'), findsOneWidget);
     });
 
     testWidgets('maps protocol_error', (tester) async {
@@ -531,7 +566,10 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      await tester.enterText(find.byKey(const Key('agent-setup-key-field')), 'k');
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'k',
+      );
       await tester.tap(find.byKey(const Key('agent-setup-save')));
       await tester.pumpAndSettle();
 
@@ -629,29 +667,30 @@ void main() {
       await tester.pumpWidget(harness(provider));
       await tester.pumpAndSettle();
 
-      expect(
-        find.textContaining('https://api.llm.ustc.edu.cn'),
-        findsWidgets,
-      );
+      expect(find.textContaining('https://api.llm.ustc.edu.cn'), findsWidgets);
       expect(find.textContaining('校园网'), findsWidgets);
       expect(find.textContaining('iWAN'), findsWidgets);
     });
 
-    testWidgets('does not expose arbitrary Base URL/temperature/max-token/system-prompt fields', (
-      tester,
-    ) async {
-      final provider = _FakeLlmProvider();
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
+    testWidgets(
+      'does not expose arbitrary Base URL/temperature/max-token/system-prompt fields',
+      (tester) async {
+        final provider = _FakeLlmProvider();
+        await tester.pumpWidget(harness(provider));
+        await tester.pumpAndSettle();
 
-      expect(find.text('Base URL'), findsNothing);
-      expect(find.text('Temperature'), findsNothing);
-      expect(find.text('Max Tokens'), findsNothing);
-      expect(find.text('System Prompt'), findsNothing);
-      expect(find.byKey(const Key('agent-base-url-field')), findsNothing);
-      expect(find.byKey(const Key('agent-temperature-field')), findsNothing);
-      expect(find.byKey(const Key('agent-max-tokens-field')), findsNothing);
-      expect(find.byKey(const Key('agent-system-prompt-field')), findsNothing);
-    });
+        expect(find.text('Base URL'), findsNothing);
+        expect(find.text('Temperature'), findsNothing);
+        expect(find.text('Max Tokens'), findsNothing);
+        expect(find.text('System Prompt'), findsNothing);
+        expect(find.byKey(const Key('agent-base-url-field')), findsNothing);
+        expect(find.byKey(const Key('agent-temperature-field')), findsNothing);
+        expect(find.byKey(const Key('agent-max-tokens-field')), findsNothing);
+        expect(
+          find.byKey(const Key('agent-system-prompt-field')),
+          findsNothing,
+        );
+      },
+    );
   });
 }

@@ -181,6 +181,7 @@ class SettingsService {
         database.localAccounts,
       )..where((row) => row.id.equals(accountId))).go();
     });
+    database.notifyActiveAccountChanged();
     try {
       await accounts.clearDedicatedBrowserSession();
     } catch (error) {

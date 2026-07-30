@@ -176,6 +176,58 @@ void main() {
       expect(settings.icourseConsent, isFalse);
     });
 
+    test(
+      'configureWithKey saves key model and enabled state atomically',
+      () async {
+        final secrets = ProtectedAgentSecretStore(
+          database: database,
+          protector: _ReversingFakeProtector(),
+        );
+
+        await service.configureWithKey(
+          accountId: 'account-a',
+          apiKey: 'school-key',
+          model: 'available-model',
+          secrets: secrets,
+        );
+
+        expect(await secrets.readKey('account-a'), 'school-key');
+        final settings = await service.load('account-a');
+        expect(settings.model, 'available-model');
+        expect(settings.enabled, isTrue);
+      },
+    );
+
+    test(
+      'configureWithKey rolls back the key when settings write fails',
+      () async {
+        final secrets = ProtectedAgentSecretStore(
+          database: database,
+          protector: _ReversingFakeProtector(),
+        );
+        await database.customStatement('''
+CREATE TRIGGER fail_agent_settings_insert
+BEFORE INSERT ON agent_settings
+BEGIN
+  SELECT RAISE(FAIL, 'settings failure');
+END
+''');
+
+        await expectLater(
+          service.configureWithKey(
+            accountId: 'account-a',
+            apiKey: 'must-rollback',
+            model: 'available-model',
+            secrets: secrets,
+          ),
+          throwsA(anything),
+        );
+
+        expect(await secrets.hasKey('account-a'), isFalse);
+        expect((await service.load('account-a')).enabled, isFalse);
+      },
+    );
+
     test('clearSummary delegates to the chat repository', () async {
       await chatRepository.replaceSummary(
         accountId: 'account-a',

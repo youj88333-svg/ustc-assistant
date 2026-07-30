@@ -13,6 +13,7 @@ import 'agent_local_data_gateway.dart';
 import 'agent_session_service.dart';
 import 'agent_tool_registry.dart';
 import 'agent_tools.dart';
+import 'cancellation_signal.dart';
 import 'outbound_privacy_filter.dart';
 
 /// Platform-injected factory for a protected [AgentSecretStore].
@@ -28,6 +29,83 @@ typedef SecretStoreFactory = AgentSecretStore Function(AppDatabase database);
 /// no-op or mock stub — the gateway is Windows-only for Task 5.
 typedef QueryGatewayFactory =
     Future<QuerySourceGateway> Function(AppDatabase database, String accountId);
+
+typedef QueryGatewayStarter = Future<QuerySourceGateway> Function();
+
+/// Defers platform Bridge startup until an external source tool is used.
+class LazyQuerySourceGateway implements DisposableQuerySourceGateway {
+  LazyQuerySourceGateway(this._starter);
+
+  final QueryGatewayStarter _starter;
+  Future<QuerySourceGateway>? _gatewayFuture;
+  bool _disposed = false;
+  bool _underlyingDisposed = false;
+
+  Future<QuerySourceGateway> _gateway() async {
+    if (_disposed) throw StateError('bridge_unavailable');
+    final starting = _gatewayFuture ??= _starter();
+    late final QuerySourceGateway gateway;
+    try {
+      gateway = await starting;
+    } catch (_) {
+      if (identical(_gatewayFuture, starting)) {
+        _gatewayFuture = null;
+      }
+      rethrow;
+    }
+    if (_disposed) {
+      await _disposeUnderlying(gateway);
+      throw StateError('bridge_unavailable');
+    }
+    return gateway;
+  }
+
+  @override
+  Stream<SourceQueryEvent> execute(
+    SourceQuery request, {
+    required CancellationSignal cancellation,
+  }) async* {
+    try {
+      final gateway = await _gateway();
+      yield* gateway.execute(request, cancellation: cancellation);
+    } catch (_) {
+      yield SourceQueryFailed(jobId: 'bridge', code: 'bridge_unavailable');
+    }
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    final gateway = await _gateway();
+    await gateway.resumeLogin(jobId, password: password);
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    final gateway = await _gateway();
+    await gateway.cancel(jobId);
+  }
+
+  @override
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    final started = _gatewayFuture;
+    if (started == null) return;
+    try {
+      await _disposeUnderlying(await started);
+    } catch (_) {
+      // A failed lazy startup has no resource to release.
+    }
+  }
+
+  Future<void> _disposeUnderlying(QuerySourceGateway gateway) async {
+    if (_underlyingDisposed) return;
+    _underlyingDisposed = true;
+    if (gateway is DisposableQuerySourceGateway) {
+      await gateway.dispose();
+    }
+  }
+}
 
 /// Composed Agent services for the active account.
 ///
@@ -138,7 +216,7 @@ class AgentComposition {
 /// The composed result, exposing all services needed by [AgentChatPage] and
 /// the [_AgentChatLoader].
 class AgentCompositionResult {
-  const AgentCompositionResult({
+  AgentCompositionResult({
     required this.chatRepository,
     required this.secretStore,
     required this.provider,
@@ -167,7 +245,18 @@ class AgentCompositionResult {
   final BeijingClock clock;
   final String accountId;
   final String model;
+  bool _disposed = false;
 
   /// Shorthand to load the account's agent settings snapshot.
   Future<AgentSettingsSnapshot> loadSettings() => configService.load(accountId);
+
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    await sessionService.dispose();
+    final gateway = queryGateway;
+    if (gateway is DisposableQuerySourceGateway) {
+      await gateway.dispose();
+    }
+  }
 }

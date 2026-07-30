@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
@@ -43,12 +45,38 @@ part 'app_database.g.dart';
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.executor);
 
+  final StreamController<void> _activeAccountChanges =
+      StreamController<void>.broadcast(sync: true);
+  final StreamController<String> _agentSettingsChanges =
+      StreamController<String>.broadcast(sync: true);
+
+  Stream<void> get activeAccountChanges => _activeAccountChanges.stream;
+
+  void notifyActiveAccountChanged() {
+    if (!_activeAccountChanges.isClosed) _activeAccountChanges.add(null);
+  }
+
+  Stream<String> get agentSettingsChanges => _agentSettingsChanges.stream;
+
+  void notifyAgentSettingsChanged(String accountId) {
+    if (!_agentSettingsChanges.isClosed) {
+      _agentSettingsChanges.add(accountId);
+    }
+  }
+
   @override
   int get schemaVersion => 3;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
   );
+
+  @override
+  Future<void> close() async {
+    await _activeAccountChanges.close();
+    await _agentSettingsChanges.close();
+    await super.close();
+  }
 
   Future<void> replaceUndoSlot({
     required String commandId,

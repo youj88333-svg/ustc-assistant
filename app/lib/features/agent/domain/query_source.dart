@@ -167,7 +167,7 @@ class SourceQueryCompleted extends SourceQueryEvent {
 /// `result_validation_failed`).
 class SourceQueryFailed extends SourceQueryEvent {
   SourceQueryFailed({required this.jobId, required String code})
-      : code = safeSourceQueryFailureCode(code);
+    : code = safeSourceQueryFailureCode(code);
 
   @override
   final String jobId;
@@ -180,6 +180,7 @@ class SourceQueryFailed extends SourceQueryEvent {
 /// always become the fixed public failure code.
 const Set<String> _safeSourceQueryFailureCodes = {
   'account_mismatch',
+  'bridge_unavailable',
   'bridge_query_busy',
   'cancelled',
   'invalid_capabilities',
@@ -228,4 +229,11 @@ abstract interface class QuerySourceGateway {
 
   /// Cancels an active or paused query job.
   Future<void> cancel(String jobId);
+}
+
+/// Optional lifecycle contract for gateways that own a process, client, or
+/// lazily-created platform resource.
+abstract interface class DisposableQuerySourceGateway
+    implements QuerySourceGateway {
+  Future<void> dispose();
 }

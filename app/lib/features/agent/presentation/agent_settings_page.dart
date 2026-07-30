@@ -138,9 +138,12 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
     setState(() {
       _snapshot = snapshot;
       _hasKey = hasKey;
-      _models = models.isEmpty
+      final availableModels = models.isEmpty
           ? const [AgentConfigurationService.defaultModel]
           : models;
+      _models = availableModels.contains(snapshot.model)
+          ? availableModels
+          : [...availableModels, snapshot.model];
       _selectedModel = snapshot.model;
       _loading = false;
       _error = probeError;
@@ -154,6 +157,9 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
     setState(() {
       _snapshot = snapshot;
       _hasKey = hasKey;
+      if (!_models.contains(snapshot.model)) {
+        _models = [..._models, snapshot.model];
+      }
       _selectedModel = snapshot.model;
     });
   }
@@ -162,7 +168,6 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
     if (_busy) return;
     final key = _keyController.text;
     if (key.isEmpty) return;
-    final model = _selectedModel ?? AgentConfigurationService.defaultModel;
     setState(() {
       _busy = true;
       _error = null;
@@ -170,6 +175,19 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
     final cancellation = CancellationSignal();
     _activeCancellation = cancellation;
     try {
+      final models = await widget.provider.listModels(
+        apiKey: key,
+        cancellation: cancellation,
+      );
+      if (models.isEmpty) {
+        throw const LlmProtocolException('model_unavailable');
+      }
+      final selected = _selectedModel;
+      final model = selected != null && models.contains(selected)
+          ? selected
+          : models.contains(AgentConfigurationService.defaultModel)
+          ? AgentConfigurationService.defaultModel
+          : models.first;
       await widget.provider.probeText(
         apiKey: key,
         model: model,
@@ -180,18 +198,16 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
         model: model,
         cancellation: cancellation,
       );
-      await widget.secrets.saveKey(widget.accountId, key);
-      await widget.config.enable(widget.accountId, true);
-      // Refresh the model list now that a key is in place.
-      final models = await widget.provider.listModels(
+      await widget.config.configureWithKey(
+        accountId: widget.accountId,
         apiKey: key,
-        cancellation: cancellation,
+        model: model,
+        secrets: widget.secrets,
       );
       if (!mounted) return;
       setState(() {
-        _models = models.isEmpty
-            ? const [AgentConfigurationService.defaultModel]
-            : models;
+        _models = models;
+        _selectedModel = model;
       });
       _keyController.clear();
       await _refreshSnapshot();
@@ -210,8 +226,10 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
   Future<void> _deleteKey() async {
     final confirmed = await _confirm('删除已保存的 API Key？删除后将无法发送消息，但聊天记录会保留。');
     if (confirmed != true) return;
-    await widget.secrets.deleteKey(widget.accountId);
-    await widget.config.enable(widget.accountId, false);
+    await widget.config.deleteKeyAndDisable(
+      accountId: widget.accountId,
+      secrets: widget.secrets,
+    );
     await _refreshSnapshot();
   }
 
@@ -275,9 +293,7 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
   }
 
   Future<void> _clearConversation() async {
-    final confirmed = await _confirm(
-      '清除全部会话？将删除消息、运行记录和摘要；API Key 与业务数据会保留。',
-    );
+    final confirmed = await _confirm('清除全部会话？将删除消息、运行记录和摘要；API Key 与业务数据会保留。');
     if (confirmed != true) return;
     await widget.config.clearConversation(widget.accountId);
   }
@@ -310,21 +326,21 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
   }
 
   Future<bool?> _confirm(String title) => showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认'),
-            ),
-          ],
+    context: context,
+    builder: (context) => AlertDialog(
+      title: Text(title),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
         ),
-      );
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('确认'),
+        ),
+      ],
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -405,9 +421,7 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
                 padding: const EdgeInsets.symmetric(horizontal: 16),
                 child: Text(
                   _error!,
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.error,
-                  ),
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
             // Model selection.
@@ -423,10 +437,7 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
                 value: _selectedModel,
                 items: _models
                     .map(
-                      (m) => DropdownMenuItem<String>(
-                        value: m,
-                        child: Text(m),
-                      ),
+                      (m) => DropdownMenuItem<String>(value: m, child: Text(m)),
                     )
                     .toList(),
                 onChanged: _busy ? null : _changeModel,

@@ -83,10 +83,8 @@ class _NoopProtector implements CredentialProtector {
 }
 
 class _FakeConfigService extends AgentConfigurationService {
-  _FakeConfigService(AppDatabase db, DriftChatRepository repo) : super(
-    database: db,
-    chatRepository: repo,
-  );
+  _FakeConfigService(AppDatabase db, DriftChatRepository repo)
+    : super(database: db, chatRepository: repo);
 
   AgentSettingsSnapshot? _override;
 
@@ -128,8 +126,17 @@ class _ScriptedSessionService extends AgentSessionService {
         database: db,
         provider: _FakeLlmProvider(),
         contextBuilder: const AgentContextBuilder(),
-        privacyFilter: OutboundPrivacyFilter(protectedAccount: '', toolBuilders: const {}),
-        registry: AgentToolRegistry(tools: [], privacyFilter: OutboundPrivacyFilter(protectedAccount: '', toolBuilders: const {})),
+        privacyFilter: OutboundPrivacyFilter(
+          protectedAccount: '',
+          toolBuilders: const {},
+        ),
+        registry: AgentToolRegistry(
+          tools: [],
+          privacyFilter: OutboundPrivacyFilter(
+            protectedAccount: '',
+            toolBuilders: const {},
+          ),
+        ),
         clock: const SystemBeijingClock(),
         model: 'deepseek-v4-flash',
         apiKeyProvider: ({required accountId}) async => '',
@@ -141,7 +148,9 @@ class _ScriptedSessionService extends AgentSessionService {
   final List<({String accountId, String runId})> resumeCalls = [];
 
   void addState(AgentRunViewState state) => _controller.add(state);
-  void closeStream() { if (!_controller.isClosed) _controller.close(); }
+  void closeStream() {
+    if (!_controller.isClosed) _controller.close();
+  }
 
   /// Simulates a stream that errors mid-flight WITHOUT first emitting a
   /// terminal state, so the page's error/done handlers must produce one.
@@ -156,10 +165,13 @@ class _ScriptedSessionService extends AgentSessionService {
   }) => _controller.stream;
 
   @override
-  Stream<AgentRunViewState> retryLast({required String accountId}) => _controller.stream;
+  Stream<AgentRunViewState> retryLast({required String accountId}) =>
+      _controller.stream;
 
   @override
-  Future<void> cancel({required String accountId}) async { closeStream(); }
+  Future<void> cancel({required String accountId}) async {
+    closeStream();
+  }
 
   @override
   Stream<AgentRunViewState> resumeUserAction({
@@ -174,11 +186,8 @@ class _ScriptedSessionService extends AgentSessionService {
 class _FakeSecretStore extends ProtectedAgentSecretStore {
   static final _noop = _NoopProtector();
 
-  _FakeSecretStore(AppDatabase db) : super(
-    database: db,
-    protector: _noop,
-    now: () => 1,
-  );
+  _FakeSecretStore(AppDatabase db)
+    : super(database: db, protector: _noop, now: () => 1);
 
   bool _hasKey = true;
 
@@ -200,6 +209,8 @@ Widget _buildPage({
   required AgentSessionService sessionService,
   required DriftChatRepository chatRepository,
   OfficialWebsiteLauncher? launcher,
+  String sessionModel = 'deepseek-v4-flash',
+  VoidCallback? onSessionModelChanged,
 }) {
   return MaterialApp(
     home: Scaffold(
@@ -211,6 +222,8 @@ Widget _buildPage({
         sessionService: sessionService,
         chatRepository: chatRepository,
         websiteLauncher: launcher ?? _FakeWebsiteLauncher(),
+        sessionModel: sessionModel,
+        onSessionModelChanged: onSessionModelChanged,
       ),
     ),
   );
@@ -243,26 +256,146 @@ void main() {
       config.setUnconfigured();
       secrets.setHasKey(false);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: _ScriptedSessionService(database, chatRepository),
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       expect(find.byType(AgentSetupPanel), findsOneWidget);
     });
 
-    testWidgets('ready: configured with empty history shows welcome', (tester) async {
+    testWidgets('inline setup immediately enables the composer', (
+      tester,
+    ) async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'test',
+              maskedHint: 'PB****0000',
+              isActive: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final liveConfig = AgentConfigurationService(
+        database: database,
+        chatRepository: chatRepository,
+      );
+
+      await tester.pumpWidget(
+        _buildPage(
+          config: liveConfig,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+        ),
+      );
+      await _pump(tester);
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const Key('agent-setup-key-field')),
+        'school-key',
+      );
+      await tester.tap(find.byKey(const Key('agent-setup-save')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('agent-setup-key-field')), findsNothing);
+      expect(find.byType(TextField), findsOneWidget);
+    });
+
+    testWidgets('external key deletion disables the composer', (tester) async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'test',
+              maskedHint: 'PB****0000',
+              isActive: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final liveConfig = AgentConfigurationService(
+        database: database,
+        chatRepository: chatRepository,
+      );
+      await liveConfig.enable('test', true);
+
+      await tester.pumpWidget(
+        _buildPage(
+          config: liveConfig,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('agent-setup-key-field')), findsNothing);
+
+      secrets.setHasKey(false);
+      await liveConfig.enable('test', false);
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const Key('agent-setup-key-field')), findsOneWidget);
+    });
+
+    testWidgets('model change requests a session rebuild', (tester) async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'test',
+              maskedHint: 'PB****0000',
+              isActive: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final liveConfig = AgentConfigurationService(
+        database: database,
+        chatRepository: chatRepository,
+      );
+      await liveConfig.enable('test', true);
+      var rebuilds = 0;
+
+      await tester.pumpWidget(
+        _buildPage(
+          config: liveConfig,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+          sessionModel: 'deepseek-v4-flash',
+          onSessionModelChanged: () => rebuilds++,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await liveConfig.setModel('test', 'campus-model');
+      await tester.pumpAndSettle();
+
+      expect(rebuilds, 1);
+    });
+
+    testWidgets('ready: configured with empty history shows welcome', (
+      tester,
+    ) async {
       config.setConfigured();
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: _ScriptedSessionService(database, chatRepository),
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       expect(find.text('有什么可以帮你的？'), findsOneWidget);
@@ -273,7 +406,9 @@ void main() {
       'persisted interrupted assistant text stays visible and retryable',
       (tester) async {
         config.setConfigured();
-        await database.into(database.localAccounts).insert(
+        await database
+            .into(database.localAccounts)
+            .insert(
               LocalAccountsCompanion.insert(
                 id: 'test',
                 maskedHint: 'PB****0000',
@@ -298,10 +433,7 @@ void main() {
           _buildPage(
             config: config,
             secrets: secrets,
-            sessionService: _ScriptedSessionService(
-              database,
-              chatRepository,
-            ),
+            sessionService: _ScriptedSessionService(database, chatRepository),
             chatRepository: chatRepository,
           ),
         );
@@ -312,16 +444,61 @@ void main() {
       },
     );
 
+    testWidgets('persisted history opens at the latest message', (
+      tester,
+    ) async {
+      config.setConfigured();
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'test',
+              maskedHint: 'PB****0000',
+              isActive: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final runId = await chatRepository.startRun(
+        accountId: 'test',
+        model: 'deepseek-v4-flash',
+      );
+      for (var index = 0; index < 40; index++) {
+        await chatRepository.appendMessage(
+          accountId: 'test',
+          runId: runId,
+          role: ChatRole.user,
+          state: ChatMessageState.completed,
+          content: 'history-message-$index',
+        );
+      }
+
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: _ScriptedSessionService(database, chatRepository),
+          chatRepository: chatRepository,
+        ),
+      );
+      await _pump(tester);
+
+      expect(find.text('history-message-39'), findsOneWidget);
+      expect(find.text('history-message-0'), findsNothing);
+    });
+
     testWidgets('streaming: send button becomes stop icon', (tester) async {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '你好');
@@ -329,7 +506,13 @@ void main() {
       await _pump(tester);
 
       // Send the running state.
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '思考中...'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '思考中...',
+        ),
+      );
       await _pump(tester);
 
       expect(find.byIcon(Icons.stop), findsOneWidget);
@@ -342,22 +525,33 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询日程');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(
-        runId: 'r1', state: AgentRunState.running, text: '查询中...',
-        toolSummaries: const [AgentToolSummary(toolName: 'get_schedule', status: AgentToolStatus.success)],
-      ));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+          toolSummaries: const [
+            AgentToolSummary(
+              toolName: 'get_schedule',
+              status: AgentToolStatus.success,
+            ),
+          ],
+        ),
+      );
       await _pump(tester);
 
       expect(find.byType(AgentToolRunTile), findsOneWidget);
@@ -370,22 +564,33 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询日程');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(
-        runId: 'r1', state: AgentRunState.running, text: '查询中...',
-        toolSummaries: const [AgentToolSummary(toolName: 'get_schedule', status: AgentToolStatus.success)],
-      ));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+          toolSummaries: const [
+            AgentToolSummary(
+              toolName: 'get_schedule',
+              status: AgentToolStatus.success,
+            ),
+          ],
+        ),
+      );
       await _pump(tester);
 
       await tester.tap(find.byType(AgentToolRunTile));
@@ -400,21 +605,35 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '你好');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '你好'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '你好',
+        ),
+      );
       await _pump(tester);
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.completed, text: '你好！我是校园助手。'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.completed,
+          text: '你好！我是校园助手。',
+        ),
+      );
       script.closeStream();
       await _pump(tester);
 
@@ -426,24 +645,40 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+        ),
+      );
       await _pump(tester);
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.failed, text: '', errorCode: 'upstream_error'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.failed,
+          text: '',
+          errorCode: 'upstream_error',
+        ),
+      );
       script.closeStream();
       await _pump(tester);
 
+      expect(find.text('请求失败，未生成回答。'), findsOneWidget);
       expect(find.byIcon(Icons.refresh), findsOneWidget);
     });
 
@@ -451,24 +686,39 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+        ),
+      );
       await _pump(tester);
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.cancelled, text: '部分结果'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.cancelled,
+          text: '',
+        ),
+      );
       script.closeStream();
       await _pump(tester);
 
+      expect(find.text('本次回答已取消。'), findsOneWidget);
       expect(find.byIcon(Icons.refresh), findsOneWidget);
     });
 
@@ -476,63 +726,92 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+        ),
+      );
       await _pump(tester);
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.interrupted, text: '部分结果'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.interrupted,
+          text: '',
+        ),
+      );
       script.closeStream();
       await _pump(tester);
 
+      expect(find.text('本次回答意外中断。'), findsOneWidget);
       expect(find.byIcon(Icons.refresh), findsOneWidget);
     });
 
-    testWidgets(
-      'copy button shows for any terminal state with non-empty text, '
-      'not only completed',
-      (tester) async {
-        // Regression guard: an interrupted/failed/cancelled run may have
-        // substantial partial text the user wants to copy. The copy button
-        // must render for ANY terminal state with non-empty text, not only
-        // `completed`. A running message, or a terminal message with empty
-        // text, must NOT show the copy button.
-        config.setConfigured();
-        final script = _ScriptedSessionService(database, chatRepository);
+    testWidgets('copy button shows for any terminal state with non-empty text, '
+        'not only completed', (tester) async {
+      // Regression guard: an interrupted/failed/cancelled run may have
+      // substantial partial text the user wants to copy. The copy button
+      // must render for ANY terminal state with non-empty text, not only
+      // `completed`. A running message, or a terminal message with empty
+      // text, must NOT show the copy button.
+      config.setConfigured();
+      final script = _ScriptedSessionService(database, chatRepository);
 
-        await tester.pumpWidget(_buildPage(
+      await tester.pumpWidget(
+        _buildPage(
           config: config,
           secrets: secrets,
           sessionService: script,
           chatRepository: chatRepository,
-        ));
-        await _pump(tester);
+        ),
+      );
+      await _pump(tester);
 
-        await tester.enterText(find.byType(TextField), '查询');
-        await tester.testTextInput.receiveAction(TextInputAction.send);
-        await _pump(tester);
+      await tester.enterText(find.byType(TextField), '查询');
+      await tester.testTextInput.receiveAction(TextInputAction.send);
+      await _pump(tester);
 
-        // 1. Interrupted with partial text -> copy button visible.
-        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'));
-        await _pump(tester);
-        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.interrupted, text: '部分结果文本'));
-        script.closeStream();
-        await _pump(tester);
+      // 1. Interrupted with partial text -> copy button visible.
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '查询中...',
+        ),
+      );
+      await _pump(tester);
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.interrupted,
+          text: '部分结果文本',
+        ),
+      );
+      script.closeStream();
+      await _pump(tester);
 
-        expect(find.byIcon(Icons.copy), findsOneWidget,
-            reason: 'interrupted run with partial text should allow copy');
-        expect(find.byIcon(Icons.refresh), findsOneWidget);
-      },
-    );
+      expect(
+        find.byIcon(Icons.copy),
+        findsOneWidget,
+        reason: 'interrupted run with partial text should allow copy',
+      );
+      expect(find.byIcon(Icons.refresh), findsOneWidget);
+    });
 
     testWidgets(
       'copy button hidden for running message and for empty-text terminal message',
@@ -540,12 +819,14 @@ void main() {
         config.setConfigured();
         final script = _ScriptedSessionService(database, chatRepository);
 
-        await tester.pumpWidget(_buildPage(
-          config: config,
-          secrets: secrets,
-          sessionService: script,
-          chatRepository: chatRepository,
-        ));
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
         await _pump(tester);
 
         await tester.enterText(find.byType(TextField), '查询');
@@ -553,17 +834,36 @@ void main() {
         await _pump(tester);
 
         // Running (non-terminal) with text -> no copy button.
-        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '正在生成...'));
+        script.addState(
+          AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.running,
+            text: '正在生成...',
+          ),
+        );
         await _pump(tester);
-        expect(find.byIcon(Icons.copy), findsNothing,
-            reason: 'running message must not show copy');
+        expect(
+          find.byIcon(Icons.copy),
+          findsNothing,
+          reason: 'running message must not show copy',
+        );
 
         // Terminal (failed) with EMPTY text -> no copy button (nothing to copy).
-        script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.failed, text: '', errorCode: 'upstream_error'));
+        script.addState(
+          AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.failed,
+            text: '',
+            errorCode: 'upstream_error',
+          ),
+        );
         script.closeStream();
         await _pump(tester);
-        expect(find.byIcon(Icons.copy), findsNothing,
-            reason: 'terminal message with empty text must not show copy');
+        expect(
+          find.byIcon(Icons.copy),
+          findsNothing,
+          reason: 'terminal message with empty text must not show copy',
+        );
         expect(find.byIcon(Icons.refresh), findsOneWidget);
       },
     );
@@ -578,12 +878,14 @@ void main() {
         config.setConfigured();
         final script = _ScriptedSessionService(database, chatRepository);
 
-        await tester.pumpWidget(_buildPage(
-          config: config,
-          secrets: secrets,
-          sessionService: script,
-          chatRepository: chatRepository,
-        ));
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
         await _pump(tester);
 
         await tester.enterText(find.byType(TextField), '查询');
@@ -592,7 +894,11 @@ void main() {
 
         // Only a running state arrives, then the stream errors — no terminal.
         script.addState(
-          AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'),
+          AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.running,
+            text: '查询中...',
+          ),
         );
         await _pump(tester);
         script.emitError(StateError('boom'));
@@ -615,12 +921,14 @@ void main() {
         config.setConfigured();
         final script = _ScriptedSessionService(database, chatRepository);
 
-        await tester.pumpWidget(_buildPage(
-          config: config,
-          secrets: secrets,
-          sessionService: script,
-          chatRepository: chatRepository,
-        ));
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
         await _pump(tester);
 
         await tester.enterText(find.byType(TextField), '查询');
@@ -628,7 +936,11 @@ void main() {
         await _pump(tester);
 
         script.addState(
-          AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '查询中...'),
+          AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.running,
+            text: '查询中...',
+          ),
         );
         await _pump(tester);
         // Close WITHOUT a terminal state — abnormal empty completion.
@@ -645,19 +957,27 @@ void main() {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);
 
-      await tester.pumpWidget(_buildPage(
-        config: config,
-        secrets: secrets,
-        sessionService: script,
-        chatRepository: chatRepository,
-      ));
+      await tester.pumpWidget(
+        _buildPage(
+          config: config,
+          secrets: secrets,
+          sessionService: script,
+          chatRepository: chatRepository,
+        ),
+      );
       await _pump(tester);
 
       await tester.enterText(find.byType(TextField), '查询二课');
       await tester.testTextInput.receiveAction(TextInputAction.send);
       await _pump(tester);
 
-      script.addState(AgentRunViewState(runId: 'r1', state: AgentRunState.running, text: '登录中...'));
+      script.addState(
+        AgentRunViewState(
+          runId: 'r1',
+          state: AgentRunState.running,
+          text: '登录中...',
+        ),
+      );
       await _pump(tester);
       script.addState(
         const AgentRunViewState(
@@ -674,10 +994,7 @@ void main() {
       expect(find.text('打开登录窗口并继续'), findsOneWidget);
       await tester.tap(find.text('打开登录窗口并继续'));
       await _pump(tester);
-      expect(
-        script.resumeCalls,
-        [(accountId: 'test', runId: 'r1')],
-      );
+      expect(script.resumeCalls, [(accountId: 'test', runId: 'r1')]);
       script.closeStream();
     });
 
@@ -696,7 +1013,9 @@ void main() {
 
         // The chat_messages table has a foreign key on account_id, so seed
         // the account row before inserting history.
-        await database.into(database.localAccounts).insert(
+        await database
+            .into(database.localAccounts)
+            .insert(
               LocalAccountsCompanion.insert(
                 id: 'test',
                 maskedHint: 'PB****0000',
@@ -717,12 +1036,14 @@ void main() {
           );
         }
 
-        await tester.pumpWidget(_buildPage(
-          config: config,
-          secrets: secrets,
-          sessionService: script,
-          chatRepository: chatRepository,
-        ));
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
         await _pump(tester);
         await tester.pumpAndSettle();
 
@@ -732,10 +1053,7 @@ void main() {
         // descendant Scrollable. The first such Scrollable is the list's
         // own viewport (markdown bubbles may nest additional Scrollables).
         final scrollableFinder = find
-            .descendant(
-              of: listViewFinder,
-              matching: find.byType(Scrollable),
-            )
+            .descendant(of: listViewFinder, matching: find.byType(Scrollable))
             .first;
 
         // Scroll up by a large amount, well past the 200px nearBottom
@@ -757,8 +1075,11 @@ void main() {
             .state<ScrollableState>(scrollableFinder)
             .position
             .pixels;
-        expect(scrolledOffset, greaterThan(300),
-            reason: 'list should have scrolled down significantly');
+        expect(
+          scrolledOffset,
+          greaterThan(300),
+          reason: 'list should have scrolled down significantly',
+        );
 
         // Now drag back UP past the 200px nearBottom threshold, which flips
         // _nearBottom to false and triggers setState. The offset must NOT
@@ -777,20 +1098,28 @@ void main() {
             .state<ScrollableState>(scrollableFinder)
             .position
             .pixels;
-        expect(offsetAfterNearBottomFlip, greaterThan(200),
-            reason: 'scroll position must be preserved across a _nearBottom '
-                'flip; snapping back to 0 is the regression');
+        expect(
+          offsetAfterNearBottomFlip,
+          greaterThan(200),
+          reason:
+              'scroll position must be preserved across a _nearBottom '
+              'flip; snapping back to 0 is the regression',
+        );
       },
     );
   });
 
   group('Step 2: safe markdown and link tests', () {
     testWidgets('raw HTML is inert (no script execution)', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SafeMarkdownMessage(text: '<script>alert("xss")</script>\nsafe text'),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SafeMarkdownMessage(
+              text: '<script>alert("xss")</script>\nsafe text',
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pump();
 
       expect(find.textContaining('safe text'), findsOneWidget);
@@ -798,11 +1127,16 @@ void main() {
 
     testWidgets('model-authored URLs are not clickable', (tester) async {
       final launcher = _FakeWebsiteLauncher();
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SafeMarkdownMessage(text: '[click me](https://evil.example.com)', launcher: launcher),
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SafeMarkdownMessage(
+              text: '[click me](https://evil.example.com)',
+              launcher: launcher,
+            ),
+          ),
         ),
-      ));
+      );
       await tester.pump();
 
       final linkFinder = find.text('click me');
@@ -821,17 +1155,19 @@ void main() {
         // pretending to be the tool-returned source. They render as inert
         // text so clicking never opens a page that is not the actual source.
         final launcher = _FakeWebsiteLauncher();
-        await tester.pumpWidget(MaterialApp(
-          home: Scaffold(
-            body: SafeMarkdownMessage(
-              text: '根据查询结果...',
-              sourceReferences: const [
-                AgentSourceReference(kind: 'event', ref: 'ref_abc'),
-              ],
-              launcher: launcher,
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: SafeMarkdownMessage(
+                text: '根据查询结果...',
+                sourceReferences: const [
+                  AgentSourceReference(kind: 'event', ref: 'ref_abc'),
+                ],
+                launcher: launcher,
+              ),
             ),
           ),
-        ));
+        );
         await tester.pump();
 
         expect(find.text('查看日程'), findsOneWidget);
@@ -845,22 +1181,30 @@ void main() {
     );
 
     testWidgets('empty text and refs renders nothing', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(body: SafeMarkdownMessage(text: '')),
-      ));
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(body: SafeMarkdownMessage(text: '')),
+        ),
+      );
       await tester.pump();
       expect(find.byType(SafeMarkdownMessage), findsOneWidget);
     });
 
-    testWidgets('source refs without launcher show non-interactive label', (tester) async {
-      await tester.pumpWidget(MaterialApp(
-        home: Scaffold(
-          body: SafeMarkdownMessage(
-            text: '查询结果',
-            sourceReferences: const [AgentSourceReference(kind: 'event', ref: 'ref_test')],
+    testWidgets('source refs without launcher show non-interactive label', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SafeMarkdownMessage(
+              text: '查询结果',
+              sourceReferences: const [
+                AgentSourceReference(kind: 'event', ref: 'ref_test'),
+              ],
+            ),
           ),
         ),
-      ));
+      );
       await tester.pump();
 
       expect(find.text('查看日程'), findsOneWidget);
