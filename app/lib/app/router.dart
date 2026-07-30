@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -28,53 +26,12 @@ import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/sync/data/python_locator.dart';
-import '../features/sync/data/bridge_client.dart';
 import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
 import '../features/tasks/presentation/task_form.dart';
 import '../features/tasks/presentation/task_detail_loader.dart';
 import 'app_drawer.dart';
-
-BridgeLaunchOptions _agentBridgeLaunchOptions() {
-  final worktreeRoot = Directory.current.absolute;
-  final sourceRoot = Directory(
-    '${worktreeRoot.path}${Platform.pathSeparator}src',
-  );
-  final queryJobs = File(
-    '${sourceRoot.path}${Platform.pathSeparator}ustc_assistant'
-    '${Platform.pathSeparator}bridge${Platform.pathSeparator}query_jobs.py',
-  );
-  final environment = Map<String, String>.from(Platform.environment);
-  if (queryJobs.existsSync()) {
-    final sourcePath = sourceRoot.path;
-    final existingPythonPath = environment['PYTHONPATH'];
-    final separator = Platform.isWindows ? ';' : ':';
-    environment['PYTHONPATH'] = existingPythonPath == null ||
-            existingPythonPath.isEmpty
-        ? sourcePath
-        : '$sourcePath$separator$existingPythonPath';
-    environment['USTC_ASSISTANT_SOURCE_ROOT'] = worktreeRoot.path;
-    environment['USTC_ASSISTANT_DATA_ROOT'] = worktreeRoot.path;
-    return BridgeLaunchOptions(
-      workingDirectory: worktreeRoot.path,
-      environment: environment,
-    );
-  }
-
-  final appData = Platform.environment['LOCALAPPDATA'] ??
-      Platform.environment['APPDATA'] ??
-      Directory.systemTemp.path;
-  final dataRoot = Directory(
-    '$appData${Platform.pathSeparator}USTC Campus Assistant',
-  );
-  dataRoot.createSync(recursive: true);
-  environment['USTC_ASSISTANT_DATA_ROOT'] = dataRoot.path;
-  return BridgeLaunchOptions(
-    workingDirectory: dataRoot.path,
-    environment: environment,
-  );
-}
 
 GoRouter buildRouter(
   OfficialWebsiteLauncher websiteLauncher,
@@ -591,11 +548,12 @@ class _AgentChatCompositionBuilderState
         accounts: accounts,
         accountId: widget.accountId,
       ).pythonPath();
+      final launchOptions = resolveBridgeLaunchOptions();
       final pythonExecutable = await PythonLocator().locate(
         savedExecutable: savedPythonPath,
         requiredModule: 'ustc_assistant.bridge.query_jobs',
+        importEnvironment: launchOptions.environment,
       );
-      final launchOptions = _agentBridgeLaunchOptions();
       return AgentComposition.build(
         database: widget.database,
         accountId: widget.accountId,

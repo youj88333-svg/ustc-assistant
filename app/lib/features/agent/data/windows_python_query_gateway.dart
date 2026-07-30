@@ -89,14 +89,17 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     required CancellationSignal cancellation,
   }) async* {
     final body = _buildRequestBody(request);
-    late final Map<String, dynamic> startResponse;
+    late final String jobId;
     try {
-      startResponse = await _post('/queries', body);
+      final startResponse = await _post('/queries', body);
+      jobId = _parseStartJobId(startResponse);
     } on BridgeProtocolError catch (error) {
       yield SourceQueryFailed(jobId: 'bridge', code: error.code);
       return;
+    } catch (_) {
+      yield SourceQueryFailed(jobId: 'bridge', code: 'invalid_response');
+      return;
     }
-    final jobId = startResponse['jobId'] as String;
     // Do not emit a progress event for the start-response phase: the first
     // poll batch will emit the authoritative starting event. Emitting both
     // would duplicate the `starting` phase.
@@ -130,6 +133,9 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
         } on BridgeProtocolError catch (error) {
           yield SourceQueryFailed(jobId: jobId, code: error.code);
           return;
+        } catch (_) {
+          yield SourceQueryFailed(jobId: jobId, code: 'invalid_response');
+          return;
         }
         var pausedForLogin = false;
         for (final event in poll.events) {
@@ -157,7 +163,7 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
             yield SourceQueryCompleted(
               jobId: jobId,
               result: QueryResultEnvelope(
-                json: poll.result as Map<String, dynamic>,
+                json: poll.result!,
               ),
             );
           } else {
@@ -283,18 +289,55 @@ class WindowsPythonQueryGateway implements QuerySourceGateway {
     final result = await _client.getQuery(
       '/query-jobs/$jobId/events?after=$afterSequence&waitMs=$_pollWaitMs',
     );
-    final events =
-        (result['events'] as List<dynamic>).cast<Map<String, dynamic>>();
+    final rawEvents = result['events'];
+    if (rawEvents is! List) throw const FormatException('events');
+    final events = <Map<String, dynamic>>[];
+    for (final rawEvent in rawEvents) {
+      if (rawEvent is! Map<String, dynamic>) {
+        throw const FormatException('event');
+      }
+      final sequence = rawEvent['sequence'];
+      final phase = rawEvent['phase'];
+      final safeCount = rawEvent['safeCount'];
+      if (sequence is! int || phase is! String ||
+          (safeCount != null && safeCount is! int)) {
+        throw const FormatException('event_fields');
+      }
+      events.add({
+        'sequence': sequence,
+        'phase': phase,
+        'safeCount': ?safeCount,
+      });
+    }
+    final nextSequence = result['nextSequence'];
+    final terminal = result['terminal'];
+    final rawResult = result['result'];
     final error = result['error'];
+    if (nextSequence is! int || terminal is! bool ||
+        (rawResult != null && rawResult is! Map<String, dynamic>) ||
+        (error != null && error is! Map<String, dynamic>)) {
+      throw const FormatException('poll_fields');
+    }
+    final errorCode = error?['code'];
+    if (errorCode != null && errorCode is! String) {
+      throw const FormatException('error_code');
+    }
     return _QueryPoll(
       events: events,
-      nextSequence: result['nextSequence'] as int,
-      terminal: result['terminal'] as bool,
-      result: result['result'] as Map<String, dynamic>?,
-      errorCode: error is Map<String, dynamic>
-          ? error['code'] as String?
-          : null,
+      nextSequence: nextSequence,
+      terminal: terminal,
+      result: rawResult,
+      errorCode: errorCode as String?,
     );
+  }
+
+  String _parseStartJobId(Map<String, dynamic> response) {
+    final jobId = response['jobId'];
+    final phase = response['phase'];
+    if (jobId is! String || jobId.isEmpty || phase is! String) {
+      throw const FormatException('start_response');
+    }
+    return jobId;
   }
 
   Future<void> _safeCancel(String jobId) async {

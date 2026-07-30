@@ -1456,11 +1456,21 @@ AgentToolResult _mapIcourseResult(QueryResultEnvelope envelope) {
   final data = envelope.data;
   return AgentToolResult(
     payload: {
-      'query': data['query'],
+      'query': _selectIcourseQuery(data['query']),
       'results': _selectIcourseResults(data['results']),
       'generatedAt': envelope.generatedAt,
     },
   );
+}
+
+Map<String, Object?>? _selectIcourseQuery(Object? value) {
+  if (value is! Map<String, dynamic>) return null;
+  return {
+    if (value['mode'] is String) 'mode': value['mode'] as String,
+    if (value['value'] is String) 'value': value['value'] as String,
+    if (_selectIcourseStrings(value['teachers']).isNotEmpty)
+      'teachers': _selectIcourseStrings(value['teachers']),
+  };
 }
 
 List<Map<String, Object?>> _selectIcourseResults(Object? rawResults) {
@@ -1469,25 +1479,53 @@ List<Map<String, Object?>> _selectIcourseResults(Object? rawResults) {
     for (final raw in rawResults)
       if (raw is Map<String, dynamic>)
         {
-          'name': raw['name'],
-          'teachers': raw['teachers'],
-          'terms': raw['terms'],
-          'averageScore': raw['averageScore'],
-          'reviewCount': raw['reviewCount'],
-          'aggregate': _selectIcourseFields(raw['aggregate'], const ['difficulty', 'homework', 'grading', 'gain']),
-          'siteAiSummary': _selectIcourseFields(raw['siteAiSummary'], const ['source', 'text']),
-          'reviews': raw['reviews'],
-          'teacherLinks': _selectIcourseListFields(raw['teacherLinks'], const ['label']),
-          'ranking': _selectIcourseFields(raw['ranking'], const ['score', 'reasons']),
-          'selectedEvidence': raw['selectedEvidence'],
-          'relationStrength': raw['relationStrength'],
+          if (raw['name'] is String) 'name': raw['name'] as String,
+          if (_selectIcourseStrings(raw['teachers']).isNotEmpty)
+            'teachers': _selectIcourseStrings(raw['teachers']),
+          if (_selectIcourseStrings(raw['terms']).isNotEmpty)
+            'terms': _selectIcourseStrings(raw['terms']),
+          if (raw['averageScore'] is num)
+            'averageScore': raw['averageScore'] as num,
+          if (raw['reviewCount'] is int)
+            'reviewCount': raw['reviewCount'] as int,
+          'aggregate': ?_selectIcourseStringFields(
+            raw['aggregate'],
+            const ['difficulty', 'homework', 'grading', 'gain'],
+          ),
+          'siteAiSummary': ?_selectIcourseStringFields(
+            raw['siteAiSummary'],
+            const ['text'],
+          ),
+          if (_selectIcourseReviews(raw['reviews']).isNotEmpty)
+            'reviews': _selectIcourseReviews(raw['reviews']),
+          if (_selectIcourseListFields(raw['teacherLinks'], const ['label'])
+              .isNotEmpty)
+            'teacherLinks': _selectIcourseListFields(
+              raw['teacherLinks'],
+              const ['label'],
+            ),
+          'ranking': ?_selectIcourseRanking(raw['ranking']),
+          if (raw['relationStrength'] is String)
+            'relationStrength': raw['relationStrength'] as String,
         },
   ];
 }
 
-Map<String, Object?>? _selectIcourseFields(Object? value, List<String> keys) {
+List<String> _selectIcourseStrings(Object? value) {
+  if (value is! List) return const [];
+  return [for (final item in value) if (item is String) item];
+}
+
+Map<String, Object?>? _selectIcourseStringFields(
+  Object? value,
+  List<String> keys,
+) {
   if (value is! Map<String, dynamic>) return null;
-  return {for (final key in keys) if (value[key] != null) key: value[key]};
+  final result = <String, Object?>{
+    for (final key in keys)
+      if (value[key] is String) key: value[key] as String,
+  };
+  return result.isEmpty ? null : result;
 }
 
 List<Map<String, Object?>> _selectIcourseListFields(Object? value, List<String> keys) {
@@ -1495,7 +1533,44 @@ List<Map<String, Object?>> _selectIcourseListFields(Object? value, List<String> 
   return [
     for (final item in value)
       if (item is Map<String, dynamic>)
-        {for (final key in keys) if (item[key] != null) key: item[key]},
+        {
+          for (final key in keys)
+            if (item[key] is String) key: item[key] as String,
+        },
+  ];
+}
+
+Map<String, Object?>? _selectIcourseRanking(Object? value) {
+  if (value is! Map<String, dynamic>) return null;
+  final result = <String, Object?>{
+    if (value['score'] is num) 'score': value['score'] as num,
+    if (_selectIcourseStrings(value['reasons']).isNotEmpty)
+      'reasons': _selectIcourseStrings(value['reasons']),
+  };
+  return result.isEmpty ? null : result;
+}
+
+List<Map<String, Object?>> _selectIcourseReviews(Object? value) {
+  if (value is! List) return const [];
+  return [
+    for (final item in value)
+      if (item is Map<String, dynamic>)
+        {
+          if (item['term'] is String) 'term': item['term'] as String,
+          if (item['content'] is String) 'content': item['content'] as String,
+          if (item['publishedAt'] is String)
+            'publishedAt': item['publishedAt'] as String,
+          if (item['updatedAt'] is String)
+            'updatedAt': item['updatedAt'] as String,
+          if (item['upvoteCount'] is int)
+            'upvoteCount': item['upvoteCount'] as int,
+          if (item['commentCount'] is int)
+            'commentCount': item['commentCount'] as int,
+          'dimensions': ?_selectIcourseStringFields(
+            item['dimensions'],
+            const ['difficulty', 'homework', 'grading', 'gain'],
+          ),
+        },
   ];
 }
 

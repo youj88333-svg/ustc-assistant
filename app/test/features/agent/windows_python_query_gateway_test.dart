@@ -347,6 +347,109 @@ void main() {
       expect((events.last as SourceQueryFailed).code, 'query_failed');
     });
 
+    test('maps an unknown terminal error code to query_failed', () async {
+      final poll = _PollScript([
+        _batch(
+          sequence: 1,
+          phase: 'failed',
+          terminal: true,
+          error: {'code': r'database_password=E:\private'},
+        ),
+      ]);
+      final gateway = await WindowsPythonQueryGateway.start(
+        pythonExecutable: 'python',
+        launcher: FakeLauncher(FakeProcess(handshake())),
+        httpClient: MockClient((request) async {
+          if (request.url.path == '/queries') {
+            return http.Response('{"jobId":"qjob-unsafe","phase":"starting"}', 202);
+          }
+          if (request.url.path == '/query-jobs/qjob-unsafe/events') {
+            return http.Response(jsonEncode(poll.next()), 200);
+          }
+          return http.Response('{"ok":true}', 200);
+        }),
+      );
+      addTearDown(gateway.shutdown);
+
+      final events = await gateway.execute(
+        const CampusSearchQueryRequest(query: 'lib'),
+        cancellation: CancellationSignal(),
+      ).toList();
+
+      expect((events.single as SourceQueryFailed).code, 'query_failed');
+    });
+
+    test('maps legal JSON with malformed start and poll shapes to invalid_response',
+        () async {
+      final malformedResponses = <Map<String, Object?>>[
+        {'jobId': 1, 'phase': 'starting'},
+        {
+          'events': 'not-a-list',
+          'nextSequence': 1,
+          'terminal': false,
+          'result': null,
+          'error': null,
+        },
+        {
+          'events': [
+            {'sequence': 1, 'phase': 'starting', 'safeCount': 'one'},
+          ],
+          'nextSequence': 1,
+          'terminal': false,
+          'result': null,
+          'error': null,
+        },
+        {
+          'events': [],
+          'nextSequence': 'one',
+          'terminal': false,
+          'result': null,
+          'error': null,
+        },
+        {
+          'events': [],
+          'nextSequence': 1,
+          'terminal': 'false',
+          'result': null,
+          'error': null,
+        },
+        {
+          'events': [],
+          'nextSequence': 1,
+          'terminal': true,
+          'result': [],
+          'error': null,
+        },
+      ];
+
+      for (final malformed in malformedResponses) {
+        final gateway = await WindowsPythonQueryGateway.start(
+          pythonExecutable: 'python',
+          launcher: FakeLauncher(FakeProcess(handshake())),
+          httpClient: MockClient((request) async {
+            if (request.url.path == '/queries') {
+              if (malformed.containsKey('jobId')) {
+                return http.Response(jsonEncode(malformed), 202);
+              }
+              return http.Response('{"jobId":"qjob-malformed","phase":"starting"}', 202);
+            }
+            if (request.url.path == '/query-jobs/qjob-malformed/events') {
+              return http.Response(jsonEncode(malformed), 200);
+            }
+            return http.Response('{"ok":true}', 200);
+          }),
+        );
+        addTearDown(gateway.shutdown);
+
+        final events = await gateway.execute(
+          const CampusSearchQueryRequest(query: 'lib'),
+          cancellation: CancellationSignal(),
+        ).toList();
+
+        expect((events.single as SourceQueryFailed).code, 'invalid_response');
+      }
+    });
+
     test('needs_user_login pauses the stream, resumeLogin uses fixed route',
         () async {
       final process = FakeProcess(handshake());

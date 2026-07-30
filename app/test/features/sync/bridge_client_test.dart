@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -52,15 +53,17 @@ class FakeLauncher implements BridgeProcessLauncher {
 class FakePythonRunner implements PythonCommandRunner {
   FakePythonRunner({this.queryJobsImportSucceeds = true});
 
-  final calls = <(String, List<String>)>[];
+  final calls = <(String, List<String>, Map<String, String>?)>[];
   final bool queryJobsImportSucceeds;
 
   @override
   Future<ProcessResultValue> run(
     String executable,
-    List<String> arguments,
+    List<String> arguments, {
+    Map<String, String>? environment,
+  }
   ) async {
-    calls.add((executable, [...arguments]));
+    calls.add((executable, [...arguments], environment));
     if (executable == 'conda') {
       return const ProcessResultValue(
         exitCode: 0,
@@ -231,6 +234,44 @@ void main() {
         'bridge_import_failed',
       )),
     );
+  });
+
+  test('python locator uses the injected development PYTHONPATH for query probing',
+      () async {
+    final runner = FakePythonRunner(queryJobsImportSucceeds: true);
+    final locator = PythonLocator(runner: runner, environment: const {});
+
+    await locator.locate(
+      savedExecutable: 'development-python.exe',
+      requiredModule: 'ustc_assistant.bridge.query_jobs',
+      importEnvironment: const {'PYTHONPATH': r'C:\worktree\src'},
+    );
+
+    expect(runner.calls.last.$3, {'PYTHONPATH': r'C:\worktree\src'});
+  });
+
+  test('development bridge options discover the worktree above app', () async {
+    final root = await Directory.systemTemp.createTemp('bridge-root-');
+    addTearDown(() => root.delete(recursive: true));
+    final queryJobs = File(
+      '${root.path}${Platform.pathSeparator}src${Platform.pathSeparator}'
+      'ustc_assistant${Platform.pathSeparator}bridge${Platform.pathSeparator}'
+      'query_jobs.py',
+    );
+    await queryJobs.parent.create(recursive: true);
+    await queryJobs.writeAsString('# fixture');
+    final appDirectory = Directory('${root.path}${Platform.pathSeparator}app');
+    await appDirectory.create();
+
+    final options = resolveBridgeLaunchOptions(
+      startDirectory: appDirectory,
+      environment: const {},
+    );
+
+    expect(options.workingDirectory, root.path);
+    expect(options.environment!['PYTHONPATH'], '${root.path}${Platform.pathSeparator}src');
+    expect(options.environment!['USTC_ASSISTANT_DATA_ROOT'],
+        '${root.path}${Platform.pathSeparator}tmp${Platform.pathSeparator}bridge-data');
   });
 
   test('BridgeClient passes explicit working directory and environment', () async {

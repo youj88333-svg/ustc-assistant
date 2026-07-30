@@ -166,13 +166,36 @@ class SourceQueryCompleted extends SourceQueryEvent {
 /// code from the Bridge (e.g. `query_failed`, `cancelled`, `account_mismatch`,
 /// `result_validation_failed`).
 class SourceQueryFailed extends SourceQueryEvent {
-  const SourceQueryFailed({required this.jobId, required this.code});
+  SourceQueryFailed({required this.jobId, required String code})
+      : code = safeSourceQueryFailureCode(code);
 
   @override
   final String jobId;
 
   final String code;
 }
+
+/// Error codes that may be exposed outside the authenticated Bridge boundary.
+/// Unknown Bridge strings can contain paths or implementation details, so they
+/// always become the fixed public failure code.
+const Set<String> _safeSourceQueryFailureCodes = {
+  'account_mismatch',
+  'bridge_query_busy',
+  'cancelled',
+  'invalid_capabilities',
+  'invalid_handshake',
+  'invalid_job_state',
+  'invalid_response',
+  'query_failed',
+  'query_job_not_found',
+  'query_timeout',
+  'request_failed',
+  'result_validation_failed',
+  'unsupported_version',
+};
+
+String safeSourceQueryFailureCode(String code) =>
+    _safeSourceQueryFailureCodes.contains(code) ? code : 'query_failed';
 
 /// The shared-core abstraction over the Windows Python Bridge's query
 /// endpoints.

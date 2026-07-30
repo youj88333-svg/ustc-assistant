@@ -313,6 +313,74 @@ void main() {
   });
 
   group('search_icourse consent', () {
+    test('filters iCourse nested source fields before the model payload', () async {
+      final harness = _Harness(
+        gateway: FakeQueryGateway(
+          icourseResult: _envelope({
+            'query': {
+              'mode': 'course',
+              'value': 'Data structures',
+              'teachers': ['Teacher'],
+              'preferences': {'cacheKey': 'must-not-leak'},
+              'unexpectedQueryField': 'must-not-leak',
+            },
+            'results': [
+              {
+                'name': 'Data structures',
+                'teachers': ['Teacher'],
+                'reviews': [
+                  {
+                    'term': 'recent',
+                    'content': 'Helpful review',
+                    'sourceReviewId': 'private-review-id',
+                    'url': 'https://private.example/review',
+                    'dimensions': {
+                      'difficulty': 'medium',
+                      'internalDimension': 'must-not-leak',
+                    },
+                    'unknownNested': {'cacheKey': 'must-not-leak'},
+                  },
+                ],
+                'selectedEvidence': [
+                  {'sourceReviewId': 'private-evidence-id'},
+                ],
+                'sourceCourseId': 'private-course-id',
+                'sourceUrl': 'https://private.example/course',
+                'cache': {'path': r'E:\private'},
+                'unexpectedResultField': 'must-not-leak',
+              },
+            ],
+          }),
+        ),
+        config: FakeAgentConfigurationService(icourseConsent: true),
+        accountId: 'a',
+        references: RunReferenceStore(runId: 'run-icourse-filter'),
+      );
+
+      final result = await harness.execute('search_icourse', {
+        'course': 'Data structures',
+      });
+
+      expect(result.status, AgentToolStatus.success);
+      final encoded = jsonEncode(result.payload);
+      for (final forbidden in [
+        'sourceReviewId',
+        'sourceCourseId',
+        'sourceUrl',
+        'selectedEvidence',
+        'cacheKey',
+        'private.example',
+        'unexpectedQueryField',
+        'unexpectedResultField',
+        'unknownNested',
+        'internalDimension',
+      ]) {
+        expect(encoded, isNot(contains(forbidden)));
+      }
+      expect(encoded, contains('Helpful review'));
+      expect(encoded, contains('difficulty'));
+    });
+
     test('refuses first use with consent_required before consent', () async {
       final harness = _Harness(
         gateway: FakeQueryGateway(),
