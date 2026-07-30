@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
+from ustc_assistant.bridge.query_contracts import build_young_enrolment_envelope
 from ustc_assistant.common.browser import (
     CollectionError,
     default_profile_dir,
@@ -397,6 +399,27 @@ def normalize_enrolments(
         },
         "activities": activities,
     }
+
+
+def build_young_query_result(snapshot: Mapping[str, Any]) -> dict[str, Any]:
+    activities = [
+        {
+            "name": item.get("name"),
+            "category": item.get("category"),
+            "status": item.get("status"),
+            "capacity": item.get("capacity"),
+            "appliedCount": item.get("appliedCount"),
+        }
+        for item in snapshot.get("activities", [])
+    ]
+    return build_young_enrolment_envelope(
+        data={"activities": activities},
+        metadata={
+            "reportedTotal": snapshot.get("metadata", {}).get("reportedTotal", 0),
+            "activityCount": len(activities),
+        },
+        generated_at=snapshot.get("collectedAt"),
+    )
 
 
 collect_enrolments = collect_activities

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "queryType": "young_enrolment",
+  "generatedAt": "2026-07-22T08:00:00+08:00",
+  "data": {
+    "activities": [
+      {
+        "name": "\u8e47\u6941\u52b9\u5a32\u8bf2\u59e9",
+        "category": "service",
+        "status": "open",
+        "capacity": 24,
+        "appliedCount": 6
+      }
+    ]
+  },
+  "metadata": {
+    "reportedTotal": 1,
+    "activityCount": 1
+  },
+  "references": []
+}

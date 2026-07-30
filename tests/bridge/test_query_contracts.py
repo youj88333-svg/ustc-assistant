@@ -237,6 +237,18 @@ class StrictRejectionTests(unittest.TestCase):
         with self.assertRaises(contracts.QueryResultValidationError):
             contracts.validate_query_result(envelope)
 
+    def test_rejects_url_tokens_regardless_of_position_or_scheme(self):
+        for value in (
+            "http://evil.example.com/notice/1",
+            "//evil.example.com/notice/1",
+            "Read this first: https://evil.example.com/notice/1.",
+        ):
+            with self.subTest(value=value):
+                envelope = deep_copy(CAMPUS_DETAIL_REFERENCE)
+                envelope["data"]["content"] = value
+                with self.assertRaises(contracts.QueryResultValidationError):
+                    contracts.validate_query_result(envelope)
+
     def test_rejects_non_string_query_type(self):
         envelope = deep_copy(YOUNG_ENROLMENT_REFERENCE)
         envelope["queryType"] = 123

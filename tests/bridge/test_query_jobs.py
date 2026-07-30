@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import threading
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from ustc_assistant.bridge.query_contracts import (
     QueryResultValidationError,
@@ -23,12 +25,22 @@ from ustc_assistant.bridge.query_jobs import (
     IcourseQuery,
     CampusSearchQuery,
     CampusDetailQuery,
+    _wrap_campus_detail,
+    _wrap_campus_search,
 )
+
+
+FIXTURE_DIRECTORY = Path(__file__).parents[1] / "fixtures/query-results"
+FIXTURE_TIME = "2026-07-22T08:00:00+08:00"
 from ustc_assistant.common.auth import (
     AccountMismatch,
     CollectionCancelled,
     LoginCredentials,
     UserActionRequired,
+)
+from ustc_assistant.sources.young.enrolment import (
+    CollectedEnrolmentActivities,
+    normalize_enrolments,
 )
 
 
@@ -68,6 +80,40 @@ VALID_CAMPUS_DETAIL_ENVELOPE = build_campus_detail_envelope(
 
 
 class YoungEnrolmentJobTests(unittest.TestCase):
+    def test_young_job_wraps_real_normalized_snapshot(self):
+        snapshot = normalize_enrolments(
+            CollectedEnrolmentActivities(
+                records=(
+                    {
+                        "id": "activity-query-result-1",
+                        "itemName": "蹇楁効娲诲姩",
+                        "itemCategory": "service",
+                        "itemStatus": "open",
+                        "itemLimitNum": 24,
+                        "applyNum": 6,
+                    },
+                ),
+                reported_total=1,
+                pages=1,
+            ),
+            collected_at="2026-07-22T08:00:00+08:00",
+        )
+
+        def query_fn(**kwargs):
+            return snapshot, object()
+
+        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
+        job = manager.start_young_enrolment(
+            YoungEnrolmentQuery(
+                account_id="acct_fixture",
+                expected_username="PB00000000",
+            )
+        )
+
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        validate_query_result(job.result)
+        self.assertEqual("蹇楁効娲诲姩", job.result["data"]["activities"][0]["name"])
+
     def test_young_job_completes_with_validated_envelope(self):
         def query_fn(**kwargs):
             return VALID_YOUNG_ENVELOPE, object()
@@ -241,6 +287,48 @@ class IcourseJobTests(unittest.TestCase):
 
 
 class CampusSearchJobTests(unittest.TestCase):
+    def test_campus_search_declares_trusted_url_embedded_in_result_text(self):
+        envelope = _wrap_campus_search(
+            {
+                "query": "选课",
+                "results": [
+                    {
+                        "id": "campus_abcdef0123456789abcdef0123",
+                        "source": "teach_notice",
+                        "kind": "notice",
+                        "title": "Synthetic catalog entry",
+                        "summary": (
+                            "Read https://www.teach.ustc.edu.cn/notice/2. for details."
+                        ),
+                    }
+                ],
+            }
+        )
+
+        validate_query_result(envelope)
+        self.assertEqual(
+            ["https://www.teach.ustc.edu.cn/notice/2"],
+            envelope["references"],
+        )
+
+    def test_campus_search_keeps_canonical_catalog_id(self):
+        envelope = _wrap_campus_search(
+            {
+                "query": "选课",
+                "results": [
+                    {
+                        "id": "campus_abcdef0123456789abcdef0123",
+                        "source": "teach_notice",
+                        "kind": "notice",
+                        "title": "Synthetic catalog entry",
+                        "publishedAt": "2026-07-20",
+                    }
+                ],
+            }
+        )
+
+        self.assertTrue(envelope["data"]["results"][0]["id"].startswith("campus_"))
+
     def test_campus_search_wraps_raw_dict_into_envelope(self):
         raw = {
             "source": "ustc_campus_catalog",
@@ -327,19 +415,63 @@ class CampusDetailJobTests(unittest.TestCase):
         self.assertNotIn("account_id", seen[0])
 
 
+class CanonicalFixtureTests(unittest.TestCase):
+    def test_campus_search_production_wrapper_matches_canonical_fixture(self):
+        with patch(
+            "ustc_assistant.bridge.query_contracts.beijing_now_iso",
+            return_value=FIXTURE_TIME,
+        ):
+            actual = _wrap_campus_search(
+                {
+                    "query": "Fixture search",
+                    "results": [
+                        {
+                            "id": "campus_abcdef0123456789abcdef0123",
+                            "source": "teach_notice",
+                            "kind": "notice",
+                            "title": "Synthetic catalog entry",
+                            "publishedAt": "2026-07-20",
+                        }
+                    ],
+                }
+            )
+
+        expected = json.loads(
+            (FIXTURE_DIRECTORY / "campus-search.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(expected, actual)
+
+    def test_campus_detail_production_wrapper_matches_canonical_fixture(self):
+        with patch(
+            "ustc_assistant.bridge.query_contracts.beijing_now_iso",
+            return_value=FIXTURE_TIME,
+        ):
+            actual = _wrap_campus_detail(
+                {
+                    "id": "campus_abcdef0123456789abcdef0123",
+                    "source": "teach_notice",
+                    "title": "Synthetic detail",
+                    "content": "Bounded synthetic content.",
+                    "url": "https://www.teach.ustc.edu.cn/notice/1",
+                    "stale": False,
+                    "followedLinks": [],
+                }
+            )
+
+        expected = json.loads(
+            (FIXTURE_DIRECTORY / "campus-detail.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(expected, actual)
+
+
 class ResultValidationTests(unittest.TestCase):
     def test_invalid_envelope_ends_in_failed_with_safe_code(self):
         def query_fn(**kwargs):
             # An envelope missing required top-level keys.
-            return {"schemaVersion": "1.0"}, object()
+            return {"schemaVersion": "1.0"}
 
-        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
-        job = manager.start_young_enrolment(
-            YoungEnrolmentQuery(
-                account_id="acct_fixture",
-                expected_username="PB00000000",
-            )
-        )
+        manager = ReadQueryJobManager(icourse_query=query_fn)
+        job = manager.start_icourse(IcourseQuery(course="Fixture course"))
         self.assertEqual("failed", job.wait_for_terminal_or_pause())
         response = job.events_after(0)
         self.assertEqual("result_validation_failed", response["error"]["code"])
@@ -347,21 +479,18 @@ class ResultValidationTests(unittest.TestCase):
 
     def test_validation_error_detail_not_leaked_in_events(self):
         def query_fn(**kwargs):
-            envelope = build_young_enrolment_envelope(
-                data={"activities": [{"secretToken": "leaked"}]},
-                metadata={"activityCount": 1, "reportedTotal": 1, "pages": 1},
+            return build_icourse_envelope(
+                data={
+                    "query": {"mode": "course", "value": "Fixture course"},
+                    "results": [{"secretToken": "leaked"}],
+                },
+                metadata={"resultCount": 1, "staleEntryCount": 0},
                 references=[],
                 generated_at="2026-07-22T08:00:00+08:00",
             )
-            return envelope, object()
 
-        manager = ReadQueryJobManager(young_enrolment_query=query_fn)
-        job = manager.start_young_enrolment(
-            YoungEnrolmentQuery(
-                account_id="acct_fixture",
-                expected_username="PB00000000",
-            )
-        )
+        manager = ReadQueryJobManager(icourse_query=query_fn)
+        job = manager.start_icourse(IcourseQuery(course="Fixture course"))
         self.assertEqual("failed", job.wait_for_terminal_or_pause())
         encoded = json.dumps(job.events_after(0))
         self.assertNotIn("leaked", encoded)

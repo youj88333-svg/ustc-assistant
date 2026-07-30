@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from ustc_assistant.bridge import query_contracts as contracts
 from ustc_assistant.sources.icourse import query as query_api
+
+
+FIXTURE_PATH = Path(__file__).parents[1] / "fixtures/query-results/icourse.json"
+FIXTURE_TIME = "2026-07-22T08:00:00+08:00"
 
 
 class FakeClient:
@@ -82,6 +88,21 @@ class ModuleContractTests(unittest.TestCase):
 
 
 class QueryCoursePublicTests(unittest.TestCase):
+    def test_production_builder_matches_canonical_fixture(self):
+        with patch(
+            "ustc_assistant.bridge.query_contracts.beijing_now_iso",
+            return_value=FIXTURE_TIME,
+        ):
+            actual = query_api.query_course_public(
+                "Fixture course",
+                teachers=(),
+                preferences={},
+                client=FakeClient(),
+            )
+
+        expected = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(expected, actual)
+
     def test_returns_envelope_with_icourse_query_type(self):
         result = query_api.query_course_public(
             "量子物理B",

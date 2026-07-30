@@ -21,6 +21,7 @@ account id, user identity) into the Agent context.
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Any
@@ -98,6 +99,8 @@ _TRUSTED_HOSTS = frozenset(
 CAMPUS_ID_PREFIX = "campus_"
 LINK_ID_PREFIX = "link_"
 ATTACHMENT_ID_PREFIX = "attachment_"
+
+_URL_TOKEN_RE = re.compile(r"(?:(?:https?:)?//[^\s<>'\"`]+)")
 
 
 class QueryResultValidationError(ValueError):
@@ -220,9 +223,9 @@ def _inspect_urls(value: Any, allowed_urls: set[str]) -> None:
     an arbitrary external URL into the Agent context.
     """
     if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.startswith("https://"):
-            if stripped not in allowed_urls:
+        for match in _URL_TOKEN_RE.finditer(value):
+            url = match.group(0).rstrip(".,;:!?")
+            if url not in allowed_urls:
                 _raise(
                     "untrusted_url",
                     "envelope contains a URL that was not produced by the source",

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1.0",
+  "queryType": "campus_search",
+  "generatedAt": "2026-07-22T08:00:00+08:00",
+  "data": {
+    "query": "Fixture search",
+    "results": [
+      {
+        "id": "campus_abcdef0123456789abcdef0123",
+        "source": "teach_notice",
+        "kind": "notice",
+        "title": "Synthetic catalog entry",
+        "publishedAt": "2026-07-20"
+      }
+    ]
+  },
+  "metadata": {
+    "resultCount": 1
+  },
+  "references": []
+}

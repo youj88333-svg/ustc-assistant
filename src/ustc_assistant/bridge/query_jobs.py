@@ -26,6 +26,7 @@ Security notes:
 
 from __future__ import annotations
 
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -121,14 +122,14 @@ class CampusDetailQuery:
 def _collect_trusted_urls(value: Any, found: list[str], seen: set[str]) -> None:
     """Collect every trusted https URL that appears in a campus raw result."""
     if isinstance(value, str):
-        stripped = value.strip()
-        if stripped.startswith("https://"):
+        for match in _URL_TOKEN_RE.finditer(value):
+            url = match.group(0).rstrip(".,;:!?")
             from urllib.parse import urlsplit
 
-            host = (urlsplit(stripped).hostname or "").lower()
-            if host in _CAMPUS_TRUSTED_HOSTS and stripped not in seen:
-                seen.add(stripped)
-                found.append(stripped)
+            host = (urlsplit(url).hostname or "").lower()
+            if host in _CAMPUS_TRUSTED_HOSTS and url not in seen:
+                seen.add(url)
+                found.append(url)
         return
     if isinstance(value, Mapping):
         for child in value.values():
@@ -146,6 +147,8 @@ _CAMPUS_TRUSTED_HOSTS = frozenset(
         "finance.ustc.edu.cn",
     }
 )
+
+_URL_TOKEN_RE = re.compile(r"(?:(?:https?:)?//[^\s<>'\"`]+)")
 
 
 def _wrap_campus_search(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -331,7 +334,9 @@ def _run_young_enrolment(
         cancel_check=cancel_check,
         status=lambda message: None,
     )
-    return normalized
+    from ustc_assistant.sources.young.enrolment import build_young_query_result
+
+    return build_young_query_result(normalized)
 
 
 def _run_icourse(
