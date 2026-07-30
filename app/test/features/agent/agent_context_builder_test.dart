@@ -600,6 +600,10 @@ void main() {
         expect(prompt, contains(name), reason: '场景映射应包含工具 $name');
       }
       expect(prompt, contains('course_summary'));
+      // 二课必须区分"正在报名"（外部开放列表）与"我已报名"（本地日程 second_class 事件）。
+      expect(prompt, contains('正在报名的二课'));
+      expect(prompt, contains('我已报名的二课'));
+      expect(prompt, contains('second_class'));
       // §3 反幻觉：外部硬、本地柔。
       expect(prompt, contains('外部数据'));
       expect(prompt, contains('本轮必须重新调用工具'));
