@@ -225,9 +225,23 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 
 ## 7. 验证基线
 
-只读 Agent 修复轮（Tasks 1–8）在 `feature/read-only-agent` 分支上推进；最终修复后的
-精确 HEAD 在最终验证时记录于此（Task 9 之前不硬编码，因为后续提交会改写哈希）。Task 8
-新增的组合级集成测试聚焦命令与结果：
+只读 Agent 修复轮（Tasks 1–9）在 `feature/read-only-agent` 分支上推进。Task 9 最终
+验证时的精确 HEAD：`6378be5`（`config: switch default JW semester to 2026 fall`）。
+后续若再提交，需重跑本节命令并刷新哈希。
+
+Task 9 实测的完整自动验证结果（2026-07-31，worktree `E:/107/.worktrees/read-only-agent`）：
+
+```text
+Python unittest discover -s tests : Ran 382 tests, OK
+Python compileall -q src tests    : exit 0
+Flutter test test/core test/features/agent test/integration : 315 passed
+Flutter test test/features (non-agent dirs)                  : 176 passed
+Flutter test test/app test/accessibility test/goldens         : 24 passed
+Flutter analyze (whole app)                                  : No issues found
+Flutter build windows --release                              : Built build\windows\x64\runner\Release\ustc_assistant_app.exe (exit 0)
+```
+
+Task 8 新增的组合级集成测试聚焦命令（仍通过）：
 
 ```text
 Push-Location app
@@ -235,9 +249,15 @@ E:\flutter\flutter\bin\flutter.bat test test/integration/agent_composition_flow_
 Pop-Location
 ```
 
-该聚焦套件全部通过（组合级集成测试 + 既有只读 Agent 流程测试 + 里程碑可访问性测试）。
-完整自动验证（Python unittest / compileall / Flutter analyze / Flutter test / Windows
-Release build）在最终验证时重新运行并记录于此。自动测试只验证代码行为，不代替人工验收。
+边界扫描（Task 9 Step 5）：`app/lib` 与 `src` 中无真实密钥/完整账号/cookie 实值泄漏
+（`PB12345678` 仅出现在 `outbound_privacy_filter.dart` 文档注释示例；`sk-` 命中均为
+Flutter widget `Key('task-...')` 误匹配；`Bearer`/`Cookie:` 仅在注释与脱敏正则中）；
+`app/lib/features/agent/domain` 与 `application` 无 `dart:io`/`windows_dpapi`/`Process`
+真实导入（仅注释中声明禁止使用）。`git diff --check` 无空白错误。
+
+自动测试只验证代码行为，不代替人工验收。学校 API 和学校网站不能进入自动测试。真实验收
+由用户在可见 Edge、校园网或 Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。
+人工验收清单见 `docs/acceptance/read-only-agent.md`（`完成：` 仍留空，待真实验收填写）。
 
 Python 测试必须在 worktree 下运行（editable install 指向主工作区 `E:/107/src`，
 不是 worktree），命令为：
@@ -262,10 +282,6 @@ Flutter tests: 203 passed
 Flutter analyze: no issues
 Windows Release build: passed
 ```
-
-学校 API 和学校网站不能进入自动测试。真实验收由用户在可见 Edge、校园网或
-Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。人工验收清单见
-`docs/acceptance/read-only-agent.md`。
 
 ## 8. 已知文档边界
 
@@ -295,6 +311,16 @@ Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。人工
   读取，仅传给网关，从不写入工具结果、模型请求或持久日志。
 - 学校 API Host 固定为 `https://api.llm.ustc.edu.cn`，不在 App 内提供 Host 配置项；
   篡改的 Host 被拒绝（`protocol_error`，不发请求）。
+- 默认学期"单一数据源"尚未统一（load-bearing 缺口，迁移手机版时处理）：当前
+  `config/source-defaults.json`（Python 采集与 `/capabilities`、CLI 读它）和
+  `SettingsService.defaultJwSemester`（Flutter“恢复默认”按钮值）各持一份字面量。本里程碑
+  按“测试性 Windows 实现、Python 最终重写”的定位，仅把两侧默认值手动同步为
+  `461 / 2026fall / 2026 秋季学期`，未做 Flutter 从共享 JSON 读取的统一（Flutter
+  `pubspec` 不允许 `../` 资源路径，统一机制是为即将重写的 Python 共存期服务的临时投资，
+  不划算）。因此计划回归场景 4 的“只改 JSON、不改生产代码即可切学期”目前**不成立**：
+  切学期仍需同时改 `SettingsService.defaultJwSemester` 与 `SettingsPage` 文案。迁移
+  Android/iOS（Python Bridge 重写、Flutter 成为唯一消费者）时，把默认学期改为 app 内
+  可配置资源（或远程下发），届时一并满足场景 4。
 - 各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类：Task 2（3 项）、Task 3
   （4 项）、Task 4（9 项）、Task 5（5 项）、Task 6（5 项）、Task 7（5 项）、
   Task 8（3 项）、Task 9（5 项）、Task 10（1 项）、Task 11（7 项）、Task 12
