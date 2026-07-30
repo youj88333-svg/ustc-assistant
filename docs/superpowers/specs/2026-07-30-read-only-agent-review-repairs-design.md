@@ -32,6 +32,19 @@ The repair covers:
 The repair does not add write tools, daily briefings, visual input, mobile
 collection adapters, or automated second-classroom enrolment.
 
+## Semester Configuration Boundary
+
+The default teaching semester is shared runtime configuration, not an Agent or
+Bridge constant. Production code reads the configured `semesterId`, product
+key, and display name, or derives display text from returned source event
+metadata. It must not branch on or hardcode the current spring or future autumn
+values.
+
+Changing the default from `421/2026spring/2026 春季学期` to
+`461/2026fall/2026 秋季学期` must require only a configuration edit. Cross-layer
+verification covers that switch so future semester changes cannot leave the
+Agent, Bridge, query layer, or UI locked to an old semester.
+
 ## Canonical Query Contract
 
 Python remains the sole producer of Query Result 1.0 envelopes. Each query type

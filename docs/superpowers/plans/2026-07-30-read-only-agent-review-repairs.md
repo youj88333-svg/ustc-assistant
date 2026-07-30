@@ -17,6 +17,11 @@
 - Do not persist or send passwords, API Keys, cookies, tokens, verification codes, complete school accounts, raw responses, browser profile paths, or internal database IDs.
 - Young enrolment and cancellation remain user-only actions on official pages.
 - The Agent remains read-only and retains the 8-model-call and 12-tool-call hard limits.
+- Semester defaults are configuration, never business logic: production Agent,
+  Bridge, query, and UI code must read the shared source-defaults configuration
+  or source event metadata and must not hardcode `421`, `461`, `2026spring`, or
+  `2026fall`. Switching the default semester must require only a configuration
+  change.
 - Preserve the three existing dirty Windows generated plugin files; never stage them.
 - Every production behavior change starts with a regression test that is observed failing for the expected reason.
 - Commit each task separately with explicit paths.
@@ -786,6 +791,9 @@ Automated:
    when login is required.
 3. Campus catalog search uses the explicit data root and returns canonical
    entries; detail consumes `content`.
+4. Replacing only the shared source-defaults fixture/configuration from
+   `421/2026spring` with `461/2026fall` makes Agent schedule queries and Bridge
+   composition use the new semester without production code changes.
 
 - [ ] **Step 2: Run complete Python verification**
 
@@ -852,4 +860,3 @@ The user runs `docs/acceptance/read-only-agent.md` with the real API Key,
 campus network/iWAN and visible Edge. Record only safe pass/fail text after each
 `完成：`; never record secrets, complete account identifiers, private schedule
 titles or raw responses.
-
