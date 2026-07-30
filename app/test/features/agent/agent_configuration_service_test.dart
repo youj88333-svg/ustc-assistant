@@ -147,7 +147,7 @@ void main() {
       expect(settings.model, 'deepseek-v4-flash');
       expect(settings.enabled, isFalse);
       expect(settings.icourseConsent, isFalse);
-      expect(settings.systemPromptVersion, 1);
+      expect(settings.systemPromptVersion, 2);
     });
 
     test(
