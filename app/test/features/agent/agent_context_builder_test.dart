@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_system_prompt.dart';
+import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 
@@ -97,6 +98,7 @@ void main() {
           summary: summary,
           currentUserText: currentUserText,
           toolDeclarations: const [],
+          clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
         );
 
         // 1. The versioned system rule is present as the system prompt.
@@ -169,6 +171,7 @@ void main() {
           summary: null,
           currentUserText: '继续',
           toolDeclarations: const [],
+          clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
         );
 
         final allText =
@@ -206,6 +209,7 @@ void main() {
         summary: summary,
         currentUserText: '现在呢？',
         toolDeclarations: const [],
+        clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
       );
 
       final allText =
@@ -237,6 +241,64 @@ void main() {
       // And the summary is NOT presented as a bare user message — it is an
       // assistant/system-style context note, so its role is 'assistant'.
       expect(summaryMessages.first.role, 'assistant');
+    });
+
+    test('system prompt appends current time to the second with weekday', () {
+      final builder = const AgentContextBuilder();
+      final clock = FixedBeijingClock(DateTime(2026, 7, 31, 14, 30, 5));
+      final request = builder.build(
+        model: model,
+        accountId: 'a',
+        history: const [],
+        summary: null,
+        currentUserText: '今天有什么课？',
+        toolDeclarations: const [],
+        clock: clock,
+      );
+      // system 同时包含 version2 文本和动态时间。
+      expect(request.system, isNotNull);
+      expect(request.system, contains('学长'));
+      expect(request.system, contains('2026-07-31T14:30:05'));
+      // 2026-07-31 是周五。
+      expect(request.system, contains('周五'));
+      expect(request.system, contains('Asia/Shanghai'));
+    });
+
+    test('history messages carry a YYYY-MM-DDTHH:mm timestamp prefix', () {
+      final builder = const AgentContextBuilder();
+      final clock = FixedBeijingClock(DateTime(2026, 7, 31, 14, 30, 5));
+      // 一条历史用户消息，createdAt = 2026-07-30 14:30 北京时间（毫秒）。
+      final history = [
+        ChatMessageRecord(
+          id: 'u-1',
+          accountId: 'a',
+          runId: 'run-1',
+          ordinal: 1,
+          role: ChatRole.user,
+          state: ChatMessageState.completed,
+          content: '我明天有什么课',
+          createdAt: DateTime(2026, 7, 30, 14, 30).millisecondsSinceEpoch,
+          updatedAt: DateTime(2026, 7, 30, 14, 30).millisecondsSinceEpoch,
+        ),
+      ];
+      final request = builder.build(
+        model: model,
+        accountId: 'a',
+        history: history,
+        summary: null,
+        currentUserText: '今天呢',
+        toolDeclarations: const [],
+        clock: clock,
+      );
+      // 历史用户消息文本前带 [2026-07-30T14:30] 前缀。
+      final userTexts = request.messages
+          .where((m) => m.role == 'user')
+          .map((m) => m.content.whereType<LlmTextBlock>().map((b) => b.text))
+          .expand((t) => t)
+          .toList();
+      expect(userTexts, anyElement(contains('[2026-07-30T14:30] 我明天有什么课')));
+      // 当前用户消息不带前缀。
+      expect(userTexts, anyElement(equals('今天呢')));
     });
 
     test('respects the 24,000 token budget by trimming oldest turns', () {
@@ -287,6 +349,7 @@ void main() {
         summary: null,
         currentUserText: '汇总',
         toolDeclarations: const [],
+        clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
       );
 
       // The oldest turn must be dropped; the newest must be kept.
@@ -460,6 +523,7 @@ void main() {
         accountId: 'a',
         history: history,
         previousSummary: summary,
+        clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
       );
 
       expect(request.tools, isEmpty);
@@ -485,11 +549,27 @@ void main() {
         accountId: 'a',
         history: history,
         previousSummary: null,
+        clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
       );
 
       expect(request.tools, isEmpty);
       expect(request.temperature, 0);
       expect(request.maxTokens, 1024);
+    });
+
+    test('summary request system also appends current time', () {
+      final builder = const AgentContextBuilder();
+      final clock = FixedBeijingClock(DateTime(2026, 7, 31, 14, 30, 5));
+      final request = builder.buildSummaryRequest(
+        model: model,
+        accountId: 'a',
+        history: const [],
+        previousSummary: null,
+        clock: clock,
+      );
+      expect(request.system, isNotNull);
+      expect(request.system, contains('2026-07-31T14:30:05'));
+      expect(request.system, contains('周五'));
     });
   });
 
@@ -662,6 +742,7 @@ void main() {
           summary: null,
           currentUserText: '汇总',
           toolDeclarations: bigToolDeclarations,
+          clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
         );
 
         // Estimate the total request size: system + JSON(tools) + messages.
@@ -706,6 +787,7 @@ void main() {
         final estimate = builder.estimateTurnTokens(
           currentUserText: hugeQuestion,
           toolDeclarations: bigToolDeclarations,
+          clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
         );
         expect(estimate.isTooLarge, isTrue);
         expect(estimate.code, 'question_too_large');
@@ -718,6 +800,7 @@ void main() {
         final estimate = builder.estimateTurnTokens(
           currentUserText: '明天有什么课？',
           toolDeclarations: bigToolDeclarations,
+          clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)),
         );
         expect(estimate.isTooLarge, isFalse);
       },
@@ -770,7 +853,7 @@ void main() {
         // The builder should either trim the summary history to fit or signal
         // that it does not fit. We assert via the public helper: the summary
         // history it would send must fit within the budget.
-        final fits = builder.summaryHistoryFits(history: history);
+        final fits = builder.summaryHistoryFits(history: history, clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0)));
         // With 60 turns of 2000 chars = 120,000 chars >> 24,000, the raw
         // history does NOT fit. The builder must report false so the caller
         // can trim before sending.
@@ -781,7 +864,7 @@ void main() {
 
     test('summaryHistoryFits accepts a small history', () {
       final history = _buildMessages(completedTurns: 3);
-      expect(builder.summaryHistoryFits(history: history), isTrue);
+      expect(builder.summaryHistoryFits(history: history, clock: FixedBeijingClock(DateTime(2026, 7, 29, 9, 0, 0))), isTrue);
     });
   });
 }

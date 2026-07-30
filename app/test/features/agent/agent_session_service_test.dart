@@ -929,7 +929,7 @@ void main() {
         );
 
         // Prior-turn history is present and separate from the current question.
-        expect(userTexts, contains('上学期有几门课？'));
+        expect(userTexts, anyElement(contains('上学期有几门课？')));
         // The current question is the LAST user text block (build appends it
         // as the final user message).
         expect(userTexts.last, currentQuestion);

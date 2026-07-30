@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../../core/time/beijing_clock.dart';
 import '../domain/agent_models.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_system_prompt.dart';
@@ -65,6 +66,7 @@ class AgentContextBuilder {
     required ConversationSummaryRecord? summary,
     required String currentUserText,
     required List<LlmToolDeclaration> toolDeclarations,
+    required BeijingClock clock,
   }) {
     final messages = <LlmMessage>[];
 
@@ -87,7 +89,7 @@ class AgentContextBuilder {
     //    prompt and the JSON-encoded tool declarations — which is subtracted
     //    BEFORE history trimming. Reserve room for the summary note, the
     //    current message, and the fixed overhead.
-    final fixedOverhead = _fixedOverheadTokens(toolDeclarations);
+    final fixedOverhead = _fixedOverheadTokens(toolDeclarations, clock);
     final summaryOverhead = _estimateTokens(_summaryNoteText(summary));
     final currentOverhead = _estimateTokens(currentUserText);
     final available =
@@ -96,10 +98,11 @@ class AgentContextBuilder {
 
     for (final record in trimmed) {
       if (!_isIncludable(record)) continue;
+      final prefix = _historyText(record.createdAt);
       messages.add(
         record.role == ChatRole.user
-            ? LlmMessage.user(text: record.content)
-            : LlmMessage.assistant(text: record.content),
+            ? LlmMessage.user(text: '$prefix${record.content}')
+            : LlmMessage.assistant(text: '$prefix${record.content}'),
       );
     }
 
@@ -109,7 +112,7 @@ class AgentContextBuilder {
     return LlmRequest(
       model: model,
       messages: messages,
-      system: AgentSystemPrompt.version2,
+      system: _systemPrompt(clock),
       tools: toolDeclarations,
     );
   }
@@ -127,8 +130,9 @@ class AgentContextBuilder {
   TurnTokenEstimate estimateTurnTokens({
     required String currentUserText,
     required List<LlmToolDeclaration> toolDeclarations,
+    required BeijingClock clock,
   }) {
-    final fixedOverhead = _fixedOverheadTokens(toolDeclarations);
+    final fixedOverhead = _fixedOverheadTokens(toolDeclarations, clock);
     final currentOverhead = _estimateTokens(currentUserText);
     final total = fixedOverhead + currentOverhead;
     if (total > inputTokenBudget) {
@@ -147,15 +151,18 @@ class AgentContextBuilder {
   /// budget the caller must trim the history before summarizing (or skip the
   /// summary). This is a pure method the caller invokes before
   /// `buildSummaryRequest`.
-  bool summaryHistoryFits({required List<ChatMessageRecord> history}) {
+  bool summaryHistoryFits({
+    required List<ChatMessageRecord> history,
+    required BeijingClock clock,
+  }) {
     // Summary requests are tool-disabled, so the fixed overhead is the system
     // prompt only (no tool declarations).
-    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version2);
+    final fixedOverhead = _estimateTokens(_systemPrompt(clock));
     final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
     var historyTokens = 0;
     for (final record in history) {
       if (!_isIncludable(record)) continue;
-      historyTokens += _estimateTokens(record.content);
+      historyTokens += _estimateTokens('${_historyText(record.createdAt)}${record.content}');
     }
     final total = fixedOverhead + summaryInstructionOverhead + historyTokens;
     return total <= inputTokenBudget;
@@ -169,8 +176,9 @@ class AgentContextBuilder {
   /// the newest single turn does not fit (caller should then skip).
   List<ChatMessageRecord> trimSummaryHistory({
     required List<ChatMessageRecord> history,
+    required BeijingClock clock,
   }) {
-    final fixedOverhead = _estimateTokens(AgentSystemPrompt.version2);
+    final fixedOverhead = _estimateTokens(_systemPrompt(clock));
     final summaryInstructionOverhead = _estimateTokens(_summaryInstructionText);
     final available =
         inputTokenBudget - fixedOverhead - summaryInstructionOverhead;
@@ -181,8 +189,11 @@ class AgentContextBuilder {
   /// JSON-encoded tool declarations. This is subtracted from the input budget
   /// before history trimming so a request with many/large tool declarations
   /// does not silently overflow the budget.
-  int _fixedOverheadTokens(List<LlmToolDeclaration> toolDeclarations) {
-    final system = _estimateTokens(AgentSystemPrompt.version2);
+  int _fixedOverheadTokens(
+    List<LlmToolDeclaration> toolDeclarations,
+    BeijingClock clock,
+  ) {
+    final system = _estimateTokens(_systemPrompt(clock));
     final toolsJson = jsonEncode(
       toolDeclarations.map((t) => t.toJson()).toList(),
     );
@@ -233,6 +244,7 @@ class AgentContextBuilder {
     required String accountId,
     required List<ChatMessageRecord> history,
     required ConversationSummaryRecord? previousSummary,
+    required BeijingClock clock,
   }) {
     final messages = <LlmMessage>[];
 
@@ -249,10 +261,11 @@ class AgentContextBuilder {
     // Replay the recent turns as the material to summarize.
     for (final record in history) {
       if (!_isIncludable(record)) continue;
+      final prefix = _historyText(record.createdAt);
       messages.add(
         record.role == ChatRole.user
-            ? LlmMessage.user(text: record.content)
-            : LlmMessage.assistant(text: record.content),
+            ? LlmMessage.user(text: '$prefix${record.content}')
+            : LlmMessage.assistant(text: '$prefix${record.content}'),
       );
     }
 
@@ -269,7 +282,7 @@ class AgentContextBuilder {
     return LlmRequest(
       model: model,
       messages: messages,
-      system: AgentSystemPrompt.version2,
+      system: _systemPrompt(clock),
       tools: const [],
       temperature: 0,
       maxTokens: summaryMaxTokens,
@@ -294,7 +307,7 @@ class AgentContextBuilder {
     for (var i = history.length - 1; i >= 0; i--) {
       final record = history[i];
       if (!_isIncludable(record)) continue;
-      final cost = _estimateTokens(record.content).toInt();
+      final cost = _estimateTokens('${_historyText(record.createdAt)}${record.content}').toInt();
       if (used + cost > availableTokens) break;
       kept.insert(0, record);
       used += cost;
@@ -327,6 +340,39 @@ class AgentContextBuilder {
   int _estimateTokens(String text) {
     if (text.isEmpty) return 0;
     return (text.length / _charsPerToken).ceil();
+  }
+
+  /// Formats [clock.now()] as `YYYY-MM-DDTHH:mm:ss（周X）` for the system
+  /// prompt's time anchor. The model uses this to resolve relative dates
+  /// like "明天" / "下周". Monday=周一 .. Sunday=周日.
+  String _timeAnchor(BeijingClock clock) {
+    final now = clock.now();
+    String two(int v) => v.toString().padLeft(2, '0');
+    const weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    final weekday = weekdays[now.weekday - 1];
+    return '${now.year}-${two(now.month)}-${two(now.day)}'
+        'T${two(now.hour)}:${two(now.minute)}:${two(now.second)}'
+        '（$weekday）';
+  }
+
+  /// The full system prompt: version2 + the dynamic current-time suffix.
+  String _systemPrompt(BeijingClock clock) {
+    final anchor = _timeAnchor(clock);
+    return '${AgentSystemPrompt.version2}\n\n当前时间：$anchor，Asia/Shanghai。';
+  }
+
+  /// Formats a history message with a `[YYYY-MM-DDTHH:mm] ` timestamp prefix
+  /// (Beijing time, to the minute) so the model can tell when each past
+  /// message was sent and judge whether a historical reply is still valid.
+  /// [createdAtMillis] is the record's `createdAt` (ms since epoch, UTC).
+  String _historyText(int createdAtMillis) {
+    final utc = DateTime.fromMillisecondsSinceEpoch(createdAtMillis, isUtc: true);
+    final beijing = utc.add(const Duration(hours: 8));
+    String two(int v) => v.toString().padLeft(2, '0');
+    final stamp =
+        '${beijing.year}-${two(beijing.month)}-${two(beijing.day)}'
+        'T${two(beijing.hour)}:${two(beijing.minute)}';
+    return '[$stamp] ';
   }
 
   /// The fixed summary-instruction text used by `buildSummaryRequest`, kept

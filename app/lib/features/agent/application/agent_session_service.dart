@@ -464,6 +464,7 @@ class AgentSessionService {
     final turnEstimate = _contextBuilder.estimateTurnTokens(
       currentUserText: userText,
       toolDeclarations: declarations,
+      clock: _clock,
     );
     if (turnEstimate.isTooLarge) {
       await _chatRepository.finishRun(
@@ -495,6 +496,7 @@ class AgentSessionService {
       summary: summary,
       currentUserText: userText,
       toolDeclarations: declarations,
+      clock: _clock,
     );
     conversation.addAll(initialRequest.messages);
     final systemPrompt = initialRequest.system;
@@ -964,9 +966,10 @@ class AgentSessionService {
       // the budget, trim to the newest turns that fit (rather than sending an
       // oversized request or skipping). If nothing fits, skip the summary.
       var summaryHistory = freshHistory;
-      if (!_contextBuilder.summaryHistoryFits(history: freshHistory)) {
+      if (!_contextBuilder.summaryHistoryFits(history: freshHistory, clock: _clock)) {
         summaryHistory = _contextBuilder.trimSummaryHistory(
           history: freshHistory,
+          clock: _clock,
         );
         if (summaryHistory.isEmpty) return;
       }
@@ -976,6 +979,7 @@ class AgentSessionService {
         accountId: accountId,
         history: summaryHistory,
         previousSummary: previousSummary,
+        clock: _clock,
       );
 
       // Run the summary as a tool-disabled, temperature-0 request. It does NOT
