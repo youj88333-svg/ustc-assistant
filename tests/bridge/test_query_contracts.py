@@ -249,6 +249,18 @@ class StrictRejectionTests(unittest.TestCase):
                 with self.assertRaises(contracts.QueryResultValidationError):
                     contracts.validate_query_result(envelope)
 
+    def test_rejects_url_tokens_in_metadata_regardless_of_scheme(self):
+        for value in (
+            "https://evil.example.invalid/path",
+            "http://evil.example.invalid/path",
+            "//evil.example.invalid/path",
+        ):
+            with self.subTest(value=value):
+                envelope = deep_copy(CAMPUS_SEARCH_REFERENCE)
+                envelope["metadata"]["sourceNote"] = value
+                with self.assertRaises(contracts.QueryResultValidationError):
+                    contracts.validate_query_result(envelope)
+
     def test_rejects_non_string_query_type(self):
         envelope = deep_copy(YOUNG_ENROLMENT_REFERENCE)
         envelope["queryType"] = 123

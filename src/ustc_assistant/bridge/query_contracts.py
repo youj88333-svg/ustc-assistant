@@ -216,7 +216,7 @@ def _inspect_text(value: Any) -> None:
 
 
 def _inspect_urls(value: Any, allowed_urls: set[str]) -> None:
-    """Reject any https URL inside ``data`` that is not in ``allowed_urls``.
+    """Reject any outbound URL that is not in ``allowed_urls``.
 
     ``allowed_urls`` is the set of trusted URLs that the source pipeline
     actually produced. This prevents a prompt-injection payload from smuggling
@@ -283,11 +283,12 @@ def validate_query_result(envelope: Mapping[str, Any]) -> None:
     _inspect_text(metadata)
     _inspect_text(list(references))
 
-    # Every https URL inside data must be one of the declared references (which
-    # are themselves trusted). This keeps the Agent from following a URL that
-    # the source pipeline did not actually surface.
+    # Every URL in data or metadata must be one of the declared references
+    # (which are themselves trusted). This keeps the Agent from following a
+    # URL that the source pipeline did not actually surface.
     allowed_urls = set(references)
     _inspect_urls(data, allowed_urls)
+    _inspect_urls(metadata, allowed_urls)
 
 
 def _base_envelope(
