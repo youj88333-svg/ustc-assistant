@@ -13,6 +13,7 @@ import 'package:ustc_assistant_app/features/agent/application/run_reference_stor
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
@@ -76,6 +77,64 @@ class _RecordingGateway implements AgentWriteGateway {
   }
 }
 
+/// update_event 专用假网关：记录被调方法。
+class _UpdateGateway implements AgentWriteGateway {
+  final Map<String, EventWriteIdentity> identities = {};
+  final Map<String, PersonalEvent> events = {};
+  String? softDeletedId;
+  String? cancelledId;
+  String? completedId;
+  String? skippedId;
+  String? editedId;
+  PersonalEvent? editedReplacement;
+  ({String seriesId, String key, OccurrenceOverride override})? occurrenceEdit;
+  ({String seriesId, PersonalEvent anchor})? wholeSeriesEdit;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<EventWriteIdentity> eventIdentity(String eventId) async =>
+      identities[eventId]!;
+
+  @override
+  Future<PersonalEvent> personalEvent(String eventId) async =>
+      events[eventId]!;
+
+  @override
+  Future<PersonalEvent> seriesAnchor(String seriesId) async =>
+      events['anchor:$seriesId']!;
+
+  @override
+  Future<void> softDeleteEvent(String eventId) async => softDeletedId = eventId;
+
+  @override
+  Future<void> cancelEvent(String eventId) async => cancelledId = eventId;
+
+  @override
+  Future<void> completeEvent(String eventId) async => completedId = eventId;
+
+  @override
+  Future<void> skipEvent(String eventId) async => skippedId = eventId;
+
+  @override
+  Future<void> editPersonalEvent(String eventId, PersonalEvent replacement, {List<int>? reminderOffsetsMinutes}) async {
+    editedId = eventId;
+    editedReplacement = replacement;
+  }
+
+  @override
+  Future<void> editOccurrenceOnly(String seriesId, String occurrenceKey, OccurrenceOverride override) async {
+    occurrenceEdit = (seriesId: seriesId, key: occurrenceKey, override: override);
+  }
+
+  @override
+  Future<SeriesEditImpact> editWholeSeries(String seriesId, {required PersonalEvent anchor}) async {
+    wholeSeriesEdit = (seriesId: seriesId, anchor: anchor);
+    return const SeriesEditImpact(affectedOccurrences: 8, newlyOrphaned: 0, continuesBeyondHorizon: true);
+  }
+}
+
 AgentToolContext _ctx(String runId, {String accountId = 'a1'}) =>
     AgentToolContext(
       accountId: accountId,
@@ -132,6 +191,7 @@ void main() {
     CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store),
     CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
     PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
+    UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: store),
   ];
 
   test('schemas declare required args', () {
@@ -206,5 +266,108 @@ void main() {
     }, _ctx('r1'));
     expect(result.status, AgentToolStatus.error);
     expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('update_event rejects an unknown ref', () async {
+    final h = _Harness(tools());
+    final result = await h.tool('update_event').execute({'ref_event': 'ref_nope'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('update_event delete soft-deletes after approval', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    // 直接测 propose + commit 路径：用真实 store 走确认
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    final result = await update.execute({'ref_event': ref, 'delete': true}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.softDeletedId, 'ev-1');
+  });
+
+  test('update_event single edit merges into the current event', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.events['ev-1'] = PersonalEvent.timed(
+      title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
+    final result = await update.execute({'ref_event': ref, 'title': '健身改五点'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.editedId, 'ev-1');
+    expect(gw.editedReplacement!.title, '健身改五点');
+    expect(gw.editedReplacement!.startAt, DateTime(2026, 8, 1, 15)); // 未变字段保留
+  });
+
+  test('update_event only_this on a recurring series writes an override', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(
+      id: 'ev-1', source: 'user', type: 'personal',
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    final result = await update.execute({'ref_event': ref, 'scope': 'only_this', 'title': '本周例会改主题'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.occurrenceEdit!.seriesId, 'ser-1');
+    expect(gw.occurrenceEdit!.override.title.value, '本周例会改主题');
+  });
+
+  test('update_event whole_series preserves the rule and changes anchor fields', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(
+      id: 'ev-1', source: 'user', type: 'personal',
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    gw.events['anchor:ser-1'] = PersonalEvent.timed(
+      title: '例会', startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16));
+    final result = await update.execute({'ref_event': ref, 'scope': 'whole_series', 'title': '例会（改）'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.wholeSeriesEdit!.seriesId, 'ser-1');
+    expect(gw.wholeSeriesEdit!.anchor.title, '例会（改）');
+  });
+
+  test('update_event rejects whole_series time changes', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(
+      id: 'ev-1', source: 'user', type: 'personal',
+      personalSeriesId: 'ser-1', occurrenceKey: 'k');
+    // 整系列时间变更在 commit 阶段拒绝；update_event 恒走确认，先批准再断言。
+    final result = await update.execute({
+      'ref_event': ref, 'scope': 'whole_series', 'start_at': '2026-08-05T17:00:00+08:00',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'whole_series_time_change_not_supported');
+  });
+
+  test('update_event refuses to edit a course event', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'ustc_jw', type: 'course');
+    // 来源校验在 commit 阶段；同样先批准。
+    final result = await update.execute({'ref_event': ref, 'title': 'x'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'source_event_not_editable');
   });
 }

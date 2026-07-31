@@ -19,7 +19,8 @@ abstract class AgentWriteTool implements AgentTool {
     required this.confirmationStore,
   });
 
-  final AgentWriteGateway gateway;
+  // 非 final：子类/测试可通过 attachGateway 注入假网关。
+  AgentWriteGateway gateway;
   final AgentPermissionPolicyService policy;
   final WriteConfirmationStore confirmationStore;
 

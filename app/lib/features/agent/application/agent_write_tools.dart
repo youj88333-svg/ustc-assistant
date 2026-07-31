@@ -1,3 +1,4 @@
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
@@ -276,4 +277,229 @@ class PlanTaskTool extends AgentWriteTool {
     );
     return AgentToolResult(payload: {'result': 'planned_task', 'start_at': (p['startAt'] as DateTime).toIso8601String()});
   }
+}
+
+/// 修改/删除已有日程。
+class UpdateEventTool extends AgentWriteTool {
+  UpdateEventTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  /// 测试用注入点：把运行时网关替换为假网关。
+  void attachGateway(AgentWriteGateway value) => gateway = value;
+
+  @override
+  String get name => 'update_event';
+  @override
+  String get description =>
+      '修改或删除一个个人日程（标题/时间/地点/状态/删除）。课程/考试/二课事件不可改，请用 create_user_overlay。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_event': {'type': 'string', 'description': '来自 get_schedule 的 ref_*'},
+      'scope': {'type': 'string', 'enum': ['only_this', 'whole_series'], 'default': 'only_this',
+          'description': '重复系列编辑范围；非重复事件忽略此字段'},
+      'title': {'type': 'string'},
+      'start_at': {'type': 'string'},
+      'end_at': {'type': 'string'},
+      'all_day': {'type': 'boolean'},
+      'start_date': {'type': 'string'},
+      'end_date_exclusive': {'type': 'string'},
+      'location': {'type': 'string'},
+      'type': {'type': 'string', 'enum': ['personal', 'entertainment', 'meal', 'campus_affair', 'travel', 'study']},
+      'description': {'type': 'string'},
+      'tags': {'type': 'array', 'items': {'type': 'string'}},
+      'status': {'type': 'string', 'enum': ['cancelled', 'completed', 'skipped']},
+      'delete': {'type': 'boolean'},
+    },
+    'required': ['ref_event'],
+  };
+
+  @override
+  String get actionType => 'update_event';
+  @override
+  RiskLevel get riskLevel => RiskLevel.high;
+  @override
+  String get targetType => 'event';
+  @override
+  String get operationLabel => '修改/删除日程';
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final ref = a['ref_event'] as String;
+    final eventId = ctx.references.resolve(ref: ref, kind: 'event');
+    if (eventId == null) throw const FormatException('unknown event ref');
+    final scope = (a['scope'] as String?) ?? 'only_this';
+    final fields = <String, Object?>{
+      if (a.containsKey('title')) 'title': (a['title'] as String).trim(),
+      if (a.containsKey('start_at')) 'start_at': _parseDateTime(a['start_at'] as String),
+      if (a.containsKey('end_at')) 'end_at': _parseDateTime(a['end_at'] as String),
+      if (a.containsKey('all_day')) 'all_day': a['all_day'],
+      if (a.containsKey('start_date')) 'start_date': _parseDateTime(a['start_date'] as String),
+      if (a.containsKey('end_date_exclusive')) 'end_date_exclusive': _parseDateTime(a['end_date_exclusive'] as String),
+      if (a.containsKey('location')) 'location': a['location'],
+      if (a.containsKey('description')) 'description': a['description'],
+      if (a.containsKey('importance')) 'importance': a['importance'],
+      if (a.containsKey('tags')) 'tags': (a['tags'] as List).cast<String>(),
+    };
+    final status = a['status'] as String?;
+    final delete = a['delete'] == true;
+
+    final lines = <String>[];
+    if (delete) {
+      lines.add('删除该日程（软删除，可从管理页恢复）');
+    } else if (status != null) {
+      lines.add('状态改为：$status');
+    } else {
+      if (a.containsKey('title')) lines.add('标题：${a['title']}');
+      if (a.containsKey('start_at') || a.containsKey('end_at')) lines.add('时间有改动');
+      lines.add(scope == 'whole_series' ? '影响：整个重复系列' : '影响：仅本次');
+    }
+
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: lines,
+      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'status': status, 'delete': delete},
+      safeLogSummary: delete ? '删除日程' : (status != null ? '修改日程状态 $status' : '修改日程'),
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final eventId = p['eventId'] as String;
+    final scope = p['scope'] as String;
+    final fields = p['fields'] as Map<String, Object?>;
+    final status = p['status'] as String?;
+    final delete = p['delete'] == true;
+
+    final identity = await gateway.eventIdentity(eventId);
+    if (!identity.isPersonal) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'source_event_not_editable',
+        payload: {'guidance': '课程/考试/二课事件请用 create_user_overlay 标注，不直接修改。'},
+      );
+    }
+
+    if (delete) {
+      await gateway.softDeleteEvent(eventId);
+      return AgentToolResult(payload: {'result': 'deleted_event'});
+    }
+    if (status != null) {
+      if (status == 'cancelled') {
+        await gateway.cancelEvent(eventId);
+      } else if (status == 'completed') {
+        await gateway.completeEvent(eventId);
+      } else {
+        await gateway.skipEvent(eventId);
+      }
+      return AgentToolResult(payload: {'result': 'updated_event', 'status': status});
+    }
+
+    // 字段修改
+    if (identity.isRecurring && scope == 'whole_series') {
+      final hasTimeChange = fields.containsKey('start_at') ||
+          fields.containsKey('end_at') ||
+          fields.containsKey('all_day');
+      if (hasTimeChange) {
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'whole_series_time_change_not_supported',
+          payload: {'guidance': '整系列时间变更暂不支持，可先用 only_this 只改本次，或在日程 UI 中整系列调整。'},
+        );
+      }
+      final current = await gateway.seriesAnchor(identity.personalSeriesId!);
+      final newAnchor = _applyToEvent(current, fields);
+      final impact = await gateway.editWholeSeries(identity.personalSeriesId!, anchor: newAnchor);
+      return AgentToolResult(payload: {
+        'result': 'updated_whole_series',
+        'affected_occurrences': impact.affectedOccurrences,
+      });
+    }
+    if (identity.isRecurring) {
+      final override = _buildOverride(fields);
+      await gateway.editOccurrenceOnly(identity.personalSeriesId!, identity.occurrenceKey!, override);
+      return AgentToolResult(payload: {'result': 'updated_occurrence'});
+    }
+
+    final current = await gateway.personalEvent(eventId);
+    final replacement = _applyToEvent(current, fields);
+    await gateway.editPersonalEvent(eventId, replacement);
+    return AgentToolResult(payload: {'result': 'updated_event'});
+  }
+
+  static PersonalEvent _applyToEvent(PersonalEvent current, Map<String, Object?> fields) {
+    if (fields.containsKey('all_day')) {
+      // 显式切换全天语义：用 start_date/end_date_exclusive
+      final startDate = (fields['start_date'] ?? current.startDate) as DateTime;
+      final endDate = (fields['end_date_exclusive'] ?? current.endDateExclusive) as DateTime;
+      return PersonalEvent.allDay(
+        title: (fields['title'] as String?) ?? current.title,
+        startDate: startDate,
+        endDateExclusive: endDate,
+        description: (fields['description'] as String?) ?? current.description,
+        locationName: (fields['location'] as String?) ?? current.locationName,
+        type: current.type,
+        importance: (fields['importance'] as String?) ?? current.importance,
+        tags: (fields['tags'] as List<String>?) ?? current.tags,
+      );
+    }
+    final allDay = current.allDay;
+    final title = (fields['title'] as String?) ?? current.title;
+    final description = (fields['description'] as String?) ?? current.description;
+    final location = (fields['location'] as String?) ?? current.locationName;
+    final importance = (fields['importance'] as String?) ?? current.importance;
+    final tags = (fields['tags'] as List<String>?) ?? current.tags;
+    if (allDay) {
+      final startDate = (fields['start_date'] as DateTime?) ?? current.startDate!;
+      final endDate = (fields['end_date_exclusive'] as DateTime?) ?? current.endDateExclusive!;
+      return PersonalEvent.allDay(
+        title: title, startDate: startDate, endDateExclusive: endDate,
+        description: description, locationName: location, type: current.type,
+        importance: importance, tags: tags,
+      );
+    }
+    final startAt = (fields['start_at'] as DateTime?) ?? current.startAt!;
+    final endAt = (fields['end_at'] as DateTime?) ?? current.endAt!;
+    return PersonalEvent.timed(
+      title: title, startAt: startAt, endAt: endAt,
+      description: description, locationName: location, type: current.type,
+      importance: importance, tags: tags,
+    );
+  }
+
+  static OccurrenceOverride _buildOverride(Map<String, Object?> fields) => OccurrenceOverride(
+    title: fields.containsKey('title') ? OverrideValue.set(fields['title'] as String) : const OverrideValue.absent(),
+    description: fields.containsKey('description')
+        ? OverrideValue.set(fields['description'] as String?)
+        : const OverrideValue.absent(),
+    locationName: fields.containsKey('location')
+        ? OverrideValue.set(fields['location'] as String?)
+        : const OverrideValue.absent(),
+    startAt: fields.containsKey('start_at')
+        ? OverrideValue.set(fields['start_at'] as DateTime)
+        : const OverrideValue.absent(),
+    endAt: fields.containsKey('end_at')
+        ? OverrideValue.set(fields['end_at'] as DateTime)
+        : const OverrideValue.absent(),
+    startDate: fields.containsKey('start_date')
+        ? OverrideValue.set(fields['start_date'] as DateTime)
+        : const OverrideValue.absent(),
+    endDateExclusive: fields.containsKey('end_date_exclusive')
+        ? OverrideValue.set(fields['end_date_exclusive'] as DateTime)
+        : const OverrideValue.absent(),
+    status: fields.containsKey('status')
+        ? OverrideValue.set(eventStatusFromStorage(fields['status'] as String))
+        : const OverrideValue.absent(),
+    importance: fields.containsKey('importance')
+        ? OverrideValue.set(fields['importance'] as String)
+        : const OverrideValue.absent(),
+    tags: fields.containsKey('tags')
+        ? OverrideValue.set(fields['tags'] as List<String>)
+        : const OverrideValue.absent(),
+  );
 }
