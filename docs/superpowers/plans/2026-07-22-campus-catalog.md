@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-07-23):** This plan has been implemented and verified against
+> the live public sites (see AGENTS.md "校园公开信息真实验收（2026-07-23）"). The
+> `sources.campus` catalog, local search, on-demand detail reads, and the
+> `collect campus` / `query campus` / `read campus` CLI commands are all in
+> place and merged to `main`. Its unchecked boxes are not live task tracking.
+> See `docs/read-only-agent-handoff.md` for the current baseline.
+
 **Goal:** Build a local public-campus catalog index with seven-day notice windows, monthly guide refreshes, on-demand detail reads, 30-day stale-aware caching, and CLI commands suitable for later Agent tools.
 
 **Architecture:** Add an isolated `sources.campus` package with immutable catalog records, atomic JSON persistence, per-site HTML adapters, a bounded public HTTP/detail reader, and a service layer shared by CLI and the future App. Catalog collection stores metadata only; detail bodies and direct attachments are fetched only through catalog identities and cached locally.

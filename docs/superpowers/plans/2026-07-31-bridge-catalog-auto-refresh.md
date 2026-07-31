@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **状态（2026-07-31）：** 本计划已实现并合并到 `main`（`860892c`、`53c16eb`，
+> 合并 `9bc83c8`）。Bridge 在 `campus_search` 查询时按节流/缺失/过期自动刷新
+> 校园目录，失败时降级用旧数据或返回 `catalog_unavailable`。下文复选框是历史
+> 实施步骤，不是实时进度；当前状态见 `docs/read-only-agent-handoff.md`。
+
 **Goal:** 让 Bridge 在 `campus_search` 查询时，若 catalog 缺失或过期则自动 `refresh_catalogs` 后再查，失败降级用旧数据，使 Agent 不再依赖外部 CLI 手动生成 catalog。
 
 **Architecture:** 在 `_run_campus_search` 调 `search_catalog` 前插入 `_ensure_catalog_fresh` 编排步骤。通过依赖注入（`refresh_fn` / `catalog_path_fn` / `now_fn`）保持单测不联网。节流与过期判定基于进程内时间戳与 catalog 的 `lastSuccessfulAt`。

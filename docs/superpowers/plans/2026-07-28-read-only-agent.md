@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-07-31):** This plan has been implemented and merged to `main`
+> (`9bc83c8`). The account-partitioned read-only campus Agent, 15 read-only
+> tools (11 local + 4 on-demand sources), Bridge Query Protocol 1.0, chat and
+> settings UI, and composition tests are all in place. The follow-up
+> review-repairs, prompt-v2, and catalog auto-refresh plans are also merged.
+> Its unchecked boxes are not live task tracking. Remaining manual acceptance
+> (real Key + campus network / Panabit iWAN + school login) still awaits the
+> user; see `docs/read-only-agent-handoff.md` for the current baseline.
+
 **Goal:** Add an account-partitioned, locally persisted, read-only campus Agent to the Flutter app using the USTC Anthropic-compatible API and every existing read-only data source.
 
 **Architecture:** The Agent runtime, chat persistence, Anthropic protocol, privacy filter, tool registry, and local-data tools live in shared Flutter code. Windows-only public/source queries use a versioned Python Bridge `QuerySourceGateway`; future Android/iOS implementations replace that gateway and secret-store adapter without changing Agent or tool semantics.

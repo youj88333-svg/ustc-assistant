@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **状态（2026-07-31）：** 本计划已实现并合并到 `main`（`9bc83c8`）。系统提示词
+> version 2（六节规则）与当前时间动态注入均已落地，版本号与默认值同步为 2。
+> 下文复选框是历史实施步骤，不是实时进度；当前状态见
+> `docs/read-only-agent-handoff.md`。
+
 **Goal:** 把只读校园 Agent 的系统提示词从 version1（7 条泛规则）扩写为 version2（6 节：角色风格 / 工具规范+场景映射 / 反幻觉外部硬本地柔 / 同步登录引导 / 数据可信 / 最小能力边界），并在 system 末尾动态注入当前时间（精确到秒），让模型能解释相对日期。
 
 **Architecture:** `AgentSystemPrompt.version2` 仍是静态字符串常量（规则文本不含日期）。`AgentContextBuilder.build` / `buildSummaryRequest` 新增 `required BeijingClock clock` 参数，把 `clock.now()` 格式化为 `YYYY-MM-DDTHH:mm:ss（周X）` 拼到 `version2` 末尾作为 `LlmRequest.system`。token 预算估算纳入该时间文本。版本号 bump 到 2，`agent_settings.systemPromptVersion` 默认值同步。组装链路其余不变。

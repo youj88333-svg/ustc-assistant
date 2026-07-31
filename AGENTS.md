@@ -45,8 +45,9 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
   与采集作业分离）；移动端 `SourceGateway` 尚未实现。
 - 只读校园 Agent 已实现（`app/lib/features/agent/`）：共享平台无关核心 + Windows
   适配器（DPAPI 保护 Key、Python 查询网关）。修复轮各 Task 在 `feature/read-only-agent`
-  分支上实现并提交；最终修复后的精确 HEAD 在 `docs/read-only-agent-handoff.md` 第 7 节
-  最终验证时记录，不在本文件硬编码（后续提交会改写哈希）。本地导航 chip 可交互
+  分支上实现并已合并到 `main`（合并提交 `9bc83c8`）；最终修复后的精确 HEAD 在
+  `docs/read-only-agent-handoff.md` 第 7 节最终验证时记录，不在本文件硬编码（后续提交
+  会改写哈希）。本地导航 chip 可交互
   （`ActionChip` 经 GoRouter 跳转），公开引用 chip 仍不可交互（临时引用到来源 URL 的
   解析为合并后工作）。
 - Windows C++ 工具链已安装，Release 可构建。自动验证结果在最终验证时更新记录于

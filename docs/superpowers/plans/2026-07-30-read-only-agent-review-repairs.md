@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Status (2026-07-31):** This repair round has been implemented and merged to
+> `main` (`9bc83c8`). The canonical Query Result producers/consumers, paused
+> Young query resume, SSE/cancellation, session lifecycle, composition, and full
+> verification are complete; the measured verification results are recorded in
+> `docs/read-only-agent-handoff.md` §7. Its unchecked boxes are not live task
+> tracking.
+
 **Goal:** Repair the reviewed read-only Agent so the real Python sources, Bridge, Flutter runtime and Windows UI work together without weakening local-first privacy or read-only safety.
 
 **Architecture:** Preserve the existing Flutter-owned Agent and Python-owned source adapters. Establish one canonical Query Result 1.0 shape per external source, keep a paused Young query alive through explicit UI resume, make the Bridge a lazy disposable platform dependency, and close the reviewed session/provider/lifecycle gaps with regression tests at their real public boundaries.
