@@ -8,11 +8,11 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 
 void main() {
   test(
-    'schema version three creates the complete constrained database',
+    'schema version four creates the complete constrained database',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      expect(database.schemaVersion, 3);
+      expect(database.schemaVersion, 4);
       final foreignKeys = await database
           .customSelect('PRAGMA foreign_keys')
           .getSingle();
@@ -112,6 +112,19 @@ CREATE TABLE local_accounts (
   updated_at INTEGER NOT NULL
 )
 ''');
+    // action_logs has existed since schema one; the v4 migration adds a
+    // risk_level column to it, so the legacy seed must include the table.
+    legacy.execute('''
+CREATE TABLE action_logs (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT,
+  source TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  result TEXT NOT NULL,
+  safe_summary TEXT NOT NULL,
+  occurred_at INTEGER NOT NULL
+)
+''');
     legacy.execute(
       "INSERT INTO local_accounts VALUES ('account', 'PB****0000', 1, 1, 1)",
     );
@@ -133,12 +146,13 @@ CREATE TABLE local_accounts (
     );
   });
 
-  // Regression for handoff §3 same-round: a real v2 -> v3 upgrade must create
-  // all six agent tables and preserve representative business data that
-  // existed before the migration. Drift's createAll path (fresh-DB test above)
-  // does not exercise the onUpgrade `from < 3` branch.
+  // Regression for handoff §3 same-round: a real v2 -> v4 upgrade must create
+  // all six agent tables, rebuild agent_permission_policies, and preserve
+  // representative business data that existed before the migration. Drift's
+  // createAll path (fresh-DB test above) does not exercise the onUpgrade
+  // `from < 3` / `from < 4` branches.
   test(
-    'schema two upgrades to three by adding the six agent tables and keeping business rows',
+    'schema two upgrades to four by adding the six agent tables and keeping business rows',
     () async {
       final directory = await Directory.systemTemp.createTemp(
         'ustc-migration-v2-test',
@@ -192,14 +206,27 @@ CREATE TABLE tasks (
         "('task-1','account','复习线性代数','期末范围','重点章节','active',NULL,'high',"
         "1759334400,120,'[]',NULL,NULL,20,20,NULL)",
       );
+      // action_logs has existed since schema one; the v4 migration adds a
+      // risk_level column to it, so the legacy seed must include the table.
+      legacy.execute('''
+CREATE TABLE action_logs (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT,
+  source TEXT NOT NULL,
+  action_type TEXT NOT NULL,
+  result TEXT NOT NULL,
+  safe_summary TEXT NOT NULL,
+  occurred_at INTEGER NOT NULL
+)
+''');
       legacy.execute('PRAGMA user_version = 2');
       legacy.close();
 
       final database = AppDatabase(NativeDatabase(File(path)));
       addTearDown(database.close);
 
-      // The v3 schema is in effect.
-      expect(database.schemaVersion, 3);
+      // The v4 schema is in effect.
+      expect(database.schemaVersion, 4);
       final tables =
           (await database
                   .customSelect(

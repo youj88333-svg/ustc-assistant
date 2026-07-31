@@ -65,7 +65,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
@@ -109,6 +109,12 @@ class AppDatabase extends _$AppDatabase {
         await migrator.createTable(toolInvocations);
         await migrator.createTable(conversationSummaries);
       }
+      if (from < 4) {
+        await migrator.addColumn(actionLogs, actionLogs.riskLevel);
+        // v3 占位表从未被使用（无行、无读取）；直接重建为完整 schema。
+        await migrator.drop(agentPermissionPolicies);
+        await migrator.createTable(agentPermissionPolicies);
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
@@ -128,6 +134,7 @@ class ActionLogRepository {
     required String actionType,
     required String result,
     required String safeSummary,
+    String? riskLevel,
     required int occurredAt,
   }) async {
     await _database
@@ -140,6 +147,7 @@ class ActionLogRepository {
             actionType: actionType,
             result: result,
             safeSummary: safeSummary,
+            riskLevel: Value(riskLevel),
             occurredAt: occurredAt,
           ),
         );

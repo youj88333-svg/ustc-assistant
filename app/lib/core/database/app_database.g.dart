@@ -3425,6 +3425,17 @@ class $ActionLogsTable extends ActionLogs
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _riskLevelMeta = const VerificationMeta(
+    'riskLevel',
+  );
+  @override
+  late final GeneratedColumn<String> riskLevel = GeneratedColumn<String>(
+    'risk_level',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _occurredAtMeta = const VerificationMeta(
     'occurredAt',
   );
@@ -3444,6 +3455,7 @@ class $ActionLogsTable extends ActionLogs
     actionType,
     result,
     safeSummary,
+    riskLevel,
     occurredAt,
   ];
   @override
@@ -3504,6 +3516,12 @@ class $ActionLogsTable extends ActionLogs
     } else if (isInserting) {
       context.missing(_safeSummaryMeta);
     }
+    if (data.containsKey('risk_level')) {
+      context.handle(
+        _riskLevelMeta,
+        riskLevel.isAcceptableOrUnknown(data['risk_level']!, _riskLevelMeta),
+      );
+    }
     if (data.containsKey('occurred_at')) {
       context.handle(
         _occurredAtMeta,
@@ -3545,6 +3563,10 @@ class $ActionLogsTable extends ActionLogs
         DriftSqlType.string,
         data['${effectivePrefix}safe_summary'],
       )!,
+      riskLevel: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}risk_level'],
+      ),
       occurredAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}occurred_at'],
@@ -3565,6 +3587,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
   final String actionType;
   final String result;
   final String safeSummary;
+  final String? riskLevel;
   final int occurredAt;
   const ActionLog({
     required this.id,
@@ -3573,6 +3596,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
     required this.actionType,
     required this.result,
     required this.safeSummary,
+    this.riskLevel,
     required this.occurredAt,
   });
   @override
@@ -3586,6 +3610,9 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
     map['action_type'] = Variable<String>(actionType);
     map['result'] = Variable<String>(result);
     map['safe_summary'] = Variable<String>(safeSummary);
+    if (!nullToAbsent || riskLevel != null) {
+      map['risk_level'] = Variable<String>(riskLevel);
+    }
     map['occurred_at'] = Variable<int>(occurredAt);
     return map;
   }
@@ -3600,6 +3627,9 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
       actionType: Value(actionType),
       result: Value(result),
       safeSummary: Value(safeSummary),
+      riskLevel: riskLevel == null && nullToAbsent
+          ? const Value.absent()
+          : Value(riskLevel),
       occurredAt: Value(occurredAt),
     );
   }
@@ -3616,6 +3646,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
       actionType: serializer.fromJson<String>(json['actionType']),
       result: serializer.fromJson<String>(json['result']),
       safeSummary: serializer.fromJson<String>(json['safeSummary']),
+      riskLevel: serializer.fromJson<String?>(json['riskLevel']),
       occurredAt: serializer.fromJson<int>(json['occurredAt']),
     );
   }
@@ -3629,6 +3660,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
       'actionType': serializer.toJson<String>(actionType),
       'result': serializer.toJson<String>(result),
       'safeSummary': serializer.toJson<String>(safeSummary),
+      'riskLevel': serializer.toJson<String?>(riskLevel),
       'occurredAt': serializer.toJson<int>(occurredAt),
     };
   }
@@ -3640,6 +3672,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
     String? actionType,
     String? result,
     String? safeSummary,
+    Value<String?> riskLevel = const Value.absent(),
     int? occurredAt,
   }) => ActionLog(
     id: id ?? this.id,
@@ -3648,6 +3681,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
     actionType: actionType ?? this.actionType,
     result: result ?? this.result,
     safeSummary: safeSummary ?? this.safeSummary,
+    riskLevel: riskLevel.present ? riskLevel.value : this.riskLevel,
     occurredAt: occurredAt ?? this.occurredAt,
   );
   ActionLog copyWithCompanion(ActionLogsCompanion data) {
@@ -3662,6 +3696,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
       safeSummary: data.safeSummary.present
           ? data.safeSummary.value
           : this.safeSummary,
+      riskLevel: data.riskLevel.present ? data.riskLevel.value : this.riskLevel,
       occurredAt: data.occurredAt.present
           ? data.occurredAt.value
           : this.occurredAt,
@@ -3677,6 +3712,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
           ..write('actionType: $actionType, ')
           ..write('result: $result, ')
           ..write('safeSummary: $safeSummary, ')
+          ..write('riskLevel: $riskLevel, ')
           ..write('occurredAt: $occurredAt')
           ..write(')'))
         .toString();
@@ -3690,6 +3726,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
     actionType,
     result,
     safeSummary,
+    riskLevel,
     occurredAt,
   );
   @override
@@ -3702,6 +3739,7 @@ class ActionLog extends DataClass implements Insertable<ActionLog> {
           other.actionType == this.actionType &&
           other.result == this.result &&
           other.safeSummary == this.safeSummary &&
+          other.riskLevel == this.riskLevel &&
           other.occurredAt == this.occurredAt);
 }
 
@@ -3712,6 +3750,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
   final Value<String> actionType;
   final Value<String> result;
   final Value<String> safeSummary;
+  final Value<String?> riskLevel;
   final Value<int> occurredAt;
   final Value<int> rowid;
   const ActionLogsCompanion({
@@ -3721,6 +3760,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
     this.actionType = const Value.absent(),
     this.result = const Value.absent(),
     this.safeSummary = const Value.absent(),
+    this.riskLevel = const Value.absent(),
     this.occurredAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -3731,6 +3771,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
     required String actionType,
     required String result,
     required String safeSummary,
+    this.riskLevel = const Value.absent(),
     required int occurredAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
@@ -3746,6 +3787,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
     Expression<String>? actionType,
     Expression<String>? result,
     Expression<String>? safeSummary,
+    Expression<String>? riskLevel,
     Expression<int>? occurredAt,
     Expression<int>? rowid,
   }) {
@@ -3756,6 +3798,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
       if (actionType != null) 'action_type': actionType,
       if (result != null) 'result': result,
       if (safeSummary != null) 'safe_summary': safeSummary,
+      if (riskLevel != null) 'risk_level': riskLevel,
       if (occurredAt != null) 'occurred_at': occurredAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -3768,6 +3811,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
     Value<String>? actionType,
     Value<String>? result,
     Value<String>? safeSummary,
+    Value<String?>? riskLevel,
     Value<int>? occurredAt,
     Value<int>? rowid,
   }) {
@@ -3778,6 +3822,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
       actionType: actionType ?? this.actionType,
       result: result ?? this.result,
       safeSummary: safeSummary ?? this.safeSummary,
+      riskLevel: riskLevel ?? this.riskLevel,
       occurredAt: occurredAt ?? this.occurredAt,
       rowid: rowid ?? this.rowid,
     );
@@ -3804,6 +3849,9 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
     if (safeSummary.present) {
       map['safe_summary'] = Variable<String>(safeSummary.value);
     }
+    if (riskLevel.present) {
+      map['risk_level'] = Variable<String>(riskLevel.value);
+    }
     if (occurredAt.present) {
       map['occurred_at'] = Variable<int>(occurredAt.value);
     }
@@ -3822,6 +3870,7 @@ class ActionLogsCompanion extends UpdateCompanion<ActionLog> {
           ..write('actionType: $actionType, ')
           ..write('result: $result, ')
           ..write('safeSummary: $safeSummary, ')
+          ..write('riskLevel: $riskLevel, ')
           ..write('occurredAt: $occurredAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -3869,13 +3918,119 @@ class $AgentPermissionPoliciesTable extends AgentPermissionPolicies
     type: DriftSqlType.string,
     requiredDuringInsert: true,
   );
-  static const VerificationMeta _policyMeta = const VerificationMeta('policy');
+  static const VerificationMeta _targetTypeMeta = const VerificationMeta(
+    'targetType',
+  );
   @override
-  late final GeneratedColumn<String> policy = GeneratedColumn<String>(
-    'policy',
+  late final GeneratedColumn<String> targetType = GeneratedColumn<String>(
+    'target_type',
     aliasedName,
     false,
     type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('*'),
+  );
+  static const VerificationMeta _confirmationModeMeta = const VerificationMeta(
+    'confirmationMode',
+  );
+  @override
+  late final GeneratedColumn<String> confirmationMode = GeneratedColumn<String>(
+    'confirmation_mode',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _riskLevelMeta = const VerificationMeta(
+    'riskLevel',
+  );
+  @override
+  late final GeneratedColumn<String> riskLevel = GeneratedColumn<String>(
+    'risk_level',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('medium'),
+  );
+  static const VerificationMeta _scopeMeta = const VerificationMeta('scope');
+  @override
+  late final GeneratedColumn<String> scope = GeneratedColumn<String>(
+    'scope',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('user_default'),
+  );
+  static const VerificationMeta _enabledMeta = const VerificationMeta(
+    'enabled',
+  );
+  @override
+  late final GeneratedColumn<bool> enabled = GeneratedColumn<bool>(
+    'enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(true),
+  );
+  static const VerificationMeta _firstConfirmedAtMeta = const VerificationMeta(
+    'firstConfirmedAt',
+  );
+  @override
+  late final GeneratedColumn<int> firstConfirmedAt = GeneratedColumn<int>(
+    'first_confirmed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _lastConfirmedAtMeta = const VerificationMeta(
+    'lastConfirmedAt',
+  );
+  @override
+  late final GeneratedColumn<int> lastConfirmedAt = GeneratedColumn<int>(
+    'last_confirmed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
+    'expiresAt',
+  );
+  @override
+  late final GeneratedColumn<int> expiresAt = GeneratedColumn<int>(
+    'expires_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _updatedByMeta = const VerificationMeta(
+    'updatedBy',
+  );
+  @override
+  late final GeneratedColumn<String> updatedBy = GeneratedColumn<String>(
+    'updated_by',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
   static const VerificationMeta _updatedAtMeta = const VerificationMeta(
@@ -3894,7 +4049,16 @@ class $AgentPermissionPoliciesTable extends AgentPermissionPolicies
     id,
     accountId,
     actionType,
-    policy,
+    targetType,
+    confirmationMode,
+    riskLevel,
+    scope,
+    enabled,
+    firstConfirmedAt,
+    lastConfirmedAt,
+    expiresAt,
+    updatedBy,
+    createdAt,
     updatedAt,
   ];
   @override
@@ -3930,13 +4094,78 @@ class $AgentPermissionPoliciesTable extends AgentPermissionPolicies
     } else if (isInserting) {
       context.missing(_actionTypeMeta);
     }
-    if (data.containsKey('policy')) {
+    if (data.containsKey('target_type')) {
       context.handle(
-        _policyMeta,
-        policy.isAcceptableOrUnknown(data['policy']!, _policyMeta),
+        _targetTypeMeta,
+        targetType.isAcceptableOrUnknown(data['target_type']!, _targetTypeMeta),
+      );
+    }
+    if (data.containsKey('confirmation_mode')) {
+      context.handle(
+        _confirmationModeMeta,
+        confirmationMode.isAcceptableOrUnknown(
+          data['confirmation_mode']!,
+          _confirmationModeMeta,
+        ),
       );
     } else if (isInserting) {
-      context.missing(_policyMeta);
+      context.missing(_confirmationModeMeta);
+    }
+    if (data.containsKey('risk_level')) {
+      context.handle(
+        _riskLevelMeta,
+        riskLevel.isAcceptableOrUnknown(data['risk_level']!, _riskLevelMeta),
+      );
+    }
+    if (data.containsKey('scope')) {
+      context.handle(
+        _scopeMeta,
+        scope.isAcceptableOrUnknown(data['scope']!, _scopeMeta),
+      );
+    }
+    if (data.containsKey('enabled')) {
+      context.handle(
+        _enabledMeta,
+        enabled.isAcceptableOrUnknown(data['enabled']!, _enabledMeta),
+      );
+    }
+    if (data.containsKey('first_confirmed_at')) {
+      context.handle(
+        _firstConfirmedAtMeta,
+        firstConfirmedAt.isAcceptableOrUnknown(
+          data['first_confirmed_at']!,
+          _firstConfirmedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('last_confirmed_at')) {
+      context.handle(
+        _lastConfirmedAtMeta,
+        lastConfirmedAt.isAcceptableOrUnknown(
+          data['last_confirmed_at']!,
+          _lastConfirmedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(
+        _expiresAtMeta,
+        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+      );
+    }
+    if (data.containsKey('updated_by')) {
+      context.handle(
+        _updatedByMeta,
+        updatedBy.isAcceptableOrUnknown(data['updated_by']!, _updatedByMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
     }
     if (data.containsKey('updated_at')) {
       context.handle(
@@ -3953,7 +4182,7 @@ class $AgentPermissionPoliciesTable extends AgentPermissionPolicies
   Set<GeneratedColumn> get $primaryKey => {id};
   @override
   List<Set<GeneratedColumn>> get uniqueKeys => [
-    {accountId, actionType},
+    {accountId, actionType, targetType},
   ];
   @override
   AgentPermissionPolicy map(Map<String, dynamic> data, {String? tablePrefix}) {
@@ -3971,9 +4200,45 @@ class $AgentPermissionPoliciesTable extends AgentPermissionPolicies
         DriftSqlType.string,
         data['${effectivePrefix}action_type'],
       )!,
-      policy: attachedDatabase.typeMapping.read(
+      targetType: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
-        data['${effectivePrefix}policy'],
+        data['${effectivePrefix}target_type'],
+      )!,
+      confirmationMode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}confirmation_mode'],
+      )!,
+      riskLevel: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}risk_level'],
+      )!,
+      scope: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scope'],
+      )!,
+      enabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enabled'],
+      )!,
+      firstConfirmedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}first_confirmed_at'],
+      ),
+      lastConfirmedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}last_confirmed_at'],
+      ),
+      expiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}expires_at'],
+      ),
+      updatedBy: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}updated_by'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
       )!,
       updatedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
@@ -3993,13 +4258,31 @@ class AgentPermissionPolicy extends DataClass
   final String id;
   final String accountId;
   final String actionType;
-  final String policy;
+  final String targetType;
+  final String confirmationMode;
+  final String riskLevel;
+  final String scope;
+  final bool enabled;
+  final int? firstConfirmedAt;
+  final int? lastConfirmedAt;
+  final int? expiresAt;
+  final String? updatedBy;
+  final int createdAt;
   final int updatedAt;
   const AgentPermissionPolicy({
     required this.id,
     required this.accountId,
     required this.actionType,
-    required this.policy,
+    required this.targetType,
+    required this.confirmationMode,
+    required this.riskLevel,
+    required this.scope,
+    required this.enabled,
+    this.firstConfirmedAt,
+    this.lastConfirmedAt,
+    this.expiresAt,
+    this.updatedBy,
+    required this.createdAt,
     required this.updatedAt,
   });
   @override
@@ -4008,7 +4291,24 @@ class AgentPermissionPolicy extends DataClass
     map['id'] = Variable<String>(id);
     map['account_id'] = Variable<String>(accountId);
     map['action_type'] = Variable<String>(actionType);
-    map['policy'] = Variable<String>(policy);
+    map['target_type'] = Variable<String>(targetType);
+    map['confirmation_mode'] = Variable<String>(confirmationMode);
+    map['risk_level'] = Variable<String>(riskLevel);
+    map['scope'] = Variable<String>(scope);
+    map['enabled'] = Variable<bool>(enabled);
+    if (!nullToAbsent || firstConfirmedAt != null) {
+      map['first_confirmed_at'] = Variable<int>(firstConfirmedAt);
+    }
+    if (!nullToAbsent || lastConfirmedAt != null) {
+      map['last_confirmed_at'] = Variable<int>(lastConfirmedAt);
+    }
+    if (!nullToAbsent || expiresAt != null) {
+      map['expires_at'] = Variable<int>(expiresAt);
+    }
+    if (!nullToAbsent || updatedBy != null) {
+      map['updated_by'] = Variable<String>(updatedBy);
+    }
+    map['created_at'] = Variable<int>(createdAt);
     map['updated_at'] = Variable<int>(updatedAt);
     return map;
   }
@@ -4018,7 +4318,24 @@ class AgentPermissionPolicy extends DataClass
       id: Value(id),
       accountId: Value(accountId),
       actionType: Value(actionType),
-      policy: Value(policy),
+      targetType: Value(targetType),
+      confirmationMode: Value(confirmationMode),
+      riskLevel: Value(riskLevel),
+      scope: Value(scope),
+      enabled: Value(enabled),
+      firstConfirmedAt: firstConfirmedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(firstConfirmedAt),
+      lastConfirmedAt: lastConfirmedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(lastConfirmedAt),
+      expiresAt: expiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(expiresAt),
+      updatedBy: updatedBy == null && nullToAbsent
+          ? const Value.absent()
+          : Value(updatedBy),
+      createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
   }
@@ -4032,7 +4349,16 @@ class AgentPermissionPolicy extends DataClass
       id: serializer.fromJson<String>(json['id']),
       accountId: serializer.fromJson<String>(json['accountId']),
       actionType: serializer.fromJson<String>(json['actionType']),
-      policy: serializer.fromJson<String>(json['policy']),
+      targetType: serializer.fromJson<String>(json['targetType']),
+      confirmationMode: serializer.fromJson<String>(json['confirmationMode']),
+      riskLevel: serializer.fromJson<String>(json['riskLevel']),
+      scope: serializer.fromJson<String>(json['scope']),
+      enabled: serializer.fromJson<bool>(json['enabled']),
+      firstConfirmedAt: serializer.fromJson<int?>(json['firstConfirmedAt']),
+      lastConfirmedAt: serializer.fromJson<int?>(json['lastConfirmedAt']),
+      expiresAt: serializer.fromJson<int?>(json['expiresAt']),
+      updatedBy: serializer.fromJson<String?>(json['updatedBy']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
     );
   }
@@ -4043,7 +4369,16 @@ class AgentPermissionPolicy extends DataClass
       'id': serializer.toJson<String>(id),
       'accountId': serializer.toJson<String>(accountId),
       'actionType': serializer.toJson<String>(actionType),
-      'policy': serializer.toJson<String>(policy),
+      'targetType': serializer.toJson<String>(targetType),
+      'confirmationMode': serializer.toJson<String>(confirmationMode),
+      'riskLevel': serializer.toJson<String>(riskLevel),
+      'scope': serializer.toJson<String>(scope),
+      'enabled': serializer.toJson<bool>(enabled),
+      'firstConfirmedAt': serializer.toJson<int?>(firstConfirmedAt),
+      'lastConfirmedAt': serializer.toJson<int?>(lastConfirmedAt),
+      'expiresAt': serializer.toJson<int?>(expiresAt),
+      'updatedBy': serializer.toJson<String?>(updatedBy),
+      'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
     };
   }
@@ -4052,13 +4387,35 @@ class AgentPermissionPolicy extends DataClass
     String? id,
     String? accountId,
     String? actionType,
-    String? policy,
+    String? targetType,
+    String? confirmationMode,
+    String? riskLevel,
+    String? scope,
+    bool? enabled,
+    Value<int?> firstConfirmedAt = const Value.absent(),
+    Value<int?> lastConfirmedAt = const Value.absent(),
+    Value<int?> expiresAt = const Value.absent(),
+    Value<String?> updatedBy = const Value.absent(),
+    int? createdAt,
     int? updatedAt,
   }) => AgentPermissionPolicy(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
     actionType: actionType ?? this.actionType,
-    policy: policy ?? this.policy,
+    targetType: targetType ?? this.targetType,
+    confirmationMode: confirmationMode ?? this.confirmationMode,
+    riskLevel: riskLevel ?? this.riskLevel,
+    scope: scope ?? this.scope,
+    enabled: enabled ?? this.enabled,
+    firstConfirmedAt: firstConfirmedAt.present
+        ? firstConfirmedAt.value
+        : this.firstConfirmedAt,
+    lastConfirmedAt: lastConfirmedAt.present
+        ? lastConfirmedAt.value
+        : this.lastConfirmedAt,
+    expiresAt: expiresAt.present ? expiresAt.value : this.expiresAt,
+    updatedBy: updatedBy.present ? updatedBy.value : this.updatedBy,
+    createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
   AgentPermissionPolicy copyWithCompanion(
@@ -4070,7 +4427,24 @@ class AgentPermissionPolicy extends DataClass
       actionType: data.actionType.present
           ? data.actionType.value
           : this.actionType,
-      policy: data.policy.present ? data.policy.value : this.policy,
+      targetType: data.targetType.present
+          ? data.targetType.value
+          : this.targetType,
+      confirmationMode: data.confirmationMode.present
+          ? data.confirmationMode.value
+          : this.confirmationMode,
+      riskLevel: data.riskLevel.present ? data.riskLevel.value : this.riskLevel,
+      scope: data.scope.present ? data.scope.value : this.scope,
+      enabled: data.enabled.present ? data.enabled.value : this.enabled,
+      firstConfirmedAt: data.firstConfirmedAt.present
+          ? data.firstConfirmedAt.value
+          : this.firstConfirmedAt,
+      lastConfirmedAt: data.lastConfirmedAt.present
+          ? data.lastConfirmedAt.value
+          : this.lastConfirmedAt,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+      updatedBy: data.updatedBy.present ? data.updatedBy.value : this.updatedBy,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
   }
@@ -4081,14 +4455,38 @@ class AgentPermissionPolicy extends DataClass
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('actionType: $actionType, ')
-          ..write('policy: $policy, ')
+          ..write('targetType: $targetType, ')
+          ..write('confirmationMode: $confirmationMode, ')
+          ..write('riskLevel: $riskLevel, ')
+          ..write('scope: $scope, ')
+          ..write('enabled: $enabled, ')
+          ..write('firstConfirmedAt: $firstConfirmedAt, ')
+          ..write('lastConfirmedAt: $lastConfirmedAt, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('updatedBy: $updatedBy, ')
+          ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(id, accountId, actionType, policy, updatedAt);
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    actionType,
+    targetType,
+    confirmationMode,
+    riskLevel,
+    scope,
+    enabled,
+    firstConfirmedAt,
+    lastConfirmedAt,
+    expiresAt,
+    updatedBy,
+    createdAt,
+    updatedAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -4096,7 +4494,16 @@ class AgentPermissionPolicy extends DataClass
           other.id == this.id &&
           other.accountId == this.accountId &&
           other.actionType == this.actionType &&
-          other.policy == this.policy &&
+          other.targetType == this.targetType &&
+          other.confirmationMode == this.confirmationMode &&
+          other.riskLevel == this.riskLevel &&
+          other.scope == this.scope &&
+          other.enabled == this.enabled &&
+          other.firstConfirmedAt == this.firstConfirmedAt &&
+          other.lastConfirmedAt == this.lastConfirmedAt &&
+          other.expiresAt == this.expiresAt &&
+          other.updatedBy == this.updatedBy &&
+          other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
 
@@ -4105,14 +4512,32 @@ class AgentPermissionPoliciesCompanion
   final Value<String> id;
   final Value<String> accountId;
   final Value<String> actionType;
-  final Value<String> policy;
+  final Value<String> targetType;
+  final Value<String> confirmationMode;
+  final Value<String> riskLevel;
+  final Value<String> scope;
+  final Value<bool> enabled;
+  final Value<int?> firstConfirmedAt;
+  final Value<int?> lastConfirmedAt;
+  final Value<int?> expiresAt;
+  final Value<String?> updatedBy;
+  final Value<int> createdAt;
   final Value<int> updatedAt;
   final Value<int> rowid;
   const AgentPermissionPoliciesCompanion({
     this.id = const Value.absent(),
     this.accountId = const Value.absent(),
     this.actionType = const Value.absent(),
-    this.policy = const Value.absent(),
+    this.targetType = const Value.absent(),
+    this.confirmationMode = const Value.absent(),
+    this.riskLevel = const Value.absent(),
+    this.scope = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.firstConfirmedAt = const Value.absent(),
+    this.lastConfirmedAt = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.updatedBy = const Value.absent(),
+    this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
   });
@@ -4120,19 +4545,38 @@ class AgentPermissionPoliciesCompanion
     required String id,
     required String accountId,
     required String actionType,
-    required String policy,
+    this.targetType = const Value.absent(),
+    required String confirmationMode,
+    this.riskLevel = const Value.absent(),
+    this.scope = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.firstConfirmedAt = const Value.absent(),
+    this.lastConfirmedAt = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.updatedBy = const Value.absent(),
+    required int createdAt,
     required int updatedAt,
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        accountId = Value(accountId),
        actionType = Value(actionType),
-       policy = Value(policy),
+       confirmationMode = Value(confirmationMode),
+       createdAt = Value(createdAt),
        updatedAt = Value(updatedAt);
   static Insertable<AgentPermissionPolicy> custom({
     Expression<String>? id,
     Expression<String>? accountId,
     Expression<String>? actionType,
-    Expression<String>? policy,
+    Expression<String>? targetType,
+    Expression<String>? confirmationMode,
+    Expression<String>? riskLevel,
+    Expression<String>? scope,
+    Expression<bool>? enabled,
+    Expression<int>? firstConfirmedAt,
+    Expression<int>? lastConfirmedAt,
+    Expression<int>? expiresAt,
+    Expression<String>? updatedBy,
+    Expression<int>? createdAt,
     Expression<int>? updatedAt,
     Expression<int>? rowid,
   }) {
@@ -4140,7 +4584,16 @@ class AgentPermissionPoliciesCompanion
       if (id != null) 'id': id,
       if (accountId != null) 'account_id': accountId,
       if (actionType != null) 'action_type': actionType,
-      if (policy != null) 'policy': policy,
+      if (targetType != null) 'target_type': targetType,
+      if (confirmationMode != null) 'confirmation_mode': confirmationMode,
+      if (riskLevel != null) 'risk_level': riskLevel,
+      if (scope != null) 'scope': scope,
+      if (enabled != null) 'enabled': enabled,
+      if (firstConfirmedAt != null) 'first_confirmed_at': firstConfirmedAt,
+      if (lastConfirmedAt != null) 'last_confirmed_at': lastConfirmedAt,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (updatedBy != null) 'updated_by': updatedBy,
+      if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
     });
@@ -4150,7 +4603,16 @@ class AgentPermissionPoliciesCompanion
     Value<String>? id,
     Value<String>? accountId,
     Value<String>? actionType,
-    Value<String>? policy,
+    Value<String>? targetType,
+    Value<String>? confirmationMode,
+    Value<String>? riskLevel,
+    Value<String>? scope,
+    Value<bool>? enabled,
+    Value<int?>? firstConfirmedAt,
+    Value<int?>? lastConfirmedAt,
+    Value<int?>? expiresAt,
+    Value<String?>? updatedBy,
+    Value<int>? createdAt,
     Value<int>? updatedAt,
     Value<int>? rowid,
   }) {
@@ -4158,7 +4620,16 @@ class AgentPermissionPoliciesCompanion
       id: id ?? this.id,
       accountId: accountId ?? this.accountId,
       actionType: actionType ?? this.actionType,
-      policy: policy ?? this.policy,
+      targetType: targetType ?? this.targetType,
+      confirmationMode: confirmationMode ?? this.confirmationMode,
+      riskLevel: riskLevel ?? this.riskLevel,
+      scope: scope ?? this.scope,
+      enabled: enabled ?? this.enabled,
+      firstConfirmedAt: firstConfirmedAt ?? this.firstConfirmedAt,
+      lastConfirmedAt: lastConfirmedAt ?? this.lastConfirmedAt,
+      expiresAt: expiresAt ?? this.expiresAt,
+      updatedBy: updatedBy ?? this.updatedBy,
+      createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
     );
@@ -4176,8 +4647,35 @@ class AgentPermissionPoliciesCompanion
     if (actionType.present) {
       map['action_type'] = Variable<String>(actionType.value);
     }
-    if (policy.present) {
-      map['policy'] = Variable<String>(policy.value);
+    if (targetType.present) {
+      map['target_type'] = Variable<String>(targetType.value);
+    }
+    if (confirmationMode.present) {
+      map['confirmation_mode'] = Variable<String>(confirmationMode.value);
+    }
+    if (riskLevel.present) {
+      map['risk_level'] = Variable<String>(riskLevel.value);
+    }
+    if (scope.present) {
+      map['scope'] = Variable<String>(scope.value);
+    }
+    if (enabled.present) {
+      map['enabled'] = Variable<bool>(enabled.value);
+    }
+    if (firstConfirmedAt.present) {
+      map['first_confirmed_at'] = Variable<int>(firstConfirmedAt.value);
+    }
+    if (lastConfirmedAt.present) {
+      map['last_confirmed_at'] = Variable<int>(lastConfirmedAt.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<int>(expiresAt.value);
+    }
+    if (updatedBy.present) {
+      map['updated_by'] = Variable<String>(updatedBy.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
     }
     if (updatedAt.present) {
       map['updated_at'] = Variable<int>(updatedAt.value);
@@ -4194,7 +4692,16 @@ class AgentPermissionPoliciesCompanion
           ..write('id: $id, ')
           ..write('accountId: $accountId, ')
           ..write('actionType: $actionType, ')
-          ..write('policy: $policy, ')
+          ..write('targetType: $targetType, ')
+          ..write('confirmationMode: $confirmationMode, ')
+          ..write('riskLevel: $riskLevel, ')
+          ..write('scope: $scope, ')
+          ..write('enabled: $enabled, ')
+          ..write('firstConfirmedAt: $firstConfirmedAt, ')
+          ..write('lastConfirmedAt: $lastConfirmedAt, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('updatedBy: $updatedBy, ')
+          ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
           ..write(')'))
@@ -4271,7 +4778,7 @@ class $AgentSettingsTable extends AgentSettings
     false,
     type: DriftSqlType.int,
     requiredDuringInsert: false,
-    defaultValue: const Constant(1),
+    defaultValue: const Constant(2),
   );
   static const VerificationMeta _updatedAtMeta = const VerificationMeta(
     'updatedAt',
@@ -23627,6 +24134,7 @@ typedef $$ActionLogsTableCreateCompanionBuilder =
       required String actionType,
       required String result,
       required String safeSummary,
+      Value<String?> riskLevel,
       required int occurredAt,
       Value<int> rowid,
     });
@@ -23638,6 +24146,7 @@ typedef $$ActionLogsTableUpdateCompanionBuilder =
       Value<String> actionType,
       Value<String> result,
       Value<String> safeSummary,
+      Value<String?> riskLevel,
       Value<int> occurredAt,
       Value<int> rowid,
     });
@@ -23696,6 +24205,11 @@ class $$ActionLogsTableFilterComposer
 
   ColumnFilters<String> get safeSummary => $composableBuilder(
     column: $table.safeSummary,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get riskLevel => $composableBuilder(
+    column: $table.riskLevel,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -23762,6 +24276,11 @@ class $$ActionLogsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get riskLevel => $composableBuilder(
+    column: $table.riskLevel,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get occurredAt => $composableBuilder(
     column: $table.occurredAt,
     builder: (column) => ColumnOrderings(column),
@@ -23818,6 +24337,9 @@ class $$ActionLogsTableAnnotationComposer
     column: $table.safeSummary,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get riskLevel =>
+      $composableBuilder(column: $table.riskLevel, builder: (column) => column);
 
   GeneratedColumn<int> get occurredAt => $composableBuilder(
     column: $table.occurredAt,
@@ -23882,6 +24404,7 @@ class $$ActionLogsTableTableManager
                 Value<String> actionType = const Value.absent(),
                 Value<String> result = const Value.absent(),
                 Value<String> safeSummary = const Value.absent(),
+                Value<String?> riskLevel = const Value.absent(),
                 Value<int> occurredAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ActionLogsCompanion(
@@ -23891,6 +24414,7 @@ class $$ActionLogsTableTableManager
                 actionType: actionType,
                 result: result,
                 safeSummary: safeSummary,
+                riskLevel: riskLevel,
                 occurredAt: occurredAt,
                 rowid: rowid,
               ),
@@ -23902,6 +24426,7 @@ class $$ActionLogsTableTableManager
                 required String actionType,
                 required String result,
                 required String safeSummary,
+                Value<String?> riskLevel = const Value.absent(),
                 required int occurredAt,
                 Value<int> rowid = const Value.absent(),
               }) => ActionLogsCompanion.insert(
@@ -23911,6 +24436,7 @@ class $$ActionLogsTableTableManager
                 actionType: actionType,
                 result: result,
                 safeSummary: safeSummary,
+                riskLevel: riskLevel,
                 occurredAt: occurredAt,
                 rowid: rowid,
               ),
@@ -23986,7 +24512,16 @@ typedef $$AgentPermissionPoliciesTableCreateCompanionBuilder =
       required String id,
       required String accountId,
       required String actionType,
-      required String policy,
+      Value<String> targetType,
+      required String confirmationMode,
+      Value<String> riskLevel,
+      Value<String> scope,
+      Value<bool> enabled,
+      Value<int?> firstConfirmedAt,
+      Value<int?> lastConfirmedAt,
+      Value<int?> expiresAt,
+      Value<String?> updatedBy,
+      required int createdAt,
       required int updatedAt,
       Value<int> rowid,
     });
@@ -23995,7 +24530,16 @@ typedef $$AgentPermissionPoliciesTableUpdateCompanionBuilder =
       Value<String> id,
       Value<String> accountId,
       Value<String> actionType,
-      Value<String> policy,
+      Value<String> targetType,
+      Value<String> confirmationMode,
+      Value<String> riskLevel,
+      Value<String> scope,
+      Value<bool> enabled,
+      Value<int?> firstConfirmedAt,
+      Value<int?> lastConfirmedAt,
+      Value<int?> expiresAt,
+      Value<String?> updatedBy,
+      Value<int> createdAt,
       Value<int> updatedAt,
       Value<int> rowid,
     });
@@ -24051,8 +24595,53 @@ class $$AgentPermissionPoliciesTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
-  ColumnFilters<String> get policy => $composableBuilder(
-    column: $table.policy,
+  ColumnFilters<String> get targetType => $composableBuilder(
+    column: $table.targetType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get confirmationMode => $composableBuilder(
+    column: $table.confirmationMode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get riskLevel => $composableBuilder(
+    column: $table.riskLevel,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get scope => $composableBuilder(
+    column: $table.scope,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get firstConfirmedAt => $composableBuilder(
+    column: $table.firstConfirmedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get lastConfirmedAt => $composableBuilder(
+    column: $table.lastConfirmedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get updatedBy => $composableBuilder(
+    column: $table.updatedBy,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -24104,8 +24693,53 @@ class $$AgentPermissionPoliciesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
-  ColumnOrderings<String> get policy => $composableBuilder(
-    column: $table.policy,
+  ColumnOrderings<String> get targetType => $composableBuilder(
+    column: $table.targetType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get confirmationMode => $composableBuilder(
+    column: $table.confirmationMode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get riskLevel => $composableBuilder(
+    column: $table.riskLevel,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get scope => $composableBuilder(
+    column: $table.scope,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get firstConfirmedAt => $composableBuilder(
+    column: $table.firstConfirmedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get lastConfirmedAt => $composableBuilder(
+    column: $table.lastConfirmedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get updatedBy => $composableBuilder(
+    column: $table.updatedBy,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -24155,8 +24789,43 @@ class $$AgentPermissionPoliciesTableAnnotationComposer
     builder: (column) => column,
   );
 
-  GeneratedColumn<String> get policy =>
-      $composableBuilder(column: $table.policy, builder: (column) => column);
+  GeneratedColumn<String> get targetType => $composableBuilder(
+    column: $table.targetType,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get confirmationMode => $composableBuilder(
+    column: $table.confirmationMode,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get riskLevel =>
+      $composableBuilder(column: $table.riskLevel, builder: (column) => column);
+
+  GeneratedColumn<String> get scope =>
+      $composableBuilder(column: $table.scope, builder: (column) => column);
+
+  GeneratedColumn<bool> get enabled =>
+      $composableBuilder(column: $table.enabled, builder: (column) => column);
+
+  GeneratedColumn<int> get firstConfirmedAt => $composableBuilder(
+    column: $table.firstConfirmedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get lastConfirmedAt => $composableBuilder(
+    column: $table.lastConfirmedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+
+  GeneratedColumn<String> get updatedBy =>
+      $composableBuilder(column: $table.updatedBy, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
   GeneratedColumn<int> get updatedAt =>
       $composableBuilder(column: $table.updatedAt, builder: (column) => column);
@@ -24227,14 +24896,32 @@ class $$AgentPermissionPoliciesTableTableManager
                 Value<String> id = const Value.absent(),
                 Value<String> accountId = const Value.absent(),
                 Value<String> actionType = const Value.absent(),
-                Value<String> policy = const Value.absent(),
+                Value<String> targetType = const Value.absent(),
+                Value<String> confirmationMode = const Value.absent(),
+                Value<String> riskLevel = const Value.absent(),
+                Value<String> scope = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int?> firstConfirmedAt = const Value.absent(),
+                Value<int?> lastConfirmedAt = const Value.absent(),
+                Value<int?> expiresAt = const Value.absent(),
+                Value<String?> updatedBy = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => AgentPermissionPoliciesCompanion(
                 id: id,
                 accountId: accountId,
                 actionType: actionType,
-                policy: policy,
+                targetType: targetType,
+                confirmationMode: confirmationMode,
+                riskLevel: riskLevel,
+                scope: scope,
+                enabled: enabled,
+                firstConfirmedAt: firstConfirmedAt,
+                lastConfirmedAt: lastConfirmedAt,
+                expiresAt: expiresAt,
+                updatedBy: updatedBy,
+                createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),
@@ -24243,14 +24930,32 @@ class $$AgentPermissionPoliciesTableTableManager
                 required String id,
                 required String accountId,
                 required String actionType,
-                required String policy,
+                Value<String> targetType = const Value.absent(),
+                required String confirmationMode,
+                Value<String> riskLevel = const Value.absent(),
+                Value<String> scope = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<int?> firstConfirmedAt = const Value.absent(),
+                Value<int?> lastConfirmedAt = const Value.absent(),
+                Value<int?> expiresAt = const Value.absent(),
+                Value<String?> updatedBy = const Value.absent(),
+                required int createdAt,
                 required int updatedAt,
                 Value<int> rowid = const Value.absent(),
               }) => AgentPermissionPoliciesCompanion.insert(
                 id: id,
                 accountId: accountId,
                 actionType: actionType,
-                policy: policy,
+                targetType: targetType,
+                confirmationMode: confirmationMode,
+                riskLevel: riskLevel,
+                scope: scope,
+                enabled: enabled,
+                firstConfirmedAt: firstConfirmedAt,
+                lastConfirmedAt: lastConfirmedAt,
+                expiresAt: expiresAt,
+                updatedBy: updatedBy,
+                createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
               ),
