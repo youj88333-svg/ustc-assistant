@@ -1,8 +1,8 @@
 # USTC Assistant 只读 Agent 实施交接
 
-更新时间：2026-07-31
+更新时间：2026-08-01
 
-## 0. 当前状态（2026-07-31 更新）
+## 0. 当前状态（2026-08-01 更新）
 
 `feature/read-only-agent` 已合并到 `main`（合并提交 `9bc83c8`，含只读 Agent Tasks
 1–8、系统提示词 v2 与 Bridge 目录自动刷新，以及 `2026-07-30-read-only-agent-review-repairs`
@@ -14,6 +14,15 @@
 设置 UI、聊天 UI 与组合、端到端安全测试，以及组合级集成测试（真实路由
 + 注入式组合覆盖配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、网关释放与
 捕获请求隐私断言）。
+
+**写工具里程碑（本计划）已实现，待合并**：10 个受控本地写工具
+（create_event/update_event/create_task/plan_task/create_user_overlay/
+record_attendance_decision/record_listening_mode/create_schedule_relation/
+set_reminder/update_permission_policy）在 `feature/write-tools` 分支上实现，包含风险
+分级"审批门"确认（聊天内联确认卡）、AgentPermissionPolicy 表迁移并接入运行时决策、
+设置页权限管理区与组合级写流程测试。尚未合并到 `main`，合并时机由本计划 Task 13
+完成后的 finishing-a-development-branch 流程决定。写工具只作用于本地业务数据，
+不新增任何学校/外部写通道；权限变更永远需要用户亲手确认。
 
 **真实人工验收尚未执行**：下文第 9 节的人工验收清单
 （`docs/acceptance/read-only-agent.md`）需由用户在真实校园网 / Panabit iWAN / 真实
@@ -337,8 +346,8 @@ Windows Release build: passed
 
 本轮完成并验收后，再按顺序设计和实现：
 
-1. Agent 写工具、风险分级、确认和权限设置；
-2. 每日简报、“可以赌”出勤询问和待确认事件；
-3. 图片/文档输入与 `qwen3.6-chat` 视觉路由；
-4. Android/iOS 安全存储和查询来源适配器；
-5. 安装发布和可选云同步。
+- ~~Agent 写工具、风险分级、确认和权限设置~~：已完成（写工具里程碑，见第 0 节）。
+- 每日简报、“可以赌”出勤询问和待确认事件（下一阶段第 1 项）；
+- 图片/文档输入与 `qwen3.6-chat` 视觉路由；
+- Android/iOS 安全存储和查询来源适配器；
+- 安装发布和可选云同步。

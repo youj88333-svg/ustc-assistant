@@ -19,9 +19,15 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
    （`https://api.llm.ustc.edu.cn`，默认模型 `deepseek-v4-flash`，SSE 流式 +
    `tool_use`/`tool_result`），15 个只读工具（11 本地 + 4 按需来源），工具过程
    默认折叠、可停止、可重试，API Key 由 DPAPI 保护，确定性隐私过滤，滚动摘要，
-   重启恢复。Agent 不能修改本地业务数据、发起同步或执行任何外部写操作。架构见
-   `docs/architecture.md`“只读 Agent 架构”一节，人工验收清单见
-   `docs/acceptance/read-only-agent.md`。
+   重启恢复。Agent 不能发起同步或执行任何外部写操作；本地业务数据修改仅经下述
+   受控写工具。架构见 `docs/architecture.md`“只读 Agent 架构”一节，人工验收清单
+   见 `docs/acceptance/read-only-agent.md`。
+   写工具：10 个受控本地写工具（create_event/update_event/create_task/plan_task/
+   create_user_overlay/record_attendance_decision/record_listening_mode/
+   create_schedule_relation/set_reminder/update_permission_policy），全部经"审批门"
+   按风险分级确认（聊天内联确认卡），AgentPermissionPolicy 表迁移并接入运行时决策，
+   设置页可管理确认策略；权限变更永远需要用户亲手确认（update_permission_policy）。
+   写能力只作用于本地业务数据，不新增任何学校/外部写通道。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
 `README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
@@ -181,7 +187,8 @@ source service
 - 校园公开信息只允许先查询本地目录，再按目录条目 ID 读取；禁止把任意 URL 交给读取工具。Agent 每批自动选择的详情不超过 3 条，发现链接最多跟进一层。
 - 二进制附件读取只负责受控下载和本地缓存，PDF、Office 等内容转换由独立转换层处理。
 - 教务联动评课社区仅可发送必要的课程名称检索词，首次联网前必须明确告知这可能透露选课情况并取得用户授权；不得发送完整课表、时间、地点、用户 ID 或登录信息。
-- 写操作未来必须经过风险策略、用户确认和操作日志；来源刷新不得覆盖 `UserOverlay`。
+- 写操作必须经风险分级、用户确认和操作日志；权限变更永远需要用户亲手确认；
+  来源刷新不得覆盖 `UserOverlay`。
 
 ## 开发规则
 
