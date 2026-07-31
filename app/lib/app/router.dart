@@ -5,10 +5,12 @@ import 'package:go_router/go_router.dart';
 
 import '../core/database/app_database.dart';
 import '../core/security/windows_dpapi_protector.dart';
+import '../core/time/beijing_clock.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/presentation/accounts_page.dart';
 import '../features/agent/application/agent_composition.dart';
 import '../features/agent/application/agent_configuration_service.dart';
+import '../features/agent/application/agent_permission_policy_service.dart';
 import '../features/agent/data/anthropic_llm_provider.dart';
 import '../features/agent/data/drift_chat_repository.dart';
 import '../features/agent/data/protected_agent_secret_store.dart';
@@ -440,6 +442,10 @@ class _AgentSettingsLoader extends StatelessWidget {
           ),
           provider: AnthropicLlmProvider(),
           chatRepository: chatRepository,
+          policyService: AgentPermissionPolicyService(
+            database: database,
+            clock: const SystemBeijingClock(),
+          ),
         );
       },
     );

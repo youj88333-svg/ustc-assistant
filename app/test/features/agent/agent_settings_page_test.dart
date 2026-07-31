@@ -6,7 +6,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
+import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_configuration_service.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
@@ -171,6 +173,10 @@ void main() {
         secrets: secrets,
         provider: provider,
         chatRepository: chatRepository,
+        policyService: AgentPermissionPolicyService(
+          database: database,
+          clock: FixedBeijingClock(DateTime.fromMillisecondsSinceEpoch(100)),
+        ),
       ),
     );
   }

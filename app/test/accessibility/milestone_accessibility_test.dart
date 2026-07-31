@@ -8,6 +8,7 @@ import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_configuration_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_session_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
@@ -318,6 +319,10 @@ void main() {
             secrets: _FakeSecretStore(database),
             provider: _FakeLlmProvider(),
             chatRepository: chatRepository,
+            policyService: AgentPermissionPolicyService(
+              database: database,
+              clock: FixedBeijingClock(DateTime.fromMillisecondsSinceEpoch(1)),
+            ),
           ),
         ),
       ),

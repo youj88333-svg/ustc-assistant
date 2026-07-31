@@ -183,6 +183,20 @@ class AgentPermissionPolicyService {
         .go();
   }
 
+  /// 最近的权限变更记录（update_permission_policy 的 ActionLog）。
+  Future<List<ActionLog>> recentPermissionChanges(
+    String accountId, {
+    int limit = 5,
+  }) => (database.select(database.actionLogs)
+        ..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              row.actionType.equals('update_permission_policy'),
+        )
+        ..orderBy([(row) => OrderingTerm.desc(row.occurredAt)])
+        ..limit(limit))
+      .get();
+
   Future<AgentPermissionPolicyRecord?> _find(
     String accountId,
     String actionType,

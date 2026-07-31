@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
 import '../application/agent_configuration_service.dart';
+import '../application/agent_permission_policy_service.dart';
 import '../application/cancellation_signal.dart';
 import '../data/drift_chat_repository.dart';
 import '../data/protected_agent_secret_store.dart';
 import '../domain/llm_protocol.dart';
+import 'agent_permission_section.dart';
 import 'agent_setup_panel.dart';
 
 /// Maps a [LlmProtocolException] code to user-friendly Chinese copy that never
@@ -59,6 +61,7 @@ class AgentSettingsPage extends StatefulWidget {
     required this.secrets,
     required this.provider,
     required this.chatRepository,
+    required this.policyService,
     super.key,
   });
 
@@ -67,6 +70,7 @@ class AgentSettingsPage extends StatefulWidget {
   final AgentSecretStore secrets;
   final LlmProvider provider;
   final DriftChatRepository chatRepository;
+  final AgentPermissionPolicyService policyService;
 
   /// Whether the Agent is configured and ready to send: a key is stored, the
   /// Agent is enabled, and a model is set. Task 11's chat page consumes this to
@@ -452,6 +456,12 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
               subtitle: const Text('关闭后 Agent 不会读取你的 iCourse 数据'),
               value: snapshot?.icourseConsent ?? false,
               onChanged: _toggleConsent,
+            ),
+            const Divider(),
+            // Agent 权限：每类写操作的确认模式、恢复默认与最近变更。
+            AgentPermissionSection(
+              accountId: widget.accountId,
+              policyService: widget.policyService,
             ),
             const Divider(),
             // Summary section.
