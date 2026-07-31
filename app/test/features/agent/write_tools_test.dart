@@ -370,4 +370,58 @@ void main() {
     expect(committed.status, AgentToolStatus.error);
     expect(committed.errorCode, 'source_event_not_editable');
   });
+
+  test('update_event all_day:true on a timed event without dates makes an all-day event', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.events['ev-1'] = PersonalEvent.timed(
+      title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
+    final result = await update.execute({'ref_event': ref, 'all_day': true}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.editedReplacement!.allDay, isTrue);
+    expect(gw.editedReplacement!.startDate, DateTime(2026, 8, 1)); // 从 startAt 取日期
+    expect(gw.editedReplacement!.endDateExclusive, DateTime(2026, 8, 2)); // 缺省 +1 天
+  });
+
+  test('update_event all_day:false on an all-day event converts to timed', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.events['ev-1'] = PersonalEvent.allDay(
+      title: '全天', startDate: DateTime(2026, 8, 1), endDateExclusive: DateTime(2026, 8, 2));
+    final result = await update.execute({
+      'ref_event': ref, 'all_day': false,
+      'start_at': '2026-08-01T09:00:00+08:00',
+      'end_at': '2026-08-01T10:00:00+08:00',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.editedReplacement!.allDay, isFalse);
+    expect(gw.editedReplacement!.startAt, DateTime.parse('2026-08-01T09:00:00+08:00'));
+    expect(gw.editedReplacement!.endAt, DateTime.parse('2026-08-01T10:00:00+08:00'));
+  });
+
+  test('update_event rejects whole_series all-day date changes', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(
+      id: 'ev-1', source: 'user', type: 'personal',
+      personalSeriesId: 'ser-1', occurrenceKey: 'k');
+    final result = await update.execute({
+      'ref_event': ref, 'scope': 'whole_series', 'start_date': '2026-08-06',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'whole_series_time_change_not_supported');
+  });
 }

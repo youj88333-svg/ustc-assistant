@@ -404,7 +404,9 @@ class UpdateEventTool extends AgentWriteTool {
     if (identity.isRecurring && scope == 'whole_series') {
       final hasTimeChange = fields.containsKey('start_at') ||
           fields.containsKey('end_at') ||
-          fields.containsKey('all_day');
+          fields.containsKey('all_day') ||
+          fields.containsKey('start_date') ||
+          fields.containsKey('end_date_exclusive');
       if (hasTimeChange) {
         return const AgentToolResult(
           status: AgentToolStatus.error,
@@ -433,44 +435,70 @@ class UpdateEventTool extends AgentWriteTool {
   }
 
   static PersonalEvent _applyToEvent(PersonalEvent current, Map<String, Object?> fields) {
-    if (fields.containsKey('all_day')) {
-      // 显式切换全天语义：用 start_date/end_date_exclusive
-      final startDate = (fields['start_date'] ?? current.startDate) as DateTime;
-      final endDate = (fields['end_date_exclusive'] ?? current.endDateExclusive) as DateTime;
-      return PersonalEvent.allDay(
-        title: (fields['title'] as String?) ?? current.title,
-        startDate: startDate,
-        endDateExclusive: endDate,
-        description: (fields['description'] as String?) ?? current.description,
-        locationName: (fields['location'] as String?) ?? current.locationName,
-        type: current.type,
-        importance: (fields['importance'] as String?) ?? current.importance,
-        tags: (fields['tags'] as List<String>?) ?? current.tags,
-      );
-    }
-    final allDay = current.allDay;
+    // all_day 显式切换全天/定时语义；未提供时保留当前事件的形态。
+    final wantAllDay = fields.containsKey('all_day') ? fields['all_day'] as bool : current.allDay;
     final title = (fields['title'] as String?) ?? current.title;
     final description = (fields['description'] as String?) ?? current.description;
     final location = (fields['location'] as String?) ?? current.locationName;
     final importance = (fields['importance'] as String?) ?? current.importance;
     final tags = (fields['tags'] as List<String>?) ?? current.tags;
-    if (allDay) {
-      final startDate = (fields['start_date'] as DateTime?) ?? current.startDate!;
-      final endDate = (fields['end_date_exclusive'] as DateTime?) ?? current.endDateExclusive!;
+
+    if (wantAllDay) {
+      // 转全天：优先用 fields 的 start_date；缺省时全天事件保留原日期，
+      // 定时事件从 startAt 取日期。
+      final DateTime startDate;
+      if (fields['start_date'] != null) {
+        startDate = fields['start_date'] as DateTime;
+      } else if (current.allDay && current.startDate != null) {
+        startDate = current.startDate!;
+      } else {
+        startDate = _dateOnly(fields['start_at'] as DateTime? ?? current.startAt!);
+      }
+      // 转全天：优先用 fields 的 end_date_exclusive；缺省时 +1 天。
+      final DateTime endDate;
+      if (fields['end_date_exclusive'] != null) {
+        endDate = fields['end_date_exclusive'] as DateTime;
+      } else if (current.allDay && current.endDateExclusive != null) {
+        endDate = current.endDateExclusive!;
+      } else {
+        endDate = startDate.add(const Duration(days: 1));
+      }
       return PersonalEvent.allDay(
         title: title, startDate: startDate, endDateExclusive: endDate,
         description: description, locationName: location, type: current.type,
         importance: importance, tags: tags,
       );
     }
-    final startAt = (fields['start_at'] as DateTime?) ?? current.startAt!;
-    final endAt = (fields['end_at'] as DateTime?) ?? current.endAt!;
+
+    // 转定时：优先用 fields 的 start_at；全天事件取日期 09:00 默认，定时事件保留原时间。
+    final DateTime startAt;
+    if (fields['start_at'] != null) {
+      startAt = fields['start_at'] as DateTime;
+    } else if (current.allDay) {
+      final date = fields['start_date'] as DateTime? ?? current.startDate!;
+      startAt = DateTime(date.year, date.month, date.day, 9);
+    } else {
+      startAt = current.startAt!;
+    }
+    // 转定时：优先用 fields 的 end_at；缺省时 start_at +1 小时。
+    final DateTime endAt;
+    if (fields['end_at'] != null) {
+      endAt = fields['end_at'] as DateTime;
+    } else if (fields['start_at'] != null) {
+      endAt = startAt.add(const Duration(hours: 1));
+    } else if (current.allDay) {
+      endAt = startAt.add(const Duration(hours: 1)); // 09:00-10:00
+    } else {
+      endAt = current.endAt!;
+    }
     return PersonalEvent.timed(
       title: title, startAt: startAt, endAt: endAt,
       description: description, locationName: location, type: current.type,
       importance: importance, tags: tags,
     );
   }
+
+  static DateTime _dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
 
   static OccurrenceOverride _buildOverride(Map<String, Object?> fields) => OccurrenceOverride(
     title: fields.containsKey('title') ? OverrideValue.set(fields['title'] as String) : const OverrideValue.absent(),
