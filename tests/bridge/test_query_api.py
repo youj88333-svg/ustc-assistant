@@ -23,6 +23,29 @@ from tests.bridge.test_server import RunningServer, request
 
 QUERY_PROTOCOL_VERSION = "1.0"
 
+
+def _no_op_campus_refresh(catalog_path=None, **_):
+    """单测用：不联网，写一个空 catalog 使 _ensure_catalog_fresh 不 raise。
+
+    与 test_query_jobs.py 的同名 helper 一致，保证 campus-search 单测 hermetic，
+    不依赖真实 tmp/campus-catalog.json 的保鲜度，也不触发真实学校网络刷新。
+    """
+    from pathlib import Path
+
+    p = Path(catalog_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"schemaVersion": "1.0", "sources": {}}), encoding="utf-8")
+    return {"sources": {}}
+
+
+def _temp_campus_catalog_path():
+    """A per-call non-existent catalog path under the system temp dir."""
+    import tempfile
+    from pathlib import Path
+
+    return Path(tempfile.mkdtemp(prefix="campus-refresh-")) / "campus-catalog.json"
+
+
 VALID_YOUNG_ENVELOPE = build_young_enrolment_envelope(
     data={"activities": []},
     metadata={"activityCount": 0, "reportedTotal": 0, "pages": 0},
@@ -323,7 +346,11 @@ class CampusSearchQueryTests(unittest.TestCase):
             return raw
 
         with RunningServer(
-            _server_with_query_manager(campus_search_query=query_fn)
+            _server_with_query_manager(
+                campus_search_query=query_fn,
+                campus_refresh_fn=_no_op_campus_refresh,
+                campus_catalog_path_fn=_temp_campus_catalog_path,
+            )
         ) as server:
             started = _post_query(
                 server,
