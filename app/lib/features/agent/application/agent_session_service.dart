@@ -34,6 +34,13 @@ typedef AgentUserActionResumeCallback =
       required AgentUserAction action,
     });
 
+typedef WriteConfirmationResumerCallback =
+    Future<void> Function({
+      required String handle,
+      required bool approve,
+      required bool remember,
+    });
+
 class _PausedRun {
   _PausedRun({
     required this.accountId,
@@ -104,6 +111,7 @@ class AgentSessionService {
     required this._model,
     required this._apiKeyProvider,
     this.userActionResumer,
+    this.writeConfirmationResumer,
   });
 
   final DriftChatRepository _chatRepository;
@@ -116,6 +124,7 @@ class AgentSessionService {
   final String _model;
   final Future<String> Function({required String accountId}) _apiKeyProvider;
   final AgentUserActionResumeCallback? userActionResumer;
+  final WriteConfirmationResumerCallback? writeConfirmationResumer;
 
   /// Hard limit on model calls per run.
   static const int maxModelCalls = 8;
@@ -341,6 +350,72 @@ class AgentSessionService {
         }
         try {
           await resume(accountId: accountId, action: paused.action);
+          await paused.pendingInvocation.result;
+        } catch (_) {
+          await _cancelPausedRun(paused);
+        }
+      } finally {
+        await controller.close();
+      }
+    }();
+    return controller.stream;
+  }
+
+  /// 用户对写确认卡做出决定：批准/拒绝 + 是否"此类型以后不再确认"。
+  ///
+  /// 完成挂起的写提案并恢复会话循环。返回的流在恢复完成时关闭；真正的
+  /// 运行状态由 `send` 的流继续发出。
+  Stream<AgentRunViewState> confirmWriteProposal({
+    required String accountId,
+    required String runId,
+    required bool approve,
+    required bool remember,
+  }) {
+    final controller = StreamController<AgentRunViewState>(sync: true);
+    () async {
+      try {
+        final key = (accountId: accountId, runId: runId);
+        final paused = _pausedRuns[key];
+        if (paused == null ||
+            paused.action.type != AgentUserActionType.writeConfirmation) {
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'paused_run_not_found',
+            ),
+          );
+          return;
+        }
+        if (paused.resumeStarted) {
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'resume_already_started',
+            ),
+          );
+          return;
+        }
+        paused.resumeStarted = true;
+        final resumer = writeConfirmationResumer;
+        if (resumer == null) {
+          await _cancelPausedRun(paused);
+          controller.add(
+            AgentRunViewState(
+              runId: runId,
+              state: AgentRunState.failed,
+              errorCode: 'resume_unavailable',
+            ),
+          );
+          return;
+        }
+        try {
+          await resumer(
+            handle: paused.action.opaqueHandle,
+            approve: approve,
+            remember: remember,
+          );
           await paused.pendingInvocation.result;
         } catch (_) {
           await _cancelPausedRun(paused);

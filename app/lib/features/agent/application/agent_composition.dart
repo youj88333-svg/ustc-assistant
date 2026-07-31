@@ -2,6 +2,7 @@ import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
 import '../../accounts/application/account_service.dart';
 import '../data/anthropic_llm_provider.dart';
+import '../data/drift_agent_write_gateway.dart';
 import '../data/drift_chat_repository.dart';
 import '../data/protected_agent_secret_store.dart';
 import '../domain/agent_tool.dart';
@@ -10,9 +11,12 @@ import '../domain/query_source.dart';
 import 'agent_configuration_service.dart';
 import 'agent_context_builder.dart';
 import 'agent_local_data_gateway.dart';
+import 'agent_permission_policy_service.dart';
 import 'agent_session_service.dart';
 import 'agent_tool_registry.dart';
 import 'agent_tools.dart';
+import 'agent_write_tool.dart';
+import 'agent_write_tools.dart';
 import 'cancellation_signal.dart';
 import 'outbound_privacy_filter.dart';
 
@@ -158,7 +162,19 @@ class AgentComposition {
       config: configService,
       usernameResolver: usernameResolverFn,
     );
-    final allTools = [...local, ...external];
+
+    // Write tools: shared permission policy, per-account write gateway, and the
+    // confirmation store that backs the pause/resume cycle for the write card.
+    final policyService = AgentPermissionPolicyService(database: database, clock: clock);
+    final writeGateway = DriftAgentWriteGateway(
+      database: database,
+      accountId: accountId,
+      policy: policyService,
+      now: () => clock.now().millisecondsSinceEpoch,
+    );
+    final confirmationStore = WriteConfirmationStore(policy: policyService);
+    final write = agentWriteTools(writeGateway, policyService, confirmationStore);
+    final allTools = [...local, ...external, ...write];
 
     // Payload builders and privacy filter.
     final payloadBuilders = agentToolPayloadBuilders();
@@ -203,6 +219,9 @@ class AgentComposition {
                 break;
             }
           },
+      writeConfirmationResumer:
+          ({required String handle, required bool approve, required bool remember}) =>
+              confirmationStore.resolve(handle, approve: approve, remember: remember),
     );
 
     return AgentCompositionResult(
@@ -216,6 +235,7 @@ class AgentComposition {
       privacyFilter: privacyFilter,
       contextBuilder: contextBuilder,
       sessionService: sessionService,
+      policyService: policyService,
       clock: clock,
       accountId: accountId,
       model: model,
@@ -237,6 +257,7 @@ class AgentCompositionResult {
     required this.privacyFilter,
     required this.contextBuilder,
     required this.sessionService,
+    required this.policyService,
     required this.clock,
     required this.accountId,
     required this.model,
@@ -252,6 +273,7 @@ class AgentCompositionResult {
   final OutboundPrivacyFilter privacyFilter;
   final AgentContextBuilder contextBuilder;
   final AgentSessionService sessionService;
+  final AgentPermissionPolicyService policyService;
   final BeijingClock clock;
   final String accountId;
   final String model;

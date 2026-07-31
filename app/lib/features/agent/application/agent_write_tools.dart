@@ -7,6 +7,7 @@ import 'package:ustc_assistant_app/features/schedule/application/overlay_service
 
 import '../domain/agent_permission_policy.dart';
 import '../domain/agent_tool.dart';
+import '../domain/agent_write_gateway.dart';
 import '../domain/agent_write_proposal.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
@@ -960,3 +961,21 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
     return AgentToolResult(payload: {'result': 'permission_updated', 'action_type': actionType});
   }
 }
+
+/// 组装全部 10 个写工具。
+List<AgentWriteTool> agentWriteTools(
+  AgentWriteGateway gateway,
+  AgentPermissionPolicyService policy,
+  WriteConfirmationStore confirmationStore,
+) => [
+  CreateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  SetReminderTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+];

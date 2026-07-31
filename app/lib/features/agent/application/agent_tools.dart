@@ -1472,7 +1472,27 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
             'generatedAt': raw['generatedAt'],
             'guidance': raw['guidance'],
           },
+      // Write tools (Task 9): unified safe-summary allowlist. No DB ids ever
+      // reach the model — commits return only the fields above.
+      'create_event': (raw) => _pick(raw, _writeResultKeys),
+      'update_event': (raw) => _pick(raw, _writeResultKeys),
+      'create_task': (raw) => _pick(raw, _writeResultKeys),
+      'plan_task': (raw) => _pick(raw, _writeResultKeys),
+      'create_user_overlay': (raw) => _pick(raw, _writeResultKeys),
+      'record_attendance_decision': (raw) => _pick(raw, _writeResultKeys),
+      'record_listening_mode': (raw) => _pick(raw, _writeResultKeys),
+      'create_schedule_relation': (raw) => _pick(raw, _writeResultKeys),
+      'set_reminder': (raw) => _pick(raw, _writeResultKeys),
+      'update_permission_policy': (raw) => _pick(raw, _writeResultKeys),
     };
+
+/// Write-tool results only carry safe summary fields. This unified allowlist
+/// is the ONLY path by which a write result reaches the model: DB ids are never
+/// produced by commit payloads, and even if one leaked it would be dropped here.
+const _writeResultKeys = {
+  'result', 'guidance', 'title', 'status', 'decision',
+  'action_type', 'affected_occurrences', 'start_at',
+};
 
 /// Copies only the allowlisted [keys] from [raw] into a fresh map. Keys not
 /// present in [raw] are omitted (no null insertion). This is the per-field
