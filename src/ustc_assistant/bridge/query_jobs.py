@@ -30,6 +30,8 @@ import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -65,6 +67,27 @@ class QueryJobNotFound(LookupError):
 
 class InvalidQueryJobState(RuntimeError):
     code = "invalid_query_state"
+
+
+# Auto-refresh throttling / staleness windows for the campus catalog.
+# Refuses to re-attempt a refresh more often than REFRESH_MIN_INTERVAL, and
+# treats a catalog whose newest source succeeded more than CATALOG_STALE_AFTER
+# ago as stale (needs refresh).
+REFRESH_MIN_INTERVAL = timedelta(minutes=30)
+CATALOG_STALE_AFTER = timedelta(hours=6)
+CATALOG_UNAVAILABLE = "catalog_unavailable"
+
+# 进程内上次 refresh 尝试时刻（不论成败）。ReadQueryJobManager 保证同一时刻
+# 只有一个 active job，故无需额外加锁。
+_last_campus_refresh_attempt: datetime | None = None
+
+
+class CampusUnavailable(RuntimeError):
+    """Catalog 既不存在且自动 refresh 也失败时抛出，携带安全错误码。"""
+
+    def __init__(self) -> None:
+        super().__init__(CATALOG_UNAVAILABLE)
+        self.code = CATALOG_UNAVAILABLE
 
 
 # Field names that are ALWAYS invalid anywhere in a query request body, because
@@ -408,6 +431,57 @@ def _run_icourse(
     )
 
 
+def _ensure_catalog_fresh(
+    *,
+    refresh_fn: Callable[..., dict[str, Any]],
+    catalog_path: Path,
+    now_fn: Callable[[], datetime],
+) -> None:
+    """若 catalog 缺失或过期，调用 refresh_fn 重建；失败时降级用旧 catalog。
+
+    节流：距上次 refresh 尝试不足 REFRESH_MIN_INTERVAL 则跳过。过期判定取
+    所有来源中最新的 lastSuccessfulAt，距今超过 CATALOG_STALE_AFTER 才 refresh。
+    refresh 抛异常时，catalog 已存在则吞掉（降级），不存在则 raise CampusUnavailable。
+    """
+    global _last_campus_refresh_attempt
+    now = now_fn()
+
+    if (
+        _last_campus_refresh_attempt is not None
+        and now - _last_campus_refresh_attempt < REFRESH_MIN_INTERVAL
+    ):
+        return
+
+    needs_refresh = not catalog_path.exists()
+    if not needs_refresh:
+        try:
+            from ustc_assistant.sources.campus.catalog import CatalogStore
+            store = CatalogStore(catalog_path)
+            latest: datetime | None = None
+            payload = store.load()
+            for source in payload.get("sources", {}):
+                at = store.last_successful_at(source)
+                if at is not None and (latest is None or at > latest):
+                    latest = at
+            if latest is not None and now - latest < CATALOG_STALE_AFTER:
+                return
+            needs_refresh = True
+        except Exception:
+            # catalog 读不出，视为需要 refresh
+            needs_refresh = True
+
+    if not needs_refresh:
+        return
+
+    _last_campus_refresh_attempt = now
+    try:
+        refresh_fn(catalog_path=catalog_path, force=False)
+    except Exception:
+        if not catalog_path.exists():
+            raise CampusUnavailable()
+        # 旧 catalog 存在：吞掉异常，降级用旧数据
+
+
 def _run_campus_search(
     request: CampusSearchQuery,
     *,
@@ -415,7 +489,15 @@ def _run_campus_search(
     credentials: Any,
     cancel_check: Callable[[], bool],
     query_fn: Callable[..., Any],
+    refresh_fn: Callable[..., Any],
+    catalog_path_fn: Callable[[], Any],
+    now_fn: Callable[[], datetime],
 ) -> dict[str, Any]:
+    _ensure_catalog_fresh(
+        refresh_fn=refresh_fn,
+        catalog_path=catalog_path_fn(),
+        now_fn=now_fn,
+    )
     raw = query_fn(
         query=request.query,
         filters=request.filters,
@@ -448,6 +530,9 @@ class ReadQueryJobManager:
         icourse_query: Callable[..., Any] | None = None,
         campus_search_query: Callable[..., Any] | None = None,
         campus_detail_query: Callable[..., Any] | None = None,
+        campus_refresh_fn: Callable[..., Any] | None = None,
+        campus_catalog_path_fn: Callable[[], Any] | None = None,
+        campus_now_fn: Callable[[], datetime] | None = None,
         validator: Callable[[Mapping[str, Any]], None] = validate_query_result,
     ) -> None:
         # Default to the real Task 7 query functions lazily to avoid importing
@@ -456,6 +541,9 @@ class ReadQueryJobManager:
         self._icourse_query = icourse_query
         self._campus_search_query = campus_search_query
         self._campus_detail_query = campus_detail_query
+        self._campus_refresh_fn = campus_refresh_fn
+        self._campus_catalog_path_fn = campus_catalog_path_fn
+        self._campus_now_fn = campus_now_fn
         self._validator = validator
         self._lock = threading.Lock()
         self._jobs: dict[str, ReadQueryJob] = {}
@@ -495,6 +583,24 @@ class ReadQueryJobManager:
         from ustc_assistant.sources.campus.service import read_detail
 
         return read_detail
+
+    def _resolve_campus_refresh(self) -> Callable[..., Any]:
+        if self._campus_refresh_fn is not None:
+            return self._campus_refresh_fn
+        from ustc_assistant.sources.campus.service import refresh_catalogs
+        return refresh_catalogs
+
+    def _resolve_campus_catalog_path(self) -> Callable[[], Any]:
+        if self._campus_catalog_path_fn is not None:
+            return self._campus_catalog_path_fn
+        from ustc_assistant.sources.campus.service import DEFAULT_CATALOG_PATH
+        return lambda: DEFAULT_CATALOG_PATH
+
+    def _resolve_campus_now(self) -> Callable[[], datetime]:
+        if self._campus_now_fn is not None:
+            return self._campus_now_fn
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+        return lambda: datetime.now(BEIJING_TZ)
 
     def _start(
         self,
@@ -592,8 +698,14 @@ class ReadQueryJobManager:
         request: CampusSearchQuery,
         *,
         query_fn: Callable[..., Any] | None = None,
+        refresh_fn: Callable[..., Any] | None = None,
+        catalog_path_fn: Callable[[], Any] | None = None,
+        now_fn: Callable[[], datetime] | None = None,
     ) -> ReadQueryJob:
         resolved = query_fn or self._resolve_campus_search_query()
+        resolved_refresh = refresh_fn or self._resolve_campus_refresh()
+        resolved_catalog_path = catalog_path_fn or self._resolve_campus_catalog_path()
+        resolved_now = now_fn or self._resolve_campus_now()
 
         def runner(
             req: CampusSearchQuery,
@@ -608,6 +720,9 @@ class ReadQueryJobManager:
                 credentials=credentials,
                 cancel_check=cancel_check,
                 query_fn=resolved,
+                refresh_fn=resolved_refresh,
+                catalog_path_fn=resolved_catalog_path,
+                now_fn=resolved_now,
             )
 
         return self._start(

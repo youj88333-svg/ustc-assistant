@@ -30,6 +30,26 @@ from ustc_assistant.bridge.query_jobs import (
     _wrap_campus_detail,
     _wrap_campus_search,
 )
+from ustc_assistant.bridge import query_jobs as qj
+
+
+def _no_op_campus_refresh(catalog_path=None, **_):
+    # 单测用：不联网，写一个空 catalog 使 _ensure_catalog_fresh 不 raise。
+    p = Path(catalog_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"schemaVersion": "1.0", "sources": {}}), encoding="utf-8")
+    return {"sources": {}}
+
+
+def _temp_campus_catalog_path() -> Path:
+    """A per-call non-existent catalog path under the system temp dir.
+
+    Keeps campus-search unit tests hermetic: refresh writes here (or nowhere)
+    instead of touching the real ``tmp/campus-catalog.json``.
+    """
+    import tempfile
+
+    return Path(tempfile.mkdtemp(prefix="campus-refresh-")) / "campus-catalog.json"
 
 
 FIXTURE_DIRECTORY = Path(__file__).parents[1] / "fixtures/query-results"
@@ -362,6 +382,7 @@ class CampusSearchJobTests(unittest.TestCase):
         self.assertTrue(envelope["data"]["results"][0]["id"].startswith("campus_"))
 
     def test_campus_search_wraps_raw_dict_into_envelope(self):
+        qj._last_campus_refresh_attempt = None
         raw = {
             "source": "ustc_campus_catalog",
             "query": "选课",
@@ -372,7 +393,11 @@ class CampusSearchJobTests(unittest.TestCase):
         def query_fn(*, query, filters, limit):
             return raw
 
-        manager = ReadQueryJobManager(campus_search_query=query_fn)
+        manager = ReadQueryJobManager(
+            campus_search_query=query_fn,
+            campus_refresh_fn=_no_op_campus_refresh,
+            campus_catalog_path_fn=_temp_campus_catalog_path,
+        )
         job = manager.start_campus_search(
             CampusSearchQuery(query="选课", filters=None, limit=20)
         )
@@ -381,6 +406,7 @@ class CampusSearchJobTests(unittest.TestCase):
         self.assertEqual("campus_search", job.result["queryType"])
 
     def test_campus_search_never_receives_credentials(self):
+        qj._last_campus_refresh_attempt = None
         seen = []
 
         def query_fn(**kwargs):
@@ -392,7 +418,11 @@ class CampusSearchJobTests(unittest.TestCase):
                 "metadata": {"resultCount": 0},
             }
 
-        manager = ReadQueryJobManager(campus_search_query=query_fn)
+        manager = ReadQueryJobManager(
+            campus_search_query=query_fn,
+            campus_refresh_fn=_no_op_campus_refresh,
+            campus_catalog_path_fn=_temp_campus_catalog_path,
+        )
         job = manager.start_campus_search(CampusSearchQuery(query="选课"))
         self.assertEqual("complete", job.wait_for_terminal_or_pause())
         self.assertEqual(1, len(seen))
@@ -633,6 +663,42 @@ class NotFoundTests(unittest.TestCase):
         manager = ReadQueryJobManager()
         with self.assertRaises(QueryJobNotFound):
             manager.cancel("does-not-exist")
+
+
+class CampusSearchAutoRefreshTests(unittest.TestCase):
+    def test_refresh_invoked_when_catalog_missing(self):
+        import tempfile
+        from ustc_assistant.bridge import query_jobs as qj
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-refresh-"))
+        catalog_path = tmp_dir / "campus-catalog.json"  # 不存在
+        refresh_calls = []
+
+        def refresh_fn(*, catalog_path, force):
+            refresh_calls.append(catalog_path)
+            # 模拟 refresh 写出 catalog 文件
+            catalog_path.parent.mkdir(parents=True, exist_ok=True)
+            catalog_path.write_text(
+                json.dumps({"schemaVersion": "1.0", "sources": {}}),
+                encoding="utf-8",
+            )
+            return {"sources": {}}
+
+        def search_fn(*, query, filters, limit):
+            return {"source": "ustc_campus_catalog", "query": query,
+                    "results": [], "metadata": {"resultCount": 0}}
+
+        # 重置进程级节流时间戳，避免被其他用例污染
+        qj._last_campus_refresh_attempt = None
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        self.assertEqual(1, len(refresh_calls))
+        self.assertEqual(catalog_path, refresh_calls[0])
 
 
 if __name__ == "__main__":
