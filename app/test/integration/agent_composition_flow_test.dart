@@ -35,6 +35,8 @@ import 'package:ustc_assistant_app/features/accounts/application/account_service
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
@@ -723,4 +725,152 @@ void main() {
       expect(captured, isNot(contains(apiKeyCanary)));
     },
   );
+
+  test('composition wiring: confirm commits a personal event and leaks no id', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+    // Call 1: create_event -> pauses for write confirmation. Call 2: final text.
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+        const ToolUseCompletedEvent(
+          id: 'tu-1',
+          name: 'create_event',
+          input: {
+            'title': '健身',
+            'start_at': '2026-08-01T15:00:00+08:00',
+            'end_at': '2026-08-01T16:00:00+08:00',
+          },
+        ),
+        const CompletedEvent(),
+      ]),
+      _ScriptedCall(() => [
+        const TextDeltaEvent('已为你新建日程「健身」。'),
+        const CompletedEvent(),
+      ]),
+    ]);
+    final gateway = _CountingResumableYoungGateway();
+    final composition = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: provider,
+      gateway: gateway,
+      protector: protector,
+    );
+    addTearDown(composition.dispose);
+
+    // 10 个写工具全部注册。
+    for (final name in const [
+      'create_event', 'update_event', 'create_task', 'plan_task',
+      'create_user_overlay', 'record_attendance_decision', 'record_listening_mode',
+      'create_schedule_relation', 'set_reminder', 'update_permission_policy',
+    ]) {
+      expect(composition.registry.isRegistered(name), isTrue,
+          reason: 'write tool $name should be registered');
+    }
+
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    composition.sessionService
+        .send(accountId: 'acc-1', userText: '帮我建个健身日程')
+        .listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete);
+
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(
+      states.any((s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+      isTrue,
+      reason: 'create_event should pause for confirmation',
+    );
+    await composition.sessionService
+        .confirmWriteProposal(accountId: 'acc-1', runId: runId, approve: true, remember: false)
+        .drain<void>();
+    await done.future;
+
+    expect(states.last.state, AgentRunState.completed);
+    final event = await db.select(db.calendarEvents).getSingle();
+    expect(event.title, '健身');
+    final logs = await db.actionLogsRepository.selectAll();
+    expect(logs.any((l) => l.source == 'agent' && l.actionType == 'create_event'), isTrue);
+
+    // 捕获请求不泄漏本地 DB 主键。
+    final eventId = event.id;
+    final toolResults = <String>[
+      for (final req in provider.requests)
+        for (final message in req.messages)
+          if (message.role == 'user')
+            for (final block in message.content)
+              if (block is LlmToolResultBlock) block.content.toString(),
+    ];
+    expect(toolResults.join('\n'), isNot(contains(eventId)));
+  });
+
+  test('composition wiring: remember relaxes, second identical write auto-executes', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+    // 第一次：create_event -> 确认卡；用户勾选"以后不再确认"。
+    final firstProvider = _ScriptedProvider([
+      _ScriptedCall(() => [
+        const ToolUseCompletedEvent(id: 'tu-1', name: 'create_event',
+            input: {'title': '健身', 'start_at': '2026-08-01T15:00:00+08:00', 'end_at': '2026-08-01T16:00:00+08:00'}),
+        const CompletedEvent(),
+      ]),
+      _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
+    ]);
+    final first = await _buildTestComposition(db, 'acc-1',
+        provider: firstProvider, gateway: _CountingResumableYoungGateway(), protector: protector);
+    addTearDown(first.dispose);
+    final done1 = Completer<void>();
+    late String runId1;
+    first.sessionService.send(accountId: 'acc-1', userText: '建个日程').listen((s) {
+      if (s.state == AgentRunState.waitingForUser) runId1 = s.runId;
+    }, onDone: done1.complete);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await first.sessionService
+        .confirmWriteProposal(accountId: 'acc-1', runId: runId1, approve: true, remember: true)
+        .drain<void>();
+    await done1.future;
+
+    // 第二次：同样的 create_event 不再出现确认卡（ask_first_time 已放行为 always_allow）。
+    final secondProvider = _ScriptedProvider([
+      _ScriptedCall(() => [
+        const ToolUseCompletedEvent(id: 'tu-1', name: 'create_event',
+            input: {'title': '复习', 'start_at': '2026-08-02T09:00:00+08:00', 'end_at': '2026-08-02T10:00:00+08:00'}),
+        const CompletedEvent(),
+      ]),
+      _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
+    ]);
+    final second = await _buildTestComposition(db, 'acc-1',
+        provider: secondProvider, gateway: _CountingResumableYoungGateway(), protector: protector);
+    addTearDown(second.dispose);
+    final states2 = <AgentRunViewState>[];
+    final done2 = Completer<void>();
+    second.sessionService.send(accountId: 'acc-1', userText: '再建个复习日程').listen((s) {
+      states2.add(s);
+    }, onDone: done2.complete);
+    await done2.future;
+
+    expect(states2.any((s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isFalse, reason: 'after remember, the same action auto-executes');
+    expect(states2.last.state, AgentRunState.completed);
+    expect((await db.select(db.calendarEvents).get()).length, 2);
+  });
 }
