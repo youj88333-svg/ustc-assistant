@@ -583,6 +583,12 @@ void main() {
       // §1 角色与风格：友善引导型学长 + 中文默认。
       expect(prompt, contains('学长'));
       expect(prompt, contains('默认中文'));
+      // 历史消息的 [YYYY-MM-DDTHH:mm] 前缀是系统标注的发送时刻；提示词必须
+      // 明确告诉模型这是系统行为、回复时不要模仿、不要自己加时间戳——否则
+      // 模型会从历史里学去这个前缀，在自己的输出里也带上。
+      expect(prompt, contains('系统自动标注'));
+      expect(prompt, contains('不要'));
+      expect(prompt, contains('时间戳'));
       // §2 工具使用规范：一句话意图 + 直接调用 + 禁止空话铺垫 + 场景映射。
       expect(prompt, contains('一句话'));
       expect(prompt, contains('立即调用'));
