@@ -2,10 +2,11 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_serv
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
+import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
+import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 
 import '../domain/agent_permission_policy.dart';
 import '../domain/agent_tool.dart';
-import '../domain/agent_write_gateway.dart';
 import '../domain/agent_write_proposal.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
@@ -283,9 +284,6 @@ class PlanTaskTool extends AgentWriteTool {
 class UpdateEventTool extends AgentWriteTool {
   UpdateEventTool({required super.gateway, required super.policy, required super.confirmationStore});
 
-  /// 测试用注入点：把运行时网关替换为假网关。
-  void attachGateway(AgentWriteGateway value) => gateway = value;
-
   @override
   String get name => 'update_event';
   @override
@@ -530,4 +528,224 @@ class UpdateEventTool extends AgentWriteTool {
         ? OverrideValue.set(fields['tags'] as List<String>)
         : const OverrideValue.absent(),
   );
+}
+
+/// 为用户对某个事件或整门课设置个人标注（出勤/听讲/显示名/重要性/隐藏）。
+class CreateUserOverlayTool extends AgentWriteTool {
+  CreateUserOverlayTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'create_user_overlay';
+  @override
+  String get description =>
+      '设置事件或整门课程的个人标注：必去/可以赌/不去、听讲/不听讲、显示名、重要性、隐藏。ref_event 来自日程查询。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_event': {'type': 'string'},
+      'scope': {'type': 'string', 'enum': ['single_event', 'course_series'], 'default': 'single_event'},
+      'attendance_policy': {'type': 'string', 'enum': ['must_go', 'gamble', 'skip']},
+      'attendance_note': {'type': 'string'},
+      'listening_mode': {'type': 'string', 'enum': ['listen', 'not_listen']},
+      'listening_note': {'type': 'string'},
+      'display_title': {'type': 'string'},
+      'importance': {'type': 'string', 'enum': ['low', 'normal', 'high', 'critical']},
+      'hidden': {'type': 'boolean'},
+    },
+    'required': ['ref_event'],
+  };
+
+  @override
+  String get actionType => 'create_user_overlay';
+  @override
+  RiskLevel get riskLevel => RiskLevel.medium;
+  @override
+  String get targetType => 'overlay';
+  @override
+  String get operationLabel => '设置个人标注';
+
+  static AttendancePolicy? _attendance(String? value) => switch (value) {
+    'must_go' => AttendancePolicy.mustGo,
+    'gamble' => AttendancePolicy.gamble,
+    'skip' => AttendancePolicy.skip,
+    _ => null,
+  };
+
+  static ListeningMode? _listening(String? value) => switch (value) {
+    'listen' => ListeningMode.listen,
+    'not_listen' => ListeningMode.notListen,
+    _ => null,
+  };
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final ref = a['ref_event'] as String;
+    final eventId = ctx.references.resolve(ref: ref, kind: 'event');
+    if (eventId == null) throw const FormatException('unknown event ref');
+    final scope = (a['scope'] as String?) ?? 'single_event';
+    final lines = <String>[];
+    if (a['attendance_policy'] != null) lines.add('出勤：${a['attendance_policy']}');
+    if (a['listening_mode'] != null) lines.add('听讲：${a['listening_mode']}');
+    if (lines.isEmpty && a['display_title'] != null) lines.add('显示名：${a['display_title']}');
+    lines.add(scope == 'course_series' ? '作用：整门课' : '作用：仅该事件');
+
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: lines,
+      commitParams: {'eventId': eventId, 'scope': scope, 'args': Map<String, Object?>.from(a)},
+      safeLogSummary: '设置个人标注 ${lines.join('、')}',
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final eventId = p['eventId'] as String;
+    final scope = p['scope'] as String;
+    final a = p['args'] as Map<String, Object?>;
+    final mutation = OverlayMutation(
+      displayTitle: a['display_title'] as String?,
+      attendancePolicy: _attendance(a['attendance_policy'] as String?),
+      attendanceNote: a['attendance_note'] as String?,
+      listeningMode: _listening(a['listening_mode'] as String?),
+      listeningNote: a['listening_note'] as String?,
+      importance: a['importance'] as String?,
+      hidden: a['hidden'] as bool?,
+    );
+    if (scope == 'course_series') {
+      final seriesId = await gateway.courseSeriesIdForEvent(eventId);
+      if (seriesId == null) {
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'no_course_series',
+          payload: {'guidance': '该事件不属于任何课程系列，无法整门课标注。'},
+        );
+      }
+      await gateway.setSeriesOverlay(seriesId, mutation);
+      return AgentToolResult(payload: {'result': 'updated_course_overlay'});
+    }
+    await gateway.setEventOverlay(eventId, mutation);
+    return AgentToolResult(payload: {'result': 'updated_event_overlay'});
+  }
+}
+
+/// 记录"可以赌"课程的本次出勤决定（去/不去/未定）。
+class RecordAttendanceDecisionTool extends AgentWriteTool {
+  RecordAttendanceDecisionTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'record_attendance_decision';
+  @override
+  String get description => '记录某节课本次去不去（用于"可以赌"课程）。ref_event 来自日程查询。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_event': {'type': 'string'},
+      'decision': {'type': 'string', 'enum': ['go', 'skip', 'undecided']},
+    },
+    'required': ['ref_event', 'decision'],
+  };
+
+  @override
+  String get actionType => 'record_attendance_decision';
+  @override
+  RiskLevel get riskLevel => RiskLevel.medium;
+  @override
+  String get targetType => 'event';
+  @override
+  String get operationLabel => '记录出勤决定';
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final ref = a['ref_event'] as String;
+    final eventId = ctx.references.resolve(ref: ref, kind: 'event');
+    if (eventId == null) throw const FormatException('unknown event ref');
+    final decision = (a['decision'] as String?) ?? 'undecided';
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: ['出勤决定：$decision'],
+      commitParams: {'eventId': eventId, 'decision': decision},
+      safeLogSummary: '记录出勤决定 $decision',
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final eventId = p['eventId'] as String;
+    final decision = switch (p['decision']) {
+      'go' => AttendanceDecision.go,
+      'skip' => AttendanceDecision.skip,
+      _ => AttendanceDecision.undecided,
+    };
+    await gateway.recordAttendanceDecision(eventId, decision);
+    return AgentToolResult(payload: {'result': 'recorded_attendance_decision', 'decision': decision.name});
+  }
+}
+
+/// 设置某节课的听讲/不听讲模式。
+class RecordListeningModeTool extends AgentWriteTool {
+  RecordListeningModeTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'record_listening_mode';
+  @override
+  String get description => '设置某节课听讲或不听讲，可附原因备注。ref_event 来自日程查询。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_event': {'type': 'string'},
+      'mode': {'type': 'string', 'enum': ['listen', 'not_listen']},
+      'note': {'type': 'string'},
+    },
+    'required': ['ref_event', 'mode'],
+  };
+
+  @override
+  String get actionType => 'record_listening_mode';
+  @override
+  RiskLevel get riskLevel => RiskLevel.medium;
+  @override
+  String get targetType => 'event';
+  @override
+  String get operationLabel => '设置听讲模式';
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final ref = a['ref_event'] as String;
+    final eventId = ctx.references.resolve(ref: ref, kind: 'event');
+    if (eventId == null) throw const FormatException('unknown event ref');
+    final mode = (a['mode'] as String?) ?? 'listen';
+    final note = a['note'] as String?;
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: ['听讲：$mode', if (note != null && note.isNotEmpty) '备注：$note'],
+      commitParams: {'eventId': eventId, 'mode': mode, 'note': note},
+      safeLogSummary: '设置听讲模式 $mode',
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final eventId = p['eventId'] as String;
+    final mode = p['mode'] == 'not_listen' ? ListeningMode.notListen : ListeningMode.listen;
+    await gateway.recordListeningMode(eventId, mode, note: p['note'] as String?);
+    return AgentToolResult(payload: {'result': 'recorded_listening_mode'});
+  }
 }

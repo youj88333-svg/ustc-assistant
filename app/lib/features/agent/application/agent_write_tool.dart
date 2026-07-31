@@ -24,6 +24,9 @@ abstract class AgentWriteTool implements AgentTool {
   final AgentPermissionPolicyService policy;
   final WriteConfirmationStore confirmationStore;
 
+  /// 运行时/测试注入点：替换底层网关（网关字段可变）。
+  void attachGateway(AgentWriteGateway value) => gateway = value;
+
   /// 策略按 (actionType, targetType) 查；写工具声明自己的组合。
   String get actionType;
   RiskLevel get riskLevel;

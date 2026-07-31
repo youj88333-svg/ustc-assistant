@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
@@ -17,6 +17,8 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_serv
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
+import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
+import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 
 class _FixedClock implements BeijingClock {
   @override
@@ -135,6 +137,34 @@ class _UpdateGateway implements AgentWriteGateway {
   }
 }
 
+/// 标注类工具假网关。
+class _OverlayGateway implements AgentWriteGateway {
+  OverlayMutation? eventOverlay;
+  OverlayMutation? seriesOverlay;
+  AttendanceDecision? decision;
+  ({ListeningMode mode, String? note})? listening;
+  String? seriesFor;
+  String? courseSeriesResult;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<void> setEventOverlay(String eventId, OverlayMutation mutation) async => eventOverlay = mutation;
+
+  @override
+  Future<void> setSeriesOverlay(String seriesId, OverlayMutation mutation) async => seriesOverlay = mutation;
+
+  @override
+  Future<void> recordAttendanceDecision(String eventId, AttendanceDecision decision) async => this.decision = decision;
+
+  @override
+  Future<void> recordListeningMode(String eventId, ListeningMode mode, {String? note}) async => listening = (mode: mode, note: note);
+
+  @override
+  Future<String?> courseSeriesIdForEvent(String eventId) async => courseSeriesResult;
+}
+
 AgentToolContext _ctx(String runId, {String accountId = 'a1'}) =>
     AgentToolContext(
       accountId: accountId,
@@ -192,6 +222,9 @@ void main() {
     CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
     PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
     UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: store),
+    CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: store),
+    RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: store),
+    RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: store),
   ];
 
   test('schemas declare required args', () {
@@ -423,5 +456,75 @@ void main() {
     final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(committed.status, AgentToolStatus.error);
     expect(committed.errorCode, 'whole_series_time_change_not_supported');
+  });
+
+  test('create_user_overlay single_event sets an event overlay', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({
+      'ref_event': ref,
+      'attendance_policy': 'must_go',
+      'attendance_note': '小测',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.eventOverlay?.attendancePolicy, AttendancePolicy.mustGo);
+    expect(gw.eventOverlay?.attendanceNote, '小测');
+  });
+
+  test('create_user_overlay course_series resolves the event series', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    gw.courseSeriesResult = 'cs-1';
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({
+      'ref_event': ref,
+      'scope': 'course_series',
+      'attendance_policy': 'skip',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.seriesOverlay?.attendancePolicy, AttendancePolicy.skip);
+  });
+
+  test('create_user_overlay course_series without a series errors', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'scope': 'course_series'}, h.ctx());
+    // 需要确认后才 commit；commit 里解析失败返回 no_course_series
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.seriesOverlay, isNull);
+  });
+
+  test('record_attendance_decision maps go/skip/undecided', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_attendance_decision');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'decision': 'go'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.decision, AttendanceDecision.go);
+  });
+
+  test('record_listening_mode maps not_listen with a note', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_listening_mode');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({
+      'ref_event': ref, 'mode': 'not_listen', 'note': '适合写作业',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.listening!.mode, ListeningMode.notListen);
+    expect(gw.listening!.note, '适合写作业');
   });
 }
