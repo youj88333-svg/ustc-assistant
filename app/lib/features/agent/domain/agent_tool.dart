@@ -2,6 +2,7 @@ import '../../../core/time/beijing_clock.dart';
 import '../application/cancellation_signal.dart';
 import '../application/run_reference_store.dart';
 import 'agent_models.dart';
+import 'agent_write_proposal.dart';
 
 /// The outcome of a single read-only tool execution.
 ///
@@ -54,25 +55,28 @@ class AgentToolResult {
 /// The status of a tool execution outcome.
 enum AgentToolStatus { success, error, needsUserAction }
 
-enum AgentUserActionType { youngLogin }
+enum AgentUserActionType { youngLogin, writeConfirmation }
 
 class AgentUserAction {
   const AgentUserAction({
     required this.type,
     required this.opaqueHandle,
+    this.writeProposal,
   });
 
   final AgentUserActionType type;
   final String opaqueHandle;
+  final AgentWriteProposalView? writeProposal;
 
   AgentUserActionMetadata get metadata =>
-      AgentUserActionMetadata(type: type);
+      AgentUserActionMetadata(type: type, writeProposal: writeProposal);
 }
 
 class AgentUserActionMetadata {
-  const AgentUserActionMetadata({required this.type});
+  const AgentUserActionMetadata({required this.type, this.writeProposal});
 
   final AgentUserActionType type;
+  final AgentWriteProposalView? writeProposal;
 }
 
 class AgentPendingToolInvocation {

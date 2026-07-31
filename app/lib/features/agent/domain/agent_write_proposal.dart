@@ -41,6 +41,22 @@ class AgentWriteProposal {
         previewLines: previewLines,
         rememberAllowed: rememberAllowed,
       );
+
+  AgentWriteProposal copyWith({bool? rememberAllowed, bool? forceConfirmation}) =>
+      AgentWriteProposal(
+        toolName: toolName,
+        actionType: actionType,
+        riskLevel: riskLevel,
+        targetType: targetType,
+        operationLabel: operationLabel,
+        previewLines: previewLines,
+        commitParams: commitParams,
+        safeLogSummary: safeLogSummary,
+        targetRef: targetRef,
+        targetId: targetId,
+        rememberAllowed: rememberAllowed ?? this.rememberAllowed,
+        forceConfirmation: forceConfirmation ?? this.forceConfirmation,
+      );
 }
 
 /// 给确认卡/UI 的模型安全视图：无本地 id、无 commitParams、无原始参数。

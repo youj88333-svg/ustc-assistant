@@ -197,6 +197,10 @@ class AgentComposition {
                   action.opaqueHandle,
                   password: password,
                 );
+              // writeConfirmation 的恢复由确认卡在 UI 层完成（Task 9/10 接线），
+              // 不经过此会话级 resumer。
+              default:
+                break;
             }
           },
     );
