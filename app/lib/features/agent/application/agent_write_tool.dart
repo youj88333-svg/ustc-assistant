@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import '../../calendar/domain/personal_event.dart';
 import '../domain/agent_permission_policy.dart';
 import '../domain/agent_tool.dart';
 import '../domain/agent_write_gateway.dart';
@@ -51,9 +52,21 @@ abstract class AgentWriteTool implements AgentTool {
         rememberAllowed: rememberAllowed && raw.rememberAllowed,
         forceConfirmation: forceConfirmation || raw.forceConfirmation,
       );
-    } catch (_) {
-      return const AgentToolResult(status: AgentToolStatus.error, errorCode: 'invalid_write_arguments');
+    } on FormatException {
+      // 参数校验失败（标题缺失/未知 ref/非法日期等）→ 让模型修正参数。
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_write_arguments',
+      );
+    } on CalendarValidationError {
+      // 日程构造校验（如全天的开始日期不晚于结束日期）同样属于参数错误。
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_write_arguments',
+      );
     }
+    // 其余异常不在此吞掉：交由 registry 兜底为 tool_execution_failed，避免把
+    // 真正的 bug 伪装成"参数不合法"而难以排查。
 
     final decision = proposal.forceConfirmation
         ? PermissionDecision.confirm
@@ -155,21 +168,34 @@ class WriteConfirmationStore {
         pending.completer.complete(declined);
         return declined;
       }
-      if (remember && !pending.proposal.forceConfirmation &&
-          pending.proposal.riskLevel != RiskLevel.critical) {
-        await policy.markAlwaysAllow(
-          accountId: pending.context.accountId,
-          actionType: pending.proposal.actionType,
-          targetType: pending.proposal.targetType,
-        );
-      } else if (!pending.proposal.forceConfirmation) {
-        await policy.recordFirstConfirmation(
-          accountId: pending.context.accountId,
-          actionType: pending.proposal.actionType,
-          targetType: pending.proposal.targetType,
-        );
-      }
+      // 先提交、成功后才放宽/记录首次确认——避免"放宽成功但提交失败"留下已放行的
+      // 错位状态。
       final result = await pending.commit(pending.proposal, pending.context);
+      if (result.status == AgentToolStatus.success) {
+        if (remember && !pending.proposal.forceConfirmation &&
+            pending.proposal.riskLevel != RiskLevel.critical) {
+          await policy.markAlwaysAllow(
+            accountId: pending.context.accountId,
+            actionType: pending.proposal.actionType,
+            targetType: pending.proposal.targetType,
+          );
+        } else if (!pending.proposal.forceConfirmation) {
+          // 仅 ask_first_time（首次确认后放行）记录 firstConfirmedAt 才有意义；
+          // always_ask 模式记录了也无效，避免写无意义行。
+          final mode = await policy.effectiveMode(
+            accountId: pending.context.accountId,
+            actionType: pending.proposal.actionType,
+            targetType: pending.proposal.targetType,
+          );
+          if (mode == ConfirmationMode.askFirstTime) {
+            await policy.recordFirstConfirmation(
+              accountId: pending.context.accountId,
+              actionType: pending.proposal.actionType,
+              targetType: pending.proposal.targetType,
+            );
+          }
+        }
+      }
       pending.completer.complete(result);
       return result;
     } catch (_) {

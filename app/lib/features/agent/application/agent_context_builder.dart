@@ -363,10 +363,10 @@ class AgentContextBuilder {
         '（$weekday）';
   }
 
-  /// The full system prompt: version2 + the dynamic current-time suffix.
+  /// The full system prompt: version3 + the dynamic current-time suffix.
   String _systemPrompt(BeijingClock clock) {
     final anchor = _timeAnchor(clock);
-    return '${AgentSystemPrompt.version2}\n\n当前时间：$anchor，Asia/Shanghai。';
+    return '${AgentSystemPrompt.version3}\n\n当前时间：$anchor，Asia/Shanghai。';
   }
 
   /// Formats a history message with a `[YYYY-MM-DDTHH:mm] ` timestamp prefix

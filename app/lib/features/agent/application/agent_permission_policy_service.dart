@@ -51,6 +51,13 @@ class AgentPermissionPolicyService {
   static RiskLevel defaultRisk(String actionType) =>
       _defaultRisks[actionType] ?? RiskLevel.medium;
 
+  /// 决议：行覆盖（enabled=false -> deny；confirmationMode 决定 allow/confirm）
+  /// 或默认模式惰性生效。
+  ///
+  /// [riskLevel] 目前仅由调用方表达意图、不参与决议：风险语义已经编码进确认模式
+  /// （critical 动作默认 always_ask；工具层 forceConfirmation + markAlwaysAllow
+  /// 拒绝 critical 放宽），这里不重复判定。保留参数以保持调用点语义清晰，供未来
+  /// 若需按风险细分策略时使用。
   Future<PermissionDecision> resolve({
     required String accountId,
     required String actionType,
@@ -68,6 +75,17 @@ class AgentPermissionPolicyService {
           : PermissionDecision.confirm,
       ConfirmationMode.alwaysAsk => PermissionDecision.confirm,
     };
+  }
+
+  /// 当前生效的确认模式（行覆盖优先，缺省回退默认），供写工具在批准后决定
+  /// 是否需要记录首次确认（仅 ask_first_time 有意义）。
+  Future<ConfirmationMode> effectiveMode({
+    required String accountId,
+    required String actionType,
+    required String targetType,
+  }) async {
+    final row = await _find(accountId, actionType, targetType);
+    return row?.confirmationMode ?? defaultMode(actionType);
   }
 
   Future<void> updatePolicy({
@@ -96,15 +114,20 @@ class AgentPermissionPolicyService {
             updatedAt: now,
           ),
         );
-    await database.actionLogsRepository.append(
-      accountId: accountId,
-      source: 'user',
-      actionType: 'update_permission_policy',
-      result: 'success',
-      safeSummary: '权限更新 $actionType($targetType) → ${mode.storage}',
-      riskLevel: riskLevel.storage,
-      occurredAt: now,
-    );
+    // 设置页/用户侧变更（updatedBy != 'agent'）落 source='user' 日志；Agent 发起的
+    // 策略变更由 `AgentWriteTool` 基类统一写 source='agent' 日志（_commitAndLog），
+    // 这里不重复写，避免「最近权限变更」对同一操作显示两条。
+    if (updatedBy != 'agent') {
+      await database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: 'update_permission_policy',
+        result: 'success',
+        safeSummary: '权限更新 $actionType($targetType) → ${mode.storage}',
+        riskLevel: riskLevel.storage,
+        occurredAt: now,
+      );
+    }
   }
 
   /// ask_first_time 首次确认后调用：记录 firstConfirmedAt，之后自动放行。
@@ -181,6 +204,16 @@ class AgentPermissionPolicyService {
     await (database.delete(database.agentPermissionPolicies)
           ..where((row) => row.accountId.equals(accountId)))
         .go();
+    // 设置页「恢复默认」同样属于权限变更，必须留痕（放宽此前收紧的策略）。
+    await database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: 'reset_permission_policy',
+      result: 'success',
+      safeSummary: '重置全部权限策略为默认',
+      riskLevel: 'critical',
+      occurredAt: clock.now().millisecondsSinceEpoch,
+    );
   }
 
   /// 最近的权限变更记录（update_permission_policy 的 ActionLog）。

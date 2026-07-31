@@ -168,9 +168,14 @@ class _RelationGateway implements AgentWriteGateway {
   ({String leftKind, String leftId, String rightKind, String rightId, String conflictState, String? reason})? relation;
   ({String eventId, List<int> offsets})? reminder;
   Map<String, Object?>? policyUpdate;
+  EventWriteIdentity? identity;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<EventWriteIdentity> eventIdentity(String eventId) async =>
+      identity ?? EventWriteIdentity(id: eventId, source: 'user', type: 'personal');
 
   @override
   Future<void> createConflictRelation({
@@ -675,5 +680,21 @@ void main() {
     final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [-5]}, h.ctx());
     expect(result.status, AgentToolStatus.error);
     expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('set_reminder rejects a non-personal event', () async {
+    // 提醒仅支持个人日程：课程/考试/二课事件在 commit 阶段拒绝（findings 8）。
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    gw.identity = const EventWriteIdentity(id: 'ev-1', source: 'ustc_jw', type: 'course');
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [15]}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'source_event_not_editable');
+    expect(gw.reminder, isNull);
   });
 }

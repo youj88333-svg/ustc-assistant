@@ -208,14 +208,8 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
         updatedAt: timestamp,
       ),
     );
-    await database.actionLogsRepository.append(
-      accountId: accountId,
-      source: 'user',
-      actionType: 'schedule_relation_create',
-      result: 'success',
-      safeSummary: 'Updated a conflict relation.',
-      occurredAt: timestamp,
-    );
+    // 不在此写 ActionLog：`AgentWriteTool` 基类在写成功后统一写
+    // source='agent' 的日志（见类注释），这里不再重复。
   }
 
   @override

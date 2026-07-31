@@ -103,7 +103,7 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
-        expect(request.system, contains(AgentSystemPrompt.version2));
+        expect(request.system, contains(AgentSystemPrompt.version3));
 
         // 2. The summary text is present as an assistant context message,
         //    framed as a prior summary (data), NOT as a local business fact.
@@ -255,7 +255,7 @@ void main() {
         toolDeclarations: const [],
         clock: clock,
       );
-      // system 同时包含 version2 文本和动态时间。
+      // system 同时包含 version3 文本和动态时间。
       expect(request.system, isNotNull);
       expect(request.system, contains('学长'));
       expect(request.system, contains('2026-07-31T14:30:05'));
@@ -574,12 +574,12 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 2', () {
-      expect(AgentSystemPrompt.version, 2);
+    test('version is 3', () {
+      expect(AgentSystemPrompt.version, 3);
     });
 
-    test('version2 contains the six sections and the 15 tool names', () {
-      const prompt = AgentSystemPrompt.version2;
+    test('version3 contains the safety sections, the read tool names and the write-tool confirmation gate', () {
+      const prompt = AgentSystemPrompt.version3;
       // §1 角色与风格：友善引导型学长 + 中文默认。
       expect(prompt, contains('学长'));
       expect(prompt, contains('默认中文'));
@@ -621,12 +621,27 @@ void main() {
       // §5 数据可信与引用。
       expect(prompt, contains('不可信数据'));
       expect(prompt, contains('conflictState'));
+      // 全部 10 个写工具都应在写映射/能力边界中出现，且确认门必须被描述。
+      const writeToolNames = [
+        'create_event', 'update_event', 'create_task', 'plan_task',
+        'create_user_overlay', 'record_attendance_decision',
+        'record_listening_mode', 'create_schedule_relation', 'set_reminder',
+        'update_permission_policy',
+      ];
+      for (final name in writeToolNames) {
+        expect(prompt, contains(name), reason: '写映射/能力边界应包含工具 $name');
+      }
+      expect(prompt, contains('确认卡'));
+      expect(prompt, contains('ref_event'));
+      expect(prompt, contains('ref_task'));
+      expect(prompt, contains('用户明确要求'));
       // §6 能力边界：二课报名需用户在官方页面操作。
       expect(prompt, contains('二课报名'));
+      expect(prompt, isNot(contains('当前只提供查询')));
     });
 
-    test('version2 has no secrets, accounts, semester literals, or raw ids', () {
-      const prompt = AgentSystemPrompt.version2;
+    test('version3 has no secrets, accounts, semester literals, or raw ids', () {
+      const prompt = AgentSystemPrompt.version3;
       expect(prompt, isNot(contains('PB12345678')));
       expect(prompt, isNot(contains('sk-')));
       expect(prompt, isNot(contains('421')));

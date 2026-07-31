@@ -72,6 +72,25 @@ class _ForceConfirmTool extends _FakeWriteTool {
   bool get forceConfirmation => true;
 }
 
+/// 模拟 update_event：默认 always_ask（首次确认后仍每次确认）。
+class _AlwaysAskTool extends _FakeWriteTool {
+  _AlwaysAskTool({required super.gateway, required super.policy, required super.confirmationStore});
+  @override
+  String get actionType => 'update_event';
+  @override
+  RiskLevel get riskLevel => RiskLevel.high;
+}
+
+/// 模拟提交失败：用于验证"先提交、成功后才放宽"的次序。
+class _FailingCommitTool extends _FakeWriteTool {
+  _FailingCommitTool({required super.gateway, required super.policy, required super.confirmationStore});
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext context) async {
+    commitCalled = true;
+    return const AgentToolResult(status: AgentToolStatus.error, errorCode: 'commit_boom');
+  }
+}
+
 AgentToolContext _ctx(String accountId, String runId) => AgentToolContext(
   accountId: accountId,
   runId: runId,
@@ -172,5 +191,31 @@ void main() {
     final resumed = await result.pendingInvocation!.result;
     expect(resumed.errorCode, 'cancelled');
     expect(tool.commitCalled, isFalse);
+  });
+
+  test('always_ask tool approval does not record a first confirmation', () async {
+    // update_event 默认 always_ask：首次确认后仍每次确认，记录 firstConfirmedAt
+    // 无意义，不应写策略行（findings 5）。
+    final tool = _AlwaysAskTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final result = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(resumed.status, AgentToolStatus.success);
+    expect(
+      (await policy.listPolicies('a1')).where((r) => r.actionType == 'update_event'),
+      isEmpty,
+    );
+  });
+
+  test('failed commit does not relax the policy', () async {
+    // 提交失败时不得放宽/记录首次确认（findings 4：先提交、成功后才放宽）。
+    final tool = _FailingCommitTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final result = await tool.execute(const {}, _ctx('a1', 'r1'));
+    final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: true);
+    expect(resumed.status, AgentToolStatus.error);
+    expect(resumed.errorCode, 'commit_boom');
+    // 放宽被跳过：create_event 仍是 ask_first_time，首次仍需确认。
+    expect(await policy.resolve(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', riskLevel: RiskLevel.medium), PermissionDecision.confirm);
   });
 }

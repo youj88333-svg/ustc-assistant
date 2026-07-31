@@ -93,4 +93,23 @@ void main() {
     expect(logs.single.riskLevel, 'medium');
     expect(logs.single.actionType, 'create_event');
   });
+
+  test('agent-initiated updatePolicy writes no user log (agent log covers it)', () async {
+    // Agent 发起的策略变更由 AgentWriteTool 基类统一写 source='agent' 日志，
+    // updatePolicy 不重复写 source='user'，避免「最近权限变更」出现双条（findings 3）。
+    await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'agent');
+    expect(await db.actionLogsRepository.selectAll(), isEmpty);
+  });
+
+  test('resetDefaults writes a reset action log', () async {
+    await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+    await service.resetDefaults('a1');
+    final logs = await db.actionLogsRepository.selectAll();
+    expect(logs.any((l) => l.actionType == 'reset_permission_policy'), isTrue);
+    expect(logs.last.source, 'user');
+  });
 }

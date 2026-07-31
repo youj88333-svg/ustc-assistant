@@ -394,8 +394,15 @@ class UpdateEventTool extends AgentWriteTool {
         await gateway.cancelEvent(eventId);
       } else if (status == 'completed') {
         await gateway.completeEvent(eventId);
-      } else {
+      } else if (status == 'skipped') {
         await gateway.skipEvent(eventId);
+      } else {
+        // 超出 schema 枚举的状态（模型越界传参）显式报错，不再静默按 skipped 处理。
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'invalid_write_arguments',
+          payload: {'guidance': '未知的事件状态，仅支持 cancelled/completed/skipped。'},
+        );
       }
       return AgentToolResult(payload: {'result': 'updated_event', 'status': status});
     }
@@ -884,7 +891,18 @@ class SetReminderTool extends AgentWriteTool {
   @override
   Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
     final p = proposal.commitParams;
-    await gateway.setReminder(p['eventId'] as String, (p['offsets'] as List).cast<int>());
+    final eventId = p['eventId'] as String;
+    // 提醒仅支持个人日程：课程/考试/二课等来源事件不可设提醒（与 update_event 的
+    // source_event_not_editable 语义一致），避免对非个人事件产生无意义覆盖。
+    final identity = await gateway.eventIdentity(eventId);
+    if (!identity.isPersonal) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'source_event_not_editable',
+        payload: {'guidance': '仅个人日程可设置提醒；课程/考试/二课事件请勿设置。'},
+      );
+    }
+    await gateway.setReminder(eventId, (p['offsets'] as List).cast<int>());
     return AgentToolResult(payload: {'result': 'reminder_set'});
   }
 }
