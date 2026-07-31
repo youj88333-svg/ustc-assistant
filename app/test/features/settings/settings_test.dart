@@ -1,10 +1,13 @@
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
 import 'package:ustc_assistant_app/features/settings/application/settings_service.dart';
+import 'package:ustc_assistant_app/features/settings/presentation/settings_page.dart';
 
 class FakeProtector implements CredentialProtector {
   @override
@@ -328,12 +331,37 @@ void main() {
       config = await (database.select(
         database.sourceConfigs,
       )..where((row) => row.source.equals('ustc_jw'))).getSingle();
-      expect(config.configJson, contains('"semesterId":421'));
-      expect(config.configJson, contains('2026spring'));
+      expect(config.configJson, contains('"semesterId":461'));
+      expect(config.configJson, contains('2026fall'));
       expect(
         await database.select(database.agentPermissionPolicies).get(),
         isEmpty,
       );
     },
   );
+
+  testWidgets('模型服务 ListTile navigates to /settings/agent', (tester) async {
+    final goRouter = GoRouter(
+      initialLocation: '/settings',
+      routes: [
+        GoRoute(
+          path: '/settings',
+          builder: (context, state) => SettingsPage(service: settings),
+        ),
+        GoRoute(
+          path: '/settings/agent',
+          builder: (context, state) =>
+              const Scaffold(body: Center(child: Text('agent-settings-stub'))),
+        ),
+      ],
+    );
+    addTearDown(goRouter.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: goRouter));
+    await tester.pumpAndSettle();
+
+    expect(find.text('模型服务'), findsOneWidget);
+    await tester.tap(find.text('模型服务'));
+    await tester.pumpAndSettle();
+    expect(find.text('agent-settings-stub'), findsOneWidget);
+  });
 }

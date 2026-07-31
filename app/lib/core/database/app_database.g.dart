@@ -4202,6 +4202,3022 @@ class AgentPermissionPoliciesCompanion
   }
 }
 
+class $AgentSettingsTable extends AgentSettings
+    with TableInfo<$AgentSettingsTable, AgentSetting> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AgentSettingsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _modelMeta = const VerificationMeta('model');
+  @override
+  late final GeneratedColumn<String> model = GeneratedColumn<String>(
+    'model',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('deepseek-v4-flash'),
+  );
+  static const VerificationMeta _enabledMeta = const VerificationMeta(
+    'enabled',
+  );
+  @override
+  late final GeneratedColumn<bool> enabled = GeneratedColumn<bool>(
+    'enabled',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("enabled" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _icourseConsentMeta = const VerificationMeta(
+    'icourseConsent',
+  );
+  @override
+  late final GeneratedColumn<bool> icourseConsent = GeneratedColumn<bool>(
+    'icourse_consent',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("icourse_consent" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _systemPromptVersionMeta =
+      const VerificationMeta('systemPromptVersion');
+  @override
+  late final GeneratedColumn<int> systemPromptVersion = GeneratedColumn<int>(
+    'system_prompt_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(1),
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    accountId,
+    model,
+    enabled,
+    icourseConsent,
+    systemPromptVersion,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'agent_settings';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<AgentSetting> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('model')) {
+      context.handle(
+        _modelMeta,
+        model.isAcceptableOrUnknown(data['model']!, _modelMeta),
+      );
+    }
+    if (data.containsKey('enabled')) {
+      context.handle(
+        _enabledMeta,
+        enabled.isAcceptableOrUnknown(data['enabled']!, _enabledMeta),
+      );
+    }
+    if (data.containsKey('icourse_consent')) {
+      context.handle(
+        _icourseConsentMeta,
+        icourseConsent.isAcceptableOrUnknown(
+          data['icourse_consent']!,
+          _icourseConsentMeta,
+        ),
+      );
+    }
+    if (data.containsKey('system_prompt_version')) {
+      context.handle(
+        _systemPromptVersionMeta,
+        systemPromptVersion.isAcceptableOrUnknown(
+          data['system_prompt_version']!,
+          _systemPromptVersionMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {accountId};
+  @override
+  AgentSetting map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AgentSetting(
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      model: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model'],
+      )!,
+      enabled: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}enabled'],
+      )!,
+      icourseConsent: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}icourse_consent'],
+      )!,
+      systemPromptVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}system_prompt_version'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $AgentSettingsTable createAlias(String alias) {
+    return $AgentSettingsTable(attachedDatabase, alias);
+  }
+}
+
+class AgentSetting extends DataClass implements Insertable<AgentSetting> {
+  final String accountId;
+  final String model;
+  final bool enabled;
+  final bool icourseConsent;
+  final int systemPromptVersion;
+  final int updatedAt;
+  const AgentSetting({
+    required this.accountId,
+    required this.model,
+    required this.enabled,
+    required this.icourseConsent,
+    required this.systemPromptVersion,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['account_id'] = Variable<String>(accountId);
+    map['model'] = Variable<String>(model);
+    map['enabled'] = Variable<bool>(enabled);
+    map['icourse_consent'] = Variable<bool>(icourseConsent);
+    map['system_prompt_version'] = Variable<int>(systemPromptVersion);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  AgentSettingsCompanion toCompanion(bool nullToAbsent) {
+    return AgentSettingsCompanion(
+      accountId: Value(accountId),
+      model: Value(model),
+      enabled: Value(enabled),
+      icourseConsent: Value(icourseConsent),
+      systemPromptVersion: Value(systemPromptVersion),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory AgentSetting.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AgentSetting(
+      accountId: serializer.fromJson<String>(json['accountId']),
+      model: serializer.fromJson<String>(json['model']),
+      enabled: serializer.fromJson<bool>(json['enabled']),
+      icourseConsent: serializer.fromJson<bool>(json['icourseConsent']),
+      systemPromptVersion: serializer.fromJson<int>(
+        json['systemPromptVersion'],
+      ),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'accountId': serializer.toJson<String>(accountId),
+      'model': serializer.toJson<String>(model),
+      'enabled': serializer.toJson<bool>(enabled),
+      'icourseConsent': serializer.toJson<bool>(icourseConsent),
+      'systemPromptVersion': serializer.toJson<int>(systemPromptVersion),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  AgentSetting copyWith({
+    String? accountId,
+    String? model,
+    bool? enabled,
+    bool? icourseConsent,
+    int? systemPromptVersion,
+    int? updatedAt,
+  }) => AgentSetting(
+    accountId: accountId ?? this.accountId,
+    model: model ?? this.model,
+    enabled: enabled ?? this.enabled,
+    icourseConsent: icourseConsent ?? this.icourseConsent,
+    systemPromptVersion: systemPromptVersion ?? this.systemPromptVersion,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  AgentSetting copyWithCompanion(AgentSettingsCompanion data) {
+    return AgentSetting(
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      model: data.model.present ? data.model.value : this.model,
+      enabled: data.enabled.present ? data.enabled.value : this.enabled,
+      icourseConsent: data.icourseConsent.present
+          ? data.icourseConsent.value
+          : this.icourseConsent,
+      systemPromptVersion: data.systemPromptVersion.present
+          ? data.systemPromptVersion.value
+          : this.systemPromptVersion,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentSetting(')
+          ..write('accountId: $accountId, ')
+          ..write('model: $model, ')
+          ..write('enabled: $enabled, ')
+          ..write('icourseConsent: $icourseConsent, ')
+          ..write('systemPromptVersion: $systemPromptVersion, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    accountId,
+    model,
+    enabled,
+    icourseConsent,
+    systemPromptVersion,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AgentSetting &&
+          other.accountId == this.accountId &&
+          other.model == this.model &&
+          other.enabled == this.enabled &&
+          other.icourseConsent == this.icourseConsent &&
+          other.systemPromptVersion == this.systemPromptVersion &&
+          other.updatedAt == this.updatedAt);
+}
+
+class AgentSettingsCompanion extends UpdateCompanion<AgentSetting> {
+  final Value<String> accountId;
+  final Value<String> model;
+  final Value<bool> enabled;
+  final Value<bool> icourseConsent;
+  final Value<int> systemPromptVersion;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const AgentSettingsCompanion({
+    this.accountId = const Value.absent(),
+    this.model = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.icourseConsent = const Value.absent(),
+    this.systemPromptVersion = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AgentSettingsCompanion.insert({
+    required String accountId,
+    this.model = const Value.absent(),
+    this.enabled = const Value.absent(),
+    this.icourseConsent = const Value.absent(),
+    this.systemPromptVersion = const Value.absent(),
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : accountId = Value(accountId),
+       updatedAt = Value(updatedAt);
+  static Insertable<AgentSetting> custom({
+    Expression<String>? accountId,
+    Expression<String>? model,
+    Expression<bool>? enabled,
+    Expression<bool>? icourseConsent,
+    Expression<int>? systemPromptVersion,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (accountId != null) 'account_id': accountId,
+      if (model != null) 'model': model,
+      if (enabled != null) 'enabled': enabled,
+      if (icourseConsent != null) 'icourse_consent': icourseConsent,
+      if (systemPromptVersion != null)
+        'system_prompt_version': systemPromptVersion,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AgentSettingsCompanion copyWith({
+    Value<String>? accountId,
+    Value<String>? model,
+    Value<bool>? enabled,
+    Value<bool>? icourseConsent,
+    Value<int>? systemPromptVersion,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return AgentSettingsCompanion(
+      accountId: accountId ?? this.accountId,
+      model: model ?? this.model,
+      enabled: enabled ?? this.enabled,
+      icourseConsent: icourseConsent ?? this.icourseConsent,
+      systemPromptVersion: systemPromptVersion ?? this.systemPromptVersion,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (model.present) {
+      map['model'] = Variable<String>(model.value);
+    }
+    if (enabled.present) {
+      map['enabled'] = Variable<bool>(enabled.value);
+    }
+    if (icourseConsent.present) {
+      map['icourse_consent'] = Variable<bool>(icourseConsent.value);
+    }
+    if (systemPromptVersion.present) {
+      map['system_prompt_version'] = Variable<int>(systemPromptVersion.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentSettingsCompanion(')
+          ..write('accountId: $accountId, ')
+          ..write('model: $model, ')
+          ..write('enabled: $enabled, ')
+          ..write('icourseConsent: $icourseConsent, ')
+          ..write('systemPromptVersion: $systemPromptVersion, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AgentSecretsTable extends AgentSecrets
+    with TableInfo<$AgentSecretsTable, AgentSecret> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AgentSecretsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _apiKeyCiphertextMeta = const VerificationMeta(
+    'apiKeyCiphertext',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> apiKeyCiphertext =
+      GeneratedColumn<Uint8List>(
+        'api_key_ciphertext',
+        aliasedName,
+        false,
+        type: DriftSqlType.blob,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _schemeMeta = const VerificationMeta('scheme');
+  @override
+  late final GeneratedColumn<String> scheme = GeneratedColumn<String>(
+    'scheme',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _protectionVersionMeta = const VerificationMeta(
+    'protectionVersion',
+  );
+  @override
+  late final GeneratedColumn<int> protectionVersion = GeneratedColumn<int>(
+    'protection_version',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _protectionMetadataMeta =
+      const VerificationMeta('protectionMetadata');
+  @override
+  late final GeneratedColumn<String> protectionMetadata =
+      GeneratedColumn<String>(
+        'protection_metadata',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('{}'),
+      );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    accountId,
+    apiKeyCiphertext,
+    scheme,
+    protectionVersion,
+    protectionMetadata,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'agent_secrets';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<AgentSecret> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('api_key_ciphertext')) {
+      context.handle(
+        _apiKeyCiphertextMeta,
+        apiKeyCiphertext.isAcceptableOrUnknown(
+          data['api_key_ciphertext']!,
+          _apiKeyCiphertextMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_apiKeyCiphertextMeta);
+    }
+    if (data.containsKey('scheme')) {
+      context.handle(
+        _schemeMeta,
+        scheme.isAcceptableOrUnknown(data['scheme']!, _schemeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_schemeMeta);
+    }
+    if (data.containsKey('protection_version')) {
+      context.handle(
+        _protectionVersionMeta,
+        protectionVersion.isAcceptableOrUnknown(
+          data['protection_version']!,
+          _protectionVersionMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_protectionVersionMeta);
+    }
+    if (data.containsKey('protection_metadata')) {
+      context.handle(
+        _protectionMetadataMeta,
+        protectionMetadata.isAcceptableOrUnknown(
+          data['protection_metadata']!,
+          _protectionMetadataMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {accountId};
+  @override
+  AgentSecret map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AgentSecret(
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      apiKeyCiphertext: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}api_key_ciphertext'],
+      )!,
+      scheme: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}scheme'],
+      )!,
+      protectionVersion: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}protection_version'],
+      )!,
+      protectionMetadata: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}protection_metadata'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $AgentSecretsTable createAlias(String alias) {
+    return $AgentSecretsTable(attachedDatabase, alias);
+  }
+}
+
+class AgentSecret extends DataClass implements Insertable<AgentSecret> {
+  final String accountId;
+  final Uint8List apiKeyCiphertext;
+  final String scheme;
+  final int protectionVersion;
+  final String protectionMetadata;
+  final int updatedAt;
+  const AgentSecret({
+    required this.accountId,
+    required this.apiKeyCiphertext,
+    required this.scheme,
+    required this.protectionVersion,
+    required this.protectionMetadata,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['account_id'] = Variable<String>(accountId);
+    map['api_key_ciphertext'] = Variable<Uint8List>(apiKeyCiphertext);
+    map['scheme'] = Variable<String>(scheme);
+    map['protection_version'] = Variable<int>(protectionVersion);
+    map['protection_metadata'] = Variable<String>(protectionMetadata);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  AgentSecretsCompanion toCompanion(bool nullToAbsent) {
+    return AgentSecretsCompanion(
+      accountId: Value(accountId),
+      apiKeyCiphertext: Value(apiKeyCiphertext),
+      scheme: Value(scheme),
+      protectionVersion: Value(protectionVersion),
+      protectionMetadata: Value(protectionMetadata),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory AgentSecret.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AgentSecret(
+      accountId: serializer.fromJson<String>(json['accountId']),
+      apiKeyCiphertext: serializer.fromJson<Uint8List>(
+        json['apiKeyCiphertext'],
+      ),
+      scheme: serializer.fromJson<String>(json['scheme']),
+      protectionVersion: serializer.fromJson<int>(json['protectionVersion']),
+      protectionMetadata: serializer.fromJson<String>(
+        json['protectionMetadata'],
+      ),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'accountId': serializer.toJson<String>(accountId),
+      'apiKeyCiphertext': serializer.toJson<Uint8List>(apiKeyCiphertext),
+      'scheme': serializer.toJson<String>(scheme),
+      'protectionVersion': serializer.toJson<int>(protectionVersion),
+      'protectionMetadata': serializer.toJson<String>(protectionMetadata),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  AgentSecret copyWith({
+    String? accountId,
+    Uint8List? apiKeyCiphertext,
+    String? scheme,
+    int? protectionVersion,
+    String? protectionMetadata,
+    int? updatedAt,
+  }) => AgentSecret(
+    accountId: accountId ?? this.accountId,
+    apiKeyCiphertext: apiKeyCiphertext ?? this.apiKeyCiphertext,
+    scheme: scheme ?? this.scheme,
+    protectionVersion: protectionVersion ?? this.protectionVersion,
+    protectionMetadata: protectionMetadata ?? this.protectionMetadata,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  AgentSecret copyWithCompanion(AgentSecretsCompanion data) {
+    return AgentSecret(
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      apiKeyCiphertext: data.apiKeyCiphertext.present
+          ? data.apiKeyCiphertext.value
+          : this.apiKeyCiphertext,
+      scheme: data.scheme.present ? data.scheme.value : this.scheme,
+      protectionVersion: data.protectionVersion.present
+          ? data.protectionVersion.value
+          : this.protectionVersion,
+      protectionMetadata: data.protectionMetadata.present
+          ? data.protectionMetadata.value
+          : this.protectionMetadata,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentSecret(')
+          ..write('accountId: $accountId, ')
+          ..write('apiKeyCiphertext: $apiKeyCiphertext, ')
+          ..write('scheme: $scheme, ')
+          ..write('protectionVersion: $protectionVersion, ')
+          ..write('protectionMetadata: $protectionMetadata, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    accountId,
+    $driftBlobEquality.hash(apiKeyCiphertext),
+    scheme,
+    protectionVersion,
+    protectionMetadata,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AgentSecret &&
+          other.accountId == this.accountId &&
+          $driftBlobEquality.equals(
+            other.apiKeyCiphertext,
+            this.apiKeyCiphertext,
+          ) &&
+          other.scheme == this.scheme &&
+          other.protectionVersion == this.protectionVersion &&
+          other.protectionMetadata == this.protectionMetadata &&
+          other.updatedAt == this.updatedAt);
+}
+
+class AgentSecretsCompanion extends UpdateCompanion<AgentSecret> {
+  final Value<String> accountId;
+  final Value<Uint8List> apiKeyCiphertext;
+  final Value<String> scheme;
+  final Value<int> protectionVersion;
+  final Value<String> protectionMetadata;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const AgentSecretsCompanion({
+    this.accountId = const Value.absent(),
+    this.apiKeyCiphertext = const Value.absent(),
+    this.scheme = const Value.absent(),
+    this.protectionVersion = const Value.absent(),
+    this.protectionMetadata = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AgentSecretsCompanion.insert({
+    required String accountId,
+    required Uint8List apiKeyCiphertext,
+    required String scheme,
+    required int protectionVersion,
+    this.protectionMetadata = const Value.absent(),
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : accountId = Value(accountId),
+       apiKeyCiphertext = Value(apiKeyCiphertext),
+       scheme = Value(scheme),
+       protectionVersion = Value(protectionVersion),
+       updatedAt = Value(updatedAt);
+  static Insertable<AgentSecret> custom({
+    Expression<String>? accountId,
+    Expression<Uint8List>? apiKeyCiphertext,
+    Expression<String>? scheme,
+    Expression<int>? protectionVersion,
+    Expression<String>? protectionMetadata,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (accountId != null) 'account_id': accountId,
+      if (apiKeyCiphertext != null) 'api_key_ciphertext': apiKeyCiphertext,
+      if (scheme != null) 'scheme': scheme,
+      if (protectionVersion != null) 'protection_version': protectionVersion,
+      if (protectionMetadata != null) 'protection_metadata': protectionMetadata,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AgentSecretsCompanion copyWith({
+    Value<String>? accountId,
+    Value<Uint8List>? apiKeyCiphertext,
+    Value<String>? scheme,
+    Value<int>? protectionVersion,
+    Value<String>? protectionMetadata,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return AgentSecretsCompanion(
+      accountId: accountId ?? this.accountId,
+      apiKeyCiphertext: apiKeyCiphertext ?? this.apiKeyCiphertext,
+      scheme: scheme ?? this.scheme,
+      protectionVersion: protectionVersion ?? this.protectionVersion,
+      protectionMetadata: protectionMetadata ?? this.protectionMetadata,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (apiKeyCiphertext.present) {
+      map['api_key_ciphertext'] = Variable<Uint8List>(apiKeyCiphertext.value);
+    }
+    if (scheme.present) {
+      map['scheme'] = Variable<String>(scheme.value);
+    }
+    if (protectionVersion.present) {
+      map['protection_version'] = Variable<int>(protectionVersion.value);
+    }
+    if (protectionMetadata.present) {
+      map['protection_metadata'] = Variable<String>(protectionMetadata.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentSecretsCompanion(')
+          ..write('accountId: $accountId, ')
+          ..write('apiKeyCiphertext: $apiKeyCiphertext, ')
+          ..write('scheme: $scheme, ')
+          ..write('protectionVersion: $protectionVersion, ')
+          ..write('protectionMetadata: $protectionMetadata, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AgentRunsTable extends AgentRuns
+    with TableInfo<$AgentRunsTable, AgentRun> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AgentRunsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _modelMeta = const VerificationMeta('model');
+  @override
+  late final GeneratedColumn<String> model = GeneratedColumn<String>(
+    'model',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _errorCodeMeta = const VerificationMeta(
+    'errorCode',
+  );
+  @override
+  late final GeneratedColumn<String> errorCode = GeneratedColumn<String>(
+    'error_code',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _inputTokensMeta = const VerificationMeta(
+    'inputTokens',
+  );
+  @override
+  late final GeneratedColumn<int> inputTokens = GeneratedColumn<int>(
+    'input_tokens',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _outputTokensMeta = const VerificationMeta(
+    'outputTokens',
+  );
+  @override
+  late final GeneratedColumn<int> outputTokens = GeneratedColumn<int>(
+    'output_tokens',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _startedAtMeta = const VerificationMeta(
+    'startedAt',
+  );
+  @override
+  late final GeneratedColumn<int> startedAt = GeneratedColumn<int>(
+    'started_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _finishedAtMeta = const VerificationMeta(
+    'finishedAt',
+  );
+  @override
+  late final GeneratedColumn<int> finishedAt = GeneratedColumn<int>(
+    'finished_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    model,
+    status,
+    errorCode,
+    inputTokens,
+    outputTokens,
+    startedAt,
+    finishedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'agent_runs';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<AgentRun> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('model')) {
+      context.handle(
+        _modelMeta,
+        model.isAcceptableOrUnknown(data['model']!, _modelMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_modelMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_statusMeta);
+    }
+    if (data.containsKey('error_code')) {
+      context.handle(
+        _errorCodeMeta,
+        errorCode.isAcceptableOrUnknown(data['error_code']!, _errorCodeMeta),
+      );
+    }
+    if (data.containsKey('input_tokens')) {
+      context.handle(
+        _inputTokensMeta,
+        inputTokens.isAcceptableOrUnknown(
+          data['input_tokens']!,
+          _inputTokensMeta,
+        ),
+      );
+    }
+    if (data.containsKey('output_tokens')) {
+      context.handle(
+        _outputTokensMeta,
+        outputTokens.isAcceptableOrUnknown(
+          data['output_tokens']!,
+          _outputTokensMeta,
+        ),
+      );
+    }
+    if (data.containsKey('started_at')) {
+      context.handle(
+        _startedAtMeta,
+        startedAt.isAcceptableOrUnknown(data['started_at']!, _startedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_startedAtMeta);
+    }
+    if (data.containsKey('finished_at')) {
+      context.handle(
+        _finishedAtMeta,
+        finishedAt.isAcceptableOrUnknown(data['finished_at']!, _finishedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {id, accountId},
+  ];
+  @override
+  AgentRun map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return AgentRun(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      model: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      errorCode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}error_code'],
+      ),
+      inputTokens: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}input_tokens'],
+      ),
+      outputTokens: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}output_tokens'],
+      ),
+      startedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}started_at'],
+      )!,
+      finishedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}finished_at'],
+      ),
+    );
+  }
+
+  @override
+  $AgentRunsTable createAlias(String alias) {
+    return $AgentRunsTable(attachedDatabase, alias);
+  }
+}
+
+class AgentRun extends DataClass implements Insertable<AgentRun> {
+  final String id;
+  final String accountId;
+  final String model;
+  final String status;
+  final String? errorCode;
+  final int? inputTokens;
+  final int? outputTokens;
+  final int startedAt;
+  final int? finishedAt;
+  const AgentRun({
+    required this.id,
+    required this.accountId,
+    required this.model,
+    required this.status,
+    this.errorCode,
+    this.inputTokens,
+    this.outputTokens,
+    required this.startedAt,
+    this.finishedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['model'] = Variable<String>(model);
+    map['status'] = Variable<String>(status);
+    if (!nullToAbsent || errorCode != null) {
+      map['error_code'] = Variable<String>(errorCode);
+    }
+    if (!nullToAbsent || inputTokens != null) {
+      map['input_tokens'] = Variable<int>(inputTokens);
+    }
+    if (!nullToAbsent || outputTokens != null) {
+      map['output_tokens'] = Variable<int>(outputTokens);
+    }
+    map['started_at'] = Variable<int>(startedAt);
+    if (!nullToAbsent || finishedAt != null) {
+      map['finished_at'] = Variable<int>(finishedAt);
+    }
+    return map;
+  }
+
+  AgentRunsCompanion toCompanion(bool nullToAbsent) {
+    return AgentRunsCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      model: Value(model),
+      status: Value(status),
+      errorCode: errorCode == null && nullToAbsent
+          ? const Value.absent()
+          : Value(errorCode),
+      inputTokens: inputTokens == null && nullToAbsent
+          ? const Value.absent()
+          : Value(inputTokens),
+      outputTokens: outputTokens == null && nullToAbsent
+          ? const Value.absent()
+          : Value(outputTokens),
+      startedAt: Value(startedAt),
+      finishedAt: finishedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(finishedAt),
+    );
+  }
+
+  factory AgentRun.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return AgentRun(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      model: serializer.fromJson<String>(json['model']),
+      status: serializer.fromJson<String>(json['status']),
+      errorCode: serializer.fromJson<String?>(json['errorCode']),
+      inputTokens: serializer.fromJson<int?>(json['inputTokens']),
+      outputTokens: serializer.fromJson<int?>(json['outputTokens']),
+      startedAt: serializer.fromJson<int>(json['startedAt']),
+      finishedAt: serializer.fromJson<int?>(json['finishedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'model': serializer.toJson<String>(model),
+      'status': serializer.toJson<String>(status),
+      'errorCode': serializer.toJson<String?>(errorCode),
+      'inputTokens': serializer.toJson<int?>(inputTokens),
+      'outputTokens': serializer.toJson<int?>(outputTokens),
+      'startedAt': serializer.toJson<int>(startedAt),
+      'finishedAt': serializer.toJson<int?>(finishedAt),
+    };
+  }
+
+  AgentRun copyWith({
+    String? id,
+    String? accountId,
+    String? model,
+    String? status,
+    Value<String?> errorCode = const Value.absent(),
+    Value<int?> inputTokens = const Value.absent(),
+    Value<int?> outputTokens = const Value.absent(),
+    int? startedAt,
+    Value<int?> finishedAt = const Value.absent(),
+  }) => AgentRun(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    model: model ?? this.model,
+    status: status ?? this.status,
+    errorCode: errorCode.present ? errorCode.value : this.errorCode,
+    inputTokens: inputTokens.present ? inputTokens.value : this.inputTokens,
+    outputTokens: outputTokens.present ? outputTokens.value : this.outputTokens,
+    startedAt: startedAt ?? this.startedAt,
+    finishedAt: finishedAt.present ? finishedAt.value : this.finishedAt,
+  );
+  AgentRun copyWithCompanion(AgentRunsCompanion data) {
+    return AgentRun(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      model: data.model.present ? data.model.value : this.model,
+      status: data.status.present ? data.status.value : this.status,
+      errorCode: data.errorCode.present ? data.errorCode.value : this.errorCode,
+      inputTokens: data.inputTokens.present
+          ? data.inputTokens.value
+          : this.inputTokens,
+      outputTokens: data.outputTokens.present
+          ? data.outputTokens.value
+          : this.outputTokens,
+      startedAt: data.startedAt.present ? data.startedAt.value : this.startedAt,
+      finishedAt: data.finishedAt.present
+          ? data.finishedAt.value
+          : this.finishedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentRun(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('model: $model, ')
+          ..write('status: $status, ')
+          ..write('errorCode: $errorCode, ')
+          ..write('inputTokens: $inputTokens, ')
+          ..write('outputTokens: $outputTokens, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('finishedAt: $finishedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    model,
+    status,
+    errorCode,
+    inputTokens,
+    outputTokens,
+    startedAt,
+    finishedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is AgentRun &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.model == this.model &&
+          other.status == this.status &&
+          other.errorCode == this.errorCode &&
+          other.inputTokens == this.inputTokens &&
+          other.outputTokens == this.outputTokens &&
+          other.startedAt == this.startedAt &&
+          other.finishedAt == this.finishedAt);
+}
+
+class AgentRunsCompanion extends UpdateCompanion<AgentRun> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String> model;
+  final Value<String> status;
+  final Value<String?> errorCode;
+  final Value<int?> inputTokens;
+  final Value<int?> outputTokens;
+  final Value<int> startedAt;
+  final Value<int?> finishedAt;
+  final Value<int> rowid;
+  const AgentRunsCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.model = const Value.absent(),
+    this.status = const Value.absent(),
+    this.errorCode = const Value.absent(),
+    this.inputTokens = const Value.absent(),
+    this.outputTokens = const Value.absent(),
+    this.startedAt = const Value.absent(),
+    this.finishedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AgentRunsCompanion.insert({
+    required String id,
+    required String accountId,
+    required String model,
+    required String status,
+    this.errorCode = const Value.absent(),
+    this.inputTokens = const Value.absent(),
+    this.outputTokens = const Value.absent(),
+    required int startedAt,
+    this.finishedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       model = Value(model),
+       status = Value(status),
+       startedAt = Value(startedAt);
+  static Insertable<AgentRun> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? model,
+    Expression<String>? status,
+    Expression<String>? errorCode,
+    Expression<int>? inputTokens,
+    Expression<int>? outputTokens,
+    Expression<int>? startedAt,
+    Expression<int>? finishedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (model != null) 'model': model,
+      if (status != null) 'status': status,
+      if (errorCode != null) 'error_code': errorCode,
+      if (inputTokens != null) 'input_tokens': inputTokens,
+      if (outputTokens != null) 'output_tokens': outputTokens,
+      if (startedAt != null) 'started_at': startedAt,
+      if (finishedAt != null) 'finished_at': finishedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AgentRunsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String>? model,
+    Value<String>? status,
+    Value<String?>? errorCode,
+    Value<int?>? inputTokens,
+    Value<int?>? outputTokens,
+    Value<int>? startedAt,
+    Value<int?>? finishedAt,
+    Value<int>? rowid,
+  }) {
+    return AgentRunsCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      model: model ?? this.model,
+      status: status ?? this.status,
+      errorCode: errorCode ?? this.errorCode,
+      inputTokens: inputTokens ?? this.inputTokens,
+      outputTokens: outputTokens ?? this.outputTokens,
+      startedAt: startedAt ?? this.startedAt,
+      finishedAt: finishedAt ?? this.finishedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (model.present) {
+      map['model'] = Variable<String>(model.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (errorCode.present) {
+      map['error_code'] = Variable<String>(errorCode.value);
+    }
+    if (inputTokens.present) {
+      map['input_tokens'] = Variable<int>(inputTokens.value);
+    }
+    if (outputTokens.present) {
+      map['output_tokens'] = Variable<int>(outputTokens.value);
+    }
+    if (startedAt.present) {
+      map['started_at'] = Variable<int>(startedAt.value);
+    }
+    if (finishedAt.present) {
+      map['finished_at'] = Variable<int>(finishedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AgentRunsCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('model: $model, ')
+          ..write('status: $status, ')
+          ..write('errorCode: $errorCode, ')
+          ..write('inputTokens: $inputTokens, ')
+          ..write('outputTokens: $outputTokens, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('finishedAt: $finishedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ChatMessagesTable extends ChatMessages
+    with TableInfo<$ChatMessagesTable, ChatMessage> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ChatMessagesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _runIdMeta = const VerificationMeta('runId');
+  @override
+  late final GeneratedColumn<String> runId = GeneratedColumn<String>(
+    'run_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _ordinalMeta = const VerificationMeta(
+    'ordinal',
+  );
+  @override
+  late final GeneratedColumn<int> ordinal = GeneratedColumn<int>(
+    'ordinal',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _roleMeta = const VerificationMeta('role');
+  @override
+  late final GeneratedColumn<String> role = GeneratedColumn<String>(
+    'role',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _stateMeta = const VerificationMeta('state');
+  @override
+  late final GeneratedColumn<String> state = GeneratedColumn<String>(
+    'state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _contentMeta = const VerificationMeta(
+    'content',
+  );
+  @override
+  late final GeneratedColumn<String> content = GeneratedColumn<String>(
+    'content',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    runId,
+    ordinal,
+    role,
+    state,
+    content,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'chat_messages';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ChatMessage> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('run_id')) {
+      context.handle(
+        _runIdMeta,
+        runId.isAcceptableOrUnknown(data['run_id']!, _runIdMeta),
+      );
+    }
+    if (data.containsKey('ordinal')) {
+      context.handle(
+        _ordinalMeta,
+        ordinal.isAcceptableOrUnknown(data['ordinal']!, _ordinalMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_ordinalMeta);
+    }
+    if (data.containsKey('role')) {
+      context.handle(
+        _roleMeta,
+        role.isAcceptableOrUnknown(data['role']!, _roleMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_roleMeta);
+    }
+    if (data.containsKey('state')) {
+      context.handle(
+        _stateMeta,
+        state.isAcceptableOrUnknown(data['state']!, _stateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_stateMeta);
+    }
+    if (data.containsKey('content')) {
+      context.handle(
+        _contentMeta,
+        content.isAcceptableOrUnknown(data['content']!, _contentMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_contentMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {accountId, ordinal},
+  ];
+  @override
+  ChatMessage map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ChatMessage(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      runId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}run_id'],
+      ),
+      ordinal: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}ordinal'],
+      )!,
+      role: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}role'],
+      )!,
+      state: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}state'],
+      )!,
+      content: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}content'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $ChatMessagesTable createAlias(String alias) {
+    return $ChatMessagesTable(attachedDatabase, alias);
+  }
+}
+
+class ChatMessage extends DataClass implements Insertable<ChatMessage> {
+  final String id;
+  final String accountId;
+  final String? runId;
+  final int ordinal;
+  final String role;
+  final String state;
+  final String content;
+  final int createdAt;
+  final int updatedAt;
+  const ChatMessage({
+    required this.id,
+    required this.accountId,
+    this.runId,
+    required this.ordinal,
+    required this.role,
+    required this.state,
+    required this.content,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    if (!nullToAbsent || runId != null) {
+      map['run_id'] = Variable<String>(runId);
+    }
+    map['ordinal'] = Variable<int>(ordinal);
+    map['role'] = Variable<String>(role);
+    map['state'] = Variable<String>(state);
+    map['content'] = Variable<String>(content);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  ChatMessagesCompanion toCompanion(bool nullToAbsent) {
+    return ChatMessagesCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      runId: runId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(runId),
+      ordinal: Value(ordinal),
+      role: Value(role),
+      state: Value(state),
+      content: Value(content),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory ChatMessage.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ChatMessage(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      runId: serializer.fromJson<String?>(json['runId']),
+      ordinal: serializer.fromJson<int>(json['ordinal']),
+      role: serializer.fromJson<String>(json['role']),
+      state: serializer.fromJson<String>(json['state']),
+      content: serializer.fromJson<String>(json['content']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'runId': serializer.toJson<String?>(runId),
+      'ordinal': serializer.toJson<int>(ordinal),
+      'role': serializer.toJson<String>(role),
+      'state': serializer.toJson<String>(state),
+      'content': serializer.toJson<String>(content),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  ChatMessage copyWith({
+    String? id,
+    String? accountId,
+    Value<String?> runId = const Value.absent(),
+    int? ordinal,
+    String? role,
+    String? state,
+    String? content,
+    int? createdAt,
+    int? updatedAt,
+  }) => ChatMessage(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    runId: runId.present ? runId.value : this.runId,
+    ordinal: ordinal ?? this.ordinal,
+    role: role ?? this.role,
+    state: state ?? this.state,
+    content: content ?? this.content,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  ChatMessage copyWithCompanion(ChatMessagesCompanion data) {
+    return ChatMessage(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      runId: data.runId.present ? data.runId.value : this.runId,
+      ordinal: data.ordinal.present ? data.ordinal.value : this.ordinal,
+      role: data.role.present ? data.role.value : this.role,
+      state: data.state.present ? data.state.value : this.state,
+      content: data.content.present ? data.content.value : this.content,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChatMessage(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('runId: $runId, ')
+          ..write('ordinal: $ordinal, ')
+          ..write('role: $role, ')
+          ..write('state: $state, ')
+          ..write('content: $content, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    runId,
+    ordinal,
+    role,
+    state,
+    content,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ChatMessage &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.runId == this.runId &&
+          other.ordinal == this.ordinal &&
+          other.role == this.role &&
+          other.state == this.state &&
+          other.content == this.content &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class ChatMessagesCompanion extends UpdateCompanion<ChatMessage> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String?> runId;
+  final Value<int> ordinal;
+  final Value<String> role;
+  final Value<String> state;
+  final Value<String> content;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const ChatMessagesCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.runId = const Value.absent(),
+    this.ordinal = const Value.absent(),
+    this.role = const Value.absent(),
+    this.state = const Value.absent(),
+    this.content = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ChatMessagesCompanion.insert({
+    required String id,
+    required String accountId,
+    this.runId = const Value.absent(),
+    required int ordinal,
+    required String role,
+    required String state,
+    required String content,
+    required int createdAt,
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       ordinal = Value(ordinal),
+       role = Value(role),
+       state = Value(state),
+       content = Value(content),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<ChatMessage> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? runId,
+    Expression<int>? ordinal,
+    Expression<String>? role,
+    Expression<String>? state,
+    Expression<String>? content,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (runId != null) 'run_id': runId,
+      if (ordinal != null) 'ordinal': ordinal,
+      if (role != null) 'role': role,
+      if (state != null) 'state': state,
+      if (content != null) 'content': content,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ChatMessagesCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String?>? runId,
+    Value<int>? ordinal,
+    Value<String>? role,
+    Value<String>? state,
+    Value<String>? content,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return ChatMessagesCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      runId: runId ?? this.runId,
+      ordinal: ordinal ?? this.ordinal,
+      role: role ?? this.role,
+      state: state ?? this.state,
+      content: content ?? this.content,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (runId.present) {
+      map['run_id'] = Variable<String>(runId.value);
+    }
+    if (ordinal.present) {
+      map['ordinal'] = Variable<int>(ordinal.value);
+    }
+    if (role.present) {
+      map['role'] = Variable<String>(role.value);
+    }
+    if (state.present) {
+      map['state'] = Variable<String>(state.value);
+    }
+    if (content.present) {
+      map['content'] = Variable<String>(content.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ChatMessagesCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('runId: $runId, ')
+          ..write('ordinal: $ordinal, ')
+          ..write('role: $role, ')
+          ..write('state: $state, ')
+          ..write('content: $content, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ToolInvocationsTable extends ToolInvocations
+    with TableInfo<$ToolInvocationsTable, ToolInvocation> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ToolInvocationsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _runIdMeta = const VerificationMeta('runId');
+  @override
+  late final GeneratedColumn<String> runId = GeneratedColumn<String>(
+    'run_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _toolNameMeta = const VerificationMeta(
+    'toolName',
+  );
+  @override
+  late final GeneratedColumn<String> toolName = GeneratedColumn<String>(
+    'tool_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _safeArgumentsSummaryMeta =
+      const VerificationMeta('safeArgumentsSummary');
+  @override
+  late final GeneratedColumn<String> safeArgumentsSummary =
+      GeneratedColumn<String>(
+        'safe_arguments_summary',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _safeResultSummaryMeta = const VerificationMeta(
+    'safeResultSummary',
+  );
+  @override
+  late final GeneratedColumn<String> safeResultSummary =
+      GeneratedColumn<String>(
+        'safe_result_summary',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _startedAtMeta = const VerificationMeta(
+    'startedAt',
+  );
+  @override
+  late final GeneratedColumn<int> startedAt = GeneratedColumn<int>(
+    'started_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _finishedAtMeta = const VerificationMeta(
+    'finishedAt',
+  );
+  @override
+  late final GeneratedColumn<int> finishedAt = GeneratedColumn<int>(
+    'finished_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    runId,
+    toolName,
+    status,
+    safeArgumentsSummary,
+    safeResultSummary,
+    startedAt,
+    finishedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'tool_invocations';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ToolInvocation> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('run_id')) {
+      context.handle(
+        _runIdMeta,
+        runId.isAcceptableOrUnknown(data['run_id']!, _runIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_runIdMeta);
+    }
+    if (data.containsKey('tool_name')) {
+      context.handle(
+        _toolNameMeta,
+        toolName.isAcceptableOrUnknown(data['tool_name']!, _toolNameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_toolNameMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_statusMeta);
+    }
+    if (data.containsKey('safe_arguments_summary')) {
+      context.handle(
+        _safeArgumentsSummaryMeta,
+        safeArgumentsSummary.isAcceptableOrUnknown(
+          data['safe_arguments_summary']!,
+          _safeArgumentsSummaryMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_safeArgumentsSummaryMeta);
+    }
+    if (data.containsKey('safe_result_summary')) {
+      context.handle(
+        _safeResultSummaryMeta,
+        safeResultSummary.isAcceptableOrUnknown(
+          data['safe_result_summary']!,
+          _safeResultSummaryMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_safeResultSummaryMeta);
+    }
+    if (data.containsKey('started_at')) {
+      context.handle(
+        _startedAtMeta,
+        startedAt.isAcceptableOrUnknown(data['started_at']!, _startedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_startedAtMeta);
+    }
+    if (data.containsKey('finished_at')) {
+      context.handle(
+        _finishedAtMeta,
+        finishedAt.isAcceptableOrUnknown(data['finished_at']!, _finishedAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  ToolInvocation map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ToolInvocation(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      runId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}run_id'],
+      )!,
+      toolName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}tool_name'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      safeArgumentsSummary: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}safe_arguments_summary'],
+      )!,
+      safeResultSummary: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}safe_result_summary'],
+      )!,
+      startedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}started_at'],
+      )!,
+      finishedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}finished_at'],
+      ),
+    );
+  }
+
+  @override
+  $ToolInvocationsTable createAlias(String alias) {
+    return $ToolInvocationsTable(attachedDatabase, alias);
+  }
+}
+
+class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
+  final String id;
+  final String accountId;
+  final String runId;
+  final String toolName;
+  final String status;
+  final String safeArgumentsSummary;
+  final String safeResultSummary;
+  final int startedAt;
+  final int? finishedAt;
+  const ToolInvocation({
+    required this.id,
+    required this.accountId,
+    required this.runId,
+    required this.toolName,
+    required this.status,
+    required this.safeArgumentsSummary,
+    required this.safeResultSummary,
+    required this.startedAt,
+    this.finishedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['run_id'] = Variable<String>(runId);
+    map['tool_name'] = Variable<String>(toolName);
+    map['status'] = Variable<String>(status);
+    map['safe_arguments_summary'] = Variable<String>(safeArgumentsSummary);
+    map['safe_result_summary'] = Variable<String>(safeResultSummary);
+    map['started_at'] = Variable<int>(startedAt);
+    if (!nullToAbsent || finishedAt != null) {
+      map['finished_at'] = Variable<int>(finishedAt);
+    }
+    return map;
+  }
+
+  ToolInvocationsCompanion toCompanion(bool nullToAbsent) {
+    return ToolInvocationsCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      runId: Value(runId),
+      toolName: Value(toolName),
+      status: Value(status),
+      safeArgumentsSummary: Value(safeArgumentsSummary),
+      safeResultSummary: Value(safeResultSummary),
+      startedAt: Value(startedAt),
+      finishedAt: finishedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(finishedAt),
+    );
+  }
+
+  factory ToolInvocation.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ToolInvocation(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      runId: serializer.fromJson<String>(json['runId']),
+      toolName: serializer.fromJson<String>(json['toolName']),
+      status: serializer.fromJson<String>(json['status']),
+      safeArgumentsSummary: serializer.fromJson<String>(
+        json['safeArgumentsSummary'],
+      ),
+      safeResultSummary: serializer.fromJson<String>(json['safeResultSummary']),
+      startedAt: serializer.fromJson<int>(json['startedAt']),
+      finishedAt: serializer.fromJson<int?>(json['finishedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'runId': serializer.toJson<String>(runId),
+      'toolName': serializer.toJson<String>(toolName),
+      'status': serializer.toJson<String>(status),
+      'safeArgumentsSummary': serializer.toJson<String>(safeArgumentsSummary),
+      'safeResultSummary': serializer.toJson<String>(safeResultSummary),
+      'startedAt': serializer.toJson<int>(startedAt),
+      'finishedAt': serializer.toJson<int?>(finishedAt),
+    };
+  }
+
+  ToolInvocation copyWith({
+    String? id,
+    String? accountId,
+    String? runId,
+    String? toolName,
+    String? status,
+    String? safeArgumentsSummary,
+    String? safeResultSummary,
+    int? startedAt,
+    Value<int?> finishedAt = const Value.absent(),
+  }) => ToolInvocation(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    runId: runId ?? this.runId,
+    toolName: toolName ?? this.toolName,
+    status: status ?? this.status,
+    safeArgumentsSummary: safeArgumentsSummary ?? this.safeArgumentsSummary,
+    safeResultSummary: safeResultSummary ?? this.safeResultSummary,
+    startedAt: startedAt ?? this.startedAt,
+    finishedAt: finishedAt.present ? finishedAt.value : this.finishedAt,
+  );
+  ToolInvocation copyWithCompanion(ToolInvocationsCompanion data) {
+    return ToolInvocation(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      runId: data.runId.present ? data.runId.value : this.runId,
+      toolName: data.toolName.present ? data.toolName.value : this.toolName,
+      status: data.status.present ? data.status.value : this.status,
+      safeArgumentsSummary: data.safeArgumentsSummary.present
+          ? data.safeArgumentsSummary.value
+          : this.safeArgumentsSummary,
+      safeResultSummary: data.safeResultSummary.present
+          ? data.safeResultSummary.value
+          : this.safeResultSummary,
+      startedAt: data.startedAt.present ? data.startedAt.value : this.startedAt,
+      finishedAt: data.finishedAt.present
+          ? data.finishedAt.value
+          : this.finishedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ToolInvocation(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('runId: $runId, ')
+          ..write('toolName: $toolName, ')
+          ..write('status: $status, ')
+          ..write('safeArgumentsSummary: $safeArgumentsSummary, ')
+          ..write('safeResultSummary: $safeResultSummary, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('finishedAt: $finishedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    accountId,
+    runId,
+    toolName,
+    status,
+    safeArgumentsSummary,
+    safeResultSummary,
+    startedAt,
+    finishedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ToolInvocation &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.runId == this.runId &&
+          other.toolName == this.toolName &&
+          other.status == this.status &&
+          other.safeArgumentsSummary == this.safeArgumentsSummary &&
+          other.safeResultSummary == this.safeResultSummary &&
+          other.startedAt == this.startedAt &&
+          other.finishedAt == this.finishedAt);
+}
+
+class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String> runId;
+  final Value<String> toolName;
+  final Value<String> status;
+  final Value<String> safeArgumentsSummary;
+  final Value<String> safeResultSummary;
+  final Value<int> startedAt;
+  final Value<int?> finishedAt;
+  final Value<int> rowid;
+  const ToolInvocationsCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.runId = const Value.absent(),
+    this.toolName = const Value.absent(),
+    this.status = const Value.absent(),
+    this.safeArgumentsSummary = const Value.absent(),
+    this.safeResultSummary = const Value.absent(),
+    this.startedAt = const Value.absent(),
+    this.finishedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ToolInvocationsCompanion.insert({
+    required String id,
+    required String accountId,
+    required String runId,
+    required String toolName,
+    required String status,
+    required String safeArgumentsSummary,
+    required String safeResultSummary,
+    required int startedAt,
+    this.finishedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       runId = Value(runId),
+       toolName = Value(toolName),
+       status = Value(status),
+       safeArgumentsSummary = Value(safeArgumentsSummary),
+       safeResultSummary = Value(safeResultSummary),
+       startedAt = Value(startedAt);
+  static Insertable<ToolInvocation> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? runId,
+    Expression<String>? toolName,
+    Expression<String>? status,
+    Expression<String>? safeArgumentsSummary,
+    Expression<String>? safeResultSummary,
+    Expression<int>? startedAt,
+    Expression<int>? finishedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (runId != null) 'run_id': runId,
+      if (toolName != null) 'tool_name': toolName,
+      if (status != null) 'status': status,
+      if (safeArgumentsSummary != null)
+        'safe_arguments_summary': safeArgumentsSummary,
+      if (safeResultSummary != null) 'safe_result_summary': safeResultSummary,
+      if (startedAt != null) 'started_at': startedAt,
+      if (finishedAt != null) 'finished_at': finishedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ToolInvocationsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String>? runId,
+    Value<String>? toolName,
+    Value<String>? status,
+    Value<String>? safeArgumentsSummary,
+    Value<String>? safeResultSummary,
+    Value<int>? startedAt,
+    Value<int?>? finishedAt,
+    Value<int>? rowid,
+  }) {
+    return ToolInvocationsCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      runId: runId ?? this.runId,
+      toolName: toolName ?? this.toolName,
+      status: status ?? this.status,
+      safeArgumentsSummary: safeArgumentsSummary ?? this.safeArgumentsSummary,
+      safeResultSummary: safeResultSummary ?? this.safeResultSummary,
+      startedAt: startedAt ?? this.startedAt,
+      finishedAt: finishedAt ?? this.finishedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (runId.present) {
+      map['run_id'] = Variable<String>(runId.value);
+    }
+    if (toolName.present) {
+      map['tool_name'] = Variable<String>(toolName.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (safeArgumentsSummary.present) {
+      map['safe_arguments_summary'] = Variable<String>(
+        safeArgumentsSummary.value,
+      );
+    }
+    if (safeResultSummary.present) {
+      map['safe_result_summary'] = Variable<String>(safeResultSummary.value);
+    }
+    if (startedAt.present) {
+      map['started_at'] = Variable<int>(startedAt.value);
+    }
+    if (finishedAt.present) {
+      map['finished_at'] = Variable<int>(finishedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ToolInvocationsCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('runId: $runId, ')
+          ..write('toolName: $toolName, ')
+          ..write('status: $status, ')
+          ..write('safeArgumentsSummary: $safeArgumentsSummary, ')
+          ..write('safeResultSummary: $safeResultSummary, ')
+          ..write('startedAt: $startedAt, ')
+          ..write('finishedAt: $finishedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $ConversationSummariesTable extends ConversationSummaries
+    with TableInfo<$ConversationSummariesTable, ConversationSummary> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $ConversationSummariesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _throughOrdinalMeta = const VerificationMeta(
+    'throughOrdinal',
+  );
+  @override
+  late final GeneratedColumn<int> throughOrdinal = GeneratedColumn<int>(
+    'through_ordinal',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _contentMeta = const VerificationMeta(
+    'content',
+  );
+  @override
+  late final GeneratedColumn<String> content = GeneratedColumn<String>(
+    'content',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _modelMeta = const VerificationMeta('model');
+  @override
+  late final GeneratedColumn<String> model = GeneratedColumn<String>(
+    'model',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    throughOrdinal,
+    content,
+    model,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'conversation_summaries';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<ConversationSummary> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('through_ordinal')) {
+      context.handle(
+        _throughOrdinalMeta,
+        throughOrdinal.isAcceptableOrUnknown(
+          data['through_ordinal']!,
+          _throughOrdinalMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_throughOrdinalMeta);
+    }
+    if (data.containsKey('content')) {
+      context.handle(
+        _contentMeta,
+        content.isAcceptableOrUnknown(data['content']!, _contentMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_contentMeta);
+    }
+    if (data.containsKey('model')) {
+      context.handle(
+        _modelMeta,
+        model.isAcceptableOrUnknown(data['model']!, _modelMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_modelMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {accountId},
+  ];
+  @override
+  ConversationSummary map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return ConversationSummary(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      throughOrdinal: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}through_ordinal'],
+      )!,
+      content: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}content'],
+      )!,
+      model: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}model'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $ConversationSummariesTable createAlias(String alias) {
+    return $ConversationSummariesTable(attachedDatabase, alias);
+  }
+}
+
+class ConversationSummary extends DataClass
+    implements Insertable<ConversationSummary> {
+  final String id;
+  final String accountId;
+  final int throughOrdinal;
+  final String content;
+  final String model;
+  final int createdAt;
+  const ConversationSummary({
+    required this.id,
+    required this.accountId,
+    required this.throughOrdinal,
+    required this.content,
+    required this.model,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['through_ordinal'] = Variable<int>(throughOrdinal);
+    map['content'] = Variable<String>(content);
+    map['model'] = Variable<String>(model);
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  ConversationSummariesCompanion toCompanion(bool nullToAbsent) {
+    return ConversationSummariesCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      throughOrdinal: Value(throughOrdinal),
+      content: Value(content),
+      model: Value(model),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory ConversationSummary.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return ConversationSummary(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      throughOrdinal: serializer.fromJson<int>(json['throughOrdinal']),
+      content: serializer.fromJson<String>(json['content']),
+      model: serializer.fromJson<String>(json['model']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'throughOrdinal': serializer.toJson<int>(throughOrdinal),
+      'content': serializer.toJson<String>(content),
+      'model': serializer.toJson<String>(model),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  ConversationSummary copyWith({
+    String? id,
+    String? accountId,
+    int? throughOrdinal,
+    String? content,
+    String? model,
+    int? createdAt,
+  }) => ConversationSummary(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    throughOrdinal: throughOrdinal ?? this.throughOrdinal,
+    content: content ?? this.content,
+    model: model ?? this.model,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  ConversationSummary copyWithCompanion(ConversationSummariesCompanion data) {
+    return ConversationSummary(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      throughOrdinal: data.throughOrdinal.present
+          ? data.throughOrdinal.value
+          : this.throughOrdinal,
+      content: data.content.present ? data.content.value : this.content,
+      model: data.model.present ? data.model.value : this.model,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ConversationSummary(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('throughOrdinal: $throughOrdinal, ')
+          ..write('content: $content, ')
+          ..write('model: $model, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, accountId, throughOrdinal, content, model, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is ConversationSummary &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.throughOrdinal == this.throughOrdinal &&
+          other.content == this.content &&
+          other.model == this.model &&
+          other.createdAt == this.createdAt);
+}
+
+class ConversationSummariesCompanion
+    extends UpdateCompanion<ConversationSummary> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<int> throughOrdinal;
+  final Value<String> content;
+  final Value<String> model;
+  final Value<int> createdAt;
+  final Value<int> rowid;
+  const ConversationSummariesCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.throughOrdinal = const Value.absent(),
+    this.content = const Value.absent(),
+    this.model = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  ConversationSummariesCompanion.insert({
+    required String id,
+    required String accountId,
+    required int throughOrdinal,
+    required String content,
+    required String model,
+    required int createdAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       throughOrdinal = Value(throughOrdinal),
+       content = Value(content),
+       model = Value(model),
+       createdAt = Value(createdAt);
+  static Insertable<ConversationSummary> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<int>? throughOrdinal,
+    Expression<String>? content,
+    Expression<String>? model,
+    Expression<int>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (throughOrdinal != null) 'through_ordinal': throughOrdinal,
+      if (content != null) 'content': content,
+      if (model != null) 'model': model,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  ConversationSummariesCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<int>? throughOrdinal,
+    Value<String>? content,
+    Value<String>? model,
+    Value<int>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return ConversationSummariesCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      throughOrdinal: throughOrdinal ?? this.throughOrdinal,
+      content: content ?? this.content,
+      model: model ?? this.model,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (throughOrdinal.present) {
+      map['through_ordinal'] = Variable<int>(throughOrdinal.value);
+    }
+    if (content.present) {
+      map['content'] = Variable<String>(content.value);
+    }
+    if (model.present) {
+      map['model'] = Variable<String>(model.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('ConversationSummariesCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('throughOrdinal: $throughOrdinal, ')
+          ..write('content: $content, ')
+          ..write('model: $model, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $CourseSeriesTable extends CourseSeries
     with TableInfo<$CourseSeriesTable, CourseSery> {
   @override
@@ -15311,6 +18327,15 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ActionLogsTable actionLogs = $ActionLogsTable(this);
   late final $AgentPermissionPoliciesTable agentPermissionPolicies =
       $AgentPermissionPoliciesTable(this);
+  late final $AgentSettingsTable agentSettings = $AgentSettingsTable(this);
+  late final $AgentSecretsTable agentSecrets = $AgentSecretsTable(this);
+  late final $AgentRunsTable agentRuns = $AgentRunsTable(this);
+  late final $ChatMessagesTable chatMessages = $ChatMessagesTable(this);
+  late final $ToolInvocationsTable toolInvocations = $ToolInvocationsTable(
+    this,
+  );
+  late final $ConversationSummariesTable conversationSummaries =
+      $ConversationSummariesTable(this);
   late final $CourseSeriesTable courseSeries = $CourseSeriesTable(this);
   late final $CalendarEventSeriesTable calendarEventSeries =
       $CalendarEventSeriesTable(this);
@@ -15342,6 +18367,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     syncRuns,
     actionLogs,
     agentPermissionPolicies,
+    agentSettings,
+    agentSecrets,
+    agentRuns,
+    chatMessages,
+    toolInvocations,
+    conversationSummaries,
     courseSeries,
     calendarEventSeries,
     calendarEvents,
@@ -15414,6 +18445,48 @@ abstract class _$AppDatabase extends GeneratedDatabase {
       result: [
         TableUpdate('agent_permission_policies', kind: UpdateKind.delete),
       ],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('agent_settings', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('agent_secrets', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('agent_runs', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('chat_messages', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('tool_invocations', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('conversation_summaries', kind: UpdateKind.delete)],
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
@@ -15763,6 +18836,123 @@ final class $$LocalAccountsTableReferences
 
     final cache = $_typedResult.readTableOrNull(
       _agentPermissionPoliciesRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$AgentSettingsTable, List<AgentSetting>>
+  _agentSettingsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.agentSettings,
+    aliasName: 'local_accounts__id__agent_settings__account_id',
+  );
+
+  $$AgentSettingsTableProcessedTableManager get agentSettingsRefs {
+    final manager = $$AgentSettingsTableTableManager(
+      $_db,
+      $_db.agentSettings,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_agentSettingsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$AgentSecretsTable, List<AgentSecret>>
+  _agentSecretsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.agentSecrets,
+    aliasName: 'local_accounts__id__agent_secrets__account_id',
+  );
+
+  $$AgentSecretsTableProcessedTableManager get agentSecretsRefs {
+    final manager = $$AgentSecretsTableTableManager(
+      $_db,
+      $_db.agentSecrets,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_agentSecretsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$AgentRunsTable, List<AgentRun>>
+  _agentRunsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.agentRuns,
+    aliasName: 'local_accounts__id__agent_runs__account_id',
+  );
+
+  $$AgentRunsTableProcessedTableManager get agentRunsRefs {
+    final manager = $$AgentRunsTableTableManager(
+      $_db,
+      $_db.agentRuns,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_agentRunsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$ChatMessagesTable, List<ChatMessage>>
+  _chatMessagesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.chatMessages,
+    aliasName: 'local_accounts__id__chat_messages__account_id',
+  );
+
+  $$ChatMessagesTableProcessedTableManager get chatMessagesRefs {
+    final manager = $$ChatMessagesTableTableManager(
+      $_db,
+      $_db.chatMessages,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_chatMessagesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$ToolInvocationsTable, List<ToolInvocation>>
+  _toolInvocationsRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.toolInvocations,
+    aliasName: 'local_accounts__id__tool_invocations__account_id',
+  );
+
+  $$ToolInvocationsTableProcessedTableManager get toolInvocationsRefs {
+    final manager = $$ToolInvocationsTableTableManager(
+      $_db,
+      $_db.toolInvocations,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _toolInvocationsRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<
+    $ConversationSummariesTable,
+    List<ConversationSummary>
+  >
+  _conversationSummariesRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.conversationSummaries,
+        aliasName: 'local_accounts__id__conversation_summaries__account_id',
+      );
+
+  $$ConversationSummariesTableProcessedTableManager
+  get conversationSummariesRefs {
+    final manager = $$ConversationSummariesTableTableManager(
+      $_db,
+      $_db.conversationSummaries,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(
+      _conversationSummariesRefsTable($_db),
     );
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
@@ -16197,6 +19387,157 @@ class $$LocalAccountsTableFilterComposer
               }) => $$AgentPermissionPoliciesTableFilterComposer(
                 $db: $db,
                 $table: $db.agentPermissionPolicies,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<bool> agentSettingsRefs(
+    Expression<bool> Function($$AgentSettingsTableFilterComposer f) f,
+  ) {
+    final $$AgentSettingsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentSettings,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentSettingsTableFilterComposer(
+            $db: $db,
+            $table: $db.agentSettings,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> agentSecretsRefs(
+    Expression<bool> Function($$AgentSecretsTableFilterComposer f) f,
+  ) {
+    final $$AgentSecretsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentSecrets,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentSecretsTableFilterComposer(
+            $db: $db,
+            $table: $db.agentSecrets,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> agentRunsRefs(
+    Expression<bool> Function($$AgentRunsTableFilterComposer f) f,
+  ) {
+    final $$AgentRunsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentRuns,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentRunsTableFilterComposer(
+            $db: $db,
+            $table: $db.agentRuns,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> chatMessagesRefs(
+    Expression<bool> Function($$ChatMessagesTableFilterComposer f) f,
+  ) {
+    final $$ChatMessagesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.chatMessages,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ChatMessagesTableFilterComposer(
+            $db: $db,
+            $table: $db.chatMessages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> toolInvocationsRefs(
+    Expression<bool> Function($$ToolInvocationsTableFilterComposer f) f,
+  ) {
+    final $$ToolInvocationsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.toolInvocations,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ToolInvocationsTableFilterComposer(
+            $db: $db,
+            $table: $db.toolInvocations,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> conversationSummariesRefs(
+    Expression<bool> Function($$ConversationSummariesTableFilterComposer f) f,
+  ) {
+    final $$ConversationSummariesTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.conversationSummaries,
+          getReferencedColumn: (t) => t.accountId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$ConversationSummariesTableFilterComposer(
+                $db: $db,
+                $table: $db.conversationSummaries,
                 $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
                 joinBuilder: joinBuilder,
                 $removeJoinBuilderFromRootComposer:
@@ -16736,6 +20077,157 @@ class $$LocalAccountsTableAnnotationComposer
     return f(composer);
   }
 
+  Expression<T> agentSettingsRefs<T extends Object>(
+    Expression<T> Function($$AgentSettingsTableAnnotationComposer a) f,
+  ) {
+    final $$AgentSettingsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentSettings,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentSettingsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.agentSettings,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> agentSecretsRefs<T extends Object>(
+    Expression<T> Function($$AgentSecretsTableAnnotationComposer a) f,
+  ) {
+    final $$AgentSecretsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentSecrets,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentSecretsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.agentSecrets,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> agentRunsRefs<T extends Object>(
+    Expression<T> Function($$AgentRunsTableAnnotationComposer a) f,
+  ) {
+    final $$AgentRunsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.agentRuns,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AgentRunsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.agentRuns,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> chatMessagesRefs<T extends Object>(
+    Expression<T> Function($$ChatMessagesTableAnnotationComposer a) f,
+  ) {
+    final $$ChatMessagesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.chatMessages,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ChatMessagesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.chatMessages,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> toolInvocationsRefs<T extends Object>(
+    Expression<T> Function($$ToolInvocationsTableAnnotationComposer a) f,
+  ) {
+    final $$ToolInvocationsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.toolInvocations,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ToolInvocationsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.toolInvocations,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> conversationSummariesRefs<T extends Object>(
+    Expression<T> Function($$ConversationSummariesTableAnnotationComposer a) f,
+  ) {
+    final $$ConversationSummariesTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.conversationSummaries,
+          getReferencedColumn: (t) => t.accountId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$ConversationSummariesTableAnnotationComposer(
+                $db: $db,
+                $table: $db.conversationSummaries,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
   Expression<T> courseSeriesRefs<T extends Object>(
     Expression<T> Function($$CourseSeriesTableAnnotationComposer a) f,
   ) {
@@ -17040,6 +20532,12 @@ class $$LocalAccountsTableTableManager
             bool syncRunsRefs,
             bool actionLogsRefs,
             bool agentPermissionPoliciesRefs,
+            bool agentSettingsRefs,
+            bool agentSecretsRefs,
+            bool agentRunsRefs,
+            bool chatMessagesRefs,
+            bool toolInvocationsRefs,
+            bool conversationSummariesRefs,
             bool courseSeriesRefs,
             bool calendarEventSeriesRefs,
             bool calendarEventsRefs,
@@ -17117,6 +20615,12 @@ class $$LocalAccountsTableTableManager
                 syncRunsRefs = false,
                 actionLogsRefs = false,
                 agentPermissionPoliciesRefs = false,
+                agentSettingsRefs = false,
+                agentSecretsRefs = false,
+                agentRunsRefs = false,
+                chatMessagesRefs = false,
+                toolInvocationsRefs = false,
+                conversationSummariesRefs = false,
                 courseSeriesRefs = false,
                 calendarEventSeriesRefs = false,
                 calendarEventsRefs = false,
@@ -17139,6 +20643,12 @@ class $$LocalAccountsTableTableManager
                     if (syncRunsRefs) db.syncRuns,
                     if (actionLogsRefs) db.actionLogs,
                     if (agentPermissionPoliciesRefs) db.agentPermissionPolicies,
+                    if (agentSettingsRefs) db.agentSettings,
+                    if (agentSecretsRefs) db.agentSecrets,
+                    if (agentRunsRefs) db.agentRuns,
+                    if (chatMessagesRefs) db.chatMessages,
+                    if (toolInvocationsRefs) db.toolInvocations,
+                    if (conversationSummariesRefs) db.conversationSummaries,
                     if (courseSeriesRefs) db.courseSeries,
                     if (calendarEventSeriesRefs) db.calendarEventSeries,
                     if (calendarEventsRefs) db.calendarEvents,
@@ -17296,6 +20806,132 @@ class $$LocalAccountsTableTableManager
                                 table,
                                 p0,
                               ).agentPermissionPoliciesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (agentSettingsRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          AgentSetting
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._agentSettingsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).agentSettingsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (agentSecretsRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          AgentSecret
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._agentSecretsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).agentSecretsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (agentRunsRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          AgentRun
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._agentRunsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).agentRunsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (chatMessagesRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          ChatMessage
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._chatMessagesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).chatMessagesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (toolInvocationsRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          ToolInvocation
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._toolInvocationsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).toolInvocationsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (conversationSummariesRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          ConversationSummary
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._conversationSummariesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).conversationSummariesRefs,
                           referencedItemsForCurrentItem:
                               (item, referencedItems) => referencedItems.where(
                                 (e) => e.accountId == item.id,
@@ -17561,6 +21197,12 @@ typedef $$LocalAccountsTableProcessedTableManager =
         bool syncRunsRefs,
         bool actionLogsRefs,
         bool agentPermissionPoliciesRefs,
+        bool agentSettingsRefs,
+        bool agentSecretsRefs,
+        bool agentRunsRefs,
+        bool chatMessagesRefs,
+        bool toolInvocationsRefs,
+        bool conversationSummariesRefs,
         bool courseSeriesRefs,
         bool calendarEventSeriesRefs,
         bool calendarEventsRefs,
@@ -20679,6 +24321,2258 @@ typedef $$AgentPermissionPoliciesTableProcessedTableManager =
       $$AgentPermissionPoliciesTableUpdateCompanionBuilder,
       (AgentPermissionPolicy, $$AgentPermissionPoliciesTableReferences),
       AgentPermissionPolicy,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$AgentSettingsTableCreateCompanionBuilder =
+    AgentSettingsCompanion Function({
+      required String accountId,
+      Value<String> model,
+      Value<bool> enabled,
+      Value<bool> icourseConsent,
+      Value<int> systemPromptVersion,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$AgentSettingsTableUpdateCompanionBuilder =
+    AgentSettingsCompanion Function({
+      Value<String> accountId,
+      Value<String> model,
+      Value<bool> enabled,
+      Value<bool> icourseConsent,
+      Value<int> systemPromptVersion,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$AgentSettingsTableReferences
+    extends BaseReferences<_$AppDatabase, $AgentSettingsTable, AgentSetting> {
+  $$AgentSettingsTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('agent_settings__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$AgentSettingsTableFilterComposer
+    extends Composer<_$AppDatabase, $AgentSettingsTable> {
+  $$AgentSettingsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get icourseConsent => $composableBuilder(
+    column: $table.icourseConsent,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get systemPromptVersion => $composableBuilder(
+    column: $table.systemPromptVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSettingsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AgentSettingsTable> {
+  $$AgentSettingsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get enabled => $composableBuilder(
+    column: $table.enabled,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get icourseConsent => $composableBuilder(
+    column: $table.icourseConsent,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get systemPromptVersion => $composableBuilder(
+    column: $table.systemPromptVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSettingsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AgentSettingsTable> {
+  $$AgentSettingsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get model =>
+      $composableBuilder(column: $table.model, builder: (column) => column);
+
+  GeneratedColumn<bool> get enabled =>
+      $composableBuilder(column: $table.enabled, builder: (column) => column);
+
+  GeneratedColumn<bool> get icourseConsent => $composableBuilder(
+    column: $table.icourseConsent,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get systemPromptVersion => $composableBuilder(
+    column: $table.systemPromptVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSettingsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AgentSettingsTable,
+          AgentSetting,
+          $$AgentSettingsTableFilterComposer,
+          $$AgentSettingsTableOrderingComposer,
+          $$AgentSettingsTableAnnotationComposer,
+          $$AgentSettingsTableCreateCompanionBuilder,
+          $$AgentSettingsTableUpdateCompanionBuilder,
+          (AgentSetting, $$AgentSettingsTableReferences),
+          AgentSetting,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$AgentSettingsTableTableManager(_$AppDatabase db, $AgentSettingsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AgentSettingsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AgentSettingsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AgentSettingsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> accountId = const Value.absent(),
+                Value<String> model = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<bool> icourseConsent = const Value.absent(),
+                Value<int> systemPromptVersion = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AgentSettingsCompanion(
+                accountId: accountId,
+                model: model,
+                enabled: enabled,
+                icourseConsent: icourseConsent,
+                systemPromptVersion: systemPromptVersion,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String accountId,
+                Value<String> model = const Value.absent(),
+                Value<bool> enabled = const Value.absent(),
+                Value<bool> icourseConsent = const Value.absent(),
+                Value<int> systemPromptVersion = const Value.absent(),
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => AgentSettingsCompanion.insert(
+                accountId: accountId,
+                model: model,
+                enabled: enabled,
+                icourseConsent: icourseConsent,
+                systemPromptVersion: systemPromptVersion,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$AgentSettingsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$AgentSettingsTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$AgentSettingsTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$AgentSettingsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AgentSettingsTable,
+      AgentSetting,
+      $$AgentSettingsTableFilterComposer,
+      $$AgentSettingsTableOrderingComposer,
+      $$AgentSettingsTableAnnotationComposer,
+      $$AgentSettingsTableCreateCompanionBuilder,
+      $$AgentSettingsTableUpdateCompanionBuilder,
+      (AgentSetting, $$AgentSettingsTableReferences),
+      AgentSetting,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$AgentSecretsTableCreateCompanionBuilder =
+    AgentSecretsCompanion Function({
+      required String accountId,
+      required Uint8List apiKeyCiphertext,
+      required String scheme,
+      required int protectionVersion,
+      Value<String> protectionMetadata,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$AgentSecretsTableUpdateCompanionBuilder =
+    AgentSecretsCompanion Function({
+      Value<String> accountId,
+      Value<Uint8List> apiKeyCiphertext,
+      Value<String> scheme,
+      Value<int> protectionVersion,
+      Value<String> protectionMetadata,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$AgentSecretsTableReferences
+    extends BaseReferences<_$AppDatabase, $AgentSecretsTable, AgentSecret> {
+  $$AgentSecretsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('agent_secrets__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$AgentSecretsTableFilterComposer
+    extends Composer<_$AppDatabase, $AgentSecretsTable> {
+  $$AgentSecretsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<Uint8List> get apiKeyCiphertext => $composableBuilder(
+    column: $table.apiKeyCiphertext,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get scheme => $composableBuilder(
+    column: $table.scheme,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSecretsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AgentSecretsTable> {
+  $$AgentSecretsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<Uint8List> get apiKeyCiphertext => $composableBuilder(
+    column: $table.apiKeyCiphertext,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get scheme => $composableBuilder(
+    column: $table.scheme,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSecretsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AgentSecretsTable> {
+  $$AgentSecretsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<Uint8List> get apiKeyCiphertext => $composableBuilder(
+    column: $table.apiKeyCiphertext,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get scheme =>
+      $composableBuilder(column: $table.scheme, builder: (column) => column);
+
+  GeneratedColumn<int> get protectionVersion => $composableBuilder(
+    column: $table.protectionVersion,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get protectionMetadata => $composableBuilder(
+    column: $table.protectionMetadata,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentSecretsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AgentSecretsTable,
+          AgentSecret,
+          $$AgentSecretsTableFilterComposer,
+          $$AgentSecretsTableOrderingComposer,
+          $$AgentSecretsTableAnnotationComposer,
+          $$AgentSecretsTableCreateCompanionBuilder,
+          $$AgentSecretsTableUpdateCompanionBuilder,
+          (AgentSecret, $$AgentSecretsTableReferences),
+          AgentSecret,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$AgentSecretsTableTableManager(_$AppDatabase db, $AgentSecretsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AgentSecretsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AgentSecretsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AgentSecretsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> accountId = const Value.absent(),
+                Value<Uint8List> apiKeyCiphertext = const Value.absent(),
+                Value<String> scheme = const Value.absent(),
+                Value<int> protectionVersion = const Value.absent(),
+                Value<String> protectionMetadata = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AgentSecretsCompanion(
+                accountId: accountId,
+                apiKeyCiphertext: apiKeyCiphertext,
+                scheme: scheme,
+                protectionVersion: protectionVersion,
+                protectionMetadata: protectionMetadata,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String accountId,
+                required Uint8List apiKeyCiphertext,
+                required String scheme,
+                required int protectionVersion,
+                Value<String> protectionMetadata = const Value.absent(),
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => AgentSecretsCompanion.insert(
+                accountId: accountId,
+                apiKeyCiphertext: apiKeyCiphertext,
+                scheme: scheme,
+                protectionVersion: protectionVersion,
+                protectionMetadata: protectionMetadata,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$AgentSecretsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$AgentSecretsTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$AgentSecretsTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$AgentSecretsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AgentSecretsTable,
+      AgentSecret,
+      $$AgentSecretsTableFilterComposer,
+      $$AgentSecretsTableOrderingComposer,
+      $$AgentSecretsTableAnnotationComposer,
+      $$AgentSecretsTableCreateCompanionBuilder,
+      $$AgentSecretsTableUpdateCompanionBuilder,
+      (AgentSecret, $$AgentSecretsTableReferences),
+      AgentSecret,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$AgentRunsTableCreateCompanionBuilder =
+    AgentRunsCompanion Function({
+      required String id,
+      required String accountId,
+      required String model,
+      required String status,
+      Value<String?> errorCode,
+      Value<int?> inputTokens,
+      Value<int?> outputTokens,
+      required int startedAt,
+      Value<int?> finishedAt,
+      Value<int> rowid,
+    });
+typedef $$AgentRunsTableUpdateCompanionBuilder =
+    AgentRunsCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String> model,
+      Value<String> status,
+      Value<String?> errorCode,
+      Value<int?> inputTokens,
+      Value<int?> outputTokens,
+      Value<int> startedAt,
+      Value<int?> finishedAt,
+      Value<int> rowid,
+    });
+
+final class $$AgentRunsTableReferences
+    extends BaseReferences<_$AppDatabase, $AgentRunsTable, AgentRun> {
+  $$AgentRunsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('agent_runs__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$AgentRunsTableFilterComposer
+    extends Composer<_$AppDatabase, $AgentRunsTable> {
+  $$AgentRunsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get errorCode => $composableBuilder(
+    column: $table.errorCode,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get inputTokens => $composableBuilder(
+    column: $table.inputTokens,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get outputTokens => $composableBuilder(
+    column: $table.outputTokens,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentRunsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AgentRunsTable> {
+  $$AgentRunsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get errorCode => $composableBuilder(
+    column: $table.errorCode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get inputTokens => $composableBuilder(
+    column: $table.inputTokens,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get outputTokens => $composableBuilder(
+    column: $table.outputTokens,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentRunsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AgentRunsTable> {
+  $$AgentRunsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get model =>
+      $composableBuilder(column: $table.model, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<String> get errorCode =>
+      $composableBuilder(column: $table.errorCode, builder: (column) => column);
+
+  GeneratedColumn<int> get inputTokens => $composableBuilder(
+    column: $table.inputTokens,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get outputTokens => $composableBuilder(
+    column: $table.outputTokens,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get startedAt =>
+      $composableBuilder(column: $table.startedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => column,
+  );
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AgentRunsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AgentRunsTable,
+          AgentRun,
+          $$AgentRunsTableFilterComposer,
+          $$AgentRunsTableOrderingComposer,
+          $$AgentRunsTableAnnotationComposer,
+          $$AgentRunsTableCreateCompanionBuilder,
+          $$AgentRunsTableUpdateCompanionBuilder,
+          (AgentRun, $$AgentRunsTableReferences),
+          AgentRun,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$AgentRunsTableTableManager(_$AppDatabase db, $AgentRunsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AgentRunsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AgentRunsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AgentRunsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String> model = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<String?> errorCode = const Value.absent(),
+                Value<int?> inputTokens = const Value.absent(),
+                Value<int?> outputTokens = const Value.absent(),
+                Value<int> startedAt = const Value.absent(),
+                Value<int?> finishedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AgentRunsCompanion(
+                id: id,
+                accountId: accountId,
+                model: model,
+                status: status,
+                errorCode: errorCode,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required String model,
+                required String status,
+                Value<String?> errorCode = const Value.absent(),
+                Value<int?> inputTokens = const Value.absent(),
+                Value<int?> outputTokens = const Value.absent(),
+                required int startedAt,
+                Value<int?> finishedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AgentRunsCompanion.insert(
+                id: id,
+                accountId: accountId,
+                model: model,
+                status: status,
+                errorCode: errorCode,
+                inputTokens: inputTokens,
+                outputTokens: outputTokens,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$AgentRunsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$AgentRunsTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$AgentRunsTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$AgentRunsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AgentRunsTable,
+      AgentRun,
+      $$AgentRunsTableFilterComposer,
+      $$AgentRunsTableOrderingComposer,
+      $$AgentRunsTableAnnotationComposer,
+      $$AgentRunsTableCreateCompanionBuilder,
+      $$AgentRunsTableUpdateCompanionBuilder,
+      (AgentRun, $$AgentRunsTableReferences),
+      AgentRun,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$ChatMessagesTableCreateCompanionBuilder =
+    ChatMessagesCompanion Function({
+      required String id,
+      required String accountId,
+      Value<String?> runId,
+      required int ordinal,
+      required String role,
+      required String state,
+      required String content,
+      required int createdAt,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$ChatMessagesTableUpdateCompanionBuilder =
+    ChatMessagesCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String?> runId,
+      Value<int> ordinal,
+      Value<String> role,
+      Value<String> state,
+      Value<String> content,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$ChatMessagesTableReferences
+    extends BaseReferences<_$AppDatabase, $ChatMessagesTable, ChatMessage> {
+  $$ChatMessagesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('chat_messages__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$ChatMessagesTableFilterComposer
+    extends Composer<_$AppDatabase, $ChatMessagesTable> {
+  $$ChatMessagesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get runId => $composableBuilder(
+    column: $table.runId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get ordinal => $composableBuilder(
+    column: $table.ordinal,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get role => $composableBuilder(
+    column: $table.role,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get content => $composableBuilder(
+    column: $table.content,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ChatMessagesTableOrderingComposer
+    extends Composer<_$AppDatabase, $ChatMessagesTable> {
+  $$ChatMessagesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get runId => $composableBuilder(
+    column: $table.runId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get ordinal => $composableBuilder(
+    column: $table.ordinal,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get role => $composableBuilder(
+    column: $table.role,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get content => $composableBuilder(
+    column: $table.content,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ChatMessagesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ChatMessagesTable> {
+  $$ChatMessagesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get runId =>
+      $composableBuilder(column: $table.runId, builder: (column) => column);
+
+  GeneratedColumn<int> get ordinal =>
+      $composableBuilder(column: $table.ordinal, builder: (column) => column);
+
+  GeneratedColumn<String> get role =>
+      $composableBuilder(column: $table.role, builder: (column) => column);
+
+  GeneratedColumn<String> get state =>
+      $composableBuilder(column: $table.state, builder: (column) => column);
+
+  GeneratedColumn<String> get content =>
+      $composableBuilder(column: $table.content, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ChatMessagesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ChatMessagesTable,
+          ChatMessage,
+          $$ChatMessagesTableFilterComposer,
+          $$ChatMessagesTableOrderingComposer,
+          $$ChatMessagesTableAnnotationComposer,
+          $$ChatMessagesTableCreateCompanionBuilder,
+          $$ChatMessagesTableUpdateCompanionBuilder,
+          (ChatMessage, $$ChatMessagesTableReferences),
+          ChatMessage,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$ChatMessagesTableTableManager(_$AppDatabase db, $ChatMessagesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ChatMessagesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ChatMessagesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ChatMessagesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String?> runId = const Value.absent(),
+                Value<int> ordinal = const Value.absent(),
+                Value<String> role = const Value.absent(),
+                Value<String> state = const Value.absent(),
+                Value<String> content = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ChatMessagesCompanion(
+                id: id,
+                accountId: accountId,
+                runId: runId,
+                ordinal: ordinal,
+                role: role,
+                state: state,
+                content: content,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                Value<String?> runId = const Value.absent(),
+                required int ordinal,
+                required String role,
+                required String state,
+                required String content,
+                required int createdAt,
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => ChatMessagesCompanion.insert(
+                id: id,
+                accountId: accountId,
+                runId: runId,
+                ordinal: ordinal,
+                role: role,
+                state: state,
+                content: content,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$ChatMessagesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$ChatMessagesTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$ChatMessagesTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$ChatMessagesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ChatMessagesTable,
+      ChatMessage,
+      $$ChatMessagesTableFilterComposer,
+      $$ChatMessagesTableOrderingComposer,
+      $$ChatMessagesTableAnnotationComposer,
+      $$ChatMessagesTableCreateCompanionBuilder,
+      $$ChatMessagesTableUpdateCompanionBuilder,
+      (ChatMessage, $$ChatMessagesTableReferences),
+      ChatMessage,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$ToolInvocationsTableCreateCompanionBuilder =
+    ToolInvocationsCompanion Function({
+      required String id,
+      required String accountId,
+      required String runId,
+      required String toolName,
+      required String status,
+      required String safeArgumentsSummary,
+      required String safeResultSummary,
+      required int startedAt,
+      Value<int?> finishedAt,
+      Value<int> rowid,
+    });
+typedef $$ToolInvocationsTableUpdateCompanionBuilder =
+    ToolInvocationsCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String> runId,
+      Value<String> toolName,
+      Value<String> status,
+      Value<String> safeArgumentsSummary,
+      Value<String> safeResultSummary,
+      Value<int> startedAt,
+      Value<int?> finishedAt,
+      Value<int> rowid,
+    });
+
+final class $$ToolInvocationsTableReferences
+    extends
+        BaseReferences<_$AppDatabase, $ToolInvocationsTable, ToolInvocation> {
+  $$ToolInvocationsTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('tool_invocations__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$ToolInvocationsTableFilterComposer
+    extends Composer<_$AppDatabase, $ToolInvocationsTable> {
+  $$ToolInvocationsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get runId => $composableBuilder(
+    column: $table.runId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get toolName => $composableBuilder(
+    column: $table.toolName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get safeArgumentsSummary => $composableBuilder(
+    column: $table.safeArgumentsSummary,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get safeResultSummary => $composableBuilder(
+    column: $table.safeResultSummary,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ToolInvocationsTableOrderingComposer
+    extends Composer<_$AppDatabase, $ToolInvocationsTable> {
+  $$ToolInvocationsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get runId => $composableBuilder(
+    column: $table.runId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get toolName => $composableBuilder(
+    column: $table.toolName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get safeArgumentsSummary => $composableBuilder(
+    column: $table.safeArgumentsSummary,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get safeResultSummary => $composableBuilder(
+    column: $table.safeResultSummary,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get startedAt => $composableBuilder(
+    column: $table.startedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ToolInvocationsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ToolInvocationsTable> {
+  $$ToolInvocationsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get runId =>
+      $composableBuilder(column: $table.runId, builder: (column) => column);
+
+  GeneratedColumn<String> get toolName =>
+      $composableBuilder(column: $table.toolName, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<String> get safeArgumentsSummary => $composableBuilder(
+    column: $table.safeArgumentsSummary,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get safeResultSummary => $composableBuilder(
+    column: $table.safeResultSummary,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get startedAt =>
+      $composableBuilder(column: $table.startedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get finishedAt => $composableBuilder(
+    column: $table.finishedAt,
+    builder: (column) => column,
+  );
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ToolInvocationsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ToolInvocationsTable,
+          ToolInvocation,
+          $$ToolInvocationsTableFilterComposer,
+          $$ToolInvocationsTableOrderingComposer,
+          $$ToolInvocationsTableAnnotationComposer,
+          $$ToolInvocationsTableCreateCompanionBuilder,
+          $$ToolInvocationsTableUpdateCompanionBuilder,
+          (ToolInvocation, $$ToolInvocationsTableReferences),
+          ToolInvocation,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$ToolInvocationsTableTableManager(
+    _$AppDatabase db,
+    $ToolInvocationsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ToolInvocationsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$ToolInvocationsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$ToolInvocationsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String> runId = const Value.absent(),
+                Value<String> toolName = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<String> safeArgumentsSummary = const Value.absent(),
+                Value<String> safeResultSummary = const Value.absent(),
+                Value<int> startedAt = const Value.absent(),
+                Value<int?> finishedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ToolInvocationsCompanion(
+                id: id,
+                accountId: accountId,
+                runId: runId,
+                toolName: toolName,
+                status: status,
+                safeArgumentsSummary: safeArgumentsSummary,
+                safeResultSummary: safeResultSummary,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required String runId,
+                required String toolName,
+                required String status,
+                required String safeArgumentsSummary,
+                required String safeResultSummary,
+                required int startedAt,
+                Value<int?> finishedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ToolInvocationsCompanion.insert(
+                id: id,
+                accountId: accountId,
+                runId: runId,
+                toolName: toolName,
+                status: status,
+                safeArgumentsSummary: safeArgumentsSummary,
+                safeResultSummary: safeResultSummary,
+                startedAt: startedAt,
+                finishedAt: finishedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$ToolInvocationsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable:
+                                    $$ToolInvocationsTableReferences
+                                        ._accountIdTable(db),
+                                referencedColumn:
+                                    $$ToolInvocationsTableReferences
+                                        ._accountIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$ToolInvocationsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ToolInvocationsTable,
+      ToolInvocation,
+      $$ToolInvocationsTableFilterComposer,
+      $$ToolInvocationsTableOrderingComposer,
+      $$ToolInvocationsTableAnnotationComposer,
+      $$ToolInvocationsTableCreateCompanionBuilder,
+      $$ToolInvocationsTableUpdateCompanionBuilder,
+      (ToolInvocation, $$ToolInvocationsTableReferences),
+      ToolInvocation,
+      PrefetchHooks Function({bool accountId})
+    >;
+typedef $$ConversationSummariesTableCreateCompanionBuilder =
+    ConversationSummariesCompanion Function({
+      required String id,
+      required String accountId,
+      required int throughOrdinal,
+      required String content,
+      required String model,
+      required int createdAt,
+      Value<int> rowid,
+    });
+typedef $$ConversationSummariesTableUpdateCompanionBuilder =
+    ConversationSummariesCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<int> throughOrdinal,
+      Value<String> content,
+      Value<String> model,
+      Value<int> createdAt,
+      Value<int> rowid,
+    });
+
+final class $$ConversationSummariesTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $ConversationSummariesTable,
+          ConversationSummary
+        > {
+  $$ConversationSummariesTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('conversation_summaries__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$ConversationSummariesTableFilterComposer
+    extends Composer<_$AppDatabase, $ConversationSummariesTable> {
+  $$ConversationSummariesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get throughOrdinal => $composableBuilder(
+    column: $table.throughOrdinal,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get content => $composableBuilder(
+    column: $table.content,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ConversationSummariesTableOrderingComposer
+    extends Composer<_$AppDatabase, $ConversationSummariesTable> {
+  $$ConversationSummariesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get throughOrdinal => $composableBuilder(
+    column: $table.throughOrdinal,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get content => $composableBuilder(
+    column: $table.content,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get model => $composableBuilder(
+    column: $table.model,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ConversationSummariesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $ConversationSummariesTable> {
+  $$ConversationSummariesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get throughOrdinal => $composableBuilder(
+    column: $table.throughOrdinal,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get content =>
+      $composableBuilder(column: $table.content, builder: (column) => column);
+
+  GeneratedColumn<String> get model =>
+      $composableBuilder(column: $table.model, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$ConversationSummariesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $ConversationSummariesTable,
+          ConversationSummary,
+          $$ConversationSummariesTableFilterComposer,
+          $$ConversationSummariesTableOrderingComposer,
+          $$ConversationSummariesTableAnnotationComposer,
+          $$ConversationSummariesTableCreateCompanionBuilder,
+          $$ConversationSummariesTableUpdateCompanionBuilder,
+          (ConversationSummary, $$ConversationSummariesTableReferences),
+          ConversationSummary,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$ConversationSummariesTableTableManager(
+    _$AppDatabase db,
+    $ConversationSummariesTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$ConversationSummariesTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$ConversationSummariesTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$ConversationSummariesTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<int> throughOrdinal = const Value.absent(),
+                Value<String> content = const Value.absent(),
+                Value<String> model = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => ConversationSummariesCompanion(
+                id: id,
+                accountId: accountId,
+                throughOrdinal: throughOrdinal,
+                content: content,
+                model: model,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required int throughOrdinal,
+                required String content,
+                required String model,
+                required int createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => ConversationSummariesCompanion.insert(
+                id: id,
+                accountId: accountId,
+                throughOrdinal: throughOrdinal,
+                content: content,
+                model: model,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$ConversationSummariesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable:
+                                    $$ConversationSummariesTableReferences
+                                        ._accountIdTable(db),
+                                referencedColumn:
+                                    $$ConversationSummariesTableReferences
+                                        ._accountIdTable(db)
+                                        .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$ConversationSummariesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $ConversationSummariesTable,
+      ConversationSummary,
+      $$ConversationSummariesTableFilterComposer,
+      $$ConversationSummariesTableOrderingComposer,
+      $$ConversationSummariesTableAnnotationComposer,
+      $$ConversationSummariesTableCreateCompanionBuilder,
+      $$ConversationSummariesTableUpdateCompanionBuilder,
+      (ConversationSummary, $$ConversationSummariesTableReferences),
+      ConversationSummary,
       PrefetchHooks Function({bool accountId})
     >;
 typedef $$CourseSeriesTableCreateCompanionBuilder =
@@ -29719,6 +35613,18 @@ class $AppDatabaseManager {
         _db,
         _db.agentPermissionPolicies,
       );
+  $$AgentSettingsTableTableManager get agentSettings =>
+      $$AgentSettingsTableTableManager(_db, _db.agentSettings);
+  $$AgentSecretsTableTableManager get agentSecrets =>
+      $$AgentSecretsTableTableManager(_db, _db.agentSecrets);
+  $$AgentRunsTableTableManager get agentRuns =>
+      $$AgentRunsTableTableManager(_db, _db.agentRuns);
+  $$ChatMessagesTableTableManager get chatMessages =>
+      $$ChatMessagesTableTableManager(_db, _db.chatMessages);
+  $$ToolInvocationsTableTableManager get toolInvocations =>
+      $$ToolInvocationsTableTableManager(_db, _db.toolInvocations);
+  $$ConversationSummariesTableTableManager get conversationSummaries =>
+      $$ConversationSummariesTableTableManager(_db, _db.conversationSummaries);
   $$CourseSeriesTableTableManager get courseSeries =>
       $$CourseSeriesTableTableManager(_db, _db.courseSeries);
   $$CalendarEventSeriesTableTableManager get calendarEventSeries =>

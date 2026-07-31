@@ -29,9 +29,9 @@ class SettingsService {
 
   static const automaticSyncInterval = Duration(hours: 12);
   static const defaultJwSemester = {
-    'semesterId': 421,
-    'semesterKey': '2026spring',
-    'displayName': '2026 春季学期',
+    'semesterId': 461,
+    'semesterKey': '2026fall',
+    'displayName': '2026 秋季学期',
   };
 
   final AppDatabase database;
@@ -181,6 +181,7 @@ class SettingsService {
         database.localAccounts,
       )..where((row) => row.id.equals(accountId))).go();
     });
+    database.notifyActiveAccountChanged();
     try {
       await accounts.clearDedicatedBrowserSession();
     } catch (error) {

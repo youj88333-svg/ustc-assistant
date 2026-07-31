@@ -11,8 +11,18 @@ void main() {
   test('history sanitizes every rendered and filterable field', () async {
     final database = AppDatabase(NativeDatabase.memory());
     addTearDown(database.close);
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'a',
+            maskedHint: 'PB****0000',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
     await database.actionLogsRepository.append(
-      accountId: null,
+      accountId: 'a',
       source: 'Authorization Bearer secret-token',
       actionType: 'password_changed',
       result: 'fine_username',
@@ -20,7 +30,7 @@ void main() {
       occurredAt: 100,
     );
 
-    final entries = await HistoryRepository(database).query();
+    final entries = await HistoryRepository(database).query('a');
     final text = entries
         .map(
           (item) =>
@@ -38,13 +48,23 @@ void main() {
   test('history filters by time, source, action type and result', () async {
     final database = AppDatabase(NativeDatabase.memory());
     addTearDown(database.close);
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'a',
+            maskedHint: 'PB****0000',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
     for (final row in const [
       ('ustc_jw', 'source_sync', 'success', 100),
       ('user', 'task_create', 'success', 200),
       ('ustc_jw', 'source_sync', 'failure', 300),
     ]) {
       await database.actionLogsRepository.append(
-        accountId: null,
+        accountId: 'a',
         source: row.$1,
         actionType: row.$2,
         result: row.$3,
@@ -53,7 +73,8 @@ void main() {
       );
     }
     final entries = await HistoryRepository(database).query(
-      HistoryFilter(
+      'a',
+      filter: HistoryFilter(
         from: 250,
         through: 350,
         source: 'ustc_jw',
@@ -63,6 +84,86 @@ void main() {
     );
     expect(entries, hasLength(1));
     expect(entries.single.occurredAt, 300);
+  });
+
+  test('history is scoped to the account in the database query', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    for (final account in ['a', 'b']) {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: account,
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+    }
+    await database.actionLogsRepository.append(
+      accountId: 'a',
+      source: 'user',
+      actionType: 'task_create',
+      result: 'success',
+      safeSummary: 'Account A task.',
+      occurredAt: 100,
+    );
+    await database.actionLogsRepository.append(
+      accountId: 'b',
+      source: 'user',
+      actionType: 'task_create',
+      result: 'success',
+      safeSummary: 'Account B task.',
+      occurredAt: 200,
+    );
+    // A null-account legacy log must never surface for a scoped query.
+    await database.actionLogsRepository.append(
+      accountId: null,
+      source: 'user',
+      actionType: 'task_create',
+      result: 'success',
+      safeSummary: 'Unscoped legacy log.',
+      occurredAt: 50,
+    );
+
+    final aEntries = await HistoryRepository(database).query('a');
+    expect(aEntries, hasLength(1));
+    expect(aEntries.single.safeSummary, 'Account A task.');
+
+    final bEntries = await HistoryRepository(database).query('b');
+    expect(bEntries, hasLength(1));
+    expect(bEntries.single.safeSummary, 'Account B task.');
+  });
+
+  test('history caps the result at 50 rows', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'a',
+            maskedHint: 'PB****0000',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    for (var i = 0; i < 60; i++) {
+      await database.actionLogsRepository.append(
+        accountId: 'a',
+        source: 'user',
+        actionType: 'task_create',
+        result: 'success',
+        safeSummary: 'Operation $i.',
+        occurredAt: 1000 + i,
+      );
+    }
+    final entries = await HistoryRepository(database).query('a');
+    expect(entries, hasLength(50));
+    // Newest-first ordering: the most recent 50 of the 60 rows.
+    expect(entries.first.occurredAt, 1059);
+    expect(entries.last.occurredAt, 1010);
   });
 
   test(
@@ -136,7 +237,7 @@ void main() {
         ConflictState.conflict,
       );
 
-      final entries = await HistoryRepository(database).query();
+      final entries = await HistoryRepository(database).query('account');
       expect(
         entries.map((entry) => entry.actionType),
         containsAll([

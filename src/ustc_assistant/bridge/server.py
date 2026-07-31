@@ -7,6 +7,7 @@ import json
 import os
 import threading
 import time
+from collections.abc import Mapping
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable
@@ -20,9 +21,21 @@ from ustc_assistant.bridge.jobs import (
     JwCollectionRequest,
     YoungCollectionRequest,
 )
+from ustc_assistant.bridge.query_jobs import (
+    BridgeQueryBusy,
+    CampusDetailQuery,
+    CampusSearchQuery,
+    IcourseQuery,
+    InvalidQueryJobState,
+    QueryJobNotFound,
+    ReadQueryJobManager,
+    YoungEnrolmentQuery,
+    _FORBIDDEN_URL_FILESYSTEM_FIELDS,
+)
 from ustc_assistant.bridge.protocol import (
     MAX_REQUEST_BYTES,
     PROTOCOL_VERSION,
+    QUERY_PROTOCOL_VERSION,
     ProtocolError,
     make_handshake,
     parse_request_body,
@@ -143,6 +156,13 @@ class _Handler(BaseHTTPRequestHandler):
                 {
                     "protocolVersion": PROTOCOL_VERSION,
                     "supportedProtocolVersions": [PROTOCOL_VERSION],
+                    "queryProtocolVersion": QUERY_PROTOCOL_VERSION,
+                    "queryTypes": [
+                        "young_enrolment",
+                        "icourse",
+                        "campus_search",
+                        "campus_detail",
+                    ],
                     "jwSemester": {
                         "semesterId": semester.semester_id,
                         "semesterKey": semester.semester_key,
@@ -168,6 +188,29 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             except (ValueError, JobNotFound):
                 self._write(404, {"error": "job_not_found"})
+                return
+            self._write(200, payload)
+            return
+        if (
+            len(parts) == 3
+            and parts[0] == "query-jobs"
+            and parts[2] == "events"
+        ):
+            values = parse_qs(parsed.query).get("after", ["0"])
+            try:
+                after = int(values[0])
+                wait_ms = int(
+                    parse_qs(parsed.query).get("waitMs", ["15000"])[0]
+                )
+                if after < 0:
+                    raise ValueError
+                if not 0 <= wait_ms <= 20_000:
+                    raise ValueError
+                payload = self.bridge.query_jobs.get(parts[1]).events_after(
+                    after, wait_timeout=wait_ms / 1000
+                )
+            except (ValueError, QueryJobNotFound):
+                self._write(404, {"error": "query_job_not_found"})
                 return
             self._write(200, payload)
             return
@@ -202,10 +245,16 @@ class _Handler(BaseHTTPRequestHandler):
         except BridgeBusy:
             self._write(409, {"error": "bridge_busy"})
             return
+        except BridgeQueryBusy:
+            self._write(409, {"error": "bridge_query_busy"})
+            return
         except JobNotFound:
             self._write(404, {"error": "job_not_found"})
             return
-        except (InvalidJobState, AccountMismatch):
+        except QueryJobNotFound:
+            self._write(404, {"error": "query_job_not_found"})
+            return
+        except (InvalidJobState, AccountMismatch, InvalidQueryJobState):
             self._write(409, {"error": "invalid_job_state"})
             return
         except (KeyError, TypeError, ValueError):
@@ -237,6 +286,11 @@ class BridgeServer:
         young_collector: Callable[..., Any] = (
             young_service.collect_young_schedule_source_bundle
         ),
+        query_job_manager: ReadQueryJobManager | None = None,
+        young_enrolment_query: Callable[..., Any] | None = None,
+        icourse_query: Callable[..., Any] | None = None,
+        campus_search_query: Callable[..., Any] | None = None,
+        campus_detail_query: Callable[..., Any] | None = None,
     ) -> None:
         if host != "127.0.0.1":
             raise ValueError("Bridge must bind to 127.0.0.1")
@@ -249,6 +303,12 @@ class BridgeServer:
         self.jobs = job_manager or JobManager()
         self._jw_collector = jw_collector
         self._young_collector = young_collector
+        self.query_jobs = query_job_manager or ReadQueryJobManager(
+            young_enrolment_query=young_enrolment_query,
+            icourse_query=icourse_query,
+            campus_search_query=campus_search_query,
+            campus_detail_query=campus_detail_query,
+        )
         self._last_activity = monotonic()
         self._lock = threading.Lock()
         self._stopping = threading.Event()
@@ -374,7 +434,188 @@ class BridgeServer:
             self._require_keys(payload, {"protocolVersion"})
             job = self.jobs.cancel(parts[1])
             return 202, {"jobId": job.id, "phase": job.phase}
+        if path == "/queries":
+            job = self._start_query_job(payload)
+            return 202, {"jobId": job.id, "phase": job.phase}
+        if (
+            len(parts) == 3
+            and parts[0] == "query-jobs"
+            and parts[2] == "resume-login"
+        ):
+            self._require_keys(
+                payload,
+                {"protocolVersion"},
+                {"password"},
+            )
+            job = self.query_jobs.get(parts[1])
+            password = payload.get("password")
+            if password is not None and (
+                not isinstance(password, str) or len(password) > 1024
+            ):
+                raise ValueError("invalid password")
+            if job.query_type != "young_enrolment":
+                raise InvalidQueryJobState(
+                    "only young_enrolment can resume login"
+                )
+            if job.phase != "needs_user_login":
+                raise InvalidQueryJobState(
+                    "job is not waiting for login"
+                )
+            self.query_jobs.resume_login(
+                job.id,
+                credentials=LoginCredentials(
+                    job.request.expected_username, password
+                ),
+            )
+            return 202, {"jobId": job.id, "phase": job.phase}
+        if (
+            len(parts) == 3
+            and parts[0] == "query-jobs"
+            and parts[2] == "cancel"
+        ):
+            self._require_keys(payload, {"protocolVersion"})
+            job = self.query_jobs.cancel(parts[1])
+            return 202, {"jobId": job.id, "phase": job.phase}
         return None
+
+    @staticmethod
+    def _reject_forbidden_fields(value: Any) -> None:
+        """Reject URL/filesystem field names anywhere in a query request.
+
+        These names are always invalid regardless of query type. Credential
+        rejection for public queries is enforced by the per-type allowlist
+        (icourse/campus top-level allowlists do not accept accountId,
+        expectedUsername, password, or credentials).
+        """
+        if isinstance(value, Mapping):
+            for key in value.keys():
+                if isinstance(key, str) and key in _FORBIDDEN_URL_FILESYSTEM_FIELDS:
+                    raise ValueError("forbidden field")
+            for child in value.values():
+                BridgeServer._reject_forbidden_fields(child)
+        elif isinstance(value, list):
+            for child in value:
+                BridgeServer._reject_forbidden_fields(child)
+
+    def _start_query_job(self, payload: dict[str, Any]):
+        # Top-level allowlist: protocolVersion + queryProtocolVersion are
+        # always required; accountId/expectedUsername only for young_enrolment.
+        keys = set(payload)
+        if not {"protocolVersion", "queryProtocolVersion"} <= keys:
+            raise ValueError("invalid request fields")
+        if payload.get("queryProtocolVersion") != QUERY_PROTOCOL_VERSION:
+            raise ValueError("unsupported query version")
+        query = payload.get("query")
+        if not isinstance(query, dict) or "type" not in query:
+            raise ValueError("invalid request fields")
+        query_type = query.get("type")
+        # Reject URL/filesystem field names anywhere in the request, before
+        # per-type allowlisting. This is a hard, type-independent guard.
+        BridgeServer._reject_forbidden_fields(payload)
+
+        if query_type == "young_enrolment":
+            self._require_keys(
+                payload,
+                {
+                    "protocolVersion",
+                    "queryProtocolVersion",
+                    "accountId",
+                    "expectedUsername",
+                    "query",
+                },
+            )
+            self._require_keys(query, {"type"})
+            account_id = self._text(payload, "accountId")
+            expected_username = self._text(payload, "expectedUsername")
+            request = YoungEnrolmentQuery(
+                account_id=account_id,
+                expected_username=expected_username,
+            )
+            return self.query_jobs.start_young_enrolment(request)
+        if query_type == "icourse":
+            self._require_keys(
+                payload,
+                {"protocolVersion", "queryProtocolVersion", "query"},
+            )
+            self._require_keys(
+                query,
+                {"type", "course"},
+                {"teachers", "preferences"},
+            )
+            course = self._text(query, "course")
+            teachers_raw = query.get("teachers", ())
+            if not isinstance(teachers_raw, (list, tuple)) or not all(
+                isinstance(item, str) and item.strip() for item in teachers_raw
+            ):
+                raise ValueError("invalid teachers")
+            teachers = tuple(teachers_raw)
+            preferences = query.get("preferences")
+            if preferences is not None:
+                if not isinstance(preferences, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str)
+                    for k, v in preferences.items()
+                ):
+                    raise ValueError("invalid preferences")
+            request = IcourseQuery(
+                course=course,
+                teachers=teachers,
+                preferences=preferences,
+            )
+            return self.query_jobs.start_icourse(request)
+        if query_type == "campus_search":
+            self._require_keys(
+                payload,
+                {"protocolVersion", "queryProtocolVersion", "query"},
+            )
+            self._require_keys(
+                query,
+                {"type", "query"},
+                {"filters", "limit"},
+            )
+            search_query = self._text(query, "query")
+            filters = query.get("filters")
+            if filters is not None:
+                if not isinstance(filters, dict) or not all(
+                    isinstance(k, str) and isinstance(v, str)
+                    for k, v in filters.items()
+                ):
+                    raise ValueError("invalid filters")
+            limit = query.get("limit", 20)
+            if (
+                isinstance(limit, bool)
+                or not isinstance(limit, int)
+                or not 1 <= limit <= 100
+            ):
+                raise ValueError("invalid limit")
+            request = CampusSearchQuery(
+                query=search_query,
+                filters=filters,
+                limit=limit,
+            )
+            return self.query_jobs.start_campus_search(request)
+        if query_type == "campus_detail":
+            self._require_keys(
+                payload,
+                {"protocolVersion", "queryProtocolVersion", "query"},
+            )
+            self._require_keys(
+                query,
+                {"type", "entryId"},
+                {"followLinkIds"},
+            )
+            entry_id = self._text(query, "entryId")
+            follow_link_ids_raw = query.get("followLinkIds", ())
+            if not isinstance(follow_link_ids_raw, (list, tuple)) or not all(
+                isinstance(item, str) and item.strip()
+                for item in follow_link_ids_raw
+            ):
+                raise ValueError("invalid followLinkIds")
+            request = CampusDetailQuery(
+                entry_id=entry_id,
+                follow_link_ids=tuple(follow_link_ids_raw),
+            )
+            return self.query_jobs.start_campus_detail(request)
+        raise ValueError("unknown query type")
 
     def serve_forever(self) -> None:
         self._serve_thread_id = threading.get_ident()
@@ -386,7 +627,9 @@ class BridgeServer:
         while not self._stopping.wait(0.25):
             with self._lock:
                 last_activity = self._last_activity
-                active_jobs = self.jobs.active_jobs
+                active_jobs = (
+                    self.jobs.active_jobs + self.query_jobs.active_jobs
+                )
             if should_stop(
                 parent_pid=self.parent_pid,
                 parent_alive=self._parent_alive,

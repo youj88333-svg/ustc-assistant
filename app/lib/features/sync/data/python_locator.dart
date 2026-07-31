@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
+
+import 'bridge_client.dart';
 
 class PythonLocationError implements Exception {
   const PythonLocationError(this.code);
@@ -19,7 +22,11 @@ class ProcessResultValue {
 }
 
 abstract interface class PythonCommandRunner {
-  Future<ProcessResultValue> run(String executable, List<String> arguments);
+  Future<ProcessResultValue> run(
+    String executable,
+    List<String> arguments, {
+    Map<String, String>? environment,
+  });
 }
 
 class IoPythonCommandRunner implements PythonCommandRunner {
@@ -28,9 +35,16 @@ class IoPythonCommandRunner implements PythonCommandRunner {
   @override
   Future<ProcessResultValue> run(
     String executable,
-    List<String> arguments,
+    List<String> arguments, {
+    Map<String, String>? environment,
+  }
   ) async {
-    final result = await Process.run(executable, arguments, runInShell: false);
+    final result = await Process.run(
+      executable,
+      arguments,
+      runInShell: false,
+      environment: environment,
+    );
     return ProcessResultValue(
       exitCode: result.exitCode,
       stdout: result.stdout.toString(),
@@ -48,7 +62,12 @@ class PythonLocator {
   final PythonCommandRunner runner;
   final Map<String, String> environment;
 
-  Future<String> locate({String? savedExecutable}) async {
+  Future<String> locate({
+    String? savedExecutable,
+    String requiredModule = 'ustc_assistant.bridge',
+    Map<String, String>? importEnvironment,
+  }) async {
+    final probeEnvironment = importEnvironment ?? environment;
     final candidates = <String>[];
     if (savedExecutable != null && savedExecutable.trim().isNotEmpty) {
       candidates.add(savedExecutable.trim());
@@ -63,7 +82,9 @@ class PythonLocator {
       );
     }
     for (final candidate in candidates.toSet()) {
-      if (await _canImport(candidate)) return candidate;
+      if (await _canImport(candidate, requiredModule, probeEnvironment)) {
+        return candidate;
+      }
     }
     final resolved = await runner.run('conda', const [
       'run',
@@ -77,17 +98,85 @@ class PythonLocator {
       throw const PythonLocationError('conda_resolution_failed');
     }
     final path = resolved.stdout.trim().split(RegExp(r'\r?\n')).last.trim();
-    if (path.isEmpty || !await _canImport(path)) {
+    if (path.isEmpty || !await _canImport(path, requiredModule, probeEnvironment)) {
       throw const PythonLocationError('bridge_import_failed');
     }
     return path;
   }
 
-  Future<bool> _canImport(String executable) async {
-    final result = await runner.run(executable, const [
+  Future<bool> _canImport(
+    String executable,
+    String requiredModule,
+    Map<String, String> environment,
+  ) async {
+    final result = await runner.run(executable, [
       '-c',
-      'import ustc_assistant.bridge',
-    ]);
+      'import importlib; importlib.import_module(${jsonEncode(requiredModule)})',
+    ], environment: environment);
     return result.exitCode == 0;
   }
+}
+
+/// Finds a source worktree from an explicit start directory, including the
+/// normal Windows application start directory at `<worktree>/app`.
+Directory? findBridgeDevelopmentRoot(Directory startDirectory) {
+  var current = startDirectory.absolute;
+  while (true) {
+    final queryJobs = File(
+      '${current.path}${Platform.pathSeparator}src${Platform.pathSeparator}'
+      'ustc_assistant${Platform.pathSeparator}bridge${Platform.pathSeparator}'
+      'query_jobs.py',
+    );
+    if (queryJobs.existsSync()) return current;
+    final parent = current.parent;
+    if (parent.path == current.path) return null;
+    current = parent;
+  }
+}
+
+/// Supplies the Bridge with explicit source and writable data roots without
+/// relying on the process current directory.
+BridgeLaunchOptions resolveBridgeLaunchOptions({
+  Directory? startDirectory,
+  Map<String, String>? environment,
+}) {
+  final resolvedEnvironment = Map<String, String>.from(
+    environment ?? Platform.environment,
+  );
+  final worktreeRoot = findBridgeDevelopmentRoot(
+    startDirectory ?? Directory.current,
+  );
+  if (worktreeRoot != null) {
+    final sourceRoot = '${worktreeRoot.path}${Platform.pathSeparator}src';
+    final dataRoot = Directory(
+      '${worktreeRoot.path}${Platform.pathSeparator}tmp'
+      '${Platform.pathSeparator}bridge-data',
+    );
+    dataRoot.createSync(recursive: true);
+    final existingPythonPath = resolvedEnvironment['PYTHONPATH'];
+    final separator = Platform.isWindows ? ';' : ':';
+    resolvedEnvironment['PYTHONPATH'] = existingPythonPath == null ||
+            existingPythonPath.isEmpty
+        ? sourceRoot
+        : '$sourceRoot$separator$existingPythonPath';
+    resolvedEnvironment['USTC_ASSISTANT_SOURCE_ROOT'] = worktreeRoot.path;
+    resolvedEnvironment['USTC_ASSISTANT_DATA_ROOT'] = dataRoot.path;
+    return BridgeLaunchOptions(
+      workingDirectory: worktreeRoot.path,
+      environment: resolvedEnvironment,
+    );
+  }
+
+  final appData = resolvedEnvironment['LOCALAPPDATA'] ??
+      resolvedEnvironment['APPDATA'] ??
+      Directory.systemTemp.path;
+  final dataRoot = Directory(
+    '$appData${Platform.pathSeparator}USTC Campus Assistant',
+  );
+  dataRoot.createSync(recursive: true);
+  resolvedEnvironment['USTC_ASSISTANT_DATA_ROOT'] = dataRoot.path;
+  return BridgeLaunchOptions(
+    workingDirectory: dataRoot.path,
+    environment: resolvedEnvironment,
+  );
 }

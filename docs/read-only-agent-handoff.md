@@ -1,6 +1,29 @@
 # USTC Assistant 只读 Agent 实施交接
 
-更新时间：2026-07-28
+更新时间：2026-07-29
+
+## 0. 当前状态（2026-07-30 更新）
+
+只读 Agent 的 Task 1–8 已在 `feature/read-only-agent` 分支上实现、审查并提交；Task 9
+及最终整分支审查尚未执行，因此本节不硬编码最终 HEAD 哈希——最终修复后的精确 HEAD 在
+最终验证时记录于本文件第 7 节，Task 9 之前任何哈希都会被后续提交改写。完整只读 Agent
+已落地：Agent 数据库表、DPAPI 保护 API Key 与配置、Anthropic SSE Provider、隐私过滤
+与上下文构建、工具注册表与会话运行时、15 个只读工具（11 本地 + 4 按需来源）、Python
+稳定查询 API、Bridge Query Protocol 1.0 查询作业、Flutter 查询网关与 4 个外部工具、
+设置 UI、聊天 UI 与组合、端到端安全测试，以及 Task 8 新增的组合级集成测试（真实路由
++ 注入式组合覆盖配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、网关释放与
+捕获请求隐私断言）。
+
+**真实人工验收尚未执行**：下文第 9 节的人工验收清单
+（`docs/acceptance/read-only-agent.md`）需由用户在真实校园网 / Panabit iWAN / 真实
+API Key 环境下逐项执行。自动测试通过不等于人工验收通过——学校 API 与学校网站从不进入
+自动测试，组合级集成测试只验证代码行为。
+
+**最终整分支审查尚未执行**：各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类，
+由控制器在最终验证后单独执行，不在本交接范围内。
+
+以下第 1–9 节保留原始交接基线信息（实施前的状态描述），仅在第 7、8 节追加实际验证
+结果与已知边界。历史基线不应被当作“功能未实现”——以本节和代码为准。
 
 ## 1. 交接目标
 
@@ -13,10 +36,9 @@
 移动端来源采集。计划包含 13 个 Task，采用 Subagent-Driven Development 逐项实现、
 测试、审查和提交。
 
-Task 1 已在隔离工作区实现并提交，新增了 Agent 数据库表、领域记录和
-`DriftChatRepository`。但独立复审发现两项阻断问题，Task 1 当前不能视为验收通过，
-下一位 Agent 必须先修复本文件第 3 节列出的问题，再开始 Task 2。Anthropic
-Provider、Agent Runtime、只读工具和聊天 UI 仍未实现。
+截至本交接文档编写前，实施尚未开始：没有 Agent 数据库表、Anthropic Provider、
+Agent Runtime、只读工具或聊天 UI 实现。不要把已经提交的设计和计划误认为功能已
+完成。
 
 ## 2. Git 基线与工作区
 
@@ -30,7 +52,7 @@ a62ca27 docs: archive first-round manual acceptance results
 b0a311d fix: auto-submit USTC CAS login after filling credentials
 ```
 
-当前主工作区基线是本地 `main` 上的 `6212f20` 及本交接文档后续提交。`main` 有大量尚未
+当前开发基线是本地 `main` 上的 `46af1f8` 及本交接文档提交。`main` 有大量尚未
 推送到 `origin/main` 的提交；开始前运行 `git status --short --branch` 和
 `git log -8 --oneline --decorate`，不要拉取、重置或改写本地历史。
 
@@ -43,75 +65,14 @@ M app/windows/flutter/generated_plugins.cmake
 ```
 
 这些文件当前没有可见内容差异，疑似换行符或文件状态变化。不要还原、暂存或提交。
-
-只读 Agent 已在以下隔离工作区和分支实施：
-
-```text
-Worktree: E:/107/.worktrees/read-only-agent
-Branch:   feature/read-only-agent
-Task 1:   28e351c feat: persist account agent conversations
-```
-
-隔离工作区也显示上述三个 Windows Flutter 生成文件为未提交状态，不得还原、暂存
-或提交。`.superpowers/sdd/2026-07-28-read-only-agent/` 中有 Task 1 报告、旧审查
-和进度 ledger；其中“Task 1 review clean”的结论已经被本次人工复审推翻，不能作为
-继续 Task 2 的依据。
+只读 Agent 应在新的 `.worktrees/` 隔离工作区和 `feature/read-only-agent` 分支上
+实现。上一次启动执行在创建工作树前已停止，目前没有为本计划创建隔离工作树，也
+没有任何 Task 被部分执行。
 
 `temp.md`、`tmp/`、`.superpowers/`、浏览器 Profile 和本地密钥均被 Git 忽略。
 不得把它们加入提交。
 
-## 3. Task 1 当前状态与必修问题
-
-### 已完成部分
-
-提交 `28e351c` 完成了计划 Task 1 的主要文件：
-
-```text
-app/lib/core/database/tables/agent_tables.dart
-app/lib/core/database/app_database.dart
-app/lib/core/database/app_database.g.dart
-app/lib/features/agent/domain/agent_models.dart
-app/lib/features/agent/data/drift_chat_repository.dart
-app/test/core/database/migration_test.dart
-app/test/features/agent/chat_repository_test.dart
-```
-
-- 数据库版本升至 3，注册并迁移六张 Agent 表；
-- 增加账号分区的聊天、Run、工具调用、摘要和加密 Key 元数据结构；
-- 增加基本消息追加、草稿更新、Run 完成、摘要替换、清空与异常恢复逻辑；
-- Task 1 报告记录聚焦测试 17 项通过。
-
-### 阻断问题
-
-在修复以下两项并补回归测试前，不得开始 Task 2：
-
-1. `DriftChatRepository.recentMessages` 当前按 `ordinal ASC` 后直接 `limit`，返回的
-   是最早消息，不是最近消息。资格过滤还发生在 SQL `limit` 之后，会漏掉窗口外的
-   有效消息。必须在 SQL 中先筛选可进入上下文的消息，按 `ordinal DESC` 取最近
-   `limit` 条，再反转为升序返回。测试必须覆盖消息数量大于 `limit` 且夹有
-   failed/cancelled/interrupted 草稿的情况。
-2. `chat_messages` 和 `tool_invocations` 只分别外键到 `account_id` 与 `run_id`，
-   没有强制两者属于同一账号；`appendMessage` 也不验证 Run 归属。因此账号 A 的
-   消息可以引用账号 B 的 Run，清除 B 时还会通过级联误删 A 的消息。应使用
-   `(run_id, account_id)` 复合约束，或在同一事务中严格验证 Run 归属，并为消息和
-   后续工具记录增加跨账号拒绝测试。
-
-### 同轮修复项
-
-- `finishRun` 应要求账号作用域，只允许从 `running` 转为终态，拒绝
-  `state=running` 和重复覆盖终态，避免清空已有 token/error；
-- `updateAssistantDraft` 和 `recoverInterrupted` 应同时限定
-  `role=assistant`；
-- 增加真实 v2→v3 迁移测试，确认六张新表创建且已有代表性业务数据保留；
-- 修复 `chat_repository_test.dart` 两处 `await_only_futures`；
-- 对本 Task 手写 Dart 文件运行格式化。当前格式检查报告
-  `agent_tables.dart`、`drift_chat_repository.dart` 和
-  `chat_repository_test.dart` 需要格式化。
-
-修复后应重新运行聚焦测试、`flutter analyze`，更新 SDD ledger，并新增一个独立
-修复提交；不要改写或 squash `28e351c`。
-
-## 4. 当前已实现能力
+## 3. 当前已实现能力
 
 ### Python 来源
 
@@ -134,12 +95,15 @@ Python 正式入口是 `python -m ustc_assistant`。`scripts/` 没有正式运�
 - Task、PlanBlock、截止风险、结束后确认和一步撤回；
 - 重叠事件、主事件、人工冲突/不冲突关系和用户覆盖；
 - Reminder、操作历史、设置、清理与完全重置；
-- 聊天页目前仍是禁用外壳。
+- 只读 Agent：聊天页已替换为校园 Agent，支持学校 Anthropic 模型、SSE 流式回答、
+  15 个只读工具（11 本地 + 4 按需来源）、按账号隔离的长期主会话、滚动摘要、工具
+  过程默认折叠、停止与重试、重启恢复、设置页模型服务配置。详见
+  `docs/architecture.md`“只读 Agent 架构”一节。
 
-Android/iOS 目录只有 Flutter 平台脚手架。共享本地模型和 ImportService 可复用，
-移动端登录、来源采集和安全存储适配尚未实现。
+Android/iOS 目录只有 Flutter 平台脚手架。共享 Agent 核心、本地模型和 ImportService
+可复用，移动端登录、来源采集和安全存储适配尚未实现。
 
-## 5. 已确认的 Agent 范围
+## 4. 已确认的 Agent 范围
 
 ### 学校模型服务
 
@@ -157,7 +121,9 @@ Tool calling:  tool_use / tool_result
 - 校内校园网直接访问；
 - 校外由用户自行开启 Panabit iWAN；
 - App 不启动或配置 iWAN、系统代理或 TUN；
-- 当前外部代理影响校园路由时，用户自行将学校 API Host 配置为直连；
+- 学校 API Host 由 `AnthropicLlmProvider` 固定为 `https://api.llm.ustc.edu.cn`，不在
+  App 内提供 Host 配置项；当前外部代理影响校园路由时，由用户在系统层面将该 Host 走
+  直连（系统代理或 PAC），App 不管理系统代理；
 - 不自动切换到第三方云模型；
 - 首版只使用文本模型，不启用 `qwen3.6-chat` 视觉路由。
 
@@ -212,7 +178,7 @@ Agent 不能直接启动教务或已报名二课同步。报名中二课需要�
 - 工具过程默认折叠，用户可以停止；
 - 公开回答链接必须来自工具实际返回的来源。
 
-## 6. 实施架构
+## 5. 实施架构
 
 ```text
 Agent Chat UI
@@ -240,43 +206,65 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 周期适配器。共享 Agent domain/application 代码不得依赖 Windows、Python、DPAPI
 或进程 API。
 
-## 7. 新 Agent 执行顺序
+## 6. 新 Agent 执行顺序
 
 1. 阅读 `AGENTS.md`，确认项目安全规则和验证命令。
-2. 阅读本文件，确认 Task 1 已提交但复审未通过。
+2. 阅读本文件，确认当前基线和未开始状态。
 3. 完整阅读只读 Agent design。
 4. 完整阅读 13 Task implementation plan。
-5. 进入现有 `E:/107/.worktrees/read-only-agent`，检查分支和工作区状态；不要再创建
-   同名工作树。
-6. 先修复本文件第 3 节的 Task 1 问题，补测试、验证并单独提交。
-7. 修正 SDD ledger 中旧的“review clean”结论，再使用
-   `superpowers:subagent-driven-development` 从 Task 2 继续。
-8. 后续每个 Task 使用新实现者和独立审查者，完成聚焦测试、审查和单独提交后，
-   才能进入下一 Task。
+5. 使用 `superpowers:using-git-worktrees` 创建隔离工作区。
+6. 使用 `superpowers:subagent-driven-development` 执行计划。
+7. 为本计划创建独立 SDD ledger；每个 Task 使用新实现者和独立审查者。
+8. 每个 Task 完成聚焦测试、审查和单独提交后，才能进入下一 Task。
 9. 全部分支完成后运行整分支审查和完整验证。
-10. 用户完成人工 API Key、校园网/iWAN 和学校登录验收后，再决定合并回 `main`。
+10. 用户完成人工 API Key、校园网/iWAN和学校登录验收后，再决定合并回 `main`。
 
 不要在主工作区直接运行 Drift/Flutter 代码生成；这会混入当前保留的生成文件状态。
 不要跳过 Task 7 的报名中二课账号 Profile 和交互登录回归，也不要把现有同步
 `CollectionJob` 的 SourceBundle 校验放宽来兼容查询结果。
 
-## 8. 验证基线
+## 7. 验证基线
 
-隔离工作区 SDD ledger 在 Task 1 前记录的完整基线为：
+只读 Agent 修复轮（Tasks 1–9）在 `feature/read-only-agent` 分支上推进。Task 9 最终
+验证时的精确 HEAD：`9935bd6`（`docs: hand off reviewed agent repairs`，本节即为该提交）；
+最后一个代码提交为 `6378be5`（`config: switch default JW semester to 2026 fall`）。
+后续若再提交，需重跑本节命令并刷新哈希。
+
+Task 9 实测的完整自动验证结果（2026-07-31，worktree `E:/107/.worktrees/read-only-agent`）：
 
 ```text
-Python unittest: 269 passed
-Python compileall: passed
-Flutter tests: 207 passed
-Flutter analyze: no issues
+Python unittest discover -s tests : Ran 382 tests, OK
+Python compileall -q src tests    : exit 0
+Flutter test test/core test/features/agent test/integration : 315 passed
+Flutter test test/features (non-agent dirs)                  : 176 passed
+Flutter test test/app test/accessibility test/goldens         : 24 passed
+Flutter analyze (whole app)                                  : No issues found
+Flutter build windows --release                              : Built build\windows\x64\runner\Release\ustc_assistant_app.exe (exit 0)
 ```
 
-Task 1 报告记录其两个聚焦测试文件共 17 项通过。本次复审尝试独立重跑时，Flutter
-SDK 全局锁被另一个进程占用，未获得新的 Flutter 测试结果；直接运行 Dart 静态分析
-成功并发现两处 `await_only_futures`，格式检查发现三个手写文件未格式化。修复
-Task 1 后必须先得到新的聚焦测试和静态分析证据。
+Task 8 新增的组合级集成测试聚焦命令（仍通过）：
+
+```text
+Push-Location app
+E:\flutter\flutter\bin\flutter.bat test test/integration/agent_composition_flow_test.dart test/integration/read_only_agent_flow_test.dart test/accessibility/milestone_accessibility_test.dart
+Pop-Location
+```
+
+边界扫描（Task 9 Step 5）：`app/lib` 与 `src` 中无真实密钥/完整账号/cookie 实值泄漏
+（`PB12345678` 仅出现在 `outbound_privacy_filter.dart` 文档注释示例；`sk-` 命中均为
+Flutter widget `Key('task-...')` 误匹配；`Bearer`/`Cookie:` 仅在注释与脱敏正则中）；
+`app/lib/features/agent/domain` 与 `application` 无 `dart:io`/`windows_dpapi`/`Process`
+真实导入（仅注释中声明禁止使用）。`git diff --check` 无空白错误。
+
+自动测试只验证代码行为，不代替人工验收。学校 API 和学校网站不能进入自动测试。真实验收
+由用户在可见 Edge、校园网或 Panabit iWAN 环境中执行，API Key 只通过 App 设置界面输入。
+人工验收清单见 `docs/acceptance/read-only-agent.md`（`完成：` 仍留空，待真实验收填写）。
+
+Python 测试必须在 worktree 下运行（editable install 指向主工作区 `E:/107/src`，
+不是 worktree），命令为：
 
 ```powershell
+$env:PYTHONPATH='E:/107/.worktrees/read-only-agent/src'
 conda run -n ustc_assistant python -m unittest discover -s tests -v
 conda run -n ustc_assistant python -m compileall -q src tests
 Push-Location app
@@ -286,20 +274,65 @@ E:\flutter\flutter\bin\flutter.bat build windows --release
 Pop-Location
 ```
 
-学校 API 和学校网站不能进入自动测试。真实验收由用户在可见 Edge、校园网或
-Panabit iWAN环境中执行，API Key 只通过 App 设置界面输入。
+实施前的交接基线（保留用于历史对照，早于只读 Agent 实施）为：
 
-## 9. 已知文档边界
+```text
+Python unittest: 267 passed
+Python compileall: passed
+Flutter tests: 203 passed
+Flutter analyze: no issues
+Windows Release build: passed
+```
+
+## 8. 已知文档边界
 
 - `docs/acceptance/windows-first-milestone.md` 是第一轮人工结果归档，不是修复后
   的最终验收结论；其中仍有旧的 `461 / 2026fall` 测试文字；
+- `docs/acceptance/read-only-agent.md` 是只读 Agent 的人工验收清单，`完成：`留空
+  待用户在真实验收后填写；自动测试通过不等于人工验收通过；
 - 当前教务默认配置以 `config/source-defaults.json` 为准：
-  `421 / 2026spring / 2026 春季学期`；
+  `461 / 2026fall / 2026 秋季学期`；
 - 历史 implementation plan 中的复选框不是实时状态；
-- 只读 Agent plan 的 Task 1 已有提交，但复审未通过；Task 2～13 尚未执行；
+- 只读 Agent 修复轮各 Task 在 `feature/read-only-agent` 分支上实现并提交；最终修复后
+  的精确 HEAD 在第 7 节最终验证时记录，不在本节硬编码（Task 9 等后续提交会改写哈希）；
 - 真实 Key、完整账号、私人课表和原始模型请求不得写入验收文档。
 
-## 10. 实施完成后的下一阶段
+### 只读 Agent 已知限制与后续工作
+
+- 本地导航 chip 可交互，公开引用 chip 仍不可交互：本地日程/任务工具返回数据时会话
+  生成去重的 `AgentLocalAction`，聊天页渲染为可点击 `ActionChip`（`查看日程`/
+  `查看任务`）经 GoRouter 跳转；公开目录引用（`campus_entry`）仍为不可交互 `Chip`，
+  因为临时引用（`ref_*`）到来源 URL 的解析尚未实现（引用真实性通过“不启动伪造 URL”
+  保证）。真实解析为合并后工作，不在本里程碑范围。
+- 查询网关惰性启动：`LazyQuerySourceGateway` 在首次外部来源工具调用时才启动 Python
+  Bridge，启动失败归一化为 `bridge_unavailable` 且可重试；Python Bridge 使用显式数据
+  根，不在用户主目录隐式写入。
+- 报名中二课同作业恢复：需要登录时返回 `needs_user_login` 暂停运行；用户点击
+  “打开登录窗口并继续”后会话对同一作业调用 `resumeLogin`，密码从受保护凭据按账号
+  读取，仅传给网关，从不写入工具结果、模型请求或持久日志。
+- 学校 API Host 固定为 `https://api.llm.ustc.edu.cn`，不在 App 内提供 Host 配置项；
+  篡改的 Host 被拒绝（`protocol_error`，不发请求）。
+- 默认学期"单一数据源"尚未统一（load-bearing 缺口，迁移手机版时处理）：当前
+  `config/source-defaults.json`（Python 采集与 `/capabilities`、CLI 读它）和
+  `SettingsService.defaultJwSemester`（Flutter“恢复默认”按钮值）各持一份字面量。本里程碑
+  按“测试性 Windows 实现、Python 最终重写”的定位，仅把两侧默认值手动同步为
+  `461 / 2026fall / 2026 秋季学期`，未做 Flutter 从共享 JSON 读取的统一（Flutter
+  `pubspec` 不允许 `../` 资源路径，统一机制是为即将重写的 Python 共存期服务的临时投资，
+  不划算）。因此计划回归场景 4 的“只改 JSON、不改生产代码即可切学期”目前**不成立**：
+  切学期仍需同时改 `SettingsService.defaultJwSemester` 与 `SettingsPage` 文案。迁移
+  Android/iOS（Python Bridge 重写、Flutter 成为唯一消费者）时，把默认学期改为 app 内
+  可配置资源（或远程下发），届时一并满足场景 4。
+- 各 Task 暂缓的 Minor 级别发现等待最终整分支审查分类：Task 2（3 项）、Task 3
+  （4 项）、Task 4（9 项）、Task 5（5 项）、Task 6（5 项）、Task 7（5 项）、
+  Task 8（3 项）、Task 9（5 项）、Task 10（1 项）、Task 11（7 项）、Task 12
+  （3 项）。逐项明细见
+  `.superpowers/sdd/2026-07-28-read-only-agent/progress.md`（gitignored，仅本机）。
+  最终整分支审查由控制器在 Task 13 之后单独执行，决定哪些必须在合并前修复。
+- 真实人工验收（Task 13 Step 7）尚未执行，需用户在真实校园网 / Panabit iWAN /
+  真实 API Key 环境下按 `docs/acceptance/read-only-agent.md` 逐项执行。
+- 学校 API 与学校网站是人工验收依赖，从不进入自动测试。
+
+## 9. 实施完成后的下一阶段
 
 本轮完成并验收后，再按顺序设计和实现：
 

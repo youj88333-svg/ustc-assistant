@@ -7,6 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from ustc_assistant.bridge.protocol import PROTOCOL_VERSION
 from ustc_assistant.bridge.server import (
     BridgeServer,
     _default_parent_alive,
@@ -72,7 +73,7 @@ class HttpBoundaryTests(unittest.TestCase):
 
         self.assertEqual(200, health[0])
         payload = json.loads(capabilities[1])
-        self.assertEqual(421, payload["jwSemester"]["semesterId"])
+        self.assertEqual(461, payload["jwSemester"]["semesterId"])
         self.assertEqual(404, missing[0])
 
     def test_invalid_shutdown_json_is_redacted(self):
@@ -110,6 +111,42 @@ class HttpBoundaryTests(unittest.TestCase):
         self.assertEqual(
             "unsupported_version", json.loads(response[1])["error"]
         )
+
+
+class QueryRouteBoundaryTests(unittest.TestCase):
+    def test_unknown_query_route_is_not_found(self):
+        with RunningServer() as server:
+            response = request(server, "GET", "/query-jobs/unknown/events", token=server.token)
+            post_unknown = request(
+                server,
+                "POST",
+                "/query-jobs/unknown/cancel",
+                token=server.token,
+                body={"protocolVersion": PROTOCOL_VERSION},
+            )
+
+        self.assertEqual(404, response[0])
+        self.assertEqual(404, post_unknown[0])
+
+    def test_post_queries_rejects_arbitrary_url_path(self):
+        with RunningServer() as server:
+            url_resp = request(
+                server,
+                "POST",
+                "/queries/some/url",
+                token=server.token,
+                body={"protocolVersion": PROTOCOL_VERSION},
+            )
+            path_resp = request(
+                server,
+                "POST",
+                "/arbitrary/path",
+                token=server.token,
+                body={"protocolVersion": PROTOCOL_VERSION},
+            )
+
+        self.assertEqual(404, url_resp[0])
+        self.assertEqual(404, path_resp[0])
 
 
 class LifecycleTests(unittest.TestCase):

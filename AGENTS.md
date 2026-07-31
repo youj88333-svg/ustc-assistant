@@ -15,6 +15,13 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
 5. 校园公开信息：教务处和财务处目录、本地检索、按需详情读取和附件缓存。
 6. Windows App：账号与同步、七日周课表、个人日程、Task/PlanBlock、冲突与用户
    覆盖、提醒、操作历史、设置和一步撤回。
+7. 只读校园 Agent：按学校账号隔离的长期主会话，接入学校 Anthropic 兼容模型服务
+   （`https://api.llm.ustc.edu.cn`，默认模型 `deepseek-v4-flash`，SSE 流式 +
+   `tool_use`/`tool_result`），15 个只读工具（11 本地 + 4 按需来源），工具过程
+   默认折叠、可停止、可重试，API Key 由 DPAPI 保护，确定性隐私过滤，滚动摘要，
+   重启恢复。Agent 不能修改本地业务数据、发起同步或执行任何外部写操作。架构见
+   `docs/architecture.md`“只读 Agent 架构”一节，人工验收清单见
+   `docs/acceptance/read-only-agent.md`。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
 `README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
@@ -33,12 +40,21 @@ SourceBundle 1.0，Windows Bridge 已提供认证回环协议与可恢复采集�
   `ImportService`、本地账号分区、同步、周日程、个人日程、Task/PlanBlock、提醒、
   历史、设置及对应测试。Android/iOS 目录目前只有 Flutter 平台脚手架，移动端采集
   适配器尚未实现。
-- `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消；
-  移动端 `SourceGateway` 尚未实现。
-- Windows C++ 工具链已安装，Release 可构建。最近自动验证通过 Python 267 项测试、
-  Flutter 203 项测试、Flutter 静态分析和 Windows Release 构建。
-- 第一轮真实手工验收已经完成并产生修复；修复后的完整人工复测仍未结束。不得把
-  自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md`。
+- `src/ustc_assistant/bridge/` 已实现认证回环协议、采集作业、登录恢复和取消，
+  以及只读 Agent 使用的 Bridge Query Protocol 1.0 查询作业（`ReadQueryJobManager`，
+  与采集作业分离）；移动端 `SourceGateway` 尚未实现。
+- 只读校园 Agent 已实现（`app/lib/features/agent/`）：共享平台无关核心 + Windows
+  适配器（DPAPI 保护 Key、Python 查询网关）。修复轮各 Task 在 `feature/read-only-agent`
+  分支上实现并提交；最终修复后的精确 HEAD 在 `docs/read-only-agent-handoff.md` 第 7 节
+  最终验证时记录，不在本文件硬编码（后续提交会改写哈希）。本地导航 chip 可交互
+  （`ActionChip` 经 GoRouter 跳转），公开引用 chip 仍不可交互（临时引用到来源 URL 的
+  解析为合并后工作）。
+- Windows C++ 工具链已安装，Release 可构建。自动验证结果在最终验证时更新记录于
+  `docs/read-only-agent-handoff.md` 第 7 节；自动测试只验证代码行为，不代替人工验收。
+- 第一轮 Windows 首版真实手工验收已经完成并产生修复；修复后的完整人工复测仍未
+  结束。只读 Agent 的人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行。不得
+  把自动测试通过写成人工验收通过，详情见 `docs/read-only-agent-handoff.md` 和
+  `docs/acceptance/read-only-agent.md`。
 - 当前修改来源代码时必须保持五条链路和 CLI 可运行；不能为了未来 App 架构提前
   删除现有 service、测试或真实故障回归样例。
 
@@ -92,7 +108,9 @@ README.md                  安装、CLI 命令和输出路径
 pyproject.toml             Python 包、依赖和命令入口
 app/
   lib/core/                Drift 数据库、安全与北京时间工具
-  lib/features/            账号、同步、导入、日程、Task、提醒、历史和设置
+  lib/features/            账号、同步、导入、日程、Task、提醒、历史、设置和只读 Agent
+  lib/features/agent/      共享只读 Agent 核心（domain/application 平台无关 +
+                           data/presentation Windows 适配器）
   test/                    Flutter 单元、数据库、Widget、Golden 和流程测试
   windows|android|ios/     Flutter 平台工程；当前真实运行目标是 Windows
 tmp/、temp.md              私有调试数据，不是代码或正式契约
@@ -168,8 +186,8 @@ source service
 
 - Python 使用 Conda 环境 `ustc_assistant`，最低版本 3.10。
 - 时间统一使用 `Asia/Shanghai`。
-- 当前教务自动同步默认学期为 `semesterId=421`、产品键 `2026spring`、显示名
-  “2026 春季学期”；不得根据年份推算教务内部学期 ID。
+- 当前教务自动同步默认学期为 `semesterId=461`、产品键 `2026fall`、显示名
+  “2026 秋季学期”；不得根据年份推算教务内部学期 ID。
 - 网站契约变化时明确失败，不返回部分数据冒充完整结果。
 - 修改来源行为时先增加回归测试；真实故障场景不得因整理测试文件而删除。
 - 各来源保留独立 DOM、接口和解析规则，只共享浏览器生命周期、存储和 CLI 编排。
@@ -188,6 +206,19 @@ Pop-Location
 ```
 
 涉及学校页面的改动还必须由真实 Edge 登录会话验收。自动测试不得访问学校网站。
+
+### 只读 Agent 自动验证
+
+只读 Agent 修复轮的精确 HEAD 与完整自动验证结果在最终验证时记录于
+`docs/read-only-agent-handoff.md` 第 7 节（不在本文件硬编码哈希，后续提交会改写）。
+Task 8 新增的组合级集成测试聚焦套件（`agent_composition_flow_test.dart` +
+`read_only_agent_flow_test.dart` + `milestone_accessibility_test.dart`）全部通过，
+覆盖真实路由 + 注入式组合的配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、
+网关释放与捕获请求隐私。
+
+- 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；清单见
+  `docs/acceptance/read-only-agent.md`。自动测试不代替人工验收：学校 API 与学校网站
+  从不进入自动测试。
 
 ### Windows 首版自动验证（2026-07-28）
 

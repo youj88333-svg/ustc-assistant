@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -34,33 +35,44 @@ class FakeLauncher implements BridgeProcessLauncher {
   final FakeProcess process;
   String? executable;
   List<String> arguments = [];
+  BridgeLaunchOptions options = const BridgeLaunchOptions();
 
   @override
   Future<BridgeChildProcess> start(
     String executable,
-    List<String> arguments,
-  ) async {
+    List<String> arguments, {
+    BridgeLaunchOptions options = const BridgeLaunchOptions(),
+  }) async {
     this.executable = executable;
     this.arguments = [...arguments];
+    this.options = options;
     return process;
   }
 }
 
 class FakePythonRunner implements PythonCommandRunner {
-  final calls = <(String, List<String>)>[];
+  FakePythonRunner({this.queryJobsImportSucceeds = true});
+
+  final calls = <(String, List<String>, Map<String, String>?)>[];
+  final bool queryJobsImportSucceeds;
 
   @override
   Future<ProcessResultValue> run(
     String executable,
-    List<String> arguments,
+    List<String> arguments, {
+    Map<String, String>? environment,
+  }
   ) async {
-    calls.add((executable, [...arguments]));
+    calls.add((executable, [...arguments], environment));
     if (executable == 'conda') {
       return const ProcessResultValue(
         exitCode: 0,
         stdout: 'C:\\envs\\ustc_assistant\\python.exe\n',
         stderr: '',
       );
+    }
+    if (arguments.join(' ').contains('query_jobs') && !queryJobsImportSucceeds) {
+      return const ProcessResultValue(exitCode: 1, stdout: '', stderr: '');
     }
     return const ProcessResultValue(exitCode: 0, stdout: '', stderr: '');
   }
@@ -199,6 +211,164 @@ void main() {
     final path = await locator.locate();
     expect(path, r'C:\envs\ustc_assistant\python.exe');
     expect(runner.calls.first.$1, 'conda');
-    expect(runner.calls.last.$2, contains('import ustc_assistant.bridge'));
+    expect(runner.calls.last.$2.join(' '), contains('ustc_assistant.bridge'));
+  });
+
+  test('python locator rejects a legacy Bridge without query jobs', () async {
+    final runner = FakePythonRunner(queryJobsImportSucceeds: false);
+    final locator = PythonLocator(runner: runner, environment: const {});
+    final legacyBridge = await runner.run('legacy-python.exe', const [
+      '-c',
+      'import ustc_assistant.bridge',
+    ]);
+    expect(legacyBridge.exitCode, 0);
+
+    await expectLater(
+      locator.locate(
+        savedExecutable: 'legacy-python.exe',
+        requiredModule: 'ustc_assistant.bridge.query_jobs',
+      ),
+      throwsA(isA<PythonLocationError>().having(
+        (error) => error.code,
+        'code',
+        'bridge_import_failed',
+      )),
+    );
+  });
+
+  test('python locator uses the injected development PYTHONPATH for query probing',
+      () async {
+    final runner = FakePythonRunner(queryJobsImportSucceeds: true);
+    final locator = PythonLocator(runner: runner, environment: const {});
+
+    await locator.locate(
+      savedExecutable: 'development-python.exe',
+      requiredModule: 'ustc_assistant.bridge.query_jobs',
+      importEnvironment: const {'PYTHONPATH': r'C:\worktree\src'},
+    );
+
+    expect(runner.calls.last.$3, {'PYTHONPATH': r'C:\worktree\src'});
+  });
+
+  test('development bridge options discover the worktree above app', () async {
+    final root = await Directory.systemTemp.createTemp('bridge-root-');
+    addTearDown(() => root.delete(recursive: true));
+    final queryJobs = File(
+      '${root.path}${Platform.pathSeparator}src${Platform.pathSeparator}'
+      'ustc_assistant${Platform.pathSeparator}bridge${Platform.pathSeparator}'
+      'query_jobs.py',
+    );
+    await queryJobs.parent.create(recursive: true);
+    await queryJobs.writeAsString('# fixture');
+    final appDirectory = Directory('${root.path}${Platform.pathSeparator}app');
+    await appDirectory.create();
+
+    final options = resolveBridgeLaunchOptions(
+      startDirectory: appDirectory,
+      environment: const {},
+    );
+
+    expect(options.workingDirectory, root.path);
+    expect(options.environment!['PYTHONPATH'], '${root.path}${Platform.pathSeparator}src');
+    expect(options.environment!['USTC_ASSISTANT_DATA_ROOT'],
+        '${root.path}${Platform.pathSeparator}tmp${Platform.pathSeparator}bridge-data');
+  });
+
+  test('BridgeClient passes explicit working directory and environment', () async {
+    final launcher = FakeLauncher(FakeProcess(handshake()));
+    final client = await BridgeClient.start(
+      pythonExecutable: 'python',
+      launcher: launcher,
+      httpClient: MockClient((_) async => http.Response('{"ok":true}', 200)),
+      launchOptions: const BridgeLaunchOptions(
+        workingDirectory: r'C:\worktree',
+        environment: {'PYTHONPATH': r'C:\worktree\src'},
+      ),
+    );
+    addTearDown(client.shutdown);
+
+    expect(launcher.options.workingDirectory, r'C:\worktree');
+    expect(launcher.options.environment!['PYTHONPATH'], r'C:\worktree\src');
+  });
+
+  test('BridgeQueryGateway uses fixed query routes and bearer token', () async {
+    final requests = <http.Request>[];
+    final process = FakeProcess(handshake());
+    final client = await BridgeClient.start(
+      pythonExecutable: 'python',
+      launcher: FakeLauncher(process),
+      httpClient: MockClient((request) async {
+        requests.add(request);
+        if (request.url.path == '/queries') {
+          return http.Response(
+            '{"jobId":"q-1","phase":"starting"}',
+            202,
+          );
+        }
+        if (request.url.path == '/query-jobs/q-1/events') {
+          return http.Response(
+            '{"events":[{"sequence":1,"phase":"complete"}],'
+            '"nextSequence":1,"terminal":true,'
+            '"result":{"schemaVersion":"1.0","queryType":"icourse",'
+            '"generatedAt":"2026-07-29T09:00:00+08:00","data":{},'
+            '"metadata":{},"references":[]},"error":null}',
+            200,
+          );
+        }
+        if (request.url.path == '/query-jobs/q-1/resume-login') {
+          return http.Response('{"jobId":"q-1","phase":"collecting"}', 202);
+        }
+        if (request.url.path == '/query-jobs/q-1/cancel') {
+          return http.Response('{"jobId":"q-1","phase":"cancelled"}', 202);
+        }
+        return http.Response('{"ok":true}', 200);
+      }),
+    );
+
+    // The BridgeClient implements BridgeQueryGateway over the same transport.
+    expect(client, isA<BridgeQueryGateway>());
+    final queryGateway = client as BridgeQueryGateway;
+
+    final startBody = await queryGateway.postQuery('/queries', {
+      'protocolVersion': '1.0',
+      'queryProtocolVersion': '1.0',
+      'query': {'type': 'icourse', 'course': '数据结构'},
+    });
+    expect(startBody['jobId'], 'q-1');
+
+    final poll = await queryGateway.getQuery('/query-jobs/q-1/events?after=0');
+    expect(poll['terminal'], true);
+    final result = poll['result'] as Map<String, dynamic>;
+    expect(result['schemaVersion'], '1.0');
+
+    await queryGateway.postQuery('/query-jobs/q-1/resume-login', {
+      'protocolVersion': '1.0',
+      'password': 'school-pass',
+    });
+    await queryGateway.postQuery('/query-jobs/q-1/cancel', {
+      'protocolVersion': '1.0',
+    });
+    await client.shutdown();
+
+    expect(
+      requests.map((r) => r.url.path),
+      containsAll([
+        '/queries',
+        '/query-jobs/q-1/events',
+        '/query-jobs/q-1/resume-login',
+        '/query-jobs/q-1/cancel',
+        '/shutdown',
+      ]),
+    );
+    // SECURITY: the bearer token authenticates every query request.
+    for (final r in requests) {
+      expect(r.headers['authorization'], 'Bearer secret-token-that-is-long');
+    }
+    // SECURITY: the query request body never includes the model API Key.
+    final queriesRequest = requests.firstWhere(
+      (r) => r.url.path == '/queries',
+    );
+    expect(queriesRequest.body, isNot(contains('apiKey')));
+    expect(queriesRequest.body, isNot(contains('api_key')));
   });
 }
