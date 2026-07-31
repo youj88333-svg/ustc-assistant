@@ -15,6 +15,7 @@ import '../../agent/domain/llm_protocol.dart';
 import 'agent_settings_page.dart';
 import 'agent_setup_panel.dart';
 import 'agent_tool_run_tile.dart';
+import 'agent_write_confirmation_card.dart';
 import 'safe_markdown_message.dart';
 
 /// The main Agent chat page.
@@ -496,6 +497,18 @@ class _AgentChatPageState extends State<AgentChatPage> {
     );
   }
 
+  /// 最后一条消息是否是一个等待写确认的暂停运行。
+  ///
+  /// 待确认提案只存活于当前 run：只有状态为 [AgentRunState.waitingForUser]
+  /// 且 `userAction` 类型为 [AgentUserActionType.writeConfirmation] 的最后一条
+  /// 助手消息才触发确认卡尾项。
+  bool get _needsWriteConfirmation {
+    final last = _messages.isEmpty ? null : _messages.last;
+    return last is _AssistantMessage &&
+        last.state == AgentRunState.waitingForUser &&
+        last.userAction?.type == AgentUserActionType.writeConfirmation;
+  }
+
   Widget _buildMessageList() {
     final last = _messages.isEmpty ? null : _messages.last;
     final needsLogin =
@@ -518,13 +531,19 @@ class _AgentChatPageState extends State<AgentChatPage> {
       );
     }
 
+    final extraItems = (needsLogin ? 1 : 0) + (_needsWriteConfirmation ? 1 : 0);
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      itemCount: _messages.length + (needsLogin ? 1 : 0),
+      itemCount: _messages.length + extraItems,
       itemBuilder: (context, index) {
         if (index == _messages.length && needsLogin) {
           return _buildNeedsLogin();
+        }
+        if (index == _messages.length + (needsLogin ? 1 : 0) &&
+            _needsWriteConfirmation) {
+          // 登录横幅优先，写确认卡在其后追加。
+          return _buildWriteConfirmationCard();
         }
 
         final msg = _messages[index];
@@ -698,6 +717,43 @@ class _AgentChatPageState extends State<AgentChatPage> {
           ),
         ),
       ),
+    );
+  }
+
+  /// 写确认卡尾项：把暂停运行的写提案渲染成内联卡，恢复暂停的运行。
+  ///
+  /// 只显示 [AgentWriteProposalView] 的安全字段（operationLabel/riskLevel/
+  /// previewLines 等），绝不暴露 commitParams/targetId。按钮通过
+  /// [AgentSessionService.confirmWriteProposal] 恢复对应 run。
+  Widget _buildWriteConfirmationCard() {
+    final last = _messages.last as _AssistantMessage;
+    final view = last.userAction?.writeProposal;
+    final runId = last.runId;
+    if (view == null || runId == null || runId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    final accountId = widget.accountId;
+    return AgentWriteConfirmationCard(
+      proposal: view,
+      onApprove: () => widget.sessionService.confirmWriteProposal(
+        accountId: accountId,
+        runId: runId,
+        approve: true,
+        remember: false,
+      ).drain<void>(),
+      onReject: () => widget.sessionService.confirmWriteProposal(
+        accountId: accountId,
+        runId: runId,
+        approve: false,
+        remember: false,
+      ).drain<void>(),
+      onRemember: () => widget.sessionService.confirmWriteProposal(
+        accountId: accountId,
+        runId: runId,
+        approve: true,
+        remember: true,
+      ).drain<void>(),
+      onGoToSettings: () => context.push('/settings/agent'),
     );
   }
 
