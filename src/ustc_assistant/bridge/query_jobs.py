@@ -327,6 +327,16 @@ class ReadQueryJob:
                 "account_mismatch",
                 "Authenticated school account did not match",
             )
+        except CampusUnavailable:
+            # Catalog missing AND auto-refresh failed: encode the safe
+            # catalog_unavailable code. The original refresh exception was
+            # already swallowed inside _ensure_catalog_fresh, so no network /
+            # traceback detail is carried here.
+            self._finish_error(
+                "failed",
+                CATALOG_UNAVAILABLE,
+                "Campus catalog is unavailable",
+            )
         except Exception:
             self._finish_error("failed", "query_failed", "Query execution failed")
         finally:

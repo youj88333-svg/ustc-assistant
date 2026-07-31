@@ -700,6 +700,189 @@ class CampusSearchAutoRefreshTests(unittest.TestCase):
         self.assertEqual(1, len(refresh_calls))
         self.assertEqual(catalog_path, refresh_calls[0])
 
+    def test_refresh_skipped_when_catalog_fresh(self):
+        import tempfile
+        from datetime import datetime, timedelta
+        from ustc_assistant.bridge import query_jobs as qj
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-fresh-"))
+        catalog_path = tmp_dir / "campus-catalog.json"
+        now = datetime(2026, 7, 31, 12, 0, tzinfo=BEIJING_TZ)
+        fresh_at = (now - timedelta(hours=1)).isoformat()
+        catalog_path.write_text(
+            json.dumps({
+                "schemaVersion": "1.0",
+                "sources": {"teach_notice": {"lastSuccessfulAt": fresh_at, "entries": []}},
+            }),
+            encoding="utf-8",
+        )
+        refresh_calls = []
+
+        def refresh_fn(*, catalog_path, force):
+            refresh_calls.append(catalog_path)
+            return {"sources": {}}
+
+        def search_fn(*, query, filters, limit):
+            return {"source": "ustc_campus_catalog", "query": query,
+                    "results": [], "metadata": {"resultCount": 0}}
+
+        qj._last_campus_refresh_attempt = None
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+            campus_now_fn=lambda: now,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        self.assertEqual(0, len(refresh_calls))
+
+    def test_refresh_throttled_within_min_interval(self):
+        import tempfile
+        from datetime import datetime, timedelta
+        from ustc_assistant.bridge import query_jobs as qj
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-throttle-"))
+        catalog_path = tmp_dir / "campus-catalog.json"  # 不存在
+        now = datetime(2026, 7, 31, 12, 0, tzinfo=BEIJING_TZ)
+        # 模拟 5 分钟前刚 refresh 过（小于 30 分钟节流窗口）
+        qj._last_campus_refresh_attempt = now - timedelta(minutes=5)
+
+        refresh_calls = []
+        def refresh_fn(*, catalog_path, force):
+            refresh_calls.append(catalog_path)
+            return {"sources": {}}
+
+        # search 在 catalog 不存在时本应失败，但节流跳过 refresh 后直接 search，
+        # search 返回空结果（search_catalog 对不存在文件返回空），job 仍 complete。
+        def search_fn(*, query, filters, limit):
+            return {"source": "ustc_campus_catalog", "query": query,
+                    "results": [], "metadata": {"resultCount": 0}}
+
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+            campus_now_fn=lambda: now,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        self.assertEqual(0, len(refresh_calls))
+
+    def test_refresh_failure_falls_back_to_existing_catalog(self):
+        import tempfile
+        from datetime import datetime, timedelta
+        from ustc_assistant.bridge import query_jobs as qj
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-fallback-"))
+        catalog_path = tmp_dir / "campus-catalog.json"
+        now = datetime(2026, 7, 31, 12, 0, tzinfo=BEIJING_TZ)
+        stale_at = (now - timedelta(hours=7)).isoformat()  # 超过 6h 过期
+        catalog_path.write_text(
+            json.dumps({
+                "schemaVersion": "1.0",
+                "sources": {"teach_notice": {"lastSuccessfulAt": stale_at, "entries": []}},
+            }),
+            encoding="utf-8",
+        )
+
+        def refresh_fn(*, catalog_path, force):
+            raise OSError("network down")
+
+        # search 仍应被调（降级用旧 catalog），返回空结果，job complete
+        search_called = []
+        def search_fn(*, query, filters, limit):
+            search_called.append(query)
+            return {"source": "ustc_campus_catalog", "query": query,
+                    "results": [], "metadata": {"resultCount": 0}}
+
+        qj._last_campus_refresh_attempt = None
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+            campus_now_fn=lambda: now,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        self.assertEqual(1, len(search_called))
+
+    def test_refresh_failure_and_no_catalog_yields_unavailable_error(self):
+        import tempfile
+        from ustc_assistant.bridge import query_jobs as qj
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+        from datetime import datetime
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-unavail-"))
+        catalog_path = tmp_dir / "campus-catalog.json"  # 不存在
+        now = datetime(2026, 7, 31, 12, 0, tzinfo=BEIJING_TZ)
+
+        def refresh_fn(*, catalog_path, force):
+            raise OSError("network down")
+
+        def search_fn(*, query, filters, limit):
+            self.fail("search must not be called when catalog is unavailable")
+
+        qj._last_campus_refresh_attempt = None
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+            campus_now_fn=lambda: now,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("failed", job.wait_for_terminal_or_pause())
+        # The brief's note authorized adjusting this assertion to the actual
+        # failure-encoding path. ReadQueryJob stores the safe error code on
+        # job.error["code"] (job.result is None on failure), mirroring the
+        # established events_after(0)["error"]["code"] pattern used by the
+        # young/account_mismatch and result_validation_failed tests.
+        self.assertEqual("catalog_unavailable", job.error.get("code"))
+        # 错误细节不泄漏
+        result_str = json.dumps(job.events_after(0), ensure_ascii=False)
+        self.assertNotIn("network down", result_str)
+        self.assertNotIn("Traceback", result_str)
+
+    def test_refresh_invoked_when_catalog_stale(self):
+        import tempfile
+        from datetime import datetime, timedelta
+        from ustc_assistant.bridge import query_jobs as qj
+        from ustc_assistant.sources.campus.catalog import BEIJING_TZ
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="campus-stale-"))
+        catalog_path = tmp_dir / "campus-catalog.json"
+        now = datetime(2026, 7, 31, 12, 0, tzinfo=BEIJING_TZ)
+        stale_at = (now - timedelta(hours=7)).isoformat()  # 超过 6h
+        catalog_path.write_text(
+            json.dumps({
+                "schemaVersion": "1.0",
+                "sources": {"teach_notice": {"lastSuccessfulAt": stale_at, "entries": []}},
+            }),
+            encoding="utf-8",
+        )
+        refresh_calls = []
+        def refresh_fn(*, catalog_path, force):
+            refresh_calls.append(catalog_path)
+            return {"sources": {}}
+
+        def search_fn(*, query, filters, limit):
+            return {"source": "ustc_campus_catalog", "query": query,
+                    "results": [], "metadata": {"resultCount": 0}}
+
+        qj._last_campus_refresh_attempt = None
+        manager = ReadQueryJobManager(
+            campus_search_query=search_fn,
+            campus_refresh_fn=refresh_fn,
+            campus_catalog_path_fn=lambda: catalog_path,
+            campus_now_fn=lambda: now,
+        )
+        job = manager.start_campus_search(CampusSearchQuery(query="通知"))
+        self.assertEqual("complete", job.wait_for_terminal_or_pause())
+        self.assertEqual(1, len(refresh_calls))
+
 
 if __name__ == "__main__":
     unittest.main()
