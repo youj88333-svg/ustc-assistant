@@ -849,6 +849,15 @@ void main() {
         .drain<void>();
     await done1.future;
 
+    // 权限放宽（remember）必须写 ActionLog：markAlwaysAllow -> updatePolicy
+    // 落一行 source='user' / actionType='update_permission_policy'。
+    expect(
+      (await db.actionLogsRepository.selectAll())
+          .any((l) => l.source == 'user' && l.actionType == 'update_permission_policy'),
+      isTrue,
+      reason: 'remember relaxation must write an ActionLog',
+    );
+
     // 第二次：同样的 create_event 不再出现确认卡（ask_first_time 已放行为 always_allow）。
     final secondProvider = _ScriptedProvider([
       _ScriptedCall(() => [
