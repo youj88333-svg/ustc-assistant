@@ -10,6 +10,7 @@ import '../domain/agent_tool.dart';
 import '../domain/agent_write_proposal.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
+import 'run_reference_store.dart';
 
 /// 把 ISO-8601 字符串解析为本地时间（模型传带 +08:00 偏移）。
 DateTime _parseDateTime(String value) => DateTime.parse(value);
@@ -747,5 +748,215 @@ class RecordListeningModeTool extends AgentWriteTool {
     final mode = p['mode'] == 'not_listen' ? ListeningMode.notListen : ListeningMode.listen;
     await gateway.recordListeningMode(eventId, mode, note: p['note'] as String?);
     return AgentToolResult(payload: {'result': 'recorded_listening_mode'});
+  }
+}
+
+/// 记录两个安排之间的关系与用户决策（仅支持 conflict 形态）。
+class CreateScheduleRelationTool extends AgentWriteTool {
+  CreateScheduleRelationTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'create_schedule_relation';
+  @override
+  String get description =>
+      '记录一对日程/执行块之间的关系与冲突决策（如二选一、课上写作业、翘课去二课）。ref_left/ref_right 来自日程或任务查询。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_left': {'type': 'string'},
+      'ref_right': {'type': 'string'},
+      'conflict_state': {'type': 'string', 'enum': ['conflict', 'no_conflict']},
+      'reason': {'type': 'string', 'description': '用户意图/备注'},
+    },
+    'required': ['ref_left', 'ref_right', 'conflict_state'],
+  };
+
+  @override
+  String get actionType => 'create_schedule_relation';
+  @override
+  RiskLevel get riskLevel => RiskLevel.medium;
+  @override
+  String get targetType => 'relation';
+  @override
+  String get operationLabel => '记录日程关系';
+
+  /// 先按 event 解析，再回退 planblock（与只读工具绑定 kind 一致）。
+  static ({String kind, String id}) _resolveRef(RunReferenceStore refs, String ref) {
+    final eventId = refs.resolve(ref: ref, kind: 'event');
+    if (eventId != null) return (kind: 'event', id: eventId);
+    final blockId = refs.resolve(ref: ref, kind: 'planblock');
+    if (blockId != null) return (kind: 'plan_block', id: blockId);
+    throw const FormatException('unknown relation ref');
+  }
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final left = _resolveRef(ctx.references, a['ref_left'] as String);
+    final right = _resolveRef(ctx.references, a['ref_right'] as String);
+    final conflictState = a['conflict_state'] as String;
+    final reason = a['reason'] as String?;
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: [
+        '关系：$conflictState',
+        if (reason != null && reason.isNotEmpty) '理由：$reason',
+      ],
+      commitParams: {
+        'left': left,
+        'right': right,
+        'conflictState': conflictState,
+        'reason': reason,
+      },
+      safeLogSummary: '记录日程关系 $conflictState',
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final left = p['left'] as ({String kind, String id});
+    final right = p['right'] as ({String kind, String id});
+    await gateway.createConflictRelation(
+      leftKind: left.kind,
+      leftId: left.id,
+      rightKind: right.kind,
+      rightId: right.id,
+      conflictState: p['conflictState'] as String,
+      reason: p['reason'] as String?,
+    );
+    return AgentToolResult(payload: {'result': 'created_schedule_relation'});
+  }
+}
+
+/// 为个人日程设置提醒偏移。
+class SetReminderTool extends AgentWriteTool {
+  SetReminderTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'set_reminder';
+  @override
+  String get description => '为个人日程设置提醒（开始前 N 分钟）。ref_event 来自日程查询。本轮仅支持日程事件。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'ref_event': {'type': 'string'},
+      'offsets_minutes': {'type': 'array', 'items': {'type': 'integer'},
+          'description': '开始前提醒偏移（分钟），全部非负'},
+    },
+    'required': ['ref_event', 'offsets_minutes'],
+  };
+
+  @override
+  String get actionType => 'set_reminder';
+  @override
+  RiskLevel get riskLevel => RiskLevel.medium;
+  @override
+  String get targetType => 'event';
+  @override
+  String get operationLabel => '设置提醒';
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final ref = a['ref_event'] as String;
+    final eventId = ctx.references.resolve(ref: ref, kind: 'event');
+    if (eventId == null) throw const FormatException('unknown event ref');
+    final offsets = (a['offsets_minutes'] as List).cast<int>();
+    if (offsets.any((o) => o < 0)) throw const FormatException('negative offset');
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: ['开始前 $offsets 分钟提醒'],
+      commitParams: {'eventId': eventId, 'offsets': offsets},
+      safeLogSummary: '设置提醒 ${offsets.join(",")} 分钟',
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    await gateway.setReminder(p['eventId'] as String, (p['offsets'] as List).cast<int>());
+    return AgentToolResult(payload: {'result': 'reminder_set'});
+  }
+}
+
+/// 调整某类操作的确认策略。永远需要用户确认，且无"以后不再确认"。
+class UpdatePermissionPolicyTool extends AgentWriteTool {
+  UpdatePermissionPolicyTool({required super.gateway, required super.policy, required super.confirmationStore});
+
+  @override
+  String get name => 'update_permission_policy';
+  @override
+  String get description =>
+      '调整某类操作的确认策略（如"以后新建日程不要再问我"）。所有权限变更都需要用户在确认卡上亲手批准，不会自动放行。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'properties': {
+      'action_type': {'type': 'string',
+          'enum': ['create_event', 'create_task', 'plan_task', 'create_schedule_relation',
+              'set_reminder', 'record_attendance_decision', 'record_listening_mode',
+              'create_user_overlay', 'update_event']},
+      'target_type': {'type': 'string', 'default': 'event'},
+      'confirmation_mode': {'type': 'string', 'enum': ['always_ask', 'ask_first_time', 'always_allow', 'always_deny']},
+    },
+    'required': ['action_type', 'confirmation_mode'],
+  };
+
+  @override
+  String get actionType => 'update_permission_policy';
+  @override
+  RiskLevel get riskLevel => RiskLevel.critical;
+  @override
+  String get targetType => 'permission';
+  @override
+  String get operationLabel => '调整确认策略';
+  @override
+  bool get rememberAllowed => false;
+  @override
+  bool get forceConfirmation => true;
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final actionType = a['action_type'] as String;
+    final targetType = (a['target_type'] as String?) ?? 'event';
+    final mode = ConfirmationModeStorage.fromStorage(a['confirmation_mode'] as String);
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: ['动作：$actionType', '改为：${mode.storage}'],
+      commitParams: {'actionType': actionType, 'targetType': targetType, 'mode': mode},
+      safeLogSummary: '调整确认策略 $actionType → ${mode.storage}',
+      rememberAllowed: false,
+      forceConfirmation: true,
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final actionType = p['actionType'] as String;
+    final targetType = p['targetType'] as String;
+    final mode = p['mode'] as ConfirmationMode;
+    await gateway.updatePermissionPolicy(
+      actionType: actionType,
+      targetType: targetType,
+      mode: mode,
+      riskLevel: AgentPermissionPolicyService.defaultRisk(actionType),
+      enabled: true,
+      updatedBy: 'agent',
+    );
+    return AgentToolResult(payload: {'result': 'permission_updated', 'action_type': actionType});
   }
 }

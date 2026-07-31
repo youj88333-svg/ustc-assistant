@@ -10,6 +10,7 @@ import 'package:ustc_assistant_app/features/agent/application/agent_write_tool.d
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
@@ -165,6 +166,44 @@ class _OverlayGateway implements AgentWriteGateway {
   Future<String?> courseSeriesIdForEvent(String eventId) async => courseSeriesResult;
 }
 
+/// 关系/提醒/权限工具假网关。
+class _RelationGateway implements AgentWriteGateway {
+  ({String leftKind, String leftId, String rightKind, String rightId, String conflictState, String? reason})? relation;
+  ({String eventId, List<int> offsets})? reminder;
+  Map<String, Object?>? policyUpdate;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<void> createConflictRelation({
+    required String leftKind,
+    required String leftId,
+    required String rightKind,
+    required String rightId,
+    required String conflictState,
+    String? reason,
+  }) async {
+    relation = (leftKind: leftKind, leftId: leftId, rightKind: rightKind, rightId: rightId, conflictState: conflictState, reason: reason);
+  }
+
+  @override
+  Future<void> setReminder(String eventId, List<int> offsetsMinutes) async =>
+      reminder = (eventId: eventId, offsets: offsetsMinutes);
+
+  @override
+  Future<void> updatePermissionPolicy({
+    required String actionType,
+    required String targetType,
+    required ConfirmationMode mode,
+    required RiskLevel riskLevel,
+    required bool enabled,
+    required String updatedBy,
+  }) async {
+    policyUpdate = {'actionType': actionType, 'targetType': targetType, 'mode': mode, 'riskLevel': riskLevel, 'updatedBy': updatedBy};
+  }
+}
+
 AgentToolContext _ctx(String runId, {String accountId = 'a1'}) =>
     AgentToolContext(
       accountId: accountId,
@@ -225,6 +264,9 @@ void main() {
     CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: store),
     RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: store),
     RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: store),
+    CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: store),
+    SetReminderTool(gateway: gateway, policy: policy, confirmationStore: store),
+    UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: store),
   ];
 
   test('schemas declare required args', () {
@@ -526,5 +568,57 @@ void main() {
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.listening!.mode, ListeningMode.notListen);
     expect(gw.listening!.note, '适合写作业');
+  });
+
+  test('create_schedule_relation resolves event refs and commits', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final left = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final right = h.refs.bind(kind: 'event', localId: 'ev-2');
+    final result = await tool.execute({
+      'ref_left': left,
+      'ref_right': right,
+      'conflict_state': 'no_conflict',
+      'reason': '两门课重叠，用户已决定去 A',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.relation!.leftKind, 'event');
+    expect(gw.relation!.leftId, 'ev-1');
+    expect(gw.relation!.conflictState, 'no_conflict');
+  });
+
+  test('set_reminder sets offsets for an event', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [15, 120]}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.reminder!.eventId, 'ev-1');
+    expect(gw.reminder!.offsets, [15, 120]);
+  });
+
+  test('update_permission_policy always confirms even when already relaxed', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    // 先把 update_permission_policy 策略设成 always_allow，基类仍必须强制确认
+    await policy.updatePolicy(accountId: 'a1', actionType: 'update_permission_policy',
+        targetType: 'create_event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.critical, enabled: true, updatedBy: 'user');
+    final result = await tool.execute({
+      'action_type': 'create_event',
+      'target_type': 'event',
+      'confirmation_mode': 'always_allow',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    expect(result.userAction?.writeProposal?.rememberAllowed, isFalse);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.policyUpdate!['actionType'], 'create_event');
+    expect(gw.policyUpdate!['mode'], ConfirmationMode.alwaysAllow);
   });
 }
