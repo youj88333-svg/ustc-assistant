@@ -606,9 +606,11 @@ void main() {
     final gw = _RelationGateway();
     final tool = h.tool('update_permission_policy');
     tool.attachGateway(gw);
-    // 先把 update_permission_policy 策略设成 always_allow，基类仍必须强制确认
+    // 先把 update_permission_policy 自身（targetType=permission）的策略设成 always_allow，
+    // 基类仍必须强制确认。审批门用工具 getter 的 (actionType,targetType) 查行，
+    // 该键若命中 always_allow 而 forceConfirmation 失效，测试就会失败——真正保护此安全属性。
     await policy.updatePolicy(accountId: 'a1', actionType: 'update_permission_policy',
-        targetType: 'create_event', mode: ConfirmationMode.alwaysAllow,
+        targetType: 'permission', mode: ConfirmationMode.alwaysAllow,
         riskLevel: RiskLevel.critical, enabled: true, updatedBy: 'user');
     final result = await tool.execute({
       'action_type': 'create_event',
@@ -620,5 +622,61 @@ void main() {
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.policyUpdate!['actionType'], 'create_event');
     expect(gw.policyUpdate!['mode'], ConfirmationMode.alwaysAllow);
+    expect(gw.policyUpdate!['riskLevel'], AgentPermissionPolicyService.defaultRisk('create_event'));
+  });
+
+  test('create_schedule_relation falls back to plan_block refs', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final left = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final right = h.refs.bind(kind: 'planblock', localId: 'pb-1');
+    final result = await tool.execute({
+      'ref_left': left,
+      'ref_right': right,
+      'conflict_state': 'conflict',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.relation!.leftKind, 'event');
+    expect(gw.relation!.leftId, 'ev-1');
+    expect(gw.relation!.rightKind, 'plan_block');
+    expect(gw.relation!.rightId, 'pb-1');
+  });
+
+  test('create_schedule_relation rejects an unknown ref before approval', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({
+      'ref_left': ref,
+      'ref_right': 'ref_nope',
+      'conflict_state': 'no_conflict',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('set_reminder rejects an unknown event ref', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final result = await tool.execute({'ref_event': 'ref_nope', 'offsets_minutes': [15]}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('set_reminder rejects negative offsets', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [-5]}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
   });
 }
