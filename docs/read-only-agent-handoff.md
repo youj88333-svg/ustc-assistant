@@ -250,6 +250,11 @@ Flutter 拥有 Agent 核心。Windows 上查询报名中二课、评课和校园
 最后一个代码提交为 `6378be5`（`config: switch default JW semester to 2026 fall`）。
 后续若再提交，需重跑本节命令并刷新哈希。
 
+写工具里程碑（Tasks 1–7，`feature/write-tools` 分支）Task 7 最终验证时的精确 HEAD：
+`ad49a2b`（`test(agent): close read-write hardening milestone`，本里程碑收尾提交）；前一
+代码提交为 `f07dbde`（Task 6，生成 Flutter 学期默认值）。完整验证结果见第 7.1 节。
+尚未合并到 `main`，合并时机由计划 Task 13 后的 finishing-a-development-branch 流程决定。
+
 Task 9 实测的完整自动验证结果（2026-07-31，worktree `E:/107/.worktrees/read-only-agent`）：
 
 ```text
