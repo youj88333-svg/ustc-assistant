@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import '../../../core/database/app_database.dart';
 import '../application/effective_event_repository.dart';
 
 class EventDetailPage extends StatelessWidget {
@@ -44,7 +43,7 @@ class EventDetailPage extends StatelessWidget {
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 12),
-          _DetailLine(icon: Icons.schedule, text: _timeText(source)),
+          _DetailLine(icon: Icons.schedule, text: _timeText(event)),
           if (event.displayLocation != null)
             _DetailLine(
               icon: Icons.location_on_outlined,
@@ -103,12 +102,19 @@ class EventDetailPage extends StatelessWidget {
     );
   }
 
-  String _timeText(CalendarEvent event) {
-    if (event.allDay) {
-      return '${event.startDate} 至 ${event.endDateExclusive}（结束日不含）';
+  String _timeText(EffectiveEventRecord record) {
+    final source = record.source;
+    if (source.allDay) {
+      return '${source.startDate} 至 ${source.endDateExclusive}（结束日不含）';
     }
-    final start = DateTime.fromMillisecondsSinceEpoch(event.startAt!);
-    final end = DateTime.fromMillisecondsSinceEpoch(event.endAt!);
+    // Whole-day JW course moves project a display time: show the effective
+    // (target-day) times when present, keeping the raw source row untouched.
+    final start =
+        record.effectiveStartAt ??
+        DateTime.fromMillisecondsSinceEpoch(source.startAt!);
+    final end =
+        record.effectiveEndAt ??
+        DateTime.fromMillisecondsSinceEpoch(source.endAt!);
     String value(DateTime date) =>
         '${date.month}月${date.day}日 '
         '${date.hour.toString().padLeft(2, '0')}:'

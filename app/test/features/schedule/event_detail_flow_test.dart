@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
+import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/conflict_management_page.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/event_detail_loader.dart';
 
@@ -172,6 +173,44 @@ void main() {
       )..where((row) => row.id.equals('source-event'))).getSingleOrNull(),
       isNotNull,
     );
+  });
+
+  testWidgets('detail page shows the effective moved time of a whole-day move', (
+    tester,
+  ) async {
+    final database = await _database();
+    addTearDown(database.close);
+    await _insertEvent(
+      database,
+      id: 'source-event',
+      source: 'ustc_jw',
+      startHour: 1,
+      type: 'course',
+    );
+    // The event's raw Beijing date is 2026-07-27 09:00-11:00; move the whole
+    // day to 2026-07-28.
+    await JwDayMoveService(
+      database: database,
+      accountId: 'account',
+    ).move('2026-07-27', '2026-07-28');
+
+    final record = await EffectiveEventRepository(
+      database,
+      accountId: 'account',
+    ).byId('source-event');
+    expect(record.effectiveStartAt, DateTime(2026, 7, 28, 9));
+    expect(record.effectiveEndAt, DateTime(2026, 7, 28, 11));
+    // The raw source row is untouched.
+    expect(record.source.startAt, isNotNull);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: EventDetailLoader(database: database, eventId: 'source-event'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('7月28日 09:00'), findsOneWidget);
+    expect(find.textContaining('7月28日 11:00'), findsOneWidget);
   });
 
   testWidgets('personal delete is soft and remains restorable', (tester) async {

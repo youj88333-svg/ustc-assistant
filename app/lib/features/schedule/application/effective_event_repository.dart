@@ -86,9 +86,23 @@ class EffectiveEventRecord {
     this.foregroundPriority,
     this.userNotes,
     this.tagsJson,
+    this.effectiveStartAt,
+    this.effectiveEndAt,
   });
 
+  /// The immutable imported row; a whole-day move never rewrites it. When
+  /// [effectiveStartAt]/[effectiveEndAt] are present, display and Agent
+  /// detail should show those instead of `source.startAt`/`source.endAt`.
   final CalendarEvent source;
+
+  /// The moved display start (Beijing local) when a whole-day JW course move
+  /// applies to [source]; null when the event is not moved. Hour/minute/second
+  /// and duration are unchanged; only the Beijing calendar date is shifted.
+  final DateTime? effectiveStartAt;
+
+  /// The moved display end (Beijing local), shifted by the same calendar-date
+  /// delta as [effectiveStartAt].
+  final DateTime? effectiveEndAt;
   final CourseSery? courseSeries;
   final AttendancePolicy attendance;
   final AttendanceDecision attendanceDecision;
@@ -117,6 +131,7 @@ class EffectiveEventRepository {
         '''
 SELECT
   e.id,
+  e.source,
   COALESCE(eo.display_title, so.display_title, e.title) AS display_title,
   COALESCE(eo.display_location, so.display_location, e.location_name)
     AS display_location,
@@ -170,16 +185,18 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
           database.scheduleRelationRules,
           database.planBlocks,
           database.tasks,
+          database.jwDayMoves,
         },
       )
       .watch()
       .asyncMap((rows) async {
+        final moves = await _movesBySourceDate();
         final visibleRows = rows
             .where((row) => row.read<int>('hidden') == 0)
             .toList(growable: false);
         final conflictIds = await resolvedConflictIdsFor([
           for (final row in visibleRows)
-            _displayEvent(row, hasConfirmedConflict: false),
+            _displayEvent(row, hasConfirmedConflict: false, moves: moves),
         ]);
         return [
           for (final row in visibleRows)
@@ -188,6 +205,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
               hasConfirmedConflict: conflictIds.contains(
                 row.read<String>('id'),
               ),
+              moves: moves,
             ),
         ];
       });
@@ -195,6 +213,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
   Future<List<EffectiveEventRecord>> overlappingRecords(String eventId) async {
     final target = await byId(eventId);
     if (!await _isPresent(target.source)) return const [];
+    final moves = await _movesBySourceDate();
     final candidates =
         await (database.select(database.calendarEvents)..where(
               (row) =>
@@ -205,7 +224,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
             .get();
     final visible = <CalendarEvent>[];
     for (final candidate in candidates) {
-      if (!_overlaps(target.source, candidate)) continue;
+      if (!_overlaps(target.source, candidate, moves)) continue;
       if (!await _isPresent(candidate)) continue;
       visible.add(candidate);
     }
@@ -273,8 +292,12 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         : read(eventOverlay) ??
               (seriesOverlay == null ? null : read(seriesOverlay));
 
+    final moves = await _movesBySourceDate();
+    final effectiveStartAt = _shiftedStartAt(event, moves);
     return EffectiveEventRecord(
       source: event,
+      effectiveStartAt: effectiveStartAt,
+      effectiveEndAt: _shiftedEndAt(event, effectiveStartAt),
       courseSeries: series,
       attendance: attendancePolicyFromStorage(
         choose((overlay) => overlay.attendancePolicy) ??
@@ -311,6 +334,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
   EffectiveEvent _displayEvent(
     QueryRow row, {
     required bool hasConfirmedConflict,
+    Map<String, String> moves = const {},
   }) {
     final importance = switch (row.read<String>('importance')) {
       'low' => EventImportance.low,
@@ -340,11 +364,28 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         hasConfirmedConflict: hasConfirmedConflict,
       );
     }
+    // Whole-day moves are projected here: when a move record's source date
+    // equals the RAW Beijing date of an ELIGIBLE course event (source ==
+    // ustc_jw, type == course, timed), the display time shifts to the target
+    // date with the same hour/minute/second and duration. Exams, second-class,
+    // personal and all-day events never move, and the raw start_at/end_at are
+    // never rewritten.
+    final startAt = _beijingDateTime(row.read<int>('start_at'));
+    final endAt = _beijingDateTime(row.read<int>('end_at'));
+    final movable =
+        row.read<String>('source') == 'ustc_jw' &&
+        row.read<String>('type') == 'course';
+    final shiftedStart = movable
+        ? (_shifted(startAt, moves) ?? startAt)
+        : startAt;
+    final shiftedEnd = shiftedStart == startAt
+        ? endAt
+        : shiftedStart.add(endAt.difference(startAt));
     return EffectiveEvent.timed(
       id: id,
       title: title,
-      startAt: _beijingDateTime(row.read<int>('start_at')),
-      endAt: _beijingDateTime(row.read<int>('end_at')),
+      startAt: shiftedStart,
+      endAt: shiftedEnd,
       courseSeriesId: courseSeriesId,
       location: location,
       isInactivePreview: row.read<String>('status') == 'tentative',
@@ -418,22 +459,97 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     return record != null;
   }
 
-  bool _overlaps(CalendarEvent target, CalendarEvent candidate) {
-    final targetBounds = _localBounds(target);
-    final candidateBounds = _localBounds(candidate);
+  bool _overlaps(
+    CalendarEvent target,
+    CalendarEvent candidate,
+    Map<String, String> moves,
+  ) {
+    final targetBounds = _localBounds(target, moves);
+    final candidateBounds = _localBounds(candidate, moves);
     return candidateBounds.$1.isBefore(targetBounds.$2) &&
         candidateBounds.$2.isAfter(targetBounds.$1);
   }
 
-  (DateTime, DateTime) _localBounds(CalendarEvent event) {
+  /// The display bounds of an event: moved courses use their effective
+  /// (target-day) times, everything else its raw times.
+  (DateTime, DateTime) _localBounds(
+    CalendarEvent event,
+    Map<String, String> moves,
+  ) {
     if (event.allDay) {
       return (
         DateTime.parse(event.startDate!),
         DateTime.parse(event.endDateExclusive!),
       );
     }
-    return (_beijingDateTime(event.startAt!), _beijingDateTime(event.endAt!));
+    final startAt = _beijingDateTime(event.startAt!);
+    final movable = event.source == 'ustc_jw' && event.type == 'course';
+    final shiftedStart = movable
+        ? (_shifted(startAt, moves) ?? startAt)
+        : startAt;
+    final endAt = _beijingDateTime(event.endAt!);
+    final shiftedEnd = shiftedStart == startAt
+        ? endAt
+        : shiftedStart.add(endAt.difference(startAt));
+    return (shiftedStart, shiftedEnd);
   }
+
+  /// All whole-day move records of the account, keyed by RAW source date.
+  Future<Map<String, String>> _movesBySourceDate() async {
+    final rows =
+        await (database.select(database.jwDayMoves)..where(
+              (row) => row.accountId.equals(accountId),
+            ))
+            .get();
+    return {for (final row in rows) row.sourceDate: row.targetDate};
+  }
+
+  /// The effective start for [event] when a move applies to its raw Beijing
+  /// calendar date; null otherwise. Only eligible `ustc_jw/course` timed
+  /// events move. The date delta uses Beijing calendar dates (not 24-hour
+  /// epoch arithmetic) and the time of day is unchanged.
+  DateTime? _shiftedStartAt(CalendarEvent event, Map<String, String> moves) {
+    if (event.allDay ||
+        event.startAt == null ||
+        event.source != 'ustc_jw' ||
+        event.type != 'course') {
+      return null;
+    }
+    final startAt = _beijingDateTime(event.startAt!);
+    final target = moves[_dateKey(startAt)];
+    if (target == null) return null;
+    final targetDate = DateTime.parse(target);
+    final rawDate = DateTime(startAt.year, startAt.month, startAt.day);
+    return startAt.add(Duration(days: targetDate.difference(rawDate).inDays));
+  }
+
+  /// The effective end: the same delta as the start, so the duration is
+  /// unchanged.
+  DateTime? _shiftedEndAt(
+    CalendarEvent event,
+    DateTime? effectiveStartAt,
+  ) {
+    if (event.allDay || event.startAt == null || effectiveStartAt == null) {
+      return null;
+    }
+    final duration = event.endAt! - event.startAt!;
+    return effectiveStartAt.add(Duration(milliseconds: duration));
+  }
+
+  /// Shifts a raw Beijing wall-clock time by the move delta of its calendar
+  /// date; null when no move applies.
+  DateTime? _shifted(DateTime value, Map<String, String> moves) {
+    final target = moves[_dateKey(value)];
+    if (target == null) return null;
+    final targetDate = DateTime.parse(target);
+    final rawDate = DateTime(value.year, value.month, value.day);
+    return value.add(Duration(days: targetDate.difference(rawDate).inDays));
+  }
+
+  String _dateKey(DateTime value) =>
+      '${value.year.toString().padLeft(4, '0')}-'
+      '${value.month.toString().padLeft(2, '0')}-'
+      '${value.day.toString().padLeft(2, '0')}';
 
   DateTime _beijingDateTime(int millisecondsSinceEpoch) {
     final shifted = DateTime.fromMillisecondsSinceEpoch(

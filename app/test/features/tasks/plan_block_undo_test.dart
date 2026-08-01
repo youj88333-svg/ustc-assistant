@@ -1,10 +1,17 @@
+import 'package:drift/drift.dart' hide isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
+
+/// Beijing wall-clock -> storage epoch-ms (app reads stored UTC + 8h).
+int _beijingEpoch(int year, int month, int day, int hour) =>
+    DateTime.utc(year, month, day, hour).millisecondsSinceEpoch -
+    const Duration(hours: 8).inMilliseconds;
 
 Future<AppDatabase> fixtureDatabase() async {
   final database = AppDatabase(NativeDatabase.memory());
@@ -293,6 +300,102 @@ void main() {
 
       expect((await tasks.byId(taskId)).state.name, 'active');
       expect((await blocks.byId(blockId)).status, PlanBlockStatus.accepted);
+    },
+  );
+
+  test(
+    'undoing a whole-day course move restores or deletes the exact prior row',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      // One eligible JW course on 2026-08-03 so the move can be recorded.
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'course',
+              accountId: 'a',
+              source: 'ustc_jw',
+              externalId: const Value('course'),
+              title: 'course',
+              type: 'course',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 9)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 10)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database
+          .into(database.sourceRecords)
+          .insert(
+            SourceRecordsCompanion.insert(
+              id: 'source-course',
+              accountId: 'a',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: 'course',
+              localEntityId: 'course',
+              sourceStatus: 'active',
+              presence: 'observed',
+              scopeKey: 'semester',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+      var clock = 500;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final service = JwDayMoveService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+
+      // Insert: undoing a move deletes the move row.
+      await service.move('2026-08-03', '2026-08-04');
+      await undo.undo();
+      expect(await database.select(database.jwDayMoves).get(), isEmpty);
+
+      // Update: undoing a retarget restores the previous target date.
+      await service.move('2026-08-03', '2026-08-04');
+      await service.move('2026-08-03', '2026-08-05');
+      await undo.undo();
+      var row = await database.select(database.jwDayMoves).getSingle();
+      expect(row.targetDate, '2026-08-04');
+
+      // Delete: undoing a clear restores the exact deleted row.
+      await service.clear('2026-08-03');
+      expect(await database.select(database.jwDayMoves).get(), isEmpty);
+      await undo.undo();
+      row = await database.select(database.jwDayMoves).getSingle();
+      expect(row.accountId, 'a');
+      expect(row.sourceDate, '2026-08-03');
+      expect(row.targetDate, '2026-08-04');
+
+      // The undo slot is account-scoped: another account cannot reverse it.
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****1111',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await service.move('2026-08-03', '2026-08-05');
+      await expectLater(
+        UndoService(database: database, accountId: 'other').undo(),
+        throwsA(isA<InvalidUndoCommand>()),
+      );
+      final after = await database.select(database.jwDayMoves).getSingle();
+      expect(after.targetDate, '2026-08-05');
     },
   );
 

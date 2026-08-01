@@ -226,11 +226,14 @@ Future<List<_PendingEventReview>> _pendingEventReviews(
   for (final record in records) {
     if (record.hidden) continue;
     final event = record.source;
+    // Whole-day JW course moves project a display time: a moved course is
+    // "ended" when its EFFECTIVE end passes, not the raw source end.
     final hasEnded = event.allDay
         ? (event.endDateExclusive != null &&
             !DateTime.parse(event.endDateExclusive!).isAfter(now))
         : (event.endAt != null &&
-            !_beijingFromEpoch(event.endAt!).isAfter(now));
+            !(record.effectiveEndAt ?? _beijingFromEpoch(event.endAt!))
+                .isAfter(now));
     if (!hasEnded) continue;
     final reasons = <String>[];
     if (record.attendanceDecision == AttendanceDecision.undecided) {
@@ -752,8 +755,14 @@ class GetEventDetailsTool implements AgentTool {
       dto['startDate'] = _formatDate(DateTime.parse(event.startDate!));
       dto['endDateExclusive'] = _formatDate(DateTime.parse(event.endDateExclusive!));
     } else {
-      dto['startAt'] = _formatDateTime(_beijingFromEpoch(event.startAt!));
-      dto['endAt'] = _formatDateTime(_beijingFromEpoch(event.endAt!));
+      // A whole-day JW course move projects a display time: the Agent sees
+      // the effective (target-day) times, never the raw source row.
+      dto['startAt'] = _formatDateTime(
+        record.effectiveStartAt ?? _beijingFromEpoch(event.startAt!),
+      );
+      dto['endAt'] = _formatDateTime(
+        record.effectiveEndAt ?? _beijingFromEpoch(event.endAt!),
+      );
     }
     // Conflict state for this event: re-derive from the effective display set
     // so the flag stays authoritative (SQL-computed). Fall back to not_conflict
@@ -949,7 +958,11 @@ class GetPendingEventReviewsTool implements AgentTool {
       if (event.allDay) {
         dto['startDate'] = _formatDate(DateTime.parse(event.startDate!));
       } else {
-        dto['startAt'] = _formatDateTime(_beijingFromEpoch(event.startAt!));
+        // Whole-day JW course moves project a display time; show the
+        // effective start when present.
+        dto['startAt'] = _formatDateTime(
+          record.effectiveStartAt ?? _beijingFromEpoch(event.startAt!),
+        );
       }
       if (record.attendanceNote != null) {
         dto['attendanceNote'] = record.attendanceNote;

@@ -186,6 +186,42 @@ class CalendarEventOccurrenceExceptions extends Table {
   ];
 }
 
+/// A whole-day move of `ustc_jw` course events from [sourceDate] to
+/// [targetDate] (both Beijing calendar dates, YYYY-MM-DD). The move is a
+/// projection: source events are never rewritten; the effective schedule reads
+/// match each event's RAW source date against [sourceDate] and display it on
+/// [targetDate] instead. See Spec section 10.2.
+///
+/// `@DataClassName` avoids colliding with the domain model `JwDayMove` in
+/// `features/schedule/domain/jw_day_move.dart` (Drift would otherwise derive
+/// `JwDayMove` from the table name).
+@DataClassName('JwDayMoveRecord')
+class JwDayMoves extends Table {
+  TextColumn get id => text()();
+  TextColumn get accountId =>
+      text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
+  TextColumn get sourceDate => text()();
+  TextColumn get targetDate => text()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
+
+  @override
+  String get tableName => 'jw_day_moves';
+
+  @override
+  Set<Column<Object>> get primaryKey => {id};
+
+  @override
+  List<Set<Column<Object>>> get uniqueKeys => [
+    {accountId, sourceDate},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (source_date <> target_date)',
+  ];
+}
+
 class UserOverlays extends Table {
   TextColumn get id => text()();
   TextColumn get accountId =>

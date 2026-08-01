@@ -147,8 +147,19 @@ void main() {
               updatedAt: 1,
             ),
           );
+      await database.into(database.jwDayMoves).insert(
+        JwDayMovesCompanion.insert(
+          id: 'move',
+          accountId: accountId,
+          sourceDate: '2026-08-03',
+          targetDate: '2026-08-04',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
       await settings.clearBusinessData(confirmed: false);
       expect(await database.select(database.tasks).get(), hasLength(1));
+      expect(await database.select(database.jwDayMoves).get(), hasLength(1));
       await settings.completeReset(
         firstConfirmation: true,
         secondConfirmation: false,
@@ -156,6 +167,7 @@ void main() {
       expect(await database.select(database.tasks).get(), hasLength(1));
       await settings.clearBusinessData(confirmed: true);
       expect(await database.select(database.tasks).get(), isEmpty);
+      expect(await database.select(database.jwDayMoves).get(), isEmpty);
     },
   );
 
@@ -250,6 +262,16 @@ void main() {
           ),
         );
     await settings.setPythonPath(r'E:\python.exe');
+    await database.into(database.jwDayMoves).insert(
+      JwDayMovesCompanion.insert(
+        id: 'move',
+        accountId: accountId,
+        sourceDate: '2026-08-03',
+        targetDate: '2026-08-04',
+        createdAt: 1,
+        updatedAt: 1,
+      ),
+    );
     await database.replaceUndoSlot(
       commandId: 'undo',
       payload: '{"accountId":"$accountId"}',
@@ -276,6 +298,7 @@ void main() {
     expect(await database.select(database.tasks).get(), isEmpty);
     expect(await database.select(database.planBlocks).get(), isEmpty);
     expect(await database.select(database.reminders).get(), isEmpty);
+    expect(await database.select(database.jwDayMoves).get(), isEmpty);
     expect(await database.select(database.sourceConfigs).get(), isEmpty);
     expect(await database.select(database.undoSlot).get(), isEmpty);
     expect(

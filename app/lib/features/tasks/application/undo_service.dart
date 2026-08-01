@@ -105,9 +105,37 @@ class UndoService implements UndoRecorder {
         await _restoreScheduleRelationRule(payload);
       case 'reminder_override':
         await _restoreReminderOverride(payload);
+      case 'jw_day_move':
+        await _restoreJwDayMove(payload);
       default:
         throw const InvalidUndoCommand();
     }
+  }
+
+  Future<void> _restoreJwDayMove(Map<String, dynamic> payload) async {
+    final before = payload['before'];
+    final id = payload['id'] as String;
+    if (before == null) {
+      await (database.delete(database.jwDayMoves)..where(
+            (row) => row.id.equals(id) & row.accountId.equals(accountId),
+          ))
+          .go();
+      return;
+    }
+    // Restore the exact prior row, account-scoped.
+    final row = before as Map<String, dynamic>;
+    await database
+        .into(database.jwDayMoves)
+        .insertOnConflictUpdate(
+          JwDayMovesCompanion.insert(
+            id: id,
+            accountId: accountId,
+            sourceDate: row['sourceDate'] as String,
+            targetDate: row['targetDate'] as String,
+            createdAt: row['createdAt'] as int,
+            updatedAt: row['updatedAt'] as int,
+          ),
+        );
   }
 
   Future<void> _restoreReminderOverride(Map<String, dynamic> payload) async {

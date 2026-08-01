@@ -160,6 +160,9 @@ class SettingsService {
       await (database.delete(
         database.importBatches,
       )..where((row) => row.accountId.equals(accountId))).go();
+      await (database.delete(
+        database.jwDayMoves,
+      )..where((row) => row.accountId.equals(accountId))).go();
       await _log('business_data_clear', 'Cleared local business data.');
     });
   }

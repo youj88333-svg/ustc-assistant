@@ -8,11 +8,11 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 
 void main() {
   test(
-    'schema version four creates the complete constrained database',
+    'schema version five creates the complete constrained database',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      expect(database.schemaVersion, 4);
+      expect(database.schemaVersion, 5);
       final foreignKeys = await database
           .customSelect('PRAGMA foreign_keys')
           .getSingle();
@@ -44,6 +44,7 @@ void main() {
           'tasks',
           'plan_blocks',
           'reminders',
+          'jw_day_moves',
           'sync_runs',
           'action_logs',
           'undo_slot',
@@ -66,6 +67,24 @@ void main() {
       expect(
         accountColumns.map((row) => row.read<String>('name')),
         contains('identity_digest'),
+      );
+      // No default whole-day course move is seeded on a fresh database.
+      final moveColumns = await database
+          .customSelect('PRAGMA table_info(jw_day_moves)')
+          .get();
+      final moveColumnNames = moveColumns
+          .map((row) => row.read<String>('name'))
+          .toList();
+      expect(
+        moveColumnNames,
+        containsAll({
+          'id',
+          'account_id',
+          'source_date',
+          'target_date',
+          'created_at',
+          'updated_at',
+        }),
       );
     },
   );
@@ -146,13 +165,13 @@ CREATE TABLE action_logs (
     );
   });
 
-  // Regression for handoff §3 same-round: a real v2 -> v4 upgrade must create
-  // all six agent tables, rebuild agent_permission_policies, and preserve
-  // representative business data that existed before the migration. Drift's
-  // createAll path (fresh-DB test above) does not exercise the onUpgrade
-  // `from < 3` / `from < 4` branches.
+  // Regression for handoff §3 same-round: a real v2 -> v5 upgrade must create
+  // all six agent tables, rebuild agent_permission_policies, create
+  // jw_day_moves, and preserve representative business data that existed
+  // before the migration. Drift's createAll path (fresh-DB test above) does
+  // not exercise the onUpgrade `from < 3` / `from < 4` / `from < 5` branches.
   test(
-    'schema two upgrades to four by adding the six agent tables and keeping business rows',
+    'schema two upgrades to five by adding the six agent tables and keeping business rows',
     () async {
       final directory = await Directory.systemTemp.createTemp(
         'ustc-migration-v2-test',
@@ -225,8 +244,8 @@ CREATE TABLE action_logs (
       final database = AppDatabase(NativeDatabase(File(path)));
       addTearDown(database.close);
 
-      // The v4 schema is in effect.
-      expect(database.schemaVersion, 4);
+      // The v5 schema is in effect.
+      expect(database.schemaVersion, 5);
       final tables =
           (await database
                   .customSelect(
@@ -244,6 +263,7 @@ CREATE TABLE action_logs (
           'chat_messages',
           'tool_invocations',
           'conversation_summaries',
+          'jw_day_moves',
         }),
       );
       // The six new tables are empty after migration.
@@ -266,6 +286,177 @@ CREATE TABLE action_logs (
       expect(task.id, 'task-1');
       expect(task.title, '复习线性代数');
       expect(task.state, 'active');
+    },
+  );
+
+  // A real v4 -> v5 upgrade must create jw_day_moves without touching
+  // representative business data. The fresh-DB test above does not exercise
+  // the onUpgrade `from < 5` branch.
+  test(
+    'schema four upgrades to five by creating jw_day_moves and preserving rows',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'ustc-migration-v4-test',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final path = p.join(directory.path, 'legacy-v4.sqlite');
+      final legacy = sqlite.sqlite3.open(path);
+      // A representative v4 schema: the account plus one business table that
+      // must survive the v5 migration (the `from < 5` branch only creates
+      // jw_day_moves).
+      legacy.execute('''
+CREATE TABLE local_accounts (
+  id TEXT NOT NULL PRIMARY KEY,
+  masked_hint TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  identity_digest TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+''');
+      legacy.execute(
+        "INSERT INTO local_accounts VALUES ('account', 'PB****0000', 1, 'digest', 10, 10)",
+      );
+      legacy.execute('''
+CREATE TABLE tasks (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  user_notes TEXT,
+  state TEXT NOT NULL,
+  blocked_reason TEXT,
+  importance TEXT NOT NULL,
+  deadline_at INTEGER,
+  estimated_minutes INTEGER,
+  tags_json TEXT NOT NULL,
+  completed_at INTEGER,
+  cancelled_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER
+)
+''');
+      legacy.execute(
+        "INSERT INTO tasks VALUES "
+        "('task-1','account','复习线性代数',NULL,NULL,'active',NULL,'high',"
+        "NULL,NULL,'[]',NULL,NULL,20,20,NULL)",
+      );
+      legacy.execute('PRAGMA user_version = 4');
+      legacy.close();
+
+      final database = AppDatabase(NativeDatabase(File(path)));
+      addTearDown(database.close);
+
+      expect(database.schemaVersion, 5);
+      final tables =
+          (await database
+                  .customSelect(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'",
+                  )
+                  .get())
+              .map((row) => row.read<String>('name'))
+              .toSet();
+      expect(tables, contains('jw_day_moves'));
+      // No default move is seeded by the migration.
+      expect(
+        await database
+            .customSelect('SELECT COUNT(*) AS n FROM jw_day_moves')
+            .getSingle()
+            .then((row) => row.read<int>('n')),
+        0,
+      );
+      final account = await database.select(database.localAccounts).getSingle();
+      expect(account.id, 'account');
+      final task = await database.select(database.tasks).getSingle();
+      expect(task.id, 'task-1');
+      expect(task.title, '复习线性代数');
+    },
+  );
+
+  test(
+    'jw_day_moves enforces account cascade, unique source date and source != target',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'account',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.jwDayMoves).insert(
+        JwDayMovesCompanion.insert(
+          id: 'move-1',
+          accountId: 'account',
+          sourceDate: '2026-08-03',
+          targetDate: '2026-08-04',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+      // Unique (accountId, sourceDate): a second move from the same source
+      // date is rejected even with a fresh id.
+      await expectLater(
+        database.into(database.jwDayMoves).insert(
+          JwDayMovesCompanion.insert(
+            id: 'move-2',
+            accountId: 'account',
+            sourceDate: '2026-08-03',
+            targetDate: '2026-08-05',
+            createdAt: 2,
+            updatedAt: 2,
+          ),
+        ),
+        throwsA(isA<sqlite.SqliteException>()),
+      );
+      // source date must differ from target date.
+      await expectLater(
+        database.into(database.jwDayMoves).insert(
+          JwDayMovesCompanion.insert(
+            id: 'move-3',
+            accountId: 'account',
+            sourceDate: '2026-08-06',
+            targetDate: '2026-08-06',
+            createdAt: 3,
+            updatedAt: 3,
+          ),
+        ),
+        throwsA(isA<sqlite.SqliteException>()),
+      );
+      // A second account can move the same source date.
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****1111',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.jwDayMoves).insert(
+        JwDayMovesCompanion.insert(
+          id: 'move-4',
+          accountId: 'other',
+          sourceDate: '2026-08-03',
+          targetDate: '2026-08-05',
+          createdAt: 2,
+          updatedAt: 2,
+        ),
+      );
+      expect(await database.select(database.jwDayMoves).get(), hasLength(2));
+      // Deleting the account cascades its move rows.
+      await (database.delete(
+        database.localAccounts,
+      )..where((row) => row.id.equals('account'))).go();
+      final remaining = await database.select(database.jwDayMoves).get();
+      expect(remaining, hasLength(1));
+      expect(remaining.single.accountId, 'other');
     },
   );
 }

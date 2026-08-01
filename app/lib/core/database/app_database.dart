@@ -39,6 +39,7 @@ part 'app_database.g.dart';
     ScheduleRelations,
     ScheduleRelationRules,
     Reminders,
+    JwDayMoves,
     UndoSlot,
   ],
 )
@@ -65,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
@@ -114,6 +115,9 @@ class AppDatabase extends _$AppDatabase {
         // v3 占位表从未被使用（无行、无读取）；直接重建为完整 schema。
         await migrator.drop(agentPermissionPolicies);
         await migrator.createTable(agentPermissionPolicies);
+      }
+      if (from < 5) {
+        await migrator.createTable(jwDayMoves);
       }
     },
     beforeOpen: (details) async {

@@ -18467,6 +18467,427 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
   }
 }
 
+class $JwDayMovesTable extends JwDayMoves
+    with TableInfo<$JwDayMovesTable, JwDayMoveRecord> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $JwDayMovesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accountIdMeta = const VerificationMeta(
+    'accountId',
+  );
+  @override
+  late final GeneratedColumn<String> accountId = GeneratedColumn<String>(
+    'account_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES local_accounts (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _sourceDateMeta = const VerificationMeta(
+    'sourceDate',
+  );
+  @override
+  late final GeneratedColumn<String> sourceDate = GeneratedColumn<String>(
+    'source_date',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _targetDateMeta = const VerificationMeta(
+    'targetDate',
+  );
+  @override
+  late final GeneratedColumn<String> targetDate = GeneratedColumn<String>(
+    'target_date',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    accountId,
+    sourceDate,
+    targetDate,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'jw_day_moves';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<JwDayMoveRecord> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('account_id')) {
+      context.handle(
+        _accountIdMeta,
+        accountId.isAcceptableOrUnknown(data['account_id']!, _accountIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accountIdMeta);
+    }
+    if (data.containsKey('source_date')) {
+      context.handle(
+        _sourceDateMeta,
+        sourceDate.isAcceptableOrUnknown(data['source_date']!, _sourceDateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_sourceDateMeta);
+    }
+    if (data.containsKey('target_date')) {
+      context.handle(
+        _targetDateMeta,
+        targetDate.isAcceptableOrUnknown(data['target_date']!, _targetDateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_targetDateMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {accountId, sourceDate},
+  ];
+  @override
+  JwDayMoveRecord map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return JwDayMoveRecord(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      accountId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}account_id'],
+      )!,
+      sourceDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}source_date'],
+      )!,
+      targetDate: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}target_date'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $JwDayMovesTable createAlias(String alias) {
+    return $JwDayMovesTable(attachedDatabase, alias);
+  }
+}
+
+class JwDayMoveRecord extends DataClass implements Insertable<JwDayMoveRecord> {
+  final String id;
+  final String accountId;
+  final String sourceDate;
+  final String targetDate;
+  final int createdAt;
+  final int updatedAt;
+  const JwDayMoveRecord({
+    required this.id,
+    required this.accountId,
+    required this.sourceDate,
+    required this.targetDate,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['account_id'] = Variable<String>(accountId);
+    map['source_date'] = Variable<String>(sourceDate);
+    map['target_date'] = Variable<String>(targetDate);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  JwDayMovesCompanion toCompanion(bool nullToAbsent) {
+    return JwDayMovesCompanion(
+      id: Value(id),
+      accountId: Value(accountId),
+      sourceDate: Value(sourceDate),
+      targetDate: Value(targetDate),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory JwDayMoveRecord.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return JwDayMoveRecord(
+      id: serializer.fromJson<String>(json['id']),
+      accountId: serializer.fromJson<String>(json['accountId']),
+      sourceDate: serializer.fromJson<String>(json['sourceDate']),
+      targetDate: serializer.fromJson<String>(json['targetDate']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'accountId': serializer.toJson<String>(accountId),
+      'sourceDate': serializer.toJson<String>(sourceDate),
+      'targetDate': serializer.toJson<String>(targetDate),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  JwDayMoveRecord copyWith({
+    String? id,
+    String? accountId,
+    String? sourceDate,
+    String? targetDate,
+    int? createdAt,
+    int? updatedAt,
+  }) => JwDayMoveRecord(
+    id: id ?? this.id,
+    accountId: accountId ?? this.accountId,
+    sourceDate: sourceDate ?? this.sourceDate,
+    targetDate: targetDate ?? this.targetDate,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  JwDayMoveRecord copyWithCompanion(JwDayMovesCompanion data) {
+    return JwDayMoveRecord(
+      id: data.id.present ? data.id.value : this.id,
+      accountId: data.accountId.present ? data.accountId.value : this.accountId,
+      sourceDate: data.sourceDate.present
+          ? data.sourceDate.value
+          : this.sourceDate,
+      targetDate: data.targetDate.present
+          ? data.targetDate.value
+          : this.targetDate,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('JwDayMoveRecord(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('sourceDate: $sourceDate, ')
+          ..write('targetDate: $targetDate, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, accountId, sourceDate, targetDate, createdAt, updatedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is JwDayMoveRecord &&
+          other.id == this.id &&
+          other.accountId == this.accountId &&
+          other.sourceDate == this.sourceDate &&
+          other.targetDate == this.targetDate &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class JwDayMovesCompanion extends UpdateCompanion<JwDayMoveRecord> {
+  final Value<String> id;
+  final Value<String> accountId;
+  final Value<String> sourceDate;
+  final Value<String> targetDate;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const JwDayMovesCompanion({
+    this.id = const Value.absent(),
+    this.accountId = const Value.absent(),
+    this.sourceDate = const Value.absent(),
+    this.targetDate = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  JwDayMovesCompanion.insert({
+    required String id,
+    required String accountId,
+    required String sourceDate,
+    required String targetDate,
+    required int createdAt,
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       accountId = Value(accountId),
+       sourceDate = Value(sourceDate),
+       targetDate = Value(targetDate),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<JwDayMoveRecord> custom({
+    Expression<String>? id,
+    Expression<String>? accountId,
+    Expression<String>? sourceDate,
+    Expression<String>? targetDate,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (accountId != null) 'account_id': accountId,
+      if (sourceDate != null) 'source_date': sourceDate,
+      if (targetDate != null) 'target_date': targetDate,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  JwDayMovesCompanion copyWith({
+    Value<String>? id,
+    Value<String>? accountId,
+    Value<String>? sourceDate,
+    Value<String>? targetDate,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return JwDayMovesCompanion(
+      id: id ?? this.id,
+      accountId: accountId ?? this.accountId,
+      sourceDate: sourceDate ?? this.sourceDate,
+      targetDate: targetDate ?? this.targetDate,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (accountId.present) {
+      map['account_id'] = Variable<String>(accountId.value);
+    }
+    if (sourceDate.present) {
+      map['source_date'] = Variable<String>(sourceDate.value);
+    }
+    if (targetDate.present) {
+      map['target_date'] = Variable<String>(targetDate.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('JwDayMovesCompanion(')
+          ..write('id: $id, ')
+          ..write('accountId: $accountId, ')
+          ..write('sourceDate: $sourceDate, ')
+          ..write('targetDate: $targetDate, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $UndoSlotTable extends UndoSlot
     with TableInfo<$UndoSlotTable, UndoSlotData> {
   @override
@@ -18860,6 +19281,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $ScheduleRelationRulesTable scheduleRelationRules =
       $ScheduleRelationRulesTable(this);
   late final $RemindersTable reminders = $RemindersTable(this);
+  late final $JwDayMovesTable jwDayMoves = $JwDayMovesTable(this);
   late final $UndoSlotTable undoSlot = $UndoSlotTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -18891,6 +19313,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     scheduleRelations,
     scheduleRelationRules,
     reminders,
+    jwDayMoves,
     undoSlot,
   ];
   @override
@@ -19179,6 +19602,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('reminders', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'local_accounts',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('jw_day_moves', kind: UpdateKind.delete)],
     ),
   ]);
 }
@@ -19682,6 +20112,24 @@ final class $$LocalAccountsTableReferences
     ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_remindersRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$JwDayMovesTable, List<JwDayMoveRecord>>
+  _jwDayMovesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.jwDayMoves,
+    aliasName: 'local_accounts__id__jw_day_moves__account_id',
+  );
+
+  $$JwDayMovesTableProcessedTableManager get jwDayMovesRefs {
+    final manager = $$JwDayMovesTableTableManager(
+      $_db,
+      $_db.jwDayMoves,
+    ).filter((f) => f.accountId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_jwDayMovesRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -20325,6 +20773,31 @@ class $$LocalAccountsTableFilterComposer
           }) => $$RemindersTableFilterComposer(
             $db: $db,
             $table: $db.reminders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> jwDayMovesRefs(
+    Expression<bool> Function($$JwDayMovesTableFilterComposer f) f,
+  ) {
+    final $$JwDayMovesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.jwDayMoves,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$JwDayMovesTableFilterComposer(
+            $db: $db,
+            $table: $db.jwDayMoves,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -21016,6 +21489,31 @@ class $$LocalAccountsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> jwDayMovesRefs<T extends Object>(
+    Expression<T> Function($$JwDayMovesTableAnnotationComposer a) f,
+  ) {
+    final $$JwDayMovesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.jwDayMoves,
+      getReferencedColumn: (t) => t.accountId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$JwDayMovesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.jwDayMoves,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$LocalAccountsTableTableManager
@@ -21056,6 +21554,7 @@ class $$LocalAccountsTableTableManager
             bool scheduleRelationsRefs,
             bool scheduleRelationRulesRefs,
             bool remindersRefs,
+            bool jwDayMovesRefs,
           })
         > {
   $$LocalAccountsTableTableManager(_$AppDatabase db, $LocalAccountsTable table)
@@ -21139,6 +21638,7 @@ class $$LocalAccountsTableTableManager
                 scheduleRelationsRefs = false,
                 scheduleRelationRulesRefs = false,
                 remindersRefs = false,
+                jwDayMovesRefs = false,
               }) {
                 return PrefetchHooks(
                   db: db,
@@ -21168,6 +21668,7 @@ class $$LocalAccountsTableTableManager
                     if (scheduleRelationsRefs) db.scheduleRelations,
                     if (scheduleRelationRulesRefs) db.scheduleRelationRules,
                     if (remindersRefs) db.reminders,
+                    if (jwDayMovesRefs) db.jwDayMoves,
                   ],
                   addJoins: null,
                   getPrefetchedDataCallback: (items) async {
@@ -21676,6 +22177,27 @@ class $$LocalAccountsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (jwDayMovesRefs)
+                        await $_getPrefetchedData<
+                          LocalAccount,
+                          $LocalAccountsTable,
+                          JwDayMoveRecord
+                        >(
+                          currentTable: table,
+                          referencedTable: $$LocalAccountsTableReferences
+                              ._jwDayMovesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$LocalAccountsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).jwDayMovesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.accountId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -21721,6 +22243,7 @@ typedef $$LocalAccountsTableProcessedTableManager =
         bool scheduleRelationsRefs,
         bool scheduleRelationRulesRefs,
         bool remindersRefs,
+        bool jwDayMovesRefs,
       })
     >;
 typedef $$CredentialAccountsTableCreateCompanionBuilder =
@@ -36101,6 +36624,347 @@ typedef $$RemindersTableProcessedTableManager =
         bool planBlockId,
       })
     >;
+typedef $$JwDayMovesTableCreateCompanionBuilder =
+    JwDayMovesCompanion Function({
+      required String id,
+      required String accountId,
+      required String sourceDate,
+      required String targetDate,
+      required int createdAt,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$JwDayMovesTableUpdateCompanionBuilder =
+    JwDayMovesCompanion Function({
+      Value<String> id,
+      Value<String> accountId,
+      Value<String> sourceDate,
+      Value<String> targetDate,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$JwDayMovesTableReferences
+    extends BaseReferences<_$AppDatabase, $JwDayMovesTable, JwDayMoveRecord> {
+  $$JwDayMovesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $LocalAccountsTable _accountIdTable(_$AppDatabase db) => db
+      .localAccounts
+      .createAlias('jw_day_moves__account_id__local_accounts__id');
+
+  $$LocalAccountsTableProcessedTableManager get accountId {
+    final $_column = $_itemColumn<String>('account_id')!;
+
+    final manager = $$LocalAccountsTableTableManager(
+      $_db,
+      $_db.localAccounts,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_accountIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$JwDayMovesTableFilterComposer
+    extends Composer<_$AppDatabase, $JwDayMovesTable> {
+  $$JwDayMovesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sourceDate => $composableBuilder(
+    column: $table.sourceDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get targetDate => $composableBuilder(
+    column: $table.targetDate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$LocalAccountsTableFilterComposer get accountId {
+    final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableFilterComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$JwDayMovesTableOrderingComposer
+    extends Composer<_$AppDatabase, $JwDayMovesTable> {
+  $$JwDayMovesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sourceDate => $composableBuilder(
+    column: $table.sourceDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get targetDate => $composableBuilder(
+    column: $table.targetDate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$LocalAccountsTableOrderingComposer get accountId {
+    final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableOrderingComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$JwDayMovesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $JwDayMovesTable> {
+  $$JwDayMovesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get sourceDate => $composableBuilder(
+    column: $table.sourceDate,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get targetDate => $composableBuilder(
+    column: $table.targetDate,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$LocalAccountsTableAnnotationComposer get accountId {
+    final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.accountId,
+      referencedTable: $db.localAccounts,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LocalAccountsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.localAccounts,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$JwDayMovesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $JwDayMovesTable,
+          JwDayMoveRecord,
+          $$JwDayMovesTableFilterComposer,
+          $$JwDayMovesTableOrderingComposer,
+          $$JwDayMovesTableAnnotationComposer,
+          $$JwDayMovesTableCreateCompanionBuilder,
+          $$JwDayMovesTableUpdateCompanionBuilder,
+          (JwDayMoveRecord, $$JwDayMovesTableReferences),
+          JwDayMoveRecord,
+          PrefetchHooks Function({bool accountId})
+        > {
+  $$JwDayMovesTableTableManager(_$AppDatabase db, $JwDayMovesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$JwDayMovesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$JwDayMovesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$JwDayMovesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> accountId = const Value.absent(),
+                Value<String> sourceDate = const Value.absent(),
+                Value<String> targetDate = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => JwDayMovesCompanion(
+                id: id,
+                accountId: accountId,
+                sourceDate: sourceDate,
+                targetDate: targetDate,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String accountId,
+                required String sourceDate,
+                required String targetDate,
+                required int createdAt,
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => JwDayMovesCompanion.insert(
+                id: id,
+                accountId: accountId,
+                sourceDate: sourceDate,
+                targetDate: targetDate,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$JwDayMovesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({accountId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (accountId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.accountId,
+                                referencedTable: $$JwDayMovesTableReferences
+                                    ._accountIdTable(db),
+                                referencedColumn: $$JwDayMovesTableReferences
+                                    ._accountIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$JwDayMovesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $JwDayMovesTable,
+      JwDayMoveRecord,
+      $$JwDayMovesTableFilterComposer,
+      $$JwDayMovesTableOrderingComposer,
+      $$JwDayMovesTableAnnotationComposer,
+      $$JwDayMovesTableCreateCompanionBuilder,
+      $$JwDayMovesTableUpdateCompanionBuilder,
+      (JwDayMoveRecord, $$JwDayMovesTableReferences),
+      JwDayMoveRecord,
+      PrefetchHooks Function({bool accountId})
+    >;
 typedef $$UndoSlotTableCreateCompanionBuilder =
     UndoSlotCompanion Function({
       Value<int> slot,
@@ -36356,6 +37220,8 @@ class $AppDatabaseManager {
       $$ScheduleRelationRulesTableTableManager(_db, _db.scheduleRelationRules);
   $$RemindersTableTableManager get reminders =>
       $$RemindersTableTableManager(_db, _db.reminders);
+  $$JwDayMovesTableTableManager get jwDayMoves =>
+      $$JwDayMovesTableTableManager(_db, _db.jwDayMoves);
   $$UndoSlotTableTableManager get undoSlot =>
       $$UndoSlotTableTableManager(_db, _db.undoSlot);
 }
