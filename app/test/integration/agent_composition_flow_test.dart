@@ -1517,4 +1517,210 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
     expect(thirdSuccessLogs, beforeThirdSuccessLogs,
         reason: 'the rolled-back third write must add no new agent success audit');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 3 composition regression: historical overlay/relation lookups.
+  // The Agent locates concrete write targets with get_schedule(query=...) across
+  // retained local history (independent of the default semester), then resolves
+  // those run-local refs into create_user_overlay / create_schedule_relation.
+  // It must NEVER use get_conflicts as a participant finder, and no outbound
+  // request may carry a hardcoded semester.
+  // ─────────────────────────────────────────────────────────────────────────
+  test(
+    'composition: get_schedule(query) locates history targets for overlay/relation,'
+    ' never get_conflicts as finder, no hardcoded semester outbound',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      // Build the composed registry first (seeds the account + agent config).
+      final built = await writeRegistry(db, 'acc-1');
+      addTearDown(built.composition.dispose);
+      final registry = built.registry;
+
+      // A default JW semester UNRELATED to the event dates (gateway semester
+      // override side channel the query mode must ignore).
+      await db.into(db.sourceConfigs).insert(
+            SourceConfigsCompanion.insert(
+              id: 'acc-1:ustc_jw',
+              accountId: 'acc-1',
+              source: 'ustc_jw',
+              enabled: const Value(true),
+              configJson: const Value(
+                '{"semesterId":421,"semesterKey":"2026spring",'
+                '"displayName":"2025-2026学年春季学期"}',
+              ),
+              lastSuccessAt: const Value(null),
+              retryAfter: const Value(null),
+              updatedAt: 1,
+            ),
+          );
+
+      // Historical course occurrences across two semesters (March = 2026spring,
+      // August = 2026fall) — the query must find BOTH without reading the
+      // default semester.
+      await _insertCourseSeries(
+        db,
+        'series-net',
+        'acc-1',
+        externalId: 'lesson-net',
+        title: '计算机网络',
+        semesterKey: '2026spring',
+      );
+      await _insertCourseOccurrence(
+        db,
+        'net-mar-a',
+        'acc-1',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '三教101',
+        start: DateTime(2026, 3, 2, 8, 40),
+        end: DateTime(2026, 3, 2, 9, 25),
+      );
+      await _insertCourseOccurrence(
+        db,
+        'net-mar-b',
+        'acc-1',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '三教201',
+        start: DateTime(2026, 3, 4, 10, 35),
+        end: DateTime(2026, 3, 4, 11, 20),
+      );
+      await _insertCourseOccurrence(
+        db,
+        'net-aug',
+        'acc-1',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '四教102',
+        start: DateTime(2026, 8, 14, 14, 0),
+        end: DateTime(2026, 8, 14, 15, 40),
+      );
+
+      // Allow the two write actions so the registry execute path commits
+      // without a confirmation pause (deterministic registry-level regression).
+      await db.into(db.agentPermissionPolicies).insert(
+            AgentPermissionPoliciesCompanion.insert(
+              id: 'pp-overlay',
+              accountId: 'acc-1',
+              actionType: 'create_user_overlay',
+              targetType: const Value('overlay'),
+              confirmationMode: 'always_allow',
+              riskLevel: const Value('medium'),
+              enabled: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await db.into(db.agentPermissionPolicies).insert(
+            AgentPermissionPoliciesCompanion.insert(
+              id: 'pp-relation',
+              accountId: 'acc-1',
+              actionType: 'create_schedule_relation',
+              targetType: const Value('relation'),
+              confirmationMode: 'always_allow',
+              riskLevel: const Value('medium'),
+              enabled: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // Step A: get_schedule(query) locates concrete refs across history.
+      final ctx = integrationCtx('acc-1', 'r-task3');
+      final schedule = await registry.execute(
+        toolName: 'get_schedule',
+        arguments: {'query': '计算机网络'},
+        context: ctx,
+      );
+      expect(schedule.status, AgentToolStatus.success);
+      final events = schedule.payload['events']! as List;
+      expect(events, hasLength(3),
+          reason: 'query must find all three historical occurrences regardless '
+              'of the default semester');
+      final scheduleEncoded = jsonEncode(schedule.payload);
+      expect(scheduleEncoded, isNot(contains('semester')));
+      expect(scheduleEncoded, isNot(contains('2026spring')));
+      expect(scheduleEncoded, isNot(contains('421')));
+      // Three concrete run-local refs.
+      final refs = <String>[
+        for (final e in events)
+          (e! as Map<String, Object?>)['ref']! as String,
+      ];
+      expect(refs, hasLength(3));
+      expect(refs.first, startsWith('ref_'));
+
+      // Step B: create_user_overlay on one historical target ref.
+      final overlay = await registry.execute(
+        toolName: 'create_user_overlay',
+        arguments: {
+          'ref_event': refs.first,
+          'attendance_policy': 'must_go',
+        },
+        context: ctx,
+      );
+      expect(overlay.status, AgentToolStatus.success,
+          reason: 'overlay targeting a get_schedule(query) ref must commit');
+      expect(overlay.payload['result'], 'updated_event_overlay');
+
+      // Step C: two title queries before create_schedule_relation. The relation
+      // binds BOTH participants from get_schedule(query) refs (never get_conflicts).
+      final relCtx = integrationCtx('acc-1', 'r-task3-rel');
+      final rel1 = await registry.execute(
+        toolName: 'get_schedule',
+        arguments: {'query': '计算机网络', 'from': '2026-03-01', 'through': '2026-03-31'},
+        context: relCtx,
+      );
+      expect(rel1.status, AgentToolStatus.success);
+      final rel1Events = rel1.payload['events']! as List;
+      final relRefs = <String>[
+        for (final e in rel1Events) (e! as Map<String, Object?>)['ref']! as String,
+      ];
+      expect(relRefs, hasLength(2),
+          reason: 'the two March candidates are the first two same-title options');
+      final rel2 = await registry.execute(
+        toolName: 'get_schedule',
+        arguments: {'query': '计算机网络'},
+        context: relCtx,
+      );
+      expect(rel2.status, AgentToolStatus.success);
+      final relation = await registry.execute(
+        toolName: 'create_schedule_relation',
+        arguments: {
+          'ref_left': relRefs[0],
+          'ref_right': relRefs[1],
+          'conflict_state': 'no_conflict',
+          'reason': '二选一课程',
+        },
+        context: relCtx,
+      );
+      expect(relation.status, AgentToolStatus.success,
+          reason: 'relation between two get_schedule(query) refs must commit');
+      expect(relation.payload['result'], 'created_schedule_relation');
+
+      // Step D: no get_conflicts was ever required as a participant finder, and
+      // no outbound write payload carries a hardcoded semester.
+      final out = jsonEncode([overlay.payload, relation.payload]);
+      expect(out, isNot(contains('2026spring')));
+      expect(out, isNot(contains('421')));
+      expect(out, isNot(contains('2026fall')));
+      expect(out, isNot(contains('get_conflicts')),
+          reason: 'get_conflicts must not appear as a finder in the write '
+              'results');
+      // The composed tool set must expose query on get_schedule (the model sees
+      // it as the finder for write targets).
+      final scheduleDecl = registry.schemas.firstWhere((s) => s.name == 'get_schedule');
+      expect(scheduleDecl.inputSchema['properties'], contains('query'),
+          reason: 'the model must be able to call get_schedule(query=...) to '
+              'locate write targets across history');
+
+      // The relation actually persisted both participants (past sort is
+      // most-recent-first, so relRefs[0] is the 3/4 occurrence net-mar-b).
+      final rows = await db.select(db.scheduleRelations).get();
+      expect(rows, hasLength(1));
+      expect({rows.single.leftEventId, rows.single.rightEventId},
+          {'net-mar-a', 'net-mar-b'});
+    },
+  );
 }

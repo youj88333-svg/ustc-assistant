@@ -280,7 +280,14 @@ class GetScheduleTool implements AgentTool {
       '"course_summary" to collapse in-range course occurrences into one '
       'group per course offering (teachers, locations, active range, weekday/'
       'period patterns, occurrence count); the 200-item limit applies after '
-      'grouping in summary mode.';
+      'grouping in summary mode. Set query to a free-text title to locate '
+      'concrete occurrences across retained local history irrespective of the '
+      'default semester: without dates it searches ALL retained effective '
+      'events for the account (current/future first ascending, then past '
+      'descending), returning up to 20 concrete refs (21+ returns '
+      'result_too_large with guidance to provide dates); with dates it applies '
+      'the same title filter inside the range. query is invalid with '
+      'view=course_summary.';
 
   @override
   Map<String, Object?> get inputSchema => const {
@@ -302,6 +309,16 @@ class GetScheduleTool implements AgentTool {
                 'course_summary collapses course occurrences into one group '
                 'per offering.',
           },
+          'query': {
+            'type': 'string',
+            'description': 'Optional title text to locate concrete schedule '
+                'events across retained local history. With no from/through, '
+                'searches ALL retained effective events for the current '
+                'account regardless of the default semester (current/future '
+                'first ascending, then past descending, up to 20 results). '
+                'With dates, applies the same title filter inside the range. '
+                'Invalid with view=course_summary.',
+          },
         },
       };
 
@@ -310,11 +327,61 @@ class GetScheduleTool implements AgentTool {
     Map<String, Object?> arguments,
     AgentToolContext context,
   ) async {
-    final parsed = _parseRange(
-      arguments['from'] as String?,
-      arguments['through'] as String?,
-      context.clock,
-    );
+    final fromStr = arguments['from'] as String?;
+    final throughStr = arguments['through'] as String?;
+    final view = (arguments['view'] as String?) ?? 'events';
+    final query = (arguments['query'] as String?)?.trim();
+    final hasQuery = query != null && query.isNotEmpty;
+
+    // query mode: locate concrete occurrences by title across retained
+    // history, independent of the default semester.
+    if (hasQuery) {
+      if (view == 'course_summary') {
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'invalid_arguments',
+          payload: {
+            'guidance': 'query cannot be combined with view=course_summary; '
+                'use view=events to get concrete occurrence refs.',
+          },
+        );
+      }
+      // With no dates: search ALL retained effective events for the account.
+      // With dates: apply the same title filter inside the parsed range.
+      final noDates = fromStr == null && throughStr == null;
+      final allEvents = await _gateway.displayEvents(context.accountId);
+      AgentDateRange? range;
+      if (noDates) {
+        return _queryEvents(
+          allEvents,
+          query,
+          null,
+          context,
+          _gateway,
+        );
+      }
+      final parsed = _parseRange(fromStr, throughStr, context.clock);
+      if (parsed.error != null) {
+        return AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: parsed.error,
+        );
+      }
+      range = parsed.range!;
+      final inRange = allEvents
+          .where((e) => _eventInRange(e, range!))
+          .toList(growable: false);
+      return _queryEvents(
+        inRange,
+        query,
+        range,
+        context,
+        _gateway,
+      );
+    }
+
+    // No query: current behavior (default range, optional course_summary).
+    final parsed = _parseRange(fromStr, throughStr, context.clock);
     if (parsed.error != null) {
       return AgentToolResult(
         status: AgentToolStatus.error,
@@ -322,7 +389,6 @@ class GetScheduleTool implements AgentTool {
       );
     }
     final range = parsed.range!;
-    final view = (arguments['view'] as String?) ?? 'events';
     final events = await _gateway.displayEvents(context.accountId);
     final inRange =
         events.where((e) => _eventInRange(e, range)).toList(growable: false);
@@ -359,6 +425,74 @@ class GetScheduleTool implements AgentTool {
       references: references,
     );
   }
+}
+
+/// The query (title-lookup) mode for `get_schedule`: search [candidates] for
+/// events whose title matches [query] under trim/case-fold, and return the
+/// concrete occurrences as DTOs with run-local refs.
+///
+/// - Same-title candidates (distinct date/time/location) all surface for the
+///   Agent/prompt to disambiguate; the tool just returns their concrete refs.
+/// - When [range] is null the search spans ALL retained effective events for
+///   the account (server-default-semester independent); sort is current/future
+///   (>= now) ascending, then past (< now) descending.
+/// - When [range] is non-null the search is confined to the range and follows
+///   the same relative sort.
+/// - 21+ matching results return `result_too_large` with guidance to provide
+///   dates; zero results return an empty `events` list.
+Future<AgentToolResult> _queryEvents(
+  List<EffectiveEvent> candidates,
+  String query,
+  AgentDateRange? range,
+  AgentToolContext context,
+  AgentLocalDataGateway gateway,
+) async {
+  final folded = query.toLowerCase();
+  final matches = candidates
+      .where((e) => e.title.trim().toLowerCase().contains(folded))
+      .toList(growable: false);
+
+  if (matches.length >= 21) {
+    return _tooLarge(
+      'query matches',
+      matches.length,
+      20,
+      'provide from/through dates to narrow the title search',
+    );
+  }
+
+  final now = context.clock.now();
+  matches.sort((a, b) {
+    // Prefer timed start; all-day events sort by startDate (fall back to a
+    // maximal instant so past all-day events order after current/future).
+    DateTime startOf(EffectiveEvent e) {
+      if (!e.allDay && e.startAt != null) return e.startAt!;
+      if (e.allDay && e.startDate != null) return e.startDate!;
+      return DateTime(9999);
+    }
+
+    final aPast = startOf(a).isBefore(now);
+    final bPast = startOf(b).isBefore(now);
+    if (aPast != bPast) return aPast ? 1 : -1; // current/future first
+    if (aPast) return startOf(b).compareTo(startOf(a)); // past descending
+    return startOf(a).compareTo(startOf(b)); // current/future ascending
+  });
+
+  final dtos = <Map<String, Object?>>[];
+  final references = <AgentToolReference>[];
+  for (final event in matches) {
+    final record = await gateway.eventById(context.accountId, event.id);
+    dtos.add(_enrichedEventDto(event, record, context));
+    final ref = context.references.bind(kind: 'event', localId: event.id);
+    references.add(AgentToolReference(kind: 'event', ref: ref, localId: event.id));
+  }
+
+  final payload = <String, Object?>{'events': dtos};
+  if (range != null) {
+    payload['from'] = _formatDate(range.from);
+    payload['through'] = _formatDate(range.through);
+  }
+  return AgentToolResult(payload: payload, references: references);
 }
 
 /// Builds the grouped course-summary payload for `get_schedule` in

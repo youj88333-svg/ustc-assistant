@@ -250,6 +250,7 @@ Future<void> _insertTimedEvent(
   String source = 'user',
   String? seriesExternalId,
   String? externalId,
+  String status = 'active',
 }) async {
   await database.into(database.calendarEvents).insert(
         CalendarEventsCompanion.insert(
@@ -265,6 +266,7 @@ Future<void> _insertTimedEvent(
           allDay: false,
           timezone: 'Asia/Shanghai',
           locationName: Value(location),
+          status: Value(status),
           createdAt: 1,
           updatedAt: 1,
         ),
@@ -380,6 +382,45 @@ Future<void> _insertPlanBlock(
           updatedAt: 1,
         ),
       );
+}
+
+/// Seeds the account-level default JW semester into `source_configs` (the
+/// same table [SettingsService.setJwSemesterOverride]) writes to. The query
+/// mode must ignore this setting entirely: events are matched by title across
+/// ALL retained history, not by the configured default semester.
+class SeedSettings {
+  static Future<void> defaultJwSemester(
+    AppDatabase database,
+    String accountId, {
+    required int semesterId,
+    required String semesterKey,
+    required String displayName,
+  }) async {
+    // Remove any existing ustc_jw config (the shared seed inserts one for 'a'
+// with a different id) so the unique (accountId, source) key is free.
+await (database.delete(database.sourceConfigs)
+      ..where((row) => row.accountId.equals(accountId) &
+          row.source.equals('ustc_jw')))
+    .go();
+await database.into(database.sourceConfigs).insert(
+      SourceConfigsCompanion.insert(
+        id: '$accountId:ustc_jw',
+        accountId: accountId,
+        source: 'ustc_jw',
+        enabled: const Value(true),
+        configJson: Value(
+          jsonEncode({
+            'semesterId': semesterId,
+            'semesterKey': semesterKey,
+            'displayName': displayName,
+          }),
+        ),
+        lastSuccessAt: const Value(null),
+        retryAfter: const Value(null),
+        updatedAt: 1,
+      ),
+    );
+  }
 }
 
 _Harness _harness(AppDatabase database, String accountId) {
@@ -721,6 +762,222 @@ void main() {
         );
       },
     );
+  });
+
+  group('get_schedule query mode', () {
+    // Seeding shared by the query-mode tests: a default-semester setting that
+    // is UNRELATED to the event dates, March + August same-title events for
+    // account 'a', an other-account match, and hidden/cancelled/missing-source
+    // decoys — all concrete schedule locations independent of the default
+    // semester.
+    Future<void> seed(String account) async {
+      // An unrelated default JW semester (421 = 2026spring). The query mode
+      // must NOT read, receive, or infer this — the events below are in March
+      // (2026spring) and August (2026fall), so a semester-blind title search is
+      // required to find them.
+      await SeedSettings.defaultJwSemester(database, account,
+          semesterId: 421, semesterKey: '2026spring',
+          displayName: '2025-2026学年春季学期');
+      // Two March (2026spring) occurrences with the SAME title but distinct
+      // date/time/location → same-title candidates surfaced for the user.
+      await _insertTimedEvent(database, '$account-q-mar-a', account, '计算机网络',
+          location: '三教101', type: 'course',
+          start: DateTime(2026, 3, 2, 8, 40), end: DateTime(2026, 3, 2, 9, 25));
+      await _insertTimedEvent(database, '$account-q-mar-b', account, '计算机网络',
+          location: '三教201', type: 'course',
+          start: DateTime(2026, 3, 4, 10, 35), end: DateTime(2026, 3, 4, 11, 20));
+      // An August (2026fall) occurrence, outside the default semester.
+      await _insertTimedEvent(database, '$account-q-aug', account, '计算机网络',
+          location: '四教102', type: 'course',
+          start: DateTime(2026, 8, 14, 14, 0), end: DateTime(2026, 8, 14, 15, 40));
+      // A case-variant + whitespace title: '  计算机 网络  ' won't case-fold
+      // matter for CJK but exercises trim matching (this one must NOT match the
+      // exact title query '计算机网络' since the space splits it).
+      await _insertTimedEvent(database, '$account-q-other', account, '自习安排',
+          location: '图书馆', type: 'personal',
+          start: DateTime(2026, 7, 30, 9, 0), end: DateTime(2026, 7, 30, 10, 0));
+      // Account 'b' match — must NEVER surface for 'a'.
+      if (account == 'b') {
+        await _insertTimedEvent(database, 'b-q-b', 'b', '计算机网络',
+            location: '五教', type: 'course',
+            start: DateTime(2026, 3, 6, 8, 0), end: DateTime(2026, 3, 6, 9, 0));
+      }
+      // Decoys that must be filtered out: hidden, cancelled, and missing-source.
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: '$account-q-hidden',
+              accountId: account,
+              source: 'user',
+              externalId: Value('$account-q-hidden'),
+              title: '计算机网络',
+              type: 'course',
+              startAt: Value(DateTime(2026, 3, 3, 8, 0).toUtc().millisecondsSinceEpoch),
+              endAt: Value(DateTime(2026, 3, 3, 9, 0).toUtc().millisecondsSinceEpoch),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: Value('已隐藏'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.userOverlays).insert(
+            UserOverlaysCompanion.insert(
+              id: '$account-q-hidden-overlay',
+              accountId: account,
+              eventId: Value('$account-q-hidden'),
+              hidden: Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await _insertTimedEvent(database, '$account-q-cancelled', account, '计算机网络',
+          location: '已取消', type: 'course',
+          start: DateTime(2026, 3, 5, 8, 0), end: DateTime(2026, 3, 5, 9, 0),
+          status: 'cancelled');
+      // A missing-source course event: present in calendar_events but with NO
+      // source record → excluded by watchDisplayEvents.
+      await _insertTimedEvent(database, '$account-q-missing', account, '计算机网络',
+          location: '无来源', type: 'course', source: 'ustc_jw',
+          externalId: '$account-q-missing',
+          start: DateTime(2026, 3, 7, 8, 0), end: DateTime(2026, 3, 7, 9, 0));
+    }
+
+    test(
+      'title query returns only same-account valid occurrences with no '
+      'semester key/id in input or payload',
+      () async {
+        await seed('a');
+        // Also seed an account-'b' match so we can assert cross-account
+        // isolation in the same test.
+        await seed('b');
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'query': '计算机网络',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final events = result.payload['events']! as List;
+        // Only the same-account valid matches: two March + one August.
+        expect(events, hasLength(3));
+        final titles =
+            events.map((e) => (e! as Map<String, Object?>)['title']).toList();
+        for (final t in titles) {
+          expect(t, '计算机网络');
+        }
+        // No cross-account 'b' match leaked in.
+        for (final e in events) {
+          final raw = e! as Map<String, Object?>;
+          expect(raw['location'], isNot('五教'));
+        }
+        // All three carry concrete run-local refs.
+        for (final e in events) {
+          expect((e! as Map<String, Object?>)['ref'], startsWith('ref_'));
+        }
+        // SECURITY: no semester key/id in the payload, and no raw local event
+        // ids.
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('semester')));
+        expect(encoded, isNot(contains('2026spring')));
+        expect(encoded, isNot(contains('421')));
+        expect(encoded, isNot(contains('a-q-mar-a')));
+        // The input had no semester parameter (the tool schema has none and the
+        // execute path never reads one).
+        expect(result.payload.containsKey('semester'), isFalse);
+        // Current/future (>= now 2026-07-29) ascending, then past descending:
+        // the single August (future) match comes first, then the two past March
+        // matches most-recent-first.
+        final first = events.first! as Map<String, Object?>;
+        expect(first['location'], '四教102');
+        final pasts = events.skip(1).map((e) => (e! as Map<String, Object?>)['location']).toList();
+        expect(pasts, ['三教201', '三教101']);
+      },
+    );
+
+    test('title query with dates filters inside the range', () async {
+      await seed('a');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'query': '计算机网络',
+        'from': '2026-08-01',
+        'through': '2026-08-31',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final events = result.payload['events']! as List;
+      expect(events, hasLength(1));
+      expect((events.first! as Map<String, Object?>)['location'], '四教102');
+      expect(result.payload['from'], '2026-08-01');
+      expect(result.payload['through'], '2026-08-31');
+    });
+
+    test('query + course_summary returns invalid_arguments', () async {
+      await seed('a');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'query': '计算机网络',
+        'view': 'course_summary',
+      });
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_arguments');
+      expect(result.payload['guidance'], isNotNull);
+    });
+
+    test('21+ matches returns result_too_large with date-narrowing guidance',
+        () async {
+      for (var i = 0; i < 21; i++) {
+        await _insertTimedEvent(database, 'b-dup-$i', 'b', '高数$i',
+            type: 'personal',
+            start: DateTime(2026, 3, 1, 8, 0).add(Duration(minutes: i)),
+            end: DateTime(2026, 3, 1, 8, 30).add(Duration(minutes: i)));
+      }
+      final harness = _harness(database, 'b');
+      final result = await harness.execute('get_schedule', {
+        'query': '高数',
+      });
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'result_too_large');
+      expect(
+        result.payload['guidance'],
+        contains('provide from/through dates'),
+      );
+    });
+
+    test('hidden/cancelled/missing-source same-title events are filtered out',
+        () async {
+      await seed('a');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'query': '计算机网络',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final locations = (result.payload['events']! as List)
+          .map((e) => (e! as Map<String, Object?>)['location'])
+          .toSet();
+      expect(locations, isNot(contains('已隐藏')));
+      expect(locations, isNot(contains('已取消')));
+      expect(locations, isNot(contains('无来源')));
+    });
+
+    test('no matching title returns an empty events list', () async {
+      await seed('a');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'query': '不存在的课程',
+      });
+      expect(result.status, AgentToolStatus.success);
+      expect(result.payload['events']! as List, isEmpty);
+    });
+
+    test('view=course_summary stays unchanged with no query', () async {
+      await seed('a');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'view': 'course_summary',
+      });
+      expect(result.status, AgentToolStatus.success);
+      // Still returns groups (not invalid_arguments), spanning the default
+      // range. This confirms no-query course_summary behavior is unchanged.
+      expect(result.payload.containsKey('groups'), isTrue);
+      expect(result.payload['groups']! as List, isNotEmpty);
+    });
   });
 
   group('get_event_details', () {
