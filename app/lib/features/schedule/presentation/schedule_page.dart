@@ -11,10 +11,12 @@ import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../application/effective_event_repository.dart';
+import '../application/jw_day_move_service.dart';
 import '../domain/overlap_engine.dart';
 import '../domain/schedule_grid_item.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/week_range.dart';
+import 'jw_day_move_dialog.dart';
 import 'week_timetable.dart';
 
 enum ScheduleSection { week, tasks }
@@ -123,6 +125,7 @@ class _SchedulePageState extends State<SchedulePage>
               selectedDate: selectedDate,
               onEventSelected: widget.onEventSelected,
               onTaskSelected: widget.onTaskSelected,
+              onDayMove: () => unawaited(_openDayMoveDialog()),
             ),
             ScheduleSection.tasks => _ScheduleData(
               database: widget.database,
@@ -130,10 +133,57 @@ class _SchedulePageState extends State<SchedulePage>
               selectedDate: selectedDate,
               onEventSelected: widget.onEventSelected,
               onTaskSelected: widget.onTaskSelected,
+              onDayMove: () => unawaited(_openDayMoveDialog()),
             ),
           },
         ),
       ],
+    );
+  }
+
+  /// Opens the whole-day course move dialog for the currently selected week
+  /// (Spec section 10.3). On success the page selects the week of the target
+  /// date (move/retarget) or of the source date (clear) and offers a one-step
+  /// undo backed by the account-scoped [UndoService] that also recorded the
+  /// move.
+  Future<void> _openDayMoveDialog() async {
+    final account = await (widget.database.select(
+      widget.database.localAccounts,
+    )..where((row) => row.isActive.equals(true))).getSingleOrNull();
+    if (account == null || !mounted) return;
+    final undo = UndoService(database: widget.database, accountId: account.id);
+    final service = JwDayMoveService(
+      database: widget.database,
+      accountId: account.id,
+      undoRecorder: undo,
+    );
+    final result = await showDialog<JwDayMoveDialogResult>(
+      context: context,
+      builder: (_) => JwDayMoveDialog(
+        service: service,
+        initialSourceDate: selectedDate,
+        clock: widget.clock,
+      ),
+    );
+    if (result == null || !mounted) return;
+    switch (result) {
+      case JwDayMovePerformed(:final targetDate):
+        setState(() => selectedDate = DateTime.parse(targetDate));
+      case JwDayMoveCleared(:final sourceDate):
+        setState(() => selectedDate = DateTime.parse(sourceDate));
+    }
+    final message = switch (result) {
+      JwDayMovePerformed() => '已移动整日课程',
+      JwDayMoveCleared() => '已恢复原日期',
+    };
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        action: SnackBarAction(
+          label: '撤销',
+          onPressed: () => unawaited(undo.undo()),
+        ),
+      ),
     );
   }
 }
@@ -145,6 +195,7 @@ class _ScheduleData extends StatelessWidget {
     required this.selectedDate,
     required this.onEventSelected,
     required this.onTaskSelected,
+    this.onDayMove,
   });
 
   final AppDatabase database;
@@ -152,6 +203,7 @@ class _ScheduleData extends StatelessWidget {
   final DateTime selectedDate;
   final ValueChanged<String>? onEventSelected;
   final ValueChanged<String>? onTaskSelected;
+  final VoidCallback? onDayMove;
 
   @override
   Widget build(BuildContext context) {
@@ -192,9 +244,11 @@ class _ScheduleData extends StatelessWidget {
                 builder: (context, eventSnapshot) {
                   final events = eventSnapshot.data ?? const [];
                   return StreamBuilder<List<PlanBlock>>(
-                    stream: (database.select(database.planBlocks)
-                          ..where((row) => row.accountId.equals(account.id)))
-                        .watch(),
+                    stream:
+                        (database.select(
+                              database.planBlocks,
+                            )..where((row) => row.accountId.equals(account.id)))
+                            .watch(),
                     builder: (context, blockSnapshot) {
                       final blocks = (blockSnapshot.data ?? const [])
                           .map(PlanBlockItem.fromRow)
@@ -249,8 +303,10 @@ class _ScheduleData extends StatelessWidget {
       final task = tasksById[block.taskId];
       if (task == null) continue;
       items.add(
-        ScheduleGridItem.fromPlanBlock(block, task)
-            .withConflict(conflictIds.contains(block.id)),
+        ScheduleGridItem.fromPlanBlock(
+          block,
+          task,
+        ).withConflict(conflictIds.contains(block.id)),
       );
     }
     return WeekTimetable(
@@ -258,6 +314,7 @@ class _ScheduleData extends StatelessWidget {
         ScheduleQuery(selectedDate: selectedDate, items: items),
       ),
       tasks: tasks,
+      onDayMove: onDayMove,
       onTaskSelected: (task) {
         onTaskSelected?.call(task.id);
       },

@@ -22,6 +22,7 @@ class WeekTimetable extends StatelessWidget {
     this.now,
     this.hideCompletedTasks = false,
     this.onTaskSelected,
+    this.onDayMove,
     super.key,
   });
 
@@ -35,6 +36,10 @@ class WeekTimetable extends StatelessWidget {
   final DateTime? now;
   final bool hideCompletedTasks;
   final ValueChanged<TaskItem>? onTaskSelected;
+
+  /// Opens the whole-day course move dialog (spec section 10.3). When null
+  /// the "整日调课" entry button is not rendered.
+  final VoidCallback? onDayMove;
 
   static const axisWidth = 56.0;
   static const minimumDayWidth = 142.0;
@@ -51,78 +56,104 @@ class WeekTimetable extends StatelessWidget {
         final fitted = (constraints.maxWidth - axisWidth) / 7;
         final dayWidth = fitted > minimumDayWidth ? fitted : minimumDayWidth;
         final totalWidth = axisWidth + dayWidth * 7;
-        return SingleChildScrollView(
-          key: const Key('week-horizontal-scroll'),
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: totalWidth,
-            height: constraints.maxHeight,
-            child: Column(
-              children: [
-                _DayHeaders(
-                  days: projection.week.days,
-                  dayWidth: dayWidth,
-                  axisWidth: axisWidth,
-                ),
-                AllDayBand(
-                  eventsByDay: projection.allDayByDay,
-                  dayWidth: dayWidth,
-                  axisWidth: axisWidth,
-                ),
-                EarlyMorningBand(
-                  eventsByDay: projection.earlyMorningByDay,
-                  dayWidth: dayWidth,
-                  axisWidth: axisWidth,
-                ),
-                _UndatedTaskBand(
-                  tasks: undatedBandTasks(tasks),
-                  totalWidth: totalWidth,
-                  axisWidth: axisWidth,
-                  onSelected: onTaskSelected,
-                ),
-                _DatedTaskBand(
-                  tasksByDay: datedBandTasks(
-                    tasks: tasks,
-                    weekStart: projection.week.start,
-                    now: now ?? DateTime.now(),
-                    hideCompleted: hideCompletedTasks,
-                  ),
-                  days: projection.week.days,
-                  dayWidth: dayWidth,
-                  axisWidth: axisWidth,
-                  now: now ?? DateTime.now(),
-                  onSelected: onTaskSelected,
-                ),
-                const Divider(height: 1),
-                Expanded(
-                  child: SingleChildScrollView(
-                    child: SizedBox(
-                      height:
-                          (UstcPeriods.dayEndMinutes -
-                              UstcPeriods.dayStartMinutes) *
-                          pixelsPerMinute,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          const TimeAxis(pixelsPerMinute: pixelsPerMinute),
-                          for (final day in projection.week.days)
-                            _DayColumn(
-                              day: day,
-                              width: dayWidth,
-                              items:
-                                  projection.timedByDay[day.weekday] ??
-                                  const [],
-                              groupsByItem: groupsByItem,
-                              onItemSelected: onEventSelected,
-                            ),
-                        ],
-                      ),
+        // The whole-day move entry sits in a pinned strip above the
+        // horizontally scrolling grid, right under the week navigation.
+        final stripHeight = onDayMove == null ? 0.0 : 48.0;
+        return Column(
+          children: [
+            if (onDayMove != null)
+              SizedBox(
+                height: stripHeight,
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: IconButton(
+                      tooltip: '整日调课',
+                      onPressed: onDayMove,
+                      icon: const Icon(Icons.event_repeat),
                     ),
                   ),
                 ),
-              ],
+              ),
+            Expanded(
+              child: SingleChildScrollView(
+                key: const Key('week-horizontal-scroll'),
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: totalWidth,
+                  height: constraints.maxHeight - stripHeight,
+                  child: Column(
+                    children: [
+                      _DayHeaders(
+                        days: projection.week.days,
+                        dayWidth: dayWidth,
+                        axisWidth: axisWidth,
+                      ),
+                      AllDayBand(
+                        eventsByDay: projection.allDayByDay,
+                        dayWidth: dayWidth,
+                        axisWidth: axisWidth,
+                      ),
+                      EarlyMorningBand(
+                        eventsByDay: projection.earlyMorningByDay,
+                        dayWidth: dayWidth,
+                        axisWidth: axisWidth,
+                      ),
+                      _UndatedTaskBand(
+                        tasks: undatedBandTasks(tasks),
+                        totalWidth: totalWidth,
+                        axisWidth: axisWidth,
+                        onSelected: onTaskSelected,
+                      ),
+                      _DatedTaskBand(
+                        tasksByDay: datedBandTasks(
+                          tasks: tasks,
+                          weekStart: projection.week.start,
+                          now: now ?? DateTime.now(),
+                          hideCompleted: hideCompletedTasks,
+                        ),
+                        days: projection.week.days,
+                        dayWidth: dayWidth,
+                        axisWidth: axisWidth,
+                        now: now ?? DateTime.now(),
+                        onSelected: onTaskSelected,
+                      ),
+                      const Divider(height: 1),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          child: SizedBox(
+                            height:
+                                (UstcPeriods.dayEndMinutes -
+                                    UstcPeriods.dayStartMinutes) *
+                                pixelsPerMinute,
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                const TimeAxis(
+                                  pixelsPerMinute: pixelsPerMinute,
+                                ),
+                                for (final day in projection.week.days)
+                                  _DayColumn(
+                                    day: day,
+                                    width: dayWidth,
+                                    items:
+                                        projection.timedByDay[day.weekday] ??
+                                        const [],
+                                    groupsByItem: groupsByItem,
+                                    onItemSelected: onEventSelected,
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ),
-          ),
+          ],
         );
       },
     );

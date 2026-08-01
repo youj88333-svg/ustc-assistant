@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
+import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
@@ -59,6 +60,58 @@ Future<void> seedPlanBlock(
           status: status,
           createdAt: 1,
           updatedAt: 1,
+        ),
+      );
+}
+
+/// Converts a Beijing wall-clock time to the UTC epoch-ms storage encoding
+/// used by the app (Beijing wall clock == stored UTC + 8h).
+int _beijingEpoch(int year, int month, int day, int hour) =>
+    DateTime.utc(year, month, day, hour).millisecondsSinceEpoch -
+    const Duration(hours: 8).inMilliseconds;
+
+/// Seeds an eligible `ustc_jw/course` timed event on the Beijing date y-m-d.
+Future<void> seedJwCourse(
+  AppDatabase database, {
+  required String id,
+  required int y,
+  required int m,
+  required int d,
+  required int h,
+}) async {
+  await database
+      .into(database.calendarEvents)
+      .insert(
+        CalendarEventsCompanion.insert(
+          id: id,
+          accountId: 'account',
+          source: 'ustc_jw',
+          externalId: Value('ext-$id'),
+          title: id,
+          type: 'course',
+          startAt: Value(_beijingEpoch(y, m, d, h)),
+          endAt: Value(_beijingEpoch(y, m, d, h + 1)),
+          allDay: false,
+          timezone: 'Asia/Shanghai',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+  await database
+      .into(database.sourceRecords)
+      .insert(
+        SourceRecordsCompanion.insert(
+          id: 'source-$id',
+          accountId: 'account',
+          source: 'ustc_jw',
+          entityType: 'calendar_event',
+          externalId: 'ext-$id',
+          localEntityId: id,
+          sourceStatus: 'active',
+          presence: 'observed',
+          scopeKey: 'semester',
+          firstObservedAt: 1,
+          lastObservedAt: 1,
         ),
       );
 }
@@ -236,7 +289,9 @@ void main() {
     final database = AppDatabase(NativeDatabase.memory());
     addTearDown(database.close);
     await tester.pumpWidget(
-      MaterialApp(home: Scaffold(body: SchedulePage(database: database))),
+      MaterialApp(
+        home: Scaffold(body: SchedulePage(database: database)),
+      ),
     );
     await tester.pumpAndSettle();
 
@@ -288,10 +343,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    SegmentedButton<ScheduleSection> seg() => tester.widget<
-        SegmentedButton<ScheduleSection>>(
-      find.byType(SegmentedButton<ScheduleSection>),
-    );
+    SegmentedButton<ScheduleSection> seg() =>
+        tester.widget<SegmentedButton<ScheduleSection>>(
+          find.byType(SegmentedButton<ScheduleSection>),
+        );
     expect(seg().selected, {ScheduleSection.week});
 
     // Route rebuild with a new initialSection (same key => State preserved).
@@ -328,43 +383,44 @@ void main() {
 
   // Task 5: accepted plan blocks from the DB appear in the week grid and tap
   // through to the parent task.
-  testWidgets('accepted plan block appears in week grid and taps to parent task', (
-    tester,
-  ) async {
-    final database = AppDatabase(NativeDatabase.memory());
-    addTearDown(database.close);
-    await seedAccount(database);
-    await seedTask(database, 'task-x', '完成实验报告');
-    await seedPlanBlock(
-      database,
-      id: 'block-x',
-      taskId: 'task-x',
-      startAt: DateTime(2026, 7, 27, 10),
-      endAt: DateTime(2026, 7, 27, 11),
-      status: PlanBlockStatus.accepted.storage,
-    );
+  testWidgets(
+    'accepted plan block appears in week grid and taps to parent task',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      await seedTask(database, 'task-x', '完成实验报告');
+      await seedPlanBlock(
+        database,
+        id: 'block-x',
+        taskId: 'task-x',
+        startAt: DateTime(2026, 7, 27, 10),
+        endAt: DateTime(2026, 7, 27, 11),
+        status: PlanBlockStatus.accepted.storage,
+      );
 
-    String? selectedTaskId;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SchedulePage(
-            database: database,
-            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
-            onTaskSelected: (id) => selectedTaskId = id,
+      String? selectedTaskId;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchedulePage(
+              database: database,
+              clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+              onTaskSelected: (id) => selectedTaskId = id,
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('plan-block-block-x')), findsOneWidget);
-    await tester.tap(find.byKey(const Key('plan-block-block-x')));
-    await tester.pumpAndSettle();
-    expect(selectedTaskId, 'task-x');
-    await tester.pumpWidget(const SizedBox());
-    await tester.pumpAndSettle();
-  });
+      expect(find.byKey(const Key('plan-block-block-x')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('plan-block-block-x')));
+      await tester.pumpAndSettle();
+      expect(selectedTaskId, 'task-x');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 
   testWidgets('non-accepted plan block stays out of the week grid', (
     tester,
@@ -401,77 +457,80 @@ void main() {
 
   // Task 5: an event and a plan block in the same slot share one overlap
   // expansion; the second tap routes to the event or the parent task.
-  testWidgets('event and plan block overlap expand then route to right target', (
-    tester,
-  ) async {
-    final database = AppDatabase(NativeDatabase.memory());
-    addTearDown(database.close);
-    await seedAccount(database);
-    await seedTask(database, 'task-x', '完成实验报告');
-    await database
-        .into(database.calendarEvents)
-        .insert(
-          CalendarEventsCompanion.insert(
-            id: 'overlap-event',
-            accountId: 'account',
-            source: 'user',
-            title: '晚间安排',
-            type: 'personal',
-            startAt: Value(DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch),
-            endAt: Value(
-              DateTime.utc(2026, 7, 27, 2, 30).millisecondsSinceEpoch,
+  testWidgets(
+    'event and plan block overlap expand then route to right target',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      await seedTask(database, 'task-x', '完成实验报告');
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'overlap-event',
+              accountId: 'account',
+              source: 'user',
+              title: '晚间安排',
+              type: 'personal',
+              startAt: Value(
+                DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime.utc(2026, 7, 27, 2, 30).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
             ),
-            allDay: false,
-            timezone: 'Asia/Shanghai',
-            createdAt: 1,
-            updatedAt: 1,
-          ),
-        );
-    await seedPlanBlock(
-      database,
-      id: 'block-x',
-      taskId: 'task-x',
-      startAt: DateTime(2026, 7, 27, 9, 30),
-      endAt: DateTime(2026, 7, 27, 10, 45),
-      status: PlanBlockStatus.accepted.storage,
-    );
+          );
+      await seedPlanBlock(
+        database,
+        id: 'block-x',
+        taskId: 'task-x',
+        startAt: DateTime(2026, 7, 27, 9, 30),
+        endAt: DateTime(2026, 7, 27, 10, 45),
+        status: PlanBlockStatus.accepted.storage,
+      );
 
-    String? selectedEventId;
-    String? selectedTaskId;
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: SchedulePage(
-            database: database,
-            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
-            onEventSelected: (id) => selectedEventId = id,
-            onTaskSelected: (id) => selectedTaskId = id,
+      String? selectedEventId;
+      String? selectedTaskId;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchedulePage(
+              database: database,
+              clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+              onEventSelected: (id) => selectedEventId = id,
+              onTaskSelected: (id) => selectedTaskId = id,
+            ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+      );
+      await tester.pumpAndSettle();
 
-    final overlapKey = const Key('overlap-group-overlap-event|block-x');
-    expect(find.byKey(overlapKey), findsOneWidget);
-    await tester.tap(find.byKey(overlapKey));
-    await tester.pumpAndSettle();
-    expect(find.byType(OverlapExpansion), findsOneWidget);
+      final overlapKey = const Key('overlap-group-overlap-event|block-x');
+      expect(find.byKey(overlapKey), findsOneWidget);
+      await tester.tap(find.byKey(overlapKey));
+      await tester.pumpAndSettle();
+      expect(find.byType(OverlapExpansion), findsOneWidget);
 
-    // Second tap on the event routes to the event detail.
-    await tester.tap(find.text('晚间安排').last);
-    await tester.pumpAndSettle();
-    expect(selectedEventId, 'overlap-event');
+      // Second tap on the event routes to the event detail.
+      await tester.tap(find.text('晚间安排').last);
+      await tester.pumpAndSettle();
+      expect(selectedEventId, 'overlap-event');
 
-    // Reopen and tap the plan block: routes to the parent task.
-    await tester.tap(find.byKey(overlapKey));
-    await tester.pumpAndSettle();
-    await tester.tap(find.text('完成实验报告').last);
-    await tester.pumpAndSettle();
-    expect(selectedTaskId, 'task-x');
-    await tester.pumpWidget(const SizedBox());
-    await tester.pumpAndSettle();
-  });
+      // Reopen and tap the plan block: routes to the parent task.
+      await tester.tap(find.byKey(overlapKey));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('完成实验报告').last);
+      await tester.pumpAndSettle();
+      expect(selectedTaskId, 'task-x');
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 
   // Task 6 follow-up: a plan block overlapping an event must ALSO show the
   // conflict warning in the week grid — both sides of the pair are stamped.
@@ -594,6 +653,148 @@ void main() {
       ),
       findsOneWidget,
     );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 8: the whole-day move entry moves the courses, navigates to the
+  // target week and offers a one-step undo snackbar.
+  testWidgets(
+    'day move entry moves courses, navigates to the target week and undoes',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+      await seedJwCourse(database, id: 'course-2', y: 2026, m: 7, d: 27, h: 14);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchedulePage(
+              database: database,
+              clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('整日调课'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('day-move-dialog')), findsOneWidget);
+      expect(find.text('符合条件课程：2 门'), findsOneWidget);
+
+      // Pick the target 2026-08-03 (the NEXT week) in the date picker. The
+      // day cell is scoped to the picker because the week grid behind it also
+      // renders a bare "3" (the third period on the time axis).
+      await tester.tap(find.byKey(const Key('day-move-target-field')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('Next month'));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(DatePickerDialog),
+          matching: find.text('3'),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('OK'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('day-move-confirm')));
+      await tester.pumpAndSettle();
+
+      // Dialog closed, target week selected, undo snackbar shown, move stored.
+      expect(find.byKey(const Key('day-move-dialog')), findsNothing);
+      expect(
+        tester.widget<Text>(find.byKey(const Key('week-range-label'))).data,
+        '2026年8月3日 - 8月9日',
+      );
+      expect(find.text('已移动整日课程'), findsOneWidget);
+      expect(find.text('撤销'), findsOneWidget);
+      final rows = await database.select(database.jwDayMoves).get();
+      expect(rows, hasLength(1));
+      expect(rows.single.targetDate, '2026-08-03');
+
+      // One-step undo restores the original state.
+      await tester.tap(find.text('撤销'));
+      await tester.pumpAndSettle();
+      expect(await database.select(database.jwDayMoves).get(), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  // Task 8: clearing an existing move navigates back to the source week and
+  // the clear itself can be undone.
+  testWidgets('day move clear navigates back to the source week and undoes', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await seedJwCourse(database, id: 'course-2', y: 2026, m: 7, d: 27, h: 14);
+    // Pre-create the move A -> B (B is the week of the fixed clock).
+    await JwDayMoveService(
+      database: database,
+      accountId: 'account',
+    ).move('2026-07-27', '2026-08-03');
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 8, 3)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('整日调课'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('day-move-dialog')), findsOneWidget);
+    // The dialog defaults the source date to the selected week (2026-08-03),
+    // so pick the actual source date 2026-07-27 in the date picker (the
+    // picker opens on August; step back to July first).
+    await tester.tap(find.byKey(const Key('day-move-source-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Previous month'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DatePickerDialog),
+        matching: find.text('27'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    // An existing move changes the confirm copy and exposes the clear.
+    expect(find.text('更新移动'), findsOneWidget);
+    expect(find.byKey(const Key('day-move-clear')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('day-move-clear')));
+    await tester.pumpAndSettle();
+
+    // Dialog closed, source week selected, undo snackbar shown, move gone.
+    expect(find.byKey(const Key('day-move-dialog')), findsNothing);
+    expect(
+      tester.widget<Text>(find.byKey(const Key('week-range-label'))).data,
+      '2026年7月27日 - 8月2日',
+    );
+    expect(find.text('已恢复原日期'), findsOneWidget);
+    expect(find.text('撤销'), findsOneWidget);
+    expect(await database.select(database.jwDayMoves).get(), isEmpty);
+
+    // Undo restores the exact move record.
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+    final rows = await database.select(database.jwDayMoves).get();
+    expect(rows, hasLength(1));
+    expect(rows.single.sourceDate, '2026-07-27');
+    expect(rows.single.targetDate, '2026-08-03');
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
