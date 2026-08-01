@@ -23,6 +23,7 @@ class SchedulePage extends StatefulWidget {
     required this.database,
     this.onEventSelected,
     this.onTaskSelected,
+    this.initialSection = ScheduleSection.week,
     this.clock = const SystemBeijingClock(),
     super.key,
   });
@@ -30,6 +31,12 @@ class SchedulePage extends StatefulWidget {
   final AppDatabase database;
   final ValueChanged<String>? onEventSelected;
   final ValueChanged<String>? onTaskSelected;
+
+  /// The section to show when the page is first displayed, and whenever this
+  /// widget is rebuilt with a different value (e.g. a route rebuild from
+  /// `?section=week` to `?section=tasks`). Defaults to the week view.
+  final ScheduleSection initialSection;
+
   final BeijingClock clock;
 
   @override
@@ -44,7 +51,20 @@ class _SchedulePageState extends State<SchedulePage>
   @override
   void initState() {
     super.initState();
+    selected = widget.initialSection;
     selectedDate = widget.clock.now();
+  }
+
+  @override
+  void didUpdateWidget(SchedulePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The shell (StatefulShellRoute.indexedStack) keeps this State alive across
+    // route changes, so a new `initialSection` must update `selected` here —
+    // otherwise a re-route (e.g. back to `/schedule?section=week`) would
+    // preserve the stale section from the retained shell State.
+    if (oldWidget.initialSection != widget.initialSection) {
+      setState(() => selected = widget.initialSection);
+    }
   }
 
   @override

@@ -389,19 +389,18 @@ class _AgentChatPageState extends State<AgentChatPage> {
   }
 
   /// Routes a local navigation action chip tap to the relevant management
-  /// screen via GoRouter. `schedule` pushes `/schedule`; `tasks` pushes the
-  /// task management screen (the schedule page owns task management in this
-  /// app, so it routes to `/schedule` as well — the task list lives there).
-  /// This is the fix for the "一堆查看日程 chip 不可点击" defect: local-action
-  /// chips are clickable `ActionChip`s, not inert `Chip`s.
+  /// screen via GoRouter. `schedule` opens `/schedule?section=week` (the week
+  /// view); `tasks` opens `/schedule?section=tasks` (the schedule page owns
+  /// task management in this app, so the task list lives there). This is the
+  /// fix for the "一堆查看日程 chip 不可点击" defect: local-action chips are
+  /// clickable `ActionChip`s, not inert `Chip`s; and each lands on the exact
+  /// section instead of both defaulting to the week view.
   void _handleLocalAction(AgentLocalActionKind kind) {
     switch (kind) {
       case AgentLocalActionKind.schedule:
-        context.push('/schedule');
+        context.push('/schedule?section=week');
       case AgentLocalActionKind.tasks:
-        // The schedule page is the task management entry in this app (it
-        // surfaces tasks and routes to `/tasks/:taskId` for details).
-        context.push('/schedule');
+        context.push('/schedule?section=tasks');
     }
   }
 

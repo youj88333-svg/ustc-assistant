@@ -171,4 +171,101 @@ void main() {
     await tester.pumpAndSettle();
     await database.close();
   });
+
+  // Task 4: route-driven section selection.
+  // `initialSection` defaults to week, so a bare SchedulePage opens the week
+  // view (the app's default). Before the Task 4 fix there was no such param.
+  testWidgets('initialSection defaults to week', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      MaterialApp(home: Scaffold(body: SchedulePage(database: database))),
+    );
+    await tester.pumpAndSettle();
+
+    final seg = tester.widget<SegmentedButton<ScheduleSection>>(
+      find.byType(SegmentedButton<ScheduleSection>),
+    );
+    expect(seg.selected, {ScheduleSection.week});
+    expect(find.byKey(const Key('week-range-label')), findsOneWidget);
+  });
+
+  // Passing `initialSection: tasks` must open the tasks section (the fix for
+  // "查看任务" landing on the week view).
+  testWidgets('initialSection tasks opens the tasks section', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            initialSection: ScheduleSection.tasks,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final seg = tester.widget<SegmentedButton<ScheduleSection>>(
+      find.byType(SegmentedButton<ScheduleSection>),
+    );
+    expect(seg.selected, {ScheduleSection.tasks});
+    expect(find.byKey(const Key('week-range-label')), findsNothing);
+  });
+
+  // A change in `initialSection` (e.g. a route rebuild from ?section=week to
+  // ?section=tasks) MUST update the visible section even though the StatefulShell
+  // keeps the SchedulePage State alive — it must not preserve stale shell state.
+  testWidgets('initialSection change updates the selected section', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(database: database, key: const Key('schedule')),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    SegmentedButton<ScheduleSection> seg() => tester.widget<
+        SegmentedButton<ScheduleSection>>(
+      find.byType(SegmentedButton<ScheduleSection>),
+    );
+    expect(seg().selected, {ScheduleSection.week});
+
+    // Route rebuild with a new initialSection (same key => State preserved).
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            key: const Key('schedule'),
+            initialSection: ScheduleSection.tasks,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(seg().selected, {ScheduleSection.tasks});
+
+    // And back to week.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            key: const Key('schedule'),
+            initialSection: ScheduleSection.week,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(seg().selected, {ScheduleSection.week});
+  });
 }

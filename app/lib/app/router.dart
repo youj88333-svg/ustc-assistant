@@ -76,6 +76,10 @@ GoRouter buildRouter(
                 path: '/schedule',
                 builder: (context, state) => SchedulePage(
                   database: database,
+                  // `?section=week|tasks` selects the schedule section. Only
+                  // these two values are recognized; any other or missing
+                  // value defaults to the week view.
+                  initialSection: _scheduleSectionFromRoute(state),
                   onEventSelected: (eventId) =>
                       context.push('/events/$eventId'),
                   onTaskSelected: (taskId) => context.push('/tasks/$taskId'),
@@ -696,6 +700,17 @@ Future<String> _resolvedUsername(
 Future<LocalAccount?> _activeAccount(AppDatabase database) => (database.select(
   database.localAccounts,
 )..where((row) => row.isActive.equals(true))).getSingleOrNull();
+
+/// Resolves the schedule section from the route's `?section=` query parameter.
+/// Only `week` and `tasks` are recognized; any other or missing value (and
+/// repeated parameters) default to the week view.
+ScheduleSection _scheduleSectionFromRoute(GoRouterState state) {
+  final raw = state.uri.queryParameters['section'];
+  return switch (raw) {
+    'tasks' => ScheduleSection.tasks,
+    _ => ScheduleSection.week,
+  };
+}
 
 class _HistoryLoader extends StatelessWidget {
   const _HistoryLoader({required this.database});

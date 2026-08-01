@@ -43,6 +43,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
+import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 
 // ---------------------------------------------------------------------------
@@ -1787,6 +1788,177 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       expect(rows, hasLength(1));
       expect({rows.single.leftEventId, rows.single.rightEventId},
           {'net-mar-a', 'net-mar-b'});
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 4: local ActionChips route to the exact schedule section.
+  //
+  // "查看日程" opens `?section=week` (week view); "查看任务" opens
+  // `?section=tasks` (tasks section). This pumps the REAL router, emits toolbar
+  // runs that produce BOTH local actions, taps each chip, and asserts the
+  // SegmentedButton's selected value. It also re-navigates back to the week
+  // section and proves the route rebuild (didUpdateWidget) updates the visible
+  // section rather than preserving stale StatefulShell state.
+  // ─────────────────────────────────────────────────────────────────────────
+  testWidgets(
+    'local ActionChips route schedule->week and tasks->tasks through the real router',
+    (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+      await _insertCourseSeries(
+        db,
+        'series-rose',
+        'acc-1',
+        externalId: 'lesson-rose',
+        title: '离散数学',
+        semesterKey: '2026spring',
+      );
+      await _insertCourseOccurrence(
+        db,
+        'rose-occ-1',
+        'acc-1',
+        '离散数学',
+        seriesExternalId: 'lesson-rose',
+        location: '三教101',
+        start: DateTime(2026, 3, 2, 8, 40),
+        end: DateTime(2026, 3, 2, 9, 25),
+      );
+      await _insertTask(db, 'task-1', 'acc-1', '复习离散');
+
+      // One call that runs BOTH a schedule tool and a task tool, so the run
+      // emits a deduplicated schedule action AND a deduplicated tasks action;
+      // a final text call completes the run.
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-1',
+            name: 'get_schedule',
+            input: {'from': '2026-03-01', 'through': '2026-03-31'},
+          ),
+          const ToolUseCompletedEvent(
+            id: 'tu-2',
+            name: 'get_tasks',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ]),
+        _ScriptedCall(() => [
+          const TextDeltaEvent('已完成查询。'),
+          const CompletedEvent(),
+        ]),
+      ]);
+      final gateway = _CountingResumableYoungGateway();
+
+      Future<AgentCompositionResult> loadComposition(
+        AppDatabase database,
+        String accountId,
+      ) =>
+          _buildTestComposition(
+            database,
+            accountId,
+            provider: provider,
+            gateway: gateway,
+            protector: protector,
+          );
+
+      final router = buildRouter(
+        _FakeWebsiteLauncher(),
+        db,
+        const NoopReminderReconciler(),
+        loadComposition,
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      for (var i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+
+      // Run a question that triggers the schedule + tasks tools.
+      await tester.enterText(
+        find.byKey(const Key('agent-chat-input')),
+        '查一下课再查一下任务。',
+      );
+      await tester.pump();
+      await tester.testTextInput.receiveAction(TextInputAction.send);
+      for (var i = 0; i < 40; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+
+      // Both local action chips present.
+      expect(find.widgetWithText(ActionChip, '查看日程'), findsOneWidget);
+      expect(find.widgetWithText(ActionChip, '查看任务'), findsOneWidget);
+
+      SegmentedButton<ScheduleSection> seg() => tester.widget<
+          SegmentedButton<ScheduleSection>>(
+        find.byType(SegmentedButton<ScheduleSection>),
+      );
+
+      Future<void> tapChip(String label) async {
+        final finder = find.widgetWithText(ActionChip, label);
+        // The chip is inside the chat ListView; the run just completed, so it
+        // is already the newest message near the bottom. ensureVisible scrolls
+        // it fully into view, then pumpAndSettle completes the scroll animation.
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+        await tester.tap(finder);
+        for (var i = 0; i < 15; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+      }
+
+      // Return to the chat branch (schedule is a sibling bottom-nav branch).
+      // pumpAndSettle lets the StatefulShell branch transition finish so the
+      // chip geometry is laid out on-screen before tapping.
+      Future<void> goToChat() async {
+        router.go('/chat');
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('agent-chat-input')), findsOneWidget);
+      }
+
+      // --- 查看日程 -> week section ---
+      await tapChip('查看日程');
+      expect(find.byType(SegmentedButton<ScheduleSection>), findsOneWidget);
+      expect(seg().selected, {ScheduleSection.week});
+      expect(find.byKey(const Key('week-range-label')), findsOneWidget);
+
+      // --- 查看任务 -> tasks section ---
+      await goToChat();
+      await tapChip('查看任务');
+      expect(find.byType(SegmentedButton<ScheduleSection>), findsOneWidget);
+      expect(seg().selected, {ScheduleSection.tasks});
+      expect(find.byKey(const Key('week-range-label')), findsNothing);
+
+      // --- tasks -> 查看日程 again proves didUpdateWidget/route rebuild ---
+      // The StatefulShell keeps the schedule State alive; re-routing to
+      // `?section=week` must update the visible section rather than preserve
+      // the tasks selection from the stale shell State.
+      await goToChat();
+      await tapChip('查看日程');
+      expect(find.byType(SegmentedButton<ScheduleSection>), findsOneWidget);
+      expect(
+        seg().selected,
+        {ScheduleSection.week},
+        reason: 're-routing to ?section=week must update the section, not '
+            'preserve the stale tasks selection from shell state',
+      );
+      expect(find.byKey(const Key('week-range-label')), findsOneWidget);
+
+      // Tear down the tree and let Drift's stream-query close timers fire so
+      // the test binding does not report a pending-timer teardown failure.
+      await tester.pumpWidget(const SizedBox.shrink());
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
     },
   );
 }
