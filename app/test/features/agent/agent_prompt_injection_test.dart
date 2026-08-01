@@ -10,7 +10,15 @@
 //       output never reach the model request — the payload allowlist strips
 //       free-text remote fields, and `_redactSanitized` scrubs the canary from
 //       any field that does pass.
-//   (d) The terminal run view contains a safe refusal/answer with no canary.
+//   (d) The terminal run view is a safe fixed notice with no canary.
+//
+// The malicious-remote-text scenario sends a write request ("帮我创建一个
+// 任务"), so the Task 1 grounding settlement (agent_session_service.dart
+// `_settleNoToolUse`) issues exactly ONE bounded corrective call when the
+// model answers without attempting the required write tool. The test asserts
+// the injection never appears in ANY of the resulting requests — including
+// the corrective one, which repeats only the sanitized conversation plus the
+// fixed application correction.
 //
 // Driven via AgentSessionService directly (in-memory DB + scripted provider +
 // FakeQueryGateway + OutboundPrivacyFilter with the canary). No production
@@ -289,7 +297,11 @@ void main() {
         campusSearchResult: _maliciousSearchEnvelope(),
       );
       // Script: call 1 searches the catalog (returns the malicious envelope),
-      // call 2 emits a safe refusal answer (the model is NOT tricked).
+      // call 2 emits a safe refusal answer (the model is NOT tricked), call 3
+      // answers the single grounded corrective call: the user asked to CREATE
+      // a task, which this read-only registry does not even declare, so the
+      // narrowed corrective request offers no tools and the model can only
+      // answer in text again.
       final provider = _InjectionScriptedProvider([
         [
           const ToolUseCompletedEvent(
@@ -301,6 +313,10 @@ void main() {
         ],
         [
           const TextDeltaEvent('我只提供只读查询，无法执行创建或取消操作。'),
+          const CompletedEvent(),
+        ],
+        [
+          const TextDeltaEvent('我没有可用的创建任务的工具，只能提供只读查询。'),
           const CompletedEvent(),
         ],
       ]);
@@ -322,11 +338,14 @@ void main() {
         hasLength(1),
       );
 
-      // CAPSTONE: the captured model request contains neither the canary nor
+      // CAPSTONE: the captured model requests contain neither the canary nor
       // the injection phrase nor the evil URL. The allowlist strips the
       // free-text body/description/metadata; `_redactSanitized` scrubs the
-      // canary from the title. This holds regardless of what the remote said.
-      expect(provider.requests, hasLength(2));
+      // canary from the title. This holds regardless of what the remote said —
+      // and for EVERY request the run makes, including the single grounded
+      // corrective call (call 3), which repeats only the sanitized
+      // conversation plus the fixed application correction text.
+      expect(provider.requests, hasLength(3));
       for (final req in provider.requests) {
         final encoded = jsonEncode(req.toJson());
         expect(encoded, isNot(contains(_canary)),
@@ -350,11 +369,23 @@ void main() {
           reason: 'canary in the title must be redacted');
       expect(toolResultEncoded, isNot(contains('campus_evil')),
           reason: 'raw id must not reach the model');
+      // The third request is the grounded corrective call: it narrows to the
+      // required write tool (create_task), which is NOT registered in this
+      // read-only registry, so the corrective request declares no tools at
+      // all and forces `any` — the model cannot be forced into an operation
+      // the registry does not expose. The retry is bounded to this one call.
+      final corrective = provider.requests[2];
+      expect(corrective.toolChoice, LlmToolChoice.any);
+      expect(corrective.tools, isEmpty);
 
-      // The terminal text is the scripted safe refusal — no canary, no echo.
+      // Terminal: the requested create_task cannot be grounded (no such tool
+      // exists), so the run fails with the fixed safe notice — the model's
+      // refusal text is REPLACED, and neither the canary nor the injection
+      // verb nor the evil URL appears anywhere in the view.
       final terminal = states.last;
-      expect(terminal.state, AgentRunState.completed);
-      expect(terminal.text, contains('无法执行创建或取消操作'));
+      expect(terminal.state, AgentRunState.failed);
+      expect(terminal.errorCode, 'grounding_failed');
+      expect(terminal.text, equals('我还没有实际查询或执行这项操作，请重试。'));
       expect(terminal.text, isNot(contains(_canary)));
       expect(terminal.text, isNot(contains('delete_everything')));
       expect(terminal.text, isNot(contains(_evilUrl)));
