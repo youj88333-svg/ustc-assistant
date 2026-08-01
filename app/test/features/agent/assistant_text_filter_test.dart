@@ -39,6 +39,25 @@ void main() {
       expect(filterAll(['[通知] 今天放假']), '[通知] 今天放假');
     });
 
+    test('a leading digit-bracket numbered list opening is preserved', () {
+      expect(filterAll(['[2] 正文']), '[2] 正文');
+    });
+
+    test('a leading digit-bracket section number is preserved', () {
+      expect(filterAll(['[3] 首先…']), '[3] 首先…');
+    });
+
+    test('a leading year-in-bracket that is not a timestamp is preserved', () {
+      expect(filterAll(['[2025年度] 存储']), '[2025年度] 存储');
+    });
+
+    test('a split digit-bracket non-marker (no closing ] yet) is held then preserved',
+        () {
+      // Same stream semantics as a split timestamp: an incomplete "[2" is held
+      // (could be a marker start), and once ']' arrives it resolves as content.
+      expect(filterAll(['[2', '] 正文']), '[2] 正文');
+    });
+
     test('a lone opening bracket held across deltas then resolved', () {
       // '[2' is a plausible marker prefix; '[通' is not. The filter holds the
       // marker-boundary characters until it can decide.

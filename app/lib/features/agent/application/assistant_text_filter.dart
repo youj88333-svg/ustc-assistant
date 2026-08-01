@@ -106,8 +106,18 @@ class AssistantTextFilter {
           exhaustedMarkers = true;
           break;
         }
-        // Starts with '[' + digit but no closing ']' yet -> an incomplete
-        // marker still streaming. Hold (or drop at stream end).
+        // Starts with '[' + digit. If a closing ']' is already present but the
+        // full marker regex did NOT match, this cannot be a timestamp marker —
+        // it is legal content like "[2] 正文" or "[2025年度]". Close the zone
+        // and emit it as content rather than silently holding (and later
+        // dropping) it.
+        if (text.contains(']')) {
+          _markerOpen = false;
+          exhaustedMarkers = true;
+          break;
+        }
+        // No closing ']' yet -> possibly an incomplete marker still streaming.
+        // Hold (or drop at stream end if it turns out incomplete).
         if (isFinal) {
           // Drop the incomplete leading marker entirely.
           _markerOpen = false;
