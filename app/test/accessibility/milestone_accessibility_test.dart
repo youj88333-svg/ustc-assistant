@@ -15,10 +15,13 @@ import 'package:ustc_assistant_app/features/agent/application/cancellation_signa
 import 'package:ustc_assistant_app/features/agent/application/outbound_privacy_filter.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/agent_chat_page.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/agent_settings_page.dart';
+import 'package:ustc_assistant_app/features/agent/presentation/agent_write_confirmation_card.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/safe_markdown_message.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/week_timetable.dart';
@@ -343,5 +346,67 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('清除会话'), findsOneWidget);
+  });
+
+  // Task 10: the write confirmation card (the approval gate of every write
+  // tool) exposes its operation label, its safe preview lines and the
+  // approve/reject actions as text semantics; a critical card never offers
+  // the "以后不再确认" action.
+  testWidgets('write confirmation card exposes approve action and safe preview semantics', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentWriteConfirmationCard(
+            proposal: const AgentWriteProposalView(
+              operationLabel: '安排任务时间段',
+              riskLevel: RiskLevel.medium,
+              actionType: 'plan_task',
+              targetType: 'task',
+              previewLines: ['目标：复习算法', '时间：2026-08-06 14:00-16:00'],
+              rememberAllowed: true,
+            ),
+            onApprove: () async {},
+            onReject: () async {},
+            onRemember: () async {},
+            onGoToSettings: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    // Operation label, safe preview and both actions are plain text semantics.
+    expect(find.text('安排任务时间段'), findsOneWidget);
+    expect(find.text('目标：复习算法'), findsOneWidget);
+    expect(find.bySemanticsLabel('确认本次'), findsOneWidget);
+    expect(find.bySemanticsLabel('取消'), findsOneWidget);
+
+    // A critical card (whole-day course move) never offers the remember
+    // action — assistive tech must not announce it either.
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentWriteConfirmationCard(
+            proposal: const AgentWriteProposalView(
+              operationLabel: '整日移动教务课程',
+              riskLevel: RiskLevel.critical,
+              actionType: 'move_jw_course_day',
+              targetType: 'course_day',
+              previewLines: ['源日期：2026-08-03', '目标日期：2026-08-09', '课程数：1'],
+              rememberAllowed: false,
+            ),
+            onApprove: () async {},
+            onReject: () async {},
+            onRemember: () async {},
+            onGoToSettings: () async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('整日移动教务课程'), findsOneWidget);
+    expect(find.text('课程数：1'), findsOneWidget);
+    expect(find.bySemanticsLabel('此类型以后不再确认'), findsNothing);
   });
 }

@@ -43,8 +43,10 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
+import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 // ---------------------------------------------------------------------------
 // Scripted provider with request capture (mirrors read_only_agent_flow_test).
@@ -79,7 +81,7 @@ class _ScriptedProvider implements LlmProvider {
       yield const ErrorEvent('script_exhausted');
       return;
     }
-    final events = _script[index].build();
+    final events = _script[index].build(requests);
     for (final event in events) {
       if (cancellation.isCancelled) {
         yield const CompletedEvent();
@@ -104,12 +106,51 @@ class _ScriptedProvider implements LlmProvider {
   }) async {}
 }
 
-/// One model call in a script. [build] returns the events to emit.
+/// One model call in a script. [build] returns the events to emit, optionally
+/// inspecting the captured [requests] so a later tool_use can echo refs bound
+/// by an earlier tool_result (the same seam the read-only flow test uses).
 class _ScriptedCall {
-  const _ScriptedCall(this._events);
+  const _ScriptedCall(this._events, {this.inputBuilder});
   final List<LlmEvent> Function() _events;
+  final Map<String, Object?> Function(List<LlmRequest> prior)? inputBuilder;
 
-  List<LlmEvent> build() => _events();
+  List<LlmEvent> build(List<LlmRequest> requests) {
+    final base = _events();
+    final builder = inputBuilder;
+    if (builder == null) return base;
+    // Replace any ToolUseCompletedEvent's input with the captured input.
+    return [
+      for (final event in base)
+        if (event is ToolUseCompletedEvent)
+          ToolUseCompletedEvent(
+            id: event.id,
+            name: event.name,
+            input: builder(requests),
+          )
+        else
+          event,
+    ];
+  }
+}
+
+/// All `ref_*` tokens from the LAST captured request's user tool_results, in
+/// tool-result order. The tokens are the run-local bindings an earlier tool
+/// actually emitted, so a later scripted tool_use can echo them faithfully.
+List<String> _refsFromLastToolResult(List<LlmRequest> prior) {
+  if (prior.isEmpty) return const [];
+  final out = <String>[];
+  for (final message in prior.last.messages) {
+    if (message.role != 'user') continue;
+    for (final block in message.content) {
+      if (block is! LlmToolResultBlock) continue;
+      final content = block.content;
+      if (content is! String) continue;
+      for (final match in RegExp(r'ref_[A-Za-z0-9_-]+').allMatches(content)) {
+        out.add(match.group(0)!);
+      }
+    }
+  }
+  return out;
 }
 
 /// A registry decorator that records the ORDER and arguments of every tool
@@ -1970,12 +2011,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
   // free discussion path ("调休功能是怎么工作的" needs no tools).
   // ─────────────────────────────────────────────────────────────────────────
 
-  /// Beijing wall clock -> the app's UTC epoch-ms storage encoding
-  /// (machine-timezone independent; copied from the schedule service tests).
-  int _beijingEpoch(int year, int month, int day, int hour, [int minute = 0]) =>
-      DateTime.utc(year, month, day, hour, minute).millisecondsSinceEpoch -
-      const Duration(hours: 8).inMilliseconds;
-
   test(
     'composition: whole-day JW course move flow '
     '(confirm -> moved in target week -> conflict pair -> no ref in chat)',
@@ -2373,4 +2408,920 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
     expect(toolUses, isEmpty,
         reason: '能力讨论不得调用任何工具');
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 10 FINAL combined acceptance regression: ONE real-router flow with an
+  // injected scripted provider covering all 9 manual-acceptance scenarios:
+  //
+  //   1. free chat without tools
+  //   2. pending review first-miss -> one correction succeeds
+  //   3. historical title lookup -> overlay write without ref output
+  //   4. two historical events -> relation write without conflict lookup loop
+  //   5. plan_task -> PlanBlock visible/clickable in week
+  //   6. overlap default conflict -> explicit no_conflict suppresses
+  //   7. whole-day JW move -> non-JW unchanged -> undo restores
+  //   8. schedule/task chips select exact sections
+  //   9. account switch isolates moves, refs, tasks and Agent history
+  // ─────────────────────────────────────────────────────────────────────────
+  testWidgets(
+    'Task 10 combined acceptance regression: 9 manual-acceptance scenarios '
+    'through the real router',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const protector = _NoopProtector();
+
+      // --- accounts A (active) and B (inactive), both configured ----------
+      await _seedAccount(database, 'a');
+      await _seedCredentials(
+        database,
+        'a',
+        protector,
+        username: 'PB12345678',
+        password: 'protected-school-password',
+      );
+      final secretStore = ProtectedAgentSecretStore(
+        database: database,
+        protector: protector,
+        now: () => 1,
+      );
+      await _seedAgentConfig(
+        database,
+        'a',
+        secrets: secretStore,
+        apiKey: 'test-key',
+      );
+      await _seedInactiveAccount(database, 'b');
+      await _seedCredentials(
+        database,
+        'b',
+        protector,
+        username: 'PB87654321',
+        password: 'protected-school-password-b',
+      );
+      final secretStoreB = ProtectedAgentSecretStore(
+        database: database,
+        protector: protector,
+        now: () => 1,
+      );
+      await _seedAgentConfig(
+        database,
+        'b',
+        secrets: secretStoreB,
+        apiKey: 'test-key-b',
+      );
+
+      final monday = _currentWeekMonday();
+      final lastMonday = monday.subtract(const Duration(days: 7));
+
+      // --- historical 计算机网络 series across two semesters ---------------
+      await _insertCourseSeries(
+        database,
+        'series-net',
+        'a',
+        externalId: 'lesson-net',
+        title: '计算机网络',
+        semesterKey: '2026spring',
+      );
+      await _insertCourseOccurrence(
+        database,
+        'net-mar-a',
+        'a',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '三教101',
+        start: DateTime(2026, 3, 2, 8, 40),
+        end: DateTime(2026, 3, 2, 9, 25),
+      );
+      await _insertCourseOccurrence(
+        database,
+        'net-mar-b',
+        'a',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '三教201',
+        start: DateTime(2026, 3, 4, 10, 35),
+        end: DateTime(2026, 3, 4, 11, 20),
+      );
+      await _insertCourseOccurrence(
+        database,
+        'net-aug',
+        'a',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '四教102',
+        start: DateTime(2026, 8, 14, 14, 0),
+        end: DateTime(2026, 8, 14, 15, 40),
+      );
+
+      // A course that ended LAST week (pending attendance/listening review).
+      await _insertCourseSeries(
+        database,
+        'series-q',
+        'a',
+        externalId: 'lesson-q',
+        title: '量子物理 B',
+        semesterKey: '2026spring',
+      );
+      await _insertCourseOccurrence(
+        database,
+        'q-last',
+        'a',
+        '量子物理 B',
+        seriesExternalId: 'lesson-q',
+        location: '三教101',
+        start: DateTime(lastMonday.year, lastMonday.month, lastMonday.day, 9, 0),
+        end: DateTime(lastMonday.year, lastMonday.month, lastMonday.day, 10, 40),
+      );
+
+      // Whole-day move source day: a JW course on 2026-08-03 with a source
+      // record (eligible), plus a NON-JW personal event on the same day that
+      // must never move; the target day 2026-08-09 already has a personal
+      // event overlapping the moved course time.
+      await _insertCourseSeries(
+        database,
+        'series-la',
+        'a',
+        externalId: 'lesson-la',
+        title: '线性代数',
+        semesterKey: '2026fall',
+      );
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'jw-0803',
+              accountId: 'a',
+              source: 'ustc_jw',
+              externalId: const Value('jw-0803'),
+              sourceSeriesExternalId: const Value('lesson-la'),
+              title: '线性代数',
+              type: 'course',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 9, 0)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 10, 40)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: const Value('三教101'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.sourceRecords).insert(
+            SourceRecordsCompanion.insert(
+              id: 'sr-jw-0803',
+              accountId: 'a',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: 'jw-0803',
+              localEntityId: 'jw-0803',
+              sourceStatus: 'active',
+              presence: 'present',
+              scopeKey: 'scope',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ev-chenpao',
+              accountId: 'a',
+              source: 'user',
+              title: '晨跑',
+              type: 'personal',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 7, 0)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 8, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ev-jianshen',
+              accountId: 'a',
+              source: 'user',
+              title: '健身',
+              type: 'personal',
+              startAt: Value(_beijingEpoch(2026, 8, 9, 9, 30)),
+              endAt: Value(_beijingEpoch(2026, 8, 9, 11, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // Two overlapping personal events in the CURRENT week: the derived
+      // conflict pair for scenario 6 (explicit no_conflict suppresses them).
+      final tuesday = monday.add(const Duration(days: 1));
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ov-a',
+              accountId: 'a',
+              source: 'user',
+              title: '重叠甲',
+              type: 'personal',
+              startAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 10, 0)),
+              endAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 12, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ov-b',
+              accountId: 'a',
+              source: 'user',
+              title: '重叠乙',
+              type: 'personal',
+              startAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 11, 0)),
+              endAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 13, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // A task for plan_task (scenario 5).
+      await _insertTask(database, 'task-1', 'a', '复习算法');
+
+      final provider = _ScriptedProvider(_combinedRegressionScript());
+      final gateway = _CountingResumableYoungGateway();
+
+      Future<AgentCompositionResult> loadComposition(
+        AppDatabase db,
+        String accountId,
+      ) =>
+          _buildTestComposition(
+            db,
+            accountId,
+            provider: provider,
+            gateway: gateway,
+            protector: protector,
+          );
+
+      final router = buildRouter(
+        _FakeWebsiteLauncher(),
+        database,
+        const NoopReminderReconciler(),
+        loadComposition,
+      );
+      addTearDown(router.dispose);
+
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+      }
+      expect(find.byKey(const Key('agent-chat-input')), findsOneWidget);
+
+      Future<void> pumpTicks([int n = 25]) async {
+        for (var i = 0; i < n; i++) {
+          await tester.pump(const Duration(milliseconds: 20));
+        }
+      }
+
+      Future<void> sendChat(String text) async {
+        await tester.enterText(
+          find.byKey(const Key('agent-chat-input')),
+          text,
+        );
+        await tester.pump();
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await pumpTicks(70);
+      }
+
+      Future<void> confirmCard(String operationLabel) async {
+        final label = find.text(operationLabel);
+        await tester.ensureVisible(label);
+        await tester.pumpAndSettle();
+        expect(label, findsOneWidget,
+            reason: '$operationLabel must pause on its confirmation card');
+        await tester.tap(find.text('确认本次'));
+        await pumpTicks(70);
+      }
+
+      Future<void> tapChip(String label) async {
+        final finder = find.widgetWithText(ActionChip, label).last;
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+        await tester.tap(finder);
+        await pumpTicks(15);
+      }
+
+      SegmentedButton<ScheduleSection> seg() =>
+          tester.widget<SegmentedButton<ScheduleSection>>(
+        find.byType(SegmentedButton<ScheduleSection>),
+      );
+
+      // --- scenario 1: free chat without tools ------------------------------
+      await sendChat('你好，今天心情怎么样？');
+      expect(provider.streamCallCount, 1);
+      expect(find.textContaining('今天心情不错'), findsOneWidget);
+      final freeRequest = provider.requests.single;
+      expect(freeRequest.toolChoice, LlmToolChoice.auto,
+          reason: 'free chat must not force tools');
+      expect(
+        freeRequest.messages
+            .expand((m) => m.content)
+            .whereType<LlmToolUseBlock>(),
+        isEmpty,
+        reason: 'free chat must not call any tool',
+      );
+      expect(_executedToolSequence(provider), isEmpty);
+
+      // --- scenario 2: pending review first-miss -> one correction succeeds --
+      await sendChat('有哪些需要我确认的课程出勤或听讲？');
+      expect(provider.streamCallCount, 4,
+          reason: 'miss + one bounded correction + tool + final');
+      final corrective = provider.requests[2];
+      expect(corrective.toolChoice, LlmToolChoice.any,
+          reason: 'the corrective request must force tool_choice any');
+      expect(
+        corrective.tools.map((t) => t.name).toSet(),
+        {'get_pending_event_reviews'},
+        reason: 'the corrective request narrows declarations to the required tool',
+      );
+      expect(
+        _capturedToolResults(provider).join('\n'),
+        contains('attendance_undecided'),
+        reason: 'the corrected get_pending_event_reviews ran for real',
+      );
+      expect(find.textContaining('量子物理 B'), findsOneWidget);
+
+      // --- scenario 3: historical title lookup -> overlay write --------------
+      await sendChat('将2026春的计算机网络设置成必去，并设置成听讲。');
+      expect(provider.streamCallCount, 6,
+          reason: 'the overlay paused for confirmation before its final text');
+      await confirmCard('设置个人标注');
+      expect(provider.streamCallCount, 7);
+      expect(find.textContaining('已为计算机网络设置必去与听讲'), findsOneWidget);
+      // The overlay landed on one of the three historical occurrences found by
+      // the TITLE query (never a get_conflicts finder, never a default
+      // semester read).
+      final overlays = await database.select(database.userOverlays).get();
+      expect(overlays, hasLength(1));
+      expect(overlays.single.attendancePolicy, 'must_go');
+      expect(overlays.single.listeningMode, 'listen');
+      expect(
+        {'net-mar-a', 'net-mar-b', 'net-aug'}.contains(overlays.single.eventId),
+        isTrue,
+        reason: 'overlay must target a get_schedule(query) historical ref',
+      );
+      // No run-local ref ever rendered in the chat UI.
+      expect(find.textContaining('ref_'), findsNothing);
+
+      // --- scenario 4: two historical events -> relation write, no conflict
+      // lookup loop ----------------------------------------------------------
+      await sendChat('把2026年3月的那两节计算机网络课记录为冲突，二选一。');
+      expect(provider.streamCallCount, 9,
+          reason: 'the relation paused for confirmation before its final text');
+      await confirmCard('记录日程关系');
+      expect(provider.streamCallCount, 10);
+      final relations =
+          await database.select(database.scheduleRelations).get();
+      expect(relations, hasLength(1));
+      expect({relations.single.leftEventId, relations.single.rightEventId},
+          {'net-mar-a', 'net-mar-b'},
+          reason: 'relation participants are the two historical March events');
+
+      // --- scenario 5: plan_task -> PlanBlock visible/clickable in week ------
+      await sendChat('给复习算法安排一个执行时间段。');
+      expect(provider.streamCallCount, 12,
+          reason: 'plan_task paused for confirmation before its final text');
+      await confirmCard('安排任务时间段');
+      expect(provider.streamCallCount, 13);
+      final blocks = await database.select(database.planBlocks).get();
+      expect(blocks, hasLength(1));
+      expect(blocks.single.taskId, 'task-1');
+      final blockId = blocks.single.id;
+
+      // --- scenario 8: schedule/task chips select exact sections -------------
+      await tapChip('查看任务');
+      expect(seg().selected, {ScheduleSection.tasks},
+          reason: '查看任务 chip must open the tasks section');
+      router.go('/chat');
+      await pumpTicks(20);
+      await tapChip('查看日程');
+      expect(seg().selected, {ScheduleSection.week},
+          reason: '查看日程 chip must open the week section');
+      // The accepted PlanBlock is visible in the current week grid and
+      // clickable -> opens its parent task detail.
+      final planBlock = find.byKey(Key('plan-block-$blockId'));
+      expect(planBlock, findsOneWidget,
+          reason: 'the planned block must render in the current week grid');
+      await tester.ensureVisible(planBlock);
+      await tester.pumpAndSettle();
+      await tester.tap(planBlock);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('task-detail-undo')), findsOneWidget,
+          reason: 'tapping the block opens its parent task detail');
+      expect(find.text('复习算法'), findsWidgets,
+          reason: 'the task detail names the parent task');
+      router.go('/chat');
+      await pumpTicks(20);
+
+      // --- scenario 6: overlap default conflict -> explicit no_conflict
+      // suppresses ------------------------------------------------------------
+      await sendChat('我这周有哪些时间冲突的安排？');
+      // create_schedule_relation is ask_first_time: the FIRST confirmation in
+      // scenario 4 released it, so this second relation AUTO-executes — the
+      // whole run completes inside the send.
+      expect(provider.streamCallCount, 17,
+          reason: 'get_conflicts -> no_conflict relation -> get_conflicts -> final');
+      final conflictPayloads = _capturedConflictPayloads(provider);
+      expect(conflictPayloads, hasLength(2),
+          reason: 'get_conflicts ran twice: before and after the relation');
+      expect(conflictPayloads.first['conflictPairs'], hasLength(1),
+          reason: 'the overlapping pair is derived as a conflict by default');
+      expect(
+        jsonEncode(conflictPayloads.first['conflictPairs']),
+        contains('derivedOverlap'),
+        reason: 'the default conflict pair origin is derivedOverlap',
+      );
+      expect(conflictPayloads.last['conflictPairs'], isEmpty,
+          reason: 'explicit no_conflict suppresses the derived pair');
+      final relationsAfter =
+          await database.select(database.scheduleRelations).get();
+      expect(relationsAfter, hasLength(2));
+      expect(relationsAfter.last.conflictState, 'no_conflict');
+      expect({relationsAfter.last.leftEventId, relationsAfter.last.rightEventId},
+          {'ov-a', 'ov-b'});
+
+      // --- scenario 7: whole-day JW move -> non-JW unchanged -> undo ---------
+      await sendChat('把8月3日的教务课程移到8月9日，其他日程不要动。');
+      expect(provider.streamCallCount, 19,
+          reason: 'the critical move paused for confirmation');
+      final moveCard = find.text('整日移动教务课程');
+      await tester.ensureVisible(moveCard);
+      await tester.pumpAndSettle();
+      expect(moveCard, findsOneWidget);
+      expect(find.text('此类型以后不再确认'), findsNothing,
+          reason: 'critical moves never offer remember');
+      await tester.tap(find.text('确认本次'));
+      await pumpTicks(70);
+      expect(provider.streamCallCount, 21);
+      final moves = await database.select(database.jwDayMoves).get();
+      expect(moves, hasLength(1));
+      expect(moves.single.sourceDate, '2026-08-03');
+      expect(moves.single.targetDate, '2026-08-09');
+      // Source events are never rewritten; only the display projection moves.
+      final feed = _capturedToolResults(provider).join('\n');
+      expect(feed, contains('2026-08-09T09:00:00'),
+          reason: 'the moved course displays on the target day');
+      expect(feed, contains('2026-08-03T07:00:00'),
+          reason: 'the personal 晨跑 event stays on the source day');
+      expect(feed, isNot(contains('2026-08-09T07:00:00')),
+          reason: '晨跑 must never move with the course day');
+      expect(find.textContaining('线性代数'), findsOneWidget);
+
+      // The one-step undo is a MANUAL-path feature: the schedule page clears
+      // through an UndoService recorder (agent clears intentionally never
+      // occupy the one-step undo slot). Replay that exact construction to
+      // prove clear -> undo restores the move.
+      final undo = UndoService(database: database, accountId: 'a');
+      final manualMoves = JwDayMoveService(
+        database: database,
+        accountId: 'a',
+        undoRecorder: undo,
+      );
+      await manualMoves.clear('2026-08-03');
+      expect(await database.select(database.jwDayMoves).get(), isEmpty,
+          reason: 'the manual clear removes the move record');
+      expect(await undo.canUndo(), isTrue);
+      await undo.undo();
+      final restored = await database.select(database.jwDayMoves).get();
+      expect(restored, hasLength(1));
+      expect(restored.single.sourceDate, '2026-08-03');
+      expect(restored.single.targetDate, '2026-08-09',
+          reason: 'the one-step undo restores the cleared move');
+
+      // --- scenario 9: account switch isolates moves, refs, tasks, history ----
+      await database.transaction(() async {
+        await (database.update(database.localAccounts)
+              ..where((row) => row.id.equals('a')))
+            .write(const LocalAccountsCompanion(isActive: Value(false)));
+        await (database.update(database.localAccounts)
+              ..where((row) => row.id.equals('b')))
+            .write(const LocalAccountsCompanion(isActive: Value(true)));
+      });
+      database.notifyActiveAccountChanged();
+      await pumpTicks(30);
+      // B's chat is empty: no history, no run-local refs, no moves, no tasks.
+      expect(find.textContaining('线性代数'), findsNothing);
+      expect(
+        await (database.select(database.chatMessages)
+              ..where((row) => row.accountId.equals('b')))
+            .get(),
+        isEmpty,
+        reason: 'account B must have no chat history',
+      );
+      expect(
+        await (database.select(database.jwDayMoves)
+              ..where((row) => row.accountId.equals('b')))
+            .get(),
+        isEmpty,
+        reason: 'account B must have no day moves',
+      );
+      expect(
+        await (database.select(database.tasks)
+              ..where((row) => row.accountId.equals('b')))
+            .get(),
+        isEmpty,
+        reason: 'account B must have no tasks',
+      );
+      // Back to A: everything is still there.
+      await database.transaction(() async {
+        await (database.update(database.localAccounts)
+              ..where((row) => row.id.equals('b')))
+            .write(const LocalAccountsCompanion(isActive: Value(false)));
+        await (database.update(database.localAccounts)
+              ..where((row) => row.id.equals('a')))
+            .write(const LocalAccountsCompanion(isActive: Value(true)));
+      });
+      database.notifyActiveAccountChanged();
+      await pumpTicks(30);
+      expect(find.textContaining('线性代数'), findsOneWidget,
+          reason: 'account A recovers its conversation after the switch back');
+      expect(
+        (await (database.select(database.jwDayMoves)
+              ..where((row) => row.accountId.equals('a')))
+            .get())
+            .length,
+        1,
+        reason: 'account A keeps its move record',
+      );
+      expect(
+        (await (database.select(database.tasks)
+              ..where((row) => row.accountId.equals('a')))
+            .get())
+            .length,
+        1,
+        reason: 'account A keeps its task',
+      );
+
+      // --- the Agent clears the move again (its own cleanup path) ------------
+      await sendChat('恢复8月3日的整日移动。');
+      expect(provider.streamCallCount, 22,
+          reason: 'the critical clear paused for confirmation');
+      await confirmCard('整日移动教务课程');
+      expect(provider.streamCallCount, 23);
+      expect(await database.select(database.jwDayMoves).get(), isEmpty,
+          reason: 'the Agent clear removes the move record');
+      final logs = await database.actionLogsRepository.selectAll();
+      expect(
+        logs.where((l) =>
+            l.source == 'agent' &&
+            l.actionType == 'move_jw_course_day' &&
+            l.result == 'success'),
+        hasLength(2),
+        reason: 'move + clear each commit an audited success',
+      );
+      expect(logs.where((l) => l.actionType == 'undo_jw_day_move'),
+          hasLength(1));
+
+      // --- the executed tool sequence is the observable contract: the
+      // overlay/relation writes are fed by get_schedule title queries, and
+      // get_conflicts appears ONLY in scenario 6 — never as a participant
+      // finder (no conflict-lookup loop) --------------------------------------
+      expect(_executedToolSequence(provider), [
+        'get_pending_event_reviews',
+        'get_schedule',
+        'create_user_overlay',
+        'get_schedule',
+        'create_schedule_relation',
+        'get_tasks',
+        'plan_task',
+        'get_conflicts',
+        'create_schedule_relation',
+        'get_conflicts',
+        'get_schedule',
+        'move_jw_course_day',
+        'get_schedule',
+        'move_jw_course_day',
+      ], reason: 'no conflict-lookup loop: get_conflicts only serves scenario 6');
+
+      // Tear down the tree and let Drift stream-query timers close.
+      await tester.pumpWidget(const SizedBox.shrink());
+      await pumpTicks(10);
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Task 10 combined-regression helpers.
+// ---------------------------------------------------------------------------
+
+/// Beijing wall clock -> the app's UTC epoch-ms storage encoding
+/// (machine-timezone independent; copied from the schedule service tests).
+/// Top-level so the file's tests share it without tripping the
+/// no_leading_underscores_for_local_identifiers lint.
+int _beijingEpoch(int year, int month, int day, int hour, [int minute = 0]) =>
+    DateTime.utc(year, month, day, hour, minute).millisecondsSinceEpoch -
+    const Duration(hours: 8).inMilliseconds;
+
+/// The Monday of the REAL current week. The schedule page and the composed
+/// tools use `SystemBeijingClock` (real clock), so seeding events on this
+/// anchor guarantees they land in the currently selected week grid no matter
+/// when the test runs.
+DateTime _currentWeekMonday() {
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  return today.subtract(Duration(days: now.weekday - 1));
+}
+
+String _isoDate(DateTime value) =>
+    '${value.year.toString().padLeft(4, '0')}-'
+    '${value.month.toString().padLeft(2, '0')}-'
+    '${value.day.toString().padLeft(2, '0')}';
+
+/// The 23 scripted model calls of the Task 10 combined regression, in order.
+/// Tool_use inputs that must echo run-local refs bound by an earlier tool
+/// result use [inputBuilder] (the current request already carries that
+/// tool_result, so the builder reads `requests.last`).
+List<_ScriptedCall> _combinedRegressionScript() {
+  final monday = _currentWeekMonday();
+  final blockDay = monday.add(const Duration(days: 3));
+  final blockStart = '${_isoDate(blockDay)}T14:00:00+08:00';
+  final blockEnd = '${_isoDate(blockDay)}T16:00:00+08:00';
+  final weekFrom = _isoDate(monday);
+  final weekThrough = _isoDate(monday.add(const Duration(days: 6)));
+  // The post-write re-query uses a WIDER range: the runtime's duplicate-call
+  // breaker rejects a second get_conflicts with EXACTLY the same arguments,
+  // so the model re-checks with a refreshed (still covering) range — this is
+  // the real "loop breaker" behavior the manual retest item 5 verifies.
+  final recheckFrom = _isoDate(monday.subtract(const Duration(days: 1)));
+  final recheckThrough =
+      _isoDate(monday.add(const Duration(days: 7)));
+  return [
+    // Scenario 1: free chat, no tools.
+    _ScriptedCall(() => [
+          const TextDeltaEvent('今天心情不错！有什么可以帮你的吗？'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 2: first response misses the tool -> one correction succeeds.
+    _ScriptedCall(() => [
+          const TextDeltaEvent('我来查一下。'),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-p1',
+            name: 'get_pending_event_reviews',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('有一节量子物理 B 需要确认出勤。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 3: historical title lookup -> overlay write.
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-c1',
+            name: 'get_schedule',
+            input: {'query': '计算机网络'},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(
+      () => [
+        const ToolUseCompletedEvent(
+          id: 'tu-c2',
+          name: 'create_user_overlay',
+          input: {},
+        ),
+        const CompletedEvent(),
+      ],
+      inputBuilder: (prior) {
+        final refs = _refsFromLastToolResult(prior);
+        return {
+          'ref_event': refs.isEmpty ? 'ref_unknown' : refs.first,
+          'attendance_policy': 'must_go',
+          'listening_mode': 'listen',
+        };
+      },
+    ),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已为计算机网络设置必去与听讲。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 4: two historical events -> relation write (title queries
+    // only; never get_conflicts as a participant finder).
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-d1',
+            name: 'get_schedule',
+            input: {
+              'query': '计算机网络',
+              'from': '2026-03-01',
+              'through': '2026-03-31',
+            },
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(
+      () => [
+        const ToolUseCompletedEvent(
+          id: 'tu-d2',
+          name: 'create_schedule_relation',
+          input: {},
+        ),
+        const CompletedEvent(),
+      ],
+      inputBuilder: (prior) {
+        final refs = _refsFromLastToolResult(prior);
+        return {
+          'ref_left': refs.isEmpty ? 'ref_unknown' : refs[0],
+          'ref_right': refs.length < 2 ? 'ref_unknown' : refs[1],
+          'conflict_state': 'conflict',
+          'reason': '二选一课程',
+        };
+      },
+    ),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已记录这两节计算机网络的冲突关系。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 5: plan_task for an existing task.
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-e1',
+            name: 'get_tasks',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(
+      () => [
+        const ToolUseCompletedEvent(
+          id: 'tu-e2',
+          name: 'plan_task',
+          input: {},
+        ),
+        const CompletedEvent(),
+      ],
+      inputBuilder: (prior) {
+        final refs = _refsFromLastToolResult(prior);
+        return {
+          'ref_task': refs.isEmpty ? 'ref_unknown' : refs.first,
+          'start_at': blockStart,
+          'end_at': blockEnd,
+        };
+      },
+    ),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已为复习算法安排了执行时间段。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 6: overlap default conflict -> explicit no_conflict suppresses.
+    _ScriptedCall(() => [
+          ToolUseCompletedEvent(
+            id: 'tu-f1',
+            name: 'get_conflicts',
+            input: {'from': weekFrom, 'through': weekThrough},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(
+      () => [
+        const ToolUseCompletedEvent(
+          id: 'tu-f2',
+          name: 'create_schedule_relation',
+          input: {},
+        ),
+        const CompletedEvent(),
+      ],
+      inputBuilder: (prior) {
+        final refs = _refsFromLastToolResult(prior);
+        return {
+          'ref_left': refs.isEmpty ? 'ref_unknown' : refs[0],
+          'ref_right': refs.length < 2 ? 'ref_unknown' : refs[1],
+          'conflict_state': 'no_conflict',
+          'reason': '两个时段都可去',
+        };
+      },
+    ),
+    _ScriptedCall(() => [
+          ToolUseCompletedEvent(
+            id: 'tu-f3',
+            name: 'get_conflicts',
+            input: {'from': recheckFrom, 'through': recheckThrough},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已把重叠时段记录为不冲突，冲突查询不再列出它们。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 7: whole-day JW course move (confirm) -> week check -> final.
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-g1',
+            name: 'get_schedule',
+            input: {'from': '2026-08-09', 'through': '2026-08-09'},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-g2',
+            name: 'move_jw_course_day',
+            input: {
+              'action': 'move',
+              'source_date': '2026-08-03',
+              'target_date': '2026-08-09',
+            },
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-g3',
+            name: 'get_schedule',
+            input: {'from': '2026-08-03', 'through': '2026-08-09'},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已把8月3日的线性代数移到8月9日，晨跑等个人日程没有移动。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 7b: clear the move through the Agent (critical confirm).
+    _ScriptedCall(() => [
+          const ToolUseCompletedEvent(
+            id: 'tu-g4',
+            name: 'move_jw_course_day',
+            input: {'action': 'clear', 'source_date': '2026-08-03'},
+          ),
+          const CompletedEvent(),
+        ]),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('已恢复8月3日的课程到原日期。'),
+          const CompletedEvent(),
+        ]),
+  ];
+}
+
+/// Reconstructs the ACTUAL executed tool-call sequence from the captured
+/// requests: assistant `tool_use` blocks declare (id -> name), user
+/// `tool_result` blocks reference the id. Each request replays the recent
+/// conversation window, so the same result can appear in several consecutive
+/// requests; matching by FIRST occurrence of each unique [LlmToolResultBlock]
+/// id yields every tool that really ran, in execution order. This makes the
+/// "get_conflicts is never a participant finder" assertion fail-capable
+/// through the real router.
+List<String> _executedToolSequence(_ScriptedProvider provider) {
+  final namesById = <String, String>{};
+  for (final request in provider.requests) {
+    for (final message in request.messages) {
+      for (final block in message.content) {
+        if (block is LlmToolUseBlock) namesById[block.id] = block.name;
+      }
+    }
+  }
+  final executed = <String>[];
+  final seen = <String>{};
+  for (final request in provider.requests) {
+    for (final message in request.messages) {
+      for (final block in message.content) {
+        if (block is! LlmToolResultBlock) continue;
+        if (!seen.add(block.toolUseId)) continue;
+        final name = namesById[block.toolUseId];
+        if (name != null) executed.add(name);
+      }
+    }
+  }
+  return executed;
+}
+
+/// Every captured get_conflicts tool_result payload, in EXECUTION order (one
+/// per unique tool result id; replays within the recent-window conversation
+/// are skipped).
+List<Map<String, Object?>> _capturedConflictPayloads(_ScriptedProvider provider) {
+  final out = <Map<String, Object?>>[];
+  final seen = <String>{};
+  for (final request in provider.requests) {
+    for (final message in request.messages) {
+      if (message.role != 'user') continue;
+      for (final block in message.content) {
+        if (block is! LlmToolResultBlock) continue;
+        if (!seen.add(block.toolUseId)) continue;
+        final content = block.content;
+        if (content is! String) continue;
+        final decoded = jsonDecode(content);
+        if (decoded is Map<String, Object?> &&
+            decoded.containsKey('conflictPairs')) {
+          out.add(decoded);
+        }
+      }
+    }
+  }
+  return out;
 }

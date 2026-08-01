@@ -1,8 +1,48 @@
 # USTC Assistant 只读 Agent 实施交接
 
-更新时间：2026-08-01
+更新时间：2026-08-02
 
-## 0. 当前状态（2026-08-01 更新）
+## 0. 当前状态（2026-08-02 更新）
+
+**人工验收修复里程碑（2026-08-01-agent-manual-acceptance-debug）已全部完成**：
+Tasks 1–9（grounding Policy + tool_choice、文本过滤 + 指纹、get_schedule 标题查询、
+本地 chip 分区路由、PlanBlock 周网格、默认冲突推导、JwDayMove schema 4→5 与服务、
+手动整日调课 UI、move_jw_course_day 工具 + prompt v4）与 Task 10 收尾（合并验收
+回归 + 全量验证 + 文档同步）均在 `feature/write-tools` 分支提交；Task 10 最终
+验证的精确 HEAD 与完整结果见第 7.2 节。**尚未合并到 `main`**，合并时机由
+finishing-a-development-branch 流程决定。
+
+修复内容概要：
+
+- Grounding Policy：显式操作必须真实调用工具，首次漏调注入一次受限纠错
+  （`tool_choice=any` + 收窄声明），耗尽后 `grounding_failed` 安全结束；自由聊天
+  从不强制工具；学校网关不接受 any 时仅回退一次 `auto`。系统提示词版本 4。
+- 输出净化：技术时间戳、`ref_*`、过程性话术不进入聊天正文；完全相同参数的重复
+  工具调用熔断（`repeated_tool_call`）。
+- `get_schedule(query=...)` 按标题跨本地历史定位写目标（不读默认学期、无硬编码
+  semesterId）；`get_conflicts` 永不作为参与者查找器（避免"查引用"无限循环）。
+- accepted PlanBlock 进入周视图网格并可点击进入父 Task 详情；时间重叠默认推导为
+  冲突，显式 conflict/no_conflict 覆盖推导。
+- 整日教务课程移动：`JwDayMove`（schema 5）按账号记录，投影只按原始日期匹配、
+  不链式搬运、源事件永不改写；`move_jw_course_day`（move|clear）为 critical，
+  永远人工确认；手动界面支持清除与一步撤回（Agent 写入不占用撤回槽）。
+- 本地 chip：`查看日程`→周视图、`查看任务`→任务分区，重路由正确更新分区。
+
+**自动测试 ≠ 人工验收**：Python 校园（campus）与 iCourse 体验未改变（本轮无任何
+`src/` 修改）；`agent-testing.md` 第 13-15 项仍等待 Flutter 来源迁移。
+
+**真实 Release 复测请求（Task 10 Step 5，等待用户执行）**：使用修复完成后新构建的
+Windows Release App（`app\build\windows\x64\runner\Release\ustc_assistant_app.exe`）
+与真实学校 API Key，在校园网 / Panabit iWAN 下复测 `agent-testing.md` 第 4、5、9
+项与 W4、W5、W8 项、补测原空白第 8 项与 W9 项，并执行：自由聊天不强制工具、学校
+网关 `tool_choice` 兼容回退、跨学期历史查找（不依赖默认学期）、整日移动/清除/一步
+撤回、`查看日程` 与 `查看任务` 两个本地 chip 的精确分区。校园目录第 13-15 项保持
+不变（等待 Flutter 来源迁移，本轮不复测）。复测逐项记录见用户文件
+`docs/agent-manual-acceptance-retest-2026-08-01.md`（未跟踪用户文件，本里程碑未
+修改、未暂存、未提交），修复路径的维护版复测清单见 `docs/acceptance/read-only-agent.md`
+第 11 节。
+
+### 0.1 历史状态（2026-08-01，保留作基线）
 
 `feature/read-only-agent` 已合并到 `main`（合并提交 `9bc83c8`，含只读 Agent Tasks
 1–8、系统提示词 v2 与 Bridge 目录自动刷新，以及 `2026-07-30-read-only-agent-review-repairs`
@@ -360,6 +400,72 @@ Task 7 精确 HEAD 见第 7 节末尾（Task 7 提交后刷新）；写工具里
 任务并亲手点击确认卡、调整权限策略等）仍需用户在真实校园网 / Panabit iWAN / 真实
 API Key 环境下按 `docs/acceptance/read-only-agent.md` 第 10 节手动执行；自动测试不
 代替人工验收。
+
+## 7.2 人工验收修复里程碑验证（feature/write-tools，2026-08-02）
+
+人工验收修复里程碑（Tasks 1–10）在 `feature/write-tools` 分支上推进。Task 10 完整
+自动验证运行在 HEAD `69c7608`（`feat(agent): add critical whole-day course moves`，
+Task 9）之上的工作树（含 Task 10 未提交的合并验收回归与本文档同步）；Task 10 收尾
+提交 `test(agent): close manual acceptance repairs` 即携带本节的验证内容。Task 10
+之后若再提交，需重跑本节命令并刷新哈希。
+
+Task 10 实测的完整自动验证（2026-08-02，worktree `E:/107/.worktrees/write-tools`；
+Python 测试在 worktree 下运行，`PYTHONPATH` 指向 worktree 的 `src`；Python 用
+PowerShell 运行）：
+
+```text
+Python unittest discover -s tests -v   : Ran 394 tests, OK
+Python compileall -q src tests          : exit 0
+Flutter analyze (whole app)             : No issues found
+Flutter test (whole suite)              : 780 passed（含 Task 10 合并验收回归）
+Flutter build windows --release         : Built build\windows\x64\runner\Release\ustc_assistant_app.exe
+```
+
+Agent 聚焦组合级回归（真实路由 + 注入式脚本化 provider）：
+
+```text
+Flutter test test/integration/agent_composition_flow_test.dart
+    test/integration/read_only_agent_flow_test.dart
+    test/accessibility/milestone_accessibility_test.dart : 33 passed
+```
+
+Task 10 新增的合并验收回归（`agent_composition_flow_test.dart` 单个 testWidgets，
+通过真实路由 + 注入式组合）一次性覆盖人工验收复测清单的 9 个场景：
+
+1. 自由聊天不调用任何工具；
+2. 待确认查询首次漏调 → 一次受限纠错成功（`tool_choice=any` + 收窄声明）；
+3. 历史标题查询 → overlay 写目标，聊天无 `ref_*` 输出；
+4. 两个历史事件 → 关系写入，`get_conflicts` 从不作为参与者查找器（可观察的工具
+   执行序列断言：get_conflicts 只出现在冲突场景）；
+5. plan_task → accepted PlanBlock 在周视图可见且可点击进入父 Task 详情；
+6. 时间重叠默认派生冲突（derivedOverlap）→ 显式 no_conflict 抑制该对；
+7. 整日教务课程移动 → 非 JW 事件（晨跑）保持不变 → 手动路径清除 + 一步撤回恢复；
+8. `查看日程`/`查看任务` chip 精确打开周视图/任务分区；
+9. 账号切换隔离移动、引用、Task 与 Agent 历史。
+
+同时新增：`read_only_agent_flow_test.dart` 真实工具层"首次漏调 → 一次纠错成功"
+测试，`milestone_accessibility_test.dart` 写确认卡语义（确认/取消可访问、critical
+卡不提供"以后不再确认"）测试。
+
+安全/配置扫描（Task 10 Step 3）：
+
+```text
+rg semesterId/2026spring/2026fall app/lib/features/{agent,schedule} : 无匹配
+    （生产代码无硬编码学期）
+rg ref_[A-Za-z0-9_-]+ app/lib/features/agent/presentation app/test/fixtures : 无匹配
+    （无具体用户可见 ref fixture）
+git diff --check   : 干净
+git status --short : 仅本任务测试/文档文件 + 受保护生成文件 + 两个未跟踪用户文档
+```
+
+**Python 校园与 iCourse UX 未改变**：本轮没有任何 `src/` 修改；
+`docs/agent-testing.md` 第 13-15 项（校园目录、iCourse 授权引导、公开引用 chip）
+仍等待 Flutter 来源迁移，不能在本轮标为已修复；真实学校模型/API 复测（`tool_choice`
+兼容、自由聊天、跨学期查找、整日移动/清除/撤回、两个本地 chip）仍待用户在真实
+校园网 / Panabit iWAN / 真实 API Key 环境下按
+`docs/agent-manual-acceptance-retest-2026-08-01.md` 执行；自动测试 ≠ 人工验收。
+`docs/agent-testing.md` 与 `docs/agent-manual-acceptance-retest-2026-08-01.md`
+是未跟踪用户文件，未修改、未暂存、未提交。
 
 ## 8. 已知文档边界
 

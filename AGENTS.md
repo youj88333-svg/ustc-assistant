@@ -22,20 +22,31 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
    重启恢复。Agent 不能发起同步或执行任何外部写操作；本地业务数据修改仅经下述
    受控写工具。架构见 `docs/architecture.md`“只读 Agent 架构”一节，人工验收清单
    见 `docs/acceptance/read-only-agent.md`。
-   写工具：10 个受控本地写工具（create_event/update_event/create_task/plan_task/
+   写工具：11 个受控本地写工具（create_event/update_event/create_task/plan_task/
    create_user_overlay/record_attendance_decision/record_listening_mode/
-   create_schedule_relation/set_reminder/update_permission_policy），全部经"审批门"
-   按风险分级确认（聊天内联确认卡），AgentPermissionPolicy 表迁移并接入运行时决策，
-   设置页可管理确认策略；权限变更永远需要用户亲手确认（update_permission_policy）。
-   写能力只作用于本地业务数据，不新增任何学校/外部写通道。十个写工具均为本地-only
-   且事务性审计：业务提交、agent 业务日志、用户确认日志与权限变更（remember /
-   ask_first_time）落在同一 Drift 事务，任一失败整体回滚（SQLite fault-injection
-   回归验证）。确认卡目标预览只显示目标标题/时间等模型安全信息，不含 DB id/ref；
-   写参数经 WriteArgumentReader 严格运行时校验，非法参数拒绝为
-   `invalid_write_arguments` 且不产生 DB 变更。写工具里程碑（Tasks 1–7）在
+   create_schedule_relation/set_reminder/update_permission_policy/
+   move_jw_course_day），全部经"审批门"按风险分级确认（聊天内联确认卡），
+   AgentPermissionPolicy 表迁移并接入运行时决策，设置页可管理确认策略；权限变更
+   永远需要用户亲手确认（update_permission_policy）。写能力只作用于本地业务数据，
+   不新增任何学校/外部写通道。全部写工具均为本地-only 且事务性审计：业务提交、
+   agent 业务日志、用户确认日志与权限变更（remember / ask_first_time）落在同一
+   Drift 事务，任一失败整体回滚（SQLite fault-injection 回归验证）。确认卡目标
+   预览只显示目标标题/时间等模型安全信息，不含 DB id/ref；写参数经
+   WriteArgumentReader 严格运行时校验，非法参数拒绝为 `invalid_write_arguments`
+   且不产生 DB 变更。
+   人工验收修复轮（2026-08-01 调试计划 Tasks 1–10）已全部完成：Grounding Policy
+   + tool_choice 受限纠错（显式操作必须真实调用工具，自由聊天从不强制；提示词
+   版本 4）、输出净化与重复调用熔断、`get_schedule(query=...)` 标题查询跨历史定位
+   写目标（get_conflicts 从不作为参与者查找器）、accepted PlanBlock 进入周视图
+   网格且可点击、时间重叠默认派生冲突 + 显式 conflict/no_conflict 覆盖、
+   `JwDayMove`（schema 5）整日教务课程移动/清除/一步撤回（Agent 写入不占用撤回
+   槽）、本地 chip 精确分区路由（查看日程→周视图、查看任务→任务分区）。修复轮在
    `feature/write-tools` 分支上完成，尚未合并到 `main`，最终验证与 HEAD 见
-   `docs/read-only-agent-handoff.md` 第 7.1 节；写工具/手动人工验收尚未执行，清单见
-   `docs/acceptance/read-only-agent.md` 第 10 节（`完成：`留空待用户填写）。
+   `docs/read-only-agent-handoff.md` 第 7.2 节；写工具/手动人工验收尚未执行，清单
+   见 `docs/acceptance/read-only-agent.md` 第 10、11 节（`完成：`留空待用户填写），
+   真实复测清单见用户文件 `docs/agent-manual-acceptance-retest-2026-08-01.md`
+   （未跟踪用户文件，不得修改）。Python 校园（campus）与 iCourse 体验未改变；
+   `agent-testing.md` 第 13-15 项仍等待 Flutter 来源迁移。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
 `README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
@@ -227,16 +238,19 @@ Pop-Location
 
 ### 只读 Agent 自动验证
 
-只读 Agent 修复轮的精确 HEAD 与完整自动验证结果在最终验证时记录于
-`docs/read-only-agent-handoff.md` 第 7 节（不在本文件硬编码哈希，后续提交会改写）。
-Task 8 新增的组合级集成测试聚焦套件（`agent_composition_flow_test.dart` +
+只读 Agent 修复轮与写工具/人工验收修复轮的精确 HEAD 与完整自动验证结果在最终验证时
+记录于 `docs/read-only-agent-handoff.md` 第 7、7.1、7.2 节（不在本文件硬编码哈希，
+后续提交会改写）。组合级集成测试聚焦套件（`agent_composition_flow_test.dart` +
 `read_only_agent_flow_test.dart` + `milestone_accessibility_test.dart`）全部通过，
 覆盖真实路由 + 注入式组合的配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换、
-网关释放与捕获请求隐私。
+网关释放与捕获请求隐私，以及 Task 10 合并验收回归（自由聊天、首次漏调纠错、历史
+标题定位写目标、冲突查询不做参与者查找、PlanBlock 周网格、派生冲突优先序、整日
+移动/清除/撤回、本地 chip 分区路由、账号隔离）。
 
 - 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；清单见
-  `docs/acceptance/read-only-agent.md`。自动测试不代替人工验收：学校 API 与学校网站
-  从不进入自动测试。
+  `docs/acceptance/read-only-agent.md` 第 10、11 节。自动测试不代替人工验收：学校
+  API 与学校网站从不进入自动测试。Python 校园（campus）与 iCourse 体验未改变，
+  `agent-testing.md` 第 13-15 项等待 Flutter 来源迁移。
 
 ### Windows 首版自动验证（2026-07-28）
 

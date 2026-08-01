@@ -113,6 +113,46 @@ Windows 专属适配器位于 `data/` 层，由 `router.dart` 的 `_AgentChatLoa
 单次请求最多 8 轮模型调用、12 次工具调用。结果过大时返回可缩小的条件，不截断冒充
 完整结果。
 
+### 写工具里程碑与人工验收修复（feature/write-tools）
+
+`feature/write-tools` 分支在只读 Agent 之上实现了 11 个受控本地写工具
+（create_event/update_event/create_task/plan_task/create_user_overlay/
+record_attendance_decision/record_listening_mode/create_schedule_relation/
+set_reminder/update_permission_policy/move_jw_course_day）。全部只作用于本地业务
+数据，不新增任何学校/外部写通道；写操作经风险分级"审批门"确认（聊天内联确认卡），
+业务提交、agent 业务日志、用户确认日志与权限变更在同一 Drift 事务，任一失败整体
+回滚；确认卡预览只显示标题/时间等模型安全信息，不含 DB id 或 `ref_*`。权限变更
+永远需要用户亲手确认。Agent 写入不占用"一步撤回"槽（`NoopUndoRecorder`），撤回
+槽只属于手动界面路径。
+
+人工验收修复轮（2026-08-01 调试计划）新增的运行时与界面行为：
+
+- **Grounding Policy（prompt v4 配套）**：显式操作请求必须真实调用工具；首次只给
+  文字时运行时注入一次受限纠错（`tool_choice=any` + 收窄工具声明），纠错耗尽后以
+  `grounding_failed` 安全结束；自由聊天、能力讨论与"只讨论"类措辞从不强制工具。
+  学校网关若不接受 `tool_choice=any`，仅在尚未返回内容时回退一次 `auto`，不无限
+  重试。系统提示词当前为版本 4。
+- **流式文本净化与重复熔断**：模型输出经过滤（技术时间戳、`ref_*` 与过程性话术不
+  进入聊天正文）；完全相同参数的重复工具调用被拒绝（`repeated_tool_call`）。
+- **标题查询定位历史目标**：`get_schedule(query=...)` 按标题在账号本地保留历史中
+  查找事件（不读取默认学期、不硬编码 `semesterId`），返回 run-local `ref_*` 供
+  overlay/relation/move 等写工具定位目标；`get_conflicts` 从不作为参与者查找器。
+- **PlanBlock 周网格**：accepted/done 的非删除 PlanBlock 按真实 `startAt/endAt`
+  进入周视图时间网格（`ScheduleGridItem.kind=planBlock`），标题优先用父 Task 标题，
+  点击打开父 Task 详情。
+- **派生冲突优先序**：定时时间重叠默认推导为冲突（`derivedOverlap`）；用户显式
+  conflict/no_conflict 关系覆盖推导结果。
+- **JwDayMove（schema 5）**：按账号记录某天 `ustc_jw` 定时 course 事件的整日移动
+  （`(accountId, sourceDate)` 唯一，无 semester/事件 id）；投影只按原始来源日期匹配，
+  A->B 后 B->C 不会链式搬运；源事件永不物理改写，出勤/听讲 overlay 保持附着。
+  移动预览只统计源日符合条件课程，考试/二课/个人事件/PlanBlock 从不移动。
+- **critical 整日移动工具**：`move_jw_course_day`（action=move|clear）每次都必须
+  人工确认，永不提供"以后不再确认"。
+- **本地 chip 精确路由**：`查看日程` 打开 `?section=week` 周视图，`查看任务` 打开
+  `?section=tasks` 任务分区；重复路由会正确更新分区（didUpdateWidget）。
+- 手动界面整日调课对话框同样提供清除与"一步撤回"（UndoService 记录
+  `jw_day_move` 撤销槽）。
+
 ### Python Bridge Query Protocol 1.0
 
 只读 Agent 的按需来源查询复用扩展后的 Windows 临时 Python Bridge，与既有采集作业
@@ -142,8 +182,11 @@ Flutter 本地日程/Task 工具。移动端只替换：
 
 “只读”表示不修改本地业务事实，也不对学校或外部系统执行写操作。本里程碑不包含：
 
-- 创建、修改或删除 CalendarEvent、Task、PlanBlock、冲突、备注或提醒的写工具；
-- `AgentPermissionPolicy` 风险分级与权限设置；
+- 创建、修改或删除 CalendarEvent、Task、PlanBlock、冲突、备注或提醒的写工具
+  ——已由写工具里程碑（`feature/write-tools` 分支，11 个受控本地写工具，待合并）
+  实现，见上文”写工具里程碑与人工验收修复”；
+- `AgentPermissionPolicy` 风险分级与权限设置——写工具里程碑已实现（含设置页
+  权限管理区）；
 - Agent 发起教务或已报名二课同步；
 - 二课报名或取消报名；
 - 每日简报和其他主动消息；
@@ -164,8 +207,18 @@ Flutter 本地日程/Task 工具。移动端只替换：
   `docs/read-only-agent-handoff.md`）。
 - 学校 API 与学校网站是人工验收依赖，从不进入自动测试。自动测试（包括组合级集成测试
   `app/test/integration/agent_composition_flow_test.dart`，通过真实路由 + 注入式组合
-  覆盖配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换与网关释放）只验证代码
-  行为，不代替人工验收。
+  覆盖配置、本地日程分组摘要、同作业二课暂停/恢复、账号切换与网关释放，以及 Task 10
+  合并验收回归：自由聊天、首次漏调纠错、历史标题定位写目标、冲突查询不做参与者查找、
+  PlanBlock 周网格、派生冲突优先序、整日移动/清除/撤回、本地 chip 分区路由、账号
+  隔离）只验证代码行为，不代替人工验收。**自动测试通过 ≠ 人工验收通过。**
+- **Python 校园（campus）与 iCourse 体验未改变**：本轮修复全部位于 Flutter Agent
+  运行时、日程投影与本地写工具，未修改 `src/` 下任何 Python 采集/查询逻辑；
+  `agent-testing.md` 第 13-15 项（校园目录、iCourse 授权引导、公开引用 chip）仍等待
+  Flutter 来源迁移，不能在本轮标为已修复。
+- **真实学校模型/API 复测仍待执行**：学校 Anthropic 网关的 `tool_choice=any`
+  兼容回退、真实 Key 下的自由聊天与全部写确认流程，需用户在真实校园网 / Panabit
+  iWAN / 真实 API Key 环境下按 `docs/agent-manual-acceptance-retest-2026-08-01.md`
+  复测清单执行；该文件是用户文件，保留其全部真实记录。
 
 ### 查询网关与二课登录恢复
 

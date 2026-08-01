@@ -56,6 +56,7 @@
 | `Reminder` | 提醒规则 | 上课前 20 分钟提醒 |
 | `ActionLog` | Agent 或用户做过的动作记录 | 导入课表、修改时间 |
 | `AgentPermissionPolicy` | 用户授予 Agent 的风险操作权限 | 新增或移动日程前是否确认 |
+| `JwDayMove` | 某天全部教务课程到另一天的整日移动记录 | 8 月 3 日课程整体移到 8 月 9 日 |
 | `KnowledgeItem` | 校园知识库条目 | 通知、办事指南、校史资料 |
 
 关系大致如下：
@@ -639,6 +640,19 @@ conflict      冲突，需要用户决策或调整
 non_conflict  不冲突，可以按当前安排共存
 ```
 
+默认优先序（2026-08-01 修复轮落地）：
+
+```text
+1. 显式 occurrence 关系（conflict / no_conflict）优先于推导结果；
+2. 显式系列规则（ScheduleRelationRule）其次；
+3. 定时时间重叠默认推导为 conflict（origin=derivedOverlap）；
+4. 其余为推导 no_conflict。
+```
+
+即：时间重叠默认按冲突处理，用户显式的 conflict/no_conflict 决策覆盖推导结果；
+显式 no_conflict 能抑制默认重叠冲突，显式 conflict 即使无时间重叠仍然生效。
+全天事项只因日期相同不会自动成为冲突。
+
 判断规则不应只看时间重叠，而应读取：
 
 ```text
@@ -1059,6 +1073,11 @@ record_attendance_decision
 record_listening_mode
 create_schedule_relation
 update_permission_policy
+move_jw_course_day        agent 整日移动/清除教务课程（critical，永远确认）
+jw_day_move               user 手动界面整日移动
+jw_day_move_retarget      user 手动界面重定向移动
+jw_day_move_clear         user 手动界面清除移动
+undo_jw_day_move          一步撤回恢复被清除的移动
 open_second_class_registration_page
 ```
 
@@ -1578,3 +1597,33 @@ confirmationMode
 enabled
 updatedAt
 ```
+
+## 17. JwDayMove（整日教务课程移动）
+
+`JwDayMove` 记录某一天的全部 `ustc_jw` 定时 course 事件整体移动到另一天（北京日历
+日，YYYY-MM-DD）。它是移动覆盖记录，不是事件改写：源 `CalendarEvent` 永不物理
+修改，日程展示投影按移动记录显示；出勤/听讲/隐藏等 `UserOverlay` 始终附着在对应
+课程上。
+
+```text
+id
+accountId
+sourceDate         源日期（YYYY-MM-DD）
+targetDate         目标日期
+createdAt
+updatedAt
+```
+
+规则：
+
+- 按账号隔离；`(accountId, sourceDate)` 唯一，同一源日期再次移动为重定向（retarget）。
+- 记录不带 semester id、不带事件 id 列表、不带外部身份——Agent 工具和手动界面都
+  只传日期。
+- 投影按事件的原始来源日期匹配移动记录，绝不按已移动的展示日期匹配：A->B 后建立
+  B->C 只移动 B 原生课程，不链式搬运 A 已移走的课程。
+- 只移动 `ustc_jw` 来源的定时 `course` 事件且来源记录有效；考试、二课、个人事件、
+  全天事项和 PlanBlock 从不移动。
+- 移动预览只统计源日符合条件的课程标题（数量与标题，无 id）。
+- 移动/清除经手动界面时写入"一步撤回"槽（UndoService，kind=`jw_day_move`），
+  清除后可撤回恢复；Agent 写入不占用撤回槽。
+- 数据库 schema 当前为版本 5（`AppDatabase.schemaVersion`）。

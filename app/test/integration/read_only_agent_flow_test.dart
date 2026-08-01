@@ -422,6 +422,12 @@ Future<void> _seedAccount(AppDatabase database, String accountId) => database
       ),
     );
 
+/// Beijing wall clock -> the app's UTC epoch-ms storage encoding
+/// (machine-timezone independent; same helper the schedule service tests use).
+int _beijingEpoch(int year, int month, int day, int hour, [int minute = 0]) =>
+    DateTime.utc(year, month, day, hour, minute).millisecondsSinceEpoch -
+    const Duration(hours: 8).inMilliseconds;
+
 /// Wires the REAL tool set (11 local read-only tools backed by the in-memory
 /// DB via DriftAgentLocalDataGateway, plus the 4 external tools backed by
 /// [gateway]) into an [AgentSessionService] with a scripted provider and the
@@ -796,6 +802,111 @@ void main() {
         contains('账号B的独立回复'),
       );
     });
+
+    // Task 10 scenario 2 at the service level with the REAL local tools: the
+    // pending-review question's FIRST model response is plain text (no tool),
+    // so the runtime issues its ONE bounded correction — the corrective
+    // request forces tool_choice any with narrowed declarations and the real
+    // get_pending_event_reviews runs over the seeded ended course.
+    test(
+      'pending event review: first-miss -> one correction succeeds with real tools',
+      () async {
+        final database = AppDatabase(NativeDatabase.memory());
+        addTearDown(database.close);
+        const account = 'a';
+        await _seedAccount(database, account);
+
+        // A course that ENDED two days ago with undecided attendance and
+        // unknown listening mode -> pending review with real data.
+        final now = DateTime.now();
+        final ended = DateTime(now.year, now.month, now.day)
+            .subtract(const Duration(days: 2));
+        await database.into(database.calendarEvents).insert(
+              CalendarEventsCompanion.insert(
+                id: 'q-1',
+                accountId: account,
+                source: 'ustc_jw',
+                externalId: const Value('q-1'),
+                sourceSeriesExternalId: const Value('lesson-q'),
+                title: '量子物理 B',
+                type: 'course',
+                startAt: Value(_beijingEpoch(ended.year, ended.month, ended.day, 9, 0)),
+                endAt: Value(
+                    _beijingEpoch(ended.year, ended.month, ended.day, 10, 40)),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        await database.into(database.sourceRecords).insert(
+              SourceRecordsCompanion.insert(
+                id: 'sr-q-1',
+                accountId: account,
+                source: 'ustc_jw',
+                entityType: 'calendar_event',
+                externalId: 'q-1',
+                localEntityId: 'q-1',
+                sourceStatus: 'active',
+                presence: 'present',
+                scopeKey: 'scope',
+                firstObservedAt: 1,
+                lastObservedAt: 1,
+              ),
+            );
+
+        final provider = _ScriptedProvider([
+          // Call 1: the model misses the tool and answers in plain text.
+          _ScriptedCall(() => [
+                const TextDeltaEvent('已列出需要确认的课程。'),
+                const CompletedEvent(),
+              ]),
+          // Call 2 (forced tool_choice any, narrowed): the correction succeeds.
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-1',
+                  name: 'get_pending_event_reviews',
+                  input: {},
+                ),
+                const CompletedEvent(),
+              ]),
+          // Call 3: grounded final answer.
+          _ScriptedCall(() => [
+                const TextDeltaEvent('有一节量子物理 B 需要确认出勤。'),
+                const CompletedEvent(),
+              ]),
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          gateway: FakeQueryGateway(),
+          clock: _SequenceClock(DateTime(now.year, now.month, now.day, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
+            .toList();
+
+        // 3 model calls: miss, one bounded correction, final.
+        expect(provider.streamCallCount, 3);
+        final corrective = provider.requests[1];
+        expect(corrective.toolChoice, LlmToolChoice.any,
+            reason: 'the corrective request must force tool_choice any');
+        expect(
+          corrective.tools.map((t) => t.name).toSet(),
+          {'get_pending_event_reviews'},
+          reason: 'the corrective request narrows declarations to the required tool',
+        );
+        // The REAL tool ran over the seeded ended course and grounded the
+        // final answer.
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('量子物理 B'));
+        final executed = states
+            .expand((s) => s.toolSummaries.map((t) => t.toolName))
+            .toSet();
+        expect(executed, {'get_pending_event_reviews'});
+      },
+    );
   });
 
   group('Step 3: cancellation and login-resume', () {
