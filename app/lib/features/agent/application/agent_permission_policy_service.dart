@@ -16,6 +16,33 @@ class AgentPermissionPolicyService {
   final BeijingClock clock;
   static const _uuid = Uuid();
 
+  /// actionType -> targetType 的单一映射。设置页策略行与权限工具的 target_type
+  /// 校验都消费这一份，避免两处各自维护一份 action/target 清单。
+  static const Map<String, String> kPolicyTargetMap = {
+    'create_event': 'event',
+    'update_event': 'event',
+    'create_task': 'task',
+    'plan_task': 'plan_block',
+    'create_user_overlay': 'overlay',
+    'record_attendance_decision': 'event',
+    'record_listening_mode': 'event',
+    'create_schedule_relation': 'relation',
+    'set_reminder': 'event',
+    'update_permission_policy': 'permission',
+  };
+
+  /// 权限工具允许调整的 action_type（可改的确认策略目标；不含
+  /// update_permission_policy 自身——它恒为 critical，永远人工确认）。
+  static const Set<String> kAgentPolicyActionTypes = {
+    'create_event', 'update_event', 'create_task', 'plan_task',
+    'create_user_overlay', 'record_attendance_decision', 'record_listening_mode',
+    'create_schedule_relation', 'set_reminder',
+  };
+
+  /// 某动作对应的唯一 target_type（策略行键的一部分）。
+  static String targetTypeFor(String actionType) => kPolicyTargetMap[actionType] ??
+      (throw ArgumentError('no policy target type for actionType $actionType'));
+
   /// actionType -> (默认确认模式, 默认风险等级)。
   static const Map<String, ConfirmationMode> _defaultModes = {
     'create_event': ConfirmationMode.askFirstTime,
@@ -96,6 +123,7 @@ class AgentPermissionPolicyService {
     required RiskLevel riskLevel,
     required bool enabled,
     required String updatedBy,
+    String? safeSummary,
   }) async {
     final now = clock.now().millisecondsSinceEpoch;
     final existing = await _find(accountId, actionType, targetType);
@@ -123,7 +151,7 @@ class AgentPermissionPolicyService {
         source: 'user',
         actionType: 'update_permission_policy',
         result: 'success',
-        safeSummary: '权限更新 $actionType($targetType) → ${mode.storage}',
+        safeSummary: safeSummary ?? '权限更新 $actionType($targetType) → ${mode.storage}',
         riskLevel: riskLevel.storage,
         occurredAt: now,
       );
@@ -131,6 +159,10 @@ class AgentPermissionPolicyService {
   }
 
   /// ask_first_time 首次确认后调用：记录 firstConfirmedAt，之后自动放行。
+  ///
+  /// 首次确认把该动作从「每次确认」放宽为「首次确认后放行」，是真实的权限模式
+  /// 变更，必须在写入 firstConfirmedAt 的同一事务里落一行
+  /// source='user'/actionType='update_permission_policy'/result='success'。
   Future<void> recordFirstConfirmation({
     required String accountId,
     required String actionType,
@@ -140,20 +172,31 @@ class AgentPermissionPolicyService {
     final existing = await _find(accountId, actionType, targetType);
     if (existing != null && existing.firstConfirmedAt != null) return;
     final id = existing?.id ?? _uuid.v4();
-    await database.into(database.agentPermissionPolicies).insertOnConflictUpdate(
-          AgentPermissionPoliciesCompanion.insert(
-            id: id,
-            accountId: accountId,
-            actionType: actionType,
-            targetType: Value(targetType),
-            confirmationMode: existing?.confirmationMode.storage ?? defaultMode(actionType).storage,
-            riskLevel: Value(existing?.riskLevel.storage ?? defaultRisk(actionType).storage),
-            firstConfirmedAt: Value(existing?.firstConfirmedAt ?? now),
-            lastConfirmedAt: Value(now),
-            createdAt: existing?.createdAt ?? now,
-            updatedAt: now,
-          ),
-        );
+    await database.transaction(() async {
+      await database.into(database.agentPermissionPolicies).insertOnConflictUpdate(
+            AgentPermissionPoliciesCompanion.insert(
+              id: id,
+              accountId: accountId,
+              actionType: actionType,
+              targetType: Value(targetType),
+              confirmationMode: existing?.confirmationMode.storage ?? defaultMode(actionType).storage,
+              riskLevel: Value(existing?.riskLevel.storage ?? defaultRisk(actionType).storage),
+              firstConfirmedAt: Value(existing?.firstConfirmedAt ?? now),
+              lastConfirmedAt: Value(now),
+              createdAt: existing?.createdAt ?? now,
+              updatedAt: now,
+            ),
+          );
+      await database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: 'update_permission_policy',
+        result: 'success',
+        safeSummary: '权限更新 $actionType($targetType) → ask_first_time',
+        riskLevel: defaultRisk(actionType).storage,
+        occurredAt: now,
+      );
+    });
   }
 
   /// 「此类型以后不再确认」：放宽为 always_allow。critical 风险拒绝。
@@ -173,6 +216,7 @@ class AgentPermissionPolicyService {
       riskLevel: defaultRisk(actionType),
       enabled: true,
       updatedBy: 'user',
+      safeSummary: '$actionType($targetType) -> always_allow',
     );
   }
 
@@ -190,6 +234,26 @@ class AgentPermissionPolicyService {
     result: result,
     safeSummary: safeSummary,
     riskLevel: riskLevel,
+    occurredAt: clock.now().millisecondsSinceEpoch,
+  );
+
+  /// Agent 审批流的唯一 ActionLog 追加口：approval 决策本身（确认/拒绝/取消）
+  /// 与 ask_first_time/remember 的权限变更都从这里追加一行，来源与语义由
+  /// [source]/[actionType]/[result] 表达。safesummary 不得含本地 id 或 ref。
+  Future<void> logAudit({
+    required String accountId,
+    required String source,
+    required String actionType,
+    required RiskLevel riskLevel,
+    required String result,
+    required String safeSummary,
+  }) => database.actionLogsRepository.append(
+    accountId: accountId,
+    source: source,
+    actionType: actionType,
+    result: result,
+    safeSummary: safeSummary,
+    riskLevel: riskLevel.storage,
     occurredAt: clock.now().millisecondsSinceEpoch,
   );
 
@@ -216,7 +280,7 @@ class AgentPermissionPolicyService {
     );
   }
 
-  /// 最近的权限变更记录（update_permission_policy 的 ActionLog）。
+  /// 最近的权限变更记录（update/reset_permission_policy 的 ActionLog）。
   Future<List<ActionLog>> recentPermissionChanges(
     String accountId, {
     int limit = 5,
@@ -224,7 +288,10 @@ class AgentPermissionPolicyService {
         ..where(
           (row) =>
               row.accountId.equals(accountId) &
-              row.actionType.equals('update_permission_policy'),
+              row.actionType.isIn(const [
+                'update_permission_policy',
+                'reset_permission_policy',
+              ]),
         )
         ..orderBy([(row) => OrderingTerm.desc(row.occurredAt)])
         ..limit(limit))

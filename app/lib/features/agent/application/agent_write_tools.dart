@@ -1162,10 +1162,10 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
           'enum': ['create_event', 'create_task', 'plan_task', 'create_schedule_relation',
               'set_reminder', 'record_attendance_decision', 'record_listening_mode',
               'create_user_overlay', 'update_event']},
-      'target_type': {'type': 'string', 'default': 'event'},
+      'target_type': {'type': 'string', 'description': '目标动作的 target_type，必须与 action_type 匹配'},
       'confirmation_mode': {'type': 'string', 'enum': ['always_ask', 'ask_first_time', 'always_allow', 'always_deny']},
     },
-    'required': ['action_type', 'confirmation_mode'],
+    'required': ['action_type', 'target_type', 'confirmation_mode'],
   };
 
   @override
@@ -1185,14 +1185,14 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
     final r = WriteArgumentReader(a, const {'action_type', 'target_type', 'confirmation_mode'});
     r.rejectUnknownKeys();
-    final actionType = r.requiredEnum('action_type', const {
-      'create_event', 'create_task', 'plan_task', 'create_schedule_relation', 'set_reminder',
-      'record_attendance_decision', 'record_listening_mode', 'create_user_overlay', 'update_event',
-    });
-    const targetTypes = {'event', 'task', 'plan_block', 'overlay', 'relation', 'permission'};
-    final targetType = r.contains('target_type')
-        ? r.requiredEnum('target_type', targetTypes)
-        : 'event';
+    // targetActionType：本提案要调整确认策略的「目标动作」（如 create_event）。
+    // proposal.actionType 恒为 update_permission_policy，绝不使用目标动作覆盖它
+    // （修复 High 2 影子覆盖：此前 actionType 同时顶替 proposal.actionType）。
+    final targetActionType = r.requiredEnum('action_type', AgentPermissionPolicyService.kAgentPolicyActionTypes);
+    final targetType = r.requiredEnum(
+      'target_type',
+      {AgentPermissionPolicyService.targetTypeFor(targetActionType)},
+    );
     final modeValue = r.requiredEnum('confirmation_mode', const {
       'always_ask', 'ask_first_time', 'always_allow', 'always_deny',
     });
@@ -1204,23 +1204,27 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
     };
     final currentMode = await policy.effectiveMode(
       accountId: ctx.accountId,
-      actionType: actionType,
+      actionType: targetActionType,
       targetType: targetType,
     );
     return AgentWriteProposal(
       toolName: name,
-      actionType: actionType,
+      actionType: actionType, // 恒为 update_permission_policy
       riskLevel: riskLevel,
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: [
-        '目标动作：$actionType',
+        '目标动作：$targetActionType',
         '目标类型：$targetType',
         '当前模式：${currentMode.storage}',
         '改为：${mode.storage}',
       ],
-      commitParams: {'actionType': actionType, 'targetType': targetType, 'mode': mode},
-      safeLogSummary: '调整确认策略 $actionType($targetType) ${currentMode.storage} → ${mode.storage}',
+      commitParams: {
+        'targetActionType': targetActionType,
+        'targetType': targetType,
+        'mode': mode,
+      },
+      safeLogSummary: '调整确认策略 $targetActionType($targetType) ${currentMode.storage} → ${mode.storage}',
       rememberAllowed: false,
       forceConfirmation: true,
     );
@@ -1229,18 +1233,18 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
   @override
   Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
     final p = proposal.commitParams;
-    final actionType = p['actionType'] as String;
+    final targetActionType = p['targetActionType'] as String;
     final targetType = p['targetType'] as String;
     final mode = p['mode'] as ConfirmationMode;
     await gateway.updatePermissionPolicy(
-      actionType: actionType,
+      actionType: targetActionType,
       targetType: targetType,
       mode: mode,
-      riskLevel: AgentPermissionPolicyService.defaultRisk(actionType),
+      riskLevel: AgentPermissionPolicyService.defaultRisk(targetActionType),
       enabled: true,
       updatedBy: 'agent',
     );
-    return AgentToolResult(payload: {'result': 'permission_updated', 'action_type': actionType});
+    return AgentToolResult(payload: {'result': 'permission_updated', 'action_type': targetActionType});
   }
 }
 

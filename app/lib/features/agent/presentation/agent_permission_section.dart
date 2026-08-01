@@ -19,18 +19,31 @@ class AgentPermissionSection extends StatefulWidget {
   State<AgentPermissionSection> createState() => _AgentPermissionSectionState();
 }
 
-/// 设置页展示的策略项（含中文标签）。
-const kAgentPermissionRows = <(String actionType, String targetType, String label)>[
-  ('create_event', 'event', '新建日程'),
-  ('update_event', 'event', '修改/删除日程'),
-  ('create_task', 'task', '新建任务'),
-  ('plan_task', 'plan_block', '安排任务时间段'),
-  ('create_user_overlay', 'overlay', '设置个人标注'),
-  ('record_attendance_decision', 'event', '记录出勤决定'),
-  ('record_listening_mode', 'event', '设置听讲模式'),
-  ('create_schedule_relation', 'relation', '记录日程关系'),
-  ('set_reminder', 'event', '设置提醒'),
-  ('update_permission_policy', 'permission', '调整确认策略'),
+/// 策略项的展示标签（actionType -> 中文标签）。targetType 由服务层的单一映射
+/// [AgentPermissionPolicyService.targetTypeFor] 导出，不在设置页独立维护一份
+/// action/target 清单。
+const kAgentPermissionLabels = <String, String>{
+  'create_event': '新建日程',
+  'update_event': '修改/删除日程',
+  'create_task': '新建任务',
+  'plan_task': '安排任务时间段',
+  'create_user_overlay': '设置个人标注',
+  'record_attendance_decision': '记录出勤决定',
+  'record_listening_mode': '设置听讲模式',
+  'create_schedule_relation': '记录日程关系',
+  'set_reminder': '设置提醒',
+  'update_permission_policy': '调整确认策略',
+};
+
+/// 设置页展示的策略项（actionType, targetType, label），按服务层映射顺序、
+/// targetType 取自单一映射，避免两份 list。
+final kAgentPermissionRows = <(String actionType, String targetType, String label)>[
+  for (final actionType in AgentPermissionPolicyService.kPolicyTargetMap.keys)
+    (
+      actionType,
+      AgentPermissionPolicyService.targetTypeFor(actionType),
+      kAgentPermissionLabels[actionType] ?? actionType,
+    ),
 ];
 
 String _modeLabel(ConfirmationMode mode) => switch (mode) {

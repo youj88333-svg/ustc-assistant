@@ -175,6 +175,22 @@ void main() {
     expect(tool.commitCalled, isFalse);
   });
 
+  test('confirm approval writes user confirm plus one agent business log', () async {
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
+    final result = await tool.execute(const {}, _ctx('a1', 'r1'));
+    final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(resumed.status, AgentToolStatus.success);
+    final logs = await db.actionLogsRepository.selectAll();
+    // 用户确认决策一行 + agent 业务成功一行。
+    final confirm = logs.where((l) => l.actionType == 'agent_write_confirm');
+    expect(confirm.length, 1);
+    expect(confirm.single.source, 'user');
+    expect(confirm.single.result, 'approved');
+    final agent = logs.where((l) => l.source == 'agent' && l.actionType == 'create_event');
+    expect(agent.length, 1);
+    expect(agent.single.result, 'success');
+  });
+
   test('remember relaxes the policy to always_allow', () async {
     final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));

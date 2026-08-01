@@ -89,4 +89,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(await policy.listPolicies('a1'), isEmpty);
   });
+
+  testWidgets('recent changes renders the reset record', (tester) async {
+    // 设置页变更 + 恢复默认：recentPermissionChanges 现在同时包含 update 与 reset，
+    // 列表应渲染恢复默认的记录。
+    await policy.updatePolicy(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+    await policy.resetDefaults('a1');
+    await pumpSection(tester);
+    expect(find.text('重置全部权限策略为默认'), findsOneWidget);
+  });
 }

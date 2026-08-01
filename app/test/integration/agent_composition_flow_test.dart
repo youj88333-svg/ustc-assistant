@@ -818,6 +818,50 @@ void main() {
     expect(toolResults.join('\n'), isNot(contains(eventId)));
   });
 
+  test('composition wiring: confirm records user decision plus agent business log', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(database: db, protector: protector);
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+        const ToolUseCompletedEvent(id: 'tu-1', name: 'create_event',
+            input: {'title': '健身', 'start_at': '2026-08-01T15:00:00+08:00', 'end_at': '2026-08-01T16:00:00+08:00'}),
+        const CompletedEvent(),
+      ]),
+      _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
+    ]);
+    final composition = await _buildTestComposition(db, 'acc-1',
+        provider: provider, gateway: _CountingResumableYoungGateway(), protector: protector);
+    addTearDown(composition.dispose);
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    composition.sessionService.send(accountId: 'acc-1', userText: '建个日程').listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    await composition.sessionService
+        .confirmWriteProposal(accountId: 'acc-1', runId: runId, approve: true, remember: false)
+        .drain<void>();
+    await done.future;
+
+    final logs = await db.actionLogsRepository.selectAll();
+    // 用户决策（agent_write_confirm/approved）与 agent 业务成功日志各一行。
+    expect(
+      logs.where((l) => l.actionType == 'agent_write_confirm' && l.result == 'approved'),
+      hasLength(1),
+    );
+    expect(
+      logs.where((l) => l.source == 'agent' && l.actionType == 'create_event' && l.result == 'success'),
+      hasLength(1),
+    );
+  });
+
   test('composition wiring: remember relaxes, second identical write auto-executes', () async {
     final db = AppDatabase(NativeDatabase.memory());
     addTearDown(db.close);
@@ -1027,16 +1071,21 @@ BEGIN SELECT RAISE(ABORT, 'forced permission policy failure'); END;
         .drain<void>();
     await done.future;
 
-    // 事件与日志全部回滚（只断言与本写事务相关的 action 日志，会话自身的
-    // read_only_run 运行日志与本事务无关）。
+    // 事件与 write 相关的日志全部回滚；但按审计 taxonomy，被回滚的业务写在事务外
+    // 留一行 best-effort source='agent' / result='failed' 审计（business write
+    // rollback -> agent / actual action / failed）。会话自身的 read_only_run 运行
+    // 日志与此 write 无关，不参与断言。
     expect((await db.select(db.calendarEvents).get()), isEmpty,
         reason: 'event must roll back when remember policy insert fails');
     final logs = await db.select(db.actionLogs).get();
-    expect(
-      logs.where((l) => l.actionType == 'create_event'),
-      isEmpty,
-      reason: 'agent create_event log must roll back with the write',
-    );
+    // success 审计必须随事务回滚，只允许留下一条 failed 审计。
+    final createEventLogs = logs.where((l) => l.actionType == 'create_event').toList();
+    expect(createEventLogs.where((l) => l.result == 'success'), isEmpty,
+        reason: 'agent create_event success log must roll back with the write');
+    expect(createEventLogs.length, 1,
+        reason: 'one best-effort failed audit records the rolled-back write');
+    expect(createEventLogs.single.source, 'agent');
+    expect(createEventLogs.single.result, 'failed');
     expect(
       logs.where((l) => l.actionType == 'update_permission_policy'),
       isEmpty,

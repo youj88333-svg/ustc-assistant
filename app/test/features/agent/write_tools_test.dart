@@ -1019,6 +1019,140 @@ void main() {
     expect(gw.reminder!.offsets, [15, 30, 120]);
   });
 
+  Future<List<ActionLog>> actionLogsFor(String accountId) async =>
+      (await db.actionLogsRepository.selectAll())
+          .where((l) => l.accountId == accountId)
+          .toList();
+
+  test('update_permission_policy proposal does not shadow actionType (High 2)',
+      () async {
+    // 修复影子覆盖：调整 create_event 的策略时，proposal.actionType 必须恒为
+    // update_permission_policy，而目标动作只作为 targetActionType。
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    final proposal = await tool.propose({
+      'action_type': 'create_event',
+      'target_type': 'event',
+      'confirmation_mode': 'always_allow',
+    }, h.ctx());
+    expect(proposal.actionType, 'update_permission_policy');
+    expect(proposal.commitParams['targetActionType'], 'create_event');
+    expect(proposal.targetType, 'event');
+  });
+
+  test('update_permission_policy approval logs agent action not target action',
+      () async {
+    // 确认一个把 create_event 放宽为 always_allow 的提案后，Agent 审计必须记
+    // update_permission_policy（业务写本身的 action），而不是把它记成 create_event。
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    final result = await tool.execute({
+      'action_type': 'create_event',
+      'target_type': 'event',
+      'confirmation_mode': 'always_allow',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+
+    final agentLogs = await actionLogsFor('a1');
+    expect(
+      agentLogs.any((log) =>
+          log.source == 'agent' && log.actionType == 'update_permission_policy'),
+      isTrue,
+    );
+    expect(
+      agentLogs.where((log) => log.source == 'agent' && log.actionType == 'create_event'),
+      isEmpty,
+    );
+    // 用户确认决策本身也留一行（agent_write_confirm/approved）。
+    expect(
+      agentLogs.any((log) =>
+          log.source == 'user' &&
+          log.actionType == 'agent_write_confirm' &&
+          log.result == 'approved'),
+      isTrue,
+    );
+  });
+
+  test('decline writes agent_write_decline/declined and never commits', () async {
+    final h = _Harness(tools());
+    final tool = h.tool('create_event');
+    final result = await tool.execute({
+      'title': '健身',
+      'start_at': '2026-08-01T15:00:00+08:00',
+      'end_at': '2026-08-01T16:00:00+08:00',
+    }, h.ctx());
+    final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: false, remember: false);
+    expect(resumed.errorCode, 'user_declined');
+    expect(gateway.createdEvents, isEmpty); // 未发生业务写
+    final logs = await actionLogsFor('a1');
+    expect(
+      logs.any((l) =>
+          l.source == 'user' && l.actionType == 'agent_write_decline' && l.result == 'declined'),
+      isTrue,
+    );
+  });
+
+  test('cancel writes agent_write_cancel/cancelled best-effort', () async {
+    final h = _Harness(tools());
+    final tool = h.tool('create_event');
+    final result = await tool.execute({
+      'title': '健身',
+      'start_at': '2026-08-01T15:00:00+08:00',
+      'end_at': '2026-08-01T16:00:00+08:00',
+    }, h.ctx());
+    await result.pendingInvocation!.cancel();
+    final resumed = await result.pendingInvocation!.result;
+    expect(resumed.errorCode, 'cancelled');
+    final logs = await actionLogsFor('a1');
+    expect(
+      logs.any((l) =>
+          l.source == 'agent' && l.actionType == 'agent_write_cancel' && l.result == 'cancelled'),
+      isTrue,
+    );
+  });
+
+  test('approval writes user confirm plus one agent business log', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [15]}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    final logs = await actionLogsFor('a1');
+    // 恰好一条用户确认 + 一条 agent 业务日志（set_reminder）。
+    final userConfirm = logs.where((l) => l.actionType == 'agent_write_confirm');
+    expect(userConfirm.length, 1);
+    expect(userConfirm.single.result, 'approved');
+    final agentBusiness = logs.where((l) => l.source == 'agent' && l.actionType == 'set_reminder');
+    expect(agentBusiness.length, 1);
+    expect(agentBusiness.single.result, 'success');
+  });
+
+  test('remember relaxes create_event and logs update_permission_policy with safe summary', () async {
+    final h = _Harness(tools());
+    final tool = h.tool('create_event');
+    final result = await tool.execute({
+      'title': '健身',
+      'start_at': '2026-08-01T15:00:00+08:00',
+      'end_at': '2026-08-01T16:00:00+08:00',
+    }, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: true);
+    final logs = await actionLogsFor('a1');
+    expect(
+      logs.any((l) =>
+          l.source == 'user' &&
+          l.actionType == 'update_permission_policy' &&
+          l.safeSummary == 'create_event(event) -> always_allow'),
+      isTrue,
+    );
+  });
+
   test('update_permission_policy rejects unknown action/target/mode', () async {
     final h = _Harness(tools());
     final gw = _RelationGateway();

@@ -100,10 +100,14 @@ abstract class AgentWriteTool implements AgentTool {
         return _commitAndLog(proposal, context);
       case PermissionDecision.confirm:
         final completer = Completer<AgentToolResult>();
+        // 确认卡的解放在 resolve 里统一走一次共享原子提交（业务 commit -> 用户
+        // 确认日志 -> agent 业务日志 -> afterSuccessfulCommit）。这里注册的是原始
+        // 业务 commit，而不是 _commitAndLog，避免把整个原子流程嵌套进另一个原子
+        // 流程，造成业务审计重复落两行。
         final handle = confirmationStore.register(
           proposal: proposal,
           context: context,
-          commit: _commitAndLog,
+          commit: (p, c) => commit(p, c),
           completer: completer,
         );
         return AgentToolResult(
@@ -133,6 +137,7 @@ abstract class AgentWriteTool implements AgentTool {
       unitOfWork: unitOfWork,
       businessCommit: (p, c) => commit(p, c),
       remember: false,
+      userConfirmed: false,
     );
   }
 }
@@ -170,17 +175,19 @@ class WriteConfirmationStore {
       return const AgentToolResult(status: AgentToolStatus.error, errorCode: 'confirmation_not_found');
     }
     if (!approve) {
-      // 拒绝不会产生业务写，无需共享原子性；记录 'declined' 审计后返回。
+      // 拒绝不会产生业务写，无需共享原子性；记录
+      // source='user'/actionType='agent_write_decline'/result='declined' 后返回。
       final declined = const AgentToolResult(
         status: AgentToolStatus.error,
         errorCode: 'user_declined',
         payload: {'guidance': '用户未批准本次操作。'},
       );
       try {
-        await policy.logAgentWrite(
+        await policy.logAudit(
           accountId: pending.context.accountId,
-          actionType: pending.proposal.actionType,
-          riskLevel: pending.proposal.riskLevel.storage,
+          source: 'user',
+          actionType: 'agent_write_decline',
+          riskLevel: pending.proposal.riskLevel,
           result: 'declined',
           safeSummary: pending.proposal.safeLogSummary,
         );
@@ -190,9 +197,10 @@ class WriteConfirmationStore {
       pending.completer.complete(declined);
       return declined;
     }
-    // 批准：走与直接放行共享的原子提交（commit -> logAgentWrite(success) ->
-    // afterSuccessfulCommit）。提交与权限变更在同一事务，任一失败全部回滚，
-    // 不会留下"放宽成功但提交失败"的错位状态。
+    // 批准：走与直接放行共享的原子提交（commit -> user 确认日志 -> agent 业务日志
+    // -> afterSuccessfulCommit）。用户决策、业务提交与权限变更在同一事务，任一
+    // 失败全部回滚，不会留下"放宽成功但提交失败"的错位状态。userConfirmed=true
+    // 表示这是一次用户在确认卡上的批准，须落 agent_write_confirm/approved。
     final result = await commitAgentWriteAtomically(
       proposal: pending.proposal,
       context: pending.context,
@@ -200,6 +208,7 @@ class WriteConfirmationStore {
       unitOfWork: unitOfWork,
       businessCommit: pending.commit,
       remember: remember,
+      userConfirmed: true,
     );
     pending.completer.complete(result);
     return result;
@@ -207,9 +216,23 @@ class WriteConfirmationStore {
 
   Future<void> cancel(String handle, Completer<AgentToolResult> completer) async {
     final pending = _pending.remove(handle);
-    if (pending != null && !pending.completer.isCompleted) {
-      pending.completer.complete(const AgentToolResult(status: AgentToolStatus.error, errorCode: 'cancelled'));
+    if (pending == null || pending.completer.isCompleted) return;
+    // run 停止使挂起的提案作废：best-effort 追加
+    // source='agent'/actionType='agent_write_cancel'/result='cancelled'，审计失败
+    // 不阻断取消；随后完成挂起的 pendingInvocation，使会话循环恢复。
+    try {
+      await policy.logAudit(
+        accountId: pending.context.accountId,
+        source: 'agent',
+        actionType: 'agent_write_cancel',
+        riskLevel: pending.proposal.riskLevel,
+        result: 'cancelled',
+        safeSummary: pending.proposal.safeLogSummary,
+      );
+    } catch (_) {
+      // 取消审计失败不改变取消结果。
     }
+    pending.completer.complete(const AgentToolResult(status: AgentToolStatus.error, errorCode: 'cancelled'));
   }
 
   String _generateHandle() {
@@ -251,6 +274,7 @@ Future<AgentToolResult> commitAgentWriteAtomically({
   required AgentWriteUnitOfWork unitOfWork,
   required Future<AgentToolResult> Function(AgentWriteProposal, AgentToolContext) businessCommit,
   required bool remember,
+  bool userConfirmed = false,
 }) async {
   try {
     return await unitOfWork.run(() async {
@@ -260,6 +284,20 @@ Future<AgentToolResult> commitAgentWriteAtomically({
         // 事务外原样返回该安全结果。
         throw AgentWriteAborted(result);
       }
+      // 用户在确认卡上的批准：先落 agent_write_confirm/approved（用户决策本身）。
+      // 只有确认卡批准（userConfirmed=true）才写这一行；直接放行路径不加。
+      if (userConfirmed) {
+        await policy.logAudit(
+          accountId: context.accountId,
+          source: 'user',
+          actionType: 'agent_write_confirm',
+          riskLevel: proposal.riskLevel,
+          result: 'approved',
+          safeSummary: proposal.safeLogSummary,
+        );
+      }
+      // 业务写本身的 Agent 审计（source='agent'，actual tool action 或
+      // update_permission_policy）。
       await policy.logAgentWrite(
         accountId: context.accountId,
         actionType: proposal.actionType,

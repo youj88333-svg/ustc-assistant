@@ -103,6 +103,80 @@ void main() {
     expect(await db.actionLogsRepository.selectAll(), isEmpty);
   });
 
+  test('ask_first_time first confirmation writes a permission-change log', () async {
+    // ask_first_time 首次确认从「每次确认」放宽为「首次确认后放行」，是真实权限
+    // 模式变更，必须写 update_permission_policy 日志（与 firstConfirmedAt 同事务）。
+    await service.recordFirstConfirmation(accountId: 'a1', actionType: 'create_event', targetType: 'event');
+    final logs = await db.actionLogsRepository.selectAll();
+    expect(
+      logs.any((l) =>
+          l.source == 'user' &&
+          l.actionType == 'update_permission_policy' &&
+          l.result == 'success'),
+      isTrue,
+    );
+  });
+
+  test('markAlwaysAllow logs safe summary action(target) -> always_allow', () async {
+    await service.markAlwaysAllow(accountId: 'a1', actionType: 'create_event', targetType: 'event');
+    final logs = await db.actionLogsRepository.selectAll();
+    expect(
+      logs.any((l) =>
+          l.actionType == 'update_permission_policy' &&
+          l.safeSummary == 'create_event(event) -> always_allow'),
+      isTrue,
+    );
+  });
+
+  test('kPolicyTargetMap and kAgentPolicyActionTypes are consistent', () {
+    // 每个可调整动作都有唯一的 target_type 映射，且都在可调整集合内。
+    for (final action in AgentPermissionPolicyService.kAgentPolicyActionTypes) {
+      expect(AgentPermissionPolicyService.kPolicyTargetMap.containsKey(action), isTrue,
+          reason: '$action must have a policy target type');
+      expect(AgentPermissionPolicyService.targetTypeFor(action), isNotEmpty);
+    }
+    // update_permission_policy 自身不可被调整（critical 恒人工确认）。
+    expect(AgentPermissionPolicyService.kAgentPolicyActionTypes.contains('update_permission_policy'), isFalse);
+  });
+
+  test('recentPermissionChanges includes update and reset, newest first, honors limit',
+      () async {
+    await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+    expect((await service.recentPermissionChanges('a1')).length, 1);
+    clock.advance(1000); // 保证 reset 的 occurredAt 严格晚于 update
+    await service.resetDefaults('a1');
+    final recent = await service.recentPermissionChanges('a1');
+    expect(recent.length, 2);
+    expect(recent.map((l) => l.actionType).toSet(),
+        {'update_permission_policy', 'reset_permission_policy'});
+    // 最新优先：reset 在 update 之后发生。
+    expect(recent.first.actionType, 'reset_permission_policy');
+    expect(recent.first.occurredAt, greaterThanOrEqualTo(recent.last.occurredAt));
+    // limit 生效。
+    expect((await service.recentPermissionChanges('a1', limit: 1)).length, 1);
+  });
+
+  test('recentPermissionChanges is account-scoped', () async {
+    await db.into(db.localAccounts).insert(
+      LocalAccountsCompanion.insert(
+        id: 'a2', maskedHint: 'PB****0001', isActive: const Value(true),
+        createdAt: 1, updatedAt: 1,
+      ),
+    );
+    await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+        targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+    await (AgentPermissionPolicyService(database: db, clock: clock).updatePolicy(
+      accountId: 'a2', actionType: 'create_event',
+      targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+      riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user',
+    ));
+    expect((await service.recentPermissionChanges('a1')).every((l) => l.accountId == 'a1'), isTrue);
+    expect((await service.recentPermissionChanges('a2')).length, 1);
+  });
+
   test('resetDefaults writes a reset action log', () async {
     await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
         targetType: 'event', mode: ConfirmationMode.alwaysAllow,
