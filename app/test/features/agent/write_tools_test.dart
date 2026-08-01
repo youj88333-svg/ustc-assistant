@@ -29,19 +29,25 @@ class _RecordingGateway implements AgentWriteGateway {
   final List<PersonalEvent> createdEvents = [];
   final List<Map<String, Object?>> createdTasks = [];
   final List<Map<String, Object?>> plannedBlocks = [];
+  /// 模拟目标在提案后被删除：taskById 在 propose 通过后抛错，触发 commit 的
+  /// TOCTOU 守卫。
+  bool taskMissing = false;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
   @override
-  Future<TaskItem> taskById(String taskId) async => TaskItem(
-        id: taskId,
-        title: '准备考试',
-        state: TaskState.active,
-        importance: TaskImportance.normal,
-        createdAt: 1,
-        updatedAt: 1,
-      );
+  Future<TaskItem> taskById(String taskId) async {
+    if (taskMissing) throw StateError('task not found');
+    return TaskItem(
+      id: taskId,
+      title: '准备考试',
+      state: TaskState.active,
+      importance: TaskImportance.normal,
+      createdAt: 1,
+      updatedAt: 1,
+    );
+  }
 
   @override
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes}) async {
@@ -195,16 +201,20 @@ class _RelationGateway implements AgentWriteGateway {
   ({String eventId, List<int> offsets})? reminder;
   Map<String, Object?>? policyUpdate;
   EventWriteSnapshot? identity;
+  /// 模拟参与方在提案后被删除：eventSnapshot 抛错，触发 commit 的 TOCTOU 守卫。
+  bool participantMissing = false;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
   @override
-  Future<EventWriteSnapshot> eventSnapshot(String eventId) async =>
-      identity ??
-      EventWriteSnapshot(id: eventId, source: 'user', type: 'personal',
-          title: '健身', allDay: false,
-          startAt: DateTime(2026, 8, 1, 9), endAt: DateTime(2026, 8, 1, 10));
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async {
+    if (participantMissing) throw StateError('event not found');
+    return identity ??
+        EventWriteSnapshot(id: eventId, source: 'user', type: 'personal',
+            title: '健身', allDay: false,
+            startAt: DateTime(2026, 8, 1, 9), endAt: DateTime(2026, 8, 1, 10));
+  }
 
   @override
   Future<PlanBlockItem> planBlockById(String planBlockId) async => PlanBlockItem(
@@ -1159,5 +1169,45 @@ void main() {
     expect(proposal.previewLines, contains('当前模式：ask_first_time'));
     expect(proposal.previewLines, contains('改为：always_allow'));
     expectNoIdsOrRefs(proposal, const []);
+  });
+
+  test('plan_task rejects a task deleted between propose and commit', () async {
+    final h = _Harness(tools());
+    final taskRef = h.refs.bind(kind: 'task', localId: 'task-gone');
+    final result = await h.tool('plan_task').execute({
+      'ref_task': taskRef,
+      'start_at': '2026-08-03T20:00:00+08:00',
+      'end_at': '2026-08-03T21:00:00+08:00',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    // 提案通过后任务被删除：commit 阶段必须重新校验并拒绝。
+    gateway.taskMissing = true;
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'target_not_found');
+    expect(gateway.plannedBlocks, isEmpty);
+  });
+
+  test('create_schedule_relation rejects a participant deleted before commit',
+      () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final left = h.refs.bind(kind: 'event', localId: 'ev-left');
+    final right = h.refs.bind(kind: 'event', localId: 'ev-right');
+    final result = await tool.execute({
+      'ref_left': left,
+      'ref_right': right,
+      'conflict_state': 'conflict',
+      'reason': '重叠',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    // 提案通过后其中一个参与方被删除：commit 阶段必须重新校验并拒绝。
+    gw.participantMissing = true;
+    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'target_not_found');
+    expect(gw.relation, isNull);
   });
 }

@@ -365,8 +365,19 @@ class PlanTaskTool extends AgentWriteTool {
   @override
   Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
     final p = proposal.commitParams;
+    final taskId = p['taskId'] as String;
+    // TOCTOU 守卫：提案后任务可能已被删除，重查目标存在性再写，避免悬挂执行块。
+    try {
+      await gateway.taskById(taskId);
+    } on Object {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'target_not_found',
+        payload: {'guidance': '该任务已不存在，无法为该任务安排时间段。'},
+      );
+    }
     await gateway.planTask(
-      taskId: p['taskId'] as String,
+      taskId: taskId,
       startAt: p['startAt'] as DateTime,
       endAt: p['endAt'] as DateTime,
       title: p['title'] as String?,
@@ -1029,6 +1040,17 @@ class CreateScheduleRelationTool extends AgentWriteTool {
     final p = proposal.commitParams;
     final left = p['left'] as ({String kind, String id});
     final right = p['right'] as ({String kind, String id});
+    // TOCTOU 守卫：提案后参与方可能已被删除，重查两侧存在性再写，避免悬挂关系行。
+    try {
+      await _relationParticipantLabel(gateway, left.kind, left.id);
+      await _relationParticipantLabel(gateway, right.kind, right.id);
+    } on Object {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'target_not_found',
+        payload: {'guidance': '关系参与方已不存在，无法记录该关系。'},
+      );
+    }
     await gateway.createConflictRelation(
       leftKind: left.kind,
       leftId: left.id,
