@@ -3,6 +3,9 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../tasks/application/undo_recorder.dart';
+import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
+import 'schedule_conflict_projection.dart';
 
 enum ConflictState { unclassified, conflict, nonConflict }
 
@@ -69,47 +72,125 @@ class ConflictService {
         : _classifyCurrentAndFuture(a, b, state, reason);
   }
 
+  /// Loads the account-scoped conflict relation snapshot (occurrence
+  /// relations + series rules) consumed by [ScheduleConflictProjection].
+  ///
+  /// Read-only: never mutates the database.
+  Future<ScheduleConflictRelationSnapshot> relationSnapshot() async {
+    final occurrenceRows =
+        await (database.select(database.scheduleRelations)..where(
+              (row) => row.accountId.equals(accountId),
+            ))
+            .get();
+    final occurrenceByPair = <String, ConflictPairState>{};
+    for (final row in occurrenceRows) {
+      final leftKind = row.leftKind;
+      final leftId = row.leftId;
+      final rightKind = row.rightKind;
+      final rightId = row.rightId;
+      if (leftKind == null ||
+          leftId == null ||
+          rightKind == null ||
+          rightId == null) {
+        continue;
+      }
+      final state = _conflictPairState(row.conflictState);
+      if (state == null) continue;
+      occurrenceByPair[
+          ScheduleConflictProjection.occurrenceKey(
+            leftKind,
+            leftId,
+            rightKind,
+            rightId,
+          )] = state;
+    }
+
+    final ruleRows =
+        await (database.select(database.scheduleRelationRules)..where(
+              (row) => row.accountId.equals(accountId),
+            ))
+            .get();
+    final seriesByPair = <String, List<SeriesConflictRule>>{};
+    for (final row in ruleRows) {
+      final state = _conflictPairState(row.conflictState);
+      if (state == null) continue;
+      final key = ScheduleConflictProjection.seriesKey(
+        row.leftSeriesType,
+        row.leftSeriesId,
+        row.rightSeriesType,
+        row.rightSeriesId,
+      );
+      seriesByPair.putIfAbsent(key, () => []).add(
+            SeriesConflictRule(
+              effectiveFrom: row.effectiveFrom,
+              effectiveThrough: row.effectiveThrough,
+              state: state,
+            ),
+          );
+    }
+    return ScheduleConflictRelationSnapshot(
+      occurrenceByPair: Map.unmodifiable(occurrenceByPair),
+      seriesByPair: Map.unmodifiable(seriesByPair),
+    );
+  }
+
+  /// The current state of a pair under the shared conflict projection.
+  ///
+  /// Derives from the same precedence as the week grid / `get_conflicts`:
+  /// explicit occurrence → explicit series → timed overlap → no conflict.
   Future<ConflictState> stateForPair(
     EventConflictParticipant a,
     EventConflictParticipant b,
   ) async {
-    final events = _canonicalEvents(a.eventId, b.eventId);
-    final occurrence =
-        await (database.select(database.scheduleRelations)..where(
+    final itemA = await _gridItemFor(a);
+    final itemB = await _gridItemFor(b);
+    if (itemA == null || itemB == null) return ConflictState.unclassified;
+    final snapshot = await relationSnapshot();
+    final pairs = ScheduleConflictProjection.resolve([itemA, itemB], snapshot);
+    if (pairs.isEmpty) return ConflictState.unclassified;
+    final pair = pairs.first;
+    return pair.state == ConflictPairState.conflict
+        ? ConflictState.conflict
+        : ConflictState.nonConflict;
+  }
+
+  /// Builds a [ScheduleGridItem] for an [EventConflictParticipant] from the
+  /// underlying calendar row so the shared projection can resolve overlap and
+  /// series identity. Returns null when the event is missing for this account.
+  Future<ScheduleGridItem?> _gridItemFor(EventConflictParticipant participant) async {
+    final event =
+        await (database.select(database.calendarEvents)..where(
               (row) =>
-                  row.accountId.equals(accountId) &
-                  row.leftKind.equals('event') &
-                  row.leftId.equals(events.$1) &
-                  row.rightKind.equals('event') &
-                  row.rightId.equals(events.$2),
+                  row.id.equals(participant.eventId) &
+                  row.accountId.equals(accountId),
             ))
             .getSingleOrNull();
-    if (occurrence != null) {
-      return _stateFromStorage(occurrence.conflictState);
+    if (event == null) return null;
+    if (event.allDay) {
+      return ScheduleGridItem.fromEvent(
+        EffectiveEvent.allDay(
+          id: event.id,
+          title: event.title,
+          startDate: DateTime.parse(event.startDate!),
+          endDateExclusive: DateTime.parse(event.endDateExclusive!),
+          courseSeriesId: participant.seriesId,
+          eventType: event.type,
+        ),
+      );
     }
-    if (!a.hasStableSeriesIdentity || !b.hasStableSeriesIdentity) {
-      return ConflictState.unclassified;
-    }
-    final series = _canonicalSeries(a, b);
-    final date = _date(a.occurrenceDate);
-    final rules =
-        await (database.select(database.scheduleRelationRules)..where(
-              (row) =>
-                  row.accountId.equals(accountId) &
-                  row.leftSeriesType.equals(series.$1.seriesType!) &
-                  row.leftSeriesId.equals(series.$1.seriesId!) &
-                  row.rightSeriesType.equals(series.$2.seriesType!) &
-                  row.rightSeriesId.equals(series.$2.seriesId!) &
-                  row.effectiveFrom.isSmallerOrEqualValue(date),
-            ))
-            .get();
-    for (final rule in rules) {
-      if (rule.effectiveThrough == null ||
-          rule.effectiveThrough!.compareTo(date) >= 0) {
-        return _stateFromStorage(rule.conflictState);
-      }
-    }
-    return ConflictState.unclassified;
+    final startAt = event.startAt;
+    final endAt = event.endAt;
+    if (startAt == null || endAt == null) return null;
+    return ScheduleGridItem.fromEvent(
+      EffectiveEvent.timed(
+        id: event.id,
+        title: event.title,
+        startAt: _beijingDateTime(startAt),
+        endAt: _beijingDateTime(endAt),
+        courseSeriesId: participant.seriesId,
+        eventType: event.type,
+      ),
+    );
   }
 
   Future<bool> showConflictWarning(
@@ -292,11 +373,28 @@ class ConflictService {
     ),
   };
 
-  ConflictState _stateFromStorage(String? value) => switch (value) {
-    'conflict' => ConflictState.conflict,
-    'no_conflict' => ConflictState.nonConflict,
-    _ => ConflictState.unclassified,
+  ConflictPairState? _conflictPairState(String? value) => switch (value) {
+    'conflict' => ConflictPairState.conflict,
+    'no_conflict' => ConflictPairState.noConflict,
+    _ => null,
   };
+
+  DateTime _beijingDateTime(int millisecondsSinceEpoch) {
+    final shifted = DateTime.fromMillisecondsSinceEpoch(
+      millisecondsSinceEpoch,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    return DateTime(
+      shifted.year,
+      shifted.month,
+      shifted.day,
+      shifted.hour,
+      shifted.minute,
+      shifted.second,
+      shifted.millisecond,
+      shifted.microsecond,
+    );
+  }
 
   String _date(DateTime value) =>
       '${value.year.toString().padLeft(4, '0')}-'

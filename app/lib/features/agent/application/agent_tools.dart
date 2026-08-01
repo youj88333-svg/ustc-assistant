@@ -5,7 +5,9 @@ import '../../../core/time/beijing_clock.dart';
 import '../../../core/database/app_database.dart';
 import '../../history/application/history_repository.dart';
 import '../../schedule/application/effective_event_repository.dart';
+import '../../schedule/application/schedule_conflict_projection.dart';
 import '../../schedule/domain/overlap_engine.dart';
+import '../../schedule/domain/schedule_grid_item.dart';
 import '../../schedule/domain/ustc_periods.dart';
 import '../../sync/domain/sync_state.dart';
 import '../../tasks/domain/plan_block.dart';
@@ -977,9 +979,14 @@ class GetConflictsTool implements AgentTool {
 
   @override
   String get description =>
-      'List schedule events that have a confirmed conflict (per the '
-      'authoritative SQL conflict flag) within an optional date range. Each '
-      'entry carries its run-local ref and conflict state.';
+      'List resolved schedule conflict PAIRS within an optional date range. '
+      'Timed overlaps default to conflict; an explicit user '
+      'conflict/no_conflict relation overrides the derived result. Each pair '
+      'carries two run-local participant refs (event refs bound as `event`, '
+      'plan-block refs as `planblock`), the participant title/time/type, and '
+      'the origin (derivedOverlap | explicitOccurrence | explicitSeries). The '
+      '`conflictPairs` list is authoritative; a compatibility `conflicts` '
+      'event summary is also included.';
 
   @override
   Map<String, Object?> get inputSchema => const {
@@ -1007,28 +1014,145 @@ class GetConflictsTool implements AgentTool {
       );
     }
     final range = parsed.range!;
+
     final events = await _gateway.displayEvents(context.accountId);
-    final conflicts = events
-        .where((e) => e.hasConfirmedConflict && _eventInRange(e, range))
+    final inRangeEvents = events
+        .where((e) => _eventInRange(e, range))
         .toList(growable: false);
-    if (conflicts.length > agentEventLimit) {
-      return _tooLarge('conflicts', conflicts.length, agentEventLimit, 'narrow the date range');
+
+    // Build the full grid-item set (events + approved plan blocks) and resolve
+    // every pair through the shared projection.
+    final planBlocks = await _gateway.allPlanBlocks(context.accountId);
+    final tasks = await _gateway.tasks(context.accountId);
+    final tasksById = {for (final task in tasks) task.id: task};
+    final items = <ScheduleGridItem>[
+      for (final event in inRangeEvents) ScheduleGridItem.fromEvent(event),
+    ];
+    for (final block in planBlocks) {
+      if (!block.showsInWeekGrid || !_planBlockInRange(block, range)) continue;
+      final task = tasksById[block.taskId];
+      if (task == null) continue;
+      items.add(ScheduleGridItem.fromPlanBlock(block, task));
     }
-    final dtos = conflicts.map((e) => _eventDto(e, context)).toList(growable: false);
+
+    final snapshot =
+        await _gateway.scheduleConflictRelations(context.accountId);
+    final pairs = ScheduleConflictProjection.resolve(items, snapshot);
+    final conflictPairs = pairs
+        .where((pair) => pair.state == ConflictPairState.conflict)
+        .toList(growable: false);
+    if (conflictPairs.length > agentEventLimit) {
+      return _tooLarge(
+        'conflict pairs',
+        conflictPairs.length,
+        agentEventLimit,
+        'narrow the date range',
+      );
+    }
+
+    final pairDtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
-    for (final e in conflicts) {
-      final ref = context.references.bind(kind: 'event', localId: e.id);
-      references.add(AgentToolReference(kind: 'event', ref: ref, localId: e.id));
+    for (final pair in conflictPairs) {
+      pairDtos.add(_conflictPairDto(pair, context));
+      references.addAll(_participantReferences(pair, context));
     }
+
+    // Compatibility event summary: events that participate in a conflict pair.
+    final conflictEventIds = {
+      for (final pair in conflictPairs) ...{pair.left.id, pair.right.id},
+    };
+    final conflictEvents = inRangeEvents
+        .where((event) => conflictEventIds.contains(event.id))
+        .toList(growable: false);
+    final eventDtos = conflictEvents
+        .map((event) => _conflictEventDto(event, context))
+        .toList(growable: false);
+
     return AgentToolResult(
       payload: {
         'from': _formatDate(range.from),
         'through': _formatDate(range.through),
-        'conflicts': dtos,
+        'conflicts': eventDtos,
+        'conflictPairs': pairDtos,
       },
       references: references,
     );
   }
+}
+
+/// Whether a timed plan block falls inside the inclusive [range].
+bool _planBlockInRange(PlanBlockItem block, AgentDateRange range) {
+  final rangeEndInclusive = range.through.add(const Duration(days: 1));
+  return block.startAt.isBefore(rangeEndInclusive) &&
+      !block.endAt.isBefore(range.from);
+}
+
+/// The model-facing conflict origin token for a resolved pair.
+String _originString(ConflictPairOrigin origin) => switch (origin) {
+  ConflictPairOrigin.derivedOverlap => 'derivedOverlap',
+  ConflictPairOrigin.explicitOccurrence => 'explicitOccurrence',
+  ConflictPairOrigin.explicitSeries => 'explicitSeries',
+};
+
+/// Builds a `conflictPairs` item: two run-local participant refs plus the
+/// origin. Participant refs are bound as `event` for events and `planblock`
+/// for plan blocks.
+Map<String, Object?> _conflictPairDto(
+  ResolvedConflictPair pair,
+  AgentToolContext context,
+) => {
+  'left': _conflictParticipantDto(pair.left, context),
+  'right': _conflictParticipantDto(pair.right, context),
+  'origin': _originString(pair.origin),
+};
+
+/// Builds a single participant DTO (title / time / type / ref) for a resolved
+/// pair.
+Map<String, Object?> _conflictParticipantDto(
+  ScheduleGridItem item,
+  AgentToolContext context,
+) {
+  final kind = item.kind == ScheduleGridItemKind.planBlock ? 'planblock' : 'event';
+  final ref = context.references.bind(kind: kind, localId: item.id);
+  return {
+    'ref': ref,
+    'title': item.title,
+    'type': item.kind == ScheduleGridItemKind.planBlock
+        ? 'plan_block'
+        : item.eventType,
+    if (item.allDay) ...{
+      'startDate': _formatDate(item.startDate!),
+      'endDateExclusive': _formatDate(item.endDateExclusive!),
+    } else ...{
+      'startAt': _formatDateTime(item.startAt!),
+      'endAt': _formatDateTime(item.endAt!),
+    },
+  };
+}
+
+/// The run-local references for both participants of a resolved pair.
+List<AgentToolReference> _participantReferences(
+  ResolvedConflictPair pair,
+  AgentToolContext context,
+) {
+  AgentToolReference refFor(ScheduleGridItem item) {
+    final kind = item.kind == ScheduleGridItemKind.planBlock ? 'planblock' : 'event';
+    final ref = context.references.bind(kind: kind, localId: item.id);
+    return AgentToolReference(kind: kind, ref: ref, localId: item.id);
+  }
+
+  return [refFor(pair.left), refFor(pair.right)];
+}
+
+/// Builds the compatibility event summary DTO: the event's normalized fields
+/// with `conflictState` forced to `conflict` (the pair list is authoritative).
+Map<String, Object?> _conflictEventDto(
+  EffectiveEvent event,
+  AgentToolContext context,
+) {
+  final dto = _eventDto(event, context);
+  dto['conflictState'] = 'conflict';
+  return dto;
 }
 
 // ===========================================================================
@@ -1551,6 +1675,7 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
             'from': raw['from'],
             'through': raw['through'],
             'conflicts': _filterItems(raw['conflicts'], _eventItemKeys),
+            'conflictPairs': _filterConflictPairs(raw['conflictPairs']),
             'guidance': raw['guidance'],
           },
       'get_tasks': (raw) => {
@@ -1658,6 +1783,31 @@ List<Map<String, Object?>> _filterItems(Object? raw, Set<String> keys) {
   return out;
 }
 
+/// Re-derives a `conflictPairs` list from [raw]: each pair is reduced to its
+/// `origin` plus two re-allowlisted participant maps (`left`/`right`). The
+/// per-participant allowlist ([_conflictParticipantKeys]) prevents any
+/// non-DTO field (e.g. a smuggled `db_id`) on a participant from leaking.
+List<Map<String, Object?>> _filterConflictPairs(Object? raw) {
+  if (raw is! List) return const [];
+  final out = <Map<String, Object?>>[];
+  for (final item in raw) {
+    if (item is! Map<String, Object?>) continue;
+    final cleaned = <String, Object?>{
+      if (item.containsKey('origin')) 'origin': item['origin'],
+    };
+    final left = item['left'];
+    if (left is Map<String, Object?>) {
+      cleaned['left'] = _pick(left, _conflictParticipantKeys);
+    }
+    final right = item['right'];
+    if (right is Map<String, Object?>) {
+      cleaned['right'] = _pick(right, _conflictParticipantKeys);
+    }
+    out.add(cleaned);
+  }
+  return out;
+}
+
 // Per-item allowlisted string keys for each nested list DTO. These are the
 // ONLY fields that survive from a nested item; anything else (e.g. a smuggled
 // `db_id`) is dropped here, before the OutboundPrivacyFilter backstop.
@@ -1680,6 +1830,18 @@ const _eventItemKeys = <String>{
   'listeningMode',
   'attendanceNote',
   'listeningNote',
+};
+
+/// Per-participant allowlisted keys inside a `get_conflicts` conflict-pair
+/// item. Only these survive from a participant DTO; anything else is dropped.
+const _conflictParticipantKeys = <String>{
+  'ref',
+  'title',
+  'type',
+  'startAt',
+  'endAt',
+  'startDate',
+  'endDateExclusive',
 };
 
 const _eventDetailsKeys = <String>{

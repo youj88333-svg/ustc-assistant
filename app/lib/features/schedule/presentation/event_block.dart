@@ -29,7 +29,7 @@ class EventBlock extends StatelessWidget {
         item.title,
         if (item.location != null) item.location!,
         if (_isPlanBlock) '任务时间段 ${_timeRange(item)}',
-        if (item.hasConfirmedConflict) '已确认冲突',
+        if (item.hasConfirmedConflict) '冲突',
         if (isPreview) '非本周上课预览',
       ].join('，'),
       child: Opacity(
@@ -89,7 +89,7 @@ class EventBlock extends StatelessWidget {
                     right: 5,
                     child: Semantics(
                       container: true,
-                      label: '已确认冲突',
+                      label: '冲突',
                       child: const Icon(
                         Icons.error_outline,
                         color: Color(0xFFFFD4D0),

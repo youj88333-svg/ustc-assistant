@@ -1,7 +1,12 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../tasks/domain/plan_block.dart';
+import '../../tasks/domain/task.dart';
 import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
+import 'conflict_service.dart';
+import 'schedule_conflict_projection.dart';
 
 enum AttendancePolicy { unknown, mustGo, gamble, skip }
 
@@ -120,43 +125,9 @@ SELECT
   COALESCE(eo.color, so.color, e.color) AS color,
   COALESCE(eo.foreground_priority, so.foreground_priority, 0)
     AS foreground_priority,
-  (
-    EXISTS (
-      SELECT 1
-      FROM schedule_relations relation
-      WHERE relation.account_id = e.account_id
-        AND relation.conflict_state = 'conflict'
-        AND (
-          relation.left_event_id = e.id
-          OR relation.right_event_id = e.id
-        )
-    )
-    OR EXISTS (
-      SELECT 1
-      FROM schedule_relation_rules rule
-      WHERE rule.account_id = e.account_id
-        AND rule.conflict_state = 'conflict'
-        AND cs.id IS NOT NULL
-        AND (
-          (rule.left_series_type = 'course_series'
-            AND rule.left_series_id = cs.id)
-          OR
-          (rule.right_series_type = 'course_series'
-            AND rule.right_series_id = cs.id)
-        )
-        AND rule.effective_from <= CASE
-          WHEN e.all_day = 1 THEN e.start_date
-          ELSE date(e.start_at / 1000, 'unixepoch', '+8 hours')
-        END
-        AND (
-          rule.effective_through IS NULL
-          OR rule.effective_through >= CASE
-            WHEN e.all_day = 1 THEN e.start_date
-            ELSE date(e.start_at / 1000, 'unixepoch', '+8 hours')
-          END
-        )
-    )
-  ) AS has_confirmed_conflict,
+  -- The conflict warning is derived by ScheduleConflictProjection (Dart),
+  -- not by SQL: overlaps default to conflict and explicit relations override.
+  0 AS has_confirmed_conflict,
   e.type,
   e.status,
   e.start_at,
@@ -197,15 +168,27 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
           database.sourceRecords,
           database.scheduleRelations,
           database.scheduleRelationRules,
+          database.planBlocks,
+          database.tasks,
         },
       )
       .watch()
-      .map(
-        (rows) => rows
+      .asyncMap((rows) async {
+        final visibleRows = rows
             .where((row) => row.read<int>('hidden') == 0)
-            .map(_displayEvent)
-            .toList(growable: false),
-      );
+            .toList(growable: false);
+        final conflictIds = await _resolvedConflictIds(visibleRows);
+        return visibleRows
+            .map(
+              (row) => _displayEvent(
+                row,
+                hasConfirmedConflict: conflictIds.contains(
+                  row.read<String>('id'),
+                ),
+              ),
+            )
+            .toList(growable: false);
+      });
 
   Future<List<EffectiveEventRecord>> overlappingRecords(String eventId) async {
     final target = await byId(eventId);
@@ -323,7 +306,10 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       ? AttendancePolicy.mustGo
       : AttendancePolicy.unknown;
 
-  EffectiveEvent _displayEvent(QueryRow row) {
+  EffectiveEvent _displayEvent(
+    QueryRow row, {
+    required bool hasConfirmedConflict,
+  }) {
     final importance = switch (row.read<String>('importance')) {
       'low' => EventImportance.low,
       'high' => EventImportance.high,
@@ -349,7 +335,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         eventType: eventType,
         foregroundPriority: row.read<int>('foreground_priority'),
         color: row.readNullable<String>('color'),
-        hasConfirmedConflict: row.read<int>('has_confirmed_conflict') != 0,
+        hasConfirmedConflict: hasConfirmedConflict,
       );
     }
     return EffectiveEvent.timed(
@@ -364,8 +350,56 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       eventType: eventType,
       foregroundPriority: row.read<int>('foreground_priority'),
       color: row.readNullable<String>('color'),
-      hasConfirmedConflict: row.read<int>('has_confirmed_conflict') != 0,
+      hasConfirmedConflict: hasConfirmedConflict,
     );
+  }
+
+  /// Resolves every pair (events + approved plan blocks) through the shared
+  /// conflict projection and returns the ids of items involved in a conflict.
+  ///
+  /// This replaces the old event-level SQL `has_confirmed_conflict` as the
+  /// authority: overlaps default to conflict and explicit
+  /// `conflict`/`no_conflict` relations override. Derived pairs are never
+  /// persisted.
+  Future<Set<String>> _resolvedConflictIds(List<QueryRow> visibleRows) async {
+    final items = <ScheduleGridItem>[
+      for (final row in visibleRows)
+        ScheduleGridItem.fromEvent(
+          _displayEvent(row, hasConfirmedConflict: false),
+        ),
+    ];
+
+    final planBlocks =
+        await (database.select(database.planBlocks)..where(
+              (row) =>
+                  row.accountId.equals(accountId) & row.deletedAt.isNull(),
+            ))
+            .get();
+    if (planBlocks.isNotEmpty) {
+      final tasks = await (database.select(database.tasks)..where(
+            (row) =>
+                row.accountId.equals(accountId) & row.deletedAt.isNull(),
+          ))
+          .get();
+      final tasksById = {for (final task in tasks) task.id: TaskItem.fromRow(task)};
+      for (final blockRow in planBlocks) {
+        final block = PlanBlockItem.fromRow(blockRow);
+        if (!block.showsInWeekGrid) continue;
+        final task = tasksById[block.taskId];
+        if (task == null) continue;
+        items.add(ScheduleGridItem.fromPlanBlock(block, task));
+      }
+    }
+
+    final snapshot =
+        await ConflictService(database: database, accountId: accountId)
+            .relationSnapshot();
+    final pairs = ScheduleConflictProjection.resolve(items, snapshot);
+    return {
+      for (final pair in pairs)
+        if (pair.state == ConflictPairState.conflict)
+          ...{pair.left.id, pair.right.id},
+    };
   }
 
   Future<bool> _isPresent(CalendarEvent event) async {

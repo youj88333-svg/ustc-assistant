@@ -125,4 +125,50 @@ class ScheduleGridItem {
     final block = planBlock;
     return block != null && block.showsInWeekGrid;
   }
+
+  /// The storage-kind token used by `schedule_relations` rows: `event` or
+  /// `plan_block`. Null is never returned (every grid item has a kind).
+  String get relationKind => switch (kind) {
+    ScheduleGridItemKind.event => 'event',
+    ScheduleGridItemKind.planBlock => 'plan_block',
+  };
+
+  /// The stable series identity type for conflict series rules
+  /// (`course_series` for events with a course series), or null for items
+  /// without one (plan blocks, personal events).
+  String? get seriesType {
+    final event = this.event;
+    if (event == null || event.courseSeriesId == null) return null;
+    return 'course_series';
+  }
+
+  /// The series id ([EffectiveEvent.courseSeriesId]) used by conflict series
+  /// rules, or null when the item has no series identity.
+  String? get seriesId => event?.courseSeriesId;
+
+  /// Returns a copy of this item with the conflict warning flag overridden.
+  ///
+  /// Used by the pair-level conflict projection to stamp derived/explicit
+  /// conflict state onto otherwise-immutable grid items.
+  ScheduleGridItem withConflict(bool conflict) => ScheduleGridItem._(
+    kind: kind,
+    id: id,
+    title: title,
+    allDay: allDay,
+    startAt: startAt,
+    endAt: endAt,
+    startDate: startDate,
+    endDateExclusive: endDateExclusive,
+    location: location,
+    hasConfirmedConflict: conflict,
+    isInactivePreview: isInactivePreview,
+    importance: importance,
+    eventType: eventType,
+    foregroundPriority: foregroundPriority,
+    color: color,
+    colorKey: colorKey,
+    event: event,
+    planBlock: planBlock,
+    task: task,
+  );
 }

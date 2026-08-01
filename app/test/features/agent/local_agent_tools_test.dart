@@ -1140,15 +1140,34 @@ void main() {
   });
 
   group('get_conflicts', () {
-    test('lists only confirmed-conflict events in range', () async {
+    test('returns pair-level conflict pairs with participant refs and origin',
+        () async {
       final harness = _harness(database, 'a');
       final result = await harness.execute('get_conflicts', {
         'from': '2026-07-29',
         'through': '2026-08-04',
       });
       expect(result.status, AgentToolStatus.success);
+
+      // The pair list is authoritative.
+      final pairs = result.payload['conflictPairs']! as List;
+      expect(pairs, hasLength(1));
+      final pair = pairs.first! as Map<String, Object?>;
+      expect(pair['origin'], 'explicitOccurrence');
+      final left = pair['left']! as Map<String, Object?>;
+      final right = pair['right']! as Map<String, Object?>;
+      expect(left['ref'], startsWith('ref_'));
+      expect(right['ref'], startsWith('ref_'));
+      expect(
+        {left['title'], right['title']},
+        containsAll(['风险课程', '青年活动']),
+      );
+      expect({left['type'], right['type']}, containsAll(['course', 'personal']));
+      expect(left['startAt'], isNotNull);
+      expect(right['startAt'], isNotNull);
+
+      // Compatibility event summary: both members are flagged.
       final conflicts = result.payload['conflicts']! as List;
-      // Both members of the conflict pair are flagged.
       final titles = conflicts
           .map((c) => (c! as Map<String, Object?>)['title'] as String)
           .toSet();
@@ -1156,9 +1175,80 @@ void main() {
       for (final c in conflicts) {
         expect((c! as Map<String, Object?>)['conflictState'], 'conflict');
       }
+
+      // SECURITY: no raw DB ids anywhere in the payload.
       final encoded = jsonEncode(result.payload);
       expect(encoded, isNot(contains('event-conflict-a')));
       expect(encoded, isNot(contains('event-conflict-b')));
+    });
+
+    test('no_conflict relation removes the pair from conflict results',
+        () async {
+      final harness = _harness(database, 'a');
+      // The seeded pair has an explicit conflict; flip it to no_conflict.
+      await ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 1,
+      ).classifyPair(
+        EventConflictParticipant(
+          eventId: 'event-conflict-a',
+          occurrenceDate: DateTime(2026, 7, 29),
+        ),
+        EventConflictParticipant(
+          eventId: 'event-conflict-b',
+          occurrenceDate: DateTime(2026, 7, 29),
+        ),
+        ConflictState.nonConflict,
+      );
+      final result = await harness.execute('get_conflicts', {
+        'from': '2026-07-29',
+        'through': '2026-08-04',
+      });
+      expect(result.status, AgentToolStatus.success);
+      expect(result.payload['conflictPairs']! as List, isEmpty);
+      expect(result.payload['conflicts']! as List, isEmpty);
+    });
+
+    test('explicit conflict on a non-overlapping pair appears', () async {
+      final harness = _harness(database, 'a');
+      // event-solo (14:00-16:00) does not overlap event-conflict-a
+      // (09:00-10:30), so a conflict here must come from the explicit relation.
+      await ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 1,
+      ).classifyPair(
+        EventConflictParticipant(
+          eventId: 'event-conflict-a',
+          occurrenceDate: DateTime(2026, 7, 29),
+        ),
+        EventConflictParticipant(
+          eventId: 'event-solo',
+          occurrenceDate: DateTime(2026, 7, 29),
+        ),
+        ConflictState.conflict,
+      );
+      final result = await harness.execute('get_conflicts', {
+        'from': '2026-07-29',
+        'through': '2026-08-04',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final pairs = result.payload['conflictPairs']! as List;
+      expect(pairs, hasLength(2));
+      // Both the overlapping pair and the new non-overlap pair are conflict by
+      // explicit occurrence relation.
+      for (final p in pairs) {
+        expect((p! as Map<String, Object?>)['origin'], 'explicitOccurrence');
+      }
+      final titles = pairs.expand((p) {
+        final map = p! as Map<String, Object?>;
+        return [
+          (map['left']! as Map<String, Object?>)['title'],
+          (map['right']! as Map<String, Object?>)['title'],
+        ];
+      }).toSet();
+      expect(titles, containsAll(['风险课程', '青年活动', '自习']));
     });
   });
 

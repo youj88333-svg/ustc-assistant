@@ -2,7 +2,9 @@ import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../history/application/history_repository.dart';
+import '../../schedule/application/conflict_service.dart';
 import '../../schedule/application/effective_event_repository.dart';
+import '../../schedule/application/schedule_conflict_projection.dart';
 import '../../schedule/domain/overlap_engine.dart';
 import '../../sync/domain/sync_state.dart';
 import '../../tasks/domain/plan_block.dart';
@@ -63,6 +65,12 @@ abstract interface class AgentLocalDataGateway {
     String accountId, {
     HistoryFilter filter,
   });
+
+  /// The account-scoped conflict relation snapshot (occurrence relations +
+  /// series rules) consumed by the pair-level conflict projection.
+  Future<ScheduleConflictRelationSnapshot> scheduleConflictRelations(
+    String accountId,
+  );
 }
 
 /// A Drift-backed [AgentLocalDataGateway].
@@ -171,6 +179,13 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
     HistoryFilter filter = const HistoryFilter(),
   }) =>
       HistoryRepository(_database).query(accountId, filter: filter);
+
+  @override
+  Future<ScheduleConflictRelationSnapshot> scheduleConflictRelations(
+    String accountId,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .relationSnapshot();
 
   /// Mirrors `SyncCoordinator.stateFor` without pulling in the Python-bridge /
   /// import dependencies (those arrive in Task 9). Reads only sync_runs and

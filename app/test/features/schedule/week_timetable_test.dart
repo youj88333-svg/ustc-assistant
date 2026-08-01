@@ -159,7 +159,7 @@ void main() {
     );
     expect(foreground.opacity, lessThan(1));
     expect(find.byType(ImageFiltered), findsWidgets);
-    expect(find.bySemanticsLabel('已确认冲突').evaluate(), isNotEmpty);
+    expect(find.bySemanticsLabel('冲突').evaluate(), isNotEmpty);
   });
 
   testWidgets('explicit foreground priority wins overlap ordering', (
