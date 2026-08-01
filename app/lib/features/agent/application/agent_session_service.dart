@@ -10,9 +10,11 @@ import '../domain/llm_protocol.dart';
 import 'agent_context_builder.dart';
 import 'agent_grounding_policy.dart';
 import 'agent_tool_registry.dart';
+import 'assistant_text_filter.dart';
 import 'cancellation_signal.dart';
 import 'outbound_privacy_filter.dart';
 import 'run_reference_store.dart';
+import 'tool_call_fingerprint.dart';
 
 /// Returns the last element matching [test], or `null` if none match.
 extension _LastWhereOrNull<T> on Iterable<T> {
@@ -602,11 +604,24 @@ class AgentSessionService {
     var modelCallCount = 0;
     var lastInputTokens = 0;
     var lastOutputTokens = 0;
-    // A single streaming assistant draft accumulates all text deltas across
-    // the run. It is created lazily on the first text delta so tool-only turns
-    // do not leave empty completed messages behind. The per-turn conversation
-    // reconstruction (text + tool_use blocks) is separate from this draft.
+    // A single streaming assistant draft accumulates all SAFE, FILTERED text
+    // deltas across the run. It is created lazily on the first text delta so
+    // tool-only turns do not leave empty completed messages behind. The
+    // per-turn conversation reconstruction (text + tool_use blocks) is
+    // separate from this draft.
+    //
+    // `_filter` sanitizes streamed model text incrementally (Task 2): it
+    // strips leading history-marker timestamps at the start of an assistant
+    // turn and replaces run-local `ref_*` tokens with a safe placeholder,
+    // holding back split tokens so they never flash even transiently. The RAW
+    // per-turn text (used for `LlmMessage` replay) is kept in `turnText`
+    // separately — only UI/persistence text is filtered.
     var assistantText = '';
+    final filter = AssistantTextFilter();
+    // Fingerprints (tool name + sorted args) whose outcome this run forbids an
+    // exact repeat: a duplicate identical tool call is bounded without a second
+    // registry execution (Task 2).
+    final fingerprintBlocked = <String>{};
     String? assistantMessageId;
 
     Future<String> ensureDraft() async {
@@ -618,6 +633,16 @@ class AgentSessionService {
         content: '',
       );
       return assistantMessageId!;
+    }
+
+    Future<void> persistVisible(String content) async {
+      final id = assistantMessageId;
+      if (id == null) return;
+      await _chatRepository.updateAssistantDraft(
+        accountId: accountId,
+        messageId: id,
+        content: content,
+      );
     }
 
     Future<void> flushDraft(ChatMessageState state) async {
@@ -682,6 +707,11 @@ class AgentSessionService {
         final toolUses = <ToolUseCompletedEvent>[];
         var streamError = false;
         String? streamErrorCode;
+        // The SAFE, filtered text visible at the START of this turn (before any
+        // of its streamed deltas). If this turn later emits a tool use, the
+        // visible draft is restored to this point — a collapsed
+        // AgentToolRunTile is the only persisted progress for that turn.
+        final visibleBeforeTurn = assistantText;
 
         // Choose the tool declarations and conversation for THIS call. The
         // initial call (and every autonomous tool-loop call) sees the full
@@ -720,8 +750,11 @@ class AgentSessionService {
           )) {
             switch (event) {
               case TextDeltaEvent(:final text):
+                // RAW per-turn text for `LlmMessage` replay.
                 turnText.write(text);
-                assistantText += text;
+                // Incrementally SAFE text for the UI and the persistence draft.
+                final filtered = filter.add(text);
+                assistantText += filtered;
                 final id = await ensureDraft();
                 viewState = viewState.copyWith(text: assistantText);
                 controller.add(viewState);
@@ -820,6 +853,19 @@ class AgentSessionService {
           break;
         }
 
+        // Tool-use turn: the model emitted tool calls, so its streamed text is
+        // interstitial chatter, not the final answer. Restore the visible draft
+        // to the pre-turn point: a collapsed AgentToolRunTile is the only
+        // persisted progress for this turn. The RAW per-turn text is still
+        // replayed to the model below; only display/persistence is reverted.
+        if (assistantText != visibleBeforeTurn) {
+          assistantText = visibleBeforeTurn;
+          filter.reset();
+          await persistVisible(assistantText);
+          viewState = viewState.copyWith(text: assistantText);
+          controller.add(viewState);
+        }
+
         // Tool-use turn: append the assistant turn (text + tool_use blocks)
         // to the conversation, then execute each tool and append a user turn
         // with the tool_result blocks.
@@ -889,13 +935,32 @@ class AgentSessionService {
           totalToolCalls++;
           toolCallCount.update(tu.name, (v) => v + 1, ifAbsent: () => 1);
 
-          var result = await _registry.execute(
-            toolName: tu.name,
-            arguments: tu.input,
-            context: context,
-          );
+          // Fingerprint dedup guard (Task 2): an EXACT repeat of a tool call
+          // that already produced a bounding outcome this run is not executed
+          // again — instead the model receives a `repeated_tool_call` error so
+          // it changes arguments or stops. The budget above still COUNTS the
+          // model's attempted duplicate (bounded run); a second registry
+          // execution does not happen.
+          final fp = ToolCallFingerprint.of(tu.name, tu.input);
+          AgentToolResult result;
+          if (fingerprintBlocked.contains(fp)) {
+            result = const AgentToolResult(
+              status: AgentToolStatus.error,
+              errorCode: 'repeated_tool_call',
+              payload: {
+                'guidance':
+                    '这个完全相同参数的调用已经出现过并被处理。请不要再重复调用该工具，'
+                    '请基于已有结果直接回答，或改用不同的参数。',
+              },
+            );
+          } else {
+            result = await _registry.execute(
+              toolName: tu.name,
+              arguments: tu.input,
+              context: context,
+            );
 
-          if (result.status == AgentToolStatus.needsUserAction) {
+            if (result.status == AgentToolStatus.needsUserAction) {
             final action = result.userAction;
             final pendingInvocation = result.pendingInvocation;
             if (action == null || pendingInvocation == null) {
@@ -944,6 +1009,25 @@ class AgentSessionService {
                 clearUserAction: true,
               );
               controller.add(viewState);
+            }
+            }
+
+            // Record the fingerprint outcome so an EXACT repeat is bounded.
+            // * success -> block repeat;
+            // * a terminal argument/reference/permission error
+            //   (invalid_arguments, invalid_write_arguments,
+            //   reference_not_found, tool_not_allowed) -> block repeat (the
+            //   model must change args, not spam the same bad call);
+            // * needsUserAction pause/resume is ONE invocation — the result
+            //   above is its terminal outcome, so only a final success (or the
+            //   listed errors) blocks; the pause itself never triggers a
+            //   second execution.
+            final outcomeBlocksRepeat =
+                result.status == AgentToolStatus.success ||
+                    (result.status == AgentToolStatus.error &&
+                        _repeatedBlockingErrors.contains(result.errorCode));
+            if (outcomeBlocksRepeat) {
+              fingerprintBlocked.add(fp);
             }
           }
 
@@ -1056,6 +1140,11 @@ class AgentSessionService {
     // run that was cancelled before any text), there is no draft to finalize.
     // An empty failed/cancelled draft would be excluded by recentMessages
     // anyway, but we avoid creating one in the first place.
+    //
+    // Flush any decidable trailing filter content first. finish() emits only
+    // SAFE trailing content and drops an incomplete `ref_`/marker prefix, so a
+    // split timestamp or token is never persisted at stream end.
+    assistantText += filter.finish();
     await flushDraft(draftState);
 
     await _chatRepository.finishRun(
@@ -1286,6 +1375,17 @@ class AgentSessionService {
   static const _catalogTools = <String>{
     'search_campus_catalog',
     'read_campus_detail',
+  };
+
+  /// Error codes whose exact-repeat tool call is also bounded without a second
+  /// execution. Repeating a call that failed because of its OWN arguments /
+  /// reference / permission is purposeless — the model must change the call
+  /// rather than spam the identical bad one.
+  static const _repeatedBlockingErrors = <String>{
+    'invalid_arguments',
+    'invalid_write_arguments',
+    'reference_not_found',
+    'tool_not_allowed',
   };
 
   // --- Grounding settlement (Task 1) -------------------------------------

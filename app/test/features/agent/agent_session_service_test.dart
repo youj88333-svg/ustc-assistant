@@ -2539,6 +2539,206 @@ END
       },
     );
   });
+
+  group('sanitization: W5 chatter/ref output regression', () {
+    test(
+      'a tool-use turn with interstitial text does not leak into the final answer',
+      () async {
+        // W5: previously, the interstitial tool-use turn text ("我来查一下…")
+        // accumulated into the assistant draft alongside the final answer,
+        // producing chatter. Now a tool-use turn's text is discarded (restored
+        // to the pre-turn visible draft); the collapsed tile is the only
+        // progress, and the final no-tool turn commits its filtered text.
+        final provider = _ScriptedProvider([
+          // Call 1: interstitial chatter + a tool use in the SAME turn.
+          [
+            const TextDeltaEvent('我来查一下你的日程，请稍等。'),
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {'date': '2026-07-29'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: final answer.
+          [const TextDeltaEvent('你明天上午有课。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '查日程')
+            .toList();
+
+        expect(provider.streamCallCount, 2);
+        final terminal = states.last;
+        expect(terminal.state, AgentRunState.completed);
+        // Only the final turn's text is committed.
+        expect(terminal.text, '你明天上午有课。');
+        expect(terminal.text, isNot(contains('我来查一下')));
+        // The interstitial chatter was not persisted either.
+        final persisted = await chatRepository.recentMessages(account, limit: 50);
+        final assistantMsgs = persisted
+            .where((m) => m.role == ChatRole.assistant)
+            .toList();
+        for (final m in assistantMsgs) {
+          expect(m.content, isNot(contains('我来查一下')));
+        }
+        expect(assistantMsgs.last.content, '你明天上午有课。');
+      },
+    );
+
+    test(
+      'a timestamp history prefix and ref tokens are filtered from output',
+      () async {
+        // W5: a single final turn that BEGINS with a history timestamp marker
+        // and regurgitates a run-local ref token. Both must be removed from the
+        // committed answer: leading marker stripped, ref_* replaced by 该条目.
+        final provider = _ScriptedProvider([
+          [
+            const TextDeltaEvent(
+              '[2026-08-01T19:42] 我找到了 ref_YCSEZ4aCQvqoVwR6rGyGvw。明天有课。',
+            ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '查日程')
+            .toList();
+
+        expect(states.last.state, AgentRunState.completed);
+        final text = states.last.text;
+        // Leading history marker stripped.
+        expect(text, isNot(startsWith('[')));
+        expect(text, isNot(contains('[2026-08-01T19:42]')));
+        // The ref token is replaced, never leaked raw.
+        expect(text, isNot(contains('ref_')));
+        expect(text, contains('该条目'));
+        // Legitimate answer preserved.
+        expect(text, contains('明天有课'));
+        // And the persisted copy matches the filtered view (no raw ref).
+        final persisted = await chatRepository.recentMessages(account, limit: 50);
+        final assistant = persisted
+            .where((m) => m.role == ChatRole.assistant)
+            .single;
+        expect(assistant.content, isNot(contains('ref_')));
+        expect(assistant.content, isNot(contains('[2026-08-01T19:42]')));
+      },
+    );
+  });
+
+  group('sanitization: W8 repeated get_conflicts bound', () {
+    test(
+      'an exact repeated get_conflicts executes only once; repeat is bounded',
+      () async {
+        // W8: the model keeps calling get_conflicts with identical args. The
+        // first fingerprint executes; the exact repeat is blocked with
+        // `repeated_tool_call` guidance and never reaches the registry a second
+        // time.
+        final tool = _CountingSuccessTool(name: 'get_conflicts');
+        final provider = _ScriptedProvider([
+          // Call 1: two identical get_conflicts in the SAME turn.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-c1',
+              name: 'get_conflicts',
+              input: {'from': '2026-08-01', 'to': '2026-08-07'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-c2',
+              name: 'get_conflicts',
+              input: {
+                'to': '2026-08-07',
+                'from': '2026-08-01',
+              }, // same content, different key order
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: final answer.
+          [const TextDeltaEvent('本周没有课表冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '请处理一下。')
+            .toList();
+
+        // Free-chat text is accepted without a corrective loop.
+        expect(provider.streamCallCount, 2);
+        // ONE registry execution despite two identical tool_use blocks.
+        expect(tool.executeCount, 1);
+        final terminal = states.last;
+        expect(terminal.state, AgentRunState.completed);
+        expect(terminal.text, contains('没有课表冲突'));
+        // The blocked duplicate carried a repeated_tool_call result to the model,
+        // which then answered. Assert the model saw it via the second request.
+        final secondRequest = provider.requests[1];
+        final toolResults = secondRequest.messages
+            .expand((m) => m.content)
+            .whereType<LlmToolResultBlock>()
+            .toList();
+        expect(toolResults, hasLength(2));
+        final codes = toolResults.map((tr) {
+          final json =
+              jsonDecode(tr.content as String) as Map<String, Object?>;
+          return json['code'];
+        }).toList();
+        // First result is a real success payload; second is the bounded repeat.
+        expect(codes.where((c) => c == 'repeated_tool_call'), hasLength(1));
+      },
+    );
+
+    test(
+      'changed arguments on the same tool execute normally (no false dedup)',
+      () async {
+        final tool = _CountingSuccessTool(name: 'get_conflicts');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_conflicts',
+              input: {'from': '2026-08-01', 'to': '2026-08-07'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-2',
+              name: 'get_conflicts',
+              input: {'from': '2026-08-08', 'to': '2026-08-14'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('两段都查过了。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '继续处理。')
+            .toList();
+
+        // Both executed because the arguments differ.
+        expect(tool.executeCount, 2);
+        expect(states.last.state, AgentRunState.completed);
+      },
+    );
+  });
 }
 
 // ---------------------------------------------------------------------------
