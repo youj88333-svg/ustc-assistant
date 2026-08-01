@@ -111,6 +111,38 @@ class _ScriptedCall {
   List<LlmEvent> build() => _events();
 }
 
+/// A registry decorator that records the ORDER and arguments of every tool
+/// invocation that flows through it. Used by the Task 3 composition regression
+/// to assert the ACTUAL tool-call sequence — e.g. that a title query
+/// (`get_schedule(query=...)`) precedes the overlay/relation writes and that
+/// `get_conflicts` is never invoked as a participant finder. The recorded
+/// sequence is observable and thus the assertion is fail-capable (unlike
+/// asserting on output payload text, which can never contain tool names).
+class _RecordingRegistry {
+  _RecordingRegistry(this.inner);
+
+  final AgentToolRegistry inner;
+
+  /// Every `(toolName, arguments)` executed, in order.
+  final List<({String toolName, Map<String, Object?> arguments})> invocations =
+      [];
+
+  Future<AgentToolResult> execute({
+    required String toolName,
+    required Map<String, Object?> arguments,
+    required AgentToolContext context,
+  }) {
+    invocations.add((toolName: toolName, arguments: arguments));
+    return inner.execute(
+      toolName: toolName,
+      arguments: arguments,
+      context: context,
+    );
+  }
+
+  List<LlmToolDeclaration> get schemas => inner.schemas;
+}
+
 // ---------------------------------------------------------------------------
 // A disposable Young query gateway that pauses for login and counts dispose.
 // ---------------------------------------------------------------------------
@@ -1536,7 +1568,10 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       // Build the composed registry first (seeds the account + agent config).
       final built = await writeRegistry(db, 'acc-1');
       addTearDown(built.composition.dispose);
-      final registry = built.registry;
+      // Wrap the composed registry in a recorder so the ACTUAL tool-invocation
+      // sequence is observable (this is what makes the get_conflicts-finder
+      // assertion fail-capable).
+      final registry = _RecordingRegistry(built.registry);
 
       // A default JW semester UNRELATED to the event dates (gateway semester
       // override side channel the query mode must ignore).
@@ -1699,15 +1734,46 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'relation between two get_schedule(query) refs must commit');
       expect(relation.payload['result'], 'created_schedule_relation');
 
-      // Step D: no get_conflicts was ever required as a participant finder, and
-      // no outbound write payload carries a hardcoded semester.
+      // Step D: assert the ACTUAL tool-invocation sequence — the observable
+      // contract the model follows in this scenario. `get_conflicts` must never
+      // be invoked as a participant finder, and every lookup that feeds the
+      // overlay/relation must be a TITLE query (`get_schedule(query=...)`),
+      // never a date-range-only or get_conflicts call.
+      final invokedNames =
+          registry.invocations.map((i) => i.toolName).toList(growable: false);
+      // The full sequence in order: the get_schedule(query) lookups precede
+      // their consuming write tools.
+      expect(invokedNames, [
+        'get_schedule', // Step A lookup before overlay
+        'create_user_overlay',
+        'get_schedule', // first relation lookup (range title query)
+        'get_schedule', // second relation lookup (full history title query)
+        'create_schedule_relation',
+      ], reason: 'the composed flow must route through get_schedule(query) '
+          'title lookups before the overlay/relation writes, never get_conflicts '
+          'as a finder');
+      // No get_conflicts intervened anywhere in the finder sequence.
+      expect(invokedNames, isNot(contains('get_conflicts')),
+          reason: 'get_conflicts must never be invoked as a participant finder');
+      // Every get_schedule invocation used a title `query` (not a bare
+      // date-range lookup), proving participants come from title matching.
+      final getScheduleCalls = registry.invocations
+          .where((i) => i.toolName == 'get_schedule')
+          .toList(growable: false);
+      expect(getScheduleCalls, hasLength(3));
+      for (final call in getScheduleCalls) {
+        final query = call.arguments['query'];
+        expect(query, isNotNull,
+            reason: 'each get_schedule lookup in the finder flow must carry a '
+                'title query');
+        expect(query, '计算机网络');
+      }
+
+      // No outbound write payload carries a hardcoded semester.
       final out = jsonEncode([overlay.payload, relation.payload]);
       expect(out, isNot(contains('2026spring')));
       expect(out, isNot(contains('421')));
       expect(out, isNot(contains('2026fall')));
-      expect(out, isNot(contains('get_conflicts')),
-          reason: 'get_conflicts must not appear as a finder in the write '
-              'results');
       // The composed tool set must expose query on get_schedule (the model sees
       // it as the finder for write targets).
       final scheduleDecl = registry.schemas.firstWhere((s) => s.name == 'get_schedule');
