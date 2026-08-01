@@ -151,7 +151,9 @@ final List<_IntentDef> _writeIntents = [
   // get_schedule before proposing the move (conflict warnings).
   _IntentDef(
     patterns: [
-      RegExp(r'(把|将).{0,16}(教务|课程|课).{0,12}(移到|移至|挪到|调至|调整到)'),
+      // Whole-day markers ONLY: a bare `课` ("把周五的英语课移到下午") is a
+      // single-course edit (update_event), not a whole-day JW course day move.
+      RegExp(r'(把|将).{0,16}(教务|课程|整日|调休).{0,12}(移到|移至|挪到|调至|调整到)'),
       RegExp(r'(移到|移至|挪到|调至|调整到).{0,12}(教务课程|课程)'),
       RegExp(r'(教务|课程).{0,8}(整日|整周|全部).{0,4}(移动|调课|调休)'),
       RegExp(r'(恢复|撤销|取消).{0,8}(整日移动|调课|调休|课程移动)'),
@@ -205,10 +207,14 @@ final List<_IntentDef> _writeIntents = [
     lookupTools: {'get_schedule'},
     terminalTools: {'set_reminder'},
   ),
-  // create_schedule_relation (conflict / choose-one relation between items)
+  // create_schedule_relation (conflict / choose-one relation between items).
+  // An explicit relation VERB is required: a bare conflict word ("这周有冲突
+  // 吗") is a READ, never a mutation. Decision markers (决策/就这么定) trailing
+  // a conflict word also route to the write.
   _IntentDef(
     patterns: [
-      RegExp(r'(冲突|二选一|撞课|重了|相撞)'),
+      RegExp(r'(记录|设为|标记|做成|选|决定|确认|建立).{0,12}(冲突|二选一|撞课|相撞|重了)'),
+      RegExp(r'(冲突|二选一|撞课|相撞|重了).{0,6}(决策|就这么定)'),
       RegExp(r'记录.{0,6}(关系|选择)'),
     ],
     lookupTools: {'get_schedule', 'get_plan_blocks'},
@@ -244,6 +250,18 @@ final List<_IntentDef> _readIntents = [
     ],
     lookupTools: {'get_pending_event_reviews'},
   ),
+  // Conflicts / overlaps. Checked BEFORE the schedule read so a question like
+  // "我这周有哪些时间冲突的安排？" routes to get_conflicts (the schedule
+  // "这周…安排" pattern would otherwise swallow it).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(冲突|时间重叠|撞课|相撞|重了)'),
+      // Question-shaped routing: an interrogative plus a conflict word is an
+      // explicit factual query, never a write.
+      RegExp(r'(有没有|吗|哪些|多少|哪里有).{0,10}(冲突|相撞|撞课|重了|时间重叠)'),
+    ],
+    lookupTools: {'get_conflicts'},
+  ),
   // Schedule / today / tomorrow / timetable. Requires a date context or an
   // explicit "查看/查一下/列出" verb so a bare navigation "查课表"/"查日程"
   // (routed to the schedule section by the chip, Task 4) is NOT forced into a
@@ -262,13 +280,6 @@ final List<_IntentDef> _readIntents = [
       RegExp(r'(空余|空闲|有空|什么时候有空|free)'),
     ],
     lookupTools: {'get_free_time'},
-  ),
-  // Conflicts / overlaps.
-  _IntentDef(
-    patterns: [
-      RegExp(r'(冲突|时间重叠|撞课|相撞|重了)'),
-    ],
-    lookupTools: {'get_conflicts'},
   ),
   // Tasks / homework listing.
   _IntentDef(

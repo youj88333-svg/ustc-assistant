@@ -28,6 +28,57 @@ void main() {
       expect(policy.classify('你能不能修改日程？'), isNull);
     });
 
+    test('conflict QUESTION is a get_conflicts READ intent, never a write', () {
+      final req = policy.classify('这周有冲突吗');
+      expect(req, isNotNull);
+      expect(req!.lookupTools, {'get_conflicts'});
+      expect(req.terminalTools, isEmpty);
+      expect(req.mutationIntent, isFalse);
+    });
+
+    test('which conflicts are arranged this week is a READ intent', () {
+      final req = policy.classify('我这周有哪些时间冲突的安排？');
+      expect(req, isNotNull);
+      expect(req!.lookupTools, {'get_conflicts'});
+      expect(req.terminalTools, isEmpty);
+      expect(req.mutationIntent, isFalse);
+    });
+
+    test('recording a relation is a create_schedule_relation WRITE intent', () {
+      final req = policy.classify('记录这两节课的冲突');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('explicit relation decision stays a write intent', () {
+      final req = policy.classify('把2026年3月的那两节计算机网络课记录为冲突，二选一。');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('recording a no-conflict decision is a relation write, not a query', () {
+      final req = policy.classify('把重叠甲和重叠乙记录为不冲突，两个时段都去。');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('single-course move is NOT a whole-day JW course move', () {
+      final req = policy.classify('把周五的英语课移到下午');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, isNot(contains('move_jw_course_day')));
+      expect(req.terminalTools, {'update_event'});
+    });
+
+    test('whole-day JW course move stays a move_jw_course_day write', () {
+      final req = policy.classify('把 8 月 3 日的教务课程移到 8 月 9 日');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'move_jw_course_day'});
+      expect(req.mutationIntent, isTrue);
+    });
+
     test('explicit no-query instruction is free chat', () {
       expect(policy.classify('不要查询，只讨论复习方法'), isNull);
     });

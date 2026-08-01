@@ -2826,25 +2826,40 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       router.go('/chat');
       await pumpTicks(20);
 
-      // --- scenario 6: overlap default conflict -> explicit no_conflict
-      // suppresses ------------------------------------------------------------
+      // --- scenario 6 (I1): a conflict QUESTION is a READ only — it must
+      // never produce a relation write; the derived overlap is reported, not
+      // mutated ---------------------------------------------------------------
       await sendChat('我这周有哪些时间冲突的安排？');
-      // create_schedule_relation is ask_first_time: the FIRST confirmation in
-      // scenario 4 released it, so this second relation AUTO-executes — the
-      // whole run completes inside the send.
-      expect(provider.streamCallCount, 17,
-          reason: 'get_conflicts -> no_conflict relation -> get_conflicts -> final');
-      final conflictPayloads = _capturedConflictPayloads(provider);
-      expect(conflictPayloads, hasLength(2),
-          reason: 'get_conflicts ran twice: before and after the relation');
-      expect(conflictPayloads.first['conflictPairs'], hasLength(1),
+      expect(provider.streamCallCount, 15,
+          reason: 'read only: get_conflicts + final answer, no relation write');
+      expect(find.textContaining('需要二选一'), findsOneWidget,
+          reason: 'the read answer reports the derived conflict pair');
+      final payloadsAfterRead = _capturedConflictPayloads(provider);
+      expect(payloadsAfterRead, hasLength(1),
+          reason: 'one get_conflicts payload so far (the read)');
+      expect(payloadsAfterRead.first['conflictPairs'], hasLength(1),
           reason: 'the overlapping pair is derived as a conflict by default');
       expect(
-        jsonEncode(conflictPayloads.first['conflictPairs']),
+        jsonEncode(payloadsAfterRead.first['conflictPairs']),
         contains('derivedOverlap'),
         reason: 'the default conflict pair origin is derivedOverlap',
       );
-      expect(conflictPayloads.last['conflictPairs'], isEmpty,
+      final relationsAfterRead =
+          await database.select(database.scheduleRelations).get();
+      expect(relationsAfterRead, hasLength(1),
+          reason: 'a conflict QUESTION must not create any relation');
+
+      // --- scenario 6b: genuine relation WRITE -> explicit no_conflict
+      // suppresses the derived pair. create_schedule_relation is
+      // ask_first_time: the FIRST confirmation in scenario 4 released it, so
+      // this relation AUTO-executes — the whole run completes inside the send.
+      await sendChat('把重叠甲和重叠乙记录为不冲突，两个时段都去。');
+      expect(provider.streamCallCount, 19,
+          reason: 'get_conflicts -> no_conflict relation -> get_conflicts -> final');
+      final payloadsAfterWrite = _capturedConflictPayloads(provider);
+      expect(payloadsAfterWrite, hasLength(3),
+          reason: 'read query + write finder + post-write recheck');
+      expect(payloadsAfterWrite.last['conflictPairs'], isEmpty,
           reason: 'explicit no_conflict suppresses the derived pair');
       final relationsAfter =
           await database.select(database.scheduleRelations).get();
@@ -2855,7 +2870,7 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
 
       // --- scenario 7: whole-day JW move -> non-JW unchanged -> undo ---------
       await sendChat('把8月3日的教务课程移到8月9日，其他日程不要动。');
-      expect(provider.streamCallCount, 19,
+      expect(provider.streamCallCount, 21,
           reason: 'the critical move paused for confirmation');
       final moveCard = find.text('整日移动教务课程');
       await tester.ensureVisible(moveCard);
@@ -2865,7 +2880,7 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'critical moves never offer remember');
       await tester.tap(find.text('确认本次'));
       await pumpTicks(70);
-      expect(provider.streamCallCount, 21);
+      expect(provider.streamCallCount, 23);
       final moves = await database.select(database.jwDayMoves).get();
       expect(moves, hasLength(1));
       expect(moves.single.sourceDate, '2026-08-03');
@@ -2967,10 +2982,10 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
 
       // --- the Agent clears the move again (its own cleanup path) ------------
       await sendChat('恢复8月3日的整日移动。');
-      expect(provider.streamCallCount, 22,
+      expect(provider.streamCallCount, 24,
           reason: 'the critical clear paused for confirmation');
       await confirmCard('整日移动教务课程');
-      expect(provider.streamCallCount, 23);
+      expect(provider.streamCallCount, 25);
       expect(await database.select(database.jwDayMoves).get(), isEmpty,
           reason: 'the Agent clear removes the move record');
       final logs = await database.actionLogsRepository.selectAll();
@@ -2997,14 +3012,15 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         'create_schedule_relation',
         'get_tasks',
         'plan_task',
-        'get_conflicts',
-        'create_schedule_relation',
-        'get_conflicts',
+        'get_conflicts', // scenario 6 READ
+        'get_conflicts', // scenario 6b write finder
+        'create_schedule_relation', // scenario 6b write
+        'get_conflicts', // scenario 6b post-write recheck
         'get_schedule',
         'move_jw_course_day',
         'get_schedule',
         'move_jw_course_day',
-      ], reason: 'no conflict-lookup loop: get_conflicts only serves scenario 6');
+      ], reason: 'no conflict-lookup loop: get_conflicts only serves the conflict scenarios');
 
       // Tear down the tree and let Drift stream-query timers close.
       await tester.pumpWidget(const SizedBox.shrink());
@@ -3051,6 +3067,8 @@ List<_ScriptedCall> _combinedRegressionScript() {
   final blockEnd = '${_isoDate(blockDay)}T16:00:00+08:00';
   final weekFrom = _isoDate(monday);
   final weekThrough = _isoDate(monday.add(const Duration(days: 6)));
+  // The seeded overlap pair (ov-a/ov-b) lives on the current week's Tuesday.
+  final conflictDayFrom = _isoDate(monday.add(const Duration(days: 1)));
   // The post-write re-query uses a WIDER range: the runtime's duplicate-call
   // breaker rejects a second get_conflicts with EXACTLY the same arguments,
   // so the model re-checks with a refreshed (still covering) range — this is
@@ -3180,7 +3198,8 @@ List<_ScriptedCall> _combinedRegressionScript() {
           const TextDeltaEvent('已为复习算法安排了执行时间段。'),
           const CompletedEvent(),
         ]),
-    // Scenario 6: overlap default conflict -> explicit no_conflict suppresses.
+    // Scenario 6 (I1): a conflict QUESTION is a READ only — the model looks up
+    // the derived overlap pair and answers; no relation is written.
     _ScriptedCall(() => [
           ToolUseCompletedEvent(
             id: 'tu-f1',
@@ -3189,10 +3208,27 @@ List<_ScriptedCall> _combinedRegressionScript() {
           ),
           const CompletedEvent(),
         ]),
+    _ScriptedCall(() => [
+          const TextDeltaEvent('这周有重叠甲和重叠乙的重叠冲突，需要二选一。'),
+          const CompletedEvent(),
+        ]),
+    // Scenario 6b: genuine relation WRITE -> explicit no_conflict suppresses
+    // the derived pair. The write finder get_conflicts is narrowed to the
+    // conflict day (distinct args keep the duplicate-call breaker quiet); the
+    // post-write recheck uses a wider refreshed range (the real loop-breaker
+    // behavior the manual retest item 5 verifies).
+    _ScriptedCall(() => [
+          ToolUseCompletedEvent(
+            id: 'tu-f2',
+            name: 'get_conflicts',
+            input: {'from': conflictDayFrom, 'through': conflictDayFrom},
+          ),
+          const CompletedEvent(),
+        ]),
     _ScriptedCall(
       () => [
         const ToolUseCompletedEvent(
-          id: 'tu-f2',
+          id: 'tu-f3',
           name: 'create_schedule_relation',
           input: {},
         ),
@@ -3210,7 +3246,7 @@ List<_ScriptedCall> _combinedRegressionScript() {
     ),
     _ScriptedCall(() => [
           ToolUseCompletedEvent(
-            id: 'tu-f3',
+            id: 'tu-f4',
             name: 'get_conflicts',
             input: {'from': recheckFrom, 'through': recheckThrough},
           ),
