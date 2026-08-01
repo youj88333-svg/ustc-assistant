@@ -425,7 +425,9 @@ void main() {
       personalSeriesId: 'ser-1', occurrenceKey: 'k');
     // 整系列时间变更在 commit 阶段拒绝；update_event 恒走确认，先批准再断言。
     final result = await update.execute({
-      'ref_event': ref, 'scope': 'whole_series', 'start_at': '2026-08-05T17:00:00+08:00',
+      'ref_event': ref, 'scope': 'whole_series',
+      'start_at': '2026-08-05T17:00:00+08:00',
+      'end_at': '2026-08-05T18:00:00+08:00',
     }, h.ctx());
     expect(result.status, AgentToolStatus.needsUserAction);
     final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
@@ -541,7 +543,9 @@ void main() {
     final tool = h.tool('create_user_overlay');
     tool.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    final result = await tool.execute({'ref_event': ref, 'scope': 'course_series'}, h.ctx());
+    final result = await tool.execute({
+      'ref_event': ref, 'scope': 'course_series', 'attendance_policy': 'must_go',
+    }, h.ctx());
     // 需要确认后才 commit；commit 里解析失败返回 no_course_series
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.seriesOverlay, isNull);
@@ -696,5 +700,254 @@ void main() {
     expect(committed.status, AgentToolStatus.error);
     expect(committed.errorCode, 'source_event_not_editable');
     expect(gw.reminder, isNull);
+  });
+
+  // ========== Task 1: strict runtime argument validation ==========
+
+  test('schemas all declare additionalProperties:false', () {
+    final t = tools();
+    for (final tool in t) {
+      final schema = tool.inputSchema;
+      expect(schema['additionalProperties'], isFalse,
+          reason: '${tool.name} schema must be closed');
+    }
+  });
+
+  test('create_event declares importance in schema', () {
+    final t = tools();
+    final schema = t.firstWhere((x) => x.name == 'create_event').inputSchema;
+    final props = schema['properties'] as Map<String, Object?>;
+    expect(props.containsKey('importance'), isTrue);
+  });
+
+  test('update_event declares and implements type and importance', () {
+    final t = tools();
+    final schema = t.firstWhere((x) => x.name == 'update_event').inputSchema;
+    final props = schema['properties'] as Map<String, Object?>;
+    expect(props.containsKey('type'), isTrue);
+    expect(props.containsKey('importance'), isTrue);
+  });
+
+  test('create_event rejects invalid field combinations', () async {
+    final h = _Harness(tools());
+    // 定时无时间对
+    var result = await h.tool('create_event').execute({'title': 'x'}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 全天无日期对
+    result = await h.tool('create_event').execute({'title': 'x', 'all_day': true}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 全天字段与定时字段混用
+    result = await h.tool('create_event').execute({
+      'title': 'x', 'all_day': true, 'start_at': '2026-08-01T15:00:00+08:00',
+      'start_date': '2026-08-01', 'end_date_exclusive': '2026-08-02',
+    }, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 type
+    result = await h.tool('create_event').execute({
+      'title': 'x', 'start_at': '2026-08-01T15:00:00+08:00', 'end_at': '2026-08-01T16:00:00+08:00',
+      'type': 'lecture',
+    }, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 额外键
+    result = await h.tool('create_event').execute({
+      'title': 'x', 'start_at': '2026-08-01T15:00:00+08:00', 'end_at': '2026-08-01T16:00:00+08:00',
+      'sneaky': true,
+    }, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_task rejects invalid estimated minutes and importance', () async {
+    final h = _Harness(tools());
+    // 未知 importance
+    var result = await h.tool('create_task').execute(
+        {'title': 'x', 'importance': 'urgent'}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 零分钟
+    result = await h.tool('create_task').execute({'title': 'x', 'estimated_minutes': 0}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 负分钟
+    result = await h.tool('create_task').execute({'title': 'x', 'estimated_minutes': -5}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 非字符串 tag
+    result = await h.tool('create_task').execute(
+        {'title': 'x', 'tags': ['ok', 3]}, _ctx('r1'));
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('plan_task rejects unknown status, bad range and blank title', () async {
+    final h = _Harness(tools());
+    final taskRef = h.refs.bind(kind: 'task', localId: 'task-1');
+    // 未知 status
+    var result = await h.tool('plan_task').execute({
+      'ref_task': taskRef, 'start_at': '2026-08-03T20:00:00+08:00',
+      'end_at': '2026-08-03T21:00:00+08:00', 'status': 'done_maybe',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // end 不晚于 start
+    result = await h.tool('plan_task').execute({
+      'ref_task': taskRef, 'start_at': '2026-08-03T21:00:00+08:00',
+      'end_at': '2026-08-03T20:00:00+08:00',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 空白可选 title
+    result = await h.tool('plan_task').execute({
+      'ref_task': taskRef, 'start_at': '2026-08-03T20:00:00+08:00',
+      'end_at': '2026-08-03T21:00:00+08:00', 'title': '   ',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('update_event rejects no-op, bad enums, mixed modes and one-ended time', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.events['ev-1'] = PersonalEvent.timed(
+        title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
+    // no-op
+    var result = await update.execute({'ref_event': ref}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 scope
+    result = await update.execute({'ref_event': ref, 'title': 'x', 'scope': 'all'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 status
+    result = await update.execute({'ref_event': ref, 'status': 'postponed'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 type
+    result = await update.execute({'ref_event': ref, 'type': 'lecture'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 importance
+    result = await update.execute({'ref_event': ref, 'importance': 'urgent'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // delete 与 status 混用
+    result = await update.execute({'ref_event': ref, 'delete': true, 'status': 'cancelled'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // delete 与字段编辑混用
+    result = await update.execute({'ref_event': ref, 'delete': true, 'title': 'x'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 只给时间对一端
+    result = await update.execute({
+      'ref_event': ref, 'start_at': '2026-08-01T17:00:00+08:00',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_user_overlay rejects no mutation and unknown enums', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    // 无任何标注字段
+    var result = await tool.execute({'ref_event': ref}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 scope
+    result = await tool.execute({'ref_event': ref, 'scope': 'big', 'display_title': 'x'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 attendance
+    result = await tool.execute({'ref_event': ref, 'attendance_policy': 'maybe'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 listening
+    result = await tool.execute({'ref_event': ref, 'listening_mode': 'probably'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 importance
+    result = await tool.execute({'ref_event': ref, 'importance': 'urgent'}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('record_attendance_decision rejects unknown decision, no undecided fallback', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_attendance_decision');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'decision': 'maybe'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('record_listening_mode rejects unknown mode, no listen fallback', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_listening_mode');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({'ref_event': ref, 'mode': 'ofcourse'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_schedule_relation rejects unknown conflict state and same ref', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final left = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final right = h.refs.bind(kind: 'event', localId: 'ev-2');
+    // 未知 conflict_state
+    var result = await tool.execute({
+      'ref_left': left, 'ref_right': right, 'conflict_state': 'maybe',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 同一 ref 两侧（字符串相同先被拒）
+    result = await tool.execute({
+      'ref_left': left, 'ref_right': left, 'conflict_state': 'no_conflict',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('set_reminder rejects negative, non-integer, empty and duplicate-only offsets', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    // 负偏移
+    var result = await tool.execute({'ref_event': ref, 'offsets_minutes': [-5]}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 非整数元素
+    result = await tool.execute({'ref_event': ref, 'offsets_minutes': ['10']}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 空列表
+    result = await tool.execute({'ref_event': ref, 'offsets_minutes': []}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('set_reminder sorts and dedups offsets before committing', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    final result = await tool.execute({
+      'ref_event': ref, 'offsets_minutes': [30, 15, 30, 120],
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.reminder!.offsets, [15, 30, 120]);
+  });
+
+  test('update_permission_policy rejects unknown action/target/mode', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    // 未知 action_type
+    var result = await tool.execute({
+      'action_type': 'smash_everything', 'confirmation_mode': 'always_ask',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 confirmation_mode
+    result = await tool.execute({
+      'action_type': 'create_event', 'confirmation_mode': 'sometimes',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 target_type（显式传错值）
+    result = await tool.execute({
+      'action_type': 'create_event', 'target_type': 'galaxy', 'confirmation_mode': 'always_ask',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
   });
 }

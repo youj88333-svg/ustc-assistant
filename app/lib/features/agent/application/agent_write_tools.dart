@@ -12,6 +12,12 @@ import '../domain/agent_write_proposal.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
 import 'run_reference_store.dart';
+import 'write_argument_reader.dart';
+
+const Set<String> _personalTypeValues = {
+  'personal', 'entertainment', 'meal', 'campus_affair', 'travel', 'study',
+};
+const Set<String> _importanceValues = {'low', 'normal', 'high', 'critical'};
 
 /// 把 ISO-8601 字符串解析为本地时间（模型传带 +08:00 偏移）。
 DateTime _parseDateTime(String value) => DateTime.parse(value);
@@ -36,6 +42,7 @@ class CreateEventTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'title': {'type': 'string'},
       'start_at': {'type': 'string', 'description': '开始时间 ISO-8601，如 2026-08-01T15:00:00+08:00'},
@@ -45,6 +52,7 @@ class CreateEventTool extends AgentWriteTool {
       'end_date_exclusive': {'type': 'string', 'description': '全天事件结束日期（不含）YYYY-MM-DD'},
       'location': {'type': 'string'},
       'type': {'type': 'string', 'enum': ['personal', 'entertainment', 'meal', 'campus_affair', 'travel', 'study']},
+      'importance': {'type': 'string', 'enum': ['low', 'normal', 'high', 'critical']},
       'description': {'type': 'string'},
       'tags': {'type': 'array', 'items': {'type': 'string'}},
       'reminder_offsets_minutes': {'type': 'array', 'items': {'type': 'integer'}},
@@ -63,20 +71,45 @@ class CreateEventTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final title = (a['title'] as String).trim();
-    if (title.isEmpty) throw const FormatException('title required');
-    final allDay = a['all_day'] == true;
-    final type = personalEventTypeFromStorage((a['type'] as String?) ?? 'personal');
-    final importance = (a['importance'] as String?) ?? 'normal';
-    final tags = (a['tags'] as List?)?.cast<String>() ?? const <String>[];
-    final offsets = (a['reminder_offsets_minutes'] as List?)?.cast<int>();
-    final location = a['location'] as String?;
-    final description = a['description'] as String?;
+    final r = WriteArgumentReader(a, const {
+      'title', 'start_at', 'end_at', 'all_day', 'start_date', 'end_date_exclusive',
+      'location', 'type', 'importance', 'description', 'tags', 'reminder_offsets_minutes',
+    });
+    r.rejectUnknownKeys();
+    final title = r.requiredString('title');
+    final allDay = r.optionalBool('all_day') ?? false;
+    final typeValue = r.optionalEnum('type', _personalTypeValues) ?? 'personal';
+    final type = switch (typeValue) {
+      'entertainment' => PersonalEventType.entertainment,
+      'meal' => PersonalEventType.meal,
+      'campus_affair' => PersonalEventType.campusAffair,
+      'travel' => PersonalEventType.travel,
+      'study' => PersonalEventType.study,
+      _ => PersonalEventType.personal,
+    };
+    final importance = r.optionalEnum('importance', _importanceValues) ?? 'normal';
+    final tags = r.optionalStringList('tags') ?? const <String>[];
+    final offsets = r.contains('reminder_offsets_minutes')
+        ? r.requiredIntList('reminder_offsets_minutes')
+        : null;
+    final location = r.optionalString('location');
+    final description = r.optionalString('description');
+
+    // 全天与定时字段集互斥，缺一不可。
+    if (allDay) {
+      if (!r.contains('start_date') || !r.contains('end_date_exclusive') ||
+          r.contains('start_at') || r.contains('end_at')) {
+        throw const FormatException('invalid all-day field set');
+      }
+    } else if (!r.contains('start_at') || !r.contains('end_at') ||
+        r.contains('start_date') || r.contains('end_date_exclusive')) {
+      throw const FormatException('invalid timed field set');
+    }
 
     final PersonalEvent event;
     if (allDay) {
-      final startDate = _parseDateTime(a['start_date'] as String);
-      final endDate = _parseDateTime(a['end_date_exclusive'] as String);
+      final startDate = _parseDateTime(r.requiredString('start_date'));
+      final endDate = _parseDateTime(r.requiredString('end_date_exclusive'));
       event = PersonalEvent.allDay(
         title: title,
         startDate: startDate,
@@ -88,8 +121,8 @@ class CreateEventTool extends AgentWriteTool {
         tags: tags,
       );
     } else {
-      final startAt = _parseDateTime(a['start_at'] as String);
-      final endAt = _parseDateTime(a['end_at'] as String);
+      final startAt = _parseDateTime(r.requiredString('start_at'));
+      final endAt = _parseDateTime(r.requiredString('end_at'));
       event = PersonalEvent.timed(
         title: title,
         startAt: startAt,
@@ -138,11 +171,12 @@ class CreateTaskTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'title': {'type': 'string'},
       'description': {'type': 'string'},
       'deadline_at': {'type': 'string', 'description': '截止时间 ISO-8601，可空'},
-      'estimated_minutes': {'type': 'integer', 'description': '预计工时（分钟）'},
+      'estimated_minutes': {'type': 'integer', 'description': '预计工时（分钟），必须为正'},
       'importance': {'type': 'string', 'enum': ['low', 'normal', 'high', 'critical']},
       'tags': {'type': 'array', 'items': {'type': 'string'}},
     },
@@ -160,16 +194,26 @@ class CreateTaskTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final title = (a['title'] as String).trim();
-    if (title.isEmpty) throw const FormatException('title required');
-    final deadlineAt = a['deadline_at'] == null ? null : _parseDateTime(a['deadline_at'] as String);
-    final estimatedMinutes = a['estimated_minutes'] as int?;
-    final importanceValue = (a['importance'] as String?) ?? 'normal';
-    final importance = TaskImportance.values.firstWhere(
-      (v) => v.name == importanceValue,
-      orElse: () => TaskImportance.normal,
-    );
-    final tags = (a['tags'] as List?)?.cast<String>() ?? const <String>[];
+    final r = WriteArgumentReader(a, const {
+      'title', 'description', 'deadline_at', 'estimated_minutes', 'importance', 'tags',
+    });
+    r.rejectUnknownKeys();
+    final title = r.requiredString('title');
+    final deadlineAt = r.contains('deadline_at')
+        ? _parseDateTime(r.requiredString('deadline_at'))
+        : null;
+    final estimatedMinutes = r.optionalInt('estimated_minutes');
+    if (estimatedMinutes != null && estimatedMinutes <= 0) {
+      throw const FormatException('estimated_minutes must be positive');
+    }
+    final importanceValue = r.optionalEnum('importance', _importanceValues) ?? 'normal';
+    final importance = switch (importanceValue) {
+      'low' => TaskImportance.low,
+      'high' => TaskImportance.high,
+      'critical' => TaskImportance.critical,
+      _ => TaskImportance.normal,
+    };
+    final tags = r.optionalStringList('tags') ?? const <String>[];
 
     return AgentWriteProposal(
       toolName: name,
@@ -184,7 +228,7 @@ class CreateTaskTool extends AgentWriteTool {
       ],
       commitParams: {
         'title': title,
-        'description': a['description'],
+        'description': r.optionalString('description'),
         'deadlineAt': deadlineAt,
         'estimatedMinutes': estimatedMinutes,
         'tags': tags,
@@ -220,6 +264,7 @@ class PlanTaskTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_task': {'type': 'string', 'description': '任务的 ref_* 引用'},
       'start_at': {'type': 'string'},
@@ -241,17 +286,17 @@ class PlanTaskTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_task'] as String;
+    final r = WriteArgumentReader(a, const {'ref_task', 'start_at', 'end_at', 'title', 'status'});
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_task');
     final taskId = ctx.references.resolve(ref: ref, kind: 'task');
     if (taskId == null) throw const FormatException('unknown task ref');
-    final startAt = _parseDateTime(a['start_at'] as String);
-    final endAt = _parseDateTime(a['end_at'] as String);
-    final title = a['title'] as String?;
-    final statusValue = (a['status'] as String?) ?? 'accepted';
-    final status = PlanBlockStatus.values.firstWhere(
-      (v) => v.name == statusValue,
-      orElse: () => PlanBlockStatus.accepted,
-    );
+    final startAt = _parseDateTime(r.requiredString('start_at'));
+    final endAt = _parseDateTime(r.requiredString('end_at'));
+    if (!endAt.isAfter(startAt)) throw const FormatException('end must be after start');
+    final title = r.contains('title') ? r.requiredString('title') : null;
+    final statusValue = r.optionalEnum('status', const {'accepted', 'suggested'}) ?? 'accepted';
+    final status = statusValue == 'suggested' ? PlanBlockStatus.suggested : PlanBlockStatus.accepted;
 
     return AgentWriteProposal(
       toolName: name,
@@ -294,6 +339,7 @@ class UpdateEventTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string', 'description': '来自 get_schedule 的 ref_*'},
       'scope': {'type': 'string', 'enum': ['only_this', 'whole_series'], 'default': 'only_this',
@@ -306,6 +352,7 @@ class UpdateEventTool extends AgentWriteTool {
       'end_date_exclusive': {'type': 'string'},
       'location': {'type': 'string'},
       'type': {'type': 'string', 'enum': ['personal', 'entertainment', 'meal', 'campus_affair', 'travel', 'study']},
+      'importance': {'type': 'string', 'enum': ['low', 'normal', 'high', 'critical']},
       'description': {'type': 'string'},
       'tags': {'type': 'array', 'items': {'type': 'string'}},
       'status': {'type': 'string', 'enum': ['cancelled', 'completed', 'skipped']},
@@ -325,24 +372,66 @@ class UpdateEventTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_event'] as String;
+    final r = WriteArgumentReader(a, const {
+      'ref_event', 'scope', 'title', 'start_at', 'end_at', 'all_day', 'start_date',
+      'end_date_exclusive', 'location', 'type', 'importance', 'description', 'tags',
+      'status', 'delete',
+    });
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final scope = (a['scope'] as String?) ?? 'only_this';
-    final fields = <String, Object?>{
-      if (a.containsKey('title')) 'title': (a['title'] as String).trim(),
-      if (a.containsKey('start_at')) 'start_at': _parseDateTime(a['start_at'] as String),
-      if (a.containsKey('end_at')) 'end_at': _parseDateTime(a['end_at'] as String),
-      if (a.containsKey('all_day')) 'all_day': a['all_day'],
-      if (a.containsKey('start_date')) 'start_date': _parseDateTime(a['start_date'] as String),
-      if (a.containsKey('end_date_exclusive')) 'end_date_exclusive': _parseDateTime(a['end_date_exclusive'] as String),
-      if (a.containsKey('location')) 'location': a['location'],
-      if (a.containsKey('description')) 'description': a['description'],
-      if (a.containsKey('importance')) 'importance': a['importance'],
-      if (a.containsKey('tags')) 'tags': (a['tags'] as List).cast<String>(),
+    final scope = r.optionalEnum('scope', const {'only_this', 'whole_series'}) ?? 'only_this';
+    final status = r.optionalEnum('status', const {'cancelled', 'completed', 'skipped'});
+    final delete = r.optionalBool('delete') ?? false;
+
+    final typeValue = r.optionalEnum('type', _personalTypeValues);
+    final type = switch (typeValue) {
+      'entertainment' => PersonalEventType.entertainment,
+      'meal' => PersonalEventType.meal,
+      'campus_affair' => PersonalEventType.campusAffair,
+      'travel' => PersonalEventType.travel,
+      'study' => PersonalEventType.study,
+      _ => null, // 未提供 type：保留当前事件的类型。
     };
-    final status = a['status'] as String?;
-    final delete = a['delete'] == true;
+    final importance = r.optionalEnum('importance', _importanceValues);
+
+    const fieldEditKeys = {
+      'title', 'start_at', 'end_at', 'all_day', 'start_date', 'end_date_exclusive',
+      'location', 'type', 'importance', 'description', 'tags',
+    };
+    final hasFieldEdits = fieldEditKeys.any(r.contains);
+
+    // 时间对的起止必须成对提供，不允许只给一端。
+    if (r.contains('start_at') != r.contains('end_at')) {
+      throw const FormatException('start_at and end_at must be provided together');
+    }
+
+    // delete / status / 字段编辑三模式互斥。
+    if (delete && (status != null || hasFieldEdits)) {
+      throw const FormatException('delete cannot be combined with status or field edits');
+    }
+    if (status != null && hasFieldEdits) {
+      throw const FormatException('status change cannot be combined with field edits');
+    }
+    // 拒绝零改动。
+    if (!delete && status == null && !hasFieldEdits) {
+      throw const FormatException('no fields to update');
+    }
+
+    final fields = <String, Object?>{
+      if (r.contains('title')) 'title': r.requiredString('title'),
+      if (r.contains('start_at')) 'start_at': _parseDateTime(r.requiredString('start_at')),
+      if (r.contains('end_at')) 'end_at': _parseDateTime(r.requiredString('end_at')),
+      if (r.contains('all_day')) 'all_day': r.optionalBool('all_day')!,
+      if (r.contains('start_date')) 'start_date': _parseDateTime(r.requiredString('start_date')),
+      if (r.contains('end_date_exclusive')) 'end_date_exclusive': _parseDateTime(r.requiredString('end_date_exclusive')),
+      if (r.contains('location')) 'location': r.optionalString('location'),
+      'type': ?type,
+      'importance': ?importance,
+      if (r.contains('description')) 'description': r.optionalString('description'),
+      if (r.contains('tags')) 'tags': r.optionalStringList('tags')!,
+    };
 
     final lines = <String>[];
     if (delete) {
@@ -350,8 +439,8 @@ class UpdateEventTool extends AgentWriteTool {
     } else if (status != null) {
       lines.add('状态改为：$status');
     } else {
-      if (a.containsKey('title')) lines.add('标题：${a['title']}');
-      if (a.containsKey('start_at') || a.containsKey('end_at')) lines.add('时间有改动');
+      if (r.contains('title')) lines.add('标题：${r.requiredString('title')}');
+      if (r.contains('start_at') || r.contains('end_at')) lines.add('时间有改动');
       lines.add(scope == 'whole_series' ? '影响：整个重复系列' : '影响：仅本次');
     }
 
@@ -390,19 +479,13 @@ class UpdateEventTool extends AgentWriteTool {
       return AgentToolResult(payload: {'result': 'deleted_event'});
     }
     if (status != null) {
-      if (status == 'cancelled') {
-        await gateway.cancelEvent(eventId);
-      } else if (status == 'completed') {
-        await gateway.completeEvent(eventId);
-      } else if (status == 'skipped') {
-        await gateway.skipEvent(eventId);
-      } else {
-        // 超出 schema 枚举的状态（模型越界传参）显式报错，不再静默按 skipped 处理。
-        return const AgentToolResult(
-          status: AgentToolStatus.error,
-          errorCode: 'invalid_write_arguments',
-          payload: {'guidance': '未知的事件状态，仅支持 cancelled/completed/skipped。'},
-        );
+      switch (status) {
+        case 'cancelled':
+          await gateway.cancelEvent(eventId);
+        case 'completed':
+          await gateway.completeEvent(eventId);
+        case 'skipped':
+          await gateway.skipEvent(eventId);
       }
       return AgentToolResult(payload: {'result': 'updated_event', 'status': status});
     }
@@ -449,6 +532,7 @@ class UpdateEventTool extends AgentWriteTool {
     final location = (fields['location'] as String?) ?? current.locationName;
     final importance = (fields['importance'] as String?) ?? current.importance;
     final tags = (fields['tags'] as List<String>?) ?? current.tags;
+    final type = (fields['type'] as PersonalEventType?) ?? current.type;
 
     if (wantAllDay) {
       // 转全天：优先用 fields 的 start_date；缺省时全天事件保留原日期，
@@ -472,7 +556,7 @@ class UpdateEventTool extends AgentWriteTool {
       }
       return PersonalEvent.allDay(
         title: title, startDate: startDate, endDateExclusive: endDate,
-        description: description, locationName: location, type: current.type,
+        description: description, locationName: location, type: type,
         importance: importance, tags: tags,
       );
     }
@@ -500,7 +584,7 @@ class UpdateEventTool extends AgentWriteTool {
     }
     return PersonalEvent.timed(
       title: title, startAt: startAt, endAt: endAt,
-      description: description, locationName: location, type: current.type,
+      description: description, locationName: location, type: type,
       importance: importance, tags: tags,
     );
   }
@@ -527,9 +611,6 @@ class UpdateEventTool extends AgentWriteTool {
     endDateExclusive: fields.containsKey('end_date_exclusive')
         ? OverrideValue.set(fields['end_date_exclusive'] as DateTime)
         : const OverrideValue.absent(),
-    status: fields.containsKey('status')
-        ? OverrideValue.set(eventStatusFromStorage(fields['status'] as String))
-        : const OverrideValue.absent(),
     importance: fields.containsKey('importance')
         ? OverrideValue.set(fields['importance'] as String)
         : const OverrideValue.absent(),
@@ -551,6 +632,7 @@ class CreateUserOverlayTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string'},
       'scope': {'type': 'string', 'enum': ['single_event', 'course_series'], 'default': 'single_event'},
@@ -589,14 +671,32 @@ class CreateUserOverlayTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_event'] as String;
+    final r = WriteArgumentReader(a, const {
+      'ref_event', 'scope', 'attendance_policy', 'attendance_note', 'listening_mode',
+      'listening_note', 'display_title', 'importance', 'hidden',
+    });
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final scope = (a['scope'] as String?) ?? 'single_event';
+    final scope = r.optionalEnum('scope', const {'single_event', 'course_series'}) ?? 'single_event';
+
+    const mutationKeys = {
+      'attendance_policy', 'attendance_note', 'listening_mode', 'listening_note',
+      'display_title', 'importance', 'hidden',
+    };
+    if (!mutationKeys.any(r.contains)) {
+      throw const FormatException('no mutation fields provided');
+    }
+
+    r.optionalEnum('attendance_policy', const {'must_go', 'gamble', 'skip'});
+    r.optionalEnum('listening_mode', const {'listen', 'not_listen'});
+    r.optionalEnum('importance', _importanceValues);
+
     final lines = <String>[];
     if (a['attendance_policy'] != null) lines.add('出勤：${a['attendance_policy']}');
     if (a['listening_mode'] != null) lines.add('听讲：${a['listening_mode']}');
-    if (lines.isEmpty && a['display_title'] != null) lines.add('显示名：${a['display_title']}');
+    if (lines.isEmpty && r.contains('display_title')) lines.add('显示名：${r.optionalString('display_title')}');
     lines.add(scope == 'course_series' ? '作用：整门课' : '作用：仅该事件');
 
     return AgentWriteProposal(
@@ -654,6 +754,7 @@ class RecordAttendanceDecisionTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string'},
       'decision': {'type': 'string', 'enum': ['go', 'skip', 'undecided']},
@@ -672,10 +773,12 @@ class RecordAttendanceDecisionTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_event'] as String;
+    final r = WriteArgumentReader(a, const {'ref_event', 'decision'});
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final decision = (a['decision'] as String?) ?? 'undecided';
+    final decision = r.requiredEnum('decision', const {'go', 'skip', 'undecided'});
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -713,6 +816,7 @@ class RecordListeningModeTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string'},
       'mode': {'type': 'string', 'enum': ['listen', 'not_listen']},
@@ -732,11 +836,13 @@ class RecordListeningModeTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_event'] as String;
+    final r = WriteArgumentReader(a, const {'ref_event', 'mode', 'note'});
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final mode = (a['mode'] as String?) ?? 'listen';
-    final note = a['note'] as String?;
+    final mode = r.requiredEnum('mode', const {'listen', 'not_listen'});
+    final note = r.optionalString('note');
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -771,6 +877,7 @@ class CreateScheduleRelationTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_left': {'type': 'string'},
       'ref_right': {'type': 'string'},
@@ -800,10 +907,15 @@ class CreateScheduleRelationTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final left = _resolveRef(ctx.references, a['ref_left'] as String);
-    final right = _resolveRef(ctx.references, a['ref_right'] as String);
-    final conflictState = a['conflict_state'] as String;
-    final reason = a['reason'] as String?;
+    final r = WriteArgumentReader(a, const {'ref_left', 'ref_right', 'conflict_state', 'reason'});
+    r.rejectUnknownKeys();
+    final leftRef = r.requiredString('ref_left');
+    final rightRef = r.requiredString('ref_right');
+    if (leftRef == rightRef) throw const FormatException('refs must differ');
+    final conflictState = r.requiredEnum('conflict_state', const {'conflict', 'no_conflict'});
+    final reason = r.optionalString('reason');
+    final left = _resolveRef(ctx.references, leftRef);
+    final right = _resolveRef(ctx.references, rightRef);
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -852,6 +964,7 @@ class SetReminderTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string'},
       'offsets_minutes': {'type': 'array', 'items': {'type': 'integer'},
@@ -871,11 +984,16 @@ class SetReminderTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final ref = a['ref_event'] as String;
+    final r = WriteArgumentReader(a, const {'ref_event', 'offsets_minutes'});
+    r.rejectUnknownKeys();
+    final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final offsets = (a['offsets_minutes'] as List).cast<int>();
-    if (offsets.any((o) => o < 0)) throw const FormatException('negative offset');
+    final raw = r.requiredIntList('offsets_minutes');
+    if (raw.isEmpty) throw const FormatException('offsets_minutes must not be empty');
+    if (raw.any((o) => o < 0)) throw const FormatException('negative offset');
+    // 排序 + 去重后再提案。
+    final offsets = raw.toSet().toList()..sort();
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -919,6 +1037,7 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
+    'additionalProperties': false,
     'properties': {
       'action_type': {'type': 'string',
           'enum': ['create_event', 'create_task', 'plan_task', 'create_schedule_relation',
@@ -945,9 +1064,25 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
-    final actionType = a['action_type'] as String;
-    final targetType = (a['target_type'] as String?) ?? 'event';
-    final mode = ConfirmationModeStorage.fromStorage(a['confirmation_mode'] as String);
+    final r = WriteArgumentReader(a, const {'action_type', 'target_type', 'confirmation_mode'});
+    r.rejectUnknownKeys();
+    final actionType = r.requiredEnum('action_type', const {
+      'create_event', 'create_task', 'plan_task', 'create_schedule_relation', 'set_reminder',
+      'record_attendance_decision', 'record_listening_mode', 'create_user_overlay', 'update_event',
+    });
+    const targetTypes = {'event', 'task', 'plan_block', 'overlay', 'relation', 'permission'};
+    final targetType = r.contains('target_type')
+        ? r.requiredEnum('target_type', targetTypes)
+        : 'event';
+    final modeValue = r.requiredEnum('confirmation_mode', const {
+      'always_ask', 'ask_first_time', 'always_allow', 'always_deny',
+    });
+    final mode = switch (modeValue) {
+      'ask_first_time' => ConfirmationMode.askFirstTime,
+      'always_allow' => ConfirmationMode.alwaysAllow,
+      'always_deny' => ConfirmationMode.alwaysDeny,
+      _ => ConfirmationMode.alwaysAsk,
+    };
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
