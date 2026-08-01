@@ -24,6 +24,16 @@ set_reminder/update_permission_policy）在 `feature/write-tools` 分支上实�
 完成后的 finishing-a-development-branch 流程决定。写工具只作用于本地业务数据，
 不新增任何学校/外部写通道；权限变更永远需要用户亲手确认。
 
+**写工具里程碑（本计划）已完成，待合并**：`feature/write-tools` 分支上的 10 个受控
+本地写工具（见上）已完成全部 7 个 Task，包含组合级回归测试（`Task 7 composition: full
+hardened write flow`）覆盖严格参数校验 → 目标预览 → 确认提交 → 原子回滚的整条写流程。
+十个写工具均为本地-only 且事务性审计（业务提交、用户确认日志、agent 业务日志与权限
+变更同一事务；任一失败整体回滚）；确认卡预览只显示目标标题/时间等模型安全信息，
+不含任何 DB id/ref；写工具参数经 `WriteArgumentReader` 严格运行时校验（未知键、类型
+不匹配、非法字段组合一律拒绝为 `invalid_write_arguments` 且不产生 DB 变更）。本分支
+最终验证与精确 HEAD 记录于第 7 节。尚未合并到 `main`，合并时机由本计划 Task 13
+完成后的 finishing-a-development-branch 流程决定。
+
 **真实人工验收尚未执行**：下文第 9 节的人工验收清单
 （`docs/acceptance/read-only-agent.md`）需由用户在真实校园网 / Panabit iWAN / 真实
 API Key 环境下逐项执行。自动测试通过不等于人工验收通过——学校 API 与学校网站从不进入
@@ -294,6 +304,58 @@ Flutter analyze: no issues
 Windows Release build: passed
 ```
 
+## 7.1 写工具里程碑验证（feature/write-tools，2026-08-01）
+
+写工具里程碑（Tasks 1–7）在 `feature/write-tools` 分支上推进。Task 7 最终验证时的
+精确 HEAD 记录见本文件第 7 节末尾（Task 7 提交后刷新）；最后一个代码提交为
+`f07dbde`（Task 6，生成 Flutter 学期默认值）。Task 7 提交后若再提交，需重跑本节命令
+并刷新哈希。
+
+Task 7 实测的完整自动验证（2026-08-01，worktree `E:/107/.worktrees/write-tools`；
+Python 测试在 worktree 下运行，`PYTHONPATH` 指向 worktree 的 `src`）：
+
+```text
+Python unittest discover -s tests   : Ran 394 tests, OK   （实施前基线 388；+6）
+Python compileall -q src tests      : exit 0
+Flutter analyze (whole app)         : No issues found
+Flutter test (whole suite)          : 648 passed
+Flutter build windows --release     : Built build\windows\x64\runner\Release\ustc_assistant_app.exe
+```
+
+Agent 聚焦测试（Step 2）与组合级回归局部命令：
+
+```text
+Flutter test test/features/agent test/integration/agent_composition_flow_test.dart
+    test/integration/read_only_agent_flow_test.dart : 422 passed
+（含 Task 7 最终组合回归：strict input -> target preview -> confirmation ->
+  atomic commit -> remembered policy -> second direct commit -> audit-failure rollback）
+```
+
+Task 7 精确 HEAD 见第 7 节末尾（Task 7 提交后刷新）；写工具里程碑最终代码提交为
+`f07dbde`（Task 6，生成 Flutter 学期默认值）。
+
+写工具里程碑新增能力：
+
+- 十个写工具（create_event/update_event/create_task/plan_task/create_user_overlay/
+  record_attendance_decision/record_listening_mode/create_schedule_relation/
+  set_reminder/update_permission_policy）全部为本地-only：只作用于本地业务数据，不新增
+  任何学校/外部写通道；权限变更永远需要用户亲手确认（update_permission_policy）。
+- 写操作事务性审计：业务提交、agent 业务日志、用户确认日志（agent_write_confirm）与
+  权限变更（remember 放宽 / ask_first_time 首次确认）落在同一个 Drift 事务；SQLite
+  fault-injection（BEFORE INSERT ... RAISE(ABORT) 触发器）验证任一步失败时业务表与日志
+  一并回滚，且重跑不产生重复行。
+- 确认卡目标预览：只看目标标题/时间/地点等模型安全信息，不含任何 DB id 或 ref_* token。
+- 写工具参数严格运行时校验（WriteArgumentReader）：未声明键、类型不匹配、非法字段
+  组合在 propose 阶段拒绝为 `invalid_write_arguments`，不产生任何 DB 变更。
+- 学期默认值改由 `config/source-defaults.json` 生成（Task 6），当前值保持 `461 /
+  2026fall / 2026 秋季学期`；迁移 Android/iOS 时的“统一单一数据源”仍为合并后工作，
+  本里程碑仅完成 Flutter 侧默认值从共享 JSON 生成。
+
+**真实人工验收尚未执行**：写工具相关的人工验收（真实 461 语义下询问 Agent 新建日程/
+任务并亲手点击确认卡、调整权限策略等）仍需用户在真实校园网 / Panabit iWAN / 真实
+API Key 环境下按 `docs/acceptance/read-only-agent.md` 第 10 节手动执行；自动测试不
+代替人工验收。
+
 ## 8. 已知文档边界
 
 - `docs/acceptance/windows-first-milestone.md` 是第一轮人工结果归档，不是修复后
@@ -302,6 +364,8 @@ Windows Release build: passed
   待用户在真实验收后填写；自动测试通过不等于人工验收通过；
 - 当前教务默认配置以 `config/source-defaults.json` 为准：
   `461 / 2026fall / 2026 秋季学期`；
+- `docs/agent-testing.md` 是未跟踪的用户文件。写工具里程碑（Task 7）未获得用户许可，
+  因此**未修改、未暂存、未提交**该文件，完整保留其内容待用户授权后再处理；
 - 历史 implementation plan 中的复选框不是实时状态；
 - 只读 Agent 修复轮各 Task 在 `feature/read-only-agent` 分支上实现并提交；最终修复后
   的精确 HEAD 在第 7 节最终验证时记录，不在本节硬编码（Task 9 等后续提交会改写哈希）；

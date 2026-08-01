@@ -402,6 +402,46 @@ Future<void> _insertCourseOccurrence(
       );
 }
 
+/// Inserts a local task row (for `get_tasks` to bind a task ref). State uses
+/// the persisted storage values (`active`/`normal`); the projection derives
+/// derived planning/deadline/confirmation state at query time.
+Future<void> _insertTask(
+  AppDatabase database,
+  String id,
+  String accountId,
+  String title, {
+  String state = 'active',
+}) async {
+  await database.into(database.tasks).insert(
+        TasksCompanion.insert(
+          id: id,
+          accountId: accountId,
+          title: title,
+          state: state,
+          importance: 'normal',
+          tagsJson: '[]',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+}
+
+/// Flattens every captured `LlmToolResultBlock` content string from [provider]
+/// in call order. Used to assert the model-facing tool feed contains the
+/// run-local `ref_*` tokens (from the read query) and never a raw DB id.
+List<String> _capturedToolResults(_ScriptedProvider provider) {
+  final out = <String>[];
+  for (final req in provider.requests) {
+    for (final message in req.messages) {
+      if (message.role != 'user') continue;
+      for (final block in message.content) {
+        if (block is LlmToolResultBlock) out.add(block.content.toString());
+      }
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // The composition loader injected into the real router.
 // ---------------------------------------------------------------------------
@@ -1191,5 +1231,277 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         reason: 'failed attempt must leave zero rows, so the retry lands exactly one');
     expect((await db.select(db.reminders).get()).length, 2,
         reason: 'two reminder offsets for the single retried event');
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 7 FINAL composition regression: the WHOLE hardened write flow, end to
+  // end, on real Drift composition with a scripted provider.
+  //
+  //   1. query/bind an event-or-task ref  → get_tasks binds a run-local task ref
+  //   2. reject one malformed write        → invalid_write_arguments, no DB change
+  //   3. confirmation preview names target → names the event title, no id/ref
+  //   4. approve + remember                → domain row + agent_write_confirm +
+  //                                          domain action + permission logs
+  //   5. same action again                 → direct success, NO second confirmation
+  //   6. force audit failure for a 3rd write → complete rollback (event + logs)
+  // ─────────────────────────────────────────────────────────────────────────
+  test('Task 7 composition: full hardened write flow (bind->validate->confirm->'
+      'remember->auto->rollback)', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+    // A task row so call 1 (get_tasks) binds a run-local task ref; a personal
+    // event row so create_event targets an account-scoped personal source.
+    await _insertTask(db, 'task-1', 'acc-1', '复习算法');
+    await db.into(db.calendarEvents).insert(
+          CalendarEventsCompanion.insert(
+            id: 'ev-1',
+            accountId: 'acc-1',
+            source: 'user',
+            externalId: Value('ev-1'),
+            title: '健身',
+            type: 'personal',
+            startAt: Value(DateTime.utc(2026, 8, 1, 7).millisecondsSinceEpoch),
+            endAt: Value(DateTime.utc(2026, 8, 1, 8).millisecondsSinceEpoch),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            locationName: Value('健身房'),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+
+    // Call 1: read query binds a task ref (get_tasks over the seeded task).
+    // Call 2: malformed create_event (missing start_at -> invalid_write_arguments,
+    //         NO confirmation pause, NO DB change; model retries with fixed args).
+    // Call 3: valid create_event -> pauses for write confirmation.
+    // Call 4: final text after the user approves (remember=true).
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_tasks',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ]),
+      // Malformed write: `create_event` needs a timed field set. Missing both
+      // start_at/end_at is rejected at propose time as invalid_write_arguments.
+      _ScriptedCall(() => [
+            const ToolUseCompletedEvent(
+              id: 'tu-2',
+              name: 'create_event',
+              input: {
+                'title': '健身',
+                'location': '健身房',
+              },
+            ),
+            // The model immediately retries with a VALID argument set.
+            const ToolUseCompletedEvent(
+              id: 'tu-3',
+              name: 'create_event',
+              input: validTimedEventArguments,
+            ),
+            const CompletedEvent(),
+          ]),
+      // Call 4: final text after confirm(approve, remember).
+      _ScriptedCall(() => [
+            const TextDeltaEvent('已为你新建日程「健身」。'),
+            const CompletedEvent(),
+          ]),
+    ]);
+    final composition = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: provider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    addTearDown(composition.dispose);
+
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    composition.sessionService
+        .send(accountId: 'acc-1', userText: '帮我查下任务并建个健身日程')
+        .listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete);
+
+    // --- Step 1: query/bind a task ref -------------------------------------
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(provider.streamCallCount, greaterThanOrEqualTo(1),
+        reason: 'get_tasks must have run');
+    // The read tool bound a run-local task ref; the model-facing tool feed
+    // carries that opaque `ref_*` token but never the raw task DB id.
+    final feed = _capturedToolResults(provider).join('\n');
+    expect(feed, isNot(contains('task-1')),
+        reason: 'raw task DB id must never reach the model');
+    expect(feed, contains('ref_'),
+        reason: 'the get_tasks tool_result must hand back a run-local ref token');
+
+    // --- Step 2: reject one malformed write, no DB change ------------------
+    // Wait for the model to have reached the malformed create_event (call 2)
+    // AND the corrected call 3 that pauses for confirmation.
+    for (var i = 0; i < 30; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      states.any((s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+      isTrue,
+      reason: 'the valid create_event (after the malformed one was rejected) '
+          'must pause for write confirmation',
+    );
+    // The malformed write added NOTHING: no new event rows beyond the seeded
+    // personal event, no agent success/confirm/decline audit for it, and no
+    // permission prior bytes.
+    expect((await db.select(db.calendarEvents).get()).length, 1,
+        reason: 'malformed write must leave exactly the one seeded event');
+    // The write-tool feed names the title and contains NO id/ref of the target.
+    final confirmProposal =
+        states.lastWhere((s) => s.userAction != null).userAction!.writeProposal;
+    expect(confirmProposal, isNotNull);
+    expect(confirmProposal!.previewLines.join('\n'), contains('健身'),
+        reason: 'confirmation preview must name the target title');
+    expect(confirmProposal.previewLines.join('\n'), isNot(contains('ev-1')),
+        reason: 'confirmation preview must not leak the raw event DB id');
+
+    // --- Step 4: approve with remember -> domain row + audit logs ---------
+    await composition.sessionService
+        .confirmWriteProposal(
+            accountId: 'acc-1', runId: runId, approve: true, remember: true)
+        .drain<void>();
+    await done.future;
+
+    expect(states.last.state, AgentRunState.completed);
+    final eventsAfter = await db.select(db.calendarEvents).get();
+    expect(eventsAfter.length, 2,
+        reason: 'the approved create_event adds the second (健身) personal row');
+    final logs = await db.actionLogsRepository.selectAll();
+    // user confirmation decision
+    expect(
+      logs.where((l) =>
+          l.source == 'user' &&
+          l.actionType == 'agent_write_confirm' &&
+          l.result == 'approved'),
+      hasLength(1),
+    );
+    // agent business success for the actual domain action
+    expect(
+      logs.where((l) =>
+          l.source == 'agent' &&
+          l.actionType == 'create_event' &&
+          l.result == 'success'),
+      hasLength(1),
+    );
+    // remember = user permission relaxation is audited
+    expect(
+      logs.where((l) =>
+          l.source == 'user' &&
+          l.actionType == 'update_permission_policy' &&
+          l.result == 'success'),
+      isNotEmpty,
+      reason: 'remember relaxation must be audited as a permission change',
+    );
+
+    // --- Step 5: same action again -> direct success, no confirmation ------
+    final secondProvider = _ScriptedProvider([
+      _ScriptedCall(() => [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'create_event',
+              input: {
+                'title': '游泳',
+                'start_at': '2026-08-02T09:00:00+08:00',
+                'end_at': '2026-08-02T10:00:00+08:00',
+              },
+            ),
+            const CompletedEvent(),
+          ]),
+      _ScriptedCall(() => [
+            const TextDeltaEvent('已新建。'),
+            const CompletedEvent(),
+          ]),
+    ]);
+    final second = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: secondProvider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    addTearDown(second.dispose);
+    final states2 = <AgentRunViewState>[];
+    final done2 = Completer<void>();
+    second.sessionService
+        .send(accountId: 'acc-1', userText: '再建个游泳日程')
+        .listen((s) => states2.add(s), onDone: done2.complete);
+    await done2.future;
+
+    expect(
+      states2.any((s) =>
+          s.userAction?.type == AgentUserActionType.writeConfirmation),
+      isFalse,
+      reason: 'after remember, the same create_event action auto-executes '
+          'without a second confirmation card',
+    );
+    expect(states2.last.state, AgentRunState.completed);
+    expect((await db.select(db.calendarEvents).get()).length, 3,
+        reason: 'the second identical write lands a direct row with no pause');
+
+    // --- Step 6: force an audit failure -> complete rollback --------------
+    final third = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: _ScriptedProvider(const []),
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    addTearDown(third.dispose);
+    // Force every source='agent' ActionLog insert to abort — simulates an audit
+    // persistence failure ON the write path (shared transaction below).
+    await db.customStatement('''
+CREATE TRIGGER fail_agent_log BEFORE INSERT ON action_logs
+WHEN NEW.source = 'agent'
+BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
+''');
+    addTearDown(() => db.customStatement('DROP TRIGGER IF EXISTS fail_agent_log'));
+    final beforeThird = (await db.select(db.calendarEvents).get()).length;
+    final beforeThirdSuccessLogs = (await db.select(db.actionLogs).get())
+        .where((l) =>
+            l.source == 'agent' &&
+            l.actionType == 'create_event' &&
+            l.result == 'success')
+        .length;
+    // create_event is now always_allow (remembered), so a third write is a
+    // direct all-granted write; the audit failure must roll back the event and
+    // every log written in the same atomic unit.
+    final thirdResult = await third.registry.execute(
+      toolName: 'create_event',
+      arguments: validTimedEventArguments,
+      context: integrationCtx('acc-1', 'r-final'),
+    );
+    expect(thirdResult.status, AgentToolStatus.error,
+        reason: 'write commit must fail when the audit cannot be persisted');
+    // Complete rollback: no new event rows and no NEW success audit may exist
+    // beyond the two that the earlier approved/remembered writes legitimately
+    // committed. The rolled-back third write must leave both unchanged.
+    expect((await db.select(db.calendarEvents).get()).length, beforeThird,
+        reason: 'the third event must roll back with the failed audit');
+    final thirdSuccessLogs = (await db.select(db.actionLogs).get())
+        .where((l) =>
+            l.source == 'agent' &&
+            l.actionType == 'create_event' &&
+            l.result == 'success')
+        .length;
+    expect(thirdSuccessLogs, beforeThirdSuccessLogs,
+        reason: 'the rolled-back third write must add no new agent success audit');
   });
 }

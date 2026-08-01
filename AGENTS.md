@@ -27,7 +27,15 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
    create_schedule_relation/set_reminder/update_permission_policy），全部经"审批门"
    按风险分级确认（聊天内联确认卡），AgentPermissionPolicy 表迁移并接入运行时决策，
    设置页可管理确认策略；权限变更永远需要用户亲手确认（update_permission_policy）。
-   写能力只作用于本地业务数据，不新增任何学校/外部写通道。
+   写能力只作用于本地业务数据，不新增任何学校/外部写通道。十个写工具均为本地-only
+   且事务性审计：业务提交、agent 业务日志、用户确认日志与权限变更（remember /
+   ask_first_time）落在同一 Drift 事务，任一失败整体回滚（SQLite fault-injection
+   回归验证）。确认卡目标预览只显示目标标题/时间等模型安全信息，不含 DB id/ref；
+   写参数经 WriteArgumentReader 严格运行时校验，非法参数拒绝为
+   `invalid_write_arguments` 且不产生 DB 变更。写工具里程碑（Tasks 1–7）在
+   `feature/write-tools` 分支上完成，尚未合并到 `main`，最终验证与 HEAD 见
+   `docs/read-only-agent-handoff.md` 第 7.1 节；写工具/手动人工验收尚未执行，清单见
+   `docs/acceptance/read-only-agent.md` 第 10 节（`完成：`留空待用户填写）。
 
 Python 入口统一为 `python -m ustc_assistant`，Flutter 工程位于 `app/`。详情见
 `README.md`，当前交接状态见 `docs/read-only-agent-handoff.md`，稳定来源契约见
@@ -195,7 +203,9 @@ source service
 - Python 使用 Conda 环境 `ustc_assistant`，最低版本 3.10。
 - 时间统一使用 `Asia/Shanghai`。
 - 当前教务自动同步默认学期为 `semesterId=461`、产品键 `2026fall`、显示名
-  “2026 秋季学期”；不得根据年份推算教务内部学期 ID。
+  “2026 秋季学期”；不得根据年份推算教务内部学期 ID。Flutter 侧学期默认值由
+  `config/source-defaults.json` 生成（写工具里程碑 Task 6），当前生成值仍为
+  `461 / 2026fall / 2026 秋季学期`。
 - 网站契约变化时明确失败，不返回部分数据冒充完整结果。
 - 修改来源行为时先增加回归测试；真实故障场景不得因整理测试文件而删除。
 - 各来源保留独立 DOM、接口和解析规则，只共享浏览器生命周期、存储和 CLI 编排。
