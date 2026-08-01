@@ -472,4 +472,129 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
+
+  // Task 6 follow-up: a plan block overlapping an event must ALSO show the
+  // conflict warning in the week grid — both sides of the pair are stamped.
+  testWidgets('plan block overlapping an event shows the conflict warning', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedTask(database, 'task-x', '完成实验报告');
+    await database
+        .into(database.calendarEvents)
+        .insert(
+          CalendarEventsCompanion.insert(
+            id: 'overlap-event',
+            accountId: 'account',
+            source: 'user',
+            title: '晚间安排',
+            type: 'personal',
+            startAt: Value(DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch),
+            endAt: Value(
+              DateTime.utc(2026, 7, 27, 2, 30).millisecondsSinceEpoch,
+            ),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await seedPlanBlock(
+      database,
+      id: 'block-x',
+      taskId: 'task-x',
+      startAt: DateTime(2026, 7, 27, 9, 30),
+      endAt: DateTime(2026, 7, 27, 10, 45),
+      status: PlanBlockStatus.accepted.storage,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Both the event side and the plan-block side carry the conflict marker.
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('event-overlap-event')),
+        matching: find.bySemanticsLabel('冲突'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('plan-block-block-x')),
+        matching: find.bySemanticsLabel('冲突'),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 6 follow-up: two overlapping plan blocks both show the conflict
+  // warning (no events involved).
+  testWidgets('overlapping plan blocks both show the conflict warning', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedTask(database, 'task-a', '任务甲');
+    await seedTask(database, 'task-b', '任务乙');
+    await seedPlanBlock(
+      database,
+      id: 'block-a',
+      taskId: 'task-a',
+      startAt: DateTime(2026, 7, 27, 9, 30),
+      endAt: DateTime(2026, 7, 27, 10, 45),
+      status: PlanBlockStatus.accepted.storage,
+    );
+    await seedPlanBlock(
+      database,
+      id: 'block-b',
+      taskId: 'task-b',
+      startAt: DateTime(2026, 7, 27, 10, 0),
+      endAt: DateTime(2026, 7, 27, 11, 15),
+      status: PlanBlockStatus.accepted.storage,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('plan-block-block-a')),
+        matching: find.bySemanticsLabel('冲突'),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('plan-block-block-b')),
+        matching: find.bySemanticsLabel('冲突'),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
 }

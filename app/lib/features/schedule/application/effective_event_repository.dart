@@ -177,17 +177,19 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         final visibleRows = rows
             .where((row) => row.read<int>('hidden') == 0)
             .toList(growable: false);
-        final conflictIds = await _resolvedConflictIds(visibleRows);
-        return visibleRows
-            .map(
-              (row) => _displayEvent(
-                row,
-                hasConfirmedConflict: conflictIds.contains(
-                  row.read<String>('id'),
-                ),
+        final conflictIds = await resolvedConflictIdsFor([
+          for (final row in visibleRows)
+            _displayEvent(row, hasConfirmedConflict: false),
+        ]);
+        return [
+          for (final row in visibleRows)
+            _displayEvent(
+              row,
+              hasConfirmedConflict: conflictIds.contains(
+                row.read<String>('id'),
               ),
-            )
-            .toList(growable: false);
+            ),
+        ];
       });
 
   Future<List<EffectiveEventRecord>> overlappingRecords(String eventId) async {
@@ -361,12 +363,13 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
   /// authority: overlaps default to conflict and explicit
   /// `conflict`/`no_conflict` relations override. Derived pairs are never
   /// persisted.
-  Future<Set<String>> _resolvedConflictIds(List<QueryRow> visibleRows) async {
+  ///
+  /// Exposed so the week page can stamp plan-block grid items with the same
+  /// id set the event stream uses ([watchDisplayEvents] stamps the event
+  /// side from the identical resolution).
+  Future<Set<String>> resolvedConflictIdsFor(List<EffectiveEvent> events) async {
     final items = <ScheduleGridItem>[
-      for (final row in visibleRows)
-        ScheduleGridItem.fromEvent(
-          _displayEvent(row, hasConfirmedConflict: false),
-        ),
+      for (final event in events) ScheduleGridItem.fromEvent(event),
     ];
 
     final planBlocks =

@@ -718,4 +718,78 @@ void main() {
       expect(ab.origin, ConflictPairOrigin.explicitOccurrence);
     });
   });
+
+  test('removing an explicit relation returns the pair to derived conflict',
+      () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = ConflictService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final a = participant('event-a', 'series-a');
+    final b = participant('event-b', 'series-b');
+
+    // event-a and event-b share the same timed slot → derived conflict with
+    // no explicit row required.
+    expect(await service.stateForPair(a, b), ConflictState.conflict);
+
+    // An explicit no_conflict row suppresses the derived conflict.
+    await service.classifyPair(a, b, ConflictState.nonConflict);
+    expect(await service.stateForPair(a, b), ConflictState.nonConflict);
+    expect(
+      await database.select(database.scheduleRelations).get(),
+      hasLength(1),
+    );
+
+    // Removing the explicit relation restores the derived conflict.
+    await (database.delete(database.scheduleRelations)).go();
+    expect(await service.stateForPair(a, b), ConflictState.conflict);
+    expect(await database.select(database.scheduleRelations).get(), isEmpty);
+  });
+
+  test('derived display projection never inserts schedule relation rows',
+      () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    for (final eventId in ['event-a', 'event-b']) {
+      await database
+          .into(database.sourceRecords)
+          .insert(
+            SourceRecordsCompanion.insert(
+              id: 'source-$eventId',
+              accountId: 'a',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: eventId,
+              localEntityId: eventId,
+              sourceStatus: 'active',
+              presence: 'observed',
+              scopeKey: 'semester',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+    }
+
+    // event-a and event-b overlap with NO explicit relation → the display
+    // projection derives conflict for both.
+    final events = await EffectiveEventRepository(
+      database,
+      accountId: 'a',
+    ).watchDisplayEvents().first;
+    expect(
+      events.singleWhere((event) => event.id == 'event-a').hasConfirmedConflict,
+      isTrue,
+    );
+    expect(
+      events.singleWhere((event) => event.id == 'event-b').hasConfirmedConflict,
+      isTrue,
+    );
+
+    // Read-only contract: the derivation never persisted any relation row.
+    expect(await database.select(database.scheduleRelations).get(), isEmpty);
+    expect(await database.select(database.scheduleRelationRules).get(), isEmpty);
+  });
 }

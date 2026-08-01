@@ -148,8 +148,9 @@ class ScheduleGridItem {
 
   /// Returns a copy of this item with the conflict warning flag overridden.
   ///
-  /// Used by the pair-level conflict projection to stamp derived/explicit
-  /// conflict state onto otherwise-immutable grid items.
+  /// Consumers of the pair-level conflict projection (e.g. the week page)
+  /// stamp the resolved conflict state onto otherwise-immutable grid items
+  /// with this helper.
   ScheduleGridItem withConflict(bool conflict) => ScheduleGridItem._(
     kind: kind,
     id: id,

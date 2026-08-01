@@ -166,7 +166,13 @@ class _ScheduleData extends StatelessWidget {
         final account = accountSnapshot.data;
         if (account == null) {
           return section == ScheduleSection.week
-              ? _week(context, const [], const [], const [])
+              ? _week(
+                  context,
+                  const [],
+                  const [],
+                  const [],
+                  conflictIds: const {},
+                )
               : const TaskCenterPage();
         }
         final query = database.select(database.tasks)
@@ -193,7 +199,28 @@ class _ScheduleData extends StatelessWidget {
                       final blocks = (blockSnapshot.data ?? const [])
                           .map(PlanBlockItem.fromRow)
                           .toList(growable: false);
-                      return _week(context, tasks, events, blocks);
+                      // The event side of a conflict is stamped by the event
+                      // stream; plan-block grid items get the same resolved
+                      // conflict id set here so both sides of an overlap
+                      // (event+PlanBlock or PlanBlock+PlanBlock) show the
+                      // warning icon.
+                      return FutureBuilder<Set<String>>(
+                        future: EffectiveEventRepository(
+                          database,
+                          accountId: account.id,
+                        ).resolvedConflictIdsFor(events),
+                        builder: (context, conflictSnapshot) {
+                          final conflictIds =
+                              conflictSnapshot.data ?? const <String>{};
+                          return _week(
+                            context,
+                            tasks,
+                            events,
+                            blocks,
+                            conflictIds: conflictIds,
+                          );
+                        },
+                      );
                     },
                   );
                 },
@@ -210,8 +237,9 @@ class _ScheduleData extends StatelessWidget {
     BuildContext context,
     List<TaskItem> tasks,
     List<EffectiveEvent> events,
-    List<PlanBlockItem> blocks,
-  ) {
+    List<PlanBlockItem> blocks, {
+    required Set<String> conflictIds,
+  }) {
     final tasksById = {for (final task in tasks) task.id: task};
     final items = <ScheduleGridItem>[
       for (final event in events) ScheduleGridItem.fromEvent(event),
@@ -220,7 +248,10 @@ class _ScheduleData extends StatelessWidget {
       if (!block.showsInWeekGrid) continue;
       final task = tasksById[block.taskId];
       if (task == null) continue;
-      items.add(ScheduleGridItem.fromPlanBlock(block, task));
+      items.add(
+        ScheduleGridItem.fromPlanBlock(block, task)
+            .withConflict(conflictIds.contains(block.id)),
+      );
     }
     return WeekTimetable(
       projection: buildWeek(
