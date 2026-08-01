@@ -735,26 +735,51 @@ class _AgentChatPageState extends State<AgentChatPage> {
     final accountId = widget.accountId;
     return AgentWriteConfirmationCard(
       proposal: view,
-      onApprove: () => widget.sessionService.confirmWriteProposal(
+      onApprove: () => _resolveWriteProposal(
         accountId: accountId,
         runId: runId,
         approve: true,
         remember: false,
-      ).drain<void>(),
-      onReject: () => widget.sessionService.confirmWriteProposal(
+      ),
+      onReject: () => _resolveWriteProposal(
         accountId: accountId,
         runId: runId,
         approve: false,
         remember: false,
-      ).drain<void>(),
-      onRemember: () => widget.sessionService.confirmWriteProposal(
+      ),
+      onRemember: () => _resolveWriteProposal(
         accountId: accountId,
         runId: runId,
         approve: true,
         remember: true,
-      ).drain<void>(),
-      onGoToSettings: () => context.push('/settings/agent'),
+      ),
+      onGoToSettings: () async => context.push('/settings/agent'),
     );
+  }
+
+  /// 恢复一个写确认决策并等待恢复流关闭。逐个收集 view state，若出现
+  /// [AgentRunState.failed] 则记住其 errorCode；流关闭后若记住过失败状态，
+  /// 抛出一个本地 UI 异常，使确认卡展示内联失败信息。绝不抛出原始内部异常文本。
+  Future<void> _resolveWriteProposal({
+    required String accountId,
+    required String runId,
+    required bool approve,
+    required bool remember,
+  }) async {
+    var failedCode = false;
+    await for (final s in widget.sessionService.confirmWriteProposal(
+      accountId: accountId,
+      runId: runId,
+      approve: approve,
+      remember: remember,
+    )) {
+      if (s.state == AgentRunState.failed) {
+        failedCode = true;
+      }
+    }
+    if (failedCode) {
+      throw Exception('write confirmation failed');
+    }
   }
 
   Widget _buildInputBar(bool isWide) {

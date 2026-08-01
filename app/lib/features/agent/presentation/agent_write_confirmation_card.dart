@@ -4,7 +4,10 @@ import '../domain/agent_permission_policy.dart';
 import '../domain/agent_write_proposal.dart';
 
 /// 聊天内联写确认卡：预览写操作 + 风险徽标 + 确认/取消/此类型以后不再确认/去权限设置。
-class AgentWriteConfirmationCard extends StatelessWidget {
+///
+/// 提交动作是异步且受 [_submitting] 守卫的：提交进行中四个动作全部禁用，
+/// 防止用户重复点击造成多次调用。失败时只展示通用提示，绝不暴露内部异常文本。
+class AgentWriteConfirmationCard extends StatefulWidget {
   const AgentWriteConfirmationCard({
     super.key,
     required this.proposal,
@@ -15,10 +18,31 @@ class AgentWriteConfirmationCard extends StatelessWidget {
   });
 
   final AgentWriteProposalView proposal;
-  final VoidCallback onApprove;
-  final VoidCallback onReject;
-  final VoidCallback onRemember;
-  final VoidCallback onGoToSettings;
+  final Future<void> Function() onApprove;
+  final Future<void> Function() onReject;
+  final Future<void> Function() onRemember;
+  final Future<void> Function() onGoToSettings;
+
+  @override
+  State<AgentWriteConfirmationCard> createState() =>
+      _AgentWriteConfirmationCardState();
+}
+
+class _AgentWriteConfirmationCardState extends State<AgentWriteConfirmationCard> {
+  bool _submitting = false;
+  String? _error;
+
+  Future<void> _submit(Future<void> Function() action) async {
+    if (_submitting) return;
+    setState(() { _submitting = true; _error = null; });
+    try {
+      await action();
+    } catch (_) {
+      if (mounted) setState(() => _error = '操作未完成，请重试。');
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
 
   static ({String label, Color color}) _riskStyle(RiskLevel risk) => switch (risk) {
     RiskLevel.low => (label: '低', color: Colors.green),
@@ -29,6 +53,7 @@ class AgentWriteConfirmationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final proposal = widget.proposal;
     final risk = _riskStyle(proposal.riskLevel);
     final theme = Theme.of(context);
     return Card(
@@ -62,12 +87,48 @@ class AgentWriteConfirmationCard extends StatelessWidget {
               ),
             const SizedBox(height: 12),
             Wrap(spacing: 8, runSpacing: 4, children: [
-              FilledButton(onPressed: onApprove, child: const Text('确认本次')),
-              OutlinedButton(onPressed: onReject, child: const Text('取消')),
+              FilledButton(
+                onPressed: _submitting ? null : () => _submit(widget.onApprove),
+                child: const Text('确认本次'),
+              ),
+              OutlinedButton(
+                onPressed: _submitting ? null : () => _submit(widget.onReject),
+                child: const Text('取消'),
+              ),
               if (proposal.rememberAllowed)
-                TextButton(onPressed: onRemember, child: const Text('此类型以后不再确认')),
-              TextButton(onPressed: onGoToSettings, child: const Text('去权限设置')),
+                TextButton(
+                  onPressed: _submitting ? null : () => _submit(widget.onRemember),
+                  child: const Text('此类型以后不再确认'),
+                ),
+              TextButton(
+                onPressed: _submitting ? null : () => _submit(widget.onGoToSettings),
+                child: const Text('去权限设置'),
+              ),
             ]),
+            if (_submitting)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Row(
+                  children: [
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 8),
+                    Text('处理中', style: theme.textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            if (_error != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  _error!,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: theme.colorScheme.error),
+                ),
+              ),
           ],
         ),
       ),

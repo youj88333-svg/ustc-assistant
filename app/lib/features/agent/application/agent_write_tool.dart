@@ -216,10 +216,19 @@ class WriteConfirmationStore {
 
   Future<void> cancel(String handle, Completer<AgentToolResult> completer) async {
     final pending = _pending.remove(handle);
-    if (pending == null || pending.completer.isCompleted) return;
+    // 即使 map 条目已丢失（挂起的 future 已倒挂），也务必完成调用方传入的
+    // completer，避免会话循环永远挂起。
+    final target = pending?.completer ?? completer;
+    if (!target.isCompleted) {
+      target.complete(const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'cancelled',
+      ));
+    }
+    if (pending == null) return;
     // run 停止使挂起的提案作废：best-effort 追加
     // source='agent'/actionType='agent_write_cancel'/result='cancelled'，审计失败
-    // 不阻断取消；随后完成挂起的 pendingInvocation，使会话循环恢复。
+    // 不阻断取消；随后的 pendingInvocation 已在上方完成。
     try {
       await policy.logAudit(
         accountId: pending.context.accountId,
@@ -232,7 +241,6 @@ class WriteConfirmationStore {
     } catch (_) {
       // 取消审计失败不改变取消结果。
     }
-    pending.completer.complete(const AgentToolResult(status: AgentToolStatus.error, errorCode: 'cancelled'));
   }
 
   String _generateHandle() {

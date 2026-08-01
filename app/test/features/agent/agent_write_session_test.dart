@@ -167,4 +167,66 @@ void main() {
     expect(states.last.state, AgentRunState.completed);
     await db.close();
   });
+
+  test('lost confirmation handle emits confirmation_not_found and does not hang', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    await db.customStatement('PRAGMA foreign_keys = OFF');
+    final clock = _FixedClock();
+    final policy = AgentPermissionPolicyService(database: db, clock: clock);
+    final unitOfWork = DriftAgentWriteUnitOfWork(db);
+    final store = WriteConfirmationStore(policy: policy, unitOfWork: unitOfWork);
+    final gateway = DriftAgentWriteGateway(database: db, accountId: 'a1', policy: policy,
+        now: () => clock.now().millisecondsSinceEpoch);
+    final privacy = OutboundPrivacyFilter(protectedAccount: 'student', toolBuilders: agentToolPayloadBuilders());
+    final registry = AgentToolRegistry(
+      tools: [CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork)],
+      privacyFilter: privacy,
+    );
+    final chatRepo = DriftChatRepository(db);
+    final provider = _ScriptedProvider([_confirmCardScript(), _finalTextScript()]);
+    final session = AgentSessionService(
+      chatRepository: chatRepo,
+      database: db,
+      provider: provider,
+      contextBuilder: const AgentContextBuilder(),
+      privacyFilter: privacy,
+      registry: registry,
+      clock: clock,
+      model: 'deepseek-v4-flash',
+      apiKeyProvider: ({required String accountId}) async => 'k',
+      // 模拟丢失句柄：session 里已有暂停 run，但 store 中已不存在该条目，
+      // 因此 resumer 返回 confirmation_not_found，且倒挂的 pendingInvocation
+      // future 永远不会自行完成。
+      writeConfirmationResumer: ({required String handle, required bool approve, required bool remember}) async =>
+          const AgentToolResult(status: AgentToolStatus.error, errorCode: 'confirmation_not_found'),
+    );
+
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    session.send(accountId: 'a1', userText: '帮我建个健身日程').listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete, onError: (_) {});
+
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(states.any((s) => s.userAction?.type == AgentUserActionType.writeConfirmation), isTrue);
+
+    // 恢复一个丢失句柄的确认：必须发出 confirmation_not_found、随后关闭，
+    // 而不是在倒挂的 pendingInvocation future 上永远挂起。
+    final confirmStates = await session
+        .confirmWriteProposal(accountId: 'a1', runId: runId, approve: true, remember: false)
+        .toList();
+    expect(
+      confirmStates.any(
+        (s) => s.state == AgentRunState.failed && s.errorCode == 'confirmation_not_found',
+      ),
+      isTrue,
+    );
+
+    // 会话最终不再停留在等待：send 流必须关闭。
+    await done.future;
+    expect(states.last.state, isNot(AgentRunState.waitingForUser));
+    await db.close();
+  }, timeout: const Timeout(Duration(seconds: 1)));
 }

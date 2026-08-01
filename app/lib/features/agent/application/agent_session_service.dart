@@ -35,7 +35,7 @@ typedef AgentUserActionResumeCallback =
     });
 
 typedef WriteConfirmationResumerCallback =
-    Future<void> Function({
+    Future<AgentToolResult> Function({
       required String handle,
       required bool approve,
       required bool remember,
@@ -411,11 +411,25 @@ class AgentSessionService {
           return;
         }
         try {
-          await resumer(
+          final result = await resumer(
             handle: paused.action.opaqueHandle,
             approve: approve,
             remember: remember,
           );
+          if (result.errorCode == 'confirmation_not_found') {
+            // 句柄已丢失（store 条目已消失）：挂起的 pendingInvocation 是倒挂的
+            // orphan，永远无法自行完成。立即取消该暂停运行、发出失败状态，
+            // 并且不 await 这个注定挂起的 future。
+            await _cancelPausedRun(paused);
+            controller.add(
+              AgentRunViewState(
+                runId: runId,
+                state: AgentRunState.failed,
+                errorCode: 'confirmation_not_found',
+              ),
+            );
+            return;
+          }
           await paused.pendingInvocation.result;
         } catch (_) {
           await _cancelPausedRun(paused);
