@@ -8,6 +8,7 @@ import '../domain/agent_models.dart';
 import '../domain/agent_tool.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_context_builder.dart';
+import 'agent_grounding_policy.dart';
 import 'agent_tool_registry.dart';
 import 'cancellation_signal.dart';
 import 'outbound_privacy_filter.dart';
@@ -112,6 +113,7 @@ class AgentSessionService {
     required this._apiKeyProvider,
     this.userActionResumer,
     this.writeConfirmationResumer,
+    this._groundingPolicy = const AgentGroundingPolicy(),
   });
 
   final DriftChatRepository _chatRepository;
@@ -125,6 +127,10 @@ class AgentSessionService {
   final Future<String> Function({required String accountId}) _apiKeyProvider;
   final AgentUserActionResumeCallback? userActionResumer;
   final WriteConfirmationResumerCallback? writeConfirmationResumer;
+
+  /// Conservative classifier that decides whether the current user text is an
+  /// explicit operation that must be backed by real tool calls.
+  final AgentGroundingPolicy _groundingPolicy;
 
   /// Hard limit on model calls per run.
   static const int maxModelCalls = 8;
@@ -629,6 +635,31 @@ class AgentSessionService {
     var terminalState = AgentRunState.completed;
     String? errorCode;
 
+    // --- Grounding state (Task 1) ----------------------------------------
+    // Classify the CURRENT user text once at send() start. Free chat and
+    // capability/advice wording yield `null` and take the normal path; an
+    // explicit operation must be backed by a real tool call.
+    final grounding = _groundingPolicy.classify(userText);
+    // Tools that completed successfully this run. A mutation is only grounded
+    // once its terminal write tool succeeded (after confirmation); a read is
+    // grounded once its required lookup tools succeeded.
+    final succeededTools = <String>{};
+    // Tools the model actually ATTEMPTED this run (any outcome). Used so a
+    // mutation that was attempted but declined/cancelled/errored is accepted
+    // as a grounded attempted operation rather than re-corrected.
+    final attemptedTools = <String>{};
+
+    // Bounded corrective-retry state: at most one forced `any` retry and at
+    // most one compat fallback without `tool_choice` per run.
+    var correctiveUsed = false; // a corrective request has already been issued
+    var correctivePending = false; // the NEXT model call must be the corrective one
+    var correctiveToolChoice = LlmToolChoice.auto;
+    var correctiveToolNames = <String>{}; // narrowed declarations for the correction
+    List<LlmMessage> correctiveMessages = const [];
+    // Set once a forced `any` request fails before content: the provider does
+    // not support forced choice for this session, so we fall back to `auto`.
+    var forcedChoiceUnsupported = false;
+
     try {
       while (true) {
         // Budget: never start a new model call past the limit.
@@ -652,15 +683,38 @@ class AgentSessionService {
         var streamError = false;
         String? streamErrorCode;
 
+        // Choose the tool declarations and conversation for THIS call. The
+        // initial call (and every autonomous tool-loop call) sees the full
+        // registry and the live conversation. If this is the single corrective
+        // call, narrow to the registered required tools and use the corrective
+        // conversation (which ends with a fixed application correction).
+        var requestTools = declarations;
+        var requestMessages = conversation;
+        var requestToolChoice = LlmToolChoice.auto;
+        var thisCallWasForcedAny = false;
+        if (correctivePending) {
+          correctivePending = false;
+          correctiveUsed = true;
+          requestTools = _registeredDeclarations(
+            correctiveToolNames,
+            declarations,
+          );
+          requestMessages = correctiveMessages;
+          requestToolChoice = correctiveToolChoice;
+          thisCallWasForcedAny =
+              correctiveToolChoice == LlmToolChoice.any;
+        }
+
         try {
           final apiKey = await _apiKeyProvider(accountId: accountId);
           await for (final event in _provider.stream(
             apiKey: apiKey,
             request: LlmRequest(
               model: _model,
-              messages: List<LlmMessage>.of(conversation),
+              messages: List<LlmMessage>.of(requestMessages),
               system: systemPrompt,
-              tools: declarations,
+              tools: requestTools,
+              toolChoice: requestToolChoice,
             ),
             cancellation: signal,
           )) {
@@ -701,6 +755,21 @@ class AgentSessionService {
         }
 
         if (streamError) {
+          // Step 4 rule 4: a forced `any` request that errors BEFORE any
+          // content means the provider likely does not support forced choice
+          // for this session. Fall back to a single `auto` retry of the same
+          // corrective request, then mark this provider as no-forced-choice.
+          if (thisCallWasForcedAny &&
+              correctiveUsed &&
+              !forcedChoiceUnsupported &&
+              turnText.isEmpty &&
+              toolUses.isEmpty &&
+              !signal.isCancelled) {
+            forcedChoiceUnsupported = true;
+            correctiveToolChoice = LlmToolChoice.auto;
+            correctivePending = true; // repeat the same correction once, auto
+            continue;
+          }
           terminalState = AgentRunState.failed;
           errorCode = streamErrorCode ?? 'upstream_error';
           break;
@@ -709,9 +778,45 @@ class AgentSessionService {
         // If the model emitted no tool uses, this is a final text turn.
         // (Either CompletedEvent or a cancel-break ended the stream.)
         if (toolUses.isEmpty) {
-          terminalState = signal.isCancelled
-              ? AgentRunState.cancelled
-              : AgentRunState.completed;
+          final grounded = _settleNoToolUse(
+            requirement: grounding,
+            succeededTools: succeededTools,
+            attemptedTools: attemptedTools,
+            isCancelled: signal.isCancelled,
+            usedCorrective: correctiveUsed,
+          );
+          switch (grounded) {
+            case _GroundedSettlement.accept:
+              // Cases 1 & 2: free chat, or every required tool already
+              // succeeded -> accept the final text.
+              terminalState = signal.isCancelled
+                  ? AgentRunState.cancelled
+                  : AgentRunState.completed;
+              break;
+            case _GroundedSettlement.correct:
+              // Case 3: no required tool succeeded and no corrective call used
+              // -> issue ONE fixed application correction with narrowed
+              // declarations and `any` (or `auto` if this provider was already
+              // found unsupported).
+              correctiveToolNames = grounding?.requiredTools ?? const {};
+              correctiveMessages = _buildCorrectiveMessages(
+                conversation,
+                systemPrompt,
+                turnText.toString(),
+              );
+              correctiveToolChoice = forcedChoiceUnsupported
+                  ? LlmToolChoice.auto
+                  : LlmToolChoice.any;
+              correctivePending = true;
+              continue;
+            case _GroundedSettlement.fail:
+              // Case 5: no legal required tool after correction/fallback.
+              // Replace any unsupported model text with the fixed safe notice.
+              terminalState = AgentRunState.failed;
+              errorCode = 'grounding_failed';
+              assistantText = _groundingFailedText;
+              break;
+          }
           break;
         }
 
@@ -841,6 +946,21 @@ class AgentSessionService {
               controller.add(viewState);
             }
           }
+
+          // Track which tools actually completed successfully this run. This
+          // drives the grounding settlement: a required lookup that succeeded
+          // grounds a read; for a mutation, only a successful terminal write
+          // after confirmation grounds success prose.
+          if (result.status == AgentToolStatus.success) {
+            succeededTools.add(tu.name);
+          }
+          // Track every tool the model actually ATTEMPTED this run (any
+          // outcome). A mutation whose terminal write was attempted but ended
+          // in decline/cancel/error is "grounded as an attempted operation"
+          // — its final text must report the actual non-success result, which
+          // the model already saw in the tool_result — rather than being
+          // re-corrected into a repeat attempt.
+          attemptedTools.add(tu.name);
 
           // Surface references bound by the tool.
           //
@@ -1167,4 +1287,110 @@ class AgentSessionService {
     'search_campus_catalog',
     'read_campus_detail',
   };
+
+  // --- Grounding settlement (Task 1) -------------------------------------
+
+  /// The fixed message used when an explicit operation could not be grounded
+  /// after the single bounded correction. The model's unsupported text is
+  /// REPLACED by this safe notice.
+  static const _groundingFailedText = '我还没有实际查询或执行这项操作，请重试。';
+
+  /// The fixed application correction appended to the conversation before the
+  /// single corrective request. It tells the model (with narrowed tool
+  /// declarations) to actually perform the required operation.
+  static const _groundingCorrectionText =
+      '请使用上面提供的工具实际完成用户刚才要求的查询或操作，不要直接给出答案。';
+
+  /// Given a set of tool names and the full registered declarations, returns
+  /// only the declarations whose names are both requested AND actually
+  /// registered. This guarantees a corrective request never declares an
+  /// unknown tool. Returns an empty list if none are registered.
+  List<LlmToolDeclaration> _registeredDeclarations(
+    Set<String> names,
+    List<LlmToolDeclaration> allDeclarations,
+  ) {
+    if (names.isEmpty) return const [];
+    final byName = <String, LlmToolDeclaration>{
+      for (final d in allDeclarations) d.name: d,
+    };
+    return [
+      for (final name in names)
+        if (byName[name] != null) byName[name]!,
+    ];
+  }
+
+  /// Builds the message list for the single corrective request: the current
+  /// conversation (whose last user turn is the grounded request) plus a fixed
+  /// application correction as a new user turn. The model's unsupported text
+  /// turn is NOT replayed — the correction is a well-formed continuation.
+  List<LlmMessage> _buildCorrectiveMessages(
+    List<LlmMessage> conversation,
+    String? systemPrompt,
+    String unsupportedTurnText,
+  ) {
+    return [
+      ...conversation,
+      LlmMessage.user(text: _groundingCorrectionText),
+    ];
+  }
+
+  /// Decides how a no-tool-use model turn settles under grounding.
+  ///
+  /// [requirement] is the classification of the CURRENT user text; null means
+  /// free chat / capability advice. [succeededTools] holds the tools that
+  /// completed successfully this run; [usedCorrective] reports whether the
+  /// single corrective request has already been issued.
+  _GroundedSettlement _settleNoToolUse({
+    required AgentGroundingRequirement? requirement,
+    required Set<String> succeededTools,
+    required Set<String> attemptedTools,
+    required bool isCancelled,
+    required bool usedCorrective,
+  }) {
+    // Stop cancels everything; do not issue any further model call.
+    if (isCancelled) return _GroundedSettlement.accept;
+
+    // Case 1: free chat / capability / advice — accept the final text.
+    final req = requirement;
+    if (req == null) return _GroundedSettlement.accept;
+
+    // Case 2: every required tool already succeeded this run — accept.
+    // (read: lookup success; mutation: terminal write success after
+    // confirmation.)
+    final required = req.requiredTools;
+    if (required.isNotEmpty && required.every(succeededTools.contains)) {
+      return _GroundedSettlement.accept;
+    }
+
+    // A mutation whose required terminal write was ATTEMPTED (declined /
+    // cancelled / errored) is grounded as an attempted operation: the model
+    // saw the non-success tool_result and its final text reports the actual
+    // result, so we accept without re-correcting into a repeat attempt. This
+    // does NOT apply when the terminal write was never attempted at all
+    // (e.g. a hallucinated success with no tool call ever made).
+    if (req.mutationIntent &&
+        req.terminalTools.isNotEmpty &&
+        req.terminalTools.any(attemptedTools.contains)) {
+      return _GroundedSettlement.accept;
+    }
+
+    // Case 3: a required tool is missing and no corrective call was used —
+    // issue the single correction.
+    if (!usedCorrective) return _GroundedSettlement.correct;
+
+    // Case 5: correction (and any compat fallback) are exhausted but no legal
+    // required tool succeeded — grounding failed.
+    return _GroundedSettlement.fail;
+  }
+}
+
+/// Outcome of settling a no-tool-use model turn under the grounding policy.
+enum _GroundedSettlement {
+  /// Accept the model's final text (free chat, or all required tools
+  /// succeeded, or the run was cancelled).
+  accept,
+  /// Issue the single bounded corrective request.
+  correct,
+  /// No legal required tool after correction/fallback: grounding failed.
+  fail,
 }

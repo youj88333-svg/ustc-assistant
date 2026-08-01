@@ -86,6 +86,82 @@ void main() {
     );
   });
 
+  group('tool_choice serialization', () {
+    test(
+      'default auto request omits tool_choice from the POST body',
+      () async {
+        final fake = _FakeClient();
+        final provider = AnthropicLlmProvider(
+          client: fake,
+          backoff: (_) => Duration.zero,
+        );
+        await provider
+            .stream(
+              apiKey: apiKey,
+              request: LlmRequest(
+                model: 'deepseek-v4-flash',
+                messages: [LlmMessage.user(text: 'hi')],
+              ),
+              cancellation: CancellationSignal(),
+            )
+            .toList();
+        final req = fake.lastRequest as http.Request;
+        final body = jsonDecode(req.body) as Map<String, Object?>;
+        expect(body.containsKey('tool_choice'), isFalse,
+            reason: 'auto (default) must preserve current behavior');
+      },
+    );
+
+    test(
+      'any forced request serializes tool_choice as {"type":"any"} with no '
+      'unknown tool or credential',
+      () async {
+        final fake = _FakeClient();
+        final provider = AnthropicLlmProvider(
+          client: fake,
+          backoff: (_) => Duration.zero,
+        );
+        await provider
+            .stream(
+              apiKey: apiKey,
+              request: LlmRequest(
+                model: 'deepseek-v4-flash',
+                messages: [LlmMessage.user(text: 'hi')],
+                tools: const [
+                  LlmToolDeclaration(
+                    name: 'get_schedule',
+                    description: 'd',
+                    inputSchema: {'type': 'object'},
+                  ),
+                ],
+                toolChoice: LlmToolChoice.any,
+              ),
+              cancellation: CancellationSignal(),
+            )
+            .toList();
+        final req = fake.lastRequest as http.Request;
+        final body = jsonDecode(req.body) as Map<String, Object?>;
+        expect(body['tool_choice'], {'type': 'any'});
+
+        // The request body carries only the registered tool — no unknown tool
+        // name sneaks in as a tool_choice target.
+        final tools = (body['tools'] as List<Object?>)
+            .cast<Map<String, Object?>>();
+        expect(tools, hasLength(1));
+        expect(tools.single['name'], 'get_schedule');
+        final bodyString = jsonEncode(body);
+        expect(bodyString, isNot(contains(apiKey)));
+        expect(bodyString, isNot(contains('sk-test')));
+      },
+    );
+
+    test('only auto and any are valid choices (closed enum)', () {
+      expect(LlmToolChoice.values.toSet(), {LlmToolChoice.auto, LlmToolChoice.any});
+      expect(LlmToolChoice.auto.toolChoiceJson, {'type': 'auto'});
+      expect(LlmToolChoice.any.toolChoiceJson, {'type': 'any'});
+    });
+  });
+
   group('listModels', () {
     test('parses data[].id from GET /v1/models', () async {
       final fake = _FakeClient(defaultModelsResponse: _modelsJson);

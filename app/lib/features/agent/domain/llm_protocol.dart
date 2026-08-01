@@ -187,6 +187,20 @@ final class LlmToolDeclaration {
   };
 }
 
+/// The `tool_choice` control for the Anthropic Messages API.
+///
+/// A closed type (not an arbitrary map) so callers can only pick the two
+/// supported modes. `auto` is the default and keeps current behavior — the
+/// field is omitted from serialization so the model freely decides whether to
+/// call tools. `any` forces a tool call and is used only for the bounded
+/// grounding correction.
+enum LlmToolChoice { auto, any }
+
+/// Serializes a [LlmToolChoice] to the Anthropic `tool_choice` shape.
+extension LlmToolChoiceJson on LlmToolChoice {
+  Map<String, String> get toolChoiceJson => {'type': name};
+}
+
 /// A complete streaming request to the gateway.
 final class LlmRequest {
   const LlmRequest({
@@ -196,6 +210,7 @@ final class LlmRequest {
     this.tools = const [],
     this.temperature = 0.2,
     this.maxTokens = 4096,
+    this.toolChoice = LlmToolChoice.auto,
   });
 
   final String model;
@@ -208,6 +223,11 @@ final class LlmRequest {
   final double temperature;
   final int maxTokens;
 
+  /// The tool-choice control. Defaults to [LlmToolChoice.auto]; `tool_choice`
+  /// is serialized ONLY when it differs from `auto`, so normal requests keep
+  /// the current (omitted) behavior.
+  final LlmToolChoice toolChoice;
+
   Map<String, Object?> toJson() => {
     'model': model,
     'messages': messages.map((m) => m.toJson()).toList(),
@@ -216,6 +236,7 @@ final class LlmRequest {
     'temperature': temperature,
     'max_tokens': maxTokens,
     'stream': true,
+    if (toolChoice != LlmToolChoice.auto) 'tool_choice': toolChoice.toolChoiceJson,
   };
 }
 

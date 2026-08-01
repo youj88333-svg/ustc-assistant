@@ -420,6 +420,99 @@ class _ManyEventRefsTasksTool implements AgentTool {
   }
 }
 
+class _FakePendingReviewsTool implements AgentTool {
+  @override
+  String get name => 'get_pending_event_reviews';
+  @override
+  String get description => 'Pending attendance/listening reviews.';
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async => const AgentToolResult(
+    status: AgentToolStatus.success,
+    payload: {'pending': <Object?>[]},
+  );
+}
+
+class _FakePendingPlanBlockReviewsTool implements AgentTool {
+  @override
+  String get name => 'get_pending_planblock_reviews';
+  @override
+  String get description => 'Pending planblock reviews.';
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async => const AgentToolResult(
+    status: AgentToolStatus.success,
+    payload: {'pending': <Object?>[]},
+  );
+}
+
+/// A tool that reports success and optionally counts executions.
+class _CountingSuccessTool implements AgentTool {
+  _CountingSuccessTool({required this.name, this.onExecute});
+
+  @override
+  final String name;
+  final void Function()? onExecute;
+  int executeCount = 0;
+
+  @override
+  String get description => 'Default tool';
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    onExecute?.call();
+    return const AgentToolResult(status: AgentToolStatus.success, payload: {});
+  }
+}
+
+/// A write tool that always fails (e.g. a declined/errored terminal write).
+class _FailingWriteTool implements AgentTool {
+  @override
+  String get name => 'plan_task';
+  @override
+  String get description => 'Plans a task execution block (always fails here).';
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async => const AgentToolResult(
+    status: AgentToolStatus.error,
+    errorCode: 'target_not_found',
+    payload: {'guidance': '该任务已不存在，无法为该任务安排时间段。'},
+  );
+}
+
 class _ConcurrentBlockingProvider implements LlmProvider {
   final Map<String, Completer<void>> _started = {};
   final Map<String, Completer<void>> _release = {};
@@ -2082,6 +2175,320 @@ END
     );
   });
 
+  group('grounding: explicit operational requests', () {
+    test(
+      'pending event review: plain answer -> forced tool use -> grounded final',
+      () async {
+        final provider = _ScriptedProvider([
+          // Call 1 (auto): model answers plain text, no tool call.
+          [const TextDeltaEvent('有待确认的出勤项。'), const CompletedEvent()],
+          // Call 2 (any, narrowed): forced to call the review tool.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-review',
+              name: 'get_pending_event_reviews',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 3: grounded final answer.
+          [
+            const TextDeltaEvent('你有 2 节课需要确认出勤。'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingReviewsTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .toList();
+
+        // 3 model calls: initial, one forced correction, final.
+        expect(provider.streamCallCount, 3);
+        // The corrective (second) request forced `any`, narrowed declarations,
+        // and omitted the original unsupported text from replay.
+        final second = provider.requests[1];
+        expect(second.toolChoice, LlmToolChoice.any);
+        final secondToolNames = second.tools.map((t) => t.name).toSet();
+        expect(secondToolNames, {'get_pending_event_reviews'});
+        // Final answer grounded and accepted.
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('需要确认出勤'));
+      },
+    );
+
+    test(
+      'pending planblock review follows the same forced path',
+      () async {
+        final provider = _ScriptedProvider([
+          [const TextDeltaEvent('已列出待确认的执行块。'), const CompletedEvent()],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pb',
+              name: 'get_pending_planblock_reviews',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('有 1 个执行块待你确认。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingPlanBlockReviewsTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些执行块需要我确认？',
+            )
+            .toList();
+
+        expect(provider.streamCallCount, 3);
+        expect(provider.requests[1].toolChoice, LlmToolChoice.any);
+        expect(
+          provider.requests[1].tools.map((t) => t.name).toSet(),
+          {'get_pending_planblock_reviews'},
+        );
+        expect(states.last.state, AgentRunState.completed);
+      },
+    );
+
+    test(
+      'plan task hallucination: two success-prose responses -> grounding_failed',
+      () async {
+        var executed = 0;
+        final tasksTool = _CountingSuccessTool(
+          name: 'get_tasks',
+          onExecute: () => executed++,
+        );
+        final provider = _ScriptedProvider([
+          // Call 1: success prose without plan_task.
+          [const TextDeltaEvent('已为你安排好了任务时间段。'), const CompletedEvent()],
+          // Call 2 (forced any): still success prose without plan_task.
+          [const TextDeltaEvent('任务已安排成功。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [tasksTool],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点',
+            )
+            .toList();
+
+        // Two model calls, no corrective loop runs on forever.
+        expect(provider.streamCallCount, 2);
+        final terminal = states.last;
+        expect(terminal.state, AgentRunState.failed);
+        expect(terminal.errorCode, 'grounding_failed');
+        // The unsupported success prose is replaced by the fixed safe notice.
+        expect(terminal.text, '我还没有实际查询或执行这项操作，请重试。');
+        // No PlanBlock write tool ran and no task was even queried.
+        expect(executed, 0);
+        // No business write: no PlanBlock rows were created for the
+        // hallucinated plan_task, and no agent write audit for plan_task.
+        final blocks = await (database.select(database.planBlocks)).get();
+        expect(blocks, isEmpty);
+        final writeLogs = await (database.select(
+          database.actionLogs,
+        )..where((row) => row.actionType.equals('plan_task'))).get();
+        expect(writeLogs, isEmpty);
+      },
+    );
+
+    test(
+      'declined mutation is grounded as an attempted operation, not re-corrected',
+      () async {
+        // Simulate a write intent where the model DOES attempt the terminal
+        // write but it yields a non-success (declined) result, then the model
+        // reports it. It must NOT be re-corrected into a repeat attempt.
+        final provider = _ScriptedProvider([
+          // Call 1: attempt plan_task, but out of a fixed budget/ref it errors.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan-x',
+              name: 'plan_task',
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-02T14:00:00+08:00',
+                'end_at': '2026-08-02T15:00:00+08:00',
+              },
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: model reports the non-success (target missing) result.
+          [const TextDeltaEvent('该任务不存在，无法安排。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FailingWriteTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点',
+            )
+            .toList();
+
+        // Two calls only — the attempted (failed) write was NOT re-corrected.
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('该任务不存在'));
+        expect(states.last.errorCode, isNull);
+      },
+    );
+
+    test(
+      'free greeting: one auto call, no tools, original response preserved',
+      () async {
+        final provider = _ScriptedProvider([
+          [
+            const TextDeltaEvent('你好！我是你的校园助手。'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '你好，介绍一下自己')
+            .toList();
+
+        expect(provider.streamCallCount, 1);
+        final request = provider.requests.single;
+        expect(request.toolChoice, LlmToolChoice.auto);
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('校园助手'));
+      },
+    );
+
+    test(
+      'capability question does not force a write',
+      () async {
+        final provider = _ScriptedProvider([
+          [
+            const TextDeltaEvent('我可以帮你修改日程。'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '你能不能修改日程？')
+            .toList();
+
+        // One plain auto call; no forced write, no correction.
+        expect(provider.streamCallCount, 1);
+        expect(provider.requests.single.toolChoice, LlmToolChoice.auto);
+        expect(states.last.state, AgentRunState.completed);
+      },
+    );
+
+    test(
+      'forced-choice protocol error: one fallback auto request, no infinite retry',
+      () async {
+        final provider = _ScriptedProvider([
+          // Call 1: initial auto, plain answer.
+          [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
+          // Call 2: forced `any` request -> protocol_error before any content.
+          [const ErrorEvent('protocol_error')],
+          // Call 3: compat fallback (auto) -> grounded final.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-review2',
+              name: 'get_pending_event_reviews',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const TextDeltaEvent('确认完成。'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingReviewsTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .toList();
+
+        // 4 calls: initial + any(protocol error) + auto fallback + final.
+        expect(provider.streamCallCount, 4);
+        // The fallback (third) request is `auto`, not a second `any`.
+        expect(provider.requests[2].toolChoice, LlmToolChoice.auto);
+        // No infinite retry: the run terminates.
+        expect(states.last.state, AgentRunState.completed);
+      },
+    );
+
+    test(
+      'stop during a pending corrective request issues no subsequent model call',
+      () async {
+        // A provider that blocks on the first call so we can cancel while a
+        // corrective request is pending — no subsequent model call may occur.
+        final provider = _CancelDuringGroundingProvider();
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingReviewsTool()],
+        );
+
+        final states = <AgentRunViewState>[];
+        final sub = service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .listen(states.add);
+        // Wait for the first model call to start (plain answer blocks), then
+        // cancel while the corrective request is pending.
+        await provider.firstCallStarted.future;
+        await service.cancel(accountId: account);
+        await sub.asFuture<void>(null);
+        await sub.cancel();
+
+        // Only the first call was ever started; no corrective call followed.
+        expect(provider.streamCallCount, 1);
+        expect(states.last.state, AgentRunState.cancelled);
+      },
+    );
+  });
+
   group('privacy and key handling', () {
     test('the API key is supplied per call and never persisted', () async {
       final provider = _ScriptedProvider(_canonicalLoop());
@@ -2171,6 +2578,57 @@ class _CancellableProvider implements LlmProvider {
       return;
     }
     // A second call should never happen; emit an error if it does.
+    yield const ErrorEvent('unexpected_second_call');
+  }
+
+  @override
+  Future<void> probeText({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+
+  @override
+  Future<void> probeTools({
+    required String apiKey,
+    required String model,
+    required CancellationSignal cancellation,
+  }) async {}
+}
+
+/// A provider whose first call yields a plain answer (making a corrective
+/// request pending) and then blocks until cancelled. A second call is an
+/// unexpected error — proving stop during a pending corrective request issues
+/// no further model call.
+class _CancelDuringGroundingProvider implements LlmProvider {
+  int streamCallCount = 0;
+  int attemptsAfterFirst = 0;
+  final Completer<void> firstCallStarted = Completer<void>();
+
+  @override
+  Future<List<String>> listModels({
+    required String apiKey,
+    required CancellationSignal cancellation,
+  }) async => const ['deepseek-v4-flash'];
+
+  @override
+  Stream<LlmEvent> stream({
+    required String apiKey,
+    required LlmRequest request,
+    required CancellationSignal cancellation,
+  }) async* {
+    streamCallCount++;
+    if (streamCallCount == 1) {
+      if (!firstCallStarted.isCompleted) firstCallStarted.complete();
+      yield const TextDeltaEvent('这是出勤情况。');
+      // Block until cancelled so the run stays in a corrective-pending state.
+      while (!cancellation.isCancelled) {
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+      }
+      yield const CompletedEvent();
+      return;
+    }
+    attemptsAfterFirst++;
     yield const ErrorEvent('unexpected_second_call');
   }
 
