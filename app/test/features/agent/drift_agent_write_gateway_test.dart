@@ -204,6 +204,23 @@ void main() {
     await expectLater(gateway.eventSnapshot('event-b'), throwsStateError);
   });
 
+  test('eventSnapshot decodes startAt/endAt as Beijing wall time from UTC epoch', () async {
+    // Real UTC instant: 2026-03-17 01:45 UTC == 09:45 Beijing.
+    final utcStart = DateTime.utc(2026, 3, 17, 1, 45).millisecondsSinceEpoch;
+    final utcEnd = DateTime.utc(2026, 3, 17, 3, 20).millisecondsSinceEpoch;
+    await db.into(db.calendarEvents).insert(CalendarEventsCompanion.insert(
+      id: 'ev-utc', accountId: 'acc-1', source: 'user',
+      title: 'UTC存储的个人事件', type: 'personal',
+      startAt: Value(utcStart), endAt: Value(utcEnd),
+      allDay: false, timezone: 'Asia/Shanghai',
+      createdAt: 1, updatedAt: 1,
+    ));
+    final snapshot = await gateway.eventSnapshot('ev-utc');
+    // Preview times must be the Beijing wall clock, not the raw UTC wall clock.
+    expect(snapshot.startAt, DateTime(2026, 3, 17, 9, 45));
+    expect(snapshot.endAt, DateTime(2026, 3, 17, 11, 20));
+  });
+
   test('updatePermissionPolicy delegates to policy service', () async {
     await gateway.updatePermissionPolicy(
       actionType: 'create_event',

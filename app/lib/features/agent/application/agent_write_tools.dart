@@ -760,15 +760,15 @@ class CreateUserOverlayTool extends AgentWriteTool {
       throw const FormatException('no mutation fields provided');
     }
 
-    r.optionalEnum('attendance_policy', const {'must_go', 'gamble', 'skip'});
-    r.optionalEnum('listening_mode', const {'listen', 'not_listen'});
-    r.optionalEnum('importance', _importanceValues);
     // 无条件类型校验：即便其他字段让 previewLines 非空，错误类型的 note/display_title
     // 也必须在此被拒，不能流到 commit 的原始参数里。
-    r.optionalString('attendance_note');
-    r.optionalString('listening_note');
+    final attendancePolicy = r.optionalEnum('attendance_policy', const {'must_go', 'gamble', 'skip'});
+    final listeningMode = r.optionalEnum('listening_mode', const {'listen', 'not_listen'});
+    final importance = r.optionalEnum('importance', _importanceValues);
+    final attendanceNote = r.optionalString('attendance_note');
+    final listeningNote = r.optionalString('listening_note');
     final displayTitle = r.contains('display_title') ? r.optionalString('display_title') : null;
-    r.optionalBool('hidden');
+    final hidden = r.optionalBool('hidden');
 
     // 目标快照 preflight：账户内目标不存在，或 course_series 无系列 → 拒绝。
     final snapshot = await gateway.eventSnapshot(eventId);
@@ -780,8 +780,8 @@ class CreateUserOverlayTool extends AgentWriteTool {
     final lines = <String>[
       ..._eventTargetLines(snapshot),
     ];
-    if (a['attendance_policy'] != null) lines.add('出勤：${a['attendance_policy']}');
-    if (a['listening_mode'] != null) lines.add('听讲：${a['listening_mode']}');
+    if (attendancePolicy != null) lines.add('出勤：$attendancePolicy');
+    if (listeningMode != null) lines.add('听讲：$listeningMode');
     if (lines.isEmpty && displayTitle != null) lines.add('显示名：$displayTitle');
     lines.add(scope == 'course_series' ? '作用：整门课' : '作用：仅该事件');
 
@@ -792,7 +792,18 @@ class CreateUserOverlayTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'args': Map<String, Object?>.from(a), 'snapshot': snapshot},
+      commitParams: {
+        'eventId': eventId,
+        'scope': scope,
+        'displayTitle': displayTitle,
+        'attendanceNote': attendanceNote,
+        'listeningNote': listeningNote,
+        'hidden': hidden,
+        'attendancePolicy': attendancePolicy,
+        'listeningMode': listeningMode,
+        'importance': importance,
+        'snapshot': snapshot,
+      },
       safeLogSummary: '设置个人标注 ${_eventSummary(snapshot)}｜${lines.skip(_eventTargetLines(snapshot).length).join('、')}',
     );
   }
@@ -802,15 +813,14 @@ class CreateUserOverlayTool extends AgentWriteTool {
     final p = proposal.commitParams;
     final eventId = p['eventId'] as String;
     final scope = p['scope'] as String;
-    final a = p['args'] as Map<String, Object?>;
     final mutation = OverlayMutation(
-      displayTitle: a['display_title'] as String?,
-      attendancePolicy: _attendance(a['attendance_policy'] as String?),
-      attendanceNote: a['attendance_note'] as String?,
-      listeningMode: _listening(a['listening_mode'] as String?),
-      listeningNote: a['listening_note'] as String?,
-      importance: a['importance'] as String?,
-      hidden: a['hidden'] as bool?,
+      displayTitle: p['displayTitle'] as String?,
+      attendancePolicy: _attendance(p['attendancePolicy'] as String?),
+      attendanceNote: p['attendanceNote'] as String?,
+      listeningMode: _listening(p['listeningMode'] as String?),
+      listeningNote: p['listeningNote'] as String?,
+      importance: p['importance'] as String?,
+      hidden: p['hidden'] as bool?,
     );
     if (scope == 'course_series') {
       final seriesId = await gateway.courseSeriesIdForEvent(eventId);

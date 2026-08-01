@@ -238,8 +238,8 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       type: row.type,
       title: row.title,
       allDay: row.allDay,
-      startAt: row.startAt == null ? null : DateTime.fromMillisecondsSinceEpoch(row.startAt!),
-      endAt: row.endAt == null ? null : DateTime.fromMillisecondsSinceEpoch(row.endAt!),
+      startAt: row.startAt == null ? null : _beijingDateTime(row.startAt!),
+      endAt: row.endAt == null ? null : _beijingDateTime(row.endAt!),
       startDate: row.startDate == null ? null : DateTime.parse(row.startDate!),
       endDateExclusive: row.endDateExclusive == null ? null : DateTime.parse(row.endDateExclusive!),
       location: row.locationName,
@@ -284,4 +284,23 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     enabled: enabled,
     updatedBy: updatedBy,
   );
+
+  /// 与 Schedule 层 `EffectiveEventRepository._beijingDateTime` 一致：把存储的
+  /// UTC epoch-ms 还原为北京墙钟时间（isUtc:true + 8h），避免确认预览显示 UTC。
+  DateTime _beijingDateTime(int millisecondsSinceEpoch) {
+    final shifted = DateTime.fromMillisecondsSinceEpoch(
+      millisecondsSinceEpoch,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    return DateTime(
+      shifted.year,
+      shifted.month,
+      shifted.day,
+      shifted.hour,
+      shifted.minute,
+      shifted.second,
+      shifted.millisecond,
+      shifted.microsecond,
+    );
+  }
 }

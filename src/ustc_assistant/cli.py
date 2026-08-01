@@ -406,7 +406,7 @@ def _generate_flutter_defaults(
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(rendered, encoding="utf-8", newline="\n")
     status(
-        f"Generated Flutter semester defaults for {semester.display_name} "
+        f"Generated Flutter semester defaults for semester {semester.semester_id} "
         f"-> {output}"
     )
     return 0
