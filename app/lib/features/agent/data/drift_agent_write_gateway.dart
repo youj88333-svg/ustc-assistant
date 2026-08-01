@@ -14,6 +14,8 @@ import '../../tasks/application/task_lifecycle_service.dart';
 import '../../tasks/application/undo_recorder.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
+import '../../schedule/application/jw_day_move_service.dart';
+import '../../schedule/domain/jw_day_move.dart';
 import '../application/agent_permission_policy_service.dart';
 import '../domain/agent_permission_policy.dart';
 import '../domain/agent_write_gateway.dart';
@@ -49,6 +51,8 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       RecurrenceService(database: database, accountId: accountId, now: now);
   ReminderOverrideService get _reminders =>
       ReminderOverrideService(database: database, accountId: accountId, undoRecorder: _noopUndo, now: now);
+  JwDayMoveService get _dayMoves =>
+      JwDayMoveService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
 
   @override
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes}) =>
@@ -284,6 +288,28 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     enabled: enabled,
     updatedBy: updatedBy,
   );
+
+  @override
+  Future<JwDayMovePreview> jwDayMovePreview(String sourceDate) =>
+      _dayMoves.preview(sourceDate);
+
+  @override
+  Future<bool> jwDayMove(String sourceDate, String targetDate) async {
+    // 数据层唯一允许的表级预读：判定本次移动是新建还是重定向（仅影响返回的
+    // 结果值）。真正的资格/目标校验都在 JwDayMoveService.move 的事务内完成。
+    final existing = await (database.select(database.jwDayMoves)
+          ..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.sourceDate.equals(sourceDate),
+          ))
+        .getSingleOrNull();
+    await _dayMoves.move(sourceDate, targetDate);
+    return existing != null;
+  }
+
+  @override
+  Future<void> jwDayMoveClear(String sourceDate) => _dayMoves.clear(sourceDate);
 
   /// 与 Schedule 层 `EffectiveEventRepository._beijingDateTime` 一致：把存储的
   /// UTC epoch-ms 还原为北京墙钟时间（isUtc:true + 8h），避免确认预览显示 UTC。

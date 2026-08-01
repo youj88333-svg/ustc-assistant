@@ -2,6 +2,7 @@ import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/personal_event.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/application/overlay_service.dart';
+import '../../schedule/domain/jw_day_move.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import 'agent_permission_policy.dart';
@@ -75,4 +76,16 @@ abstract interface class AgentWriteGateway {
   Future<TaskItem> taskById(String taskId);
   Future<PlanBlockItem> planBlockById(String planBlockId);
   Future<void> updatePermissionPolicy({required String actionType, required String targetType, required ConfirmationMode mode, required RiskLevel riskLevel, required bool enabled, required String updatedBy});
+
+  /// 整日教务课程移动预览：返回符合条件课程的标题（永不含 id）与已有目标日期。
+  /// 由 `JwDayMoveService.preview` 支撑；工具本身不触表。
+  Future<JwDayMovePreview> jwDayMovePreview(String sourceDate);
+
+  /// 把 [sourceDate] 的教务课程整体移到 [targetDate]。返回 true 表示该源日期
+  /// 已有移动记录（本次为重定向），false 表示新建。无符合条件的课程时抛
+  /// [NoEligibleJwCourses]，源目标同日期抛 [InvalidDayMoveDates]。
+  Future<bool> jwDayMove(String sourceDate, String targetDate);
+
+  /// 清除 [sourceDate] 的整日移动记录，恢复原日期。无记录时抛 [MissingJwDayMove]。
+  Future<void> jwDayMoveClear(String sourceDate);
 }

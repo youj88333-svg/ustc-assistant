@@ -1755,6 +1755,7 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'record_listening_mode': (raw) => _pick(raw, _writeResultKeys),
       'create_schedule_relation': (raw) => _pick(raw, _writeResultKeys),
       'set_reminder': (raw) => _pick(raw, _writeResultKeys),
+      'move_jw_course_day': (raw) => _pick(raw, _writeResultKeys),
       'update_permission_policy': (raw) => _pick(raw, _writeResultKeys),
     };
 

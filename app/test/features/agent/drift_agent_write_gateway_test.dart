@@ -9,11 +9,58 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
+import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
 class _FixedClock implements BeijingClock {
   @override
   DateTime now() => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000);
+}
+
+/// Beijing wall clock -> the app's UTC epoch-ms storage encoding.
+int _beijingEpoch(int year, int month, int day, int hour, [int minute = 0]) =>
+    DateTime.utc(year, month, day, hour, minute).millisecondsSinceEpoch -
+    const Duration(hours: 8).inMilliseconds;
+
+/// Seeds a `ustc_jw/course` timed event on the source day with a source record.
+Future<void> _seedJwCourse(
+  AppDatabase db,
+  String accountId,
+  String id, {
+  required int startAt,
+  required int endAt,
+}) async {
+  await db.into(db.calendarEvents).insert(
+        CalendarEventsCompanion.insert(
+          id: id,
+          accountId: accountId,
+          source: 'ustc_jw',
+          externalId: Value(id),
+          title: '课程 $id',
+          type: 'course',
+          startAt: Value(startAt),
+          endAt: Value(endAt),
+          allDay: false,
+          timezone: 'Asia/Shanghai',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+  await db.into(db.sourceRecords).insert(
+        SourceRecordsCompanion.insert(
+          id: 'sr-$id',
+          accountId: accountId,
+          source: 'ustc_jw',
+          entityType: 'calendar_event',
+          externalId: id,
+          localEntityId: id,
+          sourceStatus: 'active',
+          presence: 'present',
+          scopeKey: 'scope',
+          firstObservedAt: 1,
+          lastObservedAt: 1,
+        ),
+      );
 }
 
 void main() {
@@ -232,5 +279,71 @@ void main() {
     );
     expect(await policy.resolve(accountId: 'acc-1', actionType: 'create_event',
         targetType: 'event', riskLevel: RiskLevel.medium), PermissionDecision.allow);
+  });
+
+  test('jwDayMovePreview lists only eligible course titles on the source date', () async {
+    await _seedJwCourse(db, 'acc-1', 'course-1',
+        startAt: _beijingEpoch(2026, 8, 3, 9),
+        endAt: _beijingEpoch(2026, 8, 3, 10));
+    await _seedJwCourse(db, 'acc-1', 'course-2',
+        startAt: _beijingEpoch(2026, 8, 3, 14),
+        endAt: _beijingEpoch(2026, 8, 3, 16));
+    // 考试来源与个人事件不可移动。
+    await db.into(db.calendarEvents).insert(CalendarEventsCompanion.insert(
+      id: 'exam-1', accountId: 'acc-1', source: 'ustc_jw',
+      externalId: const Value('exam-1'), title: '期中考试', type: 'exam',
+      startAt: Value(_beijingEpoch(2026, 8, 3, 9)),
+      endAt: Value(_beijingEpoch(2026, 8, 3, 10)),
+      allDay: false, timezone: 'Asia/Shanghai', createdAt: 1, updatedAt: 1,
+    ));
+    await db.into(db.calendarEvents).insert(CalendarEventsCompanion.insert(
+      id: 'ev-1', accountId: 'acc-1', source: 'user',
+      title: '健身', type: 'personal',
+      startAt: Value(_beijingEpoch(2026, 8, 3, 9)),
+      endAt: Value(_beijingEpoch(2026, 8, 3, 10)),
+      allDay: false, timezone: 'Asia/Shanghai', createdAt: 1, updatedAt: 1,
+    ));
+    await db.into(db.sourceRecords).insert(SourceRecordsCompanion.insert(
+      id: 'sr-exam', accountId: 'acc-1', source: 'ustc_jw',
+      entityType: 'calendar_event', externalId: 'exam-1',
+      localEntityId: 'exam-1', sourceStatus: 'active', presence: 'present',
+      scopeKey: 'scope', firstObservedAt: 1, lastObservedAt: 1,
+    ));
+
+    final preview = await gateway.jwDayMovePreview('2026-08-03');
+    expect(preview.courses, ['课程 course-1', '课程 course-2'],
+        reason: '只有 ustc_jw/course 定时事件可移动，考试/个人事件排除');
+    expect(preview.targetDate, isNull);
+  });
+
+  test('jwDayMove persists the record, retargets on a second move, and clear restores', () async {
+    await _seedJwCourse(db, 'acc-1', 'course-1',
+        startAt: _beijingEpoch(2026, 8, 3, 9),
+        endAt: _beijingEpoch(2026, 8, 3, 10));
+    final first = await gateway.jwDayMove('2026-08-03', '2026-08-09');
+    expect(first, isFalse, reason: '首次移动创建记录');
+    var preview = await gateway.jwDayMovePreview('2026-08-03');
+    expect(preview.targetDate, '2026-08-09');
+    expect(preview.courses, hasLength(1));
+
+    final second = await gateway.jwDayMove('2026-08-03', '2026-08-10');
+    expect(second, isTrue, reason: '同一源日期的第二次移动是重定向');
+    preview = await gateway.jwDayMovePreview('2026-08-03');
+    expect(preview.targetDate, '2026-08-10');
+
+    await gateway.jwDayMoveClear('2026-08-03');
+    preview = await gateway.jwDayMovePreview('2026-08-03');
+    expect(preview.targetDate, isNull, reason: '清除后恢复原日期');
+  });
+
+  test('jwDayMove throws NoEligibleJwCourses without courses; clear throws MissingJwDayMove', () async {
+    await expectLater(
+      gateway.jwDayMove('2026-08-05', '2026-08-09'),
+      throwsA(isA<NoEligibleJwCourses>()),
+    );
+    await expectLater(
+      gateway.jwDayMoveClear('2026-08-03'),
+      throwsA(isA<MissingJwDayMove>()),
+    );
   });
 }

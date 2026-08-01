@@ -103,7 +103,7 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
-        expect(request.system, contains(AgentSystemPrompt.version3));
+        expect(request.system, contains(AgentSystemPrompt.version4));
 
         // 2. The summary text is present as an assistant context message,
         //    framed as a prior summary (data), NOT as a local business fact.
@@ -255,7 +255,7 @@ void main() {
         toolDeclarations: const [],
         clock: clock,
       );
-      // system 同时包含 version3 文本和动态时间。
+      // system 同时包含 version4 文本和动态时间。
       expect(request.system, isNotNull);
       expect(request.system, contains('学长'));
       expect(request.system, contains('2026-07-31T14:30:05'));
@@ -574,12 +574,12 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 3', () {
-      expect(AgentSystemPrompt.version, 3);
+    test('version is 4', () {
+      expect(AgentSystemPrompt.version, 4);
     });
 
-    test('version3 contains the safety sections, the read tool names and the write-tool confirmation gate', () {
-      const prompt = AgentSystemPrompt.version3;
+    test('version4 contains the safety sections, the read tool names and the write-tool confirmation gate', () {
+      const prompt = AgentSystemPrompt.version4;
       // §1 角色与风格：友善引导型学长 + 中文默认。
       expect(prompt, contains('学长'));
       expect(prompt, contains('默认中文'));
@@ -621,12 +621,12 @@ void main() {
       // §5 数据可信与引用。
       expect(prompt, contains('不可信数据'));
       expect(prompt, contains('conflictState'));
-      // 全部 10 个写工具都应在写映射/能力边界中出现，且确认门必须被描述。
+      // 全部 11 个写工具都应在写映射/能力边界中出现，且确认门必须被描述。
       const writeToolNames = [
         'create_event', 'update_event', 'create_task', 'plan_task',
         'create_user_overlay', 'record_attendance_decision',
         'record_listening_mode', 'create_schedule_relation', 'set_reminder',
-        'update_permission_policy',
+        'move_jw_course_day', 'update_permission_policy',
       ];
       for (final name in writeToolNames) {
         expect(prompt, contains(name), reason: '写映射/能力边界应包含工具 $name');
@@ -640,8 +640,41 @@ void main() {
       expect(prompt, isNot(contains('当前只提供查询')));
     });
 
-    test('version3 has no secrets, accounts, semester literals, or raw ids', () {
-      const prompt = AgentSystemPrompt.version3;
+    test('version4 adds the approved v4 rules', () {
+      const prompt = AgentSystemPrompt.version4;
+      // refs 仅用于工具参数传递，绝不打印进回复。
+      expect(prompt, contains('只用于工具参数传递'),
+          reason: 'refs 是 transport-only，绝不写进回复文本');
+      // 不重复发起相同查询。
+      expect(prompt, contains('不再次发起相同查询'),
+          reason: '不得重复相同查询');
+      // 只有终端写工具成功后才能声称成功。
+      expect(prompt, contains('只有终端写工具成功返回后才能声称'),
+          reason: '无成功终端写工具不得声称成功');
+      // 写目标定位用 get_schedule(query=..., view=events)，get_conflicts 不当查找器。
+      expect(prompt, contains('get_schedule'),
+          reason: '写目标定位用 get_schedule');
+      expect(prompt, contains('不要用 get_conflicts 当查找器'),
+          reason: 'get_conflicts 不得用作写目标查找器');
+      expect(prompt, contains('view=events'),
+          reason: '写目标定位用 events 视图');
+      // 时间重叠默认冲突，显式 conflict/no_conflict 覆盖。
+      expect(prompt, contains('时间重叠默认按冲突处理'),
+          reason: '时间重叠默认冲突');
+      expect(prompt, contains('conflict/no_conflict'),
+          reason: '显式冲突决策覆盖推导结果');
+      // 整日移动仅影响 ustc_jw/course，始终要求确认。
+      expect(prompt, contains('只影响 ustc_jw 来源的 course 事件'),
+          reason: '整日移动仅作用于 ustc_jw/course');
+      expect(prompt, contains('始终需要用户确认'),
+          reason: '整日移动始终要求确认');
+      // 自由聊天与能力讨论无需调用工具。
+      expect(prompt, contains('不需要调用任何工具'),
+          reason: '自由聊天/能力讨论不强制调用工具');
+    });
+
+    test('version4 has no secrets, accounts, semester literals, or raw ids', () {
+      const prompt = AgentSystemPrompt.version4;
       expect(prompt, isNot(contains('PB12345678')));
       expect(prompt, isNot(contains('sk-')));
       expect(prompt, isNot(contains('421')));

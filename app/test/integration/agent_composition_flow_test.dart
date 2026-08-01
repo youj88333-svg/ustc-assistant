@@ -1961,4 +1961,416 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       }
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 9 composition flows for move_jw_course_day (critical whole-day moves).
+  // Script user request "把 8 月 3 日的教务课程移到 8 月 9 日": model tool use ->
+  // critical confirmation -> approve -> moved events in target week -> conflict
+  // pair with a target event -> no ref in chat. Plus the decline path and the
+  // free discussion path ("调休功能是怎么工作的" needs no tools).
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// Beijing wall clock -> the app's UTC epoch-ms storage encoding
+  /// (machine-timezone independent; copied from the schedule service tests).
+  int _beijingEpoch(int year, int month, int day, int hour, [int minute = 0]) =>
+      DateTime.utc(year, month, day, hour, minute).millisecondsSinceEpoch -
+      const Duration(hours: 8).inMilliseconds;
+
+  test(
+    'composition: whole-day JW course move flow '
+    '(confirm -> moved in target week -> conflict pair -> no ref in chat)',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(
+        db,
+        'acc-1',
+        secrets: secretStore,
+        apiKey: 'test-key',
+      );
+      // 源日期 2026-08-03 的一门教务课程（09:00-10:40）。
+      await _insertCourseSeries(
+        db,
+        'series-1',
+        'acc-1',
+        externalId: 'lesson-la',
+        title: '线性代数',
+        semesterKey: '2026fall',
+      );
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'jw-0803',
+              accountId: 'acc-1',
+              source: 'ustc_jw',
+              externalId: const Value('jw-0803'),
+              sourceSeriesExternalId: const Value('lesson-la'),
+              title: '线性代数',
+              type: 'course',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 9, 0)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 10, 40)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: const Value('三教101'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await db.into(db.sourceRecords).insert(
+            SourceRecordsCompanion.insert(
+              id: 'sr-jw-0803',
+              accountId: 'acc-1',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: 'jw-0803',
+              localEntityId: 'jw-0803',
+              sourceStatus: 'active',
+              presence: 'present',
+              scopeKey: 'scope',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+      // 目标日期 2026-08-09 已有个人事件 09:30-11:00，与移动后的课程时间重叠。
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ev-target',
+              accountId: 'acc-1',
+              source: 'user',
+              title: '健身',
+              type: 'personal',
+              startAt: Value(_beijingEpoch(2026, 8, 9, 9, 30)),
+              endAt: Value(_beijingEpoch(2026, 8, 9, 11, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: const Value('健身房'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      final provider = _ScriptedProvider([
+        // Call 1: 模型先查目标日（写目标定位用 get_schedule，不用 get_conflicts）。
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-1',
+                name: 'get_schedule',
+                input: {'from': '2026-08-09', 'through': '2026-08-09'},
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 2: move_jw_course_day -> 暂停等待 critical 确认。
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-2',
+                name: 'move_jw_course_day',
+                input: {
+                  'action': 'move',
+                  'source_date': '2026-08-03',
+                  'target_date': '2026-08-09',
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 3: 批准后模型查目标周，看到移动后的课程。
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-3',
+                name: 'get_schedule',
+                input: {'from': '2026-08-03', 'through': '2026-08-09'},
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 4: 冲突对。
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-4',
+                name: 'get_conflicts',
+                input: {'from': '2026-08-09', 'through': '2026-08-09'},
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 5: 最终回复。
+        _ScriptedCall(() => [
+              const TextDeltaEvent(
+                '已把 8 月 3 日的线性代数移到 8 月 9 日（09:00-10:40）。'
+                '它和当天 09:30 的健身时间重叠，需要你二选一。',
+              ),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      expect(composition.registry.isRegistered('move_jw_course_day'), isTrue,
+          reason: '第 11 个写工具必须注册');
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '把 8 月 3 日的教务课程移到 8 月 9 日')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+
+      // --- Step 1: 移动请求暂停在 critical 确认卡 ------------------------------
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        states.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'move_jw_course_day 必须暂停等待 critical 确认',
+      );
+      final preview = states
+          .lastWhere((s) => s.userAction != null)
+          .userAction!
+          .writeProposal!;
+      final previewText = preview.previewLines.join('\n');
+      expect(preview.operationLabel, '整日移动教务课程');
+      expect(preview.rememberAllowed, isFalse,
+          reason: 'critical 确认卡永不提供"以后不再确认"');
+      expect(previewText, contains('2026-08-03'));
+      expect(previewText, contains('2026-08-09'));
+      expect(previewText, contains('线性代数'));
+      expect(previewText, contains('课程数：1'));
+      expect(previewText, isNot(contains('jw-0803')),
+          reason: '确认卡预览不得泄漏 DB id');
+      expect(previewText, isNot(contains('ev-target')),
+          reason: '确认卡预览不得泄漏 DB id');
+      expect(previewText, isNot(contains('ref_')),
+          reason: '确认卡预览不得含 ref_*');
+
+      // --- Step 2: 批准 -> 原子写入移动记录 ------------------------------------
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+
+      expect(states.last.state, AgentRunState.completed);
+      final moveRows = await db.select(db.jwDayMoves).get();
+      expect(moveRows, hasLength(1));
+      expect(moveRows.single.sourceDate, '2026-08-03');
+      expect(moveRows.single.targetDate, '2026-08-09');
+      final logs = await db.actionLogsRepository.selectAll();
+      expect(
+        logs.where((l) =>
+            l.source == 'agent' &&
+            l.actionType == 'move_jw_course_day' &&
+            l.result == 'success'),
+        hasLength(1),
+        reason: '批准必须原子写入一条 agent 成功日志',
+      );
+      expect(
+        logs.where((l) =>
+            l.source == 'user' &&
+            l.actionType == 'agent_write_confirm' &&
+            l.result == 'approved'),
+        hasLength(1),
+      );
+
+      // --- Step 3: 目标周出现移动后的课程 + 与目标事件构成冲突对 ----------------
+      final feed = _capturedToolResults(provider).join('\n');
+      expect(feed, contains('2026-08-09T09:00:00'),
+          reason: '移动后的课程必须出现在目标周（有效投影时间 09:00）');
+      expect(feed, contains('conflictPairs'),
+          reason: 'get_conflicts 必须返回冲突对');
+      expect(feed, contains('derivedOverlap'),
+          reason: '重叠推导的冲突对 origin 为 derivedOverlap');
+      expect(feed, isNot(contains('jw-0803')),
+          reason: '工具结果不得含原始 DB id');
+      expect(feed, isNot(contains('ev-target')),
+          reason: '工具结果不得含原始 DB id');
+      final finalText = states.last.text;
+      expect(finalText, isNot(contains('ref_')),
+          reason: '聊天文本不得打印 ref_*');
+      expect(finalText, contains('线性代数'),
+          reason: '最终回复应总结移动结果');
+    },
+  );
+
+  test('composition: whole-day JW course move declined writes nothing and is audited', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+    await _insertCourseSeries(
+      db,
+      'series-1',
+      'acc-1',
+      externalId: 'lesson-la',
+      title: '线性代数',
+      semesterKey: '2026fall',
+    );
+    await db.into(db.calendarEvents).insert(
+          CalendarEventsCompanion.insert(
+            id: 'jw-0803',
+            accountId: 'acc-1',
+            source: 'ustc_jw',
+            externalId: const Value('jw-0803'),
+            title: '线性代数',
+            type: 'course',
+            startAt: Value(_beijingEpoch(2026, 8, 3, 9, 0)),
+            endAt: Value(_beijingEpoch(2026, 8, 3, 10, 40)),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await db.into(db.sourceRecords).insert(
+          SourceRecordsCompanion.insert(
+            id: 'sr-jw-0803',
+            accountId: 'acc-1',
+            source: 'ustc_jw',
+            entityType: 'calendar_event',
+            externalId: 'jw-0803',
+            localEntityId: 'jw-0803',
+            sourceStatus: 'active',
+            presence: 'present',
+            scopeKey: 'scope',
+            firstObservedAt: 1,
+            lastObservedAt: 1,
+          ),
+        );
+
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'move_jw_course_day',
+              input: {
+                'action': 'move',
+                'source_date': '2026-08-03',
+                'target_date': '2026-08-09',
+              },
+            ),
+            const CompletedEvent(),
+          ]),
+      _ScriptedCall(() => [
+            const TextDeltaEvent('好的，不移动 8 月 3 日的课程。'),
+            const CompletedEvent(),
+          ]),
+    ]);
+    final composition = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: provider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    addTearDown(composition.dispose);
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    composition.sessionService
+        .send(accountId: 'acc-1', userText: '把 8 月 3 日的教务课程移到 8 月 9 日')
+        .listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete);
+    for (var i = 0; i < 30; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      states.any(
+          (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+      isTrue,
+    );
+    await composition.sessionService
+        .confirmWriteProposal(
+            accountId: 'acc-1', runId: runId, approve: false, remember: false)
+        .drain<void>();
+    await done.future;
+
+    expect(states.last.state, AgentRunState.completed);
+    expect(await db.select(db.jwDayMoves).get(), isEmpty,
+        reason: '拒绝不得写入任何移动记录');
+    final logs = await db.actionLogsRepository.selectAll();
+    expect(
+      logs.where((l) =>
+          l.source == 'agent' &&
+          l.actionType == 'move_jw_course_day' &&
+          l.result == 'success'),
+      isEmpty,
+      reason: '拒绝不得写 agent 成功日志',
+    );
+    expect(
+      logs.where((l) =>
+          l.source == 'user' &&
+          l.actionType == 'agent_write_decline' &&
+          l.result == 'declined'),
+      hasLength(1),
+      reason: '拒绝必须留下 decline 审计',
+    );
+  });
+
+  test('composition: free discussion of 调休 needs no tools and completes', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    const protector = _NoopProtector();
+    await _seedAccount(db, 'acc-1');
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+            const TextDeltaEvent(
+              '整日调休是把某一天的教务课程整体挪到另一天，只影响教务课程，'
+              '不影响考试、二课和个人日程；任何时候都需要你确认后才会执行。',
+            ),
+            const CompletedEvent(),
+          ]),
+    ]);
+    final composition = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: provider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    addTearDown(composition.dispose);
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    composition.sessionService
+        .send(accountId: 'acc-1', userText: '调休功能是怎么工作的')
+        .listen((s) => states.add(s), onDone: done.complete);
+    await done.future;
+
+    expect(states.last.state, AgentRunState.completed,
+        reason: '能力讨论必须直接完成，不被 grounding 矫正为工具调用');
+    expect(provider.requests, hasLength(1),
+        reason: '自由聊天路径只允许一次模型调用（不得触发矫正重试）');
+    expect(states.last.text, contains('整日调休'));
+    // 没有任何工具调用：自由聊天与能力讨论不需要调用工具。
+    final toolUses = provider.requests.single.messages
+        .where((m) => m.role == 'assistant')
+        .expand((m) => m.content)
+        .whereType<LlmToolUseBlock>();
+    expect(toolUses, isEmpty,
+        reason: '能力讨论不得调用任何工具');
+  });
 }

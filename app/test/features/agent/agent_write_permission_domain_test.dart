@@ -6,8 +6,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqlite3/sqlite3.dart' as sqlite;
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
+
+class _FixedClock implements BeijingClock {
+  @override
+  DateTime now() => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000);
+}
 
 void main() {
   test('ConfirmationMode/RiskLevel storage round-trips snake_case', () {
@@ -102,5 +109,39 @@ void main() {
     expect(policyRow.confirmationMode, 'always_ask');
     expect(policyRow.targetType, 'event');
     await db.close();
+  });
+
+  test('move_jw_course_day policy is critical, always-ask, and not relaxable', () {
+    // 单一映射：策略行键与权限工具共用同一份清单。
+    expect(AgentPermissionPolicyService.kPolicyTargetMap['move_jw_course_day'],
+        'jw_day_move');
+    expect(AgentPermissionPolicyService.targetTypeFor('move_jw_course_day'),
+        'jw_day_move');
+    // 用户/模型不可放宽：不在可调整动作集合里。
+    expect(AgentPermissionPolicyService.kAgentPolicyActionTypes,
+        isNot(contains('move_jw_course_day')),
+        reason: 'critical 整日移动不可通过 update_permission_policy 放宽');
+    // 默认 always_ask + critical。
+    expect(AgentPermissionPolicyService.defaultMode('move_jw_course_day'),
+        ConfirmationMode.alwaysAsk);
+    expect(AgentPermissionPolicyService.defaultRisk('move_jw_course_day'),
+        RiskLevel.critical);
+  });
+
+  test('markAlwaysAllow refuses the critical move action before touching the DB', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final service =
+        AgentPermissionPolicyService(database: db, clock: _FixedClock());
+    await expectLater(
+      service.markAlwaysAllow(
+          accountId: 'acc-1',
+          actionType: 'move_jw_course_day',
+          targetType: 'jw_day_move'),
+      throwsStateError,
+      reason: 'critical 动作拒绝放宽为 always_allow（「以后不再确认」）',
+    );
+    // 未写任何策略行。
+    expect(await db.select(db.agentPermissionPolicies).get(), isEmpty);
   });
 }

@@ -20,6 +20,7 @@ import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
+import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
 
 class _FixedClock implements BeijingClock {
   @override
@@ -197,6 +198,39 @@ class _OverlayGateway implements AgentWriteGateway {
   Future<String?> courseSeriesIdForEvent(String eventId) async => courseSeriesResult;
 }
 
+/// move_jw_course_day 专用假网关：只实现 preview/move/clear 三个新方法。
+class _MoveGateway implements AgentWriteGateway {
+  JwDayMovePreview? preview;
+  /// jwDayMove 在 commit 阶段抛错（模拟重检失败：课程消失/日期非法等）。
+  Object? moveError;
+  /// jwDayMoveClear 在 commit 阶段抛 MissingJwDayMove（记录已被删除）。
+  bool clearMissing = false;
+  /// jwDayMove 返回 true 表示重定向（原记录已存在）。
+  bool retarget = false;
+  ({String sourceDate, String targetDate})? moved;
+  String? cleared;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<JwDayMovePreview> jwDayMovePreview(String sourceDate) async => preview!;
+
+  @override
+  Future<bool> jwDayMove(String sourceDate, String targetDate) async {
+    final error = moveError;
+    if (error != null) throw error;
+    moved = (sourceDate: sourceDate, targetDate: targetDate);
+    return retarget;
+  }
+
+  @override
+  Future<void> jwDayMoveClear(String sourceDate) async {
+    if (clearMissing) throw MissingJwDayMove(sourceDate);
+    cleared = sourceDate;
+  }
+}
+
 /// 关系/提醒/权限工具假网关。
 class _RelationGateway implements AgentWriteGateway {
   ({String leftKind, String leftId, String rightKind, String rightId, String conflictState, String? reason})? relation;
@@ -323,6 +357,7 @@ void main() {
     RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
     CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
     SetReminderTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    MoveJwCourseDayTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
     UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
   ];
 
@@ -1347,5 +1382,291 @@ void main() {
     expect(committed.status, AgentToolStatus.error);
     expect(committed.errorCode, 'target_not_found');
     expect(gw.relation, isNull);
+  });
+
+  // ========== Task 9: move_jw_course_day（critical 整日移动）==========
+
+  test('move_jw_course_day requires action/source and move requires target', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    // 缺 action
+    var result = await tool.execute({
+      'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 缺 source_date
+    result = await tool.execute({
+      'action': 'move', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // move 缺 target_date
+    result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // clear 不允许 target_date
+    result = await tool.execute({
+      'action': 'clear', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 未知 action
+    result = await tool.execute({
+      'action': 'swap', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('move_jw_course_day rejects unknown fields, wrong types, malformed and same dates', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    // 未知字段
+    var result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+      'sneaky': true,
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // action 非字符串
+    result = await tool.execute({
+      'action': 1, 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // source_date 非字符串
+    result = await tool.execute({
+      'action': 'move', 'source_date': 20260803, 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 畸形日期
+    result = await tool.execute({
+      'action': 'move', 'source_date': '2026-13-40', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    result = await tool.execute({
+      'action': 'move', 'source_date': '2026-02-31', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    result = await tool.execute({
+      'action': 'move', 'source_date': '08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // 相同日期
+    result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-03',
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('move_jw_course_day with no eligible courses fails before confirmation', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: []);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'no_eligible_jw_courses');
+    expect(result.userAction, isNull,
+        reason: '空预览不得产生可批准的确认卡');
+    expect(gw.moved, isNull);
+  });
+
+  test('move_jw_course_day preview shows source/target/count/titles, no ids or refs', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null,
+        courses: ['线性代数', '大学物理']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final proposal = await tool.propose({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    final lines = proposal.previewLines.join('\n');
+    expect(lines, contains('2026-08-03'), reason: '预览必须包含源日期');
+    expect(lines, contains('2026-08-09'), reason: '预览必须包含目标日期');
+    expect(lines, contains('2'), reason: '预览必须包含课程数');
+    expect(lines, contains('线性代数'));
+    expect(lines, contains('大学物理'));
+    expectNoIdsOrRefs(proposal, const []);
+    expect(proposal.rememberAllowed, isFalse,
+        reason: 'critical 动作的确认卡永不提供"以后不再确认"');
+    expect(proposal.forceConfirmation, isTrue);
+  });
+
+  test('move_jw_course_day commit rechecks eligibility and returns safe errors', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    // 提案后课程不再可移动：commit 必须重检并安全拒绝。
+    gw.moveError = const NoEligibleJwCourses('2026-08-03');
+    final committed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'no_eligible_jw_courses');
+    expect(gw.moved, isNull, reason: '重检失败不得产生任何写');
+  });
+
+  test('move_jw_course_day clear rechecks the record and returns target_not_found', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: '2026-08-09', courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final result = await tool.execute({'action': 'clear', 'source_date': '2026-08-03'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    // 提案后移动记录被清除：commit 必须重检并安全拒绝。
+    gw.clearMissing = true;
+    final committed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.status, AgentToolStatus.error);
+    expect(committed.errorCode, 'target_not_found');
+    expect(gw.cleared, isNull);
+  });
+
+  test('move_jw_course_day clear with no record fails before confirmation', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: []);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final result = await tool.execute({'action': 'clear', 'source_date': '2026-08-03'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'target_not_found');
+    expect(result.userAction, isNull);
+    expect(gw.cleared, isNull);
+  });
+
+  test('move_jw_course_day approval commits atomically, never offers remember and logs success', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    final result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    expect(result.userAction!.writeProposal!.rememberAllowed, isFalse,
+        reason: 'critical 确认卡永不提供"以后不再确认"');
+    final committed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: true, remember: true);
+    expect(committed.payload['result'], 'moved_jw_course_day');
+    expect(gw.moved, (sourceDate: '2026-08-03', targetDate: '2026-08-09'));
+    final logs = await actionLogsFor('a1');
+    expect(
+      logs.where((l) =>
+          l.source == 'agent' &&
+          l.actionType == 'move_jw_course_day' &&
+          l.result == 'success'),
+      hasLength(1),
+      reason: '批准必须原子写入一条 agent 成功日志',
+    );
+    // remember=true 也无法放宽 critical 动作：策略决议仍是 confirm。
+    expect(
+      await policy.resolve(
+          accountId: 'a1',
+          actionType: 'move_jw_course_day',
+          targetType: 'jw_day_move',
+          riskLevel: RiskLevel.critical),
+      PermissionDecision.confirm,
+    );
+  });
+
+  test('move_jw_course_day returns retargeted and cleared result values', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    // 重定向：原记录已存在 → retargeted_jw_course_day。
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: '2026-08-09', courses: ['线性代数']);
+    gw.retarget = true;
+    var result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-10',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    expect(result.userAction!.writeProposal!.previewLines,
+        anyElement(contains('已有移动记录')),
+        reason: '重定向时确认卡必须提示已有移动记录');
+    var committed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.payload['result'], 'retargeted_jw_course_day');
+    // clear → cleared_jw_course_day_move。
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: '2026-08-09', courses: ['线性代数']);
+    result = await tool.execute({'action': 'clear', 'source_date': '2026-08-03'}, h.ctx());
+    committed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(committed.payload['result'], 'cleared_jw_course_day_move');
+    expect(gw.cleared, '2026-08-03');
+  });
+
+  test('move_jw_course_day decline and cancel write nothing', () async {
+    final h = _Harness(tools());
+    final gw = _MoveGateway();
+    gw.preview = const JwDayMovePreview(
+        sourceDate: '2026-08-03', targetDate: null, courses: ['线性代数']);
+    final tool = h.tool('move_jw_course_day');
+    tool.attachGateway(gw);
+    // decline
+    var result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    var resumed = await store.resolve(
+        result.userAction!.opaqueHandle, approve: false, remember: false);
+    expect(resumed.errorCode, 'user_declined');
+    expect(gw.moved, isNull, reason: '拒绝不得产生任何写');
+    final logs = await actionLogsFor('a1');
+    expect(
+      logs.any((l) =>
+          l.source == 'user' &&
+          l.actionType == 'agent_write_decline' &&
+          l.result == 'declined'),
+      isTrue,
+    );
+    // cancel
+    result = await tool.execute({
+      'action': 'move', 'source_date': '2026-08-03', 'target_date': '2026-08-09',
+    }, h.ctx());
+    await result.pendingInvocation!.cancel();
+    resumed = await result.pendingInvocation!.result;
+    expect(resumed.errorCode, 'cancelled');
+    expect(gw.moved, isNull, reason: '取消不得产生任何写');
+  });
+
+  test('update_permission_policy cannot relax move_jw_course_day', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    final result = await tool.execute({
+      'action_type': 'move_jw_course_day',
+      'target_type': 'jw_day_move',
+      'confirmation_mode': 'always_allow',
+    }, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+    expect(gw.policyUpdate, isNull,
+        reason: 'critical 整日移动不可被权限工具放宽');
   });
 }

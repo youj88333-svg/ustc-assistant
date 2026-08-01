@@ -144,6 +144,21 @@ final List<_IntentDef> _writeIntents = [
     ],
     terminalTools: {'create_event'},
   ),
+  // move_jw_course_day: whole-day JW course moves and their clear (restore).
+  // Checked BEFORE update_event — both share "把…移到" wording, but a course
+  // (教务课程/调休) day move must route to move_jw_course_day, not update_event.
+  // Terminal move_jw_course_day; the model looks up the target week with
+  // get_schedule before proposing the move (conflict warnings).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(把|将).{0,16}(教务|课程|课).{0,12}(移到|移至|挪到|调至|调整到)'),
+      RegExp(r'(移到|移至|挪到|调至|调整到).{0,12}(教务课程|课程)'),
+      RegExp(r'(教务|课程).{0,8}(整日|整周|全部).{0,4}(移动|调课|调休)'),
+      RegExp(r'(恢复|撤销|取消).{0,8}(整日移动|调课|调休|课程移动)'),
+    ],
+    lookupTools: {'get_schedule'},
+    terminalTools: {'move_jw_course_day'},
+  ),
   // update_event (edit/delete a concrete event)
   _IntentDef(
     patterns: [

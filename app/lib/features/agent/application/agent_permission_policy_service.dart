@@ -29,10 +29,12 @@ class AgentPermissionPolicyService {
     'create_schedule_relation': 'relation',
     'set_reminder': 'event',
     'update_permission_policy': 'permission',
+    'move_jw_course_day': 'jw_day_move',
   };
 
   /// 权限工具允许调整的 action_type（可改的确认策略目标；不含
   /// update_permission_policy 自身——它恒为 critical，永远人工确认）。
+  /// move_jw_course_day 同样刻意排除：critical 整日移动用户/模型均不可放宽。
   static const Set<String> kAgentPolicyActionTypes = {
     'create_event', 'update_event', 'create_task', 'plan_task',
     'create_user_overlay', 'record_attendance_decision', 'record_listening_mode',
@@ -56,6 +58,7 @@ class AgentPermissionPolicyService {
     'update_event': ConfirmationMode.alwaysAsk, // 含删除/整系列（大范围修改）
     'update_permission_policy': ConfirmationMode.alwaysAsk,
     'move_plan_block': ConfirmationMode.alwaysAsk, // 预留默认（本轮无工具）
+    'move_jw_course_day': ConfirmationMode.alwaysAsk, // critical：永远人工确认
   };
 
   static const Map<String, RiskLevel> _defaultRisks = {
@@ -70,6 +73,7 @@ class AgentPermissionPolicyService {
     'update_event': RiskLevel.high,
     'update_permission_policy': RiskLevel.critical,
     'move_plan_block': RiskLevel.medium,
+    'move_jw_course_day': RiskLevel.critical,
   };
 
   static ConfirmationMode defaultMode(String actionType) =>

@@ -4,6 +4,7 @@ import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
+import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
 
 import '../domain/agent_permission_policy.dart';
 import '../domain/agent_tool.dart';
@@ -22,6 +23,26 @@ const Set<String> _importanceValues = {'low', 'normal', 'high', 'critical'};
 
 /// 把 ISO-8601 字符串解析为本地时间（模型传带 +08:00 偏移）。
 DateTime _parseDateTime(String value) => DateTime.parse(value);
+
+/// 严格解析 `YYYY-MM-DD` 北京日历日并原样返回；非法格式/不存在的日历日抛
+/// [FormatException]（由基类映射为 `invalid_write_arguments`）。与
+/// `agent_tools.dart` 的 `_parseDate` 一致：DateTime 会归一化溢出，因此必须
+/// 校验回环后的年月日与请求值一致（2026-02-31 会被拒绝）。
+String _parseMoveDate(String value) {
+  final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+  if (match == null) throw FormatException('date must be YYYY-MM-DD');
+  final y = int.parse(match.group(1)!);
+  final m = int.parse(match.group(2)!);
+  final d = int.parse(match.group(3)!);
+  if (m < 1 || m > 12 || d < 1 || d > 31) {
+    throw FormatException('invalid calendar date');
+  }
+  final rounded = DateTime(y, m, d);
+  if (rounded.year != y || rounded.month != m || rounded.day != d) {
+    throw FormatException('invalid calendar date');
+  }
+  return value;
+}
 
 String _fmtRange(PersonalEvent event) => event.allDay
     ? '${event.startDate!.toIso8601String().substring(0, 10)} 至 '
@@ -1154,6 +1175,190 @@ class SetReminderTool extends AgentWriteTool {
   }
 }
 
+/// 整日移动教务课程（action=move|clear）。
+///
+/// critical：永远需要确认（forceConfirmation）、无"以后不再确认"
+/// （rememberAllowed=false）、不可被 update_permission_policy 放宽。
+/// 只暴露 `JwDayMoveService` 的 preview/move/clear，工具本身不触表；预览仅含
+/// 源/目标日期、课程数与课程标题，绝不含任何 DB id 或 ref。commit 通过
+/// service 在同一事务内重检资格与目标记录，失败安全返回
+/// `no_eligible_jw_courses` / `target_not_found`。
+class MoveJwCourseDayTool extends AgentWriteTool {
+  MoveJwCourseDayTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
+
+  @override
+  String get name => 'move_jw_course_day';
+  @override
+  String get description =>
+      '把某天（source_date）的教务课程整体移到另一天（target_date），或清除'
+      '（action=clear）已设置的整日移动恢复原日期。仅影响 ustc_jw 来源的定时'
+      'course 事件；考试/二课/个人事件不受影响。该操作永远需要用户确认。';
+  @override
+  Map<String, Object?> get inputSchema => {
+    'type': 'object',
+    'additionalProperties': false,
+    'properties': {
+      'action': {'type': 'string', 'enum': ['move', 'clear'],
+          'description': 'move=整体移动到 target_date；clear=清除移动恢复原日期'},
+      'source_date': {'type': 'string', 'description': '源日期 YYYY-MM-DD（北京日历日）'},
+      'target_date': {'type': 'string', 'description': '目标日期 YYYY-MM-DD，仅 action=move 需要'},
+    },
+    'required': ['action', 'source_date'],
+  };
+
+  @override
+  String get actionType => 'move_jw_course_day';
+  @override
+  RiskLevel get riskLevel => RiskLevel.critical;
+  @override
+  String get targetType => 'jw_day_move';
+  @override
+  String get operationLabel => '整日移动教务课程';
+  @override
+  bool get rememberAllowed => false;
+  @override
+  bool get forceConfirmation => true;
+
+  @override
+  Future<AgentToolResult> execute(Map<String, Object?> arguments, AgentToolContext context) async {
+    // 提案阶段（确认前）的领域校验失败要映射为安全的专用错误码，而不是
+    // 基类的 invalid_write_arguments 或注册表的 tool_execution_failed。
+    try {
+      return await super.execute(arguments, context);
+    } on NoEligibleJwCourses {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'no_eligible_jw_courses',
+        payload: {'guidance': '该日期没有符合条件的教务课程可移动。'},
+      );
+    } on MissingJwDayMove {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'target_not_found',
+        payload: {'guidance': '该日期没有已设置的整日移动，无需清除。'},
+      );
+    }
+  }
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
+    final r = WriteArgumentReader(a, const {'action', 'source_date', 'target_date'});
+    r.rejectUnknownKeys();
+    final action = r.requiredEnum('action', const {'move', 'clear'});
+    final sourceDate = _parseMoveDate(r.requiredString('source_date'));
+    String? targetDate;
+    if (action == 'move') {
+      if (!r.contains('target_date')) {
+        throw const FormatException('target_date is required for move');
+      }
+      targetDate = _parseMoveDate(r.requiredString('target_date'));
+      if (sourceDate == targetDate) {
+        throw const FormatException('source and target dates must differ');
+      }
+    } else if (r.contains('target_date')) {
+      throw const FormatException('target_date is only allowed for move');
+    }
+
+    // 预览（确认前的资格 preflight）：只读课程标题与已有目标日期，永不含 id。
+    final preview = await gateway.jwDayMovePreview(sourceDate);
+    if (action == 'move' && preview.courses.isEmpty) {
+      throw NoEligibleJwCourses(sourceDate);
+    }
+    if (action == 'clear' && preview.targetDate == null) {
+      throw MissingJwDayMove(sourceDate);
+    }
+
+    final isRetarget = preview.targetDate != null;
+    final lines = <String>[
+      if (action == 'move') ...[
+        '移动：$sourceDate 的教务课程',
+        '目标：$targetDate',
+        '课程数：${preview.courses.length}',
+        for (final title in preview.courses) '课程：$title',
+        if (isRetarget) '备注：该日期已有移动记录，本次将更新目标日期',
+      ] else ...[
+        '清除：$sourceDate 的整日移动',
+        if (preview.targetDate != null) '当前目标：${preview.targetDate}',
+      ],
+    ];
+
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionType,
+      riskLevel: riskLevel,
+      targetType: targetType,
+      operationLabel: operationLabel,
+      previewLines: lines,
+      commitParams: {
+        'action': action,
+        'sourceDate': sourceDate,
+        'targetDate': targetDate,
+      },
+      safeLogSummary: action == 'move'
+          ? '整日移动教务课程 $sourceDate → $targetDate（${preview.courses.length} 门）'
+          : '清除整日移动 $sourceDate',
+      rememberAllowed: false,
+      forceConfirmation: true,
+    );
+  }
+
+  @override
+  Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
+    final p = proposal.commitParams;
+    final action = p['action'] as String;
+    final sourceDate = p['sourceDate'] as String;
+    if (action == 'clear') {
+      try {
+        await gateway.jwDayMoveClear(sourceDate);
+      } on MissingJwDayMove {
+        // TOCTOU 守卫：提案后移动记录已被清除，安全拒绝。
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'target_not_found',
+          payload: {'guidance': '该日期已没有可清除的整日移动。'},
+        );
+      } on NoEligibleJwCourses {
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'no_eligible_jw_courses',
+          payload: {'guidance': '该日期没有符合条件的教务课程。'},
+        );
+      }
+      return const AgentToolResult(payload: {'result': 'cleared_jw_course_day_move'});
+    }
+
+    final targetDate = p['targetDate'] as String;
+    final bool retargeted;
+    try {
+      // service 在同一事务内重检资格与目标，失败抛领域异常。
+      retargeted = await gateway.jwDayMove(sourceDate, targetDate);
+    } on NoEligibleJwCourses {
+      // TOCTOU 守卫：提案后课程不再可移动，安全拒绝且不产生任何写。
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'no_eligible_jw_courses',
+        payload: {'guidance': '该日期已没有符合条件的教务课程，无法移动。'},
+      );
+    } on InvalidDayMoveDates {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_write_arguments',
+      );
+    } on MissingJwDayMove {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'target_not_found',
+        payload: {'guidance': '移动目标状态已变化，无法完成本次操作。'},
+      );
+    }
+    return AgentToolResult(
+      payload: {
+        'result': retargeted ? 'retargeted_jw_course_day' : 'moved_jw_course_day',
+      },
+    );
+  }
+}
+
 /// 调整某类操作的确认策略。永远需要用户确认，且无"以后不再确认"。
 class UpdatePermissionPolicyTool extends AgentWriteTool {
   UpdatePermissionPolicyTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
@@ -1258,7 +1463,7 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
   }
 }
 
-/// 组装全部 10 个写工具。
+/// 组装全部 11 个写工具。
 List<AgentWriteTool> agentWriteTools(
   AgentWriteGateway gateway,
   AgentPermissionPolicyService policy,
@@ -1274,5 +1479,6 @@ List<AgentWriteTool> agentWriteTools(
   RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
   CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
   SetReminderTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  MoveJwCourseDayTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
   UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
 ];
