@@ -1381,6 +1381,19 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
     await done.future;
 
     expect(states.last.state, AgentRunState.completed);
+    // DIRECT assertion of the malformed-write rejection (review Important):
+    // once the paused run has resumed and completed, the tool_results turn
+    // carrying the malformed create_event's error is folded into the final
+    // model request. The session service encodes the registry's errorCode as a
+    // `{"code": ...}` JSON payload, so the sanitized feed must contain exactly
+    // `invalid_write_arguments`. This catches any future regression that
+    // returns a different error code or silently swallows the malformed call.
+    expect(
+      _capturedToolResults(provider).join('\n'),
+      contains('invalid_write_arguments'),
+      reason: 'the malformed create_event must be surfaced to the model as '
+          'invalid_write_arguments',
+    );
     final eventsAfter = await db.select(db.calendarEvents).get();
     expect(eventsAfter.length, 2,
         reason: 'the approved create_event adds the second (健身) personal row');
