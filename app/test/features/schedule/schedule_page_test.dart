@@ -4,7 +4,64 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
+import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
+import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
+
+Future<void> seedAccount(AppDatabase database) async {
+  await database
+      .into(database.localAccounts)
+      .insert(
+        LocalAccountsCompanion.insert(
+          id: 'account',
+          maskedHint: 'PB****0000',
+          isActive: const Value(true),
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+}
+
+Future<void> seedTask(AppDatabase database, String id, String title) async {
+  await database
+      .into(database.tasks)
+      .insert(
+        TasksCompanion.insert(
+          id: id,
+          accountId: 'account',
+          title: title,
+          state: 'active',
+          importance: 'normal',
+          tagsJson: '[]',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+}
+
+Future<void> seedPlanBlock(
+  AppDatabase database, {
+  required String id,
+  required String taskId,
+  required DateTime startAt,
+  required DateTime endAt,
+  required String status,
+}) async {
+  await database
+      .into(database.planBlocks)
+      .insert(
+        PlanBlocksCompanion.insert(
+          id: id,
+          accountId: 'account',
+          taskId: taskId,
+          startAt: startAt.millisecondsSinceEpoch,
+          endAt: endAt.millisecondsSinceEpoch,
+          status: status,
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+}
 
 void main() {
   testWidgets('week controls navigate, persist, and return to current week', (
@@ -267,5 +324,152 @@ void main() {
     );
     await tester.pumpAndSettle();
     expect(seg().selected, {ScheduleSection.week});
+  });
+
+  // Task 5: accepted plan blocks from the DB appear in the week grid and tap
+  // through to the parent task.
+  testWidgets('accepted plan block appears in week grid and taps to parent task', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedTask(database, 'task-x', '完成实验报告');
+    await seedPlanBlock(
+      database,
+      id: 'block-x',
+      taskId: 'task-x',
+      startAt: DateTime(2026, 7, 27, 10),
+      endAt: DateTime(2026, 7, 27, 11),
+      status: PlanBlockStatus.accepted.storage,
+    );
+
+    String? selectedTaskId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            onTaskSelected: (id) => selectedTaskId = id,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('plan-block-block-x')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('plan-block-block-x')));
+    await tester.pumpAndSettle();
+    expect(selectedTaskId, 'task-x');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('non-accepted plan block stays out of the week grid', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedTask(database, 'task-y', '仅建议');
+    await seedPlanBlock(
+      database,
+      id: 'block-y',
+      taskId: 'task-y',
+      startAt: DateTime(2026, 7, 27, 10),
+      endAt: DateTime(2026, 7, 27, 11),
+      status: PlanBlockStatus.suggested.storage,
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('plan-block-block-y')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 5: an event and a plan block in the same slot share one overlap
+  // expansion; the second tap routes to the event or the parent task.
+  testWidgets('event and plan block overlap expand then route to right target', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedTask(database, 'task-x', '完成实验报告');
+    await database
+        .into(database.calendarEvents)
+        .insert(
+          CalendarEventsCompanion.insert(
+            id: 'overlap-event',
+            accountId: 'account',
+            source: 'user',
+            title: '晚间安排',
+            type: 'personal',
+            startAt: Value(DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch),
+            endAt: Value(
+              DateTime.utc(2026, 7, 27, 2, 30).millisecondsSinceEpoch,
+            ),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await seedPlanBlock(
+      database,
+      id: 'block-x',
+      taskId: 'task-x',
+      startAt: DateTime(2026, 7, 27, 9, 30),
+      endAt: DateTime(2026, 7, 27, 10, 45),
+      status: PlanBlockStatus.accepted.storage,
+    );
+
+    String? selectedEventId;
+    String? selectedTaskId;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            onEventSelected: (id) => selectedEventId = id,
+            onTaskSelected: (id) => selectedTaskId = id,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final overlapKey = const Key('overlap-group-overlap-event|block-x');
+    expect(find.byKey(overlapKey), findsOneWidget);
+    await tester.tap(find.byKey(overlapKey));
+    await tester.pumpAndSettle();
+    expect(find.byType(OverlapExpansion), findsOneWidget);
+
+    // Second tap on the event routes to the event detail.
+    await tester.tap(find.text('晚间安排').last);
+    await tester.pumpAndSettle();
+    expect(selectedEventId, 'overlap-event');
+
+    // Reopen and tap the plan block: routes to the parent task.
+    await tester.tap(find.byKey(overlapKey));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('完成实验报告').last);
+    await tester.pumpAndSettle();
+    expect(selectedTaskId, 'task-x');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
   });
 }

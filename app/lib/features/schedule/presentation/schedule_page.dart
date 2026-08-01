@@ -12,6 +12,7 @@ import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../application/effective_event_repository.dart';
 import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/week_range.dart';
 import 'week_timetable.dart';
@@ -165,7 +166,7 @@ class _ScheduleData extends StatelessWidget {
         final account = accountSnapshot.data;
         if (account == null) {
           return section == ScheduleSection.week
-              ? _week(context, const [])
+              ? _week(context, const [], const [], const [])
               : const TaskCenterPage();
         }
         final query = database.select(database.tasks)
@@ -182,8 +183,20 @@ class _ScheduleData extends StatelessWidget {
                   database,
                   accountId: account.id,
                 ).watchDisplayEvents(),
-                builder: (context, eventSnapshot) =>
-                    _week(context, tasks, eventSnapshot.data ?? const []),
+                builder: (context, eventSnapshot) {
+                  final events = eventSnapshot.data ?? const [];
+                  return StreamBuilder<List<PlanBlock>>(
+                    stream: (database.select(database.planBlocks)
+                          ..where((row) => row.accountId.equals(account.id)))
+                        .watch(),
+                    builder: (context, blockSnapshot) {
+                      final blocks = (blockSnapshot.data ?? const [])
+                          .map(PlanBlockItem.fromRow)
+                          .toList(growable: false);
+                      return _week(context, tasks, events, blocks);
+                    },
+                  );
+                },
               );
             }
             return _taskCenter(context, account.id, tasks);
@@ -195,18 +208,38 @@ class _ScheduleData extends StatelessWidget {
 
   Widget _week(
     BuildContext context,
-    List<TaskItem> tasks, [
-    List<EffectiveEvent> events = const [],
-  ]) => WeekTimetable(
-    projection: buildWeek(
-      ScheduleQuery(selectedDate: selectedDate, events: events),
-    ),
-    tasks: tasks,
-    onTaskSelected: (task) {
-      onTaskSelected?.call(task.id);
-    },
-    onEventSelected: (event) => onEventSelected?.call(event.id),
-  );
+    List<TaskItem> tasks,
+    List<EffectiveEvent> events,
+    List<PlanBlockItem> blocks,
+  ) {
+    final tasksById = {for (final task in tasks) task.id: task};
+    final items = <ScheduleGridItem>[
+      for (final event in events) ScheduleGridItem.fromEvent(event),
+    ];
+    for (final block in blocks) {
+      if (!block.showsInWeekGrid) continue;
+      final task = tasksById[block.taskId];
+      if (task == null) continue;
+      items.add(ScheduleGridItem.fromPlanBlock(block, task));
+    }
+    return WeekTimetable(
+      projection: buildWeek(
+        ScheduleQuery(selectedDate: selectedDate, items: items),
+      ),
+      tasks: tasks,
+      onTaskSelected: (task) {
+        onTaskSelected?.call(task.id);
+      },
+      onEventSelected: (item) {
+        switch (item.kind) {
+          case ScheduleGridItemKind.event:
+            onEventSelected?.call(item.id);
+          case ScheduleGridItemKind.planBlock:
+            onTaskSelected?.call(item.planBlock!.taskId);
+        }
+      },
+    );
+  }
 
   Widget _taskCenter(
     BuildContext context,

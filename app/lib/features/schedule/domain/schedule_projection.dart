@@ -1,12 +1,23 @@
 import 'overlap_engine.dart';
+import 'schedule_grid_item.dart';
 import 'ustc_periods.dart';
 import 'week_range.dart';
 
 class ScheduleQuery {
-  const ScheduleQuery({required this.selectedDate, required this.events});
+  const ScheduleQuery({
+    required this.selectedDate,
+    this.events = const [],
+    this.items = const [],
+  });
 
   final DateTime selectedDate;
+
+  /// Legacy events-only input, converted to grid items by [buildWeek]. Kept so
+  /// callers that only need calendar events can stay minimal.
   final List<EffectiveEvent> events;
+
+  /// Unified grid items (calendar events and planning blocks).
+  final List<ScheduleGridItem> items;
 }
 
 /// 0:00 至网格下界（7:00）之间的定时事件。这类事件不落入日网格，
@@ -20,12 +31,12 @@ class EarlyMorningEvent {
 
 class ProjectedEvent {
   const ProjectedEvent({
-    required this.event,
+    required this.item,
     required this.topMinutes,
     required this.heightMinutes,
   });
 
-  final EffectiveEvent event;
+  final ScheduleGridItem item;
   final int topMinutes;
   final int heightMinutes;
 }
@@ -60,10 +71,17 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
     for (var day = DateTime.monday; day <= DateTime.sunday; day++) day: [],
   };
   final previews = <ProjectedEvent>[];
-  final activeTimed = <EffectiveEvent>[];
+  final activeTimed = <ScheduleGridItem>[];
 
-  for (final event in query.events) {
-    if (event.allDay) {
+  final allItems = <ScheduleGridItem>[
+    ...query.items,
+    for (final event in query.events) ScheduleGridItem.fromEvent(event),
+  ];
+
+  for (final item in allItems) {
+    if (!item.showsInWeekGrid) continue;
+    if (item.allDay) {
+      final event = item.event!;
       for (final day in week.days) {
         if (!day.isBefore(event.startDate!) &&
             day.isBefore(event.endDateExclusive!)) {
@@ -72,11 +90,14 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
       }
       continue;
     }
-    if (!week.contains(event.startAt!)) continue;
+    if (!week.contains(item.startAt!)) continue;
     final startMinutes =
-        event.startAt!.hour * 60 + event.startAt!.minute;
+        item.startAt!.hour * 60 + item.startAt!.minute;
     // 0:00 至网格下界（7:00）的事件不落入日网格，改为凌晨事项带横排展示。
+    // 规划块只进入日网格：网格开启前的时间段不投影到凌晨带。
     if (startMinutes < UstcPeriods.dayStartMinutes) {
+      if (item.kind != ScheduleGridItemKind.event) continue;
+      final event = item.event!;
       // 取事件所在日对应的周内日期；跨日事件按 startAt 的日期归属。
       final day = week.days.firstWhere(
         (d) => d.year == event.startAt!.year && d.month == event.startAt!.month && d.day == event.startAt!.day,
@@ -88,19 +109,19 @@ ScheduleProjection buildWeek(ScheduleQuery query) {
       continue;
     }
     final projected = ProjectedEvent(
-      event: event,
+      item: item,
       topMinutes: startMinutes - UstcPeriods.dayStartMinutes,
-      heightMinutes: event.endAt!.difference(event.startAt!).inMinutes,
+      heightMinutes: item.endAt!.difference(item.startAt!).inMinutes,
     );
-    timed[event.startAt!.weekday]!.add(projected);
-    if (event.isInactivePreview) {
+    timed[item.startAt!.weekday]!.add(projected);
+    if (item.isInactivePreview) {
       previews.add(projected);
     } else {
-      activeTimed.add(event);
+      activeTimed.add(item);
     }
   }
   for (final values in timed.values) {
-    values.sort((a, b) => a.event.startAt!.compareTo(b.event.startAt!));
+    values.sort((a, b) => a.item.startAt!.compareTo(b.item.startAt!));
   }
   for (final values in earlyMorning.values) {
     values.sort((a, b) => a.event.startAt!.compareTo(b.event.startAt!));

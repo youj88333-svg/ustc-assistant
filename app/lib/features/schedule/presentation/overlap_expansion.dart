@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
 
 class OverlapExpansion extends StatelessWidget {
   const OverlapExpansion({
@@ -10,7 +11,7 @@ class OverlapExpansion extends StatelessWidget {
   });
 
   final OverlapGroup group;
-  final ValueChanged<EffectiveEvent> onSelected;
+  final ValueChanged<ScheduleGridItem> onSelected;
 
   @override
   Widget build(BuildContext context) {
@@ -21,16 +22,16 @@ class OverlapExpansion extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final event in group.events)
+            for (final item in group.items)
               ListTile(
-                title: Text(event.title),
-                subtitle: event.location == null ? null : Text(event.location!),
-                trailing: event.hasConfirmedConflict
+                title: Text(item.title),
+                subtitle: item.location == null ? null : Text(item.location!),
+                trailing: item.hasConfirmedConflict
                     ? const Icon(Icons.error_outline, color: Colors.red)
                     : null,
                 onTap: () {
                   Navigator.of(context).pop();
-                  onSelected(event);
+                  onSelected(item);
                 },
               ),
           ],

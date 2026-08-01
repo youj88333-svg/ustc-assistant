@@ -1,47 +1,57 @@
 import 'package:flutter/material.dart';
 
 import '../domain/course_color.dart';
-import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
 
 class EventBlock extends StatelessWidget {
   const EventBlock({
-    required this.event,
+    required this.item,
     required this.onTap,
     this.opacity = 0.84,
     super.key,
   });
 
-  final EffectiveEvent event;
+  final ScheduleGridItem item;
   final VoidCallback onTap;
   final double opacity;
 
+  bool get _isPlanBlock => item.kind == ScheduleGridItemKind.planBlock;
+
   @override
   Widget build(BuildContext context) {
-    final color = event.color == null
-        ? Color(courseColorValue(event.courseSeriesId ?? event.id))
-        : Color(int.parse(event.color!.substring(1), radix: 16) | 0xFF000000);
+    final color = item.color == null
+        ? Color(courseColorValue(item.colorKey))
+        : Color(int.parse(item.color!.substring(1), radix: 16) | 0xFF000000);
+    final isPreview = item.isInactivePreview;
     return Semantics(
       button: true,
       label: [
-        event.title,
-        if (event.location != null) event.location!,
-        if (event.hasConfirmedConflict) '已确认冲突',
-        if (event.isInactivePreview) '非本周上课预览',
+        item.title,
+        if (item.location != null) item.location!,
+        if (_isPlanBlock) '任务时间段 ${_timeRange(item)}',
+        if (item.hasConfirmedConflict) '已确认冲突',
+        if (isPreview) '非本周上课预览',
       ].join('，'),
       child: Opacity(
-        key: Key('event-opacity-${event.id}'),
-        opacity: event.isInactivePreview ? 0.3 : opacity,
+        key: Key(
+          _isPlanBlock
+              ? 'plan-block-opacity-${item.id}'
+              : 'event-opacity-${item.id}',
+        ),
+        opacity: isPreview ? 0.3 : opacity,
         child: Material(
           color: color,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(6),
-            side: event.isInactivePreview
+            side: isPreview
                 ? BorderSide(color: color.withValues(alpha: 0.9), width: 1.5)
                 : BorderSide.none,
           ),
           clipBehavior: Clip.antiAlias,
           child: InkWell(
-            key: Key('event-${event.id}'),
+            key: Key(
+              _isPlanBlock ? 'plan-block-${item.id}' : 'event-${item.id}',
+            ),
             onTap: onTap,
             child: Stack(
               children: [
@@ -51,7 +61,7 @@ class EventBlock extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        event.title,
+                        item.title,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
@@ -60,9 +70,9 @@ class EventBlock extends StatelessWidget {
                           fontSize: 12,
                         ),
                       ),
-                      if (event.location != null)
+                      if (item.location != null)
                         Text(
-                          event.location!,
+                          item.location!,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -73,7 +83,7 @@ class EventBlock extends StatelessWidget {
                     ],
                   ),
                 ),
-                if (event.hasConfirmedConflict)
+                if (item.hasConfirmedConflict)
                   Positioned(
                     top: 5,
                     right: 5,
@@ -93,5 +103,13 @@ class EventBlock extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  String _timeRange(ScheduleGridItem item) {
+    final start = item.startAt!;
+    final end = item.endAt!;
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${two(start.hour)}:${two(start.minute)}'
+        '-${two(end.hour)}:${two(end.minute)}';
   }
 }

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_filters.dart';
 import '../domain/overlap_engine.dart';
+import '../domain/schedule_grid_item.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/ustc_periods.dart';
 import 'all_day_band.dart';
@@ -25,7 +26,11 @@ class WeekTimetable extends StatelessWidget {
   });
 
   final ScheduleProjection projection;
-  final ValueChanged<EffectiveEvent> onEventSelected;
+
+  /// The single selection callback for timed grid items. Calendar events and
+  /// planning blocks are discriminated by [ScheduleGridItem.kind]; events
+  /// route to the event detail and plan blocks route to the parent task.
+  final ValueChanged<ScheduleGridItem> onEventSelected;
   final List<TaskItem> tasks;
   final DateTime? now;
   final bool hideCompletedTasks;
@@ -37,9 +42,9 @@ class WeekTimetable extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final groupsByEvent = {
+    final groupsByItem = {
       for (final group in projection.overlapGroups)
-        for (final event in group.events) event.id: group,
+        for (final item in group.items) item.id: group,
     };
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -104,11 +109,11 @@ class WeekTimetable extends StatelessWidget {
                             _DayColumn(
                               day: day,
                               width: dayWidth,
-                              events:
+                              items:
                                   projection.timedByDay[day.weekday] ??
                                   const [],
-                              groupsByEvent: groupsByEvent,
-                              onEventSelected: onEventSelected,
+                              groupsByItem: groupsByItem,
+                              onItemSelected: onEventSelected,
                             ),
                         ],
                       ),
@@ -373,25 +378,25 @@ class _DayColumn extends StatelessWidget {
   const _DayColumn({
     required this.day,
     required this.width,
-    required this.events,
-    required this.groupsByEvent,
-    required this.onEventSelected,
+    required this.items,
+    required this.groupsByItem,
+    required this.onItemSelected,
   });
 
   final DateTime day;
   final double width;
-  final List<ProjectedEvent> events;
-  final Map<String, OverlapGroup> groupsByEvent;
-  final ValueChanged<EffectiveEvent> onEventSelected;
+  final List<ProjectedEvent> items;
+  final Map<String, OverlapGroup> groupsByItem;
+  final ValueChanged<ScheduleGridItem> onItemSelected;
 
   @override
   Widget build(BuildContext context) {
-    final ordered = [...events]
+    final ordered = [...items]
       ..sort((a, b) {
-        final groupA = groupsByEvent[a.event.id];
-        final groupB = groupsByEvent[b.event.id];
-        final foregroundA = groupA?.foreground.id == a.event.id ? 1 : 0;
-        final foregroundB = groupB?.foreground.id == b.event.id ? 1 : 0;
+        final groupA = groupsByItem[a.item.id];
+        final groupB = groupsByItem[b.item.id];
+        final foregroundA = groupA?.foreground.id == a.item.id ? 1 : 0;
+        final foregroundB = groupB?.foreground.id == b.item.id ? 1 : 0;
         return foregroundA.compareTo(foregroundB);
       });
     return Container(
@@ -423,20 +428,21 @@ class _DayColumn extends StatelessWidget {
     );
   }
 
-  Widget _eventPosition(BuildContext context, ProjectedEvent item) {
-    final group = groupsByEvent[item.event.id];
-    final foreground = group == null || group.foreground.id == item.event.id;
+  Widget _eventPosition(BuildContext context, ProjectedEvent projected) {
+    final item = projected.item;
+    final group = groupsByItem[item.id];
+    final foreground = group == null || group.foreground.id == item.id;
     Widget block = EventBlock(
-      event: item.event,
+      item: item,
       opacity: foreground ? 0.84 : 0.32,
       onTap: () {
         if (group == null) {
-          onEventSelected(item.event);
+          onItemSelected(item);
         } else {
           showDialog<void>(
             context: context,
             builder: (context) =>
-                OverlapExpansion(group: group, onSelected: onEventSelected),
+                OverlapExpansion(group: group, onSelected: onItemSelected),
           );
         }
       },
@@ -454,10 +460,10 @@ class _DayColumn extends StatelessWidget {
       key: foreground && group != null
           ? Key('overlap-group-${group.id}')
           : null,
-      top: item.topMinutes * WeekTimetable.pixelsPerMinute,
+      top: projected.topMinutes * WeekTimetable.pixelsPerMinute,
       left: 3,
       right: 3,
-      height: (item.heightMinutes * WeekTimetable.pixelsPerMinute)
+      height: (projected.heightMinutes * WeekTimetable.pixelsPerMinute)
           .clamp(32, double.infinity)
           .toDouble(),
       child: block,

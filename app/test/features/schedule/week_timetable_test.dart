@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
+import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/event_block.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/week_timetable.dart';
+import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
+import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 
 EffectiveEvent timed(
   String id,
@@ -28,16 +31,53 @@ EffectiveEvent timed(
   foregroundPriority: foregroundPriority,
 );
 
+TaskItem taskItem(String id, {String title = ''}) => TaskItem(
+  id: id,
+  title: title.isEmpty ? id : title,
+  state: TaskState.active,
+  importance: TaskImportance.normal,
+  createdAt: 1,
+  updatedAt: 1,
+);
+
+PlanBlockItem blockItem(
+  String id,
+  String taskId,
+  DateTime start,
+  DateTime end,
+  PlanBlockStatus status,
+) => PlanBlockItem(
+  id: id,
+  taskId: taskId,
+  startAt: start,
+  endAt: end,
+  status: status,
+  locked: false,
+  createdAt: 1,
+  updatedAt: 1,
+);
+
 Widget fixture(
   List<EffectiveEvent> events, {
-  ValueChanged<EffectiveEvent>? onSelected,
+  List<PlanBlockItem> planBlocks = const [],
+  List<TaskItem> tasks = const [],
+  ValueChanged<ScheduleGridItem>? onSelected,
 }) {
+  final items = <ScheduleGridItem>[
+    for (final event in events) ScheduleGridItem.fromEvent(event),
+    for (final block in planBlocks)
+      ScheduleGridItem.fromPlanBlock(
+        block,
+        tasks.firstWhere((task) => task.id == block.taskId),
+      ),
+  ];
   return MaterialApp(
     home: Scaffold(
       body: WeekTimetable(
         projection: buildWeek(
-          ScheduleQuery(selectedDate: DateTime(2026, 7, 20), events: events),
+          ScheduleQuery(selectedDate: DateTime(2026, 7, 20), items: items),
         ),
+        tasks: tasks,
         onEventSelected: onSelected ?? (_) {},
       ),
     ),
@@ -68,12 +108,12 @@ void main() {
   testWidgets('first overlap tap expands and second selects one event', (
     tester,
   ) async {
-    EffectiveEvent? selected;
+    ScheduleGridItem? selected;
     await tester.pumpWidget(
       fixture([
         timed('电路基本理论', 1, 9, 45, 11, 20),
         timed('量子物理 B', 1, 10, 0, 11, 30),
-      ], onSelected: (event) => selected = event),
+      ], onSelected: (item) => selected = item),
     );
 
     await tester.tap(find.byKey(const Key('overlap-group-电路基本理论|量子物理 B')));
@@ -156,7 +196,76 @@ void main() {
       expect(find.text('随机过程'), findsOneWidget);
       expect(find.text('3C203'), findsOneWidget);
       final block = tester.widget<EventBlock>(find.byType(EventBlock));
-      expect(block.event.isInactivePreview, isTrue);
+      expect(block.item.isInactivePreview, isTrue);
     },
   );
+
+  testWidgets('accepted plan block renders with task title fallback', (
+    tester,
+  ) async {
+    final task = taskItem('task-x', title: '完成实验报告');
+    final block = blockItem(
+      'block-x',
+      task.id,
+      DateTime(2026, 7, 21, 9, 45),
+      DateTime(2026, 7, 21, 11, 20),
+      PlanBlockStatus.accepted,
+    );
+    await tester.pumpWidget(fixture([], planBlocks: [block], tasks: [task]));
+
+    expect(find.byKey(const Key('plan-block-block-x')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('plan-block-block-x')),
+        matching: find.text('完成实验报告'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('plan block accessibility text includes the task time range', (
+    tester,
+  ) async {
+    final task = taskItem('task-x', title: '完成实验报告');
+    final block = blockItem(
+      'block-x',
+      task.id,
+      DateTime(2026, 7, 21, 9, 45),
+      DateTime(2026, 7, 21, 11, 20),
+      PlanBlockStatus.accepted,
+    );
+    await tester.pumpWidget(fixture([], planBlocks: [block], tasks: [task]));
+
+    expect(find.bySemanticsLabel(RegExp('任务时间段')), findsOneWidget);
+  });
+
+  testWidgets('event and plan block overlap expands then selects the right item', (
+    tester,
+  ) async {
+    final task = taskItem('task-x', title: '完成实验报告');
+    final block = blockItem(
+      'block-x',
+      task.id,
+      DateTime(2026, 7, 21, 10, 0),
+      DateTime(2026, 7, 21, 11, 30),
+      PlanBlockStatus.accepted,
+    );
+    ScheduleGridItem? selected;
+    await tester.pumpWidget(
+      fixture(
+        [timed('event-x', 1, 9, 45, 11, 20)],
+        planBlocks: [block],
+        tasks: [task],
+        onSelected: (item) => selected = item,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('overlap-group-event-x|block-x')));
+    await tester.pumpAndSettle();
+    expect(find.byType(OverlapExpansion), findsOneWidget);
+    await tester.tap(find.text('完成实验报告').last);
+    await tester.pumpAndSettle();
+    expect(selected?.kind, ScheduleGridItemKind.planBlock);
+    expect(selected?.planBlock?.id, 'block-x');
+  });
 }

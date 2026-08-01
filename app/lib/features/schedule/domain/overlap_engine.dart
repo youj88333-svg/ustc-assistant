@@ -1,3 +1,5 @@
+import 'schedule_grid_item.dart';
+
 enum EventImportance { low, normal, high, critical }
 
 class EffectiveEvent {
@@ -55,36 +57,36 @@ class EffectiveEvent {
 class OverlapGroup {
   const OverlapGroup({
     required this.id,
-    required this.events,
+    required this.items,
     required this.foreground,
   });
 
   final String id;
-  final List<EffectiveEvent> events;
-  final EffectiveEvent foreground;
+  final List<ScheduleGridItem> items;
+  final ScheduleGridItem foreground;
 
   bool get hasConfirmedConflict =>
-      events.any((event) => event.hasConfirmedConflict);
+      items.any((item) => item.hasConfirmedConflict);
 }
 
-List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
-  final events =
-      input.where((event) => !event.allDay && !event.isInactivePreview).toList()
+List<OverlapGroup> groupOverlaps(List<ScheduleGridItem> input) {
+  final items =
+      input.where((item) => !item.allDay && !item.isInactivePreview).toList()
         ..sort((a, b) {
           final byStart = a.startAt!.compareTo(b.startAt!);
           return byStart != 0 ? byStart : a.id.compareTo(b.id);
         });
   final groups = <OverlapGroup>[];
-  var current = <EffectiveEvent>[];
+  var current = <ScheduleGridItem>[];
   DateTime? groupEnd;
 
   void finish() {
     if (current.length > 1) {
-      final frozen = List<EffectiveEvent>.unmodifiable(current);
+      final frozen = List<ScheduleGridItem>.unmodifiable(current);
       groups.add(
         OverlapGroup(
-          id: frozen.map((event) => event.id).join('|'),
-          events: frozen,
+          id: frozen.map((item) => item.id).join('|'),
+          items: frozen,
           foreground: _foreground(frozen),
         ),
       );
@@ -93,27 +95,27 @@ List<OverlapGroup> groupOverlaps(List<EffectiveEvent> input) {
     groupEnd = null;
   }
 
-  for (final event in events) {
+  for (final item in items) {
     final sameDay =
         current.isEmpty ||
-        _dateKey(current.first.startAt!) == _dateKey(event.startAt!);
-    if (current.isEmpty || (sameDay && event.startAt!.isBefore(groupEnd!))) {
-      current.add(event);
-      if (groupEnd == null || event.endAt!.isAfter(groupEnd!)) {
-        groupEnd = event.endAt;
+        _dateKey(current.first.startAt!) == _dateKey(item.startAt!);
+    if (current.isEmpty || (sameDay && item.startAt!.isBefore(groupEnd!))) {
+      current.add(item);
+      if (groupEnd == null || item.endAt!.isAfter(groupEnd!)) {
+        groupEnd = item.endAt;
       }
     } else {
       finish();
-      current.add(event);
-      groupEnd = event.endAt;
+      current.add(item);
+      groupEnd = item.endAt;
     }
   }
   finish();
   return List.unmodifiable(groups);
 }
 
-EffectiveEvent _foreground(List<EffectiveEvent> events) {
-  final ordered = [...events]
+ScheduleGridItem _foreground(List<ScheduleGridItem> items) {
+  final ordered = [...items]
     ..sort((a, b) {
       final foreground = b.foregroundPriority.compareTo(a.foregroundPriority);
       if (foreground != 0) return foreground;

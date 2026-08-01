@@ -5,9 +5,12 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/course_color.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
+import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/ustc_periods.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/week_range.dart';
+import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
+import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 
 EffectiveEvent event(
   String id,
@@ -32,6 +35,34 @@ EffectiveEvent event(
     importance: importance,
   );
 }
+
+TaskItem planTask(String id, {String title = ''}) => TaskItem(
+  id: id,
+  title: title.isEmpty ? id : title,
+  state: TaskState.active,
+  importance: TaskImportance.normal,
+  createdAt: 1,
+  updatedAt: 1,
+);
+
+PlanBlockItem planBlock(
+  String id,
+  String taskId,
+  DateTime start,
+  DateTime end,
+  PlanBlockStatus status, {
+  int? deletedAt,
+}) => PlanBlockItem(
+  id: id,
+  taskId: taskId,
+  startAt: start,
+  endAt: end,
+  status: status,
+  locked: false,
+  createdAt: 1,
+  updatedAt: 1,
+  deletedAt: deletedAt,
+);
 
 void main() {
   test('week always spans Monday through Sunday', () {
@@ -80,7 +111,7 @@ void main() {
     final projection = buildWeek(
       ScheduleQuery(
         selectedDate: DateTime(2026, 7, 20),
-        events: [event('second-class', 0, 9, 52, 10, 17)],
+        items: [ScheduleGridItem.fromEvent(event('second-class', 0, 9, 52, 10, 17))],
       ),
     );
     final item = projection.timedByDay[DateTime.monday]!.single;
@@ -90,34 +121,38 @@ void main() {
 
   test('overlap does not imply conflict and previews are excluded', () {
     final groups = groupOverlaps([
-      event('a', 0, 9, 0, 10, 0),
-      event('b', 0, 9, 30, 11, 0),
-      event('preview', 0, 9, 15, 9, 45, preview: true),
+      ScheduleGridItem.fromEvent(event('a', 0, 9, 0, 10, 0)),
+      ScheduleGridItem.fromEvent(event('b', 0, 9, 30, 11, 0)),
+      ScheduleGridItem.fromEvent(
+        event('preview', 0, 9, 15, 9, 45, preview: true),
+      ),
     ]);
-    expect(groups.single.events, hasLength(2));
+    expect(groups.single.items, hasLength(2));
     expect(groups.single.hasConfirmedConflict, isFalse);
   });
 
   test('confirmed conflict and importance select deterministic foreground', () {
     final groups = groupOverlaps([
-      event('normal', 0, 9, 0, 10, 0),
-      event(
-        'important',
-        0,
-        9,
-        0,
-        10,
-        0,
-        conflict: true,
-        importance: EventImportance.high,
+      ScheduleGridItem.fromEvent(event('normal', 0, 9, 0, 10, 0)),
+      ScheduleGridItem.fromEvent(
+        event(
+          'important',
+          0,
+          9,
+          0,
+          10,
+          0,
+          conflict: true,
+          importance: EventImportance.high,
+        ),
       ),
     ]);
     expect(groups.single.foreground.id, 'important');
     expect(groups.single.hasConfirmedConflict, isTrue);
 
     final tied = groupOverlaps([
-      event('b', 0, 9, 0, 10, 0),
-      event('a', 0, 9, 0, 10, 0),
+      ScheduleGridItem.fromEvent(event('b', 0, 9, 0, 10, 0)),
+      ScheduleGridItem.fromEvent(event('a', 0, 9, 0, 10, 0)),
     ]);
     expect(tied.single.foreground.id, 'a');
   });
@@ -131,12 +166,14 @@ void main() {
     final projection = buildWeek(
       ScheduleQuery(
         selectedDate: DateTime(2026, 7, 22),
-        events: [
-          EffectiveEvent.allDay(
-            id: 'trip',
-            title: 'trip',
-            startDate: DateTime(2026, 7, 24),
-            endDateExclusive: DateTime(2026, 7, 27),
+        items: [
+          ScheduleGridItem.fromEvent(
+            EffectiveEvent.allDay(
+              id: 'trip',
+              title: 'trip',
+              startDate: DateTime(2026, 7, 24),
+              endDateExclusive: DateTime(2026, 7, 27),
+            ),
           ),
         ],
       ),
@@ -150,28 +187,25 @@ void main() {
     final projection = buildWeek(
       ScheduleQuery(
         selectedDate: DateTime(2026, 7, 20),
-        events: [
+        items: [
           // 06:30 凌晨事件应进入凌晨带，不进入日网格。
-          event('early', 0, 6, 30, 6, 55),
+          ScheduleGridItem.fromEvent(event('early', 0, 6, 30, 6, 55)),
           // 07:00 恰为网格下界，应进入日网格（topMinutes=0）。
-          event('at-open', 0, 7, 0, 7, 45),
+          ScheduleGridItem.fromEvent(event('at-open', 0, 7, 0, 7, 45)),
           // 23:30 晚间事件仍在网格内（上界 24:00 之前）。
-          event('late', 0, 23, 30, 23, 55),
+          ScheduleGridItem.fromEvent(event('late', 0, 23, 30, 23, 55)),
         ],
       ),
     );
     final mondayTimed = projection.timedByDay[DateTime.monday]!;
-    expect(mondayTimed.map((p) => p.event.id), containsAll(['at-open', 'late']));
-    expect(
-      mondayTimed.map((p) => p.event.id),
-      isNot(contains('early')),
-    );
+    expect(mondayTimed.map((p) => p.item.id), containsAll(['at-open', 'late']));
+    expect(mondayTimed.map((p) => p.item.id), isNot(contains('early')));
     expect(
       projection.earlyMorningByDay[DateTime.monday]!.single.event.id,
       'early',
     );
     // 07:00 事件贴在网格顶部。
-    final atOpen = mondayTimed.firstWhere((p) => p.event.id == 'at-open');
+    final atOpen = mondayTimed.firstWhere((p) => p.item.id == 'at-open');
     expect(atOpen.topMinutes, 0);
   });
 
@@ -179,7 +213,7 @@ void main() {
     final projection = buildWeek(
       ScheduleQuery(
         selectedDate: DateTime(2026, 7, 20),
-        events: [event('daytime', 0, 9, 0, 10, 0)],
+        items: [ScheduleGridItem.fromEvent(event('daytime', 0, 9, 0, 10, 0))],
       ),
     );
     for (final day in [
@@ -207,10 +241,152 @@ void main() {
       preview: true,
     );
     final projection = buildWeek(
-      ScheduleQuery(selectedDate: DateTime(2026, 7, 20), events: [preview]),
+      ScheduleQuery(
+        selectedDate: DateTime(2026, 7, 20),
+        items: [ScheduleGridItem.fromEvent(preview)],
+      ),
     );
-    expect(projection.previews.single.event.id, 'odd-week-preview');
+    expect(projection.previews.single.item.id, 'odd-week-preview');
     expect(projection.overlapGroups, isEmpty);
+  });
+
+  test('accepted and done non-deleted plan blocks enter the timed grid', () {
+    final task = planTask('task-a', title: '准备答辩');
+    final accepted = planBlock(
+      'block-a',
+      task.id,
+      DateTime(2026, 7, 20, 9),
+      DateTime(2026, 7, 20, 10),
+      PlanBlockStatus.accepted,
+    );
+    final done = planBlock(
+      'block-b',
+      task.id,
+      DateTime(2026, 7, 20, 11),
+      DateTime(2026, 7, 20, 12),
+      PlanBlockStatus.done,
+    );
+    final projection = buildWeek(
+      ScheduleQuery(
+        selectedDate: DateTime(2026, 7, 20),
+        items: [
+          ScheduleGridItem.fromPlanBlock(accepted, task),
+          ScheduleGridItem.fromPlanBlock(done, task),
+        ],
+      ),
+    );
+    final monday = projection.timedByDay[DateTime.monday]!;
+    expect(monday.map((p) => p.item.id), containsAll(['block-a', 'block-b']));
+    final acceptedProjected = monday.firstWhere((p) => p.item.id == 'block-a');
+    expect(
+      acceptedProjected.topMinutes,
+      9 * 60 + 0 - UstcPeriods.dayStartMinutes,
+    );
+    expect(acceptedProjected.heightMinutes, 60);
+  });
+
+  test(
+    'suggested/skipped/rescheduled/cancelled/deleted blocks stay out of grid',
+    () {
+      final task = planTask('task-a', title: '准备答辩');
+      final items = <ScheduleGridItem>[
+        for (final status in PlanBlockStatus.values)
+          ScheduleGridItem.fromPlanBlock(
+            planBlock(
+              'block-${status.storage}',
+              task.id,
+              DateTime(2026, 7, 20, 9),
+              DateTime(2026, 7, 20, 10),
+              status,
+            ),
+            task,
+          ),
+        ScheduleGridItem.fromPlanBlock(
+          planBlock(
+            'block-deleted',
+            task.id,
+            DateTime(2026, 7, 20, 11),
+            DateTime(2026, 7, 20, 12),
+            PlanBlockStatus.accepted,
+            deletedAt: 1,
+          ),
+          task,
+        ),
+      ];
+      final projection = buildWeek(
+        ScheduleQuery(selectedDate: DateTime(2026, 7, 20), items: items),
+      );
+      final monday = projection.timedByDay[DateTime.monday]!;
+      expect(monday.map((p) => p.item.id), containsAll(['block-accepted', 'block-done']));
+      for (final status in [
+        PlanBlockStatus.suggested,
+        PlanBlockStatus.skipped,
+        PlanBlockStatus.rescheduled,
+        PlanBlockStatus.cancelled,
+      ]) {
+        expect(
+          monday.map((p) => p.item.id),
+          isNot(contains('block-${status.storage}')),
+          reason: '${status.storage} must not enter the timed grid',
+        );
+      }
+      expect(monday.map((p) => p.item.id), isNot(contains('block-deleted')));
+    },
+  );
+
+  test('plan block title falls back to parent task and color derives from task', () {
+    final task = planTask('task-a', title: '准备答辩');
+    final block = planBlock(
+      'block-a',
+      task.id,
+      DateTime(2026, 7, 20, 9),
+      DateTime(2026, 7, 20, 10),
+      PlanBlockStatus.accepted,
+    );
+    final item = ScheduleGridItem.fromPlanBlock(block, task);
+    expect(item.title, '准备答辩');
+    expect(item.colorKey, 'task-a');
+    expect(courseColorValue(item.colorKey), courseColorValue('task-a'));
+
+    final customTitle = PlanBlockItem(
+      id: 'block-b',
+      taskId: task.id,
+      title: '自定义标题',
+      startAt: DateTime(2026, 7, 20, 10),
+      endAt: DateTime(2026, 7, 20, 11),
+      status: PlanBlockStatus.accepted,
+      locked: false,
+      createdAt: 1,
+      updatedAt: 1,
+    );
+    expect(ScheduleGridItem.fromPlanBlock(customTitle, task).title, '自定义标题');
+  });
+
+  test('plan block color is stable across blocks of the same task', () {
+    final task = planTask('task-a');
+    final itemA = ScheduleGridItem.fromPlanBlock(
+      planBlock(
+        'ba',
+        task.id,
+        DateTime(2026, 7, 20, 9),
+        DateTime(2026, 7, 20, 10),
+        PlanBlockStatus.accepted,
+      ),
+      task,
+    );
+    final itemA2 = ScheduleGridItem.fromPlanBlock(
+      planBlock(
+        'ba2',
+        task.id,
+        DateTime(2026, 7, 20, 11),
+        DateTime(2026, 7, 20, 12),
+        PlanBlockStatus.accepted,
+      ),
+      task,
+    );
+    expect(itemA.colorKey, 'task-a');
+    expect(itemA2.colorKey, 'task-a');
+    expect(courseColorValue(itemA.colorKey), courseColorValue(itemA2.colorKey));
   });
 
   test(
