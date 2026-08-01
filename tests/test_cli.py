@@ -175,6 +175,50 @@ class PackageEntryTests(unittest.TestCase):
         self.assertTrue(callable(read_campus.handler))
         self.assertTrue(callable(collect_jw.handler))
 
+    def test_config_generate_flutter_defaults_parses(self):
+        parser = cli.build_parser()
+
+        args = parser.parse_args(["config", "generate-flutter-defaults"])
+
+        self.assertEqual("config", args.command)
+        self.assertEqual("generate-flutter-defaults", args.config_command)
+        self.assertTrue(callable(args.handler))
+
+    def test_config_generate_flutter_defaults_writes_dart_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "nested" / "generated_source_defaults.dart"
+            args = cli.build_parser().parse_args(
+                ["config", "generate-flutter-defaults", "--output", str(output)]
+            )
+
+            result = args.handler(args, lambda _: None)
+
+            self.assertEqual(0, result)
+            self.assertTrue(output.exists())
+            content = output.read_text(encoding="utf-8")
+            self.assertIn("// GENERATED FILE - DO NOT EDIT.", content)
+            self.assertIn("const int kDefaultJwSemesterId = 461;", content)
+            self.assertIn("const String kDefaultJwSemesterKey = '2026fall';", content)
+            self.assertIn("const String kDefaultJwSemesterDisplayName = '2026 秋季学期';", content)
+
+    def test_config_generate_flutter_defaults_handles_invalid_json_without_output(
+        self,
+    ):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "out" / "generated.dart"
+            parser = cli.build_parser()
+            args = parser.parse_args(
+                ["config", "generate-flutter-defaults", "--output", str(output)]
+            )
+            with patch.object(cli, "load_default_jw_semester") as load:
+                load.side_effect = cli.SourceConfigError("invalid configuration")
+                with self.assertRaises(cli.SourceConfigError):
+                    args.handler(args, lambda _: None)
+
+            self.assertFalse(output.exists())
+
     def test_campus_repeatable_and_safety_options_are_parsed(self):
         parser = cli.build_parser()
 

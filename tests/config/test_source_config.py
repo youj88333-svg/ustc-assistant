@@ -7,11 +7,14 @@ from ustc_assistant.config import (
     JwSemesterConfig,
     SourceConfigError,
     load_default_jw_semester,
+    render_flutter_source_defaults,
     resolve_jw_semester,
 )
+from ustc_assistant.config import _escape_dart_string
 
 
 ROOT = Path(__file__).resolve().parents[2]
+FLUTTER_OUTPUT = ROOT / "app" / "lib" / "core" / "config" / "generated_source_defaults.dart"
 DEFAULT = JwSemesterConfig(461, "2026fall", "2026 秋季学期")
 
 
@@ -143,6 +146,30 @@ class SourceConfigTests(unittest.TestCase):
                 with self.subTest(payload=payload):
                     with self.assertRaisesRegex(SourceConfigError, message):
                         load_default_jw_semester(path)
+
+    def test_render_flutter_defaults_is_deterministic(self):
+        rendered = render_flutter_source_defaults(
+            JwSemesterConfig(421, "2026spring", "2026 春季学期")
+        )
+        self.assertIn("const int kDefaultJwSemesterId = 421;", rendered)
+        self.assertIn("const String kDefaultJwSemesterKey = '2026spring';", rendered)
+        self.assertIn("DO NOT EDIT", rendered)
+
+    def test_render_flutter_defaults_escapes_dart_string_specials(self):
+        self.assertEqual("\\\\", _escape_dart_string("\\"))
+        self.assertEqual("\\'", _escape_dart_string("'"))
+        self.assertEqual("\\r", _escape_dart_string("\r"))
+        self.assertEqual("\\n", _escape_dart_string("\n"))
+        self.assertEqual("\\$", _escape_dart_string("$"))
+        self.assertEqual(
+            "line\\n\\'  \\$x",
+            _escape_dart_string("line\n'  $x"),
+        )
+
+    def test_checked_in_flutter_defaults_match_json(self):
+        expected = render_flutter_source_defaults(load_default_jw_semester())
+        actual = FLUTTER_OUTPUT.read_text(encoding="utf-8")
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":

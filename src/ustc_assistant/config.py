@@ -72,6 +72,39 @@ def load_default_jw_semester(path: Path | None = None) -> JwSemesterConfig:
     )
 
 
+def render_flutter_source_defaults(semester: JwSemesterConfig) -> str:
+    """Render the canonical JW semester triple as a committed Dart constants file.
+
+    Never infers the semester ID from the calendar year: every value is read
+    verbatim from the source config so the Flutter build stays byte-for-byte in
+    sync with ``config/source-defaults.json``.
+    """
+    semester_key = _escape_dart_string(semester.semester_key)
+    display_name = _escape_dart_string(semester.display_name)
+    return (
+        "// GENERATED FILE - DO NOT EDIT.\n"
+        f"const int kDefaultJwSemesterId = {semester.semester_id};\n"
+        f"const String kDefaultJwSemesterKey = '{semester_key}';\n"
+        f"const String kDefaultJwSemesterDisplayName = '{display_name}';\n"
+        "const Map<String, Object> kDefaultJwSemester = {\n"
+        "  'semesterId': kDefaultJwSemesterId,\n"
+        "  'semesterKey': kDefaultJwSemesterKey,\n"
+        "  'displayName': kDefaultJwSemesterDisplayName,\n"
+        "};\n"
+    )
+
+
+def _escape_dart_string(value: str) -> str:
+    """Escape a value as a Dart single-quoted string literal body."""
+    return (
+        value.replace("\\", "\\\\")
+        .replace("'", "\\'")
+        .replace("\r", "\\r")
+        .replace("\n", "\\n")
+        .replace("$", "\\$")
+    )
+
+
 def resolve_jw_semester(
     default: JwSemesterConfig,
     *,

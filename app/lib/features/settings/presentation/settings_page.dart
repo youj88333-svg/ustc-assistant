@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../../core/config/generated_source_defaults.dart';
 import '../application/settings_service.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -103,7 +104,10 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             leading: const Icon(Icons.restore),
             title: const Text('恢复默认教务学期'),
-            subtitle: const Text('461 / 2026fall / 2026 秋季学期'),
+            subtitle: const Text(
+              '$kDefaultJwSemesterId / $kDefaultJwSemesterKey / '
+              '$kDefaultJwSemesterDisplayName',
+            ),
             onTap: widget.service.resetJwSemester,
           ),
           const ListTile(

@@ -36,6 +36,16 @@ python -m ustc_assistant read campus --entry-id <catalog-entry-id>
 `python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 461 --semester-key 2026fall --semester-name "2026 秋季学期"`；不会根据年份或名称推算教务内部学期 ID。
 `--account-id` 是 App 本地账号标识，不是教务动态上下文 ID；正式采集命令不提供默认值。
 
+Flutter 端 `app/lib/core/config/generated_source_defaults.dart` 中的默认教务学期常量由同一份
+JSON 生成，切勿手改。修改了 `config/source-defaults.json` 后必须重新生成并提交生成文件：
+
+```powershell
+conda run -n ustc_assistant python -m ustc_assistant config generate-flutter-defaults
+```
+
+生成器逐字读取 JSON 三元组，绝不根据年份或名称推断教务内部学期 ID；一致性测试会逐字节比对
+生成文件与 JSON，只有 JSON 被改而未重新生成时测试失败。
+
 教务联动评课社区会把课程名称作为检索词发送给公开网站 `icourse.club`，但不会发送完整课表、时间、地点、用户 ID 或登录信息。首次使用前应确认这一隐私影响；仅需本地检查课程分组时可增加 `--group-only`，该模式不会联网。
 
 校园公开信息目录只读取教务处和财务处的公开页面，不使用登录状态。通知保留北京时间最近 7 个自然日，办事指南和公开信息每个自然月刷新一次；加 `--force` 可强制刷新全部目录。`query campus` 只搜索本地目录，不联网；`read campus` 按目录条目 ID 按需读取正文并使用 30 天详情缓存，刷新失败时默认可返回带 `stale: true` 的旧缓存。

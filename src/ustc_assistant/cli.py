@@ -13,6 +13,7 @@ from ustc_assistant.common.storage import dump_json, write_raw_json, write_raw_t
 from ustc_assistant.config import (
     SourceConfigError,
     load_default_jw_semester,
+    render_flutter_source_defaults,
     resolve_jw_semester,
 )
 from ustc_assistant.sources import campus
@@ -226,6 +227,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("tmp/campus-detail.generated.json"),
     )
     campus_read.set_defaults(handler=_read_campus)
+
+    config = commands.add_parser("config")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+    generate_defaults = config_sub.add_parser("generate-flutter-defaults")
+    generate_defaults.add_argument(
+        "--output",
+        "-o",
+        type=Path,
+        default=Path("app/lib/core/config/generated_source_defaults.dart"),
+    )
+    generate_defaults.set_defaults(handler=_generate_flutter_defaults)
     return parser
 
 
@@ -381,6 +393,22 @@ def _read_campus(
     dump_json(args.output, payload)
     state = "stale cache" if payload.get("stale") else "fresh content"
     status(f"Campus detail read complete ({state}) -> {args.output}")
+    return 0
+
+
+def _generate_flutter_defaults(
+    args: argparse.Namespace,
+    status: Callable[[str], None],
+) -> int:
+    semester = load_default_jw_semester()
+    rendered = render_flutter_source_defaults(semester)
+    output = Path(args.output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(rendered, encoding="utf-8", newline="\n")
+    status(
+        f"Generated Flutter semester defaults for {semester.display_name} "
+        f"-> {output}"
+    )
     return 0
 
 

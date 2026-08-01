@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:ustc_assistant_app/core/config/generated_source_defaults.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
@@ -340,6 +343,29 @@ void main() {
     },
   );
 
+  test('reset writes the generated default JW semester map', () async {
+    await database
+        .into(database.sourceConfigs)
+        .insert(
+          SourceConfigsCompanion.insert(
+            id: '$accountId:ustc_jw',
+            accountId: accountId,
+            source: 'ustc_jw',
+            configJson: const Value('{"semesterId":1,"semesterKey":"x","displayName":"x"}'),
+            updatedAt: 1,
+          ),
+        );
+    await settings.resetJwSemester();
+    final config = await (database.select(
+      database.sourceConfigs,
+    )..where((row) => row.source.equals('ustc_jw'))).getSingle();
+    final decoded = (jsonDecode(config.configJson) as Map<dynamic, dynamic>);
+    expect(decoded['semesterId'], kDefaultJwSemesterId);
+    expect(decoded['semesterKey'], kDefaultJwSemesterKey);
+    expect(decoded['displayName'], kDefaultJwSemesterDisplayName);
+    expect(decoded, kDefaultJwSemester);
+  });
+
   testWidgets('模型服务 ListTile navigates to /settings/agent', (tester) async {
     final goRouter = GoRouter(
       initialLocation: '/settings',
@@ -363,5 +389,27 @@ void main() {
     await tester.tap(find.text('模型服务'));
     await tester.pumpAndSettle();
     expect(find.text('agent-settings-stub'), findsOneWidget);
+  });
+
+  testWidgets('settings UI renders the generated JW semester defaults', (
+    tester,
+  ) async {
+    final goRouter = GoRouter(
+      initialLocation: '/settings',
+      routes: [
+        GoRoute(
+          path: '/settings',
+          builder: (context, state) => SettingsPage(service: settings),
+        ),
+      ],
+    );
+    addTearDown(goRouter.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: goRouter));
+    await tester.pumpAndSettle();
+
+    final subtitle =
+        '$kDefaultJwSemesterId / $kDefaultJwSemesterKey / '
+        '$kDefaultJwSemesterDisplayName';
+    expect(find.text(subtitle), findsOneWidget);
   });
 }

@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 
+import '../../../core/config/generated_source_defaults.dart';
 import '../../../core/database/app_database.dart';
 import '../../accounts/application/account_service.dart';
 
@@ -28,11 +29,7 @@ class SettingsService {
        now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   static const automaticSyncInterval = Duration(hours: 12);
-  static const defaultJwSemester = {
-    'semesterId': 461,
-    'semesterKey': '2026fall',
-    'displayName': '2026 秋季学期',
-  };
+  static const defaultJwSemester = kDefaultJwSemester;
 
   final AppDatabase database;
   final AccountService accounts;
