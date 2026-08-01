@@ -692,11 +692,17 @@ class CreateUserOverlayTool extends AgentWriteTool {
     r.optionalEnum('attendance_policy', const {'must_go', 'gamble', 'skip'});
     r.optionalEnum('listening_mode', const {'listen', 'not_listen'});
     r.optionalEnum('importance', _importanceValues);
+    // 无条件类型校验：即便其他字段让 previewLines 非空，错误类型的 note/display_title
+    // 也必须在此被拒，不能流到 commit 的原始参数里。
+    r.optionalString('attendance_note');
+    r.optionalString('listening_note');
+    final displayTitle = r.contains('display_title') ? r.optionalString('display_title') : null;
+    r.optionalBool('hidden');
 
     final lines = <String>[];
     if (a['attendance_policy'] != null) lines.add('出勤：${a['attendance_policy']}');
     if (a['listening_mode'] != null) lines.add('听讲：${a['listening_mode']}');
-    if (lines.isEmpty && r.contains('display_title')) lines.add('显示名：${r.optionalString('display_title')}');
+    if (lines.isEmpty && displayTitle != null) lines.add('显示名：$displayTitle');
     lines.add(scope == 'course_series' ? '作用：整门课' : '作用：仅该事件');
 
     return AgentWriteProposal(

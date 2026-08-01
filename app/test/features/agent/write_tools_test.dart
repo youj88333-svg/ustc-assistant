@@ -857,6 +857,32 @@ void main() {
     expect(result.errorCode, 'invalid_write_arguments');
   });
 
+  test('create_user_overlay rejects wrong-typed notes/display_title even alongside a policy', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    // attendance_policy 在场使 previewLines 非空，错误类型的 attendance_note 仍须被拒。
+    var result = await tool.execute({
+      'ref_event': ref, 'attendance_policy': 'must_go', 'attendance_note': 123,
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // listening_mode 在场时，错误类型的 listening_note 仍须被拒。
+    result = await tool.execute({
+      'ref_event': ref, 'listening_mode': 'listen', 'listening_note': true,
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // attendance_policy 在场时，错误类型的 display_title 仍须被拒。
+    result = await tool.execute({
+      'ref_event': ref, 'attendance_policy': 'must_go', 'display_title': 42,
+    }, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+    // display_title 单独在场（无 policy）时错误类型也须被拒。
+    result = await tool.execute({'ref_event': ref, 'display_title': 42}, h.ctx());
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
   test('record_attendance_decision rejects unknown decision, no undecided fallback', () async {
     final h = _Harness(tools());
     final gw = _OverlayGateway();
@@ -898,7 +924,7 @@ void main() {
     expect(result.errorCode, 'invalid_write_arguments');
   });
 
-  test('set_reminder rejects negative, non-integer, empty and duplicate-only offsets', () async {
+  test('set_reminder rejects negative, non-integer and empty offsets', () async {
     final h = _Harness(tools());
     final gw = _RelationGateway();
     final tool = h.tool('set_reminder');
