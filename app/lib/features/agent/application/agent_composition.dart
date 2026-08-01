@@ -3,6 +3,7 @@ import '../../../core/time/beijing_clock.dart';
 import '../../accounts/application/account_service.dart';
 import '../data/anthropic_llm_provider.dart';
 import '../data/drift_agent_write_gateway.dart';
+import '../data/drift_agent_write_unit_of_work.dart';
 import '../data/drift_chat_repository.dart';
 import '../data/protected_agent_secret_store.dart';
 import '../domain/agent_tool.dart';
@@ -172,8 +173,17 @@ class AgentComposition {
       policy: policyService,
       now: () => clock.now().millisecondsSinceEpoch,
     );
-    final confirmationStore = WriteConfirmationStore(policy: policyService);
-    final write = agentWriteTools(writeGateway, policyService, confirmationStore);
+    final unitOfWork = DriftAgentWriteUnitOfWork(database);
+    final confirmationStore = WriteConfirmationStore(
+      policy: policyService,
+      unitOfWork: unitOfWork,
+    );
+    final write = agentWriteTools(
+      writeGateway,
+      policyService,
+      confirmationStore,
+      unitOfWork,
+    );
     final allTools = [...local, ...external, ...write];
 
     // Payload builders and privacy filter.

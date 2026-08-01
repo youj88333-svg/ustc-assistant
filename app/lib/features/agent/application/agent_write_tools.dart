@@ -9,6 +9,7 @@ import '../domain/agent_permission_policy.dart';
 import '../domain/agent_tool.dart';
 import '../domain/agent_write_gateway.dart';
 import '../domain/agent_write_proposal.dart';
+import '../domain/agent_write_unit_of_work.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
 import 'run_reference_store.dart';
@@ -77,7 +78,7 @@ Future<String> _relationParticipantLabel(AgentWriteGateway gateway, String kind,
 
 /// 新建个人日程。
 class CreateEventTool extends AgentWriteTool {
-  CreateEventTool({required super.gateway, required super.policy, required super.confirmationStore});
+  CreateEventTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'create_event';
@@ -207,7 +208,7 @@ class CreateEventTool extends AgentWriteTool {
 
 /// 新建任务。
 class CreateTaskTool extends AgentWriteTool {
-  CreateTaskTool({required super.gateway, required super.policy, required super.confirmationStore});
+  CreateTaskTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'create_task';
@@ -300,7 +301,7 @@ class CreateTaskTool extends AgentWriteTool {
 
 /// 为已有任务安排一个执行时间段（PlanBlock）。
 class PlanTaskTool extends AgentWriteTool {
-  PlanTaskTool({required super.gateway, required super.policy, required super.confirmationStore});
+  PlanTaskTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'plan_task';
@@ -389,7 +390,7 @@ class PlanTaskTool extends AgentWriteTool {
 
 /// 修改/删除已有日程。
 class UpdateEventTool extends AgentWriteTool {
-  UpdateEventTool({required super.gateway, required super.policy, required super.confirmationStore});
+  UpdateEventTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'update_event';
@@ -692,7 +693,7 @@ class UpdateEventTool extends AgentWriteTool {
 
 /// 为用户对某个事件或整门课设置个人标注（出勤/听讲/显示名/重要性/隐藏）。
 class CreateUserOverlayTool extends AgentWriteTool {
-  CreateUserOverlayTool({required super.gateway, required super.policy, required super.confirmationStore});
+  CreateUserOverlayTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'create_user_overlay';
@@ -830,7 +831,7 @@ class CreateUserOverlayTool extends AgentWriteTool {
 
 /// 记录"可以赌"课程的本次出勤决定（去/不去/未定）。
 class RecordAttendanceDecisionTool extends AgentWriteTool {
-  RecordAttendanceDecisionTool({required super.gateway, required super.policy, required super.confirmationStore});
+  RecordAttendanceDecisionTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'record_attendance_decision';
@@ -896,7 +897,7 @@ class RecordAttendanceDecisionTool extends AgentWriteTool {
 
 /// 设置某节课的听讲/不听讲模式。
 class RecordListeningModeTool extends AgentWriteTool {
-  RecordListeningModeTool({required super.gateway, required super.policy, required super.confirmationStore});
+  RecordListeningModeTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'record_listening_mode';
@@ -961,7 +962,7 @@ class RecordListeningModeTool extends AgentWriteTool {
 
 /// 记录两个安排之间的关系与用户决策（仅支持 conflict 形态）。
 class CreateScheduleRelationTool extends AgentWriteTool {
-  CreateScheduleRelationTool({required super.gateway, required super.policy, required super.confirmationStore});
+  CreateScheduleRelationTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'create_schedule_relation';
@@ -1065,7 +1066,7 @@ class CreateScheduleRelationTool extends AgentWriteTool {
 
 /// 为个人日程设置提醒偏移。
 class SetReminderTool extends AgentWriteTool {
-  SetReminderTool({required super.gateway, required super.policy, required super.confirmationStore});
+  SetReminderTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'set_reminder';
@@ -1145,7 +1146,7 @@ class SetReminderTool extends AgentWriteTool {
 
 /// 调整某类操作的确认策略。永远需要用户确认，且无"以后不再确认"。
 class UpdatePermissionPolicyTool extends AgentWriteTool {
-  UpdatePermissionPolicyTool({required super.gateway, required super.policy, required super.confirmationStore});
+  UpdatePermissionPolicyTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'update_permission_policy';
@@ -1248,15 +1249,16 @@ List<AgentWriteTool> agentWriteTools(
   AgentWriteGateway gateway,
   AgentPermissionPolicyService policy,
   WriteConfirmationStore confirmationStore,
+  AgentWriteUnitOfWork unitOfWork,
 ) => [
-  CreateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  SetReminderTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
-  UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore),
+  CreateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  SetReminderTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
 ];

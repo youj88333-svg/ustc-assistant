@@ -7,11 +7,13 @@ import 'package:ustc_assistant_app/features/agent/application/agent_permission_p
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tool.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
+import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
@@ -289,6 +291,7 @@ void main() {
   late AgentPermissionPolicyService policy;
   late WriteConfirmationStore store;
   late _RecordingGateway gateway;
+  late AgentWriteUnitOfWork unitOfWork;
 
   setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
@@ -303,23 +306,24 @@ void main() {
       ),
     );
     policy = AgentPermissionPolicyService(database: db, clock: _FixedClock());
-    store = WriteConfirmationStore(policy: policy);
+    unitOfWork = DriftAgentWriteUnitOfWork(db);
+    store = WriteConfirmationStore(policy: policy, unitOfWork: unitOfWork);
     gateway = _RecordingGateway();
   });
 
   tearDown(() => db.close());
 
   List<AgentWriteTool> tools() => [
-    CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store),
-    CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
-    PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: store),
-    UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: store),
-    CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: store),
-    RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: store),
-    RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: store),
-    CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: store),
-    SetReminderTool(gateway: gateway, policy: policy, confirmationStore: store),
-    UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: store),
+    CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    CreateTaskTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    PlanTaskTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    UpdateEventTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    CreateUserOverlayTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    RecordAttendanceDecisionTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    RecordListeningModeTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    CreateScheduleRelationTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    SetReminderTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
   ];
 
   test('schemas declare required args', () {

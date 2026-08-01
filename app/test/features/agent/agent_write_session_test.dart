@@ -14,6 +14,7 @@ import 'package:ustc_assistant_app/features/agent/application/agent_write_tools.
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/outbound_privacy_filter.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_gateway.dart';
+import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
@@ -71,11 +72,12 @@ void main() {
     await db.customStatement('PRAGMA foreign_keys = OFF');
     final clock = _FixedClock();
     final policy = AgentPermissionPolicyService(database: db, clock: clock);
-    final store = WriteConfirmationStore(policy: policy);
+    final unitOfWork = DriftAgentWriteUnitOfWork(db);
+    final store = WriteConfirmationStore(policy: policy, unitOfWork: unitOfWork);
     final gateway = DriftAgentWriteGateway(database: db, accountId: 'a1', policy: policy,
         now: () => clock.now().millisecondsSinceEpoch);
     final registry = AgentToolRegistry(
-      tools: [CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store)],
+      tools: [CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork)],
       privacyFilter: OutboundPrivacyFilter(protectedAccount: 'student', toolBuilders: agentToolPayloadBuilders()),
     );
     final chatRepo = DriftChatRepository(db);
@@ -124,12 +126,13 @@ void main() {
     await db.customStatement('PRAGMA foreign_keys = OFF');
     final clock = _FixedClock();
     final policy = AgentPermissionPolicyService(database: db, clock: clock);
-    final store = WriteConfirmationStore(policy: policy);
+    final unitOfWork = DriftAgentWriteUnitOfWork(db);
+    final store = WriteConfirmationStore(policy: policy, unitOfWork: unitOfWork);
     final gateway = DriftAgentWriteGateway(database: db, accountId: 'a1', policy: policy,
         now: () => clock.now().millisecondsSinceEpoch);
     final privacy = OutboundPrivacyFilter(protectedAccount: 'student', toolBuilders: agentToolPayloadBuilders());
     final registry = AgentToolRegistry(
-      tools: [CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store)],
+      tools: [CreateEventTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork)],
       privacyFilter: privacy,
     );
     final chatRepo = DriftChatRepository(db);

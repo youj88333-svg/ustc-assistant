@@ -31,9 +31,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/app/router.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
+import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
+import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
@@ -881,5 +884,263 @@ void main() {
         isFalse, reason: 'after remember, the same action auto-executes');
     expect(states2.last.state, AgentRunState.completed);
     expect((await db.select(db.calendarEvents).get()).length, 2);
+  });
+
+  // --- Step 1/5: SQLite fault-injection rollback tests (real Drift) ----------
+  //
+  // These prove the write + audit atomicity on the REAL SQLite engine through
+  // the composed registry. A `BEFORE INSERT ... RAISE(ABORT)` trigger on
+  // `action_logs` forces the audit to fail AFTER the business write has already
+  // executed inside the very same Drift transaction; if the write tool correctly
+  // joins commit + audit + permission mutation into one shared transaction, the
+  // trigger's abort rolls EVERYTHING back (event + service log + policy row).
+
+  const validTimedEventArguments = {
+    'title': '健身',
+    'start_at': '2026-08-01T15:00:00+08:00',
+    'end_at': '2026-08-01T16:00:00+08:00',
+  };
+
+  AgentToolContext integrationCtx(String accountId, String runId) =>
+      AgentToolContext(
+        accountId: accountId,
+        runId: runId,
+        clock: FixedBeijingClock(DateTime(2026, 8, 1, 12)),
+        cancellation: CancellationSignal(),
+        references: RunReferenceStore(runId: runId),
+      );
+
+  Future<void> seedAccountForWrites(AppDatabase db, String accountId) async {
+    await _seedAccount(db, accountId);
+  }
+
+  Future<({AgentToolRegistry registry, AgentCompositionResult composition})>
+      writeRegistry(AppDatabase db, String accountId) async {
+    const protector = _NoopProtector();
+    await seedAccountForWrites(db, accountId);
+    final secretStore = ProtectedAgentSecretStore(
+      database: db,
+      protector: protector,
+    );
+    await _seedAgentConfig(db, accountId, secrets: secretStore, apiKey: 'test-key');
+    final provider = _ScriptedProvider(const []);
+    final composition = await _buildTestComposition(
+      db,
+      accountId,
+      provider: provider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: protector,
+    );
+    return (registry: composition.registry, composition: composition);
+  }
+
+  // 直接 allow 路径：强制 agent 审计失败时，create_event 彻底回滚（事件 + 日志全无）。
+  test('agent write rolls back when audit persistence fails', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final built = await writeRegistry(db, 'acc-1');
+    addTearDown(built.composition.dispose);
+
+    // create_event 默认 ask_first_time 首次需确认；先记录首次确认使其放行走 allow。
+    await db.into(db.agentPermissionPolicies).insert(
+          AgentPermissionPoliciesCompanion.insert(
+            id: 'pp-1',
+            accountId: 'acc-1',
+            actionType: 'create_event',
+            targetType: const Value('event'),
+            confirmationMode: 'always_allow',
+            riskLevel: const Value('medium'),
+            enabled: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    // 强制 source='agent' 的 ActionLog 插入失败——模拟审计持久化故障。
+    await db.customStatement('''
+CREATE TRIGGER fail_agent_log BEFORE INSERT ON action_logs
+WHEN NEW.source = 'agent'
+BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
+''');
+    addTearDown(() => db.customStatement('DROP TRIGGER IF EXISTS fail_agent_log'));
+
+    final result = await built.registry.execute(
+      toolName: 'create_event',
+      arguments: validTimedEventArguments,
+      context: integrationCtx('acc-1', 'r-audit'),
+    );
+    expect(result.status, AgentToolStatus.error);
+    expect((await db.select(db.calendarEvents).get()), isEmpty,
+        reason: 'calendar event must roll back with the failed audit');
+    expect((await db.select(db.actionLogs).get()).where((l) => l.source == 'agent'), isEmpty,
+        reason: 'no agent ActionLog may survive a rolled-back write');
+  });
+
+  // 已确认 remember=true 路径：权限策略插入被强制失败时，事件 + 全部日志 + 策略行一起回滚。
+  test('confirmed remember write rolls back when permission policy insert fails', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final built = await writeRegistry(db, 'acc-1');
+    addTearDown(built.composition.dispose);
+
+    // 先执行一次 create_event 确认（不 remember），让其暂停挂起。
+    final provider = _ScriptedProvider([
+      _ScriptedCall(() => [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'create_event',
+              input: validTimedEventArguments,
+            ),
+            const CompletedEvent(),
+          ]),
+      _ScriptedCall(() => [const TextDeltaEvent('ok'), const CompletedEvent()]),
+    ]);
+    final composition = await _buildTestComposition(
+      db,
+      'acc-1',
+      provider: provider,
+      gateway: _CountingResumableYoungGateway(),
+      protector: const _NoopProtector(),
+    );
+    addTearDown(composition.dispose);
+    final states = <AgentRunViewState>[];
+    final done = Completer<void>();
+    late String runId;
+    composition.sessionService.send(accountId: 'acc-1', userText: '建个日程').listen((s) {
+      states.add(s);
+      if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+    }, onDone: done.complete);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(
+      states.any((s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+      isTrue,
+    );
+
+    // 强制 agent_permission_policy 插入失败——模拟 remember 放宽的权限落库故障。
+    await db.customStatement('''
+CREATE TRIGGER fail_permission_policy BEFORE INSERT ON agent_permission_policies
+BEGIN SELECT RAISE(ABORT, 'forced permission policy failure'); END;
+''');
+    addTearDown(() => db.customStatement('DROP TRIGGER IF EXISTS fail_permission_policy'));
+
+    await composition.sessionService
+        .confirmWriteProposal(accountId: 'acc-1', runId: runId, approve: true, remember: true)
+        .drain<void>();
+    await done.future;
+
+    // 事件与日志全部回滚（只断言与本写事务相关的 action 日志，会话自身的
+    // read_only_run 运行日志与本事务无关）。
+    expect((await db.select(db.calendarEvents).get()), isEmpty,
+        reason: 'event must roll back when remember policy insert fails');
+    final logs = await db.select(db.actionLogs).get();
+    expect(
+      logs.where((l) => l.actionType == 'create_event'),
+      isEmpty,
+      reason: 'agent create_event log must roll back with the write',
+    );
+    expect(
+      logs.where((l) => l.actionType == 'update_permission_policy'),
+      isEmpty,
+      reason: 'user-sourced permission-change (remember) log must roll back too',
+    );
+    // 策略行不得残留（remember 放宽失败）。
+    expect((await db.select(db.agentPermissionPolicies).get()), isEmpty,
+        reason: 'permission policy row must roll back');
+  });
+
+  // Step 5 单写 service：create_task 在审计失败时彻底回滚。
+  test('create_task rolls back when audit persistence fails', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final built = await writeRegistry(db, 'acc-1');
+    addTearDown(built.composition.dispose);
+
+    await db.into(db.agentPermissionPolicies).insert(
+          AgentPermissionPoliciesCompanion.insert(
+            id: 'pp-1',
+            accountId: 'acc-1',
+            actionType: 'create_task',
+            targetType: const Value('task'),
+            confirmationMode: 'always_allow',
+            riskLevel: const Value('medium'),
+            enabled: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await db.customStatement('''
+CREATE TRIGGER fail_agent_log BEFORE INSERT ON action_logs
+WHEN NEW.source = 'agent'
+BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
+''');
+    addTearDown(() => db.customStatement('DROP TRIGGER IF EXISTS fail_agent_log'));
+
+    final result = await built.registry.execute(
+      toolName: 'create_task',
+      arguments: const {'title': '复习', 'estimated_minutes': 60},
+      context: integrationCtx('acc-1', 'r-task'),
+    );
+    expect(result.status, AgentToolStatus.error);
+    expect((await db.select(db.tasks).get()), isEmpty,
+        reason: 'task must roll back with the failed audit');
+    expect((await db.select(db.actionLogs).get()).where((l) => l.source == 'agent'), isEmpty);
+  });
+
+  // Step 5 多写 service：create_event（含 reminders）在审计失败时，业务表与
+  // 服务日志一并回滚，且重跑不产生重复行。
+  test('create_event with reminders rolls back and rerun leaves no duplicates', () async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final built = await writeRegistry(db, 'acc-1');
+    addTearDown(built.composition.dispose);
+
+    await db.into(db.agentPermissionPolicies).insert(
+          AgentPermissionPoliciesCompanion.insert(
+            id: 'pp-1',
+            accountId: 'acc-1',
+            actionType: 'create_event',
+            targetType: const Value('event'),
+            confirmationMode: 'always_allow',
+            riskLevel: const Value('medium'),
+            enabled: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await db.customStatement('''
+CREATE TRIGGER fail_agent_log BEFORE INSERT ON action_logs
+WHEN NEW.source = 'agent'
+BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
+''');
+    addTearDown(() => db.customStatement('DROP TRIGGER IF EXISTS fail_agent_log'));
+
+    final result = await built.registry.execute(
+      toolName: 'create_event',
+      arguments: {
+        ...validTimedEventArguments,
+        'reminder_offsets_minutes': [10, 30],
+      },
+      context: integrationCtx('acc-1', 'r-rem'),
+    );
+    expect(result.status, AgentToolStatus.error);
+    expect((await db.select(db.calendarEvents).get()), isEmpty);
+    expect((await db.select(db.reminders).get()), isEmpty,
+        reason: 'reminders written by the multi-write service must roll back');
+    expect((await db.select(db.actionLogs).get()).where((l) => l.source == 'agent'), isEmpty);
+
+    // 重跑同一失败调用（无触发器）后不产生重复行——回滚是完整的。
+    await db.customStatement('DROP TRIGGER IF EXISTS fail_agent_log');
+    final retry = await built.registry.execute(
+      toolName: 'create_event',
+      arguments: {
+        ...validTimedEventArguments,
+        'reminder_offsets_minutes': [10, 30],
+      },
+      context: integrationCtx('acc-1', 'r-rem2'),
+    );
+    expect(retry.status, AgentToolStatus.success);
+    expect((await db.select(db.calendarEvents).get()).length, 1,
+        reason: 'failed attempt must leave zero rows, so the retry lands exactly one');
+    expect((await db.select(db.reminders).get()).length, 2,
+        reason: 'two reminder offsets for the single retried event');
   });
 }

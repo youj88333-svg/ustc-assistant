@@ -7,10 +7,12 @@ import 'package:ustc_assistant_app/features/agent/application/agent_permission_p
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tool.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
+import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_write_unit_of_work.dart';
 
 class _NoopGateway implements AgentWriteGateway {
   @override
@@ -24,7 +26,7 @@ class _FixedClock implements BeijingClock {
 }
 
 class _FakeWriteTool extends AgentWriteTool {
-  _FakeWriteTool({required super.gateway, required super.policy, required super.confirmationStore});
+  _FakeWriteTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 
   @override
   String get name => 'create_event';
@@ -67,14 +69,14 @@ class _FakeWriteTool extends AgentWriteTool {
 }
 
 class _ForceConfirmTool extends _FakeWriteTool {
-  _ForceConfirmTool({required super.gateway, required super.policy, required super.confirmationStore});
+  _ForceConfirmTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
   @override
   bool get forceConfirmation => true;
 }
 
 /// 模拟 update_event：默认 always_ask（首次确认后仍每次确认）。
 class _AlwaysAskTool extends _FakeWriteTool {
-  _AlwaysAskTool({required super.gateway, required super.policy, required super.confirmationStore});
+  _AlwaysAskTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
   @override
   String get actionType => 'update_event';
   @override
@@ -83,7 +85,7 @@ class _AlwaysAskTool extends _FakeWriteTool {
 
 /// 模拟提交失败：用于验证"先提交、成功后才放宽"的次序。
 class _FailingCommitTool extends _FakeWriteTool {
-  _FailingCommitTool({required super.gateway, required super.policy, required super.confirmationStore});
+  _FailingCommitTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
   @override
   Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext context) async {
     commitCalled = true;
@@ -104,6 +106,7 @@ void main() {
   late AgentPermissionPolicyService policy;
   late WriteConfirmationStore store;
   late _NoopGateway gateway;
+  late AgentWriteUnitOfWork unitOfWork;
 
   setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
@@ -118,7 +121,11 @@ void main() {
       ),
     );
     policy = AgentPermissionPolicyService(database: db, clock: _FixedClock());
-    store = WriteConfirmationStore(policy: policy);
+    unitOfWork = DriftAgentWriteUnitOfWork(db);
+    store = WriteConfirmationStore(
+      policy: policy,
+      unitOfWork: unitOfWork,
+    );
     gateway = _NoopGateway();
   });
 
@@ -127,7 +134,7 @@ void main() {
   test('allow decision commits directly and logs agent action', () async {
     // create_event 默认 ask_first_time 首次需要确认；先记录首次确认使其放行。
     await policy.recordFirstConfirmation(accountId: 'a1', actionType: 'create_event', targetType: 'event');
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     expect(result.status, AgentToolStatus.success);
     expect(tool.commitCalled, isTrue);
@@ -139,7 +146,7 @@ void main() {
     await policy.updatePolicy(accountId: 'a1', actionType: 'create_event',
         targetType: 'event', mode: ConfirmationMode.alwaysDeny,
         riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     expect(result.status, AgentToolStatus.error);
     expect(result.errorCode, 'permission_denied');
@@ -147,7 +154,7 @@ void main() {
   });
 
   test('confirm decision suspends and commits on resolve(approve)', () async {
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     expect(result.status, AgentToolStatus.needsUserAction);
     expect(result.userAction?.type, AgentUserActionType.writeConfirmation);
@@ -160,7 +167,7 @@ void main() {
   });
 
   test('reject decision returns user_declined and never commits', () async {
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: false, remember: false);
     expect(resumed.status, AgentToolStatus.error);
@@ -169,7 +176,7 @@ void main() {
   });
 
   test('remember relaxes the policy to always_allow', () async {
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: true);
     expect(await policy.resolve(accountId: 'a1', actionType: 'create_event',
@@ -178,14 +185,14 @@ void main() {
 
   test('forceConfirmation tool always confirms even when policy allows', () async {
     await policy.recordFirstConfirmation(accountId: 'a1', actionType: 'create_event', targetType: 'event');
-    final tool = _ForceConfirmTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _ForceConfirmTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     expect(result.status, AgentToolStatus.needsUserAction);
     expect(tool.commitCalled, isFalse);
   });
 
   test('cancel completes the pending invocation as cancelled', () async {
-    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     await result.pendingInvocation!.cancel();
     final resumed = await result.pendingInvocation!.result;
@@ -196,7 +203,7 @@ void main() {
   test('always_ask tool approval does not record a first confirmation', () async {
     // update_event 默认 always_ask：首次确认后仍每次确认，记录 firstConfirmedAt
     // 无意义，不应写策略行（findings 5）。
-    final tool = _AlwaysAskTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _AlwaysAskTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     expect(result.status, AgentToolStatus.needsUserAction);
     final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
@@ -209,7 +216,7 @@ void main() {
 
   test('failed commit does not relax the policy', () async {
     // 提交失败时不得放宽/记录首次确认（findings 4：先提交、成功后才放宽）。
-    final tool = _FailingCommitTool(gateway: gateway, policy: policy, confirmationStore: store);
+    final tool = _FailingCommitTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
     final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: true);
     expect(resumed.status, AgentToolStatus.error);
