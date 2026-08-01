@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
@@ -83,16 +84,19 @@ void main() {
     expect(row.deletedAt, isNotNull);
   });
 
-  test('eventIdentity reports personal/recurring', () async {
+  test('eventSnapshot reports personal/recurring', () async {
     await gateway.createEvent(PersonalEvent.timed(
       id: 'ev-1',
       title: '健身',
       startAt: DateTime(2026, 8, 1, 15),
       endAt: DateTime(2026, 8, 1, 16),
     ));
-    final identity = await gateway.eventIdentity('ev-1');
-    expect(identity.isPersonal, isTrue);
-    expect(identity.isRecurring, isFalse);
+    final snapshot = await gateway.eventSnapshot('ev-1');
+    expect(snapshot.isPersonal, isTrue);
+    expect(snapshot.isRecurring, isFalse);
+    expect(snapshot.title, '健身');
+    expect(snapshot.startAt, DateTime(2026, 8, 1, 15));
+    expect(snapshot.endAt, DateTime(2026, 8, 1, 16));
   });
 
   test('recordAttendanceDecision and setEventOverlay write overlays', () async {
@@ -149,6 +153,55 @@ void main() {
     final reminders = await db.select(db.reminders).get();
     expect(reminders.single.eventId, 'ev-1');
     expect(reminders.single.offsetMinutes, 15);
+  });
+
+  test('eventSnapshot reads own account event with identity + course series', () async {
+    // Two accounts' local account rows so foreign keys are satisfiable.
+    await db.into(db.localAccounts).insert(LocalAccountsCompanion.insert(
+      id: 'acc-2', maskedHint: 'PB****0000',
+      isActive: const Value(true), createdAt: 1, updatedAt: 1,
+    ));
+    // Account A: a source (ustc_jw) course event belonging to a course series.
+    await db.into(db.courseSeries).insert(CourseSeriesCompanion.insert(
+      id: 'cs-1', accountId: 'acc-1', source: 'ustc_jw', externalId: 'lesson-phys',
+      title: '大学物理', semesterKey: '2026spring', participantsJson: const Value('[]'),
+      sourceDetailsJson: '{}', createdAt: 1, updatedAt: 1,
+    ));
+    await db.into(db.calendarEvents).insert(CalendarEventsCompanion.insert(
+      id: 'event-a', accountId: 'acc-1', source: 'ustc_jw',
+      sourceSeriesExternalId: const Value('lesson-phys'),
+      title: '量子物理 B', type: 'course',
+      startAt: Value(DateTime(2026, 3, 17, 9, 45).toUtc().millisecondsSinceEpoch),
+      endAt: Value(DateTime(2026, 3, 17, 11, 20).toUtc().millisecondsSinceEpoch),
+      allDay: false, timezone: 'Asia/Shanghai', locationName: Value('5101'),
+      createdAt: 1, updatedAt: 1,
+    ));
+    await db.into(db.sourceRecords).insert(SourceRecordsCompanion.insert(
+      id: 'sr-a', accountId: 'acc-1', source: 'ustc_jw', entityType: 'calendar_event',
+      externalId: 'ph-evt-a', localEntityId: 'event-a', sourceStatus: 'active',
+      presence: 'present', scopeKey: 'scope', firstObservedAt: 1, lastObservedAt: 1,
+    ));
+    // Account B: a distinct event that must NOT be readable from account A.
+    await db.into(db.calendarEvents).insert(CalendarEventsCompanion.insert(
+      id: 'event-b', accountId: 'acc-2', source: 'user',
+      title: 'B 的健身', type: 'personal',
+      startAt: Value(DateTime(2026, 3, 18, 9, 0).toUtc().millisecondsSinceEpoch),
+      endAt: Value(DateTime(2026, 3, 18, 10, 0).toUtc().millisecondsSinceEpoch),
+      allDay: false, timezone: 'Asia/Shanghai', locationName: Value('健身房'),
+      createdAt: 1, updatedAt: 1,
+    ));
+
+    final snapshot = await gateway.eventSnapshot('event-a');
+    expect(snapshot.title, '量子物理 B');
+    expect(snapshot.location, '5101');
+    expect(snapshot.source, 'ustc_jw');
+    expect(snapshot.type, 'course');
+    expect(snapshot.isPersonal, isFalse);
+    expect(snapshot.courseSeriesId, 'cs-1');
+    expect(snapshot.startAt, DateTime(2026, 3, 17, 9, 45));
+    expect(snapshot.endAt, DateTime(2026, 3, 17, 11, 20));
+
+    await expectLater(gateway.eventSnapshot('event-b'), throwsStateError);
   });
 
   test('updatePermissionPolicy delegates to policy service', () async {

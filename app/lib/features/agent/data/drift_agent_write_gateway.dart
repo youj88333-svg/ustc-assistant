@@ -217,17 +217,35 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       _reminders.setEventOffsets(eventId, offsetsMinutes);
 
   @override
-  Future<EventWriteIdentity> eventIdentity(String eventId) async {
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async {
     final row = await (database.select(database.calendarEvents)
           ..where((r) => r.id.equals(eventId) & r.accountId.equals(accountId)))
         .getSingleOrNull();
     if (row == null) throw StateError('event not found for account');
-    return EventWriteIdentity(
+    // 仅对课程系列身份使用 EffectiveEventRepository；其余字段直接来自账户
+    // 过滤后的 calendar_events 行。DB id 只进 commitParams。
+    String? courseSeriesId;
+    if (row.sourceSeriesExternalId != null) {
+      final record = await EffectiveEventRepository(
+        database,
+        accountId: accountId,
+      ).byId(eventId);
+      courseSeriesId = record.courseSeries?.id;
+    }
+    return EventWriteSnapshot(
       id: row.id,
       source: row.source,
       type: row.type,
+      title: row.title,
+      allDay: row.allDay,
+      startAt: row.startAt == null ? null : DateTime.fromMillisecondsSinceEpoch(row.startAt!),
+      endAt: row.endAt == null ? null : DateTime.fromMillisecondsSinceEpoch(row.endAt!),
+      startDate: row.startDate == null ? null : DateTime.parse(row.startDate!),
+      endDateExclusive: row.endDateExclusive == null ? null : DateTime.parse(row.endDateExclusive!),
+      location: row.locationName,
       personalSeriesId: row.personalSeriesId,
       occurrenceKey: row.occurrenceKey,
+      courseSeriesId: courseSeriesId,
     );
   }
 

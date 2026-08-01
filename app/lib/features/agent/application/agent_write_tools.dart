@@ -30,6 +30,51 @@ String _fmtRange(PersonalEvent event) => event.allDay
 String _fmtTaskRange(DateTime? start, DateTime? end) =>
     '${start?.toIso8601String()} 至 ${end?.toIso8601String()}';
 
+/// 定时事件的时间范围（“HH:MM-HH:MM”）。
+String _fmtTimeRange(DateTime start, DateTime end) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final d = '${start.year}-${two(start.month)}-${two(start.day)}';
+  return '$d ${two(start.hour)}:${two(start.minute)}-${two(end.hour)}:${two(end.minute)}';
+}
+
+/// 事件的展示行：标题 + 当前时间（+ 地点）。
+List<String> _eventTargetLines(EventWriteSnapshot snapshot) {
+  final lines = <String>[
+    '目标：${snapshot.title}',
+    if (snapshot.allDay)
+      '当前时间：${snapshot.startDate!.toIso8601String().substring(0, 10)} 至 '
+          '${snapshot.endDateExclusive!.toIso8601String().substring(0, 10)}'
+    else
+      '当前时间：${_fmtTimeRange(snapshot.startAt!, snapshot.endAt!)}',
+    if (snapshot.location != null && snapshot.location!.isNotEmpty)
+      '地点：${snapshot.location}',
+  ];
+  return lines;
+}
+
+/// 事件/任务/执行块摘要文本（进入预览/日志，不含任何 DB id）。
+String _eventSummary(EventWriteSnapshot snapshot) {
+  if (snapshot.allDay) {
+    return '${snapshot.title} '
+        '（${snapshot.startDate!.toIso8601String().substring(0, 10)} 至 '
+        '${snapshot.endDateExclusive!.toIso8601String().substring(0, 10)}）';
+  }
+  return '${snapshot.title} / ${_fmtTimeRange(snapshot.startAt!, snapshot.endAt!)}';
+}
+
+/// 关系参与方的展示摘要（event 用快照，plan_block 用执行块行）。
+Future<String> _relationParticipantLabel(AgentWriteGateway gateway, String kind, String id) async {
+  if (kind == 'event') {
+    return _eventSummary(await gateway.eventSnapshot(id));
+  }
+  if (kind == 'plan_block') {
+    final block = await gateway.planBlockById(id);
+    final title = (block.title != null && block.title!.isNotEmpty) ? block.title! : '执行块';
+    return '$title / ${_fmtTimeRange(block.startAt, block.endAt)}';
+  }
+  throw const FormatException('unsupported relation kind');
+}
+
 /// 新建个人日程。
 class CreateEventTool extends AgentWriteTool {
   CreateEventTool({required super.gateway, required super.policy, required super.confirmationStore});
@@ -298,6 +343,9 @@ class PlanTaskTool extends AgentWriteTool {
     final statusValue = r.optionalEnum('status', const {'accepted', 'suggested'}) ?? 'accepted';
     final status = statusValue == 'suggested' ? PlanBlockStatus.suggested : PlanBlockStatus.accepted;
 
+    // 目标存在性 preflight：任务不存在则不产生可批准的提案。
+    final task = await gateway.taskById(taskId);
+
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -305,11 +353,12 @@ class PlanTaskTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: [
+        '目标：${task.title}',
         if (title != null && title.isNotEmpty) '标题：$title',
         '时间：$_fmtTaskRange(startAt, endAt)',
       ],
       commitParams: {'taskId': taskId, 'startAt': startAt, 'endAt': endAt, 'title': title, 'status': status},
-      safeLogSummary: '安排任务时间段 ${_fmtTaskRange(startAt, endAt)}',
+      safeLogSummary: '安排任务时间段 ${task.title}（${_fmtTaskRange(startAt, endAt)}）',
     );
   }
 
@@ -433,14 +482,22 @@ class UpdateEventTool extends AgentWriteTool {
       if (r.contains('tags')) 'tags': r.optionalStringList('tags')!,
     };
 
-    final lines = <String>[];
+    // 目标快照 preflight：账户内的目标不存在/非个人来源时不产生可批准提案。
+    final snapshot = await gateway.eventSnapshot(eventId);
+    if (!snapshot.isPersonal) {
+      throw const FormatException('source event cannot be edited with update_event');
+    }
+
+    final lines = <String>[
+      ..._eventTargetLines(snapshot),
+    ];
     if (delete) {
-      lines.add('删除该日程（软删除，可从管理页恢复）');
+      lines.add('变更：删除该日程（软删除，可从管理页恢复）');
     } else if (status != null) {
-      lines.add('状态改为：$status');
+      lines.add('变更：状态改为 $status');
     } else {
-      if (r.contains('title')) lines.add('标题：${r.requiredString('title')}');
-      if (r.contains('start_at') || r.contains('end_at')) lines.add('时间有改动');
+      if (r.contains('title')) lines.add('变更：标题改为 ${r.requiredString('title')}');
+      if (r.contains('start_at') || r.contains('end_at')) lines.add('变更：时间有改动');
       lines.add(scope == 'whole_series' ? '影响：整个重复系列' : '影响：仅本次');
     }
 
@@ -451,8 +508,10 @@ class UpdateEventTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'status': status, 'delete': delete},
-      safeLogSummary: delete ? '删除日程' : (status != null ? '修改日程状态 $status' : '修改日程'),
+      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'status': status, 'delete': delete, 'snapshot': snapshot},
+      safeLogSummary: delete
+          ? '删除日程 ${_eventSummary(snapshot)}'
+          : (status != null ? '修改日程状态 $status（${_eventSummary(snapshot)}）' : '修改日程 ${_eventSummary(snapshot)}'),
     );
   }
 
@@ -465,7 +524,7 @@ class UpdateEventTool extends AgentWriteTool {
     final status = p['status'] as String?;
     final delete = p['delete'] == true;
 
-    final identity = await gateway.eventIdentity(eventId);
+    final identity = await gateway.eventSnapshot(eventId);
     if (!identity.isPersonal) {
       return const AgentToolResult(
         status: AgentToolStatus.error,
@@ -699,7 +758,16 @@ class CreateUserOverlayTool extends AgentWriteTool {
     final displayTitle = r.contains('display_title') ? r.optionalString('display_title') : null;
     r.optionalBool('hidden');
 
-    final lines = <String>[];
+    // 目标快照 preflight：账户内目标不存在，或 course_series 无系列 → 拒绝。
+    final snapshot = await gateway.eventSnapshot(eventId);
+    if (scope == 'course_series' &&
+        (snapshot.courseSeriesId == null || snapshot.isPersonal)) {
+      throw const FormatException('event has no course series for course_series overlay');
+    }
+
+    final lines = <String>[
+      ..._eventTargetLines(snapshot),
+    ];
     if (a['attendance_policy'] != null) lines.add('出勤：${a['attendance_policy']}');
     if (a['listening_mode'] != null) lines.add('听讲：${a['listening_mode']}');
     if (lines.isEmpty && displayTitle != null) lines.add('显示名：$displayTitle');
@@ -712,8 +780,8 @@ class CreateUserOverlayTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'args': Map<String, Object?>.from(a)},
-      safeLogSummary: '设置个人标注 ${lines.join('、')}',
+      commitParams: {'eventId': eventId, 'scope': scope, 'args': Map<String, Object?>.from(a), 'snapshot': snapshot},
+      safeLogSummary: '设置个人标注 ${_eventSummary(snapshot)}｜${lines.skip(_eventTargetLines(snapshot).length).join('、')}',
     );
   }
 
@@ -785,15 +853,19 @@ class RecordAttendanceDecisionTool extends AgentWriteTool {
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
     final decision = r.requiredEnum('decision', const {'go', 'skip', 'undecided'});
+    final snapshot = await gateway.eventSnapshot(eventId);
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
       riskLevel: riskLevel,
       targetType: targetType,
       operationLabel: operationLabel,
-      previewLines: ['出勤决定：$decision'],
+      previewLines: [
+        ..._eventTargetLines(snapshot),
+        '出勤决定：$decision',
+      ],
       commitParams: {'eventId': eventId, 'decision': decision},
-      safeLogSummary: '记录出勤决定 $decision',
+      safeLogSummary: '记录出勤决定 $decision（${_eventSummary(snapshot)}）',
     );
   }
 
@@ -849,15 +921,20 @@ class RecordListeningModeTool extends AgentWriteTool {
     if (eventId == null) throw const FormatException('unknown event ref');
     final mode = r.requiredEnum('mode', const {'listen', 'not_listen'});
     final note = r.optionalString('note');
+    final snapshot = await gateway.eventSnapshot(eventId);
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
       riskLevel: riskLevel,
       targetType: targetType,
       operationLabel: operationLabel,
-      previewLines: ['听讲：$mode', if (note != null && note.isNotEmpty) '备注：$note'],
+      previewLines: [
+        ..._eventTargetLines(snapshot),
+        '听讲：$mode',
+        if (note != null && note.isNotEmpty) '备注：$note',
+      ],
       commitParams: {'eventId': eventId, 'mode': mode, 'note': note},
-      safeLogSummary: '设置听讲模式 $mode',
+      safeLogSummary: '设置听讲模式 $mode（${_eventSummary(snapshot)}）',
     );
   }
 
@@ -922,6 +999,9 @@ class CreateScheduleRelationTool extends AgentWriteTool {
     final reason = r.optionalString('reason');
     final left = _resolveRef(ctx.references, leftRef);
     final right = _resolveRef(ctx.references, rightRef);
+    // 目标存在性 preflight：两个参与方都必须存在，否则不产生可批准提案。
+    final leftLabel = await _relationParticipantLabel(gateway, left.kind, left.id);
+    final rightLabel = await _relationParticipantLabel(gateway, right.kind, right.id);
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -929,6 +1009,8 @@ class CreateScheduleRelationTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: [
+        '日程 A：$leftLabel',
+        '日程 B：$rightLabel',
         '关系：$conflictState',
         if (reason != null && reason.isNotEmpty) '理由：$reason',
       ],
@@ -938,7 +1020,7 @@ class CreateScheduleRelationTool extends AgentWriteTool {
         'conflictState': conflictState,
         'reason': reason,
       },
-      safeLogSummary: '记录日程关系 $conflictState',
+      safeLogSummary: '记录日程关系 $conflictState（$leftLabel ↔ $rightLabel）',
     );
   }
 
@@ -1000,15 +1082,23 @@ class SetReminderTool extends AgentWriteTool {
     if (raw.any((o) => o < 0)) throw const FormatException('negative offset');
     // 排序 + 去重后再提案。
     final offsets = raw.toSet().toList()..sort();
+    // 目标快照 preflight：账户内目标不存在/非个人来源 → 拒绝，不产生可批准提案。
+    final snapshot = await gateway.eventSnapshot(eventId);
+    if (!snapshot.isPersonal) {
+      throw const FormatException('only personal events can set reminders');
+    }
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
       riskLevel: riskLevel,
       targetType: targetType,
       operationLabel: operationLabel,
-      previewLines: ['开始前 $offsets 分钟提醒'],
+      previewLines: [
+        ..._eventTargetLines(snapshot),
+        '开始前 $offsets 分钟提醒',
+      ],
       commitParams: {'eventId': eventId, 'offsets': offsets},
-      safeLogSummary: '设置提醒 ${offsets.join(",")} 分钟',
+      safeLogSummary: '设置提醒 ${offsets.join(",")} 分钟（${_eventSummary(snapshot)}）',
     );
   }
 
@@ -1018,7 +1108,7 @@ class SetReminderTool extends AgentWriteTool {
     final eventId = p['eventId'] as String;
     // 提醒仅支持个人日程：课程/考试/二课等来源事件不可设提醒（与 update_event 的
     // source_event_not_editable 语义一致），避免对非个人事件产生无意义覆盖。
-    final identity = await gateway.eventIdentity(eventId);
+    final identity = await gateway.eventSnapshot(eventId);
     if (!identity.isPersonal) {
       return const AgentToolResult(
         status: AgentToolStatus.error,
@@ -1089,15 +1179,25 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
       'always_deny' => ConfirmationMode.alwaysDeny,
       _ => ConfirmationMode.alwaysAsk,
     };
+    final currentMode = await policy.effectiveMode(
+      accountId: ctx.accountId,
+      actionType: actionType,
+      targetType: targetType,
+    );
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
       riskLevel: riskLevel,
       targetType: targetType,
       operationLabel: operationLabel,
-      previewLines: ['动作：$actionType', '改为：${mode.storage}'],
+      previewLines: [
+        '目标动作：$actionType',
+        '目标类型：$targetType',
+        '当前模式：${currentMode.storage}',
+        '改为：${mode.storage}',
+      ],
       commitParams: {'actionType': actionType, 'targetType': targetType, 'mode': mode},
-      safeLogSummary: '调整确认策略 $actionType → ${mode.storage}',
+      safeLogSummary: '调整确认策略 $actionType($targetType) ${currentMode.storage} → ${mode.storage}',
       rememberAllowed: false,
       forceConfirmation: true,
     );

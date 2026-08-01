@@ -11,6 +11,7 @@ import 'package:ustc_assistant_app/features/agent/application/run_reference_stor
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
+import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
@@ -31,6 +32,16 @@ class _RecordingGateway implements AgentWriteGateway {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<TaskItem> taskById(String taskId) async => TaskItem(
+        id: taskId,
+        title: '准备考试',
+        state: TaskState.active,
+        importance: TaskImportance.normal,
+        createdAt: 1,
+        updatedAt: 1,
+      );
 
   @override
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes}) async {
@@ -79,7 +90,7 @@ class _RecordingGateway implements AgentWriteGateway {
 
 /// update_event 专用假网关：记录被调方法。
 class _UpdateGateway implements AgentWriteGateway {
-  final Map<String, EventWriteIdentity> identities = {};
+  final Map<String, EventWriteSnapshot> snapshots = {};
   final Map<String, PersonalEvent> events = {};
   String? softDeletedId;
   String? cancelledId;
@@ -94,8 +105,8 @@ class _UpdateGateway implements AgentWriteGateway {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
   @override
-  Future<EventWriteIdentity> eventIdentity(String eventId) async =>
-      identities[eventId]!;
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async =>
+      snapshots[eventId]!;
 
   @override
   Future<PersonalEvent> personalEvent(String eventId) async =>
@@ -143,9 +154,24 @@ class _OverlayGateway implements AgentWriteGateway {
   ({ListeningMode mode, String? note})? listening;
   String? seriesFor;
   String? courseSeriesResult;
+  bool personal = true;
+  String? courseSeriesId;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async =>
+      EventWriteSnapshot(
+        id: eventId,
+        source: personal ? 'user' : 'ustc_jw',
+        type: personal ? 'personal' : 'course',
+        title: '课程A',
+        allDay: false,
+        startAt: DateTime(2026, 8, 1, 9),
+        endAt: DateTime(2026, 8, 1, 10),
+        courseSeriesId: courseSeriesId,
+      );
 
   @override
   Future<void> setEventOverlay(String eventId, OverlayMutation mutation) async => eventOverlay = mutation;
@@ -168,14 +194,29 @@ class _RelationGateway implements AgentWriteGateway {
   ({String leftKind, String leftId, String rightKind, String rightId, String conflictState, String? reason})? relation;
   ({String eventId, List<int> offsets})? reminder;
   Map<String, Object?>? policyUpdate;
-  EventWriteIdentity? identity;
+  EventWriteSnapshot? identity;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
   @override
-  Future<EventWriteIdentity> eventIdentity(String eventId) async =>
-      identity ?? EventWriteIdentity(id: eventId, source: 'user', type: 'personal');
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async =>
+      identity ??
+      EventWriteSnapshot(id: eventId, source: 'user', type: 'personal',
+          title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 9), endAt: DateTime(2026, 8, 1, 10));
+
+  @override
+  Future<PlanBlockItem> planBlockById(String planBlockId) async => PlanBlockItem(
+        id: planBlockId,
+        taskId: 'task-1',
+        startAt: DateTime(2026, 8, 1, 9),
+        endAt: DateTime(2026, 8, 1, 10),
+        status: PlanBlockStatus.accepted,
+        locked: false,
+        createdAt: 1,
+        updatedAt: 1,
+      );
 
   @override
   Future<void> createConflictRelation({
@@ -359,7 +400,8 @@ void main() {
     update.attachGateway(gw);
     // 直接测 propose + commit 路径：用真实 store 走确认
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     final result = await update.execute({'ref_event': ref, 'delete': true}, h.ctx());
     expect(result.status, AgentToolStatus.needsUserAction);
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
@@ -372,7 +414,8 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     gw.events['ev-1'] = PersonalEvent.timed(
       title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     final result = await update.execute({'ref_event': ref, 'title': '健身改五点'}, h.ctx());
@@ -388,8 +431,9 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(
-      id: 'ev-1', source: 'user', type: 'personal',
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
       personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
     final result = await update.execute({'ref_event': ref, 'scope': 'only_this', 'title': '本周例会改主题'}, h.ctx());
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
@@ -403,8 +447,9 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(
-      id: 'ev-1', source: 'user', type: 'personal',
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
       personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
     gw.events['anchor:ser-1'] = PersonalEvent.timed(
       title: '例会', startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16));
@@ -420,8 +465,9 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(
-      id: 'ev-1', source: 'user', type: 'personal',
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
       personalSeriesId: 'ser-1', occurrenceKey: 'k');
     // 整系列时间变更在 commit 阶段拒绝；update_event 恒走确认，先批准再断言。
     final result = await update.execute({
@@ -441,13 +487,11 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'ustc_jw', type: 'course');
-    // 来源校验在 commit 阶段；同样先批准。
+    gw.snapshots['ev-1'] = const EventWriteSnapshot(id: 'ev-1', source: 'ustc_jw', type: 'course', title: '健身', allDay: false);
+    // 来源校验在 propose 阶段即被拒（preflight），不产生可批准提案。
     final result = await update.execute({'ref_event': ref, 'title': 'x'}, h.ctx());
-    expect(result.status, AgentToolStatus.needsUserAction);
-    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
-    expect(committed.status, AgentToolStatus.error);
-    expect(committed.errorCode, 'source_event_not_editable');
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
   });
 
   test('update_event all_day:true on a timed event without dates makes an all-day event', () async {
@@ -456,7 +500,8 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     gw.events['ev-1'] = PersonalEvent.timed(
       title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     final result = await update.execute({'ref_event': ref, 'all_day': true}, h.ctx());
@@ -472,7 +517,8 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     gw.events['ev-1'] = PersonalEvent.allDay(
       title: '全天', startDate: DateTime(2026, 8, 1), endDateExclusive: DateTime(2026, 8, 2));
     final result = await update.execute({
@@ -492,8 +538,9 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(
-      id: 'ev-1', source: 'user', type: 'personal',
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
       personalSeriesId: 'ser-1', occurrenceKey: 'k');
     final result = await update.execute({
       'ref_event': ref, 'scope': 'whole_series', 'start_date': '2026-08-06',
@@ -525,6 +572,8 @@ void main() {
     final h = _Harness(tools());
     final gw = _OverlayGateway();
     gw.courseSeriesResult = 'cs-1';
+    gw.courseSeriesId = 'cs-1';
+    gw.personal = false;
     final tool = h.tool('create_user_overlay');
     tool.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
@@ -533,11 +582,12 @@ void main() {
       'scope': 'course_series',
       'attendance_policy': 'skip',
     }, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.seriesOverlay?.attendancePolicy, AttendancePolicy.skip);
   });
 
-  test('create_user_overlay course_series without a series errors', () async {
+  test('create_user_overlay course_series without a series errors before confirmation', () async {
     final h = _Harness(tools());
     final gw = _OverlayGateway();
     final tool = h.tool('create_user_overlay');
@@ -546,8 +596,9 @@ void main() {
     final result = await tool.execute({
       'ref_event': ref, 'scope': 'course_series', 'attendance_policy': 'must_go',
     }, h.ctx());
-    // 需要确认后才 commit；commit 里解析失败返回 no_course_series
-    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    // preflight：无课程系列在 propose 阶段即被拒。
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
     expect(gw.seriesOverlay, isNull);
   });
 
@@ -686,19 +737,17 @@ void main() {
     expect(result.errorCode, 'invalid_write_arguments');
   });
 
-  test('set_reminder rejects a non-personal event', () async {
-    // 提醒仅支持个人日程：课程/考试/二课事件在 commit 阶段拒绝（findings 8）。
+  test('set_reminder rejects a non-personal event before confirmation', () async {
+    // 提醒仅支持个人日程：课程/考试/二课事件在 propose 阶段即被拒（preflight）。
     final h = _Harness(tools());
     final gw = _RelationGateway();
-    gw.identity = const EventWriteIdentity(id: 'ev-1', source: 'ustc_jw', type: 'course');
+    gw.identity = const EventWriteSnapshot(id: 'ev-1', source: 'ustc_jw', type: 'course', title: '健身', allDay: false);
     final tool = h.tool('set_reminder');
     tool.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
     final result = await tool.execute({'ref_event': ref, 'offsets_minutes': [15]}, h.ctx());
-    expect(result.status, AgentToolStatus.needsUserAction);
-    final committed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
-    expect(committed.status, AgentToolStatus.error);
-    expect(committed.errorCode, 'source_event_not_editable');
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
     expect(gw.reminder, isNull);
   });
 
@@ -803,7 +852,8 @@ void main() {
     final gw = _UpdateGateway();
     update.attachGateway(gw);
     final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
-    gw.identities['ev-1'] = const EventWriteIdentity(id: 'ev-1', source: 'user', type: 'personal');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+          startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     gw.events['ev-1'] = PersonalEvent.timed(
         title: '健身', startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
     // no-op
@@ -975,5 +1025,139 @@ void main() {
       'action_type': 'create_event', 'target_type': 'galaxy', 'confirmation_mode': 'always_ask',
     }, h.ctx());
     expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  // ========== Task 2: target previews identify the target ==========
+
+  void expectNoIdsOrRefs(AgentWriteProposal proposal, List<String> seededIds) {
+    final view = proposal.toView();
+    final lines = view.previewLines.join('\n');
+    final log = proposal.safeLogSummary;
+    for (final id in seededIds) {
+      expect(lines, isNot(contains(id)), reason: 'preview must not leak $id');
+      expect(log, isNot(contains(id)), reason: 'log must not leak $id');
+    }
+    expect(lines, isNot(contains('ref_')), reason: 'preview must not leak ref_*');
+    expect(log, isNot(contains('ref_')), reason: 'log must not leak ref_*');
+  }
+
+  test('plan_task preview identifies the task title', () async {
+    final h = _Harness(tools());
+    final taskRef = h.refs.bind(kind: 'task', localId: 'task-secret');
+    final proposal = await h.tool('plan_task').propose({
+      'ref_task': taskRef,
+      'start_at': '2026-08-03T20:00:00+08:00',
+      'end_at': '2026-08-03T21:00:00+08:00',
+    }, h.ctx());
+    expect(proposal.previewLines, contains('目标：准备考试'));
+    expectNoIdsOrRefs(proposal, ['task-secret']);
+  });
+
+  test('update_event preview identifies event title, current time and change',
+      () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-secret');
+    gw.snapshots['ev-secret'] = EventWriteSnapshot(
+      id: 'ev-secret', source: 'user', type: 'personal', title: '健身',
+      allDay: false,
+      startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16),
+      location: '健身房',
+    );
+    final proposal = await update.propose({'ref_event': ref, 'status': 'completed'}, h.ctx());
+    expect(proposal.previewLines, contains('目标：健身'));
+    expect(proposal.previewLines, contains('当前时间：2026-08-01 15:00-16:00'));
+    expect(proposal.previewLines, contains('地点：健身房'));
+    expect(proposal.previewLines, contains('变更：状态改为 completed'));
+    expectNoIdsOrRefs(proposal, ['ev-secret']);
+  });
+
+  test('create_user_overlay preview identifies the target event', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('create_user_overlay');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-secret');
+    final proposal = await tool.propose({
+      'ref_event': ref, 'attendance_policy': 'must_go', 'attendance_note': '小测',
+    }, h.ctx());
+    expect(proposal.previewLines, contains('目标：课程A'));
+    expectNoIdsOrRefs(proposal, ['ev-secret']);
+  });
+
+  test('record_attendance_decision preview identifies the target event', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_attendance_decision');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-secret');
+    final proposal = await tool.propose({'ref_event': ref, 'decision': 'go'}, h.ctx());
+    expect(proposal.previewLines, contains('目标：课程A'));
+    expect(proposal.previewLines, contains('出勤决定：go'));
+    expectNoIdsOrRefs(proposal, ['ev-secret']);
+  });
+
+  test('record_listening_mode preview identifies the target event', () async {
+    final h = _Harness(tools());
+    final gw = _OverlayGateway();
+    final tool = h.tool('record_listening_mode');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-secret');
+    final proposal = await tool.propose({
+      'ref_event': ref, 'mode': 'not_listen', 'note': '适合写作业',
+    }, h.ctx());
+    expect(proposal.previewLines, contains('目标：课程A'));
+    expect(proposal.previewLines, contains('听讲：not_listen'));
+    expectNoIdsOrRefs(proposal, ['ev-secret']);
+  });
+
+  test('set_reminder preview identifies the target event', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('set_reminder');
+    tool.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-secret');
+    final proposal = await tool.propose({'ref_event': ref, 'offsets_minutes': [15]}, h.ctx());
+    expect(proposal.previewLines, contains('目标：健身'));
+    expect(proposal.previewLines, contains('开始前 [15] 分钟提醒'));
+    expectNoIdsOrRefs(proposal, ['ev-secret']);
+  });
+
+  test('create_schedule_relation preview identifies both participants', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('create_schedule_relation');
+    tool.attachGateway(gw);
+    final left = h.refs.bind(kind: 'event', localId: 'ev-left');
+    final right = h.refs.bind(kind: 'event', localId: 'ev-right');
+    final proposal = await tool.propose({
+      'ref_left': left,
+      'ref_right': right,
+      'conflict_state': 'conflict',
+      'reason': '重叠',
+    }, h.ctx());
+    expect(proposal.previewLines, contains('日程 A：健身 / 2026-08-01 09:00-10:00'));
+    expect(proposal.previewLines, contains('日程 B：健身 / 2026-08-01 09:00-10:00'));
+    expect(proposal.previewLines, contains('关系：conflict'));
+    expectNoIdsOrRefs(proposal, ['ev-left', 'ev-right']);
+  });
+
+  test('update_permission_policy preview shows target action/type/modes', () async {
+    final h = _Harness(tools());
+    final gw = _RelationGateway();
+    final tool = h.tool('update_permission_policy');
+    tool.attachGateway(gw);
+    final proposal = await tool.propose({
+      'action_type': 'create_event',
+      'target_type': 'event',
+      'confirmation_mode': 'always_allow',
+    }, h.ctx());
+    expect(proposal.previewLines, contains('目标动作：create_event'));
+    expect(proposal.previewLines, contains('目标类型：event'));
+    expect(proposal.previewLines, contains('当前模式：ask_first_time'));
+    expect(proposal.previewLines, contains('改为：always_allow'));
+    expectNoIdsOrRefs(proposal, const []);
   });
 }

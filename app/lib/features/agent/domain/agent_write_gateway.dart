@@ -6,21 +6,38 @@ import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import 'agent_permission_policy.dart';
 
-/// 一个事件的写身份（是否个人、是否重复系列、occurrence 位置）。
-class EventWriteIdentity {
-  const EventWriteIdentity({
+/// 一个事件在提案/确认阶段的不可变快照：身份 + 面向用户展示的
+/// title/时间/地点。DB 行 id 只进入 [commitParams]，永不进入预览/日志文本。
+final class EventWriteSnapshot {
+  const EventWriteSnapshot({
     required this.id,
     required this.source,
     required this.type,
+    required this.title,
+    required this.allDay,
+    this.startAt,
+    this.endAt,
+    this.startDate,
+    this.endDateExclusive,
+    this.location,
     this.personalSeriesId,
     this.occurrenceKey,
+    this.courseSeriesId,
   });
 
   final String id;
   final String source;
   final String type;
+  final String title;
+  final bool allDay;
+  final DateTime? startAt;
+  final DateTime? endAt;
+  final DateTime? startDate;
+  final DateTime? endDateExclusive;
+  final String? location;
   final String? personalSeriesId;
   final String? occurrenceKey;
+  final String? courseSeriesId;
 
   bool get isPersonal => source == 'user';
   bool get isRecurring => personalSeriesId != null && occurrenceKey != null;
@@ -52,7 +69,7 @@ abstract interface class AgentWriteGateway {
   Future<void> recordListeningMode(String eventId, ListeningMode mode, {String? note});
   Future<void> createConflictRelation({required String leftKind, required String leftId, required String rightKind, required String rightId, required String conflictState, String? reason});
   Future<void> setReminder(String eventId, List<int> offsetsMinutes);
-  Future<EventWriteIdentity> eventIdentity(String eventId);
+  Future<EventWriteSnapshot> eventSnapshot(String eventId);
   Future<PersonalEvent> personalEvent(String eventId);
   Future<String?> courseSeriesIdForEvent(String eventId);
   Future<TaskItem> taskById(String taskId);
