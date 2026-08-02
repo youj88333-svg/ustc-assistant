@@ -1077,6 +1077,47 @@ void main() {
       );
     });
 
+    test('undo restores a plan block relation from a non-null before snapshot',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      final undo = UndoService(database: database, accountId: 'a');
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        undoRecorder: undo,
+      );
+      final event = participant('event-a', 'series-a');
+      final block = planBlockParticipant('pb-1');
+      // First classify conflict (row with plan-block FKs).
+      await service.classifyPair(event, block, ConflictState.conflict);
+      // Update the same canonical pair → the undo snapshot carries the prior
+      // conflict row (non-null `before`).
+      await service.classifyPair(event, block, ConflictState.nonConflict);
+      expect(
+        (await database.select(database.scheduleRelations).getSingle())
+            .conflictState,
+        'no_conflict',
+      );
+
+      await undo.undo();
+
+      // The prior conflict row must be restored with its plan-block FK intact
+      // (and satisfy the CHECK constraint), not a nulled-out row.
+      final restored =
+          await database.select(database.scheduleRelations).getSingle();
+      expect(restored.conflictState, 'conflict');
+      expect(restored.leftKind, 'event');
+      expect(restored.leftId, 'event-a');
+      expect(restored.leftEventId, 'event-a');
+      expect(restored.leftPlanBlockId, isNull);
+      expect(restored.rightKind, 'plan_block');
+      expect(restored.rightId, 'pb-1');
+      expect(restored.rightEventId, isNull);
+      expect(restored.rightPlanBlockId, 'pb-1');
+    });
+
     test('distinct kinds never collapse: event/plan_block vs event/event differ',
         () async {
       final database = await fixtureDatabase();
