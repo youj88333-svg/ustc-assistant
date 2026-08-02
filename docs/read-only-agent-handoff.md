@@ -9,8 +9,15 @@ Tasks 1–9（grounding Policy + tool_choice、文本过滤 + 指纹、get_sched
 本地 chip 分区路由、PlanBlock 周网格、默认冲突推导、JwDayMove schema 4→5 与服务、
 手动整日调课 UI、move_jw_course_day 工具 + prompt v4）与 Task 10 收尾（合并验收
 回归 + 全量验证 + 文档同步）均在 `feature/write-tools` 分支提交；Task 10 最终
-验证的精确 HEAD 与完整结果见第 7.2 节。**尚未合并到 `main`**，合并时机由
-finishing-a-development-branch 流程决定。
+验证见第 7.2 节。
+
+**审查修复轮（2026-08-02-agent-manual-acceptance-review-repairs）已全部完成**：
+修复实现审查中发现的四类缺陷——(1) 写工具失败后仍保留模型虚假成功文本、(2)
+Grounding 意图误判（礼貌查询被 free-chat 吞掉、整日移动/plan_task 误归类）、
+(3) `tool_choice` 兼容回退吞掉真实上游错误、(4) 冲突投影随本地历史增长产生
+重复全量二次复杂度计算。其最终精确 HEAD 与完整验证结果见第 7.3 节。**尚未合并到
+`main`**，合并时机由 finishing-a-development-branch 流程决定；真实学校模型/API
+人工验收尚未执行（见第 7.3 节“真实人工验收待办”）。
 
 修复内容概要：
 
@@ -403,6 +410,11 @@ API Key 环境下按 `docs/acceptance/read-only-agent.md` 第 10 节手动执行
 
 ## 7.2 人工验收修复里程碑验证（feature/write-tools，2026-08-02）
 
+> **注意**：本节记录的是 2026-08-01 人工验收修复里程碑（Tasks 1–10）在 HEAD
+> `69c7608` 工作树上的验证快照，**不是当前分支最新状态**。随后又完成了
+> 2026-08-02 审查修复轮（Tasks 1–5，HEAD `bc1a69b`），其最终精确 HEAD 与最新
+> 测试计数见第 7.3 节。以第 7.3 节为准。
+
 人工验收修复里程碑（Tasks 1–10）在 `feature/write-tools` 分支上推进。Task 10 完整
 自动验证运行在 HEAD `69c7608`（`feat(agent): add critical whole-day course moves`，
 Task 9）之上的工作树（含 Task 10 未提交的合并验收回归与本文档同步）；Task 10 收尾
@@ -466,6 +478,109 @@ git status --short : 仅本任务测试/文档文件 + 受保护生成文件 + �
 `docs/agent-manual-acceptance-retest-2026-08-01.md` 执行；自动测试 ≠ 人工验收。
 `docs/agent-testing.md` 与 `docs/agent-manual-acceptance-retest-2026-08-01.md`
 是未跟踪用户文件，未修改、未暂存、未提交。
+
+## 7.3 审查修复轮验证（feature/write-tools，2026-08-02）
+
+审查修复里程碑（2026-08-02-agent-manual-acceptance-review-repairs，Tasks 1–5）在
+`feature/write-tools` 分支上推进，修正实现审查（handoff
+`docs/agent-manual-acceptance-review-handoff-2026-08-02.md`）发现的四类缺陷。完整
+自动验证运行在最终 HEAD `bc1a69b`（`test(agent): close review repair regressions`）。
+后续若再提交，需重跑本节命令并刷新 HEAD 与测试计数。
+
+提交序列（基线 `d789283` → HEAD `bc1a69b`，共 6 提交）：
+
+```text
+8db72b4  fix(agent): ground mutation results on terminal outcomes     Task 1
+bdc899c  fix(agent): narrow grounding intent classification           Task 2
+debaeb1  fix(agent): bound tool choice compatibility fallback         Task 3
+1ad6790  perf(schedule): bound conflict projection to query ranges    Task 4
+80b9508  fix(schedule): preserve explicit cross-window conflicts      Task 4 fix wave
+bc1a69b  test(agent): close review repair regressions                 Task 5
+```
+
+每 Task 均经独立审查（spec compliance + code quality）通过；Task 4 修复波经 scoped
+重审通过（补齐 `get_conflicts` 对跨窗口显式冲突的 under-report）。整分支最终独立审查
+无 MUST-FIX / Important。
+
+修复内容概要：
+
+- **Task 1 终端写结果权威化**：`agent_session_service.dart` 以结构化 `_TerminalMutationAttempt`
+  记录写工具结果，非 success 的 terminal write（`user_declined`/`permission_denied`/
+  `target_not_found`/`invalid_write_arguments`/`write_commit_failed`/`cancelled`）覆盖模型
+  文本为本地固定“没有修改数据”说明、运行以非 success 结束、不再重试该写工具；成功则
+  保留模型完成话术。判断只看 `AgentToolResult.status`，不看模型措辞。
+- **Task 2 Grounding 意图精确化**：删除全局否决词 `能不能`/`帮我看看`/`解释`，改为有序
+  窄守卫（硬 no-tool → 结构清晰的能力/建议 → 高置信写 → 高置信读 → null）；`move_jw_course_day`
+  必须同时有日期语境与集合语义（当天/整日/全部/所有/调休），裸 `课程` 不再是集合标记；
+  `plan_task` 必须出现任务实体，删除裸 `给.*安排`；通用“安排日程”归 `create_event`。
+  `create_schedule_relation` 采用 `allOfLookupTools` + `anyOfLookupToolGroups`，事件-事件
+  关系不强制 `get_plan_blocks`，PlanBlock 关系不强制 `get_schedule`。
+- **Task 3 兼容回退限定**：forced-`any` 的回退仅对 `protocol_error` 生效（
+  `_isForcedChoiceCompatibilityError`），且要求尚未回退、错误发生在内容前、run 未取消；
+  `auth_failed`/限流/传输/服务器/流中断错误保留原错误结束，绝不做 auto 回退，无无限调用。
+- **Task 4 冲突投影范围界定**：`watchDisplayEvents()` 只加载 effective events、不再做全局
+  O(n²) 投影；周视图与 Agent 工具改为对消费范围内 events + 有效 PlanBlocks 做一次有界投影
+  （`conflictsForItems` / `resolveCandidates`：timed overlap 活动窗口 sweep + 显式关系 +
+  series 成员，只为可能冲突/被显式覆盖的候选生成 pair，不为无关历史构造 noConflict）；
+  `get_free_time` 不触发冲突投影。`get_conflicts`/`get_schedule` 通过
+  `includeExplicitOutOfWindow` 保留跨窗口显式冲突（不 under-report），周视图保持仅选中周。
+  语义不变：overlap 默认冲突、occurrence no_conflict 覆盖、非重叠显式 conflict 成立、
+  series 生效窗口、账号隔离、全天不自动冲突。
+- **Task 5 组合回归**：修正 Task-1 遗留的 declined 写测试（改为非 success + “没有修改数据”）；
+  新增 5 个贯通场景（礼貌查询漏调一次纠错、失败写+虚假成功不在业务表产生行、forced-any
+  auth 错误不回退、单课程移动 vs 整日集合路由、多学期历史只投影当前结果集）。
+
+本轮（最终 HEAD `bc1a69b`）实测完整自动验证（2026-08-02，worktree
+`E:/107/.worktrees/write-tools`；Python 用 PowerShell 运行，`PYTHONPATH` 指向
+worktree 的 `src`）：
+
+```text
+Python unittest discover -s tests -v   : Ran 394 tests, OK
+Python compileall -q src tests          : exit 0
+Flutter analyze (whole app)             : No issues found
+Flutter test (whole suite)              : 824 passed
+Flutter build windows --release         : Built build\windows\x64\runner\Release\ustc_assistant_app.exe
+git diff --check                        : 干净（仅生成的 Windows 文件 CRLF 提示）
+```
+
+Agent / 日程聚焦套件（8 文件组合回归）：
+
+```text
+Flutter test
+  test/features/agent/agent_grounding_policy_test.dart
+  test/features/agent/agent_session_service_test.dart
+  test/features/agent/anthropic_llm_provider_test.dart
+  test/features/agent/local_agent_tools_test.dart
+  test/features/schedule/overlay_conflict_test.dart
+  test/features/schedule/schedule_page_test.dart
+  test/integration/agent_composition_flow_test.dart
+  test/integration/read_only_agent_flow_test.dart : 226 passed
+```
+
+安全/配置扫描（Task 5 Step 3）：
+
+```text
+rg semesterId/2026spring/2026fall app/lib/features/{agent,schedule} : 无匹配
+    （生产代码无硬编码学期；仅 config/source-defaults.json 保持 461 / 2026fall，未改动）
+git diff --check   : 干净
+git status --short : 仅 3 个受保护 Windows 生成文件 + 4 个未跟踪用户文档
+```
+
+**真实人工验收待办（尚未执行）**：真实 Release、学校 Anthropic 兼容 API Key 与
+校园网 / Panabit iWAN 下需由主人复测（见 `docs/agent-manual-acceptance-retest-2026-08-01.md`
+与计划“Manual Retest Focus”）：
+
+1. “能不能帮我看看明天有什么课？”会真实查询，而“你能不能修改日程？”仍可自由回答；
+2. 拒绝确认、权限拒绝、目标消失和本地提交失败时，聊天绝不显示“已完成”；
+3. 学校 Anthropic 网关支持与不支持 `tool_choice=any` 的真实行为；
+4. 单课程调整与“某天全部教务课程移动”不会互相误路由；
+5. 保留多个学期历史后切换周视图，页面响应与冲突图标正常；
+6. 原验收文档中仍未通过或空白的项目继续复测；Python 校园目录迁移项（
+   `docs/agent-testing.md` 第 13-15 项）不在本轮伪修复，仍等待 Flutter 来源迁移。
+
+自动测试全绿 ≠ 上述人工验收通过。`docs/agent-testing.md` 与
+`docs/agent-manual-acceptance-retest-2026-08-01.md` 是未跟踪用户文件，未修改、
+未暂存、未提交。
 
 ## 8. 已知文档边界
 
