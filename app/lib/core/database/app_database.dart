@@ -66,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
@@ -118,6 +118,15 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 5) {
         await migrator.createTable(jwDayMoves);
+      }
+      // Schema six adds tool_invocations.error_code. The `from >= 3` guard is
+      // required: when upgrading from a pre-v3 schema, the `from < 3` branch
+      // above creates tool_invocations with the CURRENT (v6) definition, which
+      // already includes error_code -- so addColumn would duplicate it. Only
+      // databases where tool_invocations existed since v3 as the v5 definition
+      // (from = 3, 4, 5) need the new column added.
+      if (from >= 3 && from < 6) {
+        await migrator.addColumn(toolInvocations, toolInvocations.errorCode);
       }
     },
     beforeOpen: (details) async {

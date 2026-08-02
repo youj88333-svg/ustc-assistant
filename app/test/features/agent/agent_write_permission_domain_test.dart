@@ -74,6 +74,30 @@ void main() {
         policy TEXT NOT NULL,
         updated_at INTEGER NOT NULL
       );
+      CREATE TABLE agent_runs (
+        id TEXT NOT NULL PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_code TEXT,
+        input_tokens INTEGER,
+        output_tokens INTEGER,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        UNIQUE(id, account_id)
+      );
+      CREATE TABLE tool_invocations (
+        id TEXT NOT NULL PRIMARY KEY,
+        account_id TEXT NOT NULL,
+        run_id TEXT NOT NULL,
+        tool_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        safe_arguments_summary TEXT NOT NULL,
+        safe_result_summary TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        finished_at INTEGER,
+        FOREIGN KEY (run_id, account_id) REFERENCES agent_runs(id, account_id) ON DELETE CASCADE
+      );
       PRAGMA user_version = 3;
     ''');
     legacy.close();

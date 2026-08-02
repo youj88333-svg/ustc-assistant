@@ -708,4 +708,300 @@ void main() {
       expect(recent.last.content, 'partial answer');
     },
   );
+
+  test(
+    'startToolInvocation inserts a running invocation for an owned run',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final invocationId = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'title=物理',
+      );
+      expect(invocationId, isNotEmpty);
+      final row = await database.select(database.toolInvocations).getSingle();
+      expect(row.id, invocationId);
+      expect(row.accountId, 'a');
+      expect(row.runId, runId);
+      expect(row.toolName, 'get_schedule');
+      expect(row.status, ToolInvocationLifecycleState.running.storageName);
+      expect(row.safeArgumentsSummary, 'title=物理');
+      expect(row.finishedAt, null);
+    },
+  );
+
+  test(
+    'startToolInvocation rejects a run owned by a different account',
+    () async {
+      final runA = await repository.startRun(accountId: 'a', model: 'm');
+      await expectLater(
+        repository.startToolInvocation(
+          accountId: 'b',
+          runId: runA,
+          toolName: 'get_schedule',
+          safeArgumentsSummary: 'title=物理',
+        ),
+        throwsA(isA<RunOwnershipException>()),
+      );
+      expect(await database.select(database.toolInvocations).get(), isEmpty);
+    },
+  );
+
+  test(
+    'markToolInvocationWaiting moves running to waiting_user and never sets finishedAt',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final invocationId = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.markToolInvocationWaiting(
+        accountId: 'a',
+        invocationId: invocationId,
+      );
+      final row = await database.select(database.toolInvocations).getSingle();
+      expect(
+        row.status,
+        ToolInvocationLifecycleState.waitingUser.storageName,
+      );
+      expect(row.finishedAt, null);
+    },
+  );
+
+  test('finishToolInvocation finalizes to success with a result', () async {
+    final runId = await repository.startRun(accountId: 'a', model: 'm');
+    final invocationId = await repository.startToolInvocation(
+      accountId: 'a',
+      runId: runId,
+      toolName: 'get_schedule',
+      safeArgumentsSummary: 'args',
+    );
+    await repository.finishToolInvocation(
+      accountId: 'a',
+      invocationId: invocationId,
+      state: ToolInvocationLifecycleState.success,
+      safeResultSummary: 'rows=3',
+    );
+    final row = await database.select(database.toolInvocations).getSingle();
+    expect(row.status, ToolInvocationLifecycleState.success.storageName);
+    expect(row.safeResultSummary, 'rows=3');
+    expect(row.errorCode, null);
+    expect(row.finishedAt, isNot(null));
+  });
+
+  test('finishToolInvocation finalizes to error with a safe error code', () async {
+    final runId = await repository.startRun(accountId: 'a', model: 'm');
+    final invocationId = await repository.startToolInvocation(
+      accountId: 'a',
+      runId: runId,
+      toolName: 'get_schedule',
+      safeArgumentsSummary: 'args',
+    );
+    await repository.finishToolInvocation(
+      accountId: 'a',
+      invocationId: invocationId,
+      state: ToolInvocationLifecycleState.error,
+      safeResultSummary: '',
+      errorCode: 'schedule_summary_required',
+    );
+    final row = await database.select(database.toolInvocations).getSingle();
+    expect(row.status, ToolInvocationLifecycleState.error.storageName);
+    expect(row.errorCode, 'schedule_summary_required');
+    expect(row.finishedAt, isNot(null));
+  });
+
+  test(
+    'finishToolInvocation rejects a cross-account invocation and keeps it running',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final invocationId = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      await expectLater(
+        repository.finishToolInvocation(
+          accountId: 'b',
+          invocationId: invocationId,
+          state: ToolInvocationLifecycleState.success,
+          safeResultSummary: 'x',
+        ),
+        throwsA(isA<RunOwnershipException>()),
+      );
+      final row = await database.select(database.toolInvocations).getSingle();
+      expect(
+        row.status,
+        ToolInvocationLifecycleState.running.storageName,
+      );
+      expect(row.finishedAt, null);
+    },
+  );
+
+  test(
+    'finishToolInvocation ignores an already-terminal invocation and keeps its fields',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final invocationId = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.finishToolInvocation(
+        accountId: 'a',
+        invocationId: invocationId,
+        state: ToolInvocationLifecycleState.success,
+        safeResultSummary: 'rows=1',
+      );
+      // A second finalize attempt with different values must be a no-op.
+      await repository.finishToolInvocation(
+        accountId: 'a',
+        invocationId: invocationId,
+        state: ToolInvocationLifecycleState.error,
+        safeResultSummary: '',
+        errorCode: 'late_error',
+      );
+      final row = await database.select(database.toolInvocations).getSingle();
+      expect(row.status, ToolInvocationLifecycleState.success.storageName);
+      expect(row.safeResultSummary, 'rows=1');
+      expect(row.errorCode, null);
+    },
+  );
+
+  test(
+    'toolInvocationsForRuns loads only owned runs, ordered by startedAt',
+    () async {
+      final runA = await repository.startRun(accountId: 'a', model: 'm');
+      final runB = await repository.startRun(accountId: 'a', model: 'm');
+      final runC = await repository.startRun(accountId: 'b', model: 'm');
+      final invA = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runA,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      final invB = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runB,
+        toolName: 'get_plan_blocks',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.startToolInvocation(
+        accountId: 'b',
+        runId: runC,
+        toolName: 'get_plan_blocks',
+        safeArgumentsSummary: 'args',
+      );
+
+      final rows = await repository.toolInvocationsForRuns(
+        accountId: 'a',
+        runIds: {runA, runB},
+      );
+
+      expect(rows, hasLength(2));
+      final names = rows.map((r) => r.toolName).toList();
+      expect(names, containsAll(['get_schedule', 'get_plan_blocks']));
+      // Account B's invocation must not leak into account A's query.
+      expect(rows.any((r) => r.id == invA || r.id == invB), isTrue);
+      expect(
+        rows.any((r) => r.id == invA && r.runId == runA),
+        isTrue,
+      );
+    },
+  );
+
+  test(
+    'toolInvocationsForRuns orders rows by startedAt ascending',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final first = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_plan_blocks',
+        safeArgumentsSummary: 'args',
+      );
+      final rows = await repository.toolInvocationsForRuns(
+        accountId: 'a',
+        runIds: {runId},
+      );
+      expect(rows, hasLength(2));
+      expect(rows.first.id, first);
+      expect(rows.first.startedAt <= rows.last.startedAt, isTrue);
+    },
+  );
+
+  test(
+    'recoverInterrupted flips both running and waiting_user invocations to interrupted',
+    () async {
+      final runId = await repository.startRun(accountId: 'a', model: 'm');
+      final running = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      final waiting = await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runId,
+        toolName: 'get_plan_blocks',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.markToolInvocationWaiting(
+        accountId: 'a',
+        invocationId: waiting,
+      );
+
+      await repository.recoverInterrupted();
+
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows, hasLength(2));
+      final byId = {for (final r in rows) r.id: r};
+      expect(
+        byId[running]!.status,
+        ToolInvocationLifecycleState.interrupted.storageName,
+      );
+      expect(
+        byId[waiting]!.status,
+        ToolInvocationLifecycleState.interrupted.storageName,
+      );
+      expect(byId[running]!.finishedAt, isNot(null));
+      expect(byId[waiting]!.finishedAt, isNot(null));
+    },
+  );
+
+  test(
+    'clearConversation removes tool invocations only for the targeted account',
+    () async {
+      final runA = await repository.startRun(accountId: 'a', model: 'm');
+      final runB = await repository.startRun(accountId: 'b', model: 'm');
+      await repository.startToolInvocation(
+        accountId: 'a',
+        runId: runA,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+      await repository.startToolInvocation(
+        accountId: 'b',
+        runId: runB,
+        toolName: 'get_schedule',
+        safeArgumentsSummary: 'args',
+      );
+
+      await repository.clearConversation('a');
+
+      final remaining = await database.select(database.toolInvocations).get();
+      expect(remaining, hasLength(1));
+      expect(remaining.single.accountId, 'b');
+    },
+  );
 }

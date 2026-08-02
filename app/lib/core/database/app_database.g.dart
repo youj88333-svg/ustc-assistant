@@ -6828,6 +6828,17 @@ class $ToolInvocationsTable extends ToolInvocations
     type: DriftSqlType.int,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _errorCodeMeta = const VerificationMeta(
+    'errorCode',
+  );
+  @override
+  late final GeneratedColumn<String> errorCode = GeneratedColumn<String>(
+    'error_code',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -6839,6 +6850,7 @@ class $ToolInvocationsTable extends ToolInvocations
     safeResultSummary,
     startedAt,
     finishedAt,
+    errorCode,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -6925,6 +6937,12 @@ class $ToolInvocationsTable extends ToolInvocations
         finishedAt.isAcceptableOrUnknown(data['finished_at']!, _finishedAtMeta),
       );
     }
+    if (data.containsKey('error_code')) {
+      context.handle(
+        _errorCodeMeta,
+        errorCode.isAcceptableOrUnknown(data['error_code']!, _errorCodeMeta),
+      );
+    }
     return context;
   }
 
@@ -6970,6 +6988,10 @@ class $ToolInvocationsTable extends ToolInvocations
         DriftSqlType.int,
         data['${effectivePrefix}finished_at'],
       ),
+      errorCode: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}error_code'],
+      ),
     );
   }
 
@@ -6989,6 +7011,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
   final String safeResultSummary;
   final int startedAt;
   final int? finishedAt;
+  final String? errorCode;
   const ToolInvocation({
     required this.id,
     required this.accountId,
@@ -6999,6 +7022,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
     required this.safeResultSummary,
     required this.startedAt,
     this.finishedAt,
+    this.errorCode,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -7013,6 +7037,9 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
     map['started_at'] = Variable<int>(startedAt);
     if (!nullToAbsent || finishedAt != null) {
       map['finished_at'] = Variable<int>(finishedAt);
+    }
+    if (!nullToAbsent || errorCode != null) {
+      map['error_code'] = Variable<String>(errorCode);
     }
     return map;
   }
@@ -7030,6 +7057,9 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
       finishedAt: finishedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(finishedAt),
+      errorCode: errorCode == null && nullToAbsent
+          ? const Value.absent()
+          : Value(errorCode),
     );
   }
 
@@ -7050,6 +7080,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
       safeResultSummary: serializer.fromJson<String>(json['safeResultSummary']),
       startedAt: serializer.fromJson<int>(json['startedAt']),
       finishedAt: serializer.fromJson<int?>(json['finishedAt']),
+      errorCode: serializer.fromJson<String?>(json['errorCode']),
     );
   }
   @override
@@ -7065,6 +7096,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
       'safeResultSummary': serializer.toJson<String>(safeResultSummary),
       'startedAt': serializer.toJson<int>(startedAt),
       'finishedAt': serializer.toJson<int?>(finishedAt),
+      'errorCode': serializer.toJson<String?>(errorCode),
     };
   }
 
@@ -7078,6 +7110,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
     String? safeResultSummary,
     int? startedAt,
     Value<int?> finishedAt = const Value.absent(),
+    Value<String?> errorCode = const Value.absent(),
   }) => ToolInvocation(
     id: id ?? this.id,
     accountId: accountId ?? this.accountId,
@@ -7088,6 +7121,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
     safeResultSummary: safeResultSummary ?? this.safeResultSummary,
     startedAt: startedAt ?? this.startedAt,
     finishedAt: finishedAt.present ? finishedAt.value : this.finishedAt,
+    errorCode: errorCode.present ? errorCode.value : this.errorCode,
   );
   ToolInvocation copyWithCompanion(ToolInvocationsCompanion data) {
     return ToolInvocation(
@@ -7106,6 +7140,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
       finishedAt: data.finishedAt.present
           ? data.finishedAt.value
           : this.finishedAt,
+      errorCode: data.errorCode.present ? data.errorCode.value : this.errorCode,
     );
   }
 
@@ -7120,7 +7155,8 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
           ..write('safeArgumentsSummary: $safeArgumentsSummary, ')
           ..write('safeResultSummary: $safeResultSummary, ')
           ..write('startedAt: $startedAt, ')
-          ..write('finishedAt: $finishedAt')
+          ..write('finishedAt: $finishedAt, ')
+          ..write('errorCode: $errorCode')
           ..write(')'))
         .toString();
   }
@@ -7136,6 +7172,7 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
     safeResultSummary,
     startedAt,
     finishedAt,
+    errorCode,
   );
   @override
   bool operator ==(Object other) =>
@@ -7149,7 +7186,8 @@ class ToolInvocation extends DataClass implements Insertable<ToolInvocation> {
           other.safeArgumentsSummary == this.safeArgumentsSummary &&
           other.safeResultSummary == this.safeResultSummary &&
           other.startedAt == this.startedAt &&
-          other.finishedAt == this.finishedAt);
+          other.finishedAt == this.finishedAt &&
+          other.errorCode == this.errorCode);
 }
 
 class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
@@ -7162,6 +7200,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
   final Value<String> safeResultSummary;
   final Value<int> startedAt;
   final Value<int?> finishedAt;
+  final Value<String?> errorCode;
   final Value<int> rowid;
   const ToolInvocationsCompanion({
     this.id = const Value.absent(),
@@ -7173,6 +7212,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
     this.safeResultSummary = const Value.absent(),
     this.startedAt = const Value.absent(),
     this.finishedAt = const Value.absent(),
+    this.errorCode = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ToolInvocationsCompanion.insert({
@@ -7185,6 +7225,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
     required String safeResultSummary,
     required int startedAt,
     this.finishedAt = const Value.absent(),
+    this.errorCode = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        accountId = Value(accountId),
@@ -7204,6 +7245,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
     Expression<String>? safeResultSummary,
     Expression<int>? startedAt,
     Expression<int>? finishedAt,
+    Expression<String>? errorCode,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -7217,6 +7259,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
       if (safeResultSummary != null) 'safe_result_summary': safeResultSummary,
       if (startedAt != null) 'started_at': startedAt,
       if (finishedAt != null) 'finished_at': finishedAt,
+      if (errorCode != null) 'error_code': errorCode,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -7231,6 +7274,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
     Value<String>? safeResultSummary,
     Value<int>? startedAt,
     Value<int?>? finishedAt,
+    Value<String?>? errorCode,
     Value<int>? rowid,
   }) {
     return ToolInvocationsCompanion(
@@ -7243,6 +7287,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
       safeResultSummary: safeResultSummary ?? this.safeResultSummary,
       startedAt: startedAt ?? this.startedAt,
       finishedAt: finishedAt ?? this.finishedAt,
+      errorCode: errorCode ?? this.errorCode,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -7279,6 +7324,9 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
     if (finishedAt.present) {
       map['finished_at'] = Variable<int>(finishedAt.value);
     }
+    if (errorCode.present) {
+      map['error_code'] = Variable<String>(errorCode.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -7297,6 +7345,7 @@ class ToolInvocationsCompanion extends UpdateCompanion<ToolInvocation> {
           ..write('safeResultSummary: $safeResultSummary, ')
           ..write('startedAt: $startedAt, ')
           ..write('finishedAt: $finishedAt, ')
+          ..write('errorCode: $errorCode, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -27044,6 +27093,7 @@ typedef $$ToolInvocationsTableCreateCompanionBuilder =
       required String safeResultSummary,
       required int startedAt,
       Value<int?> finishedAt,
+      Value<String?> errorCode,
       Value<int> rowid,
     });
 typedef $$ToolInvocationsTableUpdateCompanionBuilder =
@@ -27057,6 +27107,7 @@ typedef $$ToolInvocationsTableUpdateCompanionBuilder =
       Value<String> safeResultSummary,
       Value<int> startedAt,
       Value<int?> finishedAt,
+      Value<String?> errorCode,
       Value<int> rowid,
     });
 
@@ -27137,6 +27188,11 @@ class $$ToolInvocationsTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get errorCode => $composableBuilder(
+    column: $table.errorCode,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$LocalAccountsTableFilterComposer get accountId {
     final $$LocalAccountsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -27210,6 +27266,11 @@ class $$ToolInvocationsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get errorCode => $composableBuilder(
+    column: $table.errorCode,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$LocalAccountsTableOrderingComposer get accountId {
     final $$LocalAccountsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -27272,6 +27333,9 @@ class $$ToolInvocationsTableAnnotationComposer
     column: $table.finishedAt,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get errorCode =>
+      $composableBuilder(column: $table.errorCode, builder: (column) => column);
 
   $$LocalAccountsTableAnnotationComposer get accountId {
     final $$LocalAccountsTableAnnotationComposer composer = $composerBuilder(
@@ -27336,6 +27400,7 @@ class $$ToolInvocationsTableTableManager
                 Value<String> safeResultSummary = const Value.absent(),
                 Value<int> startedAt = const Value.absent(),
                 Value<int?> finishedAt = const Value.absent(),
+                Value<String?> errorCode = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ToolInvocationsCompanion(
                 id: id,
@@ -27347,6 +27412,7 @@ class $$ToolInvocationsTableTableManager
                 safeResultSummary: safeResultSummary,
                 startedAt: startedAt,
                 finishedAt: finishedAt,
+                errorCode: errorCode,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -27360,6 +27426,7 @@ class $$ToolInvocationsTableTableManager
                 required String safeResultSummary,
                 required int startedAt,
                 Value<int?> finishedAt = const Value.absent(),
+                Value<String?> errorCode = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ToolInvocationsCompanion.insert(
                 id: id,
@@ -27371,6 +27438,7 @@ class $$ToolInvocationsTableTableManager
                 safeResultSummary: safeResultSummary,
                 startedAt: startedAt,
                 finishedAt: finishedAt,
+                errorCode: errorCode,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

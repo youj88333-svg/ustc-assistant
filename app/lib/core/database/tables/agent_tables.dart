@@ -115,6 +115,10 @@ class ToolInvocations extends Table {
   TextColumn get safeResultSummary => text()();
   IntColumn get startedAt => integer()();
   IntColumn get finishedAt => integer().nullable()();
+  // Schema six: a safe, non-secret error code (e.g. `schedule_summary_required`)
+  // recorded when a terminal tool invocation ends in the `error` state. Never
+  // stores API keys, cookies, tokens, account ids or full bodies.
+  TextColumn get errorCode => text().nullable()();
 
   @override
   String get tableName => 'tool_invocations';

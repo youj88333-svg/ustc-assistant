@@ -8,11 +8,11 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 
 void main() {
   test(
-    'schema version five creates the complete constrained database',
+    'schema version six creates the complete constrained database',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      expect(database.schemaVersion, 5);
+      expect(database.schemaVersion, 6);
       final foreignKeys = await database
           .customSelect('PRAGMA foreign_keys')
           .getSingle();
@@ -86,6 +86,17 @@ void main() {
           'updated_at',
         }),
       );
+      // Schema six adds a nullable error_code to tool_invocations.
+      final toolColumns = await database
+          .customSelect("PRAGMA table_info('tool_invocations')")
+          .get();
+      final toolColumnNames = toolColumns
+          .map((row) => row.read<String>('name'))
+          .toList();
+      expect(toolColumnNames, contains('error_code'));
+      final errorCodeMeta =
+          toolColumns.firstWhere((row) => row.read<String>('name') == 'error_code');
+      expect(errorCodeMeta.read<int>('notnull'), 0);
     },
   );
 
@@ -244,8 +255,8 @@ CREATE TABLE action_logs (
       final database = AppDatabase(NativeDatabase(File(path)));
       addTearDown(database.close);
 
-      // The v5 schema is in effect.
-      expect(database.schemaVersion, 5);
+      // The v6 schema is in effect.
+      expect(database.schemaVersion, 6);
       final tables =
           (await database
                   .customSelect(
@@ -342,13 +353,44 @@ CREATE TABLE tasks (
         "('task-1','account','复习线性代数',NULL,NULL,'active',NULL,'high',"
         "NULL,NULL,'[]',NULL,NULL,20,20,NULL)",
       );
+      // A real v4 database has tool_invocations (created at v3). The schema-six
+      // migration (from=4) adds error_code to it, so the fixture must carry the
+      // v5 definition (without error_code) for the addColumn to apply.
+      legacy.execute('''
+CREATE TABLE agent_runs (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  UNIQUE(id, account_id)
+)
+''');
+      legacy.execute('''
+CREATE TABLE tool_invocations (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  safe_arguments_summary TEXT NOT NULL,
+  safe_result_summary TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  FOREIGN KEY (run_id, account_id) REFERENCES agent_runs(id, account_id) ON DELETE CASCADE
+)
+''');
       legacy.execute('PRAGMA user_version = 4');
       legacy.close();
 
       final database = AppDatabase(NativeDatabase(File(path)));
       addTearDown(database.close);
 
-      expect(database.schemaVersion, 5);
+      expect(database.schemaVersion, 6);
       final tables =
           (await database
                   .customSelect(
@@ -371,6 +413,229 @@ CREATE TABLE tasks (
       final task = await database.select(database.tasks).getSingle();
       expect(task.id, 'task-1');
       expect(task.title, '复习线性代数');
+    },
+  );
+
+  // Regression for this repair round: schema six adds a nullable error_code
+  // to tool_invocations. The fresh-schema test above checks a clean creation;
+  // this one exercises the onUpgrade `from < 6` branch on a real v5 fixture and
+  // verifies the migrated error_code is null while representative business
+  // data (account, run, chat message, invocation, Task, PlanBlock, Relation)
+  // survives untouched.
+  test(
+    'schema five upgrades to six by adding tool_invocations.error_code and keeping business rows',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'ustc-migration-v5-test',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final path = p.join(directory.path, 'legacy-v5.sqlite');
+      final legacy = sqlite.sqlite3.open(path);
+      legacy.execute('PRAGMA foreign_keys = ON');
+      // Representative v5 schema. The account is created first because the
+      // agent/business tables reference it.
+      legacy.execute('''
+CREATE TABLE local_accounts (
+  id TEXT NOT NULL PRIMARY KEY,
+  masked_hint TEXT NOT NULL,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  identity_digest TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+''');
+      legacy.execute(
+        "INSERT INTO local_accounts VALUES ('account', 'PB****0000', 1, 'digest', 10, 10)",
+      );
+      legacy.execute('''
+CREATE TABLE tasks (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  user_notes TEXT,
+  state TEXT NOT NULL,
+  blocked_reason TEXT,
+  importance TEXT NOT NULL,
+  deadline_at INTEGER,
+  estimated_minutes INTEGER,
+  tags_json TEXT NOT NULL,
+  completed_at INTEGER,
+  cancelled_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  CHECK (state IN ('active','blocked','completed','cancelled')),
+  CHECK ((state = 'completed' AND completed_at IS NOT NULL AND cancelled_at IS NULL) OR
+         (state = 'cancelled' AND cancelled_at IS NOT NULL AND completed_at IS NULL) OR
+         (state IN ('active','blocked') AND completed_at IS NULL AND cancelled_at IS NULL)),
+  CHECK (estimated_minutes IS NULL OR estimated_minutes > 0)
+)
+''');
+      legacy.execute(
+        "INSERT INTO tasks VALUES "
+        "('task-1','account','复习线性代数',NULL,NULL,'active',NULL,'high',"
+        "1759334400,120,'[]',NULL,NULL,20,20,NULL)",
+      );
+      legacy.execute('''
+CREATE TABLE plan_blocks (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  title TEXT,
+  start_at INTEGER NOT NULL,
+  end_at INTEGER NOT NULL,
+  status TEXT NOT NULL,
+  locked INTEGER NOT NULL DEFAULT 0,
+  review_note TEXT,
+  reviewed_at INTEGER,
+  rescheduled_to_plan_block_id TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  CHECK (end_at > start_at),
+  CHECK (status IN ('suggested','accepted','done','skipped','rescheduled','cancelled')),
+  CHECK ((status IN ('suggested','accepted') AND reviewed_at IS NULL) OR
+         (status NOT IN ('suggested','accepted') AND reviewed_at IS NOT NULL)),
+  CHECK ((status = 'rescheduled' AND rescheduled_to_plan_block_id IS NOT NULL) OR
+         (status != 'rescheduled' AND rescheduled_to_plan_block_id IS NULL))
+)
+''');
+      legacy.execute(
+        "INSERT INTO plan_blocks VALUES "
+        "('pb-1','account','task-1',NULL,100,200,'accepted',0,NULL,NULL,NULL,30,30,NULL)",
+      );
+      legacy.execute(
+        "INSERT INTO plan_blocks VALUES "
+        "('pb-2','account','task-1',NULL,300,400,'accepted',0,NULL,NULL,NULL,30,30,NULL)",
+      );
+      legacy.execute('''
+CREATE TABLE schedule_relations (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  source TEXT NOT NULL DEFAULT 'user',
+  external_id TEXT,
+  relation_type TEXT NOT NULL DEFAULT 'conflict',
+  primary_entity_type TEXT,
+  primary_entity_id TEXT,
+  related_entity_type TEXT,
+  related_entity_id TEXT,
+  left_kind TEXT,
+  left_id TEXT,
+  right_kind TEXT,
+  right_id TEXT,
+  left_event_id TEXT,
+  left_plan_block_id TEXT REFERENCES plan_blocks(id) ON DELETE CASCADE,
+  right_event_id TEXT,
+  right_plan_block_id TEXT REFERENCES plan_blocks(id) ON DELETE CASCADE,
+  conflict_state TEXT,
+  reason TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)
+''');
+      legacy.execute(
+        "INSERT INTO schedule_relations "
+        "('id','account_id','source','external_id','relation_type',"
+        "'primary_entity_type','primary_entity_id','related_entity_type',"
+        "'related_entity_id','left_kind','left_id','right_kind','right_id',"
+        "'left_event_id','left_plan_block_id','right_event_id','right_plan_block_id',"
+        "'conflict_state','reason','created_at','updated_at') VALUES "
+        "('rel-1','account','user',NULL,'conflict',NULL,NULL,NULL,NULL,"
+        "'plan_block','pb-1','plan_block','pb-2',NULL,'pb-1',NULL,'pb-2',"
+        "'conflict','reason',40,40)",
+      );
+      legacy.execute('''
+CREATE TABLE agent_runs (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL,
+  error_code TEXT,
+  input_tokens INTEGER,
+  output_tokens INTEGER,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  UNIQUE(id, account_id)
+)
+''');
+      legacy.execute(
+        "INSERT INTO agent_runs VALUES "
+        "('run-1','account','deepseek-v4-flash','running',NULL,NULL,NULL,50,NULL)",
+      );
+      legacy.execute('''
+CREATE TABLE chat_messages (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  run_id TEXT,
+  ordinal INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  state TEXT NOT NULL,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(account_id, ordinal),
+  FOREIGN KEY (run_id, account_id) REFERENCES agent_runs(id, account_id) ON DELETE CASCADE
+)
+''');
+      legacy.execute(
+        "INSERT INTO chat_messages VALUES "
+        "('msg-1','account','run-1',1,'user','completed','你好',60,60)",
+      );
+      // v5 tool_invocations has NO error_code column.
+      legacy.execute('''
+CREATE TABLE tool_invocations (
+  id TEXT NOT NULL PRIMARY KEY,
+  account_id TEXT NOT NULL REFERENCES local_accounts(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL,
+  tool_name TEXT NOT NULL,
+  status TEXT NOT NULL,
+  safe_arguments_summary TEXT NOT NULL,
+  safe_result_summary TEXT NOT NULL,
+  started_at INTEGER NOT NULL,
+  finished_at INTEGER,
+  FOREIGN KEY (run_id, account_id) REFERENCES agent_runs(id, account_id) ON DELETE CASCADE
+)
+''');
+      legacy.execute(
+        "INSERT INTO tool_invocations VALUES "
+        "('inv-1','account','run-1','get_schedule','running','args','',70,NULL)",
+      );
+      legacy.execute('PRAGMA user_version = 5');
+      legacy.close();
+
+      final database = AppDatabase(NativeDatabase(File(path)));
+      addTearDown(database.close);
+
+      // The v6 schema is in effect and the new column exists and is nullable.
+      expect(database.schemaVersion, 6);
+      final columns = await database.customSelect(
+        "PRAGMA table_info('tool_invocations')",
+      ).get();
+      final byName = {
+        for (final row in columns) row.read<String>('name'): row.data,
+      };
+      expect(byName.keys, contains('error_code'));
+      expect(byName['error_code']!['notnull'], 0);
+
+      // Migrated business rows are preserved.
+      final account = await database.select(database.localAccounts).getSingle();
+      expect(account.id, 'account');
+      expect(account.identityDigest, 'digest');
+      final run = await database.select(database.agentRuns).getSingle();
+      expect(run.id, 'run-1');
+      final message = await database.select(database.chatMessages).getSingle();
+      expect(message.id, 'msg-1');
+      final invocation = await database.select(database.toolInvocations).getSingle();
+      expect(invocation.id, 'inv-1');
+      expect(invocation.errorCode, isNull);
+      final task = await database.select(database.tasks).getSingle();
+      expect(task.id, 'task-1');
+      expect(await database.select(database.planBlocks).get(), hasLength(2));
+      final relation = await database
+          .select(database.scheduleRelations)
+          .getSingle();
+      expect(relation.id, 'rel-1');
     },
   );
 

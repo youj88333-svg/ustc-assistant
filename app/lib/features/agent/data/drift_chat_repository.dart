@@ -287,6 +287,171 @@ class DriftChatRepository {
     });
   }
 
+  /// Starts a new tool invocation in the `running` state for [runId], which
+  /// must belong to [accountId]. Returns the new invocation id.
+  ///
+  /// The insert is wrapped in a transaction with [verifyRunOwnership] so a
+  /// cross-account run is rejected with a [RunOwnershipException] before any
+  /// row is written. See handoff §3 blocker 2.
+  Future<String> startToolInvocation({
+    required String accountId,
+    required String runId,
+    required String toolName,
+    required String safeArgumentsSummary,
+  }) async {
+    final id = _uuid.v4();
+    await _database.transaction(() async {
+      final run =
+          await (_database.select(_database.agentRuns)
+                ..where(
+                  (row) =>
+                      row.id.equals(runId) & row.accountId.equals(accountId),
+                )
+                ..limit(1))
+              .getSingleOrNull();
+      if (run == null) {
+        throw RunOwnershipException(accountId: accountId, runId: runId);
+      }
+      await _database
+          .into(_database.toolInvocations)
+          .insert(
+            ToolInvocationsCompanion.insert(
+              id: id,
+              accountId: accountId,
+              runId: runId,
+              toolName: toolName,
+              status: ToolInvocationLifecycleState.running.storageName,
+              safeArgumentsSummary: safeArgumentsSummary,
+              safeResultSummary: '',
+              startedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
+          );
+    });
+    return id;
+  }
+
+  /// Marks an invocation as waiting on the user (`waiting_user`). The update is
+  /// scoped to the invocation id and account and only accepts a row still in a
+  /// nonterminal state. Waiting does NOT set `finishedAt`: the row is not
+  /// complete yet, and only a terminal transition records the finish time.
+  Future<void> markToolInvocationWaiting({
+    required String accountId,
+    required String invocationId,
+  }) async {
+    await (_database.update(_database.toolInvocations)..where(
+          (row) =>
+              row.id.equals(invocationId) &
+              row.accountId.equals(accountId) &
+              row.status.isIn(
+                _nonterminalToolStatuses(),
+              ),
+        ))
+        .write(
+          ToolInvocationsCompanion(
+            status: Value(
+              ToolInvocationLifecycleState.waitingUser.storageName,
+            ),
+          ),
+        );
+  }
+
+  /// Records a terminal state, optional safe [errorCode] and result summary for
+  /// an invocation. The update is scoped to the invocation id and account and
+  /// only accepts rows still in a nonterminal state (`running` or
+  /// `waiting_user`). Terminal transitions set `finishedAt` exactly once; a
+  /// repeated finalize call is a no-op that leaves the recorded fields intact.
+  /// A cross-account or missing invocation throws [RunOwnershipException].
+  Future<void> finishToolInvocation({
+    required String accountId,
+    required String invocationId,
+    required ToolInvocationLifecycleState state,
+    required String safeResultSummary,
+    String? errorCode,
+  }) async {
+    if (!state.isTerminal) {
+      throw ArgumentError.value(
+        state,
+        'state',
+        'finishToolInvocation expects a terminal state',
+      );
+    }
+    await _database.transaction(() async {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final affected =
+          await (_database.update(_database.toolInvocations)..where(
+                (row) =>
+                    row.id.equals(invocationId) &
+                    row.accountId.equals(accountId) &
+                    row.status.isIn(_nonterminalToolStatuses()),
+              ))
+              .write(
+                ToolInvocationsCompanion(
+                  status: Value(state.storageName),
+                  safeResultSummary: Value(safeResultSummary),
+                  errorCode: Value(errorCode),
+                  finishedAt: Value(now),
+                ),
+              );
+      // If nothing was updated, either the row does not belong to this account
+      // or it already reached a terminal state. Ownership is surfaced as a
+      // typed exception; an already-terminal row is left untouched.
+      if (affected == 0) {
+        final existing =
+            await (_database.select(_database.toolInvocations)
+                  ..where((row) => row.id.equals(invocationId))
+                  ..limit(1))
+                .getSingleOrNull();
+        if (existing == null ||
+            existing.accountId != accountId) {
+          throw RunOwnershipException(
+            accountId: accountId,
+            runId: existing?.runId ?? '',
+          );
+        }
+      }
+    });
+  }
+
+  /// Returns the tool invocations for the given run ids, filtered to
+  /// [accountId], ordered by `startedAt` ascending. Used by the session
+  /// service to restore diagnostics for the runs shown in chat history.
+  Future<List<ToolInvocationRecord>> toolInvocationsForRuns({
+    required String accountId,
+    required Set<String> runIds,
+  }) async {
+    if (runIds.isEmpty) {
+      return const [];
+    }
+    final query = _database.select(_database.toolInvocations)
+      ..where(
+        (row) =>
+            row.accountId.equals(accountId) &
+            row.runId.isIn(runIds),
+      )
+      ..orderBy([(row) => OrderingTerm.asc(row.startedAt)]);
+    final rows = await query.get();
+    return rows.map(_toInvocationRecord).toList();
+  }
+
+  static List<String> _nonterminalToolStatuses() => [
+    ToolInvocationLifecycleState.running.storageName,
+    ToolInvocationLifecycleState.waitingUser.storageName,
+  ];
+
+  ToolInvocationRecord _toInvocationRecord(ToolInvocation row) =>
+      ToolInvocationRecord(
+        id: row.id,
+        accountId: row.accountId,
+        runId: row.runId,
+        toolName: row.toolName,
+        status: ToolInvocationLifecycleState.fromStorage(row.status),
+        safeArgumentsSummary: row.safeArgumentsSummary,
+        safeResultSummary: row.safeResultSummary,
+        errorCode: row.errorCode,
+        startedAt: row.startedAt,
+        finishedAt: row.finishedAt,
+      );
+
   /// Deletes the account's conversation summary only, preserving chat
   /// messages, runs, tool invocations, `agent_settings`, and `agent_secrets`.
   Future<void> clearSummary(String accountId) async {
@@ -296,9 +461,11 @@ class DriftChatRepository {
   }
 
   /// Startup recovery: marks stale `running` runs as `interrupted` and their
-  /// `streaming` assistant messages as `interrupted`. Called by the session
-  /// service on app start to reconcile runs that never reached a terminal
-  /// state (e.g. process killed mid-stream).
+  /// `streaming` assistant messages as `interrupted`, and flips any tool
+  /// invocation still in a nonterminal state (`running` or `waiting_user`) to
+  /// `interrupted`. Called by the session service on app start to reconcile
+  /// runs that never reached a terminal state (e.g. process killed
+  /// mid-stream).
   Future<void> recoverInterrupted() async {
     await _database.transaction(() async {
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -327,6 +494,18 @@ class DriftChatRepository {
               ),
             );
       }
+      // Recover tool invocations left in a nonterminal state across restart.
+      // This covers both freshly started (`running`) and user-waiting
+      // (`waiting_user`) invocations; terminal rows are skipped.
+      await (_database.update(_database.toolInvocations)..where(
+            (row) => row.status.isIn(_nonterminalToolStatuses()),
+          ))
+          .write(
+            ToolInvocationsCompanion(
+              status: Value(ToolInvocationLifecycleState.interrupted.storageName),
+              finishedAt: Value(now),
+            ),
+          );
     });
   }
 

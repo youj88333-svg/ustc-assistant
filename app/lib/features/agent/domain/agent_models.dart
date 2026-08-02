@@ -83,6 +83,70 @@ class AgentRunRecord {
   final int? finishedAt;
 }
 
+/// Lifecycle state of a single persisted agent tool invocation. Stored in
+/// `tool_invocations.status` using [storageName]; `waitingUser` is persisted as
+/// `waiting_user`.
+enum ToolInvocationLifecycleState {
+  running,
+  waitingUser,
+  success,
+  error,
+  cancelled,
+  interrupted;
+
+  String get storageName {
+    switch (this) {
+      case ToolInvocationLifecycleState.waitingUser:
+        return 'waiting_user';
+      default:
+        return name;
+    }
+  }
+
+  static ToolInvocationLifecycleState fromStorage(String value) =>
+      ToolInvocationLifecycleState.values.firstWhere(
+        (state) => state.storageName == value,
+      );
+
+  bool get isTerminal => switch (this) {
+        ToolInvocationLifecycleState.success ||
+        ToolInvocationLifecycleState.error ||
+        ToolInvocationLifecycleState.cancelled ||
+        ToolInvocationLifecycleState.interrupted =>
+          true,
+        ToolInvocationLifecycleState.running ||
+        ToolInvocationLifecycleState.waitingUser =>
+          false,
+      };
+}
+
+/// A persisted tool invocation row, surfaced from `tool_invocations`.
+class ToolInvocationRecord {
+  const ToolInvocationRecord({
+    required this.id,
+    required this.accountId,
+    required this.runId,
+    required this.toolName,
+    required this.status,
+    required this.safeArgumentsSummary,
+    required this.safeResultSummary,
+    required this.startedAt,
+    this.errorCode,
+    this.finishedAt,
+  });
+
+  final String id;
+  final String accountId;
+  final String runId;
+  final String toolName;
+  final ToolInvocationLifecycleState status;
+  final String safeArgumentsSummary;
+  final String safeResultSummary;
+  final String? errorCode;
+  final int startedAt;
+  final int? finishedAt;
+}
+
 /// The current conversation summary persisted in `conversation_summaries`.
 class ConversationSummaryRecord {
   const ConversationSummaryRecord({
