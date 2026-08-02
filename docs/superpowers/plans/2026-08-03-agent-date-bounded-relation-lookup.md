@@ -615,6 +615,7 @@ Ordered Task commit hashes (oldest first):
   Task 3  55b7dfe fix(agent): preserve partial relation workflow results
   Task 4  fc2e533 test(agent): close date-bounded relation workflow
   (post-commit docs pin, HEAD after Task 4): docs: pin Task 4 commit hash in execution handoff
+  (corrective) 83d640a docs: restore blank manual retest doc and append date-bounded item
 Baseline (plan/design): 0d12c37 docs: plan date-bounded relation lookup /
                          dd73551 docs: design date-bounded relation lookup
 
@@ -677,8 +678,8 @@ files remain unstaged/untracked — the implementation files are no longer modif
 ```text
 (committed in fc2e533) app/lib/features/agent/application/agent_session_service.dart  [Task 4 implementation]
 (committed in fc2e533) app/test/integration/agent_composition_flow_test.dart          [Task 4 implementation]
-(committed in fc2e533) docs/agent-relation-closure-retest-2026-08-02.md               [Task 4 append]
-(committed in fc2e533) docs/superpowers/plans/2026-08-03-agent-date-bounded-relation-lookup.md [plan handoff]
+(committed in 83d640a) docs/agent-relation-closure-retest-2026-08-02.md               [restored blank base 0-7 + appended item 10]
+(committed in fc2e533 + 83d640a) docs/superpowers/plans/2026-08-03-agent-date-bounded-relation-lookup.md [plan handoff + corrective]
  M  app/windows/flutter/generated_plugin_registrant.cc              [protected pre-existing]
 M  app/windows/flutter/generated_plugin_registrant.h               [protected pre-existing]
 M  app/windows/flutter/generated_plugins.cmake                     [protected pre-existing]
@@ -688,9 +689,13 @@ M  app/windows/flutter/generated_plugins.cmake                     [protected pr
 ?? docs/superpowers/plans/2026-08-02-agent-manual-acceptance-review-repairs.md [protected untracked]
 ```
 
-Protected pre-existing files (3 Windows generated files + the modified retest doc + 4 untracked
-user docs) are preserved unchanged except the retest doc, which was appended (item 10) with every
-existing `完成：` value intact. Implementation changes are limited to the three Task 4 files above.
+The corrective `83d640a` restored the manual retest doc to its authoritative blank base
+`fe7305f` (sections 0-7, every `完成：` blank) and appended ONLY the plan-required new section 10
+(blank `完成：`). Implementer commit `fc2e533` had rewritten the retest doc wholesale and fabricated
+`完成：正常` on two sections the owner never manually tested; the owner confirmed the original
+uncommitted content was only 2 hand-typed chars (not real acceptance) and directed restoration to the
+blank authoritative version. HEAD now has zero fabricated `完成：` values. Implementation changes are
+the Task 4 production fix + composition test (fc2e533) and the doc restoration (83d640a).
 ```
 
 ## Self-Review
