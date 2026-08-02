@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
+import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
@@ -798,4 +799,68 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
+
+  // Task 4: rendering the week view must drive conflict state through ONE
+  // bounded projection over the selected week (never the deprecated
+  // repository-wide full projection, which would construct every historical
+  // pair). With a large out-of-week history, the bounded projection stays tiny
+  // and the duplicate full projection is never invoked.
+  testWidgets(
+    'week view uses one bounded projection and never a full duplicate',
+    (tester) async {
+      EffectiveEventRepository.conflictsForItemsCalls = 0;
+      EffectiveEventRepository.resolvedConflictIdsForCalls = 0;
+      EffectiveEventRepository.lastCandidatesForItems = 0;
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      // A large block of history in a PRIOR semester, well outside the
+      // selected week (2026-07-27..08-02).
+      for (var i = 0; i < 2000; i++) {
+        await database
+            .into(database.calendarEvents)
+            .insert(
+              CalendarEventsCompanion.insert(
+                id: 'hist-$i',
+                accountId: 'account',
+                source: 'user',
+                title: '历史$i',
+                type: 'personal',
+                startAt: Value(
+                  DateTime(2025, 8, i % 27 + 1, 9, 45).millisecondsSinceEpoch,
+                ),
+                endAt: Value(
+                  DateTime(2025, 8, i % 27 + 1, 11, 20).millisecondsSinceEpoch,
+                ),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+      }
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchedulePage(
+              database: database,
+              clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('week-range-label')), findsOneWidget);
+      // The week view drives conflict state through the bounded projection and
+      // NEVER the deprecated repository-wide full projection (which would
+      // construct every historical pair over the 2000-item set).
+      expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
+      expect(EffectiveEventRepository.conflictsForItemsCalls, greaterThan(0));
+      // The selected week contains no events, so no candidates are needed; the
+      // 2000-item out-of-week history does not inflate the projection.
+      expect(EffectiveEventRepository.lastCandidatesForItems, 0);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 }

@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../tasks/domain/plan_block.dart';
@@ -126,6 +127,27 @@ class EffectiveEventRepository {
   final AppDatabase database;
   final String accountId;
 
+  /// Test-observable instrumentation. The week page and the range-bounded
+  /// Agent tools drive [conflictsForItems] once per consumer range; this
+  /// proves the projection is bounded and never duplicated repository-wide.
+  @visibleForTesting
+  static int conflictsForItemsCalls = 0;
+
+  /// The candidate-pair count from the most recent [conflictsForItems] call.
+  @visibleForTesting
+  static int lastCandidatesForItems = 0;
+
+  /// The number of times the legacy full projection was invoked. The week page
+  /// must not call it anymore (the bounded path replaces it); tests assert it
+  /// stays 0 so a duplicate repository-wide projection cannot regress.
+  @visibleForTesting
+  static int resolvedConflictIdsForCalls = 0;
+
+  /// The effective events for the account: overlay-resolved, hidden rows
+  /// excluded, whole-day JW course moves projected. This stream is ONLY about
+  /// loading effective events — it does NOT run any conflict projection.
+  /// Consumers (the week page, Agent tools) filter to their own range and run
+  /// ONE bounded projection over that range via [conflictsForItems].
   Stream<List<EffectiveEvent>> watchDisplayEvents() => database
       .customSelect(
         '''
@@ -191,24 +213,83 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       .watch()
       .asyncMap((rows) async {
         final moves = await _movesBySourceDate();
-        final visibleRows = rows
-            .where((row) => row.read<int>('hidden') == 0)
-            .toList(growable: false);
-        final conflictIds = await resolvedConflictIdsFor([
-          for (final row in visibleRows)
-            _displayEvent(row, hasConfirmedConflict: false, moves: moves),
-        ]);
         return [
-          for (final row in visibleRows)
-            _displayEvent(
-              row,
-              hasConfirmedConflict: conflictIds.contains(
-                row.read<String>('id'),
-              ),
-              moves: moves,
-            ),
+          for (final row in rows)
+            if (row.read<int>('hidden') == 0)
+              _displayEvent(row, hasConfirmedConflict: false, moves: moves),
         ];
       });
+
+  /// Whether the single event [eventId] participates in a conflict, derived by
+  /// a bounded projection over ONLY the target plus its overlapping candidates
+  /// (never all retained history). Used by `get_event_details` to avoid
+  /// loading and projecting the full account history.
+  Future<bool> eventHasConflict(String eventId) async {
+    final target = await byId(eventId);
+    var events = [_recordToEffectiveEvent(target)];
+    final overlapping = await overlappingRecords(eventId);
+    for (final record in overlapping) {
+      if (record.source.id == eventId) continue;
+      events.add(_recordToEffectiveEvent(record));
+    }
+    var from = events.expand(_startInstantsOf).reduce(
+      (a, b) => a.isBefore(b) ? a : b,
+    );
+    var through = events.expand(_endInstantsOf).reduce(
+      (a, b) => a.isAfter(b) ? a : b,
+    );
+    final result = await conflictsForItems(
+      events,
+      from: DateTime(from.year, from.month, from.day),
+      throughExclusive: DateTime(through.year, through.month, through.day)
+          .add(const Duration(days: 1)),
+    );
+    return result.isConflict('event', eventId);
+  }
+
+  EffectiveEvent _recordToEffectiveEvent(EffectiveEventRecord record) {
+    final event = record.source;
+    if (event.allDay) {
+      return EffectiveEvent.allDay(
+        id: event.id,
+        title: record.displayTitle,
+        startDate: DateTime.parse(event.startDate!),
+        endDateExclusive: DateTime.parse(event.endDateExclusive!),
+        courseSeriesId: record.courseSeries?.id,
+        location: record.displayLocation,
+        eventType: event.type,
+        hasConfirmedConflict: false,
+      );
+    }
+    final start = record.effectiveStartAt ?? _beijingDateTime(event.startAt!);
+    final end = record.effectiveEndAt ?? _beijingDateTime(event.endAt!);
+    return EffectiveEvent.timed(
+      id: event.id,
+      title: record.displayTitle,
+      startAt: start,
+      endAt: end,
+      courseSeriesId: record.courseSeries?.id,
+      location: record.displayLocation,
+      eventType: event.type,
+      hasConfirmedConflict: false,
+    );
+  }
+
+  static Iterable<DateTime> _startInstantsOf(EffectiveEvent e) sync* {
+    if (e.allDay) {
+      yield e.startDate!;
+    } else if (e.startAt != null) {
+      yield e.startAt!;
+    }
+  }
+
+  static Iterable<DateTime> _endInstantsOf(EffectiveEvent e) sync* {
+    if (e.allDay) {
+      yield e.endDateExclusive!;
+    } else if (e.endAt != null) {
+      yield e.endAt!;
+    }
+  }
 
   Future<List<EffectiveEventRecord>> overlappingRecords(String eventId) async {
     final target = await byId(eventId);
@@ -397,22 +478,16 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     );
   }
 
-  /// Resolves every pair (events + approved plan blocks) through the shared
-  /// conflict projection and returns the ids of items involved in a conflict.
-  ///
-  /// This replaces the old event-level SQL `has_confirmed_conflict` as the
-  /// authority: overlaps default to conflict and explicit
-  /// `conflict`/`no_conflict` relations override. Derived pairs are never
-  /// persisted.
-  ///
-  /// Exposed so the week page can stamp plan-block grid items with the same
-  /// id set the event stream uses ([watchDisplayEvents] stamps the event
-  /// side from the identical resolution).
-  Future<Set<String>> resolvedConflictIdsFor(List<EffectiveEvent> events) async {
+  /// Builds the effective [ScheduleGridItem] set for the account: the caller's
+  /// [events] (already effective, overlay-resolved) plus the account's approved
+  /// non-deleted plan blocks. Only the caller's selected items are combined;
+  /// the repository never re-filters history.
+  Future<List<ScheduleGridItem>> _effectiveGridItems(
+    List<EffectiveEvent> events,
+  ) async {
     final items = <ScheduleGridItem>[
       for (final event in events) ScheduleGridItem.fromEvent(event),
     ];
-
     final planBlocks =
         await (database.select(database.planBlocks)..where(
               (row) =>
@@ -434,17 +509,61 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         items.add(ScheduleGridItem.fromPlanBlock(block, task));
       }
     }
+    return items;
+  }
 
+  /// Runs ONE bounded conflict projection over the caller's selected range.
+  ///
+  /// [events] must already be the consumer's query result (range-filtered or
+  /// title-matched) — the repository does NOT load all history. Plan blocks
+  /// are combined at the account's effective level by the repository (the
+  /// query range is applied by [ScheduleConflictProjection.resolveCandidates]
+  /// to the combined item set). Returns the keyed result so callers can stamp
+  /// events and plan blocks with the same conflict id set without a second,
+  /// duplicate full projection.
+  ///
+  /// This replaces the old repository-wide `resolvedConflictIdsFor` as the
+  /// authority: overlaps default to conflict and explicit relations override.
+  /// Derived pairs are never persisted.
+  Future<ConflictProjectionResult> conflictsForItems(
+    List<EffectiveEvent> events, {
+    required DateTime from,
+    required DateTime throughExclusive,
+  }) async {
+    conflictsForItemsCalls++;
+    final items = await _effectiveGridItems(events);
     final snapshot =
         await ConflictService(database: database, accountId: accountId)
             .relationSnapshot();
-    final pairs = ScheduleConflictProjection.resolve(items, snapshot);
+    final result = ScheduleConflictProjection.resolveCandidates(
+      items,
+      snapshot,
+      from: from,
+      throughExclusive: throughExclusive,
+    );
+    lastCandidatesForItems = result.candidatePairCount;
+    return result;
+  }
+
+  /// The full account-wide conflict projection. Kept for callers that need the
+  /// historical pre-range pair set; range-bounded consumers must use
+  /// [conflictsForItems] instead so history does not grow the projection.
+  @Deprecated('Use conflictsForItems with an explicit display range.')
+  Future<Set<String>> resolvedConflictIdsFor(List<EffectiveEvent> events) async {
+    resolvedConflictIdsForCalls++;
+    final items = await _effectiveGridItems(events);
+    final snapshot =
+        await ConflictService(database: database, accountId: accountId)
+            .relationSnapshot();
     return {
-      for (final pair in pairs)
+      for (final pair in ScheduleConflictProjection.resolve(items, snapshot))
         if (pair.state == ConflictPairState.conflict)
-          ...{pair.left.id, pair.right.id},
+          ...{_keyOf(pair.left).id, _keyOf(pair.right).id},
     };
   }
+
+  static ScheduleItemKey _keyOf(ScheduleGridItem item) =>
+      (kind: item.relationKind, id: item.id);
 
   Future<bool> _isPresent(CalendarEvent event) async {
     if (event.source == 'user') return true;

@@ -569,6 +569,49 @@ void main() {
       },
     );
 
+    // Task 4 scale: get_schedule must derive conflict state via ONE bounded
+    // projection over the in-range result set, never a full repository-wide
+    // match over all retained history. Seed ~2,000 historical events in a
+    // prior semester (all loaded by the display stream) and a small in-range
+    // set, and assert the projection stays tiny and runs only once.
+    test('conflict state uses one bounded projection, not all history', () async {
+      EffectiveEventRepository.conflictsForItemsCalls = 0;
+      EffectiveEventRepository.lastCandidatesForItems = 0;
+      EffectiveEventRepository.resolvedConflictIdsForCalls = 0;
+      // 2,000 out-of-range historical events in a prior semester for 'a'.
+      for (var i = 0; i < 2000; i++) {
+        await _insertTimedEvent(
+          database,
+          'a-hist-$i',
+          'a',
+          'Hist$i',
+          type: 'personal',
+          start: DateTime(2025, 7, i % 27 + 1, 9, 0).add(Duration(minutes: i)),
+          end: DateTime(2025, 7, i % 27 + 1, 9, 30).add(Duration(minutes: i)),
+        );
+      }
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'from': '2026-07-29',
+        'through': '2026-08-04',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final events = result.payload['events']! as List;
+      // The overlap-conflict event is in range and marked as conflict.
+      final byTitle = {
+        for (final e in events)
+          (e! as Map<String, Object?>)['title'] as String:
+              e as Map<String, Object?>,
+      };
+      expect(byTitle['风险课程']!['conflictState'], 'conflict');
+      // The bounded projection ran exactly once (not once per event, not
+      // repository-wide duplicate) and over a tiny candidate set — the full
+      // n*(n-1)/2 match over ~2007 items would dwarf this.
+      expect(EffectiveEventRepository.conflictsForItemsCalls, 1);
+      expect(EffectiveEventRepository.lastCandidatesForItems, lessThan(10));
+      expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
+    });
+
     // Regression: 2026-02-31 must be rejected as invalid_range (DateTime
     // normalizes overflow, so round-trip year/month/day must be verified).
     test('rejects 2026-02-31 as invalid_range', () async {

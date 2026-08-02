@@ -343,18 +343,17 @@ void main() {
         events.singleWhere((event) => event.id == 'event-b').foregroundPriority,
         100,
       );
-      expect(
-        events
-            .singleWhere((event) => event.id == 'event-a')
-            .hasConfirmedConflict,
-        isTrue,
+      // The loading stream no longer falls back to repository-wide conflict
+      // projection; conflict state is bounded to the caller's range via
+      // conflictsForItems(inclusive 2026-08-10 day).
+      final repo = EffectiveEventRepository(database, accountId: 'a');
+      final result = await repo.conflictsForItems(
+        events,
+        from: DateTime(2026, 8, 9),
+        throughExclusive: DateTime(2026, 8, 11),
       );
-      expect(
-        events
-            .singleWhere((event) => event.id == 'event-b')
-            .hasConfirmedConflict,
-        isTrue,
-      );
+      expect(result.isConflict('event', 'event-a'), isTrue);
+      expect(result.isConflict('event', 'event-b'), isTrue);
     },
   );
 
@@ -773,23 +772,110 @@ void main() {
           );
     }
 
-    // event-a and event-b overlap with NO explicit relation → the display
+    // event-a and event-b overlap with NO explicit relation → the bounded
     // projection derives conflict for both.
-    final events = await EffectiveEventRepository(
-      database,
-      accountId: 'a',
-    ).watchDisplayEvents().first;
-    expect(
-      events.singleWhere((event) => event.id == 'event-a').hasConfirmedConflict,
-      isTrue,
+    final repo = EffectiveEventRepository(database, accountId: 'a');
+    final events = await repo.watchDisplayEvents().first;
+    final result = await repo.conflictsForItems(
+      events,
+      from: DateTime(2026, 8, 9),
+      throughExclusive: DateTime(2026, 8, 11),
     );
-    expect(
-      events.singleWhere((event) => event.id == 'event-b').hasConfirmedConflict,
-      isTrue,
-    );
+    expect(result.isConflict('event', 'event-a'), isTrue);
+    expect(result.isConflict('event', 'event-b'), isTrue);
 
     // Read-only contract: the derivation never persisted any relation row.
     expect(await database.select(database.scheduleRelations).get(), isEmpty);
     expect(await database.select(database.scheduleRelationRules).get(), isEmpty);
+  });
+
+  group('bounded projection scale', () {
+    test('week-window projection builds no full match and no duplicate pass',
+        () async {
+      EffectiveEventRepository.conflictsForItemsCalls = 0;
+      EffectiveEventRepository.lastCandidatesForItems = 0;
+      EffectiveEventRepository.resolvedConflictIdsForCalls = 0;
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'a',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      // ~2,000 non-overlapping historical events across a prior semester
+      // (2025-08), all present and thus loaded by the display stream, but all
+      // outside the selected 2026-08 week. If the projection were not bounded
+      // to the range, the full n*(n-1)/2 match would examine ~2M pairs.
+      for (var i = 0; i < 2000; i++) {
+        await database
+            .into(database.calendarEvents)
+            .insert(
+              CalendarEventsCompanion.insert(
+                id: 'hist-$i',
+                accountId: 'a',
+                source: 'user',
+                externalId: Value('hist-$i'),
+                title: 'hist-$i',
+                type: 'personal',
+                startAt: Value(
+                  DateTime(2025, 8, i % 27 + 1, 9, 45).millisecondsSinceEpoch,
+                ),
+                endAt: Value(
+                  DateTime(2025, 8, i % 27 + 1, 11, 20).millisecondsSinceEpoch,
+                ),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+      }
+      // Several current-week events (start 2026-08-10..): two overlapping, one
+      // solo.
+      for (var i = 0; i < 3; i++) {
+        await database
+            .into(database.calendarEvents)
+            .insert(
+              CalendarEventsCompanion.insert(
+                id: 'cur-$i',
+                accountId: 'a',
+                source: 'user',
+                externalId: Value('cur-$i'),
+                title: 'cur-$i',
+                type: 'personal',
+                startAt: Value(
+                  DateTime(2026, 8, 10, 10 + i).millisecondsSinceEpoch,
+                ),
+                endAt: Value(
+                  DateTime(2026, 8, 10, 11 + i).millisecondsSinceEpoch,
+                ),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+      }
+      final repo = EffectiveEventRepository(database, accountId: 'a');
+      final events = await repo.watchDisplayEvents().first;
+      // The week window 2026-08-10..2026-08-16.
+      final result = await repo.conflictsForItems(
+        events,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+      );
+      // Only current-week items intersect the window; the full n*(n-1)/2 match
+      // over ~2003 items would be enormous. Assert the bounded candidate count
+      // is tiny and the projection ran exactly once.
+      expect(result.candidatePairCount, lessThan(10));
+      expect(EffectiveEventRepository.conflictsForItemsCalls, 1);
+      // The legacy full projection must NOT be called by a bounded consumer.
+      expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
+    });
   });
 }

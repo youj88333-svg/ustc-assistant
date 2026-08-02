@@ -71,6 +71,23 @@ abstract interface class AgentLocalDataGateway {
   Future<ScheduleConflictRelationSnapshot> scheduleConflictRelations(
     String accountId,
   );
+
+  /// Runs ONE bounded conflict projection over [events] (already the caller's
+  /// range/title-filtered result set) plus the account's effective plan blocks,
+  /// restricted to the inclusive-exclusive display range. Returns the keyed
+  /// result so callers can stamp events and plan blocks with the same conflict
+  /// id set without a second, duplicate projection over all history.
+  Future<ConflictProjectionResult> conflictsForItems(
+    String accountId,
+    List<EffectiveEvent> events, {
+    required DateTime from,
+    required DateTime throughExclusive,
+  });
+
+  /// Whether the single event [eventId] conflicts with any overlapping
+  /// candidate, via a bounded projection (never all history). Used by
+  /// `get_event_details`.
+  Future<bool> eventHasConflict(String accountId, String eventId);
 }
 
 /// A Drift-backed [AgentLocalDataGateway].
@@ -186,6 +203,24 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
   ) =>
       ConflictService(database: _database, accountId: accountId)
           .relationSnapshot();
+
+  @override
+  Future<ConflictProjectionResult> conflictsForItems(
+    String accountId,
+    List<EffectiveEvent> events, {
+    required DateTime from,
+    required DateTime throughExclusive,
+  }) =>
+      EffectiveEventRepository(_database, accountId: accountId).conflictsForItems(
+        events,
+        from: from,
+        throughExclusive: throughExclusive,
+      );
+
+  @override
+  Future<bool> eventHasConflict(String accountId, String eventId) =>
+      EffectiveEventRepository(_database, accountId: accountId)
+          .eventHasConflict(eventId);
 
   /// Mirrors `SyncCoordinator.stateFor` without pulling in the Python-bridge /
   /// import dependencies (those arrive in Task 9). Reads only sync_runs and

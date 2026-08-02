@@ -141,11 +141,50 @@ String _formatDate(DateTime value) {
   return '${value.year}-${two(value.month)}-${two(value.day)}';
 }
 
-/// Maps an [EffectiveEvent]'s confirmed-conflict flag to the model-facing
-/// `conflictState` string. Free-time and plain schedules never invent a
-/// `conflict` classification; this only reflects the authoritative SQL flag.
-String _conflictStateString(EffectiveEvent event) =>
-    event.hasConfirmedConflict ? 'conflict' : 'not_conflict';
+/// Computes the set of event ids involved in a conflict within [events] by
+/// running ONE bounded projection over exactly that result set (plus the
+/// account's effective plan blocks). This replaces any repository-wide
+/// projection: the consumer's range/title result is already determined, so the
+/// bounded projection only ever sees the relevant subset.
+Future<Set<String>> _conflictEventIds(
+  AgentLocalDataGateway gateway,
+  String accountId,
+  List<EffectiveEvent> events,
+) async {
+  if (events.isEmpty) return const {};
+  var from = events.expand(_startInstantsOf).reduce(
+    (a, b) => a.isBefore(b) ? a : b,
+  );
+  var throughExclusive = events.expand(_endInstantsOf).reduce(
+    (a, b) => a.isAfter(b) ? a : b,
+  );
+  final result = await gateway.conflictsForItems(
+    accountId,
+    events,
+    from: from,
+    throughExclusive: throughExclusive,
+  );
+  return {
+    for (final key in result.conflictKeys)
+      if (key.kind == 'event') key.id,
+  };
+}
+
+Iterable<DateTime> _startInstantsOf(EffectiveEvent e) sync* {
+  if (e.allDay) {
+    yield e.startDate!;
+  } else if (e.startAt != null) {
+    yield e.startAt!;
+  }
+}
+
+Iterable<DateTime> _endInstantsOf(EffectiveEvent e) sync* {
+  if (e.allDay) {
+    yield e.endDateExclusive!;
+  } else if (e.endAt != null) {
+    yield e.endAt!;
+  }
+}
 
 String _importanceString(EventImportance importance) => switch (importance) {
       EventImportance.low => 'low',
@@ -156,18 +195,27 @@ String _importanceString(EventImportance importance) => switch (importance) {
 
 /// Normalizes an [EffectiveEvent] into the model-facing schedule DTO, binding a
 /// run-local `ref_event_*` token via [references] for the event's local id.
+///
+/// [conflictEventIds] is the set of event ids involved in a conflict within the
+/// consumer's bounded result set; when non-null it drives `conflictState`
+/// (falling back to the event's own [EffectiveEvent.hasConfirmedConflict]
+/// flag). Free-time and plain schedules omit it (no invented classification).
 Map<String, Object?> _eventDto(
   EffectiveEvent event,
-  AgentToolContext context,
-) {
+  AgentToolContext context, {
+  Set<String>? conflictEventIds,
+}) {
   final ref = context.references.bind(kind: 'event', localId: event.id);
+  final isConflict = conflictEventIds != null
+      ? conflictEventIds.contains(event.id)
+      : event.hasConfirmedConflict;
   final dto = <String, Object?>{
     'ref': ref,
     'title': event.title,
     'allDay': event.allDay,
     'eventType': event.eventType,
     'importance': _importanceString(event.importance),
-    'conflictState': _conflictStateString(event),
+    'conflictState': isConflict ? 'conflict' : 'not_conflict',
   };
   if (event.location != null) dto['location'] = event.location;
   if (event.allDay) {
@@ -188,9 +236,10 @@ Map<String, Object?> _eventDto(
 Map<String, Object?> _enrichedEventDto(
   EffectiveEvent event,
   EffectiveEventRecord record,
-  AgentToolContext context,
-) {
-  final dto = _eventDto(event, context);
+  AgentToolContext context, {
+  Set<String>? conflictEventIds,
+}) {
+  final dto = _eventDto(event, context, conflictEventIds: conflictEventIds);
   dto['attendancePolicy'] = record.attendance.name;
   dto['attendanceDecision'] = record.attendanceDecision.name;
   dto['listeningMode'] = record.listeningMode.name;
@@ -408,6 +457,11 @@ class GetScheduleTool implements AgentTool {
         'narrow the date range',
       );
     }
+    final conflictEventIds = await _conflictEventIds(
+      _gateway,
+      context.accountId,
+      inRange,
+    );
     final dtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
     for (final event in inRange) {
@@ -415,7 +469,14 @@ class GetScheduleTool implements AgentTool {
       // notes alongside the conflict flag (the brief's schedule DTO carries
       // attendanceNote and conflictState per event).
       final record = await _gateway.eventById(context.accountId, event.id);
-      dtos.add(_enrichedEventDto(event, record, context));
+      dtos.add(
+        _enrichedEventDto(
+          event,
+          record,
+          context,
+          conflictEventIds: conflictEventIds,
+        ),
+      );
       final ref = context.references.bind(kind: 'event', localId: event.id);
       references.add(
         AgentToolReference(kind: 'event', ref: ref, localId: event.id),
@@ -483,11 +544,23 @@ Future<AgentToolResult> _queryEvents(
     return startOf(a).compareTo(startOf(b)); // current/future ascending
   });
 
+  final conflictEventIds = await _conflictEventIds(
+    gateway,
+    context.accountId,
+    matches,
+  );
   final dtos = <Map<String, Object?>>[];
   final references = <AgentToolReference>[];
   for (final event in matches) {
     final record = await gateway.eventById(context.accountId, event.id);
-    dtos.add(_enrichedEventDto(event, record, context));
+    dtos.add(
+      _enrichedEventDto(
+        event,
+        record,
+        context,
+        conflictEventIds: conflictEventIds,
+      ),
+    );
     final ref = context.references.bind(kind: 'event', localId: event.id);
     references.add(AgentToolReference(kind: 'event', ref: ref, localId: event.id));
   }
@@ -764,13 +837,13 @@ class GetEventDetailsTool implements AgentTool {
         record.effectiveEndAt ?? _beijingFromEpoch(event.endAt!),
       );
     }
-    // Conflict state for this event: re-derive from the effective display set
-    // so the flag stays authoritative (SQL-computed). Fall back to not_conflict
-    // if the event is no longer in the display set.
-    final display = await _gateway.displayEvents(context.accountId);
-    final match = display.where((e) => e.id == eventId).firstOrNull;
+    // Conflict state for this single event: derived by a bounded projection
+    // over the target plus only its overlapping candidates (never all retained
+    // history).
     dto['conflictState'] =
-        match != null ? _conflictStateString(match) : 'not_conflict';
+        await _gateway.eventHasConflict(context.accountId, eventId)
+        ? 'conflict'
+        : 'not_conflict';
     return AgentToolResult(
       payload: dto,
       references: [
@@ -1033,24 +1106,17 @@ class GetConflictsTool implements AgentTool {
         .where((e) => _eventInRange(e, range))
         .toList(growable: false);
 
-    // Build the full grid-item set (events + approved plan blocks) and resolve
-    // every pair through the shared projection.
-    final planBlocks = await _gateway.allPlanBlocks(context.accountId);
-    final tasks = await _gateway.tasks(context.accountId);
-    final tasksById = {for (final task in tasks) task.id: task};
-    final items = <ScheduleGridItem>[
-      for (final event in inRangeEvents) ScheduleGridItem.fromEvent(event),
-    ];
-    for (final block in planBlocks) {
-      if (!block.showsInWeekGrid || !_planBlockInRange(block, range)) continue;
-      final task = tasksById[block.taskId];
-      if (task == null) continue;
-      items.add(ScheduleGridItem.fromPlanBlock(block, task));
-    }
-
-    final snapshot =
-        await _gateway.scheduleConflictRelations(context.accountId);
-    final pairs = ScheduleConflictProjection.resolve(items, snapshot);
+    // Run ONE bounded projection over exactly the in-range result set (events
+    // + effective plan blocks, restricted to the range) via the candidate API.
+    // Only candidate pairs are resolved; unrelated out-of-range history never
+    // grows the projection.
+    final projection = await _gateway.conflictsForItems(
+      context.accountId,
+      inRangeEvents,
+      from: range.from,
+      throughExclusive: range.through.add(const Duration(days: 1)),
+    );
+    final pairs = projection.pairs;
     final conflictPairs = pairs
         .where((pair) => pair.state == ConflictPairState.conflict)
         .toList(growable: false);
@@ -1091,13 +1157,6 @@ class GetConflictsTool implements AgentTool {
       references: references,
     );
   }
-}
-
-/// Whether a timed plan block falls inside the inclusive [range].
-bool _planBlockInRange(PlanBlockItem block, AgentDateRange range) {
-  final rangeEndInclusive = range.through.add(const Duration(days: 1));
-  return block.startAt.isBefore(rangeEndInclusive) &&
-      !block.endAt.isBefore(range.from);
 }
 
 /// The model-facing conflict origin token for a resolved pair.

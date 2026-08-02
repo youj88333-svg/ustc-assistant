@@ -12,6 +12,7 @@ import '../../tasks/domain/task.dart';
 import '../../tasks/presentation/task_center_page.dart';
 import '../application/effective_event_repository.dart';
 import '../application/jw_day_move_service.dart';
+import '../application/schedule_conflict_projection.dart';
 import '../domain/overlap_engine.dart';
 import '../domain/schedule_grid_item.dart';
 import '../domain/schedule_projection.dart';
@@ -223,7 +224,11 @@ class _ScheduleData extends StatelessWidget {
                   const [],
                   const [],
                   const [],
-                  conflictIds: const {},
+                  result: const ConflictProjectionResult(
+                    pairs: [],
+                    candidatePairCount: 0,
+                    conflictKeys: {},
+                  ),
                 )
               : const TaskCenterPage();
         }
@@ -236,13 +241,25 @@ class _ScheduleData extends StatelessWidget {
                 .map(TaskItem.fromRow)
                 .toList(growable: false);
             if (section == ScheduleSection.week) {
+              final repository = EffectiveEventRepository(
+                database,
+                accountId: account.id,
+              );
               return StreamBuilder<List<EffectiveEvent>>(
-                stream: EffectiveEventRepository(
-                  database,
-                  accountId: account.id,
-                ).watchDisplayEvents(),
+                stream: repository.watchDisplayEvents(),
                 builder: (context, eventSnapshot) {
                   final events = eventSnapshot.data ?? const [];
+                  // ONE bounded projection over the selected 7-day range. The
+                  // repository loads effective events only; the range filter
+                  // and candidate generation happen here, once, for both the
+                  // event and plan-block sides. This removes the old duplicate
+                  // repository-wide projection + widget projection.
+                  final week = WeekRange.forDate(selectedDate);
+                  final conflictFuture = repository.conflictsForItems(
+                    events,
+                    from: week.start,
+                    throughExclusive: week.endExclusive,
+                  );
                   return StreamBuilder<List<PlanBlock>>(
                     stream:
                         (database.select(
@@ -253,25 +270,22 @@ class _ScheduleData extends StatelessWidget {
                       final blocks = (blockSnapshot.data ?? const [])
                           .map(PlanBlockItem.fromRow)
                           .toList(growable: false);
-                      // The event side of a conflict is stamped by the event
-                      // stream; plan-block grid items get the same resolved
-                      // conflict id set here so both sides of an overlap
-                      // (event+PlanBlock or PlanBlock+PlanBlock) show the
-                      // warning icon.
-                      return FutureBuilder<Set<String>>(
-                        future: EffectiveEventRepository(
-                          database,
-                          accountId: account.id,
-                        ).resolvedConflictIdsFor(events),
+                      return FutureBuilder<ConflictProjectionResult>(
+                        future: conflictFuture,
                         builder: (context, conflictSnapshot) {
-                          final conflictIds =
-                              conflictSnapshot.data ?? const <String>{};
+                          final result =
+                              conflictSnapshot.data ??
+                              const ConflictProjectionResult(
+                                pairs: [],
+                                candidatePairCount: 0,
+                                conflictKeys: {},
+                              );
                           return _week(
                             context,
                             tasks,
                             events,
                             blocks,
-                            conflictIds: conflictIds,
+                            result: result,
                           );
                         },
                       );
@@ -292,11 +306,14 @@ class _ScheduleData extends StatelessWidget {
     List<TaskItem> tasks,
     List<EffectiveEvent> events,
     List<PlanBlockItem> blocks, {
-    required Set<String> conflictIds,
+    required ConflictProjectionResult result,
   }) {
     final tasksById = {for (final task in tasks) task.id: task};
     final items = <ScheduleGridItem>[
-      for (final event in events) ScheduleGridItem.fromEvent(event),
+      for (final event in events)
+        ScheduleGridItem.fromEvent(event).withConflict(
+          result.isConflict('event', event.id),
+        ),
     ];
     for (final block in blocks) {
       if (!block.showsInWeekGrid) continue;
@@ -306,7 +323,7 @@ class _ScheduleData extends StatelessWidget {
         ScheduleGridItem.fromPlanBlock(
           block,
           task,
-        ).withConflict(conflictIds.contains(block.id)),
+        ).withConflict(result.isConflict('plan_block', block.id)),
       );
     }
     return WeekTimetable(

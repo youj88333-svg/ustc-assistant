@@ -1,5 +1,44 @@
 import '../domain/schedule_grid_item.dart';
 
+/// A stable, kind-scoped identity for a schedule grid item. `kind` reuses the
+/// storage token produced by [ScheduleGridItem.relationKind] (`event` or
+/// `plan_block`) so it matches `schedule_relations` rows and never mixes bare
+/// CalendarEvent ids with PlanBlock ids.
+typedef ScheduleItemKey = ({String kind, String id});
+
+/// The parsed halves of a canonical `kind:id|kind:id` pair key.
+typedef _ParsedPairKey = ({String leftKind, String leftId, String rightKind, String rightId});
+
+/// The keyed outcome of one bounded conflict projection.
+///
+/// [pairs] holds one entry per *candidate* pair that could be in conflict
+/// (timed overlap, explicit occurrence relation, or a series-rule member
+/// combination). Unrelated historical items never produce a `noConflict` pair,
+/// so [candidatePairCount] is observable and stays small relative to the full
+/// `n*(n-1)/2` match.
+class ConflictProjectionResult {
+  const ConflictProjectionResult({
+    required this.pairs,
+    required this.candidatePairCount,
+    required this.conflictKeys,
+  });
+
+  /// Resolved candidate pairs (deterministically sorted).
+  final List<ResolvedConflictPair> pairs;
+
+  /// The number of candidate pairs the projection actually constructed. Equal
+  /// to [pairs].length; exposed so callers and tests can assert the projection
+  /// is bounded to the consumer's range rather than the full match.
+  final int candidatePairCount;
+
+  /// The [ScheduleItemKey] of every item involved in a conflict pair.
+  final Set<ScheduleItemKey> conflictKeys;
+
+  /// Whether the item identified by [kind]/[id] participates in a conflict.
+  bool isConflict(String kind, String id) =>
+      conflictKeys.contains((kind: kind, id: id));
+}
+
 /// Why a [ResolvedConflictPair] has its state.
 enum ConflictPairOrigin {
   /// Derived purely from a timed overlap (or its absence) — no explicit user
@@ -104,6 +143,8 @@ class ScheduleConflictProjection {
   ///
   /// The result is deterministic (sorted by pair) and contains one entry per
   /// distinct pair of items (a pair of an item with itself is skipped).
+  /// This full-pair form is retained for the two-item editor-preview and unit
+  /// tests; range-bounded consumers should use [resolveCandidates].
   static List<ResolvedConflictPair> resolve(
     List<ScheduleGridItem> items,
     ScheduleConflictRelationSnapshot snapshot,
@@ -117,11 +158,170 @@ class ScheduleConflictProjection {
         pairs.add(_resolvePair(a, b, snapshot));
       }
     }
+    return _sorted(pairs);
+  }
+
+  /// Resolves the pair formed by exactly two items, or null when they share an
+  /// id. Unit-test and editor-preview entry point for a single pair.
+  static ResolvedConflictPair? resolvePair(
+    ScheduleGridItem a,
+    ScheduleGridItem b,
+    ScheduleConflictRelationSnapshot snapshot,
+  ) {
+    if (a.id == b.id) return null;
+    return _resolvePair(a, b, snapshot);
+  }
+
+  /// Builds a bounded, keyed conflict projection over [items] intersected with
+  /// the inclusive-exclusive display range `[from, throughExclusive)`.
+  ///
+  /// Only *meaningful* candidate pairs are materialized:
+  /// 1. timed interval overlap (via a start-sorted sweep — O(n log n) rather
+  ///    than O(n²) pair construction);
+  /// 2. explicit occurrence relations (added even when the items do not
+  ///    overlap, so a non-overlapping explicit `conflict` still surfaces);
+  /// 3. member combinations that may hit an explicit series rule.
+  ///
+  /// No `noConflict` pair is ever emitted for two unrelated historical items
+  /// that neither overlap nor share an explicit relation — the returned
+  /// `candidatePairCount` therefore reflects only the consumer's relevant
+  /// subset. All-day items follow the existing product rules (never
+  /// auto-conflict from a shared date). Each candidate resolves with the
+  /// established precedence: occurrence override > series rule > derived
+  /// overlap > no conflict.
+  static ConflictProjectionResult resolveCandidates(
+    List<ScheduleGridItem> items,
+    ScheduleConflictRelationSnapshot snapshot, {
+    required DateTime from,
+    required DateTime throughExclusive,
+  }) {
+    final keyed = <ScheduleItemKey, ScheduleGridItem>{};
+    final sorted = <ScheduleGridItem>[];
+    for (final item in items) {
+      if (!_intersects(item, from, throughExclusive)) continue;
+      final key = (kind: item.relationKind, id: item.id);
+      if (keyed.containsKey(key)) continue;
+      keyed[key] = item;
+      sorted.add(item);
+    }
+
+    final candidateKeys = <({int a, int b})>{};
+    // Tier 1: timed interval overlap — start-sorted active-window sweep.
+    // Only in-range timed items are examined; indices are into [sorted].
+    final timed = sorted.where((item) => !item.allDay).toList()
+      ..sort((a, b) {
+        final byStart = a.startAt!.compareTo(b.startAt!);
+        return byStart != 0 ? byStart : a.id.compareTo(b.id);
+      });
+    var windowStart = 0;
+    for (var i = 0; i < timed.length; i++) {
+      final current = timed[i];
+      while (windowStart < i &&
+          !timed[windowStart].endAt!.isAfter(current.startAt!)) {
+        windowStart++;
+      }
+      for (var j = windowStart; j < i; j++) {
+        if (_timedOverlap(timed[j], current)) {
+          candidateKeys.add((
+            a: sorted.indexOf(timed[j]),
+            b: sorted.indexOf(current),
+          ));
+        }
+      }
+    }
+
+    // Tier 2 + 3: explicit occurrence relations and series-rule member pairs
+    // (added even when the members do not overlap).
+    for (final ruleKey in snapshot.occurrenceByPair.keys) {
+      final parsed = _parsePairKey(ruleKey);
+      if (parsed == null) continue;
+      final a = keyed[(kind: parsed.leftKind, id: parsed.leftId)];
+      final b = keyed[(kind: parsed.rightKind, id: parsed.rightId)];
+      if (a == null || b == null) continue;
+      candidateKeys.add((a: sorted.indexOf(a), b: sorted.indexOf(b)));
+    }
+    for (final ruleKey in snapshot.seriesByPair.keys) {
+      final parsed = _parsePairKey(ruleKey);
+      if (parsed == null) continue;
+      final a = _seriesMember(keyed, parsed.leftKind, parsed.leftId);
+      final b = _seriesMember(keyed, parsed.rightKind, parsed.rightId);
+      if (a == null || b == null) continue;
+      candidateKeys.add((a: sorted.indexOf(a), b: sorted.indexOf(b)));
+    }
+
+    // Resolve each candidate pair with the shared precedence.
+    final pairs = <ResolvedConflictPair>[];
+    for (final key in candidateKeys) {
+      pairs.add(_resolvePair(sorted[key.a], sorted[key.b], snapshot));
+    }
+    pairs.sort((x, y) {
+      final byLeft = _itemKey(x.left).id.compareTo(_itemKey(y.left).id);
+      return byLeft != 0 ? byLeft : _itemKey(x.right).id.compareTo(_itemKey(y.right).id);
+    });
+    return ConflictProjectionResult(
+      pairs: List.unmodifiable(pairs),
+      candidatePairCount: pairs.length,
+      conflictKeys: {
+        for (final pair in pairs)
+          if (pair.state == ConflictPairState.conflict)
+            ...{_itemKey(pair.left), _itemKey(pair.right)},
+      },
+    );
+  }
+
+  static List<ResolvedConflictPair> _sorted(List<ResolvedConflictPair> pairs) {
     pairs.sort((x, y) {
       final byLeft = x.left.id.compareTo(y.left.id);
       return byLeft != 0 ? byLeft : x.right.id.compareTo(y.right.id);
     });
     return List.unmodifiable(pairs);
+  }
+
+  static ScheduleItemKey _itemKey(ScheduleGridItem item) =>
+      (kind: item.relationKind, id: item.id);
+
+  static ScheduleGridItem? _seriesMember(
+    Map<ScheduleItemKey, ScheduleGridItem> keyed,
+    String seriesType,
+    String seriesId,
+  ) {
+    // A series rule references `course_series:<id>` for events. Find any
+    // in-range item whose series identity matches.
+    for (final item in keyed.values) {
+      if (item.seriesType == seriesType && item.seriesId == seriesId) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  static _ParsedPairKey? _parsePairKey(String key) {
+    final parts = key.split('|');
+    if (parts.length != 2) return null;
+    final a = parts[0].split(':');
+    final b = parts[1].split(':');
+    if (a.length != 2 || b.length != 2) return null;
+    return (
+      leftKind: a[0],
+      leftId: a[1],
+      rightKind: b[0],
+      rightId: b[1],
+    );
+  }
+
+  static bool _intersects(
+    ScheduleGridItem item,
+    DateTime from,
+    DateTime throughExclusive,
+  ) {
+    if (item.allDay) {
+      final start = item.startDate!;
+      final end = item.endDateExclusive!;
+      return start.isBefore(throughExclusive) && end.isAfter(from);
+    }
+    final start = item.startAt!;
+    final end = item.endAt ?? start;
+    return start.isBefore(throughExclusive) && end.isAfter(from);
   }
 
   static ResolvedConflictPair _resolvePair(
