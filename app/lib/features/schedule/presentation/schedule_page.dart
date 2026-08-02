@@ -27,6 +27,7 @@ class SchedulePage extends StatefulWidget {
     required this.database,
     this.onEventSelected,
     this.onTaskSelected,
+    this.onManageRelations,
     this.initialSection = ScheduleSection.week,
     this.clock = const SystemBeijingClock(),
     super.key,
@@ -35,6 +36,11 @@ class SchedulePage extends StatefulWidget {
   final AppDatabase database;
   final ValueChanged<String>? onEventSelected;
   final ValueChanged<String>? onTaskSelected;
+
+  /// Handles the "处理重叠关系" command from an overlap expansion in the week
+  /// grid, receiving the overlap group's items so the caller can route them to
+  /// the mixed relation editor.
+  final ValueChanged<OverlapGroup>? onManageRelations;
 
   /// The section to show when the page is first displayed, and whenever this
   /// widget is rebuilt with a different value (e.g. a route rebuild from
@@ -126,6 +132,7 @@ class _SchedulePageState extends State<SchedulePage>
               selectedDate: selectedDate,
               onEventSelected: widget.onEventSelected,
               onTaskSelected: widget.onTaskSelected,
+              onManageRelations: widget.onManageRelations,
               onDayMove: () => unawaited(_openDayMoveDialog()),
             ),
             ScheduleSection.tasks => _ScheduleData(
@@ -134,6 +141,7 @@ class _SchedulePageState extends State<SchedulePage>
               selectedDate: selectedDate,
               onEventSelected: widget.onEventSelected,
               onTaskSelected: widget.onTaskSelected,
+              onManageRelations: widget.onManageRelations,
               onDayMove: () => unawaited(_openDayMoveDialog()),
             ),
           },
@@ -196,6 +204,7 @@ class _ScheduleData extends StatelessWidget {
     required this.selectedDate,
     required this.onEventSelected,
     required this.onTaskSelected,
+    this.onManageRelations,
     this.onDayMove,
   });
 
@@ -204,6 +213,7 @@ class _ScheduleData extends StatelessWidget {
   final DateTime selectedDate;
   final ValueChanged<String>? onEventSelected;
   final ValueChanged<String>? onTaskSelected;
+  final ValueChanged<OverlapGroup>? onManageRelations;
   final VoidCallback? onDayMove;
 
   @override
@@ -332,6 +342,7 @@ class _ScheduleData extends StatelessWidget {
       ),
       tasks: tasks,
       onDayMove: onDayMove,
+      onManageRelations: onManageRelations,
       onTaskSelected: (task) {
         onTaskSelected?.call(task.id);
       },

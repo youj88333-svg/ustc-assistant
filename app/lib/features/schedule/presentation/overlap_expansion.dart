@@ -7,11 +7,17 @@ class OverlapExpansion extends StatelessWidget {
   const OverlapExpansion({
     required this.group,
     required this.onSelected,
+    this.onManageRelations,
     super.key,
   });
 
   final OverlapGroup group;
   final ValueChanged<ScheduleGridItem> onSelected;
+
+  /// When provided, the overlap expansion shows a "处理重叠关系" command that
+  /// closes the dialog and hands the active group to the caller (which routes
+  /// it to the mixed relation editor).
+  final ValueChanged<OverlapGroup>? onManageRelations;
 
   @override
   Widget build(BuildContext context) {
@@ -38,6 +44,14 @@ class OverlapExpansion extends StatelessWidget {
         ),
       ),
       actions: [
+        if (onManageRelations != null)
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              onManageRelations!(group);
+            },
+            child: const Text('处理重叠关系'),
+          ),
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: const Text('关闭'),

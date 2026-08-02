@@ -83,6 +83,10 @@ GoRouter buildRouter(
                   onEventSelected: (eventId) =>
                       context.push('/events/$eventId'),
                   onTaskSelected: (taskId) => context.push('/tasks/$taskId'),
+                  onManageRelations: (group) => context.push(
+                    '/schedule/conflicts',
+                    extra: ConflictManagementRequest(group.items),
+                  ),
                 ),
               ),
             ],
@@ -121,6 +125,15 @@ GoRouter buildRouter(
         builder: (context, state) => ConflictManagementLoader(
           database: database,
           eventId: state.pathParameters['eventId']!,
+        ),
+      ),
+      GoRoute(
+        path: '/schedule/conflicts',
+        builder: (context, state) => _ScheduleConflictsLoader(
+          database: database,
+          request: state.extra is ConflictManagementRequest
+              ? state.extra! as ConflictManagementRequest
+              : null,
         ),
       ),
       GoRoute(
@@ -268,6 +281,51 @@ class _MainShell extends StatelessWidget {
     } else {
       context.push('/calendar-event/new');
     }
+  }
+}
+
+class _ScheduleConflictsLoader extends StatelessWidget {
+  const _ScheduleConflictsLoader({
+    required this.database,
+    required this.request,
+  });
+
+  final AppDatabase database;
+  final ConflictManagementRequest? request;
+
+  @override
+  Widget build(BuildContext context) {
+    // Only a ConflictManagementRequest with at least two items is accepted.
+    // Missing or invalid extras render an empty-state page.
+    final items = request?.items;
+    if (items == null || items.length < 2) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('处理重叠日程')),
+        body: const Center(child: Text('没有可处理的重叠日程')),
+      );
+    }
+    return FutureBuilder<LocalAccount?>(
+      future: _activeAccount(database),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        final account = snapshot.data;
+        if (account == null) {
+          return Scaffold(
+            appBar: AppBar(title: const Text('处理重叠日程')),
+            body: const Center(child: Text('请先配置学校账号')),
+          );
+        }
+        return ConflictManagementPage(
+          database: database,
+          accountId: account.id,
+          items: items,
+        );
+      },
+    );
   }
 }
 

@@ -2,10 +2,12 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
+import 'package:ustc_assistant_app/features/schedule/presentation/conflict_management_page.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
@@ -863,4 +865,205 @@ void main() {
       await tester.pumpAndSettle();
     },
   );
+
+  // Task 5: a three-item overlap group routed to the relation editor lists
+  // every unordered pair (three pairs).
+  testWidgets('three-item overlap group lists all three pairs in the editor', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    for (final spec in [
+      ('ev-a', 1, 3),
+      ('ev-b', 2, 4),
+      ('ev-c', 2, 5),
+    ]) {
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: spec.$1,
+              accountId: 'account',
+              source: 'user',
+              title: spec.$1,
+              type: 'personal',
+              startAt: Value(
+                DateTime.utc(2026, 7, 27, spec.$2).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime.utc(2026, 7, 27, spec.$3).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+    }
+    // A tall surface so the editor's lazy pair list builds all three pair
+    // tiles (each pair tile, with dropdown/switch/reason, is ~200px tall).
+    tester.view.physicalSize = const Size(800, 2400);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+    final router = _conflictRouter(database);
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    // Open the overlap group expansion and invoke the manage command.
+    await tester.tap(find.byKey(const Key('overlap-group-ev-a|ev-b|ev-c')));
+    await tester.pumpAndSettle();
+    expect(find.text('处理重叠关系'), findsOneWidget);
+    await tester.tap(find.text('处理重叠关系'));
+    await tester.pumpAndSettle();
+
+    // The editor lists every unordered pair of the three-item group.
+    expect(find.byKey(const Key('conflict-state-ev-a|ev-b')), findsOneWidget);
+    expect(find.byKey(const Key('conflict-state-ev-a|ev-c')), findsOneWidget);
+    expect(find.byKey(const Key('conflict-state-ev-b|ev-c')), findsOneWidget);
+    expect(find.byKey(const Key('save-conflicts')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets(
+    'saving event/plan-block no_conflict removes warnings while both remain',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      await seedTask(database, 'task-x', '完成实验报告');
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'overlap-event',
+              accountId: 'account',
+              source: 'user',
+              title: '晚间安排',
+              type: 'personal',
+              startAt: Value(
+                DateTime.utc(2026, 7, 27, 1).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime.utc(2026, 7, 27, 2, 30).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await seedPlanBlock(
+        database,
+        id: 'block-x',
+        taskId: 'task-x',
+        startAt: DateTime(2026, 7, 27, 9, 30),
+        endAt: DateTime(2026, 7, 27, 10, 45),
+        status: PlanBlockStatus.accepted.storage,
+      );
+      final router = _conflictRouter(database);
+      addTearDown(router.dispose);
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+
+      // Both cards carry the conflict warning before classification.
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('event-overlap-event')),
+          matching: find.bySemanticsLabel('冲突'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('plan-block-block-x')),
+          matching: find.bySemanticsLabel('冲突'),
+        ),
+        findsOneWidget,
+      );
+
+      // Open expansion, invoke manage, land in the editor.
+      await tester.tap(
+        find.byKey(const Key('overlap-group-overlap-event|block-x')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('处理重叠关系'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('conflict-state-overlap-event|block-x')), findsOneWidget);
+      // No foreground radios for a PlanBlock participant.
+      expect(find.text('优先显示'), findsNothing);
+
+      // Classify the pair as no_conflict and save.
+      await tester.tap(
+        find.byKey(const Key('conflict-state-overlap-event|block-x')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('不冲突').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('save-conflicts')));
+      await tester.pumpAndSettle();
+
+      // Returned to the week view: both arrangements remain but warnings gone.
+      expect(find.byKey(const Key('week-range-label')), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('event-overlap-event')),
+          matching: find.bySemanticsLabel('冲突'),
+        ),
+        findsNothing,
+      );
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('plan-block-block-x')),
+          matching: find.bySemanticsLabel('冲突'),
+        ),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('event-overlap-event')), findsOneWidget);
+      expect(find.byKey(const Key('plan-block-block-x')), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
 }
+
+/// A minimal router for `/schedule` (week view) and `/schedule/conflicts`
+/// (mixed relation editor), so overlap-expansion tests can route the manage
+/// command without booting the full agent composition chain.
+GoRouter _conflictRouter(AppDatabase database) => GoRouter(
+  initialLocation: '/schedule',
+  routes: [
+    GoRoute(
+      path: '/schedule',
+      builder: (context, state) => Scaffold(
+        body: SchedulePage(
+          database: database,
+          clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          onManageRelations: (group) => context.push(
+            '/schedule/conflicts',
+            extra: ConflictManagementRequest(group.items),
+          ),
+        ),
+      ),
+    ),
+    GoRoute(
+      path: '/schedule/conflicts',
+      builder: (context, state) {
+        final request = state.extra is ConflictManagementRequest
+            ? state.extra! as ConflictManagementRequest
+            : null;
+        return Scaffold(
+          body: request == null
+              ? const Center(child: Text('没有可处理的重叠日程'))
+              : ConflictManagementPage(
+                  database: database,
+                  accountId: 'account',
+                  items: request.items,
+                ),
+        );
+      },
+    ),
+  ],
+);

@@ -23,6 +23,7 @@ class WeekTimetable extends StatelessWidget {
     this.hideCompletedTasks = false,
     this.onTaskSelected,
     this.onDayMove,
+    this.onManageRelations,
     super.key,
   });
 
@@ -40,6 +41,11 @@ class WeekTimetable extends StatelessWidget {
   /// Opens the whole-day course move dialog (spec section 10.3). When null
   /// the "整日调课" entry button is not rendered.
   final VoidCallback? onDayMove;
+
+  /// Exposes the "处理重叠关系" command from every overlap expansion. When
+  /// non-null, the expansion shows the command which hands the active
+  /// [OverlapGroup] to the caller for routing to the mixed relation editor.
+  final ValueChanged<OverlapGroup>? onManageRelations;
 
   static const axisWidth = 56.0;
   static const minimumDayWidth = 142.0;
@@ -142,6 +148,7 @@ class WeekTimetable extends StatelessWidget {
                                         const [],
                                     groupsByItem: groupsByItem,
                                     onItemSelected: onEventSelected,
+                                    onManageRelations: onManageRelations,
                                   ),
                               ],
                             ),
@@ -412,6 +419,7 @@ class _DayColumn extends StatelessWidget {
     required this.items,
     required this.groupsByItem,
     required this.onItemSelected,
+    required this.onManageRelations,
   });
 
   final DateTime day;
@@ -419,6 +427,7 @@ class _DayColumn extends StatelessWidget {
   final List<ProjectedEvent> items;
   final Map<String, OverlapGroup> groupsByItem;
   final ValueChanged<ScheduleGridItem> onItemSelected;
+  final ValueChanged<OverlapGroup>? onManageRelations;
 
   @override
   Widget build(BuildContext context) {
@@ -472,8 +481,11 @@ class _DayColumn extends StatelessWidget {
         } else {
           showDialog<void>(
             context: context,
-            builder: (context) =>
-                OverlapExpansion(group: group, onSelected: onItemSelected),
+            builder: (context) => OverlapExpansion(
+              group: group,
+              onSelected: onItemSelected,
+              onManageRelations: onManageRelations,
+            ),
           );
         }
       },

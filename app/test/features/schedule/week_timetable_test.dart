@@ -62,6 +62,7 @@ Widget fixture(
   List<PlanBlockItem> planBlocks = const [],
   List<TaskItem> tasks = const [],
   ValueChanged<ScheduleGridItem>? onSelected,
+  ValueChanged<OverlapGroup>? onManageRelations,
 }) {
   final items = <ScheduleGridItem>[
     for (final event in events) ScheduleGridItem.fromEvent(event),
@@ -79,6 +80,7 @@ Widget fixture(
         ),
         tasks: tasks,
         onEventSelected: onSelected ?? (_) {},
+        onManageRelations: onManageRelations,
       ),
     ),
   );
@@ -267,5 +269,104 @@ void main() {
     await tester.pumpAndSettle();
     expect(selected?.kind, ScheduleGridItemKind.planBlock);
     expect(selected?.planBlock?.id, 'block-x');
+  });
+
+  testWidgets(
+    'event/event overlap expansion shows the manage-relations command',
+    (tester) async {
+      OverlapGroup? managed;
+      await tester.pumpWidget(
+        fixture([
+          timed('a', 1, 9, 45, 11, 20),
+          timed('b', 1, 10, 0, 11, 30),
+        ], onManageRelations: (group) => managed = group),
+      );
+
+      await tester.tap(find.byKey(const Key('overlap-group-a|b')));
+      await tester.pumpAndSettle();
+      expect(find.byType(OverlapExpansion), findsOneWidget);
+      expect(find.text('处理重叠关系'), findsOneWidget);
+
+      await tester.tap(find.text('处理重叠关系'));
+      await tester.pumpAndSettle();
+      expect(managed, isNotNull);
+      expect(managed!.items.map((item) => item.id), ['a', 'b']);
+      // The dialog closed after invoking the command.
+      expect(find.byType(OverlapExpansion), findsNothing);
+    },
+  );
+
+  testWidgets('event/plan-block overlap expansion shows the manage command', (
+    tester,
+  ) async {
+    final task = taskItem('task-x', title: '完成实验报告');
+    final block = blockItem(
+      'block-x',
+      task.id,
+      DateTime(2026, 7, 21, 10, 0),
+      DateTime(2026, 7, 21, 11, 30),
+      PlanBlockStatus.accepted,
+    );
+    OverlapGroup? managed;
+    await tester.pumpWidget(
+      fixture(
+        [timed('event-x', 1, 9, 45, 11, 20)],
+        planBlocks: [block],
+        tasks: [task],
+        onManageRelations: (group) => managed = group,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('overlap-group-event-x|block-x')));
+    await tester.pumpAndSettle();
+    expect(find.byType(OverlapExpansion), findsOneWidget);
+    expect(find.text('处理重叠关系'), findsOneWidget);
+
+    await tester.tap(find.text('处理重叠关系'));
+    await tester.pumpAndSettle();
+    expect(managed, isNotNull);
+    expect(managed!.items.map((item) => item.id), ['event-x', 'block-x']);
+    expect(find.byType(OverlapExpansion), findsNothing);
+  });
+
+  testWidgets('plan-block/plan-block overlap expansion shows the manage command', (
+    tester,
+  ) async {
+    final taskA = taskItem('task-a', title: '任务甲');
+    final taskB = taskItem('task-b', title: '任务乙');
+    final blockA = blockItem(
+      'block-a',
+      taskA.id,
+      DateTime(2026, 7, 21, 10, 0),
+      DateTime(2026, 7, 21, 11, 30),
+      PlanBlockStatus.accepted,
+    );
+    final blockB = blockItem(
+      'block-b',
+      taskB.id,
+      DateTime(2026, 7, 21, 10, 15),
+      DateTime(2026, 7, 21, 12, 0),
+      PlanBlockStatus.accepted,
+    );
+    OverlapGroup? managed;
+    await tester.pumpWidget(
+      fixture(
+        [],
+        planBlocks: [blockA, blockB],
+        tasks: [taskA, taskB],
+        onManageRelations: (group) => managed = group,
+      ),
+    );
+
+    await tester.tap(find.byKey(const Key('overlap-group-block-a|block-b')));
+    await tester.pumpAndSettle();
+    expect(find.byType(OverlapExpansion), findsOneWidget);
+    expect(find.text('处理重叠关系'), findsOneWidget);
+
+    await tester.tap(find.text('处理重叠关系'));
+    await tester.pumpAndSettle();
+    expect(managed, isNotNull);
+    expect(managed!.items.map((item) => item.id), ['block-a', 'block-b']);
+    expect(find.byType(OverlapExpansion), findsNothing);
   });
 }

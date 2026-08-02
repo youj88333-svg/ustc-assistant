@@ -253,16 +253,17 @@ void main() {
         startHour: item.$2,
       );
     }
-    final records = await EffectiveEventRepository(
+    final repository = EffectiveEventRepository(
       database,
       accountId: 'account',
-    ).overlappingRecords('event-b');
+    );
+    final records = await repository.overlappingRecords('event-b');
     await tester.pumpWidget(
       MaterialApp(
         home: ConflictManagementPage(
           database: database,
           accountId: 'account',
-          records: records,
+          items: [for (final record in records) repository.gridItemFor(record)],
         ),
       ),
     );

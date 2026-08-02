@@ -275,6 +275,12 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     );
   }
 
+  /// Converts a loaded record into the unified [ScheduleGridItem] shape so
+  /// `/events/:eventId/conflicts` feeds the same mixed relation editor as the
+  /// overlap-expansion route.
+  ScheduleGridItem gridItemFor(EffectiveEventRecord record) =>
+      ScheduleGridItem.fromEvent(_recordToEffectiveEvent(record));
+
   static Iterable<DateTime> _startInstantsOf(EffectiveEvent e) sync* {
     if (e.allDay) {
       yield e.startDate!;
