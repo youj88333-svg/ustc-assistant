@@ -669,10 +669,12 @@ class AgentSessionService {
     // once its terminal write tool succeeded (after confirmation); a read is
     // grounded once its required lookup tools succeeded.
     final succeededTools = <String>{};
-    // Tools the model actually ATTEMPTED this run (any outcome). Used so a
-    // mutation that was attempted but declined/cancelled/errored is accepted
-    // as a grounded attempted operation rather than re-corrected.
-    final attemptedTools = <String>{};
+    // Structured outcomes of THIS grounding requirement's terminal write
+    // tool(s). Success prose is grounded ONLY by a successful terminal write;
+    // a terminal write attempted but not successful deterministically settles
+    // the run as a non-success outcome (no repeat attempt, no reliance on the
+    // model honestly reporting the failure).
+    final terminalAttempts = <String, _TerminalMutationAttempt>{};
 
     // Bounded corrective-retry state: at most one forced `any` retry and at
     // most one compat fallback without `tool_choice` per run.
@@ -814,7 +816,7 @@ class AgentSessionService {
           final grounded = _settleNoToolUse(
             requirement: grounding,
             succeededTools: succeededTools,
-            attemptedTools: attemptedTools,
+            terminalAttempts: terminalAttempts,
             isCancelled: signal.isCancelled,
             usedCorrective: correctiveUsed,
           );
@@ -842,6 +844,16 @@ class AgentSessionService {
                   : LlmToolChoice.any;
               correctivePending = true;
               continue;
+            case _GroundedSettlement.overrideFailure:
+              // The terminal write WAS attempted but did not succeed. Do NOT
+              // re-correct into a repeat write attempt. Deterministically
+              // replace the model's text (which may falsely claim success)
+              // with a fixed non-success statement derived from the tool's
+              // safe error code. Success is NOT judged from model wording.
+              terminalState = _terminalFailureRuntimeState(grounding);
+              errorCode = _terminalFailureCode(grounding, terminalAttempts);
+              assistantText = _terminalFailureText(errorCode);
+              break;
             case _GroundedSettlement.fail:
               // Case 5: no legal required tool after correction/fallback.
               // Replace any unsupported model text with the fixed safe notice.
@@ -1038,13 +1050,19 @@ class AgentSessionService {
           if (result.status == AgentToolStatus.success) {
             succeededTools.add(tu.name);
           }
-          // Track every tool the model actually ATTEMPTED this run (any
-          // outcome). A mutation whose terminal write was attempted but ended
-          // in decline/cancel/error is "grounded as an attempted operation"
-          // — its final text must report the actual non-success result, which
-          // the model already saw in the tool_result — rather than being
-          // re-corrected into a repeat attempt.
-          attemptedTools.add(tu.name);
+          // Record a structured outcome ONLY when this tool is a terminal
+          // write of the CURRENT grounding requirement. A read-tool failure or
+          // an unrelated tool attempt must NOT be treated as a completed
+          // (non-)write. This deterministic outcome is what grounds success
+          // prose for a mutation — success never depends on model wording.
+          if (grounding != null &&
+              grounding.terminalTools.contains(tu.name)) {
+            terminalAttempts[tu.name] = _TerminalMutationAttempt(
+              toolName: tu.name,
+              status: result.status,
+              errorCode: result.errorCode,
+            );
+          }
 
           // Surface references bound by the tool.
           //
@@ -1438,12 +1456,13 @@ class AgentSessionService {
   ///
   /// [requirement] is the classification of the CURRENT user text; null means
   /// free chat / capability advice. [succeededTools] holds the tools that
-  /// completed successfully this run; [usedCorrective] reports whether the
-  /// single corrective request has already been issued.
+  /// completed successfully this run; [terminalAttempts] holds structured
+  /// outcomes for any terminal write tool(s) run this session; [usedCorrective]
+  /// reports whether the single corrective request has already been issued.
   _GroundedSettlement _settleNoToolUse({
     required AgentGroundingRequirement? requirement,
     required Set<String> succeededTools,
-    required Set<String> attemptedTools,
+    required Map<String, _TerminalMutationAttempt> terminalAttempts,
     required bool isCancelled,
     required bool usedCorrective,
   }) {
@@ -1462,16 +1481,22 @@ class AgentSessionService {
       return _GroundedSettlement.accept;
     }
 
-    // A mutation whose required terminal write was ATTEMPTED (declined /
-    // cancelled / errored) is grounded as an attempted operation: the model
-    // saw the non-success tool_result and its final text reports the actual
-    // result, so we accept without re-correcting into a repeat attempt. This
-    // does NOT apply when the terminal write was never attempted at all
-    // (e.g. a hallucinated success with no tool call ever made).
-    if (req.mutationIntent &&
-        req.terminalTools.isNotEmpty &&
-        req.terminalTools.any(attemptedTools.contains)) {
-      return _GroundedSettlement.accept;
+    // Mutation: the terminal write outcome is the SOLE authority on success.
+    // If a terminal write of this requirement was invoked, decide by its
+    // structured result — never by the model's wording. A success grounds the
+    // model's completion prose; any non-success deterministically overrides
+    // the model's (possibly false) text and must NOT be re-called. This does
+    // NOT apply when the terminal write was never invoked at all (e.g. a
+    // hallucinated success with no tool call ever made).
+    if (req.mutationIntent && req.terminalTools.isNotEmpty) {
+      for (final terminalTool in req.terminalTools) {
+        final attempt = terminalAttempts[terminalTool];
+        if (attempt != null) {
+          return attempt.succeeded
+              ? _GroundedSettlement.accept
+              : _GroundedSettlement.overrideFailure;
+        }
+      }
     }
 
     // Case 3: a required tool is missing and no corrective call was used —
@@ -1482,6 +1507,67 @@ class AgentSessionService {
     // required tool succeeded — grounding failed.
     return _GroundedSettlement.fail;
   }
+
+  /// The runtime terminal state for a terminal write that was attempted but
+  /// did not succeed. Declined / permission-denied / tool-cancelled outcomes
+  /// are safe-ended conversations; technical errors follow the existing
+  /// failed-run display convention. In every case the run never lands on a
+  /// success conclusion, and the safe `errorCode` is preserved.
+  static AgentRunState _terminalFailureRuntimeState(
+    AgentGroundingRequirement? requirement,
+  ) {
+    // Kept simple: a non-success terminal write never yields `completed`.
+    return AgentRunState.failed;
+  }
+
+  /// The preserved safe error code for a non-success terminal write. Falls
+  /// back to `write_not_grounded` when the structured outcome carries no code
+  /// so a traceable local failure reason always survives.
+  static String? _terminalFailureCode(
+    AgentGroundingRequirement? requirement,
+    Map<String, _TerminalMutationAttempt> terminalAttempts,
+  ) {
+    if (requirement != null) {
+      for (final terminalTool in requirement.terminalTools) {
+        final attempt = terminalAttempts[terminalTool];
+        if (attempt != null && attempt.errorCode != null) {
+          return attempt.errorCode;
+        }
+      }
+    }
+    return 'write_not_grounded';
+  }
+
+  /// Maps a safe terminal-write error code to a fixed non-success statement.
+  /// Every variant explicitly states that no data was modified. The fallback
+  /// must at least convey "没有修改数据".
+  static String _terminalFailureText(String? code) => switch (code) {
+        'user_declined' => '本次操作已取消，没有修改数据。',
+        'permission_denied' => '权限策略拒绝了本次操作，没有修改数据。',
+        'cancelled' => '本次操作已停止，没有修改数据。',
+        _ => '操作未完成，没有修改数据，请检查信息后重试。',
+      };
+}
+
+/// A structured record of a terminal write attempt during this session run.
+///
+/// Success of a mutation is grounded ONLY by an [AgentToolStatus.success]
+/// terminal write result — never by the model claiming completion. A terminal
+/// write that was invoked but did not succeed is recorded here so the
+/// settlement can deterministically override false success prose without
+/// re-calling the write.
+class _TerminalMutationAttempt {
+  const _TerminalMutationAttempt({
+    required this.toolName,
+    required this.status,
+    this.errorCode,
+  });
+
+  final String toolName;
+  final AgentToolStatus status;
+  final String? errorCode;
+
+  bool get succeeded => status == AgentToolStatus.success;
 }
 
 /// Outcome of settling a no-tool-use model turn under the grounding policy.
@@ -1491,6 +1577,9 @@ enum _GroundedSettlement {
   accept,
   /// Issue the single bounded corrective request.
   correct,
+  /// A terminal write was attempted but did not succeed — deterministically
+  /// settle as non-success (override the model's text, never re-call).
+  overrideFailure,
   /// No legal required tool after correction/fallback: grounding failed.
   fail,
 }

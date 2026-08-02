@@ -513,6 +513,43 @@ class _FailingWriteTool implements AgentTool {
   );
 }
 
+/// A plan_task write tool whose outcome (status + errorCode) is configurable
+/// per test, and which counts its executions so a test can assert the write is
+/// never re-executed after a failed terminal outcome.
+class _ConfigurablePlanTaskTool implements AgentTool {
+  _ConfigurablePlanTaskTool({required this.status, this.errorCode});
+
+  final AgentToolStatus status;
+  final String? errorCode;
+  int executeCount = 0;
+
+  @override
+  String get name => 'plan_task';
+  @override
+  String get description => 'Plans a task execution block.';
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    if (status == AgentToolStatus.success) {
+      return const AgentToolResult(status: AgentToolStatus.success, payload: {});
+    }
+    return AgentToolResult(
+      status: status,
+      errorCode: errorCode ?? 'write_commit_failed',
+      payload: {'guidance': '写操作未成功，请检查后重试。'},
+    );
+  }
+}
+
 class _ConcurrentBlockingProvider implements LlmProvider {
   final Map<String, Completer<void>> _started = {};
   final Map<String, Completer<void>> _release = {};
@@ -2313,13 +2350,16 @@ END
     );
 
     test(
-      'declined mutation is grounded as an attempted operation, not re-corrected',
+      'declined mutation is settled as non-success, not re-corrected, no false success',
       () async {
         // Simulate a write intent where the model DOES attempt the terminal
         // write but it yields a non-success (declined) result, then the model
-        // reports it. It must NOT be re-corrected into a repeat attempt.
+        // dishonestly reports completion. It must NOT be re-corrected into a
+        // repeat attempt AND its false success text must be overridden by a
+        // fixed non-success statement — success is decided by the structured
+        // tool result, not the model's wording.
         final provider = _ScriptedProvider([
-          // Call 1: attempt plan_task, but out of a fixed budget/ref it errors.
+          // Call 1: attempt plan_task, which fails with target_not_found.
           [
             const ToolUseCompletedEvent(
               id: 'tu-plan-x',
@@ -2332,8 +2372,8 @@ END
             ),
             const CompletedEvent(),
           ],
-          // Call 2: model reports the non-success (target missing) result.
-          [const TextDeltaEvent('该任务不存在，无法安排。'), const CompletedEvent()],
+          // Call 2: the model falsely claims success.
+          [const TextDeltaEvent('已经完成，任务时间段已安排成功。'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -2351,9 +2391,13 @@ END
 
         // Two calls only — the attempted (failed) write was NOT re-corrected.
         expect(provider.streamCallCount, 2);
-        expect(states.last.state, AgentRunState.completed);
-        expect(states.last.text, contains('该任务不存在'));
-        expect(states.last.errorCode, isNull);
+        // The run never lands on a success conclusion.
+        expect(states.last.state, isNot(AgentRunState.completed));
+        // The false success claim is replaced by the fixed non-success text.
+        expect(states.last.text, isNot(contains('安排成功')));
+        expect(states.last.text, contains('没有修改数据'));
+        // The preserved safe error code is traceable.
+        expect(states.last.errorCode, 'target_not_found');
       },
     );
 
@@ -2485,6 +2529,170 @@ END
         // Only the first call was ever started; no corrective call followed.
         expect(provider.streamCallCount, 1);
         expect(states.last.state, AgentRunState.cancelled);
+      },
+    );
+  });
+
+  group('grounding: terminal write outcome is authoritative', () {
+    test(
+      'a failed terminal write overrides false success prose and is not re-run',
+      () async {
+        // A terminal write that returns each non-success code, with the model
+        // then falsely claiming success. The final visible text must NOT carry
+        // the success claim and the write must NOT be re-executed.
+        const failureCodes = <String>{
+          'user_declined',
+          'permission_denied',
+          'target_not_found',
+          'invalid_write_arguments',
+          'write_commit_failed',
+          'cancelled',
+        };
+        for (final code in failureCodes) {
+          final tool = _ConfigurablePlanTaskTool(
+            status: AgentToolStatus.error,
+            errorCode: code,
+          );
+          final provider = _ScriptedProvider([
+            // Call 1: attempt the terminal write (it fails with [code]).
+            [
+              ToolUseCompletedEvent(
+                id: 'tu-plan-$code',
+                name: 'plan_task',
+                input: {'ref_task': 'ref_1'},
+              ),
+              const CompletedEvent(),
+            ],
+            // Call 2: the model dishonestly claims success.
+            [
+              const TextDeltaEvent('已经完成，任务时间段已安排成功。'),
+              const CompletedEvent(),
+            ],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+            tools: [tool],
+          );
+
+          final states = await service
+              .send(
+                accountId: account,
+                userText: '给完成操作系统大作业安排明天下午两点',
+              )
+              .toList();
+
+          // Two calls only: the failed terminal write is NOT re-corrected into
+          // a repeat attempt, so the write ran exactly once.
+          expect(provider.streamCallCount, 2, reason: 'code=$code');
+          expect(tool.executeCount, 1, reason: 'code=$code');
+          // The false success claim is replaced by a fixed non-success text.
+          expect(
+            states.last.text,
+            isNot(contains('已经完成')),
+            reason: 'code=$code',
+          );
+          expect(
+            states.last.text,
+            isNot(contains('安排成功')),
+            reason: 'code=$code',
+          );
+          expect(states.last.text, contains('没有修改数据'),
+              reason: 'code=$code');
+          // The run never lands on a success conclusion.
+          expect(states.last.state, isNot(AgentRunState.completed),
+              reason: 'code=$code');
+          // The safe error code is preserved.
+          expect(states.last.errorCode, code, reason: 'code=$code');
+        }
+      },
+    );
+
+    test(
+      'a successful terminal write preserves the model completion prose',
+      () async {
+        final tool = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final provider = _ScriptedProvider([
+          // Call 1: attempt the terminal write (succeeds).
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan-ok',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: the model reports completion.
+          [
+            const TextDeltaEvent('已经完成，任务时间段已安排成功。'),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点',
+            )
+            .toList();
+
+        // Success grounded by the structured result: the completion prose is
+        // preserved normally.
+        expect(provider.streamCallCount, 2);
+        expect(tool.executeCount, 1);
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('安排成功'));
+        expect(states.last.errorCode, isNull);
+      },
+    );
+
+    test(
+      'a failed read lookup for a read intent is not treated as terminal override',
+      () async {
+        // A pure read intent (schedule query) whose single lookup fails. It
+        // has NO terminal write, so the failure must NOT be mistaken for a
+        // completed mutation; it must instead follow the read grounding path
+        // (a bounded correction, then grounding_failed) rather than emit a
+        // "没有修改数据" terminal-override statement.
+        final provider = _ScriptedProvider([
+          // Call 1: attempt get_schedule, which fails.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-sched-fail',
+              name: 'get_schedule',
+              input: {'date': '2026-07-30'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: plain text, no lookup -> triggers the single correction.
+          [const TextDeltaEvent('我查不到。'), const CompletedEvent()],
+          // Call 3 (corrective): still no legal lookup; correction exhausted.
+          [const TextDeltaEvent('还是查不到。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_GuidanceScheduleTool()],
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '明天有什么课？')
+            .toList();
+
+        // The read failure settles as grounding_failed, NOT as a write
+        // terminal-override (which would be wrong for a read).
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'grounding_failed');
       },
     );
   });
