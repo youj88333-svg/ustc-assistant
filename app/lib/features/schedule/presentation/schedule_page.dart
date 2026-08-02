@@ -18,6 +18,7 @@ import '../domain/schedule_grid_item.dart';
 import '../domain/schedule_projection.dart';
 import '../domain/week_range.dart';
 import 'jw_day_move_dialog.dart';
+import 'schedule_undo_notice.dart';
 import 'week_timetable.dart';
 
 enum ScheduleSection { week, tasks }
@@ -58,11 +59,50 @@ class _SchedulePageState extends State<SchedulePage>
   ScheduleSection selected = ScheduleSection.week;
   late DateTime selectedDate;
 
+  /// Presentation state for the schedule-page-local undo notice. A non-null
+  /// value means the notice is currently displayed. Dismissal (hide or
+  /// timeout) changes ONLY this presentation — it never clears the persisted
+  /// DB one-step undo slot.
+  _UndoNoticeState? _undoNotice;
+
+  /// The single countdown driving [ScheduleUndoNotice]. Starting a new notice
+  /// cancels any in-flight timer so only the latest notice is ever shown.
+  Timer? _undoNoticeTimer;
+
   @override
   void initState() {
     super.initState();
     selected = widget.initialSection;
     selectedDate = widget.clock.now();
+  }
+
+  @override
+  void dispose() {
+    _undoNoticeTimer?.cancel();
+    super.dispose();
+  }
+
+  /// Shows (or replaces) the page-local undo notice and restarts its EXACTLY
+  /// six-second countdown. A previous notice is closed immediately — there is
+  /// never a queue. This is presentation-only: the DB undo slot recorded by
+  /// [UndoService] is untouched by the timer or by dismissal.
+  void _showUndoNotice({required String message, required VoidCallback onUndo}) {
+    _undoNoticeTimer?.cancel();
+    setState(() {
+      _undoNotice = _UndoNoticeState(message: message, onUndo: onUndo);
+    });
+    _undoNoticeTimer = Timer(const Duration(seconds: 6), () {
+      if (!mounted) return;
+      setState(() => _undoNotice = null);
+    });
+  }
+
+  void _hideUndoNotice() {
+    _undoNoticeTimer?.cancel();
+    _undoNoticeTimer = null;
+    if (_undoNotice != null) {
+      setState(() => _undoNotice = null);
+    }
   }
 
   @override
@@ -83,69 +123,83 @@ class _SchedulePageState extends State<SchedulePage>
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Column(
+    return Stack(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: SegmentedButton<ScheduleSection>(
-            segments: const [
-              ButtonSegment(
-                value: ScheduleSection.week,
-                icon: Icon(Icons.calendar_view_week),
-                label: Text('周视图'),
+        Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+              child: SegmentedButton<ScheduleSection>(
+                segments: const [
+                  ButtonSegment(
+                    value: ScheduleSection.week,
+                    icon: Icon(Icons.calendar_view_week),
+                    label: Text('周视图'),
+                  ),
+                  ButtonSegment(
+                    value: ScheduleSection.tasks,
+                    icon: Icon(Icons.task_alt),
+                    label: Text('任务'),
+                  ),
+                ],
+                selected: {selected},
+                onSelectionChanged: (selection) {
+                  setState(() => selected = selection.single);
+                },
               ),
-              ButtonSegment(
-                value: ScheduleSection.tasks,
-                icon: Icon(Icons.task_alt),
-                label: Text('任务'),
+            ),
+            if (selected == ScheduleSection.week)
+              _WeekNavigation(
+                selectedDate: selectedDate,
+                currentDate: widget.clock.now(),
+                onPrevious: () {
+                  setState(() {
+                    selectedDate = selectedDate.subtract(const Duration(days: 7));
+                  });
+                },
+                onCurrent: () {
+                  setState(() => selectedDate = widget.clock.now());
+                },
+                onNext: () {
+                  setState(() {
+                    selectedDate = selectedDate.add(const Duration(days: 7));
+                  });
+                },
               ),
-            ],
-            selected: {selected},
-            onSelectionChanged: (selection) {
-              setState(() => selected = selection.single);
+            Expanded(
+              child: switch (selected) {
+                ScheduleSection.week => _ScheduleData(
+                  database: widget.database,
+                  section: selected,
+                  selectedDate: selectedDate,
+                  onEventSelected: widget.onEventSelected,
+                  onTaskSelected: widget.onTaskSelected,
+                  onManageRelations: widget.onManageRelations,
+                  onDayMove: () => unawaited(_openDayMoveDialog()),
+                ),
+                ScheduleSection.tasks => _ScheduleData(
+                  database: widget.database,
+                  section: selected,
+                  selectedDate: selectedDate,
+                  onEventSelected: widget.onEventSelected,
+                  onTaskSelected: widget.onTaskSelected,
+                  onManageRelations: widget.onManageRelations,
+                  onDayMove: () => unawaited(_openDayMoveDialog()),
+                ),
+              },
+            ),
+          ],
+        ),
+        if (_undoNotice != null) ...[
+          ScheduleUndoNotice(
+            message: _undoNotice!.message,
+            onUndo: () {
+              final onUndo = _undoNotice!.onUndo;
+              _hideUndoNotice();
+              onUndo();
             },
           ),
-        ),
-        if (selected == ScheduleSection.week)
-          _WeekNavigation(
-            selectedDate: selectedDate,
-            currentDate: widget.clock.now(),
-            onPrevious: () {
-              setState(() {
-                selectedDate = selectedDate.subtract(const Duration(days: 7));
-              });
-            },
-            onCurrent: () {
-              setState(() => selectedDate = widget.clock.now());
-            },
-            onNext: () {
-              setState(() {
-                selectedDate = selectedDate.add(const Duration(days: 7));
-              });
-            },
-          ),
-        Expanded(
-          child: switch (selected) {
-            ScheduleSection.week => _ScheduleData(
-              database: widget.database,
-              section: selected,
-              selectedDate: selectedDate,
-              onEventSelected: widget.onEventSelected,
-              onTaskSelected: widget.onTaskSelected,
-              onManageRelations: widget.onManageRelations,
-              onDayMove: () => unawaited(_openDayMoveDialog()),
-            ),
-            ScheduleSection.tasks => _ScheduleData(
-              database: widget.database,
-              section: selected,
-              selectedDate: selectedDate,
-              onEventSelected: widget.onEventSelected,
-              onTaskSelected: widget.onTaskSelected,
-              onManageRelations: widget.onManageRelations,
-              onDayMove: () => unawaited(_openDayMoveDialog()),
-            ),
-          },
-        ),
+        ],
       ],
     );
   }
@@ -185,16 +239,23 @@ class _SchedulePageState extends State<SchedulePage>
       JwDayMovePerformed() => '已移动整日课程',
       JwDayMoveCleared() => '已恢复原日期',
     };
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        action: SnackBarAction(
-          label: '撤销',
-          onPressed: () => unawaited(undo.undo()),
-        ),
-      ),
-    );
+    // Present the one-step undo as a schedule-page-local floating notice (not
+    // a root/global ScaffoldMessenger snackbar) so it never covers chat and
+    // never lingers across pages. The six-second countdown, replacement of a
+    // prior notice, and dismissal are page-local and presentation-only — the
+    // DB one-step undo slot stays intact until undo() actually consumes it.
+    _showUndoNotice(message: message, onUndo: () => unawaited(undo.undo()));
   }
+}
+
+/// Immutable presentation payload for the page-local undo notice. Kept out of
+/// the widget tree's widget graph as a plain object so the state is trivial to
+/// inspect in tests and cheap to replace on consecutive operations.
+class _UndoNoticeState {
+  const _UndoNoticeState({required this.message, required this.onUndo});
+
+  final String message;
+  final VoidCallback onUndo;
 }
 
 class _ScheduleData extends StatelessWidget {

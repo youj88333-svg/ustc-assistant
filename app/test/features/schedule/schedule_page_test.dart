@@ -10,6 +10,7 @@ import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_ser
 import 'package:ustc_assistant_app/features/schedule/presentation/conflict_management_page.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/overlap_expansion.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
 Future<void> seedAccount(AppDatabase database) async {
@@ -798,6 +799,261 @@ void main() {
     expect(rows, hasLength(1));
     expect(rows.single.sourceDate, '2026-07-27');
     expect(rows.single.targetDate, '2026-08-03');
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  /// Performs an opinionated whole-day move: opens the dialog, picks a target
+  /// in the FOLLOWING month whose day cell is [targetDay], confirms, and
+  /// settles. Requires seeded `ustc_jw/course` events on the selected week.
+  Future<void> performDayMoveNextMonth(
+    WidgetTester tester, {
+    required String targetDay,
+  }) async {
+    await tester.tap(find.byTooltip('整日调课'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('day-move-dialog')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('day-move-target-field')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byTooltip('Next month'));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: find.byType(DatePickerDialog),
+        matching: find.text(targetDay),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('OK'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('day-move-confirm')));
+    await tester.pumpAndSettle();
+  }
+
+  // Task 6: the day-move notice is a schedule-PAGE-local floating notice, never
+  // a global ScaffoldMessenger snackbar. It must not cover chat and must be a
+  // descendant of SchedulePage itself.
+  testWidgets('day move notice is schedule-local, not a global snackbar', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await performDayMoveNextMonth(tester, targetDay: '3');
+
+    // The notice is shown, but it is NOT realized as a global snackbar.
+    expect(find.text('已移动整日课程'), findsOneWidget);
+    expect(find.byType(SnackBar), findsNothing);
+    expect(
+      find.descendant(
+        of: find.byType(SchedulePage),
+        matching: find.byKey(const Key('schedule-undo-notice')),
+      ),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 6: leaving the schedule page closes the notice immediately (it never
+  // enters chat or any other page) and cancels its timer.
+  testWidgets('leaving the schedule page closes the notice immediately', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await performDayMoveNextMonth(tester, targetDay: '3');
+    expect(find.byKey(const Key('schedule-undo-notice')), findsOneWidget);
+
+    // Navigate away (unmount the schedule page): the notice must vanish with
+    // it rather than surviving to a later route.
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(milliseconds: 1));
+    expect(find.byKey(const Key('schedule-undo-notice')), findsNothing);
+    expect(find.text('撤销'), findsNothing);
+  });
+
+  // Task 6: the notice disappears after exactly six seconds even when
+  // accessibleNavigation is enabled (which otherwise keeps global snackbars /
+  // toasts from auto-dismissing without explicit action).
+  testWidgets(
+    'day move notice disappears at six seconds with accessibleNavigation',
+    (tester) async {
+      tester.binding.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(accessibleNavigation: true);
+      addTearDown(
+        tester.binding.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await seedAccount(database);
+      await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SchedulePage(
+              database: database,
+              clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await performDayMoveNextMonth(tester, targetDay: '3');
+      expect(find.byKey(const Key('schedule-undo-notice')), findsOneWidget);
+
+      // Still visible just before six seconds.
+      await tester.pump(const Duration(seconds: 5));
+      expect(find.byKey(const Key('schedule-undo-notice')), findsOneWidget);
+
+      // Gone at exactly six seconds.
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('schedule-undo-notice')), findsNothing);
+      expect(find.text('撤销'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pumpAndSettle();
+    },
+  );
+
+  // Task 6: a second day-move operation replaces the first notice — only the
+  // latest shows, and only one is ever displayed (no queue).
+  testWidgets('a second day move replaces the first notice', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await performDayMoveNextMonth(tester, targetDay: '3');
+    expect(find.byKey(const Key('schedule-undo-notice')), findsOneWidget);
+
+    // Immediately perform a second move without waiting for the first notice
+    // to time out.
+    await performDayMoveNextMonth(tester, targetDay: '10');
+
+    // Only the newest notice is displayed; there is exactly one.
+    expect(find.byKey(const Key('schedule-undo-notice')), findsOneWidget);
+    expect(find.text('已移动整日课程'), findsOneWidget);
+    expect(find.text('撤销'), findsOneWidget);
+
+    // The replaced notice's timer must not linger: the visible notice still
+    // disappears at six seconds from the second operation.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('schedule-undo-notice')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 6: tapping 撤销 fires the one-step undo exactly once and hides the
+  // notice.
+  testWidgets('day move undo fires once and hides the notice', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await performDayMoveNextMonth(tester, targetDay: '3');
+    expect((await database.select(database.jwDayMoves).get()), hasLength(1));
+
+    await tester.tap(find.text('撤销'));
+    await tester.pumpAndSettle();
+
+    expect((await database.select(database.jwDayMoves).get()), isEmpty);
+    expect(find.byKey(const Key('schedule-undo-notice')), findsNothing);
+    expect(find.text('撤销'), findsNothing);
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pumpAndSettle();
+  });
+
+  // Task 6: the notice timing out is presentation-only — it must NOT clear the
+  // persisted DB one-step undo slot; the move record remains undoable.
+  testWidgets('notice timeout leaves the persisted undo slot intact', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    await seedAccount(database);
+    await seedJwCourse(database, id: 'course-1', y: 2026, m: 7, d: 27, h: 9);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SchedulePage(
+            database: database,
+            clock: FixedBeijingClock(DateTime(2026, 7, 27)),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await performDayMoveNextMonth(tester, targetDay: '3');
+    expect(await database.select(database.undoSlot).getSingleOrNull(), isNot(null));
+
+    // Let the notice time out.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('schedule-undo-notice')), findsNothing);
+
+    // The move row AND the undo slot survive the dismissal.
+    expect((await database.select(database.jwDayMoves).get()), hasLength(1));
+    expect(await database.select(database.undoSlot).getSingleOrNull(), isNot(null));
+
+    // The one-step undo still works from the persisted slot.
+    await UndoService(database: database, accountId: 'account').undo();
+    expect((await database.select(database.jwDayMoves).get()), isEmpty);
     await tester.pumpWidget(const SizedBox());
     await tester.pumpAndSettle();
   });
