@@ -19,6 +19,10 @@
 - 周视图可以发现 CalendarEvent 与 PlanBlock 重叠，但手动冲突管理只支持
   CalendarEvent，无法把“课上安排另一门课作业”标为不冲突。
 
+并纳入新增人工测试暴露的高频 Agent 工作流：用户要求按整学期课程范围，在每个指定
+星期创建一个独立 Task。该工作流必须先用课程摘要确定边界、主动澄清未明确参数，再通过
+现有 `create_task` 多次写入；不得先拉取整学期全部 occurrence，也不新增重复 Task 模型。
+
 ## 2. Evidence From The Real Database
 
 只读检查 `ustc_assistant.sqlite` 得到：
@@ -33,6 +37,8 @@
   `create_schedule_relation` 仅存在于运行时 UI；
 - 2026-08-02 16:55:16，`move_jw_course_day` 已成功移动 3 门课程；同一 run 在
   16:55:18 仍以 `grounding_failed` 结束。
+- 新增“电磁场与波每周六作业”测试最终已经通过多次 `create_task` 创建成功；实际缺陷是
+  Agent 首次错误使用普通 `get_schedule` 查询过大范围，先产生了一次可避免的失败。
 
 这些事实是本设计的回归基线。不得把自动测试替代真实人工复测。
 
@@ -77,7 +83,7 @@ no_conflict
 已有历史 `conflict` 行不得自动迁移为 `no_conflict`，因为无法可靠判断当时用户是否已经
 作出取舍。用户再次通过 Agent 或手动编辑时正常 upsert 覆盖。
 
-## 4. Bounded Agent Relation Workflow
+## 4. Bounded Agent Workflows
 
 ### 4.1 Participant Lookup
 
@@ -141,6 +147,46 @@ Grounding Policy 为高置信度关系措辞提供一个可选的 expected state
 `relation_state_mismatch` 和固定纠错说明，最多允许一次修正调用。用户句子同时出现“冲突”
 和明确取舍时，明确取舍优先。例如“记录这两节课的冲突，我选择去量子物理 B”必须得到
 `no_conflict` 确认卡。
+
+### 4.3 Semester-backed Repeated Task Creation
+
+典型请求：
+
+> 我下学期电磁场与波这门课的作业每周六交，请给我每周六设置一个 Task。
+
+该请求表示创建多个相互独立、可分别完成或取消的 Task，不表示一个重复 Task 实体。继续
+复用现有 `create_task`，不新增 `TaskSeries`、recurrence 字段或批量写工具。
+
+Agent 必须按以下顺序工作：
+
+1. 识别“每周/每天/每月”等周期性多 Task 请求；
+2. 若课程学期、起止范围、截止时刻或是否包含特殊周次不足以确定具体 Task 集合，先继续
+   查询或向用户追问，不得静默采用默认值；
+3. 需要从整学期课程确定边界时，调用
+   `get_schedule(view="course_summary", from=..., through=...)`；禁止用普通 `events`
+   视图读取整个学期 occurrence；
+4. 从目标课程的 `activeFrom`、`activeThrough` 计算候选日期，并向用户说明日期范围、候选
+   数量以及仍需确认的参数；
+5. 用户明确确认后，对每个日期分别调用一次 `create_task`，每个 Task 拥有自己的
+   `deadline_at` 和生命周期；
+6. 任一 Task 被拒绝或创建失败时，不得声称整个集合均已创建；必须准确报告成功、失败和
+   尚未处理的数量；
+7. 不创建课程有效范围之外的 Task，也不得根据默认学期或 `semesterId` 猜测课程范围。
+
+“进一步确认”属于业务澄清，不等同于写工具确认卡。前者用于让用户确认最终日期集合和
+未明确参数；后者仍按既有风险策略逐项出现。若用户在第一张确认卡选择对此类型以后不再
+确认，后续 `create_task` 可按既有权限策略继续，但 Agent 不得自行放宽权限。
+
+现有多次 `create_task` 路径已经通过真实人工测试，本轮不修改 model/tool call budget、写
+确认恢复流程或 `create_task` 提交机制。完全相同参数仍由 fingerprint 熔断；若未来真实
+学期范围触发既有预算上限，再根据持久 invocation 日志单独设计，不在本轮提前扩容。
+
+为避免首次普通大范围查询成为预期失败，`get_schedule` 增加确定性保护：无 `query`、
+`view=events` 且请求跨度超过允许的 occurrence 查询窗口时，不读取并序列化整段事件，直接
+返回 `schedule_summary_required`，附带改用 `view=course_summary` 或缩小日期范围的固定
+指导。具体窗口阈值由一个具名常量维护，不能与默认学期或学期 ID 绑定。系统提示和工具
+description 同时明确：整学期课程概览、课程规律分析以及基于课程范围生成多个 Task，都必须
+优先使用 `course_summary`。提示用于引导模型，运行时错误负责确定性兜底。
 
 ## 5. Terminal Write Settlement
 
@@ -292,6 +338,8 @@ pair 必须 canonicalize，反向传入不能产生第二条重复 Relation。�
 ## 9. Error Handling
 
 - `result_too_large`：保留安全错误码和建议缩小范围；关系请求已经有日期时不得扩大范围；
+- `schedule_summary_required`：普通事件视图请求跨度过大；改用 `course_summary` 或缩小
+  日期范围，不把这次可预防的拒绝当作来源故障；
 - `reference_not_found` / `target_not_found`：要求重新查询，不写悬挂 Relation；
 - `ambiguous_target`：返回安全候选并等待用户选择；
 - `repeated_tool_call`：记录日志并停止相同参数循环；
@@ -323,6 +371,11 @@ pair 必须 canonicalize，反向传入不能产生第二条重复 Relation。�
 - terminal move 成功后 run completed；
 - decline/error 后不显示成功；
 - 相同失败参数熔断；
+- 整学期课程规律和基于课程范围创建 Task 的请求首先使用 `course_summary`，不会先产生一次
+  大范围 `events` 失败；
+- 周期性多 Task 请求在日期集合或截止时刻不明确时先询问，不调用 `create_task`；
+- 用户确认后按每个日期多次调用 `create_task`，每项参数和最终成功/失败计数准确；
+- 现有成功的多次 `create_task` 路径保持不变，不为该场景放宽通用工具预算；
 - UI 工具调用数量与持久 invocation 数量一致。
 
 ### 10.3 Widget And Integration
@@ -347,6 +400,9 @@ pair 必须 canonicalize，反向传入不能产生第二条重复 Relation。�
 5. 原第 16 项：确认整日移动后只报告成功，不再出现 grounding_failed；
 6. 操作历史和本地工具日志能看到安全的工具名、次数、状态、错误码和耗时；
 7. 日志中不包含密钥、账号、内部 ID、原始 ref 或完整课表。
+8. 新增周期 Task 测试：询问“下学期电磁场与波作业每周六交”时，Agent 不先读取整学期
+   occurrence；它使用课程摘要、说明候选范围并询问缺失参数。用户确认后，为范围内各周六
+   创建独立 Task，并准确报告创建结果。
 
 人工结果继续写入用户验收文档的“完成：”字段。自动测试不得代替真实学校 API、校园网、
 确认卡和 Release UI 验收。
@@ -356,6 +412,8 @@ pair 必须 canonicalize，反向传入不能产生第二条重复 Relation。�
 - 不实现完整 relationType / resolution 状态机；
 - 不自动写课程 attendance/listening overlay；
 - 不改变 Task 状态模型或 PlanBlock 生命周期；
+- 不新增重复 Task、TaskSeries 或批量 Task 写工具；周期性请求由多个现有 `create_task`
+  调用实现；
 - 不修改 Python 来源、Bridge、SourceBundle 或校园目录迁移；
 - 不实现二课报名/取消；
 - 不修改默认学期或硬编码任意 semesterId；
@@ -369,4 +427,5 @@ pair 必须 canonicalize，反向传入不能产生第二条重复 Relation。�
 - 数据库迁移测试覆盖 v5 -> v6；
 - Python 未修改时仍运行现有全量测试与 compileall，确认跨层无回归；
 - 真实复测第 5、12、16 项及 mixed PlanBlock relation 均有用户填写结果；
+- 新增整学期课程驱动的周期 Task 人工测试有用户填写结果；
 - 交接文档记录精确 HEAD、真实测试输出、仍未执行的人工验收和未解决边界。
