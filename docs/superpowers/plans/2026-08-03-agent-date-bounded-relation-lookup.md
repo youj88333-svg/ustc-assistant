@@ -608,12 +608,13 @@ This subsection records the measured final execution evidence collected by Task 
 **Implementation status: COMPLETED** on branch `feature/write-tools`.
 
 ```text
-Final HEAD (Task 4 commit): e1e99aa (test(agent): close date-bounded relation workflow)
+Final HEAD (Task 4 commit): fc2e533 (test(agent): close date-bounded relation workflow)
 Ordered Task commit hashes (oldest first):
   Task 1  66c625f fix(agent): allow exact-day relation lookups
   Task 2  92ad76d feat(agent): expose task planning for relation runs
   Task 3  55b7dfe fix(agent): preserve partial relation workflow results
-  Task 4  e1e99aa test(agent): close date-bounded relation workflow
+  Task 4  fc2e533 test(agent): close date-bounded relation workflow
+  (post-commit docs pin, HEAD after Task 4): docs: pin Task 4 commit hash in execution handoff
 Baseline (plan/design): 0d12c37 docs: plan date-bounded relation lookup /
                          dd73551 docs: design date-bounded relation lookup
 
@@ -627,7 +628,7 @@ Files changed by each Task:
                     app/test/features/agent/agent_grounding_policy_test.dart
   Task 3 (55b7dfe): app/lib/features/agent/application/agent_session_service.dart
                     app/test/features/agent/agent_session_service_test.dart
-  Task 4 (e1e99aa):
+  Task 4 (fc2e533):
     app/lib/features/agent/application/agent_session_service.dart  (production fix)
     app/test/integration/agent_composition_flow_test.dart           (real composition regression)
     docs/agent-relation-closure-retest-2026-08-02.md                 (manual retest item 10)
@@ -670,13 +671,15 @@ it has not been run here.
   `2026fall` literal was introduced.
 
 **Current `git status --short` (post Task 4):** distinguishes protected pre-existing files from the
-three implementation files staged/committed by Task 4.
+three implementation files that were committed by Task 4 (`fc2e533`). Only the protected pre-existing
+files remain unstaged/untracked — the implementation files are no longer modified in the working tree.
 
 ```text
-M  app/lib/features/agent/application/agent_session_service.dart   [Task 4 implementation]
-M  app/test/integration/agent_composition_flow_test.dart           [Task 4 implementation]
-M  docs/agent-relation-closure-retest-2026-08-02.md                [Task 4 append]
-M  app/windows/flutter/generated_plugin_registrant.cc              [protected pre-existing]
+(committed in fc2e533) app/lib/features/agent/application/agent_session_service.dart  [Task 4 implementation]
+(committed in fc2e533) app/test/integration/agent_composition_flow_test.dart          [Task 4 implementation]
+(committed in fc2e533) docs/agent-relation-closure-retest-2026-08-02.md               [Task 4 append]
+(committed in fc2e533) docs/superpowers/plans/2026-08-03-agent-date-bounded-relation-lookup.md [plan handoff]
+ M  app/windows/flutter/generated_plugin_registrant.cc              [protected pre-existing]
 M  app/windows/flutter/generated_plugin_registrant.h               [protected pre-existing]
 M  app/windows/flutter/generated_plugins.cmake                     [protected pre-existing]
 ?? docs/agent-manual-acceptance-retest-2026-08-01.md               [protected untracked]
