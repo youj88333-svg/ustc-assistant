@@ -43,6 +43,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
+import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/schedule_page.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
@@ -2338,7 +2339,13 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         .drain<void>();
     await done.future;
 
-    expect(states.last.state, AgentRunState.completed);
+    // Task 1 contract: a declined critical write must NEVER report success.
+    // The run settles as failed (not completed) and the visible text is the
+    // fixed local non-success statement.
+    expect(states.last.state, AgentRunState.failed,
+        reason: 'declined critical write must NOT report success');
+    expect(states.last.text, contains('没有修改数据'),
+        reason: 'the visible text must carry the fixed non-success statement');
     expect(await db.select(db.jwDayMoves).get(), isEmpty,
         reason: '拒绝不得写入任何移动记录');
     final logs = await db.actionLogsRepository.selectAll();
@@ -2359,6 +2366,605 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       reason: '拒绝必须留下 decline 审计',
     );
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 5 Part A composition regressions. Each scenario drives the real
+  // composed AgentSessionService (via _buildTestComposition) with a scripted
+  // provider and asserts the FIXED behavior end-to-end.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Scenario 1: a polite factual query ("能不能帮我看看明天有什么课？") that the
+  // model first answers WITHOUT a tool call triggers exactly ONE bounded
+  // corrective retry (tool_choice any, declarations narrowed to get_schedule),
+  // then grounds on get_schedule and completes with the data-backed answer.
+  test(
+    'composition: polite get_schedule query first-miss triggers exactly one '
+    'bounded correction, then grounds on get_schedule',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+      // A concrete course occurrence tomorrow so get_schedule returns data.
+      final now = DateTime.now();
+      final tomorrow = now.add(const Duration(days: 1));
+      await _insertCourseSeries(
+        db,
+        'series-t1',
+        'acc-1',
+        externalId: 'lesson-t1',
+        title: '数据结构',
+      );
+      await _insertCourseOccurrence(
+        db,
+        't1-occ',
+        'acc-1',
+        '数据结构',
+        seriesExternalId: 'lesson-t1',
+        location: '三教101',
+        start: DateTime(tomorrow.year, tomorrow.month, tomorrow.day, 9, 0),
+        end: DateTime(tomorrow.year, tomorrow.month, tomorrow.day, 10, 40),
+      );
+
+      // Call 1: the model answers in plain text (no tool). Call 2: the bounded
+      // correction forces get_schedule. Call 3: grounded final answer.
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const TextDeltaEvent('明天有一节课。'),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-t1',
+                name: 'get_schedule',
+                input: {},
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('明天有数据结构。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '能不能帮我看看明天有什么课？')
+          .listen((s) => states.add(s), onDone: done.complete);
+      await done.future;
+
+      // Exactly 3 model calls: miss + ONE bounded corrective retry + final.
+      expect(provider.streamCallCount, 3,
+          reason: 'a polite factual first-miss must trigger exactly one bounded correction');
+      final corrective = provider.requests[1];
+      expect(corrective.toolChoice, LlmToolChoice.any,
+          reason: 'the corrective request must force tool_choice any');
+      expect(
+        corrective.tools.map((t) => t.name).toSet(),
+        {'get_schedule'},
+        reason: 'the corrective request narrows declarations to get_schedule',
+      );
+      // The real get_schedule ran and grounded the answer.
+      expect(states.last.state, AgentRunState.completed);
+      expect(states.last.text, contains('数据结构'),
+          reason: 'the grounded answer reflects the queried schedule');
+    },
+  );
+
+  // Scenario 2: a write tool returns non-success while the model claims
+  // success. The final UI must show the local non-success text ("没有修改数据")
+  // and the business table must be unchanged (no row created). The failed
+  // terminal write is NOT re-called.
+  test(
+    'composition: failed write with fake success claim ends non-success, '
+    'no row created, write not re-called',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+      // Call 1: create_event with a MISSING end_at -> invalid_write_arguments
+      // (a non-success terminal write before any confirmation). Call 2: the
+      // model falsely claims success. No third write is re-called.
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-t2',
+                name: 'create_event',
+                input: {'title': '健身'},
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已为你新建日程「健身」。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '帮我创建健身日程')
+          .listen((s) => states.add(s), onDone: done.complete);
+      await done.future;
+
+      // Exactly 2 calls: the single failed write + the model's false prose. No
+      // re-corrected repeat of the failed write, no confirmation (the write
+      // never reached the confirm gate).
+      expect(provider.streamCallCount, 2,
+          reason: 'a failed write must not be re-called as a corrective repeat');
+      // The run must NOT report success.
+      expect(states.last.state, isNot(AgentRunState.completed),
+          reason: 'a write that did not succeed must never report success');
+      // The model's false success claim is replaced by the fixed non-success text.
+      expect(states.last.text, isNot(contains('已为你新建')),
+          reason: 'the false success prose must be overridden');
+      expect(states.last.text, contains('没有修改数据'),
+          reason: 'the visible text must carry the fixed non-success statement');
+      expect(states.last.errorCode, 'invalid_write_arguments',
+          reason: 'the preserved error code is traceable');
+      // The business table is unchanged: no event row was created.
+      expect((await db.select(db.calendarEvents).get()), isEmpty,
+          reason: 'a failed write must leave no domain row');
+    },
+  );
+
+  // Scenario 3: a forced-`any` corrective request that returns an auth/transport
+  // error ends the run WITHOUT a second compatibility auto-fallback request.
+  test(
+    'composition: forced-any auth/transport error does NOT auto-fallback',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+      // Call 1: the model misses the read tool (plain text). Call 2: the
+      // corrective request (forced any) returns an auth_failed error — this is
+      // a REAL upstream failure, NOT a forced-choice compatibility issue, so no
+      // auto fallback may be issued.
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const TextDeltaEvent('我来查一下。'),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const ErrorEvent('auth_failed'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '能不能帮我看看明天有什么课？')
+          .listen((s) => states.add(s), onDone: done.complete);
+      await done.future;
+
+      // Exactly 2 model calls: the initial miss + the forced-any corrective that
+      // errored. NO second auto fallback request was issued.
+      expect(provider.streamCallCount, 2,
+          reason: 'an auth/transport error on forced-any must not trigger a '
+              'compatibility auto fallback');
+      expect(provider.requests.last.toolChoice, LlmToolChoice.any,
+          reason: 'the single corrective request was the forced-any attempt');
+      // The run ends failed with the preserved original error code (not success).
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'auth_failed',
+          reason: 'the original auth error must be preserved, not hidden');
+    },
+  );
+
+  // Scenario 4: a single-course move ("把数据结构课程移到周五下午") routes to
+  // update_event (single-event edit) and does NOT open the whole-day critical
+  // confirm; a whole-day collection request ("把 8 月 3 日当天所有教务课程移到
+  // 8 月 9 日") still requires the critical confirmation gate.
+  test(
+    'composition: single-course move routes to update_event (no whole-day '
+    'confirm); whole-day collection still opens critical confirm',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+      // A single personal event "数据结构" for the single-course move target.
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ds-1',
+              accountId: 'acc-1',
+              source: 'user',
+              externalId: const Value('ds-1'),
+              title: '数据结构',
+              type: 'personal',
+              startAt: Value(_beijingEpoch(2026, 8, 7, 9, 0)),
+              endAt: Value(_beijingEpoch(2026, 8, 7, 10, 40)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: const Value('三教101'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // A JW course on the whole-day source day (2026-08-03) with a source
+      // record so the whole-day collection request preflights a course.
+      await _insertCourseSeries(
+        db,
+        'series-t4',
+        'acc-1',
+        externalId: 'lesson-t4',
+        title: '线性代数',
+      );
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'jw-t4',
+              accountId: 'acc-1',
+              source: 'ustc_jw',
+              externalId: const Value('jw-t4'),
+              sourceSeriesExternalId: const Value('lesson-t4'),
+              title: '线性代数',
+              type: 'course',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 9, 0)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 10, 40)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              locationName: const Value('三教101'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await db.into(db.sourceRecords).insert(
+            SourceRecordsCompanion.insert(
+              id: 'sr-jw-t4',
+              accountId: 'acc-1',
+              source: 'ustc_jw',
+              entityType: 'calendar_event',
+              externalId: 'jw-t4',
+              localEntityId: 'jw-t4',
+              sourceStatus: 'active',
+              presence: 'present',
+              scopeKey: 'scope',
+              firstObservedAt: 1,
+              lastObservedAt: 1,
+            ),
+          );
+
+      // --- single-course move: routes to update_event, NO whole-day confirm ---
+      final singleProvider = _ScriptedProvider([
+        // Call 1: get_schedule locates the single 数据结构 event -> binds ref.
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-t4a1',
+                name: 'get_schedule',
+                input: {'query': '数据结构'},
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 2: update_event (single-event edit). update_event is
+        // always_ask, so it pauses for confirmation — but the confirm is the
+        // HIGH-risk single-event edit card, NOT the whole-day critical one.
+        // It echoes the run-local ref the get_schedule title query bound.
+        _ScriptedCall(
+          () => [
+            const ToolUseCompletedEvent(
+              id: 'tu-t4a2',
+              name: 'update_event',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          inputBuilder: (prior) {
+            final refs = _refsFromLastToolResult(prior);
+            return {
+              'ref_event': refs.isEmpty ? 'ref_unknown' : refs.first,
+              'title': '数据结构',
+              'start_at': '2026-08-07T14:00:00+08:00',
+              'end_at': '2026-08-07T15:40:00+08:00',
+            };
+          },
+        ),
+        // Call 3: final text after confirm.
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已把数据结构移到周五下午。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final singleComposition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: singleProvider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(singleComposition.dispose);
+      final singleStates = <AgentRunViewState>[];
+      final singleDone = Completer<void>();
+      late String singleRunId;
+      singleComposition.sessionService
+          .send(accountId: 'acc-1', userText: '把数据结构课程移到周五下午')
+          .listen((s) {
+        singleStates.add(s);
+        if (s.state == AgentRunState.waitingForUser) singleRunId = s.runId;
+      }, onDone: singleDone.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      // It pauses on a confirmation — but it must be the single-event edit
+      // operation, never the whole-day critical headline.
+      expect(
+        singleStates.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'update_event (single-course move) pauses for confirmation',
+      );
+      final singleProposal = singleStates
+          .lastWhere((s) => s.userAction != null)
+          .userAction!
+          .writeProposal!;
+      expect(singleProposal.operationLabel, '修改/删除日程',
+          reason: 'a single-course move opens the single-event edit confirm, '
+              'NOT the whole-day critical one');
+      // Approve and complete.
+      await singleComposition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: singleRunId, approve: true, remember: false)
+          .drain<void>();
+      await singleDone.future;
+      expect(singleStates.last.state, AgentRunState.completed);
+      // No whole-day move record was created by the single-course move.
+      expect(await db.select(db.jwDayMoves).get(), isEmpty,
+          reason: 'a single-course move must not create a whole-day move record');
+
+      // --- whole-day collection move: still requires the critical confirm ---
+      final wholeProvider = _ScriptedProvider([
+        // Call 1: move_jw_course_day (whole-day collection) -> critical confirm.
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-t4b1',
+                name: 'move_jw_course_day',
+                input: {
+                  'action': 'move',
+                  'source_date': '2026-08-03',
+                  'target_date': '2026-08-09',
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 2: final text after approve.
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已把 8 月 3 日的教务课程移到 8 月 9 日。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final wholeComposition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: wholeProvider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(wholeComposition.dispose);
+      final wholeStates = <AgentRunViewState>[];
+      final wholeDone = Completer<void>();
+      late String wholeRunId;
+      wholeComposition.sessionService
+          .send(
+              accountId: 'acc-1',
+              userText: '把 8 月 3 日当天所有教务课程移到 8 月 9 日')
+          .listen((s) {
+        wholeStates.add(s);
+        if (s.state == AgentRunState.waitingForUser) wholeRunId = s.runId;
+      }, onDone: wholeDone.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        wholeStates.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'a whole-day collection move must open the critical confirm',
+      );
+      final wholeProposal = wholeStates
+          .lastWhere((s) => s.userAction != null)
+          .userAction!
+          .writeProposal!;
+      expect(wholeProposal.operationLabel, '整日移动教务课程',
+          reason: 'the whole-day collection move opens the critical whole-day confirm');
+      expect(wholeProposal.rememberAllowed, isFalse,
+          reason: 'critical confirm never offers remember');
+      await wholeComposition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: wholeRunId, approve: true, remember: false)
+          .drain<void>();
+      await wholeDone.future;
+      expect(wholeStates.last.state, AgentRunState.completed);
+      final moves = await db.select(db.jwDayMoves).get();
+      expect(moves, hasLength(1));
+      expect(moves.single.sourceDate, '2026-08-03');
+      expect(moves.single.targetDate, '2026-08-09');
+    },
+  );
+
+  // Scenario 5: with multi-semester history present, the week page AND a ranged
+  // Agent query each project ONLY the current result set. Conflict semantics
+  // stay unchanged, and the deprecated full projection is never invoked
+  // (resolvedConflictIdsForCalls stays 0).
+  test(
+    'composition: multi-semester history projects only the current result set '
+    '(no deprecated full projection), conflict semantics unchanged',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+      EffectiveEventRepository.resolvedConflictIdsForCalls = 0;
+      EffectiveEventRepository.conflictsForItemsCalls = 0;
+      EffectiveEventRepository.lastCandidatesForItems = 0;
+
+      // Two overlapping personal events in the CURRENT week.
+      final monday = _currentWeekMonday();
+      final tuesday = monday.add(const Duration(days: 1));
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 's5-a',
+              accountId: 'acc-1',
+              source: 'user',
+              externalId: const Value('s5-a'),
+              title: '重叠甲',
+              type: 'personal',
+              startAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 10, 0)),
+              endAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 12, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await db.into(db.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 's5-b',
+              accountId: 'acc-1',
+              source: 'user',
+              externalId: const Value('s5-b'),
+              title: '重叠乙',
+              type: 'personal',
+              startAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 11, 0)),
+              endAt: Value(
+                  _beijingEpoch(tuesday.year, tuesday.month, tuesday.day, 13, 0)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      // Non-overlapping historical events from a PRIOR semester (the retained
+      // multi-semester history the bounded projection must ignore).
+      for (final label in ['历史一', '历史二', '历史三']) {
+        await db.into(db.calendarEvents).insert(
+              CalendarEventsCompanion.insert(
+                id: 's5-hist-$label',
+                accountId: 'acc-1',
+                source: 'ustc_jw',
+                externalId: Value('s5-hist-$label'),
+                sourceSeriesExternalId: const Value('lesson-hist'),
+                title: label,
+                type: 'course',
+                startAt: Value(_beijingEpoch(2026, 2, 2, 9, 0)),
+                endAt: Value(_beijingEpoch(2026, 2, 2, 10, 0)),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        await db.into(db.sourceRecords).insert(
+              SourceRecordsCompanion.insert(
+                id: 'sr-s5-hist-$label',
+                accountId: 'acc-1',
+                source: 'ustc_jw',
+                entityType: 'calendar_event',
+                externalId: 's5-hist-$label',
+                localEntityId: 's5-hist-$label',
+                sourceStatus: 'active',
+                presence: 'present',
+                scopeKey: 'scope',
+                firstObservedAt: 1,
+                lastObservedAt: 1,
+              ),
+            );
+      }
+
+      // A ranged Agent query (this week) projects only the current result set.
+      final built = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: _ScriptedProvider(const []),
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(built.dispose);
+      final getSchedule = built.registry.execute(
+        toolName: 'get_schedule',
+        arguments: {'from': _isoDate(monday), 'through': _isoDate(monday.add(const Duration(days: 6)))},
+        context: integrationCtx('acc-1', 'r-s5'),
+      );
+      final schedule = await getSchedule;
+      expect(schedule.status, AgentToolStatus.success);
+      // The ranged query sees ONLY the current-week events.
+      final events = schedule.payload['events']! as List;
+      final titles = events
+          .map((e) => (e! as Map<String, Object?>)['title'] as String)
+          .toSet();
+      expect(titles, containsAll({'重叠甲', '重叠乙'}));
+      expect(titles, isNot(contains('历史一')),
+          reason: 'the ranged Agent query must project only the current result set');
+      // Conflict semantics unchanged: the overlap pair is derived as a conflict.
+      final conflicted = events
+          .map((e) => (e! as Map<String, Object?>)['conflictState'] as String? ?? 'no_conflict')
+          .toList();
+      expect(conflicted, contains('conflict'),
+          reason: 'the in-range overlap remains a derived conflict');
+      // The deprecated full projection was never invoked.
+      expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0,
+          reason: 'the ranged Agent query must not invoke the deprecated full projection');
+    },
+  );
 
   test('composition: free discussion of 调休 needs no tools and completes', () async {
     final db = AppDatabase(NativeDatabase.memory());
