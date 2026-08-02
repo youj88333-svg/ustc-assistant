@@ -327,19 +327,20 @@ class _CountingCatalogTool implements AgentTool {
   }
 }
 
-/// A get_schedule tool that returns the intent-specific
-/// `relation_lookup_requires_title` error when invoked (as a relation-run
-/// lookup) without a nonblank `query`. Counts executions but never "loads"
-/// events, so a test can assert events were never loaded.
-class _TitleRequiredScheduleTool implements AgentTool {
+/// A get_schedule tool that counts actual executions and returns one concrete
+/// event reference whenever it actually runs. It never rejects on its own: a
+/// bounded relation lookup (title query or exact single-day events) is
+/// permitted to run and yields exactly one event ref, while unbounded calls
+/// are intercepted by the session layer before reaching the registry (so their
+/// executeCount stays at whatever the allowed calls produced).
+class _CountingEventScheduleTool implements AgentTool {
   int executeCount = 0;
-  bool loadedEvents = false;
 
   @override
   String get name => 'get_schedule';
 
   @override
-  String get description => 'Requires a title query inside a relation run.';
+  String get description => 'Counts executions; returns one event reference.';
 
   @override
   Map<String, Object?> get inputSchema => const {
@@ -353,20 +354,13 @@ class _TitleRequiredScheduleTool implements AgentTool {
     AgentToolContext context,
   ) async {
     executeCount++;
-    final query = arguments['query'];
-    if (query is! String || query.trim().isEmpty) {
-      return const AgentToolResult(
-        status: AgentToolStatus.error,
-        errorCode: 'relation_lookup_requires_title',
-        payload: {
-          'guidance': '填写指定日期与标题后重新查询；不要读取整学期事件后再过滤。',
-        },
-      );
-    }
-    loadedEvents = true;
-    return const AgentToolResult(
+    final ref = context.references.bind(kind: 'event', localId: 'event-1');
+    return AgentToolResult(
       status: AgentToolStatus.success,
-      payload: {'courses': <Object?>[], 'events': <Object?>[]},
+      payload: const <String, Object?>{},
+      references: [
+        AgentToolReference(kind: 'event', ref: ref, localId: 'event-1'),
+      ],
     );
   }
 }
@@ -3161,7 +3155,7 @@ END
       'relation first-request declarations are narrowed to the registered members',
       () async {
         final relation = _RecordingRelationTool();
-        final schedule = _TitleRequiredScheduleTool();
+        final schedule = _CountingEventScheduleTool();
         final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
         final provider = _ScriptedProvider([
           // Call 1: the model uses create_schedule_relation directly.
@@ -3198,57 +3192,123 @@ END
     );
 
     test(
-      'a relation get_schedule without a query returns relation_lookup_requires_title and loads no events',
+      'relation get_schedule bounds: exact-day no-query and query views run once, unbounded calls are rejected and never reach the registry',
       () async {
-        final schedule = _TitleRequiredScheduleTool();
-        final relation = _RecordingRelationTool();
-        final provider = _ScriptedProvider([
-          // Call 1: get_schedule without a query.
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-s1',
-              name: 'get_schedule',
-              input: {},
-            ),
-            const CompletedEvent(),
-          ],
-          // Call 2: the model fixes it with a query, then relation.
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-s2',
-              name: 'get_schedule',
-              input: {'query': '量子物理', 'date': '2026-06-02'},
-            ),
-            const CompletedEvent(),
-          ],
-          [const TextDeltaEvent('已查到。'), const CompletedEvent()],
-        ]);
-        final service = _buildService(
-          database: database,
-          provider: provider,
-          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
-          tools: [schedule, relation],
-        );
+        final cases = <({
+          Map<String, Object?> input,
+          bool executes,
+          String? error,
+        })>[
+          (
+            input: {'from': '2026-09-01', 'through': '2026-09-01'},
+            executes: true,
+            error: null,
+          ),
+          (
+            input: {'query': '计算机网络', 'view': 'events'},
+            executes: true,
+            error: null,
+          ),
+          (
+            input: const {},
+            executes: false,
+            error: 'relation_lookup_requires_bound',
+          ),
+          (
+            input: {'from': '2026-09-01'},
+            executes: false,
+            error: 'relation_lookup_requires_bound',
+          ),
+          (
+            input: {'from': '2026-09-01', 'through': '2026-09-02'},
+            executes: false,
+            error: 'relation_lookup_requires_bound',
+          ),
+          (
+            input: {
+              'from': '2026-09-01',
+              'through': '2026-09-01',
+              'view': 'course_summary',
+            },
+            executes: false,
+            error: 'relation_lookup_requires_bound',
+          ),
+        ];
 
-        await service
-            .send(accountId: account, userText: '记录这两节课的冲突')
-            .toList();
+        for (final c in cases) {
+          final schedule = _CountingEventScheduleTool();
+          final relation = _RecordingRelationTool();
+          final provider = _ScriptedProvider([
+            // Call 1: get_schedule with this case's input.
+            [
+              ToolUseCompletedEvent(
+                id: 'tu-s1',
+                name: 'get_schedule',
+                input: c.input,
+              ),
+              const CompletedEvent(),
+            ],
+            // Call 2: relation write (only reached in the executing paths).
+            [
+              const ToolUseCompletedEvent(
+                id: 'tu-r1',
+                name: 'create_schedule_relation',
+                input: {'conflict_state': 'no_conflict'},
+              ),
+              const CompletedEvent(),
+            ],
+            [const TextDeltaEvent('已查到。'), const CompletedEvent()],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+            tools: [schedule, relation],
+          );
 
-        // The no-query call was intercepted by the session service BEFORE the
-        // tool ran: it never reached the registry, so only the WITH-query call
-        // executed. Therefore the no-query call could not have loaded events.
-        expect(schedule.executeCount, 1);
-        expect(
-          provider.requests[1].messages
-              .expand((m) => m.content)
-              .whereType<LlmToolResultBlock>()
-              .any((tr) {
-            final payload =
-                jsonDecode(tr.content as String) as Map<String, Object?>;
-            return payload['code'] == 'relation_lookup_requires_title';
-          }),
-          isTrue,
-        );
+          await service
+              .send(accountId: account, userText: '记录这两节课的冲突')
+              .toList();
+
+          // The session guard gates BEFORE the registry: bounded cases run the
+          // tool's counter, unbounded cases are intercepted and never execute.
+          expect(
+            schedule.executeCount,
+            c.executes ? 1 : 0,
+            reason: 'input=$c',
+          );
+
+          if (c.error != null) {
+            // The rejected call persists an error row in its own invocation
+            // row, and the model hears the new error code. Rows accumulate
+            // across loop cases, and each send adds exactly one get_schedule
+            // invocation, so the last get_schedule row is THIS send's.
+            final rows = await database.select(database.toolInvocations).get();
+            final scheduleRows =
+                rows.where((r) => r.toolName == 'get_schedule').toList();
+            expect(scheduleRows, isNotEmpty, reason: 'input=$c');
+            final row = scheduleRows.last;
+            expect(row.errorCode, 'relation_lookup_requires_bound',
+                reason: 'input=$c');
+            expect(
+              row.status,
+              ToolInvocationLifecycleState.error.storageName,
+              reason: 'input=$c',
+            );
+            expect(
+              provider.requests[1].messages
+                  .expand((m) => m.content)
+                  .whereType<LlmToolResultBlock>()
+                  .any((tr) {
+                final payload =
+                    jsonDecode(tr.content as String) as Map<String, Object?>;
+                return payload['code'] == 'relation_lookup_requires_bound';
+              }),
+              isTrue,
+              reason: 'input=$c',
+            );
+          }
+        }
       },
     );
 

@@ -1059,16 +1059,20 @@ class AgentSessionService {
             forcedLifecycle = ToolInvocationLifecycleState.error;
           } else if (_isRelationLookup(tu.name, grounding) &&
               tu.name == 'get_schedule' &&
-              _noNonblankQuery(tu.input)) {
-            // Relation-run get_schedule without a title query: return the
-            // intent-specific error WITHOUT loading events (Task 3). This
-            // prevents a relation request from pulling the whole semester's
-            // occurrence just to filter by title later.
+              !_isBoundedRelationScheduleLookup(tu.input)) {
+            // Relation-run get_schedule that is not bounded (no title query and
+            // not an exact single-day events lookup): return the intent-specific
+            // error WITHOUT loading events. This prevents a relation request
+            // from pulling the whole semester's occurrence just to filter by
+            // title later. Exact-day (=single day, view=events) lookups and
+            // any nonblank query are permitted to run and return concrete event
+            // refs, which the LLM can then feed into a no_conflict relation.
             result = const AgentToolResult(
               status: AgentToolStatus.error,
-              errorCode: 'relation_lookup_requires_title',
+              errorCode: 'relation_lookup_requires_bound',
               payload: {
-                'guidance': '填写指定日期与标题后重新查询；不要读取整学期事件后再过滤。',
+                'guidance': '关系参与方需要具体事件引用。请提供事件标题，或把 '
+                    'from/through 限定为同一天并使用 view=events；不要读取整学期详细事件后再过滤。',
               },
             );
             forcedLifecycle = ToolInvocationLifecycleState.error;
@@ -1748,7 +1752,7 @@ class AgentSessionService {
   /// Whether the current run is a relation write (i.e. the grounding
   /// requirement is a `create_schedule_relation` mutation), in which case a
   /// `get_schedule` call is a relation participant lookup subject to the
-  /// title-query requirement.
+  /// bounded-lookup requirement.
   static bool _isRelationLookup(
     String toolName,
     AgentGroundingRequirement? grounding,
@@ -1756,10 +1760,28 @@ class AgentSessionService {
       grounding != null &&
       grounding.terminalTools.contains('create_schedule_relation');
 
-  /// Whether a `get_schedule` call carries no nonblank `query` argument.
-  static bool _noNonblankQuery(Map<String, Object?> input) {
+  /// Whether a relation-run `get_schedule` lookup is bounded: either it
+  /// carries a nonblank title `query`, or (when it has no query) it is an
+  /// exact single-day events lookup (from == through with view=events). Only
+  /// bounded lookups are allowed to run during a relation run so the response
+  /// is a concrete, bounded set of event refs. Date parsing is deliberately NOT
+  /// performed here: malformed date strings pass through to `GetScheduleTool`,
+  /// which remains the single date-validation authority.
+  static bool _isBoundedRelationScheduleLookup(
+    Map<String, Object?> input,
+  ) {
+    final view = input['view'];
+    if (view != null && view != 'events') return false;
+
     final query = input['query'];
-    return query is! String || query.trim().isEmpty;
+    if (query is String && query.trim().isNotEmpty) return true;
+
+    final from = input['from'];
+    final through = input['through'];
+    return from is String &&
+        through is String &&
+        from.trim().isNotEmpty &&
+        from == through;
   }
 
   /// The fixed application correction appended to the conversation before the
