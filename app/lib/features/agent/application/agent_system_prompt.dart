@@ -1,12 +1,12 @@
 /// The fixed, versioned application system prompt for the campus Agent.
 ///
-/// This is **version 5**. The prompt is fixed application text: it contains
+/// This is **version 6**. The prompt is fixed application text: it contains
 /// the safety/behavior sections verbatim and nothing user-configurable is
 /// concatenated above or inside it. The current time is appended dynamically
 /// by `AgentContextBuilder` (to the second, Asia/Shanghai) so the model can
 /// resolve relative dates; this constant itself holds no date.
 ///
-/// The Agent runtime passes [version5] (plus the dynamic time suffix) as the
+/// The Agent runtime passes [version6] (plus the dynamic time suffix) as the
 /// `system` field of the outbound [LlmRequest]. The privacy filter and context
 /// builder treat this string as immutable.
 ///
@@ -39,7 +39,22 @@ class AgentSystemPrompt {
   /// The prompt version. Bumped only when the fixed text changes; stored on
   /// `agent_settings.system_prompt_version` so old conversations can be
   /// re-summarized under a new version if needed.
-  static const int version = 5;
+  static const int version = 6;
+
+  /// The fixed application system prompt, version 6.
+  ///
+  /// Built by taking [version5] verbatim (so every v4/v5 rule is preserved) and
+  /// appending the v6 sections. The sections below are the authoritative
+  /// safety/behavior rules and MUST NOT be edited without bumping [version].
+  /// There is intentionally no user-configurable preamble: the role section is
+  /// the first thing the model reads.
+  static const String version6 = '$version5' '''
+
+## 单日关系参与方与已有任务规划
+- 用户用日期与节次或时间指明关系参与方但未给标题时，使用同一天的 get_schedule（view=events），根据返回开始/结束时间选择事件，不猜课程名。
+- 同一时段有多个候选事件且用户未指定全部对象时，先列出安全标题和时间并询问，不任意选择或批量写关系。
+- 同一句话要求安排已有 Task 并建立关系时，先用 get_tasks/get_schedule 定位目标，再顺序调用 plan_task；提交成功后用 get_plan_blocks 取得新引用，最后调用 create_schedule_relation。依赖新 PlanBlock 引用的两个写工具不能并行。
+- 找不到唯一 Task 时先询问，不自动调用 create_task。PlanBlock 已创建但 Relation 未成功时，准确报告部分完成。''';
 
   /// The fixed application system prompt, version 5.
   ///

@@ -314,4 +314,37 @@ void main() {
       );
     });
   });
+
+  group('AgentGroundingPolicy.classify — relation runs that plan an existing task',
+      () {
+    test('exact real request exposes task-planning tools and no_conflict', () {
+      const text = '在9月1号上午第一节课我想再写一门生命科学简史课作业，'
+          '你只要帮我安排在这个时间段，具体事件我自己把握，并标记为不冲突';
+      final req = policy.classify(text)!;
+      expect(req.expectedConflictState, ExpectedConflictState.noConflict);
+      expect(req.terminalTools, {'create_schedule_relation'});
+      expect(req.supportingTools, {'get_tasks', 'plan_task'});
+      expect(req.initialAllowedTools, [
+        'get_tasks',
+        'get_schedule',
+        'plan_task',
+        'get_plan_blocks',
+        'create_schedule_relation',
+      ]);
+      expect(req.initialAllowedTools, isNot(contains('create_task')));
+    });
+
+    test('plain relation request keeps the original three tools and empty '
+        'supportingTools', () {
+      final req = policy.classify('把这两节课标记为不冲突')!;
+      expect(req.expectedConflictState, ExpectedConflictState.noConflict);
+      expect(req.terminalTools, {'create_schedule_relation'});
+      expect(req.supportingTools, isEmpty);
+      expect(req.initialAllowedTools, [
+        'get_schedule',
+        'get_plan_blocks',
+        'create_schedule_relation',
+      ]);
+    });
+  });
 }

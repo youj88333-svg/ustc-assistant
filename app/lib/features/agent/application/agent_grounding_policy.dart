@@ -25,6 +25,7 @@ class AgentGroundingRequirement {
     this.lookupTools = const {},
     this.anyOfLookupToolGroups = const [],
     this.terminalTools = const {},
+    this.supportingTools = const {},
     this.mutationIntent = false,
     this.initialAllowedTools,
     this.expectedConflictState,
@@ -44,6 +45,14 @@ class AgentGroundingRequirement {
   final List<Set<String>> anyOfLookupToolGroups;
 
   final Set<String> terminalTools;
+
+  /// Tools the model may use to prepare/plan the operation beyond the terminal
+  /// write and its required lookups, e.g. task-planning tools exposed to a
+  /// relation run that also schedules an existing Task. Empty for a plain
+  /// relation write. Included in [requiredTools] so corrective-stage tool
+  /// narrowing keeps them allowed for the whole run.
+  final Set<String> supportingTools;
+
   final bool mutationIntent;
 
   /// When non-null, the FIRST model request of the run declares ONLY these
@@ -62,7 +71,7 @@ class AgentGroundingRequirement {
   /// The union of every tool this request ultimately requires (lookups that
   /// must provide evidence/refs plus the terminal write). For corrective-stage
   /// tool narrowing this keeps all candidate lookup tools allowed.
-  Set<String> get requiredTools => {...lookupTools, ...terminalTools};
+  Set<String> get requiredTools => {...lookupTools, ...supportingTools, ...terminalTools};
 
   /// Whether the given set of succeeded lookup tools satisfies the lookup
   /// requirement. With [anyOfLookupToolGroups] a single complete group is
@@ -141,16 +150,36 @@ class AgentGroundingPolicy {
   /// optional narrowing set and (for relation writes) an expected conflict
   /// state derived from the user's wording.
   AgentGroundingRequirement _buildRequirement(_IntentDef def, String text) {
-    final relationSet = def.terminalTools.contains('create_schedule_relation')
-        ? const ['get_schedule', 'get_plan_blocks', 'create_schedule_relation']
+    final isRelation =
+        def.terminalTools.contains('create_schedule_relation');
+    // A relation run that ALSO plans an existing Task ("写一门...课作业" +
+    // "安排在这个时间段") exposes the task-planning tools as supporting tools
+    // alongside the relation terminal write. Uses the same shared
+    // _planTaskPatterns as the standalone plan_task intent.
+    final plansTask = isRelation && _matchesAny(text, _planTaskPatterns);
+    final relationSet = isRelation
+        ? (plansTask
+              ? const [
+                  'get_tasks',
+                  'get_schedule',
+                  'plan_task',
+                  'get_plan_blocks',
+                  'create_schedule_relation',
+                ]
+              : const [
+                  'get_schedule',
+                  'get_plan_blocks',
+                  'create_schedule_relation',
+                ])
         : null;
-    final expected = def.terminalTools.contains('create_schedule_relation')
+    final expected = isRelation
         ? _classifyExpectedConflictState(text)
         : null;
     return AgentGroundingRequirement(
       lookupTools: def.lookupTools,
       anyOfLookupToolGroups: def.anyOfLookupToolGroups,
       terminalTools: def.terminalTools,
+      supportingTools: plansTask ? const {'get_tasks', 'plan_task'} : const {},
       mutationIntent: true,
       initialAllowedTools: relationSet,
       expectedConflictState: expected,
@@ -169,6 +198,9 @@ class AgentGroundingPolicy {
       RegExp(r'课上写'),
       RegExp(r'都去'),
       RegExp(r'两个.{0,4}(都|保留|共存|都要)'),
+      // An explicit "不冲突" is a concrete user decision -> no_conflict. Placed
+      // here so it is checked before the bare "冲突" unresolved patterns below.
+      RegExp(r'不冲突'),
     ];
     for (final p in noConflictPatterns) {
       if (p.hasMatch(text)) return ExpectedConflictState.noConflict;
@@ -248,6 +280,15 @@ final List<RegExp> _capabilityAdvicePatterns = [
   RegExp(r'解释一下.{0,6}(plan ?block|任务|概念|机制)'),
 ];
 
+/// Shared plan-task patterns. Used BOTH by the standalone `plan_task` intent
+/// and by the secondary "does this relation run also plan an existing Task?"
+/// check, so the two must never drift apart.
+final List<RegExp> _planTaskPatterns = [
+  RegExp(r'(任务|作业|复习|project|assignment).{0,20}(安排|规划)'),
+  RegExp(r'(安排|规划).{0,20}(任务|作业|复习)'),
+  RegExp(r'安排.*(时间段|时段)'),
+];
+
 /// Write (mutation) intents, checked in order before read intents.
 final List<_IntentDef> _writeIntents = [
   // create_schedule_relation (conflict / choose-one / coexist relation between
@@ -287,11 +328,7 @@ final List<_IntentDef> _writeIntents = [
   // REQUIRES a task/作业/复习 entity — a bare "安排" with no task object is a
   // generic event (create_event) or ambiguous (null), never plan_task.
   _IntentDef(
-    patterns: [
-      RegExp(r'(任务|作业|复习|project|assignment).{0,20}(安排|规划)'),
-      RegExp(r'(安排|规划).{0,20}(任务|作业|复习)'),
-      RegExp(r'安排.*(时间段|时段)'),
-    ],
+    patterns: _planTaskPatterns,
     lookupTools: {'get_tasks'},
     terminalTools: {'plan_task'},
   ),

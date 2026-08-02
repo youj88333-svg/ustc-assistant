@@ -103,7 +103,7 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
-        expect(request.system, contains(AgentSystemPrompt.version5));
+        expect(request.system, contains(AgentSystemPrompt.version6));
 
         // 2. The summary text is present as an assistant context message,
         //    framed as a prior summary (data), NOT as a local business fact.
@@ -574,8 +574,8 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 5', () {
-      expect(AgentSystemPrompt.version, 5);
+    test('version is 6', () {
+      expect(AgentSystemPrompt.version, 6);
     });
 
     test('version4 contains the safety sections, the read tool names and the write-tool confirmation gate', () {
@@ -727,6 +727,67 @@ void main() {
       expect(v5, isNot(contains('2026fall')));
       expect(v5, isNot(contains('421')));
       expect(v5, isNot(contains('461')));
+    });
+
+    test('version6 preserves every v5 rule and adds single-day relation / '
+        'task-planning rules', () {
+      const v6 = AgentSystemPrompt.version6;
+      // Every v5 rule is preserved verbatim.
+      expect(v6, contains(AgentSystemPrompt.version5),
+          reason: 'version6 must preserve every v5 rule');
+      // Single-day relation-participant location with schedule events.
+      expect(v6, contains('用同一天的 get_schedule（view=events）'),
+          reason: '按日期与节次定位关系参与方时，用同一天的 get_schedule(view=events)');
+      expect(v6, contains('不猜课程名'),
+          reason: '不猜课程名');
+      // Sequential task -> planblock -> relation flow.
+      expect(v6, contains('get_plan_blocks'),
+          reason: '提交成功后用 get_plan_blocks 取得新引用');
+      expect(v6, contains('create_schedule_relation'),
+          reason: '最后创建关系');
+      expect(v6, contains('不能并行'),
+          reason: '依赖新 PlanBlock 引用的写工具不能并行');
+      // Ask before auto-create_task; report partial completion honestly.
+      expect(v6, contains('先询问'),
+          reason: '找不到唯一 Task 时先询问');
+      expect(v6, contains('不自动'),
+          reason: '不自动调用 create_task');
+      expect(v6, contains('部分完成'),
+          reason: 'PlanBlock 成功但 Relation 未成功时报告部分完成');
+      // No semester literal in the v6 text.
+      expect(v6, isNot(contains('2026spring')));
+      expect(v6, isNot(contains('2026fall')));
+      expect(v6, isNot(contains('421')));
+      expect(v6, isNot(contains('461')));
+    });
+  });
+
+  group('AgentSystemPrompt version6 Beijing-time suffix', () {
+    test('the dynamic Asia/Shanghai time suffix is present exactly once', () {
+      final builder = const AgentContextBuilder();
+      final clock = FixedBeijingClock(DateTime(2026, 7, 31, 14, 30, 5));
+      final request = builder.build(
+        model: model,
+        accountId: 'a',
+        history: const [],
+        summary: null,
+        currentUserText: '今天有什么课？',
+        toolDeclarations: const [],
+        clock: clock,
+      );
+      final system = request.system;
+      expect(system, isNotNull);
+      // The version4 base text already mentions Asia/Shanghai once as part of
+      // the time-anchor explanation; the DYNAMIC suffix
+      // "当前时间：$anchor，Asia/Shanghai。" (with the leading comma) must appear
+      // exactly once. Count the full suffix marker so the base mention is not
+      // confused with it.
+      expect(
+        '，Asia/Shanghai。'.allMatches(system!).length,
+        1,
+        reason: 'the dynamic Beijing-time suffix must appear exactly once',
+      );
+      expect(system, contains('2026-07-31T14:30:05'));
     });
   });
 
