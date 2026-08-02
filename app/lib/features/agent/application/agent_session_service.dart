@@ -1109,49 +1109,47 @@ class AgentSessionService {
             );
             forcedLifecycle = ToolInvocationLifecycleState.error;
           } else if (tu.name == 'create_schedule_relation' &&
-              expectedConflictState != null) {
+              expectedConflictState != null &&
+              _relationStateMismatches(
+                proposed: tu.input['conflict_state'],
+                expected: expectedConflictState,
+              )) {
             // Expected-state enforcement (Task 3): never execute (nor silently
             // rewrite) a relation write whose conflict_state disagrees with the
             // user's expressed choice. First mismatch -> fixed guidance; second
             // -> end safely without a confirmation card.
-            final proposed = tu.input['conflict_state'];
-            final mismatch = _relationStateMismatches(
-              proposed: proposed,
-              expected: expectedConflictState,
-            );
-            if (mismatch) {
-              relationStateMismatchCount++;
-              if (relationStateMismatchCount >= 2) {
-                // Second consecutive mismatch: end safely, no confirmation.
-                terminalState = AgentRunState.failed;
-                errorCode = 'grounding_failed';
-                result = const AgentToolResult(
-                  status: AgentToolStatus.error,
-                  errorCode: 'relation_state_mismatch',
-                  payload: {
-                    'guidance': '第二次仍与你的选择不一致，已停止，未写入任何关系。',
-                  },
-                );
-                forcedLifecycle = ToolInvocationLifecycleState.error;
-              } else {
-                // First mismatch: fixed, DIRECTION-AWARE guidance, allow one
-                // changed call. The expected direction is derived from the
-                // user's expressed decision — never a hardcoded no_conflict.
-                result = AgentToolResult(
-                  status: AgentToolStatus.error,
-                  errorCode: 'relation_state_mismatch',
-                  payload: {
-                    'guidance': _relationStateMismatchGuidance(expectedConflictState),
-                  },
-                );
-                forcedLifecycle = ToolInvocationLifecycleState.error;
-              }
-            } else {
-              result = await _registry.execute(
-                toolName: tu.name,
-                arguments: tu.input,
-                context: context,
+            //
+            // IMPORTANT: this branch only fires ON MISMATCH. When the proposed
+            // conflict_state agrees with the user's decision, the write falls
+            // through to the generic execution branch below so its
+            // `needsUserAction` confirmation pause is honored like any other
+            // write (Task 4 composition regression covers the two-sequential-
+            // confirmation flow).
+            relationStateMismatchCount++;
+            if (relationStateMismatchCount >= 2) {
+              // Second consecutive mismatch: end safely, no confirmation.
+              terminalState = AgentRunState.failed;
+              errorCode = 'grounding_failed';
+              result = const AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'relation_state_mismatch',
+                payload: {
+                  'guidance': '第二次仍与你的选择不一致，已停止，未写入任何关系。',
+                },
               );
+              forcedLifecycle = ToolInvocationLifecycleState.error;
+            } else {
+              // First mismatch: fixed, DIRECTION-AWARE guidance, allow one
+              // changed call. The expected direction is derived from the
+              // user's expressed decision — never a hardcoded no_conflict.
+              result = AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'relation_state_mismatch',
+                payload: {
+                  'guidance': _relationStateMismatchGuidance(expectedConflictState),
+                },
+              );
+              forcedLifecycle = ToolInvocationLifecycleState.error;
             }
           } else {
             result = await _registry.execute(

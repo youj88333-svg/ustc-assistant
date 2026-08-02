@@ -3792,6 +3792,368 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'resetting/clearing the account removes persisted diagnostics');
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 4 FINAL composition regression: the REAL date-bounded relation
+  // workflow, end to end, through the real composed registry with a scripted
+  // provider.
+  //
+  //   seed : Task 生命科学简史课作业 + three 2026-09-01 courses
+  //          07:50-09:25 计算机网络 / 09:45-11:20 非线性电子线路 /
+  //          15:55-17:30 半导体材料与物理
+  //   send : 在9月1号上午第一节课我想再写一门生命科学简史课作业，你只要帮我安排在这个时间段，
+  //          具体事件我自己把握，并标记为不冲突
+  //
+  // The TRUTH exercised here (spec §4.1, §5.1-§5.3, §8.3), on the REAL
+  // registry + confirmation store + Drift gateway + Relation writer:
+  //
+  //   1. grounding exposes EXACTLY the five task-planning/relation tools, never
+  //      create_task or any other write tool;
+  //   2. the exact-day no-query get_schedule(view=events) returns all three
+  //      2026-09-01 events as run-local refs — the single first-period course
+  //      (计算机网络) is located purely by 07:50-09:25 timing, never by guessing
+  //      a title;
+  //   3. plan_task commits a PlanBlock via a real confirmation checkpoint;
+  //   4. get_plan_blocks locates that block (by the task ref bound in get_tasks)
+  //      and hands back a run-local plan_block ref;
+  //   5. create_schedule_relation(no_conflict) commits an event↔PlanBlock
+  //      relation via a second real confirmation checkpoint;
+  //   6. the run completes with exactly one PlanBlock and one relation; the
+  //      invocation trail carries neither relation_lookup_requires_bound nor a
+  //      trailing protocol_error; no Task or course title was guessed/created.
+  // ─────────────────────────────────────────────────────────────────────────
+  test(
+    'composition: exact-day relation workflow '
+    '(5-tool sequence -> 2 confirmations -> event↔PlanBlock no_conflict)',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+
+      // The existing Task the user wants to schedule (生命科学简史课作业).
+      await _insertTask(db, 'task-1', 'acc-1', '生命科学简史课作业');
+
+      // Three 2026-09-01 course occurrences (the local data the request refers
+      // to). 2026-09-01 is TEST DATA — never a semester literal. Use a neutral
+      // semester key so no 2026spring/2026fall literal appears.
+      await _insertCourseSeries(
+        db,
+        'series-net',
+        'acc-1',
+        externalId: 'lesson-net',
+        title: '计算机网络',
+        semesterKey: 'aug2026',
+      );
+      await _insertCourseSeries(
+        db,
+        'series-elec',
+        'acc-1',
+        externalId: 'lesson-elec',
+        title: '非线性电子线路',
+        semesterKey: 'aug2026',
+      );
+      await _insertCourseSeries(
+        db,
+        'series-semi',
+        'acc-1',
+        externalId: 'lesson-semi',
+        title: '半导体材料与物理',
+        semesterKey: 'aug2026',
+      );
+      await _insertCourseOccurrence(
+        db,
+        'occ-net',
+        'acc-1',
+        '计算机网络',
+        seriesExternalId: 'lesson-net',
+        location: '三教101',
+        start: DateTime(2026, 9, 1, 7, 50),
+        end: DateTime(2026, 9, 1, 9, 25),
+      );
+      await _insertCourseOccurrence(
+        db,
+        'occ-elec',
+        'acc-1',
+        '非线性电子线路',
+        seriesExternalId: 'lesson-elec',
+        location: '三教201',
+        start: DateTime(2026, 9, 1, 9, 45),
+        end: DateTime(2026, 9, 1, 11, 20),
+      );
+      await _insertCourseOccurrence(
+        db,
+        'occ-semi',
+        'acc-1',
+        '半导体材料与物理',
+        seriesExternalId: 'lesson-semi',
+        location: '四教102',
+        start: DateTime(2026, 9, 1, 15, 55),
+        end: DateTime(2026, 9, 1, 17, 30),
+      );
+
+      // The scripted "model" executes the real §5.2 sequence:
+      //   get_tasks + get_schedule(view=events, exact 2026-09-01)  [turn 1]
+      //   plan_task                                              [turn 2, confirm 1]
+      //   get_plan_blocks(taskRef=<task ref from get_tasks>)       [turn 3]
+      //   create_schedule_relation(no_conflict)                    [turn 4, confirm 2]
+      //   final text                                              [turn 5]
+      const blockStart = '2026-09-01T07:50:00+08:00';
+      const blockEnd = '2026-09-01T09:25:00+08:00';
+      final provider = _ScriptedProvider([
+        // Call 1: get_tasks (binds the 生命科学简史课作业 task ref) + get_schedule
+        // exact-day events (binds all three course refs). Both are independent
+        // reads the model may issue in the same turn.
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-t1',
+                name: 'get_tasks',
+                input: {},
+              ),
+              const ToolUseCompletedEvent(
+                id: 'tu-t2',
+                name: 'get_schedule',
+                input: {
+                  'from': '2026-09-01',
+                  'through': '2026-09-01',
+                  'view': 'events',
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        // Call 2: plan_task for the existing task (echoes the get_tasks ref).
+        // Pauses for write confirmation.
+        _ScriptedCall(
+          () => [
+            const ToolUseCompletedEvent(
+              id: 'tu-t3',
+              name: 'plan_task',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          inputBuilder: (prior) {
+            final refs = _refsFromLastToolResult(prior);
+            // The FIRST bound task ref is the get_tasks result (it precedes the
+            // get_schedule refs in turn 1's tool_results), but to be robust,
+            // resolve the ref that the get_tasks payload actually carries.
+            return {
+              'ref_task': _taskRefFromResults(prior) ?? refs.first,
+              'start_at': blockStart,
+              'end_at': blockEnd,
+            };
+          },
+        ),
+        // Call 3: get_plan_blocks filtered to the just-planned task (echoes the
+        // task ref). The block now exists -> binds a plan_block ref.
+        _ScriptedCall(
+          () => [
+            const ToolUseCompletedEvent(
+              id: 'tu-t4',
+              name: 'get_plan_blocks',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          inputBuilder: (prior) => {
+            'taskRef': _taskRefFromResults(prior),
+          },
+        ),
+        // Call 4: create_schedule_relation(no_conflict) between the first-period
+        // event (located by 07:50-09:25 timing from the exact-day get_schedule)
+        // and the new PlanBlock (from get_plan_blocks). Pauses for confirmation.
+        _ScriptedCall(
+          () => [
+            const ToolUseCompletedEvent(
+              id: 'tu-t5',
+              name: 'create_schedule_relation',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          inputBuilder: (prior) {
+            final eventRef = _firstPeriodEventRef(prior);
+            final blockRef = _lastPlanBlockRef(prior);
+            if (eventRef == null) {
+              throw StateError('first-period event ref not found in feed');
+            }
+            if (blockRef == null) {
+              throw StateError('plan-block ref not found in feed');
+            }
+            return {
+              'ref_left': eventRef,
+              'ref_right': blockRef,
+              'conflict_state': 'no_conflict',
+              'reason': '在第一节课期间写生命科学简史课作业',
+            };
+          },
+        ),
+        // Call 5: final completion prose.
+        _ScriptedCall(() => [
+              const TextDeltaEvent(
+                '已安排生命科学简史课作业的执行时间段（07:50-09:25），'
+                '并把它与第一节课标记为不冲突。',
+              ),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '在9月1号上午第一节课我想再写一门生命'
+              '科学简史课作业，你只要帮我安排在这个时间段，具体事件我自己把握，并标记为不冲突')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+
+      // --- turn 1 (get_tasks + get_schedule) -> turn 2 plan_task pauses ---
+      Future<dynamic> waitForCard(String label) async {
+        // The state list accumulates across the whole run (two confirmations
+        // share one runId), so poll for the SPECIFIC operation label rather
+        // than grabbing the last userAction (which may be an earlier card).
+        for (var i = 0; i < 150; i++) {
+          AgentRunViewState? found;
+          for (final s in states) {
+            if (s.userAction?.type == AgentUserActionType.writeConfirmation &&
+                s.userAction!.writeProposal?.operationLabel == label) {
+              found = s;
+            }
+          }
+          if (found != null) return found.userAction!.writeProposal!;
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        fail('never saw the $label confirmation card');
+      }
+
+      final planProposal = await waitForCard('安排任务时间段');
+      expect(planProposal.operationLabel, '安排任务时间段',
+          reason: 'the first confirmation is the plan_task card');
+      expect(planProposal.previewLines.join('\n'), contains('生命科学简史课作业'),
+          reason: 'the plan confirm names the existing task title');
+
+      // Approve the PlanBlock creation.
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+
+      // --- turn 3 (get_plan_blocks) -> turn 4 relation pauses ---
+      final relProposal = await waitForCard('记录日程关系');
+      expect(relProposal.operationLabel, '记录日程关系',
+          reason: 'the second confirmation is the relation card');
+      final relPreview = relProposal.previewLines.join('\n');
+      expect(relPreview, contains('计算机网络'),
+          reason: 'the relation preview names the located first-period course');
+      expect(relPreview, isNot(contains('occ-net')),
+          reason: 'the relation preview must not leak the raw event DB id');
+      expect(relPreview, isNot(contains('ref_')),
+          reason: 'the relation preview must not leak run-local refs');
+
+      // Approve the relation.
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+
+      // --- terminal truth ---------------------------------------------------
+      expect(states.last.state, AgentRunState.completed);
+      // The persisted run row reflects the completed terminal state.
+      final runs = await db.select(db.agentRuns).get();
+      expect(runs.single.status, AgentRunState.completed.name);
+
+      // Exactly ONE PlanBlock and ONE canonical Relation.
+      final planBlocks = await db.select(db.planBlocks).get();
+      final planBlocksForTask = planBlocks
+          .where((b) => b.taskId == 'task-1')
+          .toList(growable: false);
+      expect(planBlocksForTask, hasLength(1));
+      expect(planBlocksForTask.single.startAt,
+          DateTime.utc(2026, 9, 1, 7, 50).millisecondsSinceEpoch -
+              const Duration(hours: 8).inMilliseconds);
+      expect(planBlocksForTask.single.endAt,
+          DateTime.utc(2026, 9, 1, 9, 25).millisecondsSinceEpoch -
+              const Duration(hours: 8).inMilliseconds);
+
+      final relations = await db.select(db.scheduleRelations).get();
+      expect(relations, hasLength(1));
+      expect(relations.single.conflictState, 'no_conflict');
+      // The pair is event↔PlanBlock, both under the same account.
+      expect(relations.single.leftKind, 'event');
+      expect(relations.single.rightKind, 'plan_block');
+      expect(relations.single.leftId, 'occ-net');
+      expect(relations.single.rightId, planBlocksForTask.single.id);
+      expect(relations.single.leftEventId, 'occ-net');
+      expect(relations.single.rightPlanBlockId, planBlocksForTask.single.id);
+      expect(relations.single.accountId, 'acc-1');
+      // No Task or course title was guessed or newly created: the only task is
+      // the seeded one, and the only courses are the three seeded occurrences.
+      expect((await db.select(db.tasks).get()).length, 1);
+      expect((await db.select(db.calendarEvents).get()).length, 3);
+
+      // --- invocation diagnostic trail -------------------------------------
+      // The five real tool calls ran in order; persisted diagnostics record
+      // ONLY safe codes. Neither relation_lookup_requires_bound nor a trailing
+      // protocol_error may appear.
+      final activeRunId = runs.single.id;
+      final invocations =
+          await composition.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-1',
+        runIds: {activeRunId},
+      );
+      expect(
+        invocations.map((r) => r.toolName).toList(growable: false),
+        [
+          'get_tasks',
+          'get_schedule',
+          'plan_task',
+          'get_plan_blocks',
+          'create_schedule_relation',
+        ],
+        reason: 'the real five-tool sequence ran in §5.2 order',
+      );
+      final errorCodes = invocations.map((r) => r.errorCode).toSet();
+      expect(errorCodes, isNot(contains('relation_lookup_requires_bound')));
+      expect(errorCodes, isNot(contains('protocol_error')));
+      // Every invocation reached a terminal lifecycle state (no lingering
+      // running/waiting rows).
+      for (final inv in invocations) {
+        expect(inv.status.isTerminal, isTrue,
+            reason: 'every persisted invocation must settle to a terminal state');
+      }
+      // The first-period event was located by the exact-day get_schedule WITHOUT
+      // a title query: the get_schedule call carried no query argument.
+      final scheduleCall = invocations
+          .firstWhere((inv) => inv.toolName == 'get_schedule');
+      expect(scheduleCall.safeArgumentsSummary, isNot(contains('计算机网络')),
+          reason: 'the exact-day lookup must not carry a title query');
+      expect(scheduleCall.safeArgumentsSummary, contains('2026-09-01'),
+          reason: 'the exact-day lookup carries the bound date');
+      // The model-facing feed reflected the timing-based selection, not a guessed
+      // course name in the write input (the relation refs resolve via the store).
+      final feed = _capturedToolResults(provider).join('\n');
+      expect(feed, contains('2026-09-01T07:50:00'),
+          reason: 'the exact-day get_schedule surfaced the first-period timing');
+      expect(feed, isNot(contains('occ-net')),
+          reason: 'no raw event DB id may reach the model feed');
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -4125,4 +4487,88 @@ List<Map<String, Object?>> _capturedConflictPayloads(_ScriptedProvider provider)
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Task 4 (date-bounded relation) script helpers.
+// ---------------------------------------------------------------------------
+
+/// The run-local task ref emitted by the LAST `get_tasks` tool_result across all
+/// captured requests, or `null` if none is present. Parses the JSON payload the
+/// session service folds into the model feed (the `_taskItemKeys` allowlist
+/// keeps `ref`, `title`, etc.).
+String? _taskRefFromResults(List<LlmRequest> prior) {
+  for (final request in prior.reversed) {
+    for (final message in request.messages) {
+      if (message.role != 'user') continue;
+      for (final block in message.content) {
+        if (block is! LlmToolResultBlock) continue;
+        final content = block.content;
+        if (content is! String) continue;
+        final decoded = jsonDecode(content);
+        if (decoded is! Map<String, Object?>) continue;
+        final tasks = decoded['tasks'];
+        if (tasks is List && tasks.isNotEmpty) {
+          final first = tasks.first;
+          if (first is Map<String, Object?> && first['ref'] is String) {
+            return first['ref'] as String;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/// The run-local plan_block ref from the LAST `get_plan_blocks` tool_result, or
+/// `null` if none is present.
+String? _lastPlanBlockRef(List<LlmRequest> prior) {
+  for (final request in prior.reversed) {
+    for (final message in request.messages) {
+      if (message.role != 'user') continue;
+      for (final block in message.content) {
+        if (block is! LlmToolResultBlock) continue;
+        final content = block.content;
+        if (content is! String) continue;
+        final decoded = jsonDecode(content);
+        if (decoded is! Map<String, Object?>) continue;
+        final blocks = decoded['planBlocks'];
+        if (blocks is List && blocks.isNotEmpty) {
+          final first = blocks.first;
+          if (first is Map<String, Object?> && first['ref'] is String) {
+            return first['ref'] as String;
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/// The run-local event ref of the FIRST period (07:50-09:25) from the exact-day
+/// `get_schedule` result. Selects purely by the surfaced `startAt` timing —
+/// exactly how the real model locates the first-period course WITHOUT guessing
+/// 计算机网络. Returns `null` if no event with that start time is present.
+String? _firstPeriodEventRef(List<LlmRequest> prior) {
+  for (final request in prior.reversed) {
+    for (final message in request.messages) {
+      if (message.role != 'user') continue;
+      for (final block in message.content) {
+        if (block is! LlmToolResultBlock) continue;
+        final content = block.content;
+        if (content is! String) continue;
+        final decoded = jsonDecode(content);
+        if (decoded is! Map<String, Object?>) continue;
+        final events = decoded['events'];
+        if (events is! List) continue;
+        for (final e in events) {
+          if (e is! Map<String, Object?>) continue;
+          if (e['startAt'] == '2026-09-01T07:50:00' && e['ref'] is String) {
+            return e['ref'] as String;
+          }
+        }
+      }
+    }
+  }
+  return null;
 }

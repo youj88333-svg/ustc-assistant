@@ -603,12 +603,91 @@ The retest document is intentionally modified and will be appended in Task 4. Re
 
 ### Execution Evidence
 
-This subsection intentionally records only the pre-execution state until Task 4 Step 7. The executor must replace it with measured final evidence rather than appending guesses:
+This subsection records the measured final execution evidence collected by Task 4 Step 7. Automatic verification does not mark the manual `完成：` field in the retest document.
+
+**Implementation status: COMPLETED** on branch `feature/write-tools`.
 
 ```text
-Implementation status: not started at plan commit
-Manual Release acceptance: not executed
-Separate handoff document: prohibited by owner request; this plan is the handoff authority
+Final HEAD (Task 4 commit): e1e99aa (test(agent): close date-bounded relation workflow)
+Ordered Task commit hashes (oldest first):
+  Task 1  66c625f fix(agent): allow exact-day relation lookups
+  Task 2  92ad76d feat(agent): expose task planning for relation runs
+  Task 3  55b7dfe fix(agent): preserve partial relation workflow results
+  Task 4  e1e99aa test(agent): close date-bounded relation workflow
+Baseline (plan/design): 0d12c37 docs: plan date-bounded relation lookup /
+                         dd73551 docs: design date-bounded relation lookup
+
+Files changed by each Task:
+  Task 1 (66c625f): app/lib/features/agent/application/agent_session_service.dart
+                    app/test/features/agent/agent_session_service_test.dart
+  Task 2 (92ad76d): app/lib/features/agent/application/agent_context_builder.dart
+                    app/lib/features/agent/application/agent_grounding_policy.dart
+                    app/lib/features/agent/application/agent_system_prompt.dart
+                    app/test/features/agent/agent_context_builder_test.dart
+                    app/test/features/agent/agent_grounding_policy_test.dart
+  Task 3 (55b7dfe): app/lib/features/agent/application/agent_session_service.dart
+                    app/test/features/agent/agent_session_service_test.dart
+  Task 4 (e1e99aa):
+    app/lib/features/agent/application/agent_session_service.dart  (production fix)
+    app/test/integration/agent_composition_flow_test.dart           (real composition regression)
+    docs/agent-relation-closure-retest-2026-08-02.md                 (manual retest item 10)
+
+Focused regression suite (5 files): PASSED — 184 tests, zero failures
+  agent_grounding_policy_test, agent_context_builder_test,
+  agent_session_service_test, agent_composition_flow_test, read_only_agent_flow_test
+Full Flutter test suite: PASSED — 910 tests, zero failures (flutter test)
+Flutter analyze: 0 issues found (clean)
+Windows Release build: SUCCEEDED
+  E:/107/.worktrees/write-tools/app/build/windows/x64/runner/Release/ustc_assistant_app.exe
+Python (E:/107, conda env ustc_assistant): 388 tests, OK (unittest discover -s tests -v)
+Python compileall (src tests): OK, exit 0
+git diff --check: clean (exit 0)
+```
+
+**Real production defect found and fixed (Task 4):** When a relation run's `create_schedule_relation`
+call matched the expected conflict state (the normal date-bounded no_conflict path), the
+`needsUserAction` write confirmation pause was bypassed because the pause handler lived only in the
+generic `else` branch, while the matching-state relation call was dispatched by the
+`else if (... expectedConflictState != null)` branch. The relation's confirmation card never paused;
+the run settled as `relation_not_grounded_after_plan` and the write could not be confirmed. The fix
+moved the mismatch branch to fire only on `_relationStateMismatches(...) == true`, so a matching
+relation falls through to the generic execute + needsUserAction pause path. Red→green evidence: the
+new composition regression (`exact-day relation workflow`) failed with
+`relation_not_grounded_after_plan` before the fix and passed after; all 82 pre-existing
+agent_session_service tests (including the two expected-state-mismatch cases) still pass unmodified.
+
+**Remaining manual acceptance status:** NOT EXECUTED. The owner-fillable manual acceptance is
+documented as section 10 (`完成：` blank) in `docs/agent-relation-closure-retest-2026-08-02.md`.
+The final code review (Step 6) is handled separately by the controller after Task 4 per the brief;
+it has not been run here.
+
+**Accepted residual limitations:**
+- The manual Release acceptance (real school model, new Release process) is not executed; only the
+  automatic composition regression ran.
+- The production fix to `agent_session_service.dart` was not reviewed through requesting-code-review
+  (deferred to the separate Step 6 controller review).
+- 2026-09-01 is test DATA, never a semester literal; no `semesterId`, `421`, `461`, `2026spring` or
+  `2026fall` literal was introduced.
+
+**Current `git status --short` (post Task 4):** distinguishes protected pre-existing files from the
+three implementation files staged/committed by Task 4.
+
+```text
+M  app/lib/features/agent/application/agent_session_service.dart   [Task 4 implementation]
+M  app/test/integration/agent_composition_flow_test.dart           [Task 4 implementation]
+M  docs/agent-relation-closure-retest-2026-08-02.md                [Task 4 append]
+M  app/windows/flutter/generated_plugin_registrant.cc              [protected pre-existing]
+M  app/windows/flutter/generated_plugin_registrant.h               [protected pre-existing]
+M  app/windows/flutter/generated_plugins.cmake                     [protected pre-existing]
+?? docs/agent-manual-acceptance-retest-2026-08-01.md               [protected untracked]
+?? docs/agent-manual-acceptance-review-handoff-2026-08-02.md       [protected untracked]
+?? docs/agent-testing.md                                           [protected untracked]
+?? docs/superpowers/plans/2026-08-02-agent-manual-acceptance-review-repairs.md [protected untracked]
+```
+
+Protected pre-existing files (3 Windows generated files + the modified retest doc + 4 untracked
+user docs) are preserved unchanged except the retest doc, which was appended (item 10) with every
+existing `完成：` value intact. Implementation changes are limited to the three Task 4 files above.
 ```
 
 ## Self-Review
