@@ -1098,13 +1098,14 @@ class AgentSessionService {
                 );
                 forcedLifecycle = ToolInvocationLifecycleState.error;
               } else {
-                // First mismatch: fixed guidance, allow one changed call.
-                result = const AgentToolResult(
+                // First mismatch: fixed, DIRECTION-AWARE guidance, allow one
+                // changed call. The expected direction is derived from the
+                // user's expressed decision — never a hardcoded no_conflict.
+                result = AgentToolResult(
                   status: AgentToolStatus.error,
                   errorCode: 'relation_state_mismatch',
                   payload: {
-                    'guidance': '用户已经表达了取舍；请把 conflict_state 改为 no_conflict，'
-                        '不要记录为 conflict。',
+                    'guidance': _relationStateMismatchGuidance(expectedConflictState),
                   },
                 );
                 forcedLifecycle = ToolInvocationLifecycleState.error;
@@ -1729,6 +1730,18 @@ class AgentSessionService {
         return proposed != 'no_conflict';
       case ExpectedConflictState.conflict:
         return proposed != 'conflict';
+    }
+  }
+
+  /// The fixed, direction-aware guidance surfaced on a FIRST relation-state
+  /// mismatch. Derived from the user's expressed decision so the single allowed
+  /// changed call is pushed toward the correct state — not always `no_conflict`.
+  static String _relationStateMismatchGuidance(ExpectedConflictState expected) {
+    switch (expected) {
+      case ExpectedConflictState.noConflict:
+        return '用户已经表达了取舍；请把 conflict_state 改为 no_conflict，不要记录为 conflict。';
+      case ExpectedConflictState.conflict:
+        return '用户尚未决定，只登记为未解决冲突；请把 conflict_state 改为 conflict，不要记录为 no_conflict。';
     }
   }
 

@@ -3225,6 +3225,71 @@ END
         expect(states.last.state, isNot(AgentRunState.completed));
       },
     );
+
+    test(
+      'expected conflict vs model no_conflict: direction-aware guidance pushes toward conflict',
+      () async {
+        // Symmetric of the no_conflict-mismatch test: the user is UNRESOLVED
+        // (expected conflict), the model wrongly proposes no_conflict. The
+        // first-mismatch guidance must point the model toward conflict, and the
+        // single corrected call must then record conflict — proving the
+        // guidance is direction-aware, not hardcoded to no_conflict.
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final relation = _RecordingRelationTool();
+        final provider = _ScriptedProvider([
+          // Call 1: model records no_conflict, but the user is unresolved ->
+          // expected conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r1',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: the model corrected to conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r2',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已记录为冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [schedule, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '记录为冲突，我还没决定',
+            )
+            .toList();
+
+        // The first mismatch was surfaced as an error carrying the
+        // conflict-direction guidance (NOT "改为 no_conflict"), and the single
+        // corrected call (conflict) succeeded — the run completes.
+        final firstResult = provider.requests[1].messages
+            .expand((m) => m.content)
+            .whereType<LlmToolResultBlock>()
+            .first;
+        final payload =
+            jsonDecode(firstResult.content as String) as Map<String, Object?>;
+        expect(payload['code'], 'relation_state_mismatch');
+        final guidance = payload['guidance'] as String;
+        expect(guidance, contains('改为 conflict'));
+        expect(guidance, isNot(contains('改为 no_conflict')));
+        expect(states.last.state, AgentRunState.completed);
+        expect(relation.conflictStates, contains('conflict'));
+        expect(relation.conflictStates, isNot(contains('no_conflict')));
+      },
+    );
   });
 
   group('grounding: terminal move stay completed (real regression)', () {

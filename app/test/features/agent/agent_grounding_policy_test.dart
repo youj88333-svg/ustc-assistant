@@ -233,6 +233,20 @@ void main() {
       expect(req.expectedConflictState, ExpectedConflictState.noConflict);
     });
 
+    test('concise 选去/不去 phrasing selects the relation write and no_conflict', () {
+      // The brief's own example uses the full "选择去"; the concise natural
+      // variant "选去" must route to the exact three-tool relation set too.
+      final req = policy.classify('选去量子物理 B，不去电路基本理论');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.mutationIntent, isTrue);
+      expect(req.expectedConflictState, ExpectedConflictState.noConflict);
+      expect(
+        req.initialAllowedTools,
+        ['get_schedule', 'get_plan_blocks', 'create_schedule_relation'],
+      );
+    });
+
     test('course-time nested work selects no_conflict', () {
       final req = policy.classify('课上写操作系统作业');
       expect(req, isNotNull);
