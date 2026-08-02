@@ -630,10 +630,15 @@ class _FailingWriteTool implements AgentTool {
 /// per test, and which counts its executions so a test can assert the write is
 /// never re-executed after a failed terminal outcome.
 class _ConfigurablePlanTaskTool implements AgentTool {
-  _ConfigurablePlanTaskTool({required this.status, this.errorCode});
+  _ConfigurablePlanTaskTool({
+    required this.status,
+    this.errorCode,
+    this.onExecute,
+  });
 
   final AgentToolStatus status;
   final String? errorCode;
+  final void Function()? onExecute;
   int executeCount = 0;
 
   @override
@@ -652,6 +657,7 @@ class _ConfigurablePlanTaskTool implements AgentTool {
     AgentToolContext context,
   ) async {
     executeCount++;
+    onExecute?.call();
     if (status == AgentToolStatus.success) {
       return const AgentToolResult(status: AgentToolStatus.success, payload: {});
     }
@@ -659,6 +665,55 @@ class _ConfigurablePlanTaskTool implements AgentTool {
       status: status,
       errorCode: errorCode ?? 'write_commit_failed',
       payload: {'guidance': '写操作未成功，请检查后重试。'},
+    );
+  }
+}
+
+/// A create_schedule_relation tool whose outcome (status + errorCode) is
+/// configurable per test, with an optional order callback for sequential
+/// confirmation assertions. Counts executions so tests can assert the relation
+/// write runs exactly once.
+class _ConfigurableRelationTool implements AgentTool {
+  _ConfigurableRelationTool({
+    required this.status,
+    this.errorCode,
+    this.onExecute,
+  });
+
+  final AgentToolStatus status;
+  final String? errorCode;
+  final void Function()? onExecute;
+  int executeCount = 0;
+
+  @override
+  String get name => 'create_schedule_relation';
+
+  @override
+  String get description => 'Creates a no-conflict relation (configurable).';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    onExecute?.call();
+    if (status == AgentToolStatus.success) {
+      return const AgentToolResult(
+        status: AgentToolStatus.success,
+        payload: {'result': 'created_schedule_relation'},
+      );
+    }
+    return AgentToolResult(
+      status: status,
+      errorCode: errorCode ?? 'write_commit_failed',
+      payload: {'guidance': '关系未写入，请检查后重试。'},
     );
   }
 }
@@ -3468,6 +3523,662 @@ END
         expect(states.last.state, AgentRunState.completed);
         expect(relation.conflictStates, contains('conflict'));
         expect(relation.conflictStates, isNot(contains('no_conflict')));
+      },
+    );
+  });
+
+  group('grounding: sequential write and partial completion (Task 3)', () {
+    test(
+      'sequential confirmation: plan_task succeeds before get_plan_blocks, relation confirmation after new PlanBlock ref, run completes after relation',
+      () async {
+        // The full successful workflow: get_tasks + get_schedule (shared turn),
+        // plan_task, get_plan_blocks, create_schedule_relation, final text.
+        // Assert the ordering via a shared call-order record.
+        final order = <String>[];
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+          onExecute: () => order.add('plan_task'),
+        );
+        var relationDone = false;
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+          onExecute: () {
+            order.add('create_schedule_relation');
+            relationDone = true;
+          },
+        );
+        final blocks = _CountingSuccessTool(
+          name: 'get_plan_blocks',
+          onExecute: () => order.add('get_plan_blocks'),
+        );
+        final tasks = _CountingSuccessTool(
+          name: 'get_tasks',
+          onExecute: () => order.add('get_tasks'),
+        );
+        final schedule = _CountingSuccessTool(
+          name: 'get_schedule',
+          onExecute: () => order.add('get_schedule'),
+        );
+        final provider = _ScriptedProvider([
+          // Call 1: the two independent reads share one provider turn.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-sched',
+              name: 'get_schedule',
+              input: {
+                'from': '2026-08-03',
+                'through': '2026-08-03',
+                'view': 'events',
+              },
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: plan_task succeeds.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 3: reads the new PlanBlock ref (must come AFTER plan_task).
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 4: relation write with no_conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-rel',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 5: final text.
+          [const TextDeltaEvent('已完成安排并保存关系。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        // Sequential ordering: get_plan_blocks runs strictly after plan_task,
+        // the relation after that, and the run completes after relation success.
+        expect(
+          order.indexOf('plan_task'),
+          lessThan(order.indexOf('get_plan_blocks')),
+        );
+        expect(
+          order.indexOf('get_plan_blocks'),
+          lessThan(order.indexOf('create_schedule_relation')),
+        );
+        expect(relationDone, isTrue);
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.errorCode, isNull);
+        // plan_task called exactly once; relation called exactly once.
+        expect(plan.executeCount, 1);
+        expect(relation.executeCount, 1);
+        // Within 8 model calls and 12 tool calls. The exact successful workflow
+        // runs one tool per write step (reads share a turn), so the total tool
+        // executions here are the five supporting/terminal calls (well under
+        // the 12-call budget).
+        expect(provider.streamCallCount, 5);
+        final totalToolExecutions = plan.executeCount +
+            relation.executeCount +
+            blocks.executeCount +
+            tasks.executeCount +
+            schedule.executeCount;
+        expect(totalToolExecutions, lessThanOrEqualTo(12));
+      },
+    );
+
+    test(
+      'declined planning settles failed user_declined when model stops before any relation',
+      () async {
+        // PlanBlock declined AND the model never attempts a relation. The
+        // supporting-write branch returns overrideSupportingFailure BEFORE any
+        // correction is issued (a correction could never build a relation from
+        // a declined PlanBlock).
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.error,
+          errorCode: 'user_declined',
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Final text claims success.
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        // No correction was issued — the run settles deterministically as a
+        // completed supporting failure.
+        expect(provider.streamCallCount, 3);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'user_declined');
+        expect(states.last.text, contains('未创建执行时间段'));
+        expect(states.last.text, isNot(contains('没有修改数据')));
+        expect(relation.executeCount, 0);
+        // plan_task runs exactly once (never re-called).
+        expect(plan.executeCount, 1);
+      },
+    );
+
+    test(
+      'cancelled planning settles failed cancelled, 未创建执行时间段',
+      () async {
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.error,
+          errorCode: 'cancelled',
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'cancelled');
+        expect(states.last.text, contains('未创建执行时间段'));
+        expect(plan.executeCount, 1);
+        expect(relation.executeCount, 0);
+      },
+    );
+
+    test(
+      'technical error planning settles failed safe error, 未创建执行时间段',
+      () async {
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.error,
+          errorCode: 'write_commit_failed',
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'write_commit_failed');
+        // The fallback supporting-failure message states no time block was
+        // created.
+        expect(states.last.text, contains('执行时间段未创建'));
+        expect(plan.executeCount, 1);
+      },
+    );
+
+    test(
+      'successful plan then declined relation: partial success preserved, 执行时间段已创建',
+      () async {
+        // PlanBlock succeeds; relation is declined (user_declined). This is a
+        // PARTIAL completion: the PlanBlock is preserved, the relation reports
+        // the declined partial fact. Must NOT say "没有修改数据".
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.error,
+          errorCode: 'user_declined',
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-rel',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        // Partial: run failed, preserved safe relation code, partial message.
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'user_declined');
+        expect(states.last.text, contains('执行时间段已创建'));
+        expect(states.last.text, isNot(contains('没有修改数据')));
+        expect(plan.executeCount, 1);
+        expect(relation.executeCount, 1);
+      },
+    );
+
+    test(
+      'successful plan then cancelled relation: partial success, 已取消 variant',
+      () async {
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.error,
+          errorCode: 'cancelled',
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-rel',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'cancelled');
+        expect(states.last.text, contains('执行时间段已创建'));
+      },
+    );
+
+    test(
+      'successful plan then technical relation error: partial success, safe relation error',
+      () async {
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.error,
+          errorCode: 'write_commit_failed',
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-rel',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'write_commit_failed');
+        // Partial-success fact retained: 执行时间段已创建.
+        expect(states.last.text, contains('执行时间段已创建'));
+        expect(states.last.text, isNot(contains('没有修改数据')));
+      },
+    );
+
+    test(
+      'successful plan then model omits relation after correction: failed relation_not_grounded_after_plan, PlanBlock preserved',
+      () async {
+        // PlanBlock succeeds but the model never attempts the relation, even
+        // after the single correction. Correction is exhausted with no relation
+        // attempt -> partialFailure with relation_not_grounded_after_plan; the
+        // PlanBlock (and its ActionLog) must remain recorded.
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Final text claims success without ever attempting the relation ->
+          // triggers the single corrective call.
+          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+          // Corrective call: still no relation attempt; correction exhausted.
+          [const TextDeltaEvent('我已经完成了。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        // The relation was never attempted; after correction is exhausted the
+        // run settles as partialFailure.
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'relation_not_grounded_after_plan');
+        expect(states.last.text, contains('执行时间段已创建'));
+        expect(states.last.text, isNot(contains('没有修改数据')));
+        expect(relation.executeCount, 0);
+        // PlanBlock ran exactly once and was preserved (never re-run/rolled
+        // back by the failed or omitted relation).
+        expect(plan.executeCount, 1);
+      },
+    );
+
+    test(
+      'successful plan then successful relation: completed, model final text accepted',
+      () async {
+        final plan = _ConfigurablePlanTaskTool(
+          status: AgentToolStatus.success,
+        );
+        final relation = _ConfigurableRelationTool(
+          status: AgentToolStatus.success,
+        );
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final tasks = _CountingSuccessTool(name: 'get_tasks');
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-tasks',
+              name: 'get_tasks',
+              input: {'status': 'active'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-plan',
+              name: 'plan_task',
+              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-blocks',
+              name: 'get_plan_blocks',
+              input: {'task': '操作系统大作业'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-rel',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已完成安排并保存了不冲突关系。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+          tools: [tasks, schedule, plan, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
+            )
+            .toList();
+
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.errorCode, isNull);
+        // Model final text accepted (not overridden).
+        expect(states.last.text, contains('已完成安排'));
+        expect(plan.executeCount, 1);
+        expect(relation.executeCount, 1);
       },
     );
   });

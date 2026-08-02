@@ -681,7 +681,14 @@ class AgentSessionService {
     // a terminal write attempted but not successful deterministically settles
     // the run as a non-success outcome (no repeat attempt, no reliance on the
     // model honestly reporting the failure).
-    final terminalAttempts = <String, _TerminalMutationAttempt>{};
+    final terminalAttempts = <String, _MutationAttempt>{};
+    // Structured outcomes of supporting mutation attempts (Task 3). Only the
+    // `plan_task` supporting write is recorded — a successful PlanBlock is
+    // preserved as partial completion even when the terminal relation write is
+    // declined/fails or is omitted. Successful read tools (e.g. get_tasks) are
+    // NEVER recorded here: reads are not writes and must not emit mutation
+    // messages.
+    final supportingAttempts = <String, _MutationAttempt>{};
 
     // Expected-state enforcement (Task 3): when the user text carries an
     // expected conflict state for a relation write, a `create_schedule_relation`
@@ -841,6 +848,7 @@ class AgentSessionService {
             requirement: grounding,
             succeededTools: succeededTools,
             terminalAttempts: terminalAttempts,
+            supportingAttempts: supportingAttempts,
             isCancelled: signal.isCancelled,
             usedCorrective: correctiveUsed,
           );
@@ -869,14 +877,38 @@ class AgentSessionService {
               correctivePending = true;
               continue;
             case _GroundedSettlement.overrideFailure:
-              // The terminal write WAS attempted but did not succeed. Do NOT
-              // re-correct into a repeat write attempt. Deterministically
-              // replace the model's text (which may falsely claim success)
-              // with a fixed non-success statement derived from the tool's
-              // safe error code. Success is NOT judged from model wording.
+              // The terminal write WAS attempted but did not succeed and no
+              // supporting PlanBlock was created. Do NOT re-correct into a
+              // repeat write attempt. Deterministically replace the model's
+              // text (which may falsely claim success) with a fixed
+              // non-success statement derived from the tool's safe error code.
+              // Success is NOT judged from model wording.
               terminalState = _terminalFailureRuntimeState(grounding);
               errorCode = _terminalFailureCode(grounding, terminalAttempts);
               assistantText = _terminalFailureText(errorCode);
+              break;
+            case _GroundedSettlement.overrideSupportingFailure:
+              // The supporting `plan_task` write was attempted but did not
+              // succeed and no relation terminal write was attempted. Before
+              // issuing a correction (which could never complete a relation on
+              // a declined task), deterministically settle as a completed
+              // supporting failure with a fixed message.
+              terminalState = AgentRunState.failed;
+              errorCode = _supportingFailureCode(supportingAttempts);
+              assistantText = _supportingFailureText(errorCode);
+              break;
+            case _GroundedSettlement.partialFailure:
+              // A successful PlanBlock (supporting write) was created but the
+              // relation terminal write did not complete (declined, failed, or
+              // omitted after correction). The PlanBlock and its ActionLog are
+              // PRESERVED — never rolled back — and never reported as "没有修
+              // 改数据", because real partial work happened. Run stays failed.
+              terminalState = AgentRunState.failed;
+              errorCode = _partialRelationFailureCode(
+                terminalAttempts,
+                supportingAttempts,
+              );
+              assistantText = _partialRelationFailureText(errorCode);
               break;
             case _GroundedSettlement.fail:
               // Case 5: no legal required tool after correction/fallback.
@@ -1225,17 +1257,29 @@ class AgentSessionService {
           if (result.status == AgentToolStatus.success) {
             succeededTools.add(tu.name);
           }
-          // Record a structured outcome ONLY when this tool is a terminal
-          // write of the CURRENT grounding requirement. A read-tool failure or
-          // an unrelated tool attempt must NOT be treated as a completed
-          // (non-)write. This deterministic outcome is what grounds success
-          // prose for a mutation — success never depends on model wording.
+          // Record structured outcomes for mutation attempts:
+          //
+          // * terminalAttempts — ONLY when this tool is a terminal write of
+          //   the CURRENT grounding requirement. A read-tool failure or an
+          //   unrelated tool attempt must NOT be treated as a completed
+          //   (non-)write. This deterministic outcome is what grounds success
+          //   prose for a mutation — success never depends on model wording.
+          // * supportingAttempts — ONLY the `plan_task` supporting write is
+          //   recorded, regardless of declaration breadth. Successful `get_tasks`
+          //   reads are NOT writes: they are never recorded here and never emit
+          //   a mutation message.
           if (grounding != null &&
               grounding.terminalTools.contains(tu.name)) {
-            terminalAttempts[tu.name] = _TerminalMutationAttempt(
-              toolName: tu.name,
-              status: result.status,
-              errorCode: result.errorCode,
+            terminalAttempts[tu.name] = _MutationAttempt.fromResult(
+              tu.name,
+              result,
+            );
+          }
+          if ((grounding?.supportingTools.contains(tu.name) ?? false) &&
+              tu.name == 'plan_task') {
+            supportingAttempts[tu.name] = _MutationAttempt.fromResult(
+              tu.name,
+              result,
             );
           }
 
@@ -1843,12 +1887,15 @@ class AgentSessionService {
   /// [requirement] is the classification of the CURRENT user text; null means
   /// free chat / capability advice. [succeededTools] holds the tools that
   /// completed successfully this run; [terminalAttempts] holds structured
-  /// outcomes for any terminal write tool(s) run this session; [usedCorrective]
-  /// reports whether the single corrective request has already been issued.
+  /// outcomes for any terminal write tool(s) run this session;
+  /// [supportingAttempts] holds structured outcomes for the `plan_task`
+  /// supporting write (a partial completion); [usedCorrective] reports whether
+  /// the single corrective request has already been issued.
   _GroundedSettlement _settleNoToolUse({
     required AgentGroundingRequirement? requirement,
     required Set<String> succeededTools,
-    required Map<String, _TerminalMutationAttempt> terminalAttempts,
+    required Map<String, _MutationAttempt> terminalAttempts,
+    required Map<String, _MutationAttempt> supportingAttempts,
     required bool isCancelled,
     required bool usedCorrective,
   }) {
@@ -1872,6 +1919,19 @@ class AgentSessionService {
       return _GroundedSettlement.accept;
     }
 
+    // Task 3: supporting-write settlement. When the `plan_task` supporting
+    // write was attempted but did NOT succeed AND no relation terminal write
+    // was attempted, a correction could never complete the relation (there is
+    // no PlanBlock to relate). Deterministically settle as a completed
+    // supporting failure rather than looping toward a relation that cannot
+    // exist.
+    final planAttempt = supportingAttempts['plan_task'];
+    if (planAttempt != null &&
+        !planAttempt.succeeded &&
+        terminalAttempts['create_schedule_relation'] == null) {
+      return _GroundedSettlement.overrideSupportingFailure;
+    }
+
     // Mutation: the terminal write outcome is the SOLE authority on success.
     // If a terminal write of this requirement was invoked, decide by its
     // structured result — never by the model's wording. A success grounds the
@@ -1883,9 +1943,15 @@ class AgentSessionService {
       for (final terminalTool in req.terminalTools) {
         final attempt = terminalAttempts[terminalTool];
         if (attempt != null) {
-          return attempt.succeeded
-              ? _GroundedSettlement.accept
-              : _GroundedSettlement.overrideFailure;
+          if (attempt.succeeded) return _GroundedSettlement.accept;
+          // A successful PlanBlock (supporting write) with a failed/declined
+          // relation is a PARTIAL completion: the PlanBlock is real, the
+          // relation is not. Report the partial fact — never "没有修改数据",
+          // never a repeat corrective call.
+          if (planAttempt != null && planAttempt.succeeded) {
+            return _GroundedSettlement.partialFailure;
+          }
+          return _GroundedSettlement.overrideFailure;
         }
       }
     }
@@ -1893,6 +1959,16 @@ class AgentSessionService {
     // Case 3: a required tool is missing and no corrective call was used —
     // issue the single correction.
     if (!usedCorrective) return _GroundedSettlement.correct;
+
+    // Task 3: correction exhausted AND the supporting PlanBlock was created,
+    // but no relation terminal write was ever attempted (the model stopped
+    // after creating the PlanBlock). That is a partial completion bounded by
+    // the corrective limit — settle deterministically rather than falling
+    // through to `grounding_failed` (which would falsely look like nothing
+    // happened).
+    if (planAttempt != null && planAttempt.succeeded) {
+      return _GroundedSettlement.partialFailure;
+    }
 
     // Case 5: correction (and any compat fallback) are exhausted but no legal
     // required tool succeeded — grounding failed.
@@ -1916,7 +1992,7 @@ class AgentSessionService {
   /// so a traceable local failure reason always survives.
   static String? _terminalFailureCode(
     AgentGroundingRequirement? requirement,
-    Map<String, _TerminalMutationAttempt> terminalAttempts,
+    Map<String, _MutationAttempt> terminalAttempts,
   ) {
     if (requirement != null) {
       for (final terminalTool in requirement.terminalTools) {
@@ -1938,21 +2014,81 @@ class AgentSessionService {
         'cancelled' => '本次操作已停止，没有修改数据。',
         _ => '操作未完成，没有修改数据，请检查信息后重试。',
       };
+
+  /// The preserved safe error code for a failed supporting `plan_task` write.
+  /// Unlike a terminal failure, the relation was never attempted, so the code
+  /// comes from the supporting attempt (or a fallback when absent).
+  static String? _supportingFailureCode(
+    Map<String, _MutationAttempt> supportingAttempts,
+  ) {
+    final attempt = supportingAttempts['plan_task'];
+    return attempt?.errorCode ?? 'write_not_grounded';
+  }
+
+  /// Maps a safe supporting-write error code to a fixed non-success statement.
+  /// This is the "declined planning / never reached relation" case, so it
+  /// explicitly states neither the time block nor the relation was saved.
+  static String _supportingFailureText(String? code) => switch (code) {
+        'user_declined' => '本次安排已取消，未创建执行时间段，也未保存不冲突关系。',
+        'cancelled' => '本次安排已停止，未创建执行时间段，也未保存不冲突关系。',
+        _ => '执行时间段未创建，不冲突关系也未保存，请检查信息后重试。',
+      };
+
+  /// The preserved safe error code for a partial relation completion (PlanBlock
+  /// succeeded, relation did not). Prefers the relation terminal code; falls
+  /// back to `relation_not_grounded_after_plan`.
+  static String? _partialRelationFailureCode(
+    Map<String, _MutationAttempt> terminalAttempts,
+    Map<String, _MutationAttempt> supportingAttempts,
+  ) {
+    final relation = terminalAttempts['create_schedule_relation'];
+    if (relation != null && relation.errorCode != null) {
+      return relation.errorCode;
+    }
+    final plan = supportingAttempts['plan_task'];
+    if (plan != null && plan.succeeded) {
+      // The PlanBlock succeeded but no (or no non-success) relation attempt
+      // exists after correction was exhausted — the model omitted the relation.
+      return 'relation_not_grounded_after_plan';
+    }
+    return 'write_not_grounded';
+  }
+
+  /// Maps a safe partial-relation failure code to a fixed message that states
+  /// the REAL partial fact: the PlanBlock (执行时间段) was created, but the
+  /// relation was not saved. No variant claims "没有修改数据".
+  static String _partialRelationFailureText(String? code) => switch (code) {
+        'user_declined' => '执行时间段已创建，但不冲突关系已取消、尚未保存。',
+        'cancelled' => '执行时间段已创建，但不冲突关系未保存。',
+        _ => '执行时间段已创建，但不冲突关系未保存，请检查后重试。',
+      };
 }
 
-/// A structured record of a terminal write attempt during this session run.
+/// A structured record of a mutation attempt during this session run — either
+/// a terminal write (the SOLE authority on full success) or a supporting write
+/// like `plan_task` (the authority on PARTIAL completion).
 ///
 /// Success of a mutation is grounded ONLY by an [AgentToolStatus.success]
-/// terminal write result — never by the model claiming completion. A terminal
-/// write that was invoked but did not succeed is recorded here so the
-/// settlement can deterministically override false success prose without
-/// re-calling the write.
-class _TerminalMutationAttempt {
-  const _TerminalMutationAttempt({
+/// tool result — never by the model claiming completion. A mutation that was
+/// invoked but did not succeed is recorded here so the settlement can
+/// deterministically override false success prose without re-calling the
+/// write.
+class _MutationAttempt {
+  const _MutationAttempt({
     required this.toolName,
     required this.status,
     this.errorCode,
   });
+
+  factory _MutationAttempt.fromResult(
+    String toolName,
+    AgentToolResult result,
+  ) =>
+      _MutationAttempt(
+        toolName: toolName,
+        status: result.status,
+        errorCode: result.errorCode,
+      );
 
   final String toolName;
   final AgentToolStatus status;
@@ -1968,9 +2104,20 @@ enum _GroundedSettlement {
   accept,
   /// Issue the single bounded corrective request.
   correct,
-  /// A terminal write was attempted but did not succeed — deterministically
-  /// settle as non-success (override the model's text, never re-call).
+  /// A terminal write was attempted but did not succeed and no PlanBlock was
+  /// created — deterministically settle as non-success (override the model's
+  /// text, never re-call).
   overrideFailure,
+  /// The supporting `plan_task` write was attempted but did not succeed and no
+  /// relation terminal write was attempted. Settle as a completed supporting
+  /// failure (no relation can be completed without a PlanBlock) rather than
+  /// looping toward a relation that cannot exist.
+  overrideSupportingFailure,
+  /// A successful PlanBlock (supporting write) was created but the relation
+  /// terminal write did not complete (declined, failed, or omitted after
+  /// correction). This is a PARTIAL completion: preserve the PlanBlock, report
+  /// the partial fact, run stays failed.
+  partialFailure,
   /// No legal required tool after correction/fallback: grounding failed.
   fail,
 }
