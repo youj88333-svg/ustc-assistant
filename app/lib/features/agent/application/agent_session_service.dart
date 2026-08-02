@@ -9,6 +9,7 @@ import '../domain/agent_tool.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_context_builder.dart';
 import 'agent_grounding_policy.dart';
+import 'agent_tool_invocation_summary.dart';
 import 'agent_tool_registry.dart';
 import 'assistant_text_filter.dart';
 import 'cancellation_signal.dart';
@@ -923,9 +924,33 @@ class AgentSessionService {
 
         for (var toolIndex = 0; toolIndex < toolUses.length; toolIndex++) {
           final tu = toolUses[toolIndex];
+
+          // Cancellation boundary: the current and every remaining tool_use in
+          // this turn was never executed. Each un-executed block still consumes
+          // one lifecycle row (finished `cancelled`) so the chat count matches
+          // the persisted invocation count, and the model receives a cancelled
+          // tool_result for each.
           if (signal.isCancelled) {
             terminalState = AgentRunState.cancelled;
             for (final unstarted in toolUses.skip(toolIndex)) {
+              final invId = await _startInvocation(
+                accountId: accountId,
+                runId: runId,
+                tu: unstarted,
+              );
+              await _finishInvocation(
+                accountId: accountId,
+                invocationId: invId,
+                state: ToolInvocationLifecycleState.cancelled,
+                result: null,
+              );
+              newToolSummaries.add(
+                _toolSummaryBlocked(
+                  toolName: unstarted.name,
+                  lifecycleState: ToolInvocationLifecycleState.cancelled,
+                  errorCode: 'cancelled',
+                ),
+              );
               toolResults.add(
                 LlmToolResultBlock(
                   toolUseId: unstarted.id,
@@ -936,11 +961,34 @@ class AgentSessionService {
             }
             break;
           }
-          // Budget: never execute a tool past the limit.
+
+          // Budget: never execute a tool past the limit. The exceeded call
+          // itself consumes one lifecycle row finished as an error.
           if (totalToolCalls >= maxToolCalls) {
             terminalState = AgentRunState.failed;
             errorCode = 'tool_call_budget_exceeded';
             // Append an error tool_result so the model's turn is well-formed.
+            final invId = await _startInvocation(
+              accountId: accountId,
+              runId: runId,
+              tu: tu,
+            );
+            await _finishInvocation(
+              accountId: accountId,
+              invocationId: invId,
+              state: ToolInvocationLifecycleState.error,
+              result: const AgentToolResult(
+                status: AgentToolStatus.error,
+                errorCode: 'tool_call_budget_exceeded',
+              ),
+            );
+            newToolSummaries.add(
+              _toolSummaryBlocked(
+                toolName: tu.name,
+                lifecycleState: ToolInvocationLifecycleState.error,
+                errorCode: 'tool_call_budget_exceeded',
+              ),
+            );
             toolResults.add(
               LlmToolResultBlock(
                 toolUseId: tu.id,
@@ -955,6 +1003,16 @@ class AgentSessionService {
           totalToolCalls++;
           toolCallCount.update(tu.name, (v) => v + 1, ifAbsent: () => 1);
 
+          // The call will actually be processed, so persist a `running` row
+          // now (before the fingerprint/registry branches that may block it).
+          // The same invocation id moves running -> waiting -> terminal below.
+          final invocationStartedAt = _clock.now().millisecondsSinceEpoch;
+          final invocationId = await _startInvocation(
+            accountId: accountId,
+            runId: runId,
+            tu: tu,
+          );
+
           // Fingerprint dedup guard (Task 2): an EXACT repeat of a tool call
           // that already produced a bounding outcome this run is not executed
           // again — instead the model receives a `repeated_tool_call` error so
@@ -963,6 +1021,16 @@ class AgentSessionService {
           // execution does not happen.
           final fp = ToolCallFingerprint.of(tu.name, tu.input);
           AgentToolResult result;
+          // Lifecycle override for calls blocked before a normal registry
+          // completion: fingerprint dedup and a needsUserAction-cancel finish
+          // as a specific terminal state rather than the bare error mapping.
+          ToolInvocationLifecycleState? forcedLifecycle;
+
+          // Fingerprint dedup guard (Task 2): an EXACT repeat of a tool call
+          // that already produced a bounding outcome this run is not executed
+          // again — instead the model receives a `repeated_tool_call` error so
+          // it changes arguments or stops. The started `running` row above is
+          // finished as an error so the call still counts.
           if (fingerprintBlocked.contains(fp)) {
             result = const AgentToolResult(
               status: AgentToolStatus.error,
@@ -973,6 +1041,7 @@ class AgentSessionService {
                     '请基于已有结果直接回答，或改用不同的参数。',
               },
             );
+            forcedLifecycle = ToolInvocationLifecycleState.error;
           } else {
             result = await _registry.execute(
               toolName: tu.name,
@@ -981,55 +1050,74 @@ class AgentSessionService {
             );
 
             if (result.status == AgentToolStatus.needsUserAction) {
-            final action = result.userAction;
-            final pendingInvocation = result.pendingInvocation;
-            if (action == null || pendingInvocation == null) {
-              if (pendingInvocation != null) {
+              final action = result.userAction;
+              final pendingInvocation = result.pendingInvocation;
+              if (action == null || pendingInvocation == null) {
+                if (pendingInvocation != null) {
+                  await _cancelPendingInvocation(pendingInvocation);
+                }
+                terminalState = AgentRunState.failed;
+                errorCode = 'invalid_user_action';
+                result = const AgentToolResult(
+                  status: AgentToolStatus.error,
+                  errorCode: 'invalid_user_action',
+                );
+                forcedLifecycle = ToolInvocationLifecycleState.error;
+              } else if (signal.isCancelled) {
                 await _cancelPendingInvocation(pendingInvocation);
-              }
-              terminalState = AgentRunState.failed;
-              errorCode = 'invalid_user_action';
-              result = const AgentToolResult(
-                status: AgentToolStatus.error,
-                errorCode: 'invalid_user_action',
-              );
-            } else if (signal.isCancelled) {
-              await _cancelPendingInvocation(pendingInvocation);
-              result = const AgentToolResult(
-                status: AgentToolStatus.error,
-                errorCode: 'cancelled',
-              );
-            } else {
-              final key = (accountId: accountId, runId: runId);
-              final paused = _PausedRun(
-                accountId: accountId,
-                runId: runId,
-                action: action,
-                pendingInvocation: pendingInvocation,
-                conversation: conversation,
-                toolUseId: tu.id,
-                references: references,
-                signal: signal,
-              );
-              _pausedRuns[key] = paused;
-              viewState = viewState.copyWith(
-                state: AgentRunState.waitingForUser,
-                userAction: action.metadata,
-              );
-              controller.add(viewState);
-              try {
-                result = await pendingInvocation.result;
-              } finally {
-                if (identical(_pausedRuns[key], paused)) {
-                  _pausedRuns.remove(key);
+                result = const AgentToolResult(
+                  status: AgentToolStatus.error,
+                  errorCode: 'cancelled',
+                );
+                forcedLifecycle = ToolInvocationLifecycleState.cancelled;
+              } else {
+                // Enter the pause flow: mark the started row `waiting_user`,
+                // then await the pending invocation's terminal result and
+                // finish the SAME row. This is the one place a lifecycle moves
+                // running -> waiting_user -> terminal.
+                final key = (accountId: accountId, runId: runId);
+                final paused = _PausedRun(
+                  accountId: accountId,
+                  runId: runId,
+                  action: action,
+                  pendingInvocation: pendingInvocation,
+                  conversation: conversation,
+                  toolUseId: tu.id,
+                  references: references,
+                  signal: signal,
+                );
+                _pausedRuns[key] = paused;
+                if (invocationId != null) {
+                  await _chatRepository.markToolInvocationWaiting(
+                    accountId: accountId,
+                    invocationId: invocationId,
+                  );
+                }
+                viewState = viewState.copyWith(
+                  state: AgentRunState.waitingForUser,
+                  userAction: action.metadata,
+                );
+                controller.add(viewState);
+                try {
+                  result = await pendingInvocation.result;
+                } finally {
+                  if (identical(_pausedRuns[key], paused)) {
+                    _pausedRuns.remove(key);
+                  }
+                }
+                viewState = viewState.copyWith(
+                  state: AgentRunState.running,
+                  clearUserAction: true,
+                );
+                controller.add(viewState);
+                // A pause/resume that ends in a cancellation (the pending
+                // invocation completed its terminal result as cancelled)
+                // retains the `cancelled` lifecycle on the SAME row rather
+                // than collapsing to a generic error.
+                if (result.errorCode == 'cancelled') {
+                  forcedLifecycle = ToolInvocationLifecycleState.cancelled;
                 }
               }
-              viewState = viewState.copyWith(
-                state: AgentRunState.running,
-                clearUserAction: true,
-              );
-              controller.add(viewState);
-            }
             }
 
             // Record the fingerprint outcome so an EXACT repeat is bounded.
@@ -1106,8 +1194,29 @@ class AgentSessionService {
               );
             }
           }
+          // Finish the SAME invocation row started above and surface its live
+          // summary. A normal registry completion maps by result status; a
+          // forcedLifecycle (fingerprint dedup, invalid_user_action, or
+          // needsUserAction-cancel) wins for blocked calls.
+          final terminalLifecycle = forcedLifecycle ??
+              (result.status == AgentToolStatus.success
+                  ? ToolInvocationLifecycleState.success
+                  : ToolInvocationLifecycleState.error);
+          final runClockMillis = _clock.now().millisecondsSinceEpoch;
+          await _finishInvocation(
+            accountId: accountId,
+            invocationId: invocationId,
+            state: terminalLifecycle,
+            result: result,
+          );
           newToolSummaries.add(
-            AgentToolSummary(toolName: tu.name, status: result.status),
+            _toolSummaryFromResult(
+              toolName: tu.name,
+              result: result,
+              startedAt: invocationStartedAt,
+              finishedAt: runClockMillis,
+              safeArgumentsSummary: summarizeToolArguments(tu.name, tu.input),
+            ),
           );
 
           // Build the tool_result content. On error, send a short safe code.
@@ -1215,6 +1324,110 @@ class AgentSessionService {
         lastInputTokens: lastInputTokens,
         signal: signal,
       );
+    }
+  }
+
+  /// Starts a persisted invocation row for the given `tool_use`, moving the
+  /// model's run-local `tool_use` block onto a DB lifecycle row so the terminal
+  /// transition (and any later restore in chat) uses the SAME id. Logging is
+  /// best-effort: a persistence failure never replays or reverses an already
+  /// successful write — it is swallowed so the running tool path still proceeds.
+  Future<String?> _startInvocation({
+    required String accountId,
+    required String runId,
+    required ToolUseCompletedEvent tu,
+  }) async {
+    final safeArguments = summarizeToolArguments(tu.name, tu.input);
+    try {
+      return await _chatRepository.startToolInvocation(
+        accountId: accountId,
+        runId: runId,
+        toolName: tu.name,
+        safeArgumentsSummary: safeArguments,
+      );
+    } catch (_) {
+      // Persistence is best-effort; a failure must not abort the tool.
+      return null;
+    }
+  }
+
+  /// Maps a terminal [AgentToolResult] into the [AgentToolSummary] that live
+  /// UI consumes. The pause/resume path re-enters here with the terminal result
+  /// of the pending invocation. [finishedAt] is the run-clock time the
+  /// invocation was finalized; the finished-lifecycle row in the DB and this
+  /// in-memory summary agree on the safe result summary.
+  static AgentToolSummary _toolSummaryFromResult({
+    required String toolName,
+    required AgentToolResult result,
+    int? startedAt,
+    int? finishedAt,
+    String? safeArgumentsSummary,
+  }) {
+    final lifecycle = switch (result.status) {
+      AgentToolStatus.success => ToolInvocationLifecycleState.success,
+      AgentToolStatus.error => ToolInvocationLifecycleState.error,
+      // A pending invocation only reaches this helper through its terminal
+      // result, so needsUserAction never escapes here.
+      AgentToolStatus.needsUserAction => ToolInvocationLifecycleState.error,
+    };
+    return AgentToolSummary(
+      toolName: toolName,
+      lifecycleState: lifecycle,
+      status: result.status,
+      errorCode: result.status == AgentToolStatus.error
+          ? (result.errorCode ?? 'tool_error')
+          : null,
+      safeArgumentsSummary: safeArgumentsSummary,
+      safeResultSummary: summarizeToolResult(result),
+      startedAt: startedAt,
+      finishedAt: finishedAt,
+    );
+  }
+
+  /// Builds a [AgentToolSummary] for a `tool_use` that was blocked before its
+  /// registry execution: cancellation, budget, fingerprint-dedup, or
+  /// registry-not-allowed. Such calls still consume one row, labelled with the
+  /// ruling lifecycle state and a safe error code.
+  static AgentToolSummary _toolSummaryBlocked({
+    required String toolName,
+    required ToolInvocationLifecycleState lifecycleState,
+    required String errorCode,
+    int? startedAt,
+  }) => AgentToolSummary.error(
+    toolName: toolName,
+    lifecycleState: lifecycleState,
+    errorCode: errorCode,
+    startedAt: startedAt,
+  );
+
+  /// Finishes the invocation DB row matching [invocationId] with the terminal
+  /// state derived from [result]. Best-effort like [_startInvocation]; a
+  /// failure never reverses a successful tool write.
+  Future<void> _finishInvocation({
+    required String accountId,
+    required String? invocationId,
+    required ToolInvocationLifecycleState state,
+    required AgentToolResult? result,
+  }) async {
+    if (invocationId == null) return;
+    final safeResult = result == null
+        ? ''
+        : summarizeToolResult(result);
+    final errorCode = result?.status == AgentToolStatus.error
+        ? (result?.errorCode ?? 'tool_error')
+        : null;
+    try {
+      await _chatRepository.finishToolInvocation(
+        accountId: accountId,
+        invocationId: invocationId,
+        state: state,
+        safeResultSummary: safeResult,
+        errorCode: state == ToolInvocationLifecycleState.error
+            ? errorCode
+            : null,
+      );
+    } catch (_) {
+      // Best-effort logging; never disturb the tool outcome.
     }
   }
 

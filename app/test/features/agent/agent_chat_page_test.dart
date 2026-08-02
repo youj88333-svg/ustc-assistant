@@ -1302,4 +1302,180 @@ void main() {
       },
     );
   });
+
+  group('Step 3: tool invocation restoration after restart', () {
+    testWidgets(
+      'restores a completed assistant message and three invocation rows',
+      (tester) async {
+        config.setConfigured();
+        await database
+            .into(database.localAccounts)
+            .insert(
+              LocalAccountsCompanion.insert(
+                id: 'test',
+                maskedHint: 'PB****0000',
+                isActive: const Value(true),
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        final runId = await chatRepository.startRun(
+          accountId: 'test',
+          model: 'deepseek-v4-flash',
+        );
+        await chatRepository.appendMessage(
+          accountId: 'test',
+          runId: runId,
+          role: ChatRole.assistant,
+          state: ChatMessageState.completed,
+          content: '已为你查询。',
+        );
+        // Three terminal invocation rows for this run: success, error, waiting.
+        await chatRepository.finishToolInvocation(
+          accountId: 'test',
+          invocationId: await chatRepository.startToolInvocation(
+            accountId: 'test',
+            runId: runId,
+            toolName: 'get_schedule',
+            safeArgumentsSummary: 'get_schedule{date=2026-07-29}',
+          ),
+          state: ToolInvocationLifecycleState.success,
+          safeResultSummary: 'status=success payload{courses=list(2)}',
+        );
+        await chatRepository.finishToolInvocation(
+          accountId: 'test',
+          invocationId: await chatRepository.startToolInvocation(
+            accountId: 'test',
+            runId: runId,
+            toolName: 'get_conflicts',
+            safeArgumentsSummary: 'get_conflicts{}',
+          ),
+          state: ToolInvocationLifecycleState.error,
+          safeResultSummary: 'status=error error=tool_not_allowed payload{}',
+          errorCode: 'tool_not_allowed',
+        );
+        final waitingId = await chatRepository.startToolInvocation(
+          accountId: 'test',
+          runId: runId,
+          toolName: 'wait_tool',
+          safeArgumentsSummary: 'wait_tool{}',
+        );
+        await chatRepository.markToolInvocationWaiting(
+          accountId: 'test',
+          invocationId: waitingId,
+        );
+
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: _ScriptedSessionService(database, chatRepository),
+            chatRepository: chatRepository,
+          ),
+        );
+        await _pump(tester);
+
+        // The collapsed tile shows the persisted count.
+        expect(find.text('工具调用 (3)'), findsOneWidget);
+        // Expand to see the individual steps. Use fixed pumps (not settle):
+        // the waiting row carries an indeterminate spinner that never settles.
+        await tester.tap(find.byType(AgentToolRunTile));
+        await _pump(tester);
+
+        expect(find.text('get_schedule'), findsOneWidget);
+        expect(find.text('get_conflicts'), findsOneWidget);
+        expect(find.text('wait_tool'), findsOneWidget);
+        // The waiting step shows a waiting/确认 marker (not an error marker).
+        expect(find.text('等待确认'), findsWidgets);
+        // Safe error code is surfaced only in the expanded row.
+        expect(find.textContaining('tool_not_allowed'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'other-account invocation rows stay absent after restart',
+      (tester) async {
+        config.setConfigured();
+        await database
+            .into(database.localAccounts)
+            .insert(
+              LocalAccountsCompanion.insert(
+                id: 'test',
+                maskedHint: 'PB****0000',
+                isActive: const Value(true),
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        await database
+            .into(database.localAccounts)
+            .insert(
+              LocalAccountsCompanion.insert(
+                id: 'other',
+                maskedHint: 'PB****0000',
+                isActive: const Value(true),
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        final ownRun = await chatRepository.startRun(
+          accountId: 'test',
+          model: 'deepseek-v4-flash',
+        );
+        await chatRepository.appendMessage(
+          accountId: 'test',
+          runId: ownRun,
+          role: ChatRole.assistant,
+          state: ChatMessageState.completed,
+          content: '自己的回答',
+        );
+        await chatRepository.finishToolInvocation(
+          accountId: 'test',
+          invocationId: await chatRepository.startToolInvocation(
+            accountId: 'test',
+            runId: ownRun,
+            toolName: 'get_schedule',
+            safeArgumentsSummary: 'get_schedule{}',
+          ),
+          state: ToolInvocationLifecycleState.success,
+          safeResultSummary: 'status=success payload{}',
+        );
+        // A foreign account's invocation in its own run.
+        final otherRun = await chatRepository.startRun(
+          accountId: 'other',
+          model: 'deepseek-v4-flash',
+        );
+        await chatRepository.finishToolInvocation(
+          accountId: 'other',
+          invocationId: await chatRepository.startToolInvocation(
+            accountId: 'other',
+            runId: otherRun,
+            toolName: 'leaky_secret_tool',
+            safeArgumentsSummary: 'leaky_secret_tool{}',
+          ),
+          state: ToolInvocationLifecycleState.success,
+          safeResultSummary: 'status=success payload{}',
+        );
+
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: _ScriptedSessionService(database, chatRepository),
+            chatRepository: chatRepository,
+          ),
+        );
+        await _pump(tester);
+        await tester.pumpAndSettle();
+
+        // Only the OWN invocation is visible.
+        expect(find.text('工具调用 (1)'), findsOneWidget);
+        await tester.tap(find.byType(AgentToolRunTile));
+        await _pump(tester);
+        await tester.pumpAndSettle();
+        expect(find.text('get_schedule'), findsOneWidget);
+        expect(find.text('leaky_secret_tool'), findsNothing);
+      },
+    );
+  });
 }

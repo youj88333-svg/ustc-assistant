@@ -187,6 +187,25 @@ class _AgentChatPageState extends State<AgentChatPage> {
         widget.accountId,
         limit: 200,
       );
+      // Restore persisted tool diagnostics in ONE grouped query: collect every
+      // assistant run id, load their invocations filtered to this account, and
+      // group by run so each assistant message gets exactly its own rows.
+      final assistantRunIds = <String>{
+        for (final record in history)
+          if (record.role == ChatRole.assistant && record.runId != null)
+            record.runId!,
+      };
+      final invocations = assistantRunIds.isEmpty
+          ? const <ToolInvocationRecord>[]
+          : await widget.chatRepository.toolInvocationsForRuns(
+              accountId: widget.accountId,
+              runIds: assistantRunIds,
+            );
+      final byRun = <String, List<ToolInvocationRecord>>{};
+      for (final inv in invocations) {
+        byRun.putIfAbsent(inv.runId, () => []).add(inv);
+      }
+
       final messages = <_ChatMessage>[];
       for (final record in history) {
         if (record.role == ChatRole.user) {
@@ -205,12 +224,18 @@ class _AgentChatPageState extends State<AgentChatPage> {
             ChatMessageState.cancelled => AgentRunState.cancelled,
             ChatMessageState.completed => AgentRunState.completed,
           };
+          final runInvocations = record.runId == null
+              ? const <ToolInvocationRecord>[]
+              : (byRun[record.runId] ?? const <ToolInvocationRecord>[]);
           messages.add(
             _AssistantMessage(
               text: record.content,
               runId: record.runId,
               ordinal: record.ordinal,
               state: state,
+              toolSummaries: runInvocations
+                  .map(_toolSummaryFromRecord)
+                  .toList(growable: false),
               hasGeneratedText: record.content.isNotEmpty,
             ),
           );
@@ -351,6 +376,23 @@ class _AgentChatPageState extends State<AgentChatPage> {
       );
     }
   }
+
+  /// Builds a live-UI-compatible [AgentToolSummary] from a persisted
+  /// [ToolInvocationRecord], so restored rows render with the same shape as
+  /// the in-flight summaries the session service emits.
+  static AgentToolSummary _toolSummaryFromRecord(ToolInvocationRecord record) =>
+      AgentToolSummary(
+        toolName: record.toolName,
+        lifecycleState: record.status,
+        status: record.status == ToolInvocationLifecycleState.success
+            ? AgentToolStatus.success
+            : AgentToolStatus.error,
+        errorCode: record.errorCode,
+        safeArgumentsSummary: record.safeArgumentsSummary,
+        safeResultSummary: record.safeResultSummary,
+        startedAt: record.startedAt,
+        finishedAt: record.finishedAt,
+      );
 
   String _emptyTerminalText(AgentRunState state) => switch (state) {
     AgentRunState.failed => '请求失败，未生成回答。',

@@ -8,6 +8,7 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_session_service.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_tool_invocation_summary.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/outbound_privacy_filter.dart';
@@ -3205,6 +3206,312 @@ END
         // Both executed because the arguments differ.
         expect(tool.executeCount, 2);
         expect(states.last.state, AgentRunState.completed);
+      },
+    );
+  });
+
+  group('safe summary privacy (dedicated)', () {
+    test(
+      'argument summaries never contain ref_ or a student id literal PB2408',
+      () {
+        final args = <String, Object?>{
+          'date': '2026-07-29',
+          'ref_task': 'ref_1',
+          'studentId': 'PB2408',
+          'apiKey': 'sk-secret',
+          'startAt': '2026-08-02T14:00:00+08:00',
+          'scope': 'week',
+          'count': 3,
+          'nested': {
+            'studentId': 'PB2408',
+            'name': 'Alice',
+          },
+        };
+        final summary = summarizeToolArguments('plan_task', args);
+        expect(summary, isNot(contains('ref_')));
+        expect(summary, isNot(contains('PB2408')));
+        expect(summary, isNot(contains('sk-secret')));
+        expect(summary, isNot(contains('Alice')));
+        // Allowed fields survive deterministically.
+        expect(summary, contains('date=2026-07-29'));
+        expect(summary, contains('startAt=2026-08-02T14:00:00+08:00'));
+        expect(summary, contains('scope=week'));
+        expect(summary, contains('count=3'));
+        // Nested data is reduced to a bare count, never its contents.
+        expect(summary, contains('nested=map(2)'));
+      },
+    );
+
+    test(
+      'result summaries carry lifecycle and safe error only, no payload values',
+      () {
+        final result = AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'tool_not_allowed',
+          payload: {
+            'courses': [
+              {'title': 'PB2408 secret', 'id': 42},
+            ],
+            'studentId': 'PB2408',
+          },
+        );
+        final summary = summarizeToolResult(result);
+        expect(summary, contains('status=error'));
+        expect(summary, contains('error=tool_not_allowed'));
+        expect(summary, isNot(contains('PB2408')));
+        expect(summary, isNot(contains('secret')));
+        // Top-level counts only; no nested values.
+        expect(summary, contains('courses=list(1)'));
+        expect(summary, isNot(contains('title')));
+        expect(summary, isNot(contains('id')));
+      },
+    );
+  });
+
+  group('tool invocation lifecycle persistence', () {
+    test(
+      'script success persists one running->terminal row per tool_use with safe summaries',
+      () async {
+        final provider = _ScriptedProvider(_canonicalLoop());
+        final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: clock,
+        );
+
+        await service
+            .send(accountId: account, userText: '明天有什么课？图书馆在哪？')
+            .toList();
+
+        // Exactly two invocation rows: one per tool_use block.
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(2));
+        final names = rows.map((r) => r.toolName).toSet();
+        expect(names, {'get_schedule', 'search_campus_catalog'});
+        // Every row reached a terminal success state with a finish time.
+        for (final row in rows) {
+          expect(
+            row.status,
+            ToolInvocationLifecycleState.success.storageName,
+          );
+          expect(row.finishedAt, isNotNull);
+          expect(row.accountId, account);
+        }
+        // Privacy: no ref and no student id in any safe summary.
+        for (final row in rows) {
+          expect(row.safeArgumentsSummary, isNot(contains('ref_')));
+          expect(row.safeArgumentsSummary, isNot(contains('PB2408')));
+          expect(row.safeResultSummary, isNot(contains('ref_')));
+          expect(row.safeResultSummary, isNot(contains('PB2408')));
+        }
+        // UI count equals the persisted invocation count for the run.
+        final runs = await (database.select(database.agentRuns)).get();
+        final runId = runs.single.id;
+        final restored = await chatRepository.toolInvocationsForRuns(
+          accountId: account,
+          runIds: {runId},
+        );
+        expect(restored, hasLength(2));
+        expect(restored.length, rows.length);
+      },
+    );
+
+    test(
+      'deterministic error result persists an error row with a safe code',
+      () async {
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {'date': '2026-07-29'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('我查不到。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [_GuidanceScheduleTool()],
+        );
+
+        await service
+            .send(accountId: account, userText: '查课表')
+            .toList();
+
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(1));
+        expect(
+          rows.single.status,
+          ToolInvocationLifecycleState.error.storageName,
+        );
+        expect(rows.single.errorCode, 'result_too_large');
+        expect(rows.single.safeArgumentsSummary, isNot(contains('ref_')));
+        expect(rows.single.safeArgumentsSummary, isNot(contains('PB2408')));
+        expect(rows.single.safeResultSummary, contains('result_too_large'));
+      },
+    );
+
+    test(
+      'duplicate fingerprint call persists a second error row, no second execution',
+      () async {
+        final tool = _CountingSuccessTool(name: 'get_conflicts');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-c1',
+              name: 'get_conflicts',
+              input: {'from': '2026-08-01', 'to': '2026-08-07'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-c2',
+              name: 'get_conflicts',
+              input: {'to': '2026-08-07', 'from': '2026-08-01'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('本周没有课表冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+
+        await service.send(accountId: account, userText: '继续处理。').toList();
+
+        // One registry execution, but TWO rows: the repeated model tool_use
+        // still consumes a row finished as an error.
+        expect(tool.executeCount, 1);
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(2));
+        final codes = rows.map((r) => r.errorCode).toSet();
+        expect(codes, contains('repeated_tool_call'));
+        expect(codes, contains(isNull));
+      },
+    );
+
+    test(
+      'budget rejection persists the exceeded call as an error row',
+      () async {
+        final twoToolsPerCall = [
+          const ToolUseCompletedEvent(
+            id: 'tu-a',
+            name: 'get_schedule',
+            input: {'date': '2026-07-29'},
+          ),
+          const ToolUseCompletedEvent(
+            id: 'tu-b',
+            name: 'search_campus_catalog',
+            input: {'q': 'x'},
+          ),
+          const CompletedEvent(),
+        ];
+        final provider = _ScriptedProvider(
+          List<List<LlmEvent>>.filled(20, twoToolsPerCall),
+        );
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '无限工具')
+            .toList();
+
+        // The call that tripped the budget ceiling still gets a row.
+        expect(states.last.state, isNot(AgentRunState.running));
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, isNotEmpty);
+        expect(
+          rows.any(
+            (r) => r.errorCode == 'tool_call_budget_exceeded',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'cancellation persists every unstarted tool_use as a cancelled row',
+      () async {
+        final provider = _CancellableProvider();
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final subscription = service
+            .send(accountId: account, userText: '查课表')
+            .listen((_) {});
+        await provider.firstToolUseFired.future;
+        await service.cancel(accountId: account);
+        await subscription.asFuture<void>(null);
+        await subscription.cancel();
+
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(1));
+        expect(
+          rows.single.status,
+          ToolInvocationLifecycleState.cancelled.storageName,
+        );
+        expect(rows.single.safeArgumentsSummary, isNot(contains('ref_')));
+        expect(rows.single.safeArgumentsSummary, isNot(contains('PB2408')));
+      },
+    );
+
+    test(
+      'pause tool marks the same row waiting then finishes it terminal',
+      () async {
+        final tool = _PausingTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pause',
+              name: 'pause_tool',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+        final states = <AgentRunViewState>[];
+        final subscription = service
+            .send(accountId: account, userText: 'pause')
+            .listen(states.add);
+        final done = subscription.asFuture<void>();
+
+        // While paused, the row must be in the waiting_user state.
+        await tool.paused.future;
+        await Future<void>.delayed(Duration.zero);
+        var rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(1));
+        expect(
+          rows.single.status,
+          ToolInvocationLifecycleState.waitingUser.storageName,
+        );
+
+        await service.cancel(accountId: account);
+        await done;
+
+        // After terminal (cancelled), the SAME row id moved waiting -> terminal.
+        rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(1));
+        expect(
+          rows.single.status,
+          ToolInvocationLifecycleState.cancelled.storageName,
+        );
       },
     );
   });

@@ -185,22 +185,77 @@ class AgentToolContext {
 
 /// A collapsed, model-safe summary of a single tool invocation within a run,
 /// surfaced to the UI.
+///
+/// Live and restored summaries share this one shape: the session service builds
+/// it from the tool registry result and from the persisted
+/// [ToolInvocationRecord]s, and the chat page renders both through the single
+/// [AgentToolRunTile]. It intentionally carries NO raw arguments or result
+/// payload — only the deterministic safe summaries from
+/// `summarizeToolArguments`/`summarizeToolResult`.
 class AgentToolSummary {
   const AgentToolSummary({
     required this.toolName,
-    required this.status,
-    this.safeLabel,
+    this.lifecycleState = ToolInvocationLifecycleState.success,
+    this.status = AgentToolStatus.success,
+    this.errorCode,
+    this.safeArgumentsSummary,
+    this.safeResultSummary,
+    this.startedAt,
+    this.finishedAt,
   });
+
+  /// Creates a terminal, error [AgentToolSummary] for an invocation that was
+  /// blocked before any registry execution or otherwise ended in error.
+  factory AgentToolSummary.error({
+    required String toolName,
+    required String errorCode,
+    ToolInvocationLifecycleState lifecycleState =
+        ToolInvocationLifecycleState.error,
+    int? startedAt,
+  }) => AgentToolSummary(
+    toolName: toolName,
+    lifecycleState: lifecycleState,
+    status: AgentToolStatus.error,
+    errorCode: errorCode,
+    safeArgumentsSummary: '',
+    safeResultSummary: '',
+    startedAt: startedAt,
+  );
 
   /// The tool's registered name.
   final String toolName;
 
-  /// The outcome of the tool call.
+  /// The invocation lifecycle state. Live rows move running -> waitingUser ->
+  /// terminal; restored rows read straight from the persisted record.
+  final ToolInvocationLifecycleState lifecycleState;
+
+  /// The tool execution outcome for the terminal state. Defaults to
+  /// [AgentToolStatus.success]; set via [AgentToolSummary.error] for a
+  /// non-success call.
   final AgentToolStatus status;
 
-  /// A short, safe, human-readable label for the call (no user text, no raw
-  /// results). May be null.
-  final String? safeLabel;
+  /// A safe, non-secret error code on a non-success call (e.g.
+  /// `tool_not_allowed`, `repeated_tool_call`, `tool_call_budget_exceeded`).
+  final String? errorCode;
+
+  /// The deterministic safe argument summary persisted with the row. Empty for
+  /// a call blocked before registry execution.
+  final String? safeArgumentsSummary;
+
+  /// The deterministic safe result summary persisted with the row. Empty for an
+  /// in-flight or blocked call.
+  final String? safeResultSummary;
+
+  /// Epoch-millis the invocation started. Present once the row is started.
+  final int? startedAt;
+
+  /// Epoch-millis the invocation finished. Present once terminal.
+  final int? finishedAt;
+
+  /// The lifecycle is non-terminal (running or waiting on the user).
+  bool get isLive =>
+      lifecycleState == ToolInvocationLifecycleState.running ||
+      lifecycleState == ToolInvocationLifecycleState.waitingUser;
 }
 
 /// A source reference surfaced in the final run view, derived from the
