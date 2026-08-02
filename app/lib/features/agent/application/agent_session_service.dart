@@ -791,14 +791,22 @@ class AgentSessionService {
 
         if (streamError) {
           // Step 4 rule 4: a forced `any` request that errors BEFORE any
-          // content means the provider likely does not support forced choice
-          // for this session. Fall back to a single `auto` retry of the same
-          // corrective request, then mark this provider as no-forced-choice.
+          // content AND with a recognized compatibility code means the
+          // provider likely does not support forced choice for this session.
+          // Fall back to a single `auto` retry of the same corrective
+          // request, then mark this provider as no-forced-choice.
+          //
+          // The fallback is STRICTLY gated: auth, rate-limit, server,
+          // transport, stream-interrupt, and tool-input errors are real
+          // upstream/network failures, NOT a forced-choice compatibility
+          // issue — they must preserve the original error and end immediately
+          // rather than hide behind an `auto` retry.
           if (thisCallWasForcedAny &&
               correctiveUsed &&
               !forcedChoiceUnsupported &&
               turnText.isEmpty &&
               toolUses.isEmpty &&
+              _isForcedChoiceCompatibilityError(streamErrorCode) &&
               !signal.isCancelled) {
             forcedChoiceUnsupported = true;
             correctiveToolChoice = LlmToolChoice.auto;
@@ -1407,6 +1415,15 @@ class AgentSessionService {
   };
 
   // --- Grounding settlement (Task 1) -------------------------------------
+
+  /// Whether a stream error code is a recognized forced-choice compatibility
+  /// failure, for which a single `auto` fallback is warranted. Only a
+  /// corrective forced-`any` request that errors BEFORE any content and with
+  /// this code may fall back. Auth, rate-limit, server, transport,
+  /// stream-interrupt, and tool-input errors are NOT compatibility issues —
+  /// they preserve the original error and end immediately.
+  static bool _isForcedChoiceCompatibilityError(String? code) =>
+      code == 'protocol_error';
 
   /// The fixed message used when an explicit operation could not be grounded
   /// after the single bounded correction. The model's unsupported text is

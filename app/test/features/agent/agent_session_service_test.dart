@@ -2500,6 +2500,137 @@ END
     );
 
     test(
+      'forced-choice auth_failed: fail immediately, NO auto fallback',
+      () async {
+        final provider = _ScriptedProvider([
+          // Call 1: initial auto, plain answer.
+          [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
+          // Call 2: forced `any` request -> auth_failed.
+          [const ErrorEvent('auth_failed')],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingReviewsTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .toList();
+
+        // auth_failed is NOT a compatibility problem: exactly two model calls,
+        // no auto fallback into a third.
+        expect(provider.streamCallCount, 2);
+        expect(provider.requests[1].toolChoice, LlmToolChoice.any);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'auth_failed');
+      },
+    );
+
+    test(
+      'forced-choice rate_limited: fail after provider retries, NO session fallback',
+      () async {
+        final provider = _ScriptedProvider([
+          [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
+          // The provider already exhausted its own retries; it surfaces a final
+          // rate_limited error. The SESSION must not fall back to auto.
+          [const ErrorEvent('rate_limited')],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [_FakePendingReviewsTool()],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .toList();
+
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'rate_limited');
+      },
+    );
+
+    test(
+      'forced-choice transport error: fail immediately, NOT a compatibility issue',
+      () async {
+        for (final code in const ['transport_error', 'stream_transport_error']) {
+          final provider = _ScriptedProvider([
+            [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
+            [ErrorEvent(code)],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+            tools: [_FakePendingReviewsTool()],
+          );
+
+          final states = await service
+              .send(
+                accountId: account,
+                userText: '有哪些需要我确认的课程出勤或听讲？',
+              )
+              .toList();
+
+          expect(provider.streamCallCount, 2, reason: 'code=$code');
+          expect(states.last.state, AgentRunState.failed, reason: 'code=$code');
+          expect(states.last.errorCode, code, reason: 'code=$code');
+        }
+      },
+    );
+
+    test(
+      'forced-choice produced content then errored: NO compatibility fallback',
+      () async {
+        // The forced `any` request partially emitted text/tool content before
+        // erroring. A late transport/protocol error after content is NOT a
+        // forced-choice compatibility problem, so no auto fallback may occur.
+        final tool = _FakePendingReviewsTool();
+        final provider = _ScriptedProvider([
+          [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-review-late',
+              name: 'get_pending_event_reviews',
+              input: {},
+            ),
+            const ErrorEvent('protocol_error'),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '有哪些需要我确认的课程出勤或听讲？',
+            )
+            .toList();
+
+        // The tool was attempted but the stream errored AFTER content, so the
+        // run fails immediately with the upstream error — no second `auto`
+        // correction.
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'protocol_error');
+      },
+    );
+
+    test(
       'stop during a pending corrective request issues no subsequent model call',
       () async {
         // A provider that blocks on the first call so we can cancel while a
