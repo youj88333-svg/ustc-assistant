@@ -103,7 +103,7 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
-        expect(request.system, contains(AgentSystemPrompt.version4));
+        expect(request.system, contains(AgentSystemPrompt.version5));
 
         // 2. The summary text is present as an assistant context message,
         //    framed as a prior summary (data), NOT as a local business fact.
@@ -255,7 +255,7 @@ void main() {
         toolDeclarations: const [],
         clock: clock,
       );
-      // system 同时包含 version4 文本和动态时间。
+      // system 同时包含 version5 文本和动态时间。
       expect(request.system, isNotNull);
       expect(request.system, contains('学长'));
       expect(request.system, contains('2026-07-31T14:30:05'));
@@ -574,8 +574,8 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 4', () {
-      expect(AgentSystemPrompt.version, 4);
+    test('version is 5', () {
+      expect(AgentSystemPrompt.version, 5);
     });
 
     test('version4 contains the safety sections, the read tool names and the write-tool confirmation gate', () {
@@ -694,6 +694,39 @@ void main() {
       expect(prompt, isNot(contains('461')));
       expect(prompt, isNot(contains('2026spring')));
       expect(prompt, isNot(contains('2026fall')));
+    });
+
+    test('version5 preserves every v4 rule and adds summary-first / repeated-Task rules', () {
+      const v5 = AgentSystemPrompt.version5;
+      // Every v4 rule is preserved verbatim.
+      expect(v5, contains(AgentSystemPrompt.version4),
+          reason: 'version5 must preserve every v4 rule');
+      // v5 summary-first: semester overview / course pattern / course-range
+      // Task requests use course_summary first, never a whole-semester events
+      // read.
+      expect(v5, contains('course_summary'),
+          reason: '学期概览优先使用 course_summary');
+      expect(v5, contains('不要为整学期直接用普通 events 视图'),
+          reason: '禁止为整学期直接用普通 events 视图');
+      // Recurring Task requests are independent Tasks, not a repeat entity.
+      expect(v5, contains('相互独立'),
+          reason: '周期性多 Task 请求为多个相互独立 Task');
+      expect(v5, contains('不是重复 Task 实体'),
+          reason: '不是重复 Task 实体');
+      // Missing date range / deadline / special-week must be confirmed before
+      // calling create_task repeatedly.
+      expect(v5, contains('不得静默采用默认值'),
+          reason: '信息不足先追问，不得静默默认');
+      expect(v5, contains('先继续查询或向用户追问'),
+          reason: '信息不足先继续查询或追问');
+      // Partial outcomes must be reported accurately.
+      expect(v5, contains('准确报告成功、失败与尚未处理的数量'),
+          reason: '逐项 create_task 后准确报告成功/失败/待处理数量');
+      // No semester literal in the v5 text.
+      expect(v5, isNot(contains('2026spring')));
+      expect(v5, isNot(contains('2026fall')));
+      expect(v5, isNot(contains('421')));
+      expect(v5, isNot(contains('461')));
     });
   });
 

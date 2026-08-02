@@ -425,6 +425,49 @@ class _GuidanceScheduleTool implements AgentTool {
   );
 }
 
+/// A get_schedule tool that mimics the Task 7 summary-first guard: a no-query
+/// `events` view (the default) returns `schedule_summary_required` with
+/// summary guidance; a `course_summary` view succeeds. Counts executions so a
+/// test can assert that after the model changes to `course_summary` the call
+/// is NOT duplicate-blocked (different arguments => a different fingerprint).
+class _SummaryFirstScheduleTool implements AgentTool {
+  int executeCount = 0;
+
+  @override
+  String get name => 'get_schedule';
+
+  @override
+  String get description => 'Peers at the view argument to mimic the guard.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    final view = arguments['view'];
+    if (view != 'course_summary') {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'schedule_summary_required',
+        payload: {
+          'guidance': '日期范围较大，请改用 view=course_summary；若需要具体课次，请缩小日期范围。',
+        },
+      );
+    }
+    return const AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: {'groups': <Object?>[]},
+    );
+  }
+}
+
 /// A schedule tool that binds [eventCount] event refs, simulating a large
 /// schedule query. Used to verify deduplication of local navigation actions.
 class _ManyEventRefsScheduleTool implements AgentTool {
@@ -1802,6 +1845,83 @@ END
         'guidance': 'Narrow the date range and retry.',
       });
     });
+
+    test(
+      'summary guard guidance reaches the next request and a changed '
+      'course_summary call is not duplicate-blocked',
+      () async {
+        // Call 1: the model makes a wrong no-query `events` (default view)
+        // call, which the guard rejects with schedule_summary_required.
+        // Call 2: after seeing the guidance, the model retries with
+        // view=course_summary, which succeeds.
+        final tool = _SummaryFirstScheduleTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-wide',
+              name: 'get_schedule',
+              input: {'from': '2026-07-01', 'through': '2026-08-04'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-summary',
+              name: 'get_schedule',
+              input: {
+                'view': 'course_summary',
+                'from': '2026-07-01',
+                'through': '2026-08-04',
+              },
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('这是本学期课程概览。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '我下学期有什么课')
+            .toList();
+
+        // The run completes grounded.
+        expect(states.last.state, AgentRunState.completed);
+
+        // The first tool_result (fed to call 2) carried the guard error code
+        // and its guidance. Each subsequent request replays prior turns, so we
+        // target the LAST tool result block in the request, which is the one
+        // just produced by the preceding call.
+        final firstToolResult = provider.requests[1].messages
+            .expand((message) => message.content)
+            .whereType<LlmToolResultBlock>()
+            .last;
+        final firstPayload = jsonDecode(firstToolResult.content as String)
+            as Map<String, Object?>;
+        expect(firstPayload['code'], 'schedule_summary_required');
+        expect(
+          firstPayload['guidance'],
+          contains('course_summary'),
+        );
+
+        // The changed course_summary call executed and was NOT duplicate
+        // blocked (its arguments differ from the rejected events call, so its
+        // fingerprint differs).
+        expect(tool.executeCount, 2);
+
+        // The tool_result for the successful course_summary (the last block in
+        // request 2 = call 3's input) reflects the success.
+        final secondToolResult = provider.requests[2].messages
+            .expand((message) => message.content)
+            .whereType<LlmToolResultBlock>()
+            .last;
+        expect(secondToolResult.isError, isFalse);
+      },
+    );
   });
 
   group('summary scheduling', () {

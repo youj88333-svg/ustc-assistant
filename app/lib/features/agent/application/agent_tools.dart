@@ -38,6 +38,16 @@ const int _defaultRangeDays = 7;
 /// The maximum allowed schedule range span in calendar days.
 const int _maxRangeDays = 31;
 
+/// The maximum inclusive calendar-day span a no-query, `view=events`
+/// `get_schedule` request may cover before the runtime refuses with
+/// `schedule_summary_required` and steers the model to `course_summary` (or a
+/// narrower date range). This is a deterministic guard against a preventable
+/// large-range detailed `events` read: semester schedules and course-pattern /
+/// repeated-Task workflows belong in `course_summary`, never a whole-semester
+/// `events` dump. The threshold is intentionally NOT tied to any semester,
+/// semester id, or calendar term — it is a plain fixed day count.
+const int maxDetailedScheduleSpanDays = 31;
+
 // ---------------------------------------------------------------------------
 // Range parsing
 // ---------------------------------------------------------------------------
@@ -67,9 +77,18 @@ class _RangeParse {
 ///
 /// - If both are null, defaults to today..today + (`_defaultRangeDays` - 1).
 /// - Rejects reversed ranges (`from` after `through`) with `invalid_range`.
-/// - Rejects ranges wider than `_maxRangeDays` days with `range_too_large`.
+/// - Rejects ranges wider than [maxDays] with `range_too_large`. When [maxDays]
+///   is null no explicit span cap is applied (the caller applies its own span
+///   policy — e.g. `get_schedule` gates the no-query `events` view with
+///   `schedule_summary_required` and lets `course_summary` span a whole
+///   semester).
 /// - Returns a safe error code for unparseable dates.
-_RangeParse _parseRange(String? fromStr, String? throughStr, BeijingClock clock) {
+_RangeParse _parseRange(
+  String? fromStr,
+  String? throughStr,
+  BeijingClock clock, {
+  int? maxDays = _maxRangeDays,
+}) {
   final now = clock.now();
   if (fromStr == null && throughStr == null) {
     final from = DateTime(now.year, now.month, now.day);
@@ -85,7 +104,7 @@ _RangeParse _parseRange(String? fromStr, String? throughStr, BeijingClock clock)
     return _RangeParse.error('invalid_range');
   }
   final range = AgentDateRange(from: from, through: through);
-  if (range.dayCount > _maxRangeDays) {
+  if (maxDays != null && range.dayCount > maxDays) {
     return _RangeParse.error('range_too_large');
   }
   return _RangeParse.ok(range);
@@ -433,8 +452,10 @@ class GetScheduleTool implements AgentTool {
       );
     }
 
-    // No query: current behavior (default range, optional course_summary).
-    final parsed = _parseRange(fromStr, throughStr, context.clock);
+    // No query. The span parse is capped only by reversed-range / date
+    // validity; the wide-span decision is made per view below so `course_summary`
+    // may span a whole semester while the no-query `events` view is guarded.
+    final parsed = _parseRange(fromStr, throughStr, context.clock, maxDays: null);
     if (parsed.error != null) {
       return AgentToolResult(
         status: AgentToolStatus.error,
@@ -442,6 +463,24 @@ class GetScheduleTool implements AgentTool {
       );
     }
     final range = parsed.range!;
+
+    // Deterministic summary-first guard (Task 7): a no-query `events` request
+    // spanning more than `maxDetailedScheduleSpanDays` inclusive days is a
+    // preventable large-range detailed read (whole-semester courses) and must
+    // be refused BEFORE displayEvents is read/serialized. The model is steered
+    // to `course_summary` or a narrower range. This short-circuits: no events
+    // are read or parsed here. It is never tied to a semester or semester id.
+    final inclusiveDays = range.through.difference(range.from).inDays + 1;
+    if (view == 'events' && inclusiveDays > maxDetailedScheduleSpanDays) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'schedule_summary_required',
+        payload: {
+          'guidance': '日期范围较大，请改用 view=course_summary；若需要具体课次，请缩小日期范围。',
+        },
+      );
+    }
+
     final events = await _gateway.displayEvents(context.accountId);
     final inRange =
         events.where((e) => _eventInRange(e, range)).toList(growable: false);

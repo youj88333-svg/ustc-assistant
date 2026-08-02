@@ -493,14 +493,67 @@ void main() {
       expect(result.errorCode, 'invalid_range');
     });
 
-    test('rejects ranges over 31 days with range_too_large', () async {
+    test(
+      'rejects a wide no-query events range with schedule_summary_required',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-07-01',
+          'through': '2026-08-04',
+        });
+        expect(result.status, AgentToolStatus.error);
+        expect(result.errorCode, 'schedule_summary_required');
+      },
+    );
+
+    test(
+      'no-query events 32 inclusive days rejects before displaying events',
+      () async {
+        final harness = _harness(database, 'a');
+        // 2026-07-29 .. 2026-08-29 = 32 inclusive days, no query, events view.
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-07-29',
+          'through': '2026-08-29',
+        });
+        expect(result.status, AgentToolStatus.error);
+        expect(result.errorCode, 'schedule_summary_required');
+        expect(result.payload['guidance'], isNotNull);
+        // The request was refused before any events were read/displayed: no
+        // event refs were bound (the privacy filter normalizes the `events`
+        // list to empty on an error result).
+        expect(result.payload['events'], isEmpty);
+        expect(result.references, isEmpty);
+      },
+    );
+
+    test('no-query events 31 inclusive days succeeds', () async {
       final harness = _harness(database, 'a');
+      // 2026-07-29 .. 2026-08-28 = 31 inclusive days.
       final result = await harness.execute('get_schedule', {
-        'from': '2026-07-01',
-        'through': '2026-08-04',
+        'from': '2026-07-29',
+        'through': '2026-08-28',
       });
-      expect(result.status, AgentToolStatus.error);
-      expect(result.errorCode, 'range_too_large');
+      expect(result.status, AgentToolStatus.success);
+      final events = result.payload['events']! as List;
+      final titles = events
+          .map((e) => (e! as Map<String, Object?>)['title'])
+          .toSet();
+      // Jul-29 events plus the Aug-10 far exam are in range.
+      expect(titles, containsAll(['风险课程', '青年活动', '自习', '远期考试']));
+    });
+
+    test('semester-wide course_summary succeeds', () async {
+      final harness = _harness(database, 'a');
+      // A wide, semester-sized range in summary view must succeed (the span
+      // guard applies only to the no-query `events` view).
+      final result = await harness.execute('get_schedule', {
+        'from': '2026-02-01',
+        'through': '2026-08-31',
+        'view': 'course_summary',
+      });
+      expect(result.status, AgentToolStatus.success);
+      expect(result.payload.containsKey('groups'), isTrue);
+      expect(result.payload['groups']! as List, isNotEmpty);
     });
 
     test('account b sees none of account a events', () async {

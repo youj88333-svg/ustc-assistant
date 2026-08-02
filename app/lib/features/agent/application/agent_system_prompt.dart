@@ -1,12 +1,12 @@
 /// The fixed, versioned application system prompt for the campus Agent.
 ///
-/// This is **version 4**. The prompt is fixed application text: it contains
+/// This is **version 5**. The prompt is fixed application text: it contains
 /// the safety/behavior sections verbatim and nothing user-configurable is
 /// concatenated above or inside it. The current time is appended dynamically
 /// by `AgentContextBuilder` (to the second, Asia/Shanghai) so the model can
 /// resolve relative dates; this constant itself holds no date.
 ///
-/// The Agent runtime passes [version4] (plus the dynamic time suffix) as the
+/// The Agent runtime passes [version5] (plus the dynamic time suffix) as the
 /// `system` field of the outbound [LlmRequest]. The privacy filter and context
 /// builder treat this string as immutable.
 ///
@@ -25,20 +25,43 @@
 /// explicit overrides; whole-day moves affect only `ustc_jw/course` and always
 /// require confirmation; free chat and capability discussion need not call
 /// tools.
+///
+/// v4 -> v5: added summary-first guidance for semester overview / course
+/// pattern / course-range Task requests, and clarified that recurring Task
+/// requests represent MULTIPLE independent Tasks (never a repeat Task entity,
+/// no TaskSeries/recurrence/batch writer). Missing date range / deadline /
+/// special-week detail must be confirmed before calling `create_task`
+/// repeatedly, and partial outcomes reported accurately. No hidden default and
+/// no semester literal.
 class AgentSystemPrompt {
   const AgentSystemPrompt._();
 
   /// The prompt version. Bumped only when the fixed text changes; stored on
   /// `agent_settings.system_prompt_version` so old conversations can be
   /// re-summarized under a new version if needed.
-  static const int version = 4;
+  static const int version = 5;
+
+  /// The fixed application system prompt, version 5.
+  ///
+  /// Built by taking [version4] verbatim (so every v4 rule is preserved) and
+  /// appending the v5 sections. The sections below are the authoritative
+  /// safety/behavior rules and MUST NOT be edited without bumping [version].
+  /// There is intentionally no user-configurable preamble: the role section is
+  /// the first thing the model reads.
+  static const String version5 = '$version4' '''
+
+## 学期概览与重复任务（summary 优先）
+- 问"整个学期/某个学期有什么课"、分析课程规律、或依课程起止范围生成多个 Task 时，先用 get_schedule（view=course_summary）得到课程概览，再按需缩小日期范围用 view=events 取具体课次；不要为整学期直接用普通 events 视图。
+- "每周/每天/每月"等周期性多 Task 请求表示多个相互独立、可分别完成或取消的 Task，不是重复 Task 实体；继续逐个调用 create_task，不引入重复 Task、周期字段或批量写。
+- 若课程学期、起止日期、截止时刻或是否包含特殊周次不足以确定具体 Task 集合，先继续查询或向用户追问，不得静默采用默认值，也不得自行猜测课程范围。
+- 用目标课程的 activeFrom/activeThrough 等边界计算候选日期，向用户说明日期范围与候选数量；用户确认后再为每个日期分别调用一次 create_task。
+- 任一 create_task 被拒绝或创建失败时，不得声称整个集合均已创建；必须准确报告成功、失败与尚未处理的数量；不创建课程有效范围之外的 Task，不根据默认学期或学期号猜测课程范围。''';
 
   /// The fixed application system prompt, version 4.
   ///
-  /// The sections below are the authoritative safety/behavior rules and
-  /// MUST NOT be edited without bumping [version]. There is intentionally no
-  /// user-configurable preamble: the role section is the first thing the model
-  /// reads.
+  /// Retained unchanged so every v4 rule is preserved verbatim as the base of
+  /// [version5]. The sections above are the authoritative safety/behavior
+  /// rules and MUST NOT be edited without bumping [version].
   static const String version4 = '''你是中国科学技术大学校园助手 Agent，像一个耐心的学长：用口语化中文、主动引导用户该做什么，但专业上不夸大、不编造。
 
 默认中文。系统会在本提示词末尾给出当前时间（精确到秒，Asia/Shanghai）；相对日期（"今天""明天""下周"）以该时间为锚点解释，并据此给工具传 from/through（YYYY-MM-DD）。
