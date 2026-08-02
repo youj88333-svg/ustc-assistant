@@ -7,12 +7,27 @@
 ///   confirmation) before success prose for a mutation is accepted.
 /// - [mutationIntent]: whether this is an actual write operation. When true,
 ///   lookup success alone is never sufficient — a terminal write must succeed.
+/// The relation conflict state the user has already expressed for a
+/// high-confidence relation write. A concrete user decision (choosing one item,
+/// allowing coexistence, or doing nested work) outscores the mere word
+/// "冲突"; an unresolved decision is a genuine `conflict`. Only used to enforce
+/// expected state on `create_schedule_relation` inputs — never to rewrite model
+/// input silently.
+enum ExpectedConflictState {
+  /// 用户已表达取舍 / 允许共存 / 课上完成另一任务 -> save `no_conflict`.
+  noConflict,
+  /// 用户尚未决定 / 仍需调整 / 只需登记未解决冲突 -> save `conflict`.
+  conflict,
+}
+
 class AgentGroundingRequirement {
   const AgentGroundingRequirement({
     this.lookupTools = const {},
     this.anyOfLookupToolGroups = const [],
     this.terminalTools = const {},
     this.mutationIntent = false,
+    this.initialAllowedTools,
+    this.expectedConflictState,
   });
 
   /// Read-only tools the model must call to obtain concrete evidence or a
@@ -30,6 +45,19 @@ class AgentGroundingRequirement {
 
   final Set<String> terminalTools;
   final bool mutationIntent;
+
+  /// When non-null, the FIRST model request of the run declares ONLY these
+  /// tool declarations (plus `auto` tool choice), rather than the whole
+  /// registry. Used to keep high-confidence relation writes from reaching
+  /// unrelated tools (e.g. `get_conflicts`). The set must contain only
+  /// registered members of the relation tool family.
+  final List<String>? initialAllowedTools;
+
+  /// When non-null, the user has already expressed the relation's expected
+  /// conflict state. A `create_schedule_relation` call whose `conflict_state`
+  /// disagrees is corrected (never silently rewritten) with at most one changed
+  /// call.
+  final ExpectedConflictState? expectedConflictState;
 
   /// The union of every tool this request ultimately requires (lookups that
   /// must provide evidence/refs plus the terminal write). For corrective-stage
@@ -85,12 +113,7 @@ class AgentGroundingPolicy {
     //    of tasks).
     for (final def in _writeIntents) {
       if (_matchesAny(text, def.patterns)) {
-        return AgentGroundingRequirement(
-          lookupTools: def.lookupTools,
-          anyOfLookupToolGroups: def.anyOfLookupToolGroups,
-          terminalTools: def.terminalTools,
-          mutationIntent: true,
-        );
+        return _buildRequirement(def, text);
       }
     }
 
@@ -112,6 +135,57 @@ class AgentGroundingPolicy {
       if (pattern.hasMatch(text)) return true;
     }
     return false;
+  }
+
+  /// Builds a [AgentGroundingRequirement] from a matched [def], adding the
+  /// optional narrowing set and (for relation writes) an expected conflict
+  /// state derived from the user's wording.
+  AgentGroundingRequirement _buildRequirement(_IntentDef def, String text) {
+    final relationSet = def.terminalTools.contains('create_schedule_relation')
+        ? const ['get_schedule', 'get_plan_blocks', 'create_schedule_relation']
+        : null;
+    final expected = def.terminalTools.contains('create_schedule_relation')
+        ? _classifyExpectedConflictState(text)
+        : null;
+    return AgentGroundingRequirement(
+      lookupTools: def.lookupTools,
+      anyOfLookupToolGroups: def.anyOfLookupToolGroups,
+      terminalTools: def.terminalTools,
+      mutationIntent: true,
+      initialAllowedTools: relationSet,
+      expectedConflictState: expected,
+    );
+  }
+
+  /// A concrete user decision means `no_conflict`, outranking the bare word
+  /// "冲突" in the same sentence. Only an explicit unresolved / just-register
+  /// framing yields `conflict`. Ambiguity returns `null` (ask first; no
+  /// confirmation card).
+  static ExpectedConflictState? _classifyExpectedConflictState(String text) {
+    // Concrete choice / coexistence / nested work -> no_conflict.
+    final noConflictPatterns = [
+      RegExp(r'(选择|选|去|不去|决定|保留).{0,12}(量子|物理|这|课|去|不|共存|同时|保留|两个)'),
+      RegExp(r'共存'),
+      RegExp(r'课上写'),
+      RegExp(r'都去'),
+      RegExp(r'两个.{0,4}(都|保留|共存|都要)'),
+    ];
+    for (final p in noConflictPatterns) {
+      if (p.hasMatch(text)) return ExpectedConflictState.noConflict;
+    }
+    // Explicit unresolved / adjust / just-register -> conflict.
+    final conflictPatterns = [
+      RegExp(r'还没决定'),
+      RegExp(r'尚未决定'),
+      RegExp(r'还没想好'),
+      RegExp(r'还未决定'),
+      RegExp(r'只登记'),
+      RegExp(r'仍需调整'),
+    ];
+    for (final p in conflictPatterns) {
+      if (p.hasMatch(text)) return ExpectedConflictState.conflict;
+    }
+    return null;
   }
 }
 
@@ -176,6 +250,37 @@ final List<RegExp> _capabilityAdvicePatterns = [
 
 /// Write (mutation) intents, checked in order before read intents.
 final List<_IntentDef> _writeIntents = [
+  // create_schedule_relation (conflict / choose-one / coexist relation between
+  // items). Checked EARLY because "记录冲突，我选择去量子物理 B" must route here
+  // (not to record_attendance_decision), and a concrete choice / coexistence /
+  // nested-work decision is a relation write even without the verb "冲突".
+  // A bare conflict word with no decision ("这周有冲突吗") is a READ (get_conflicts),
+  // never a mutation — so relation requires an explicit relation verb or a
+  // concrete decision marker.
+  _IntentDef(
+    patterns: [
+      RegExp(r'(记录|设为|标记|做成|选|决定|确认|建立).{0,12}(冲突|二选一|撞课|相撞|重了)'),
+      RegExp(r'(冲突|二选一|撞课|相撞|重了).{0,6}(决策|就这么定)'),
+      RegExp(r'记录.{0,6}(关系|选择)'),
+      // Concrete choice / coexistence / nested work between two arrangements:
+      // "选择去量子物理 B，不去电路基本理论", "两个安排可以共存", "课上写作业".
+      RegExp(r'(选择|我选|决定|打算|选择去|我选择去).{0,15}(去|不去|上|不上|保留).{0,15}(不去|不选|保留|共存|去|上|写作业|写任务|完成)'),
+      RegExp(r'(选中|选择|我选).{0,10}(量子|物理|课|B|A|甲|乙|这个|那个)'),
+      RegExp(r'(两个|两门|这两|这两节|两节|两个安排|这两个安排).{0,8}(共存|都保留|都去|同时|并存|都要|都保留)'),
+      RegExp(r'共存'),
+      RegExp(r'(课上|上课时).{0,4}(写|做|完成).{0,6}(作业|任务|复习)'),
+    ],
+    // A relation needs "two valid refs" — EITHER from schedule (event-event or
+    // mixed) OR from plan blocks (PlanBlock-PlanBlock or mixed), never an
+    // unconditional success of BOTH query tools. The single-group lookup set is
+    // kept as the broad corrective-stage allowed set.
+    lookupTools: {'get_schedule', 'get_plan_blocks'},
+    anyOfLookupToolGroups: [
+      {'get_schedule'},
+      {'get_plan_blocks'},
+    ],
+    terminalTools: {'create_schedule_relation'},
+  ),
   // plan_task: needs a task ref from get_tasks, then plans an execution window.
   // REQUIRES a task/作业/复习 entity — a bare "安排" with no task object is a
   // generic event (create_event) or ambiguous (null), never plan_task.
@@ -226,6 +331,9 @@ final List<_IntentDef> _writeIntents = [
       // whole-day collection move even without a literal 当天/全部 marker.
       // ("把 8 月 3 日的教务课程移到 8 月 9 日").
       RegExp(r'(把|将).{0,20}[0-9]+ ?月 ?[0-9]+ ?日.{0,4}的?教务课程.{0,6}(移到|移至|挪到|调至|调整到)'),
+      // A two-date whole-day 调课 request with "把 N 号的调到 M 号":
+      // "国庆要调课，请把10月1号的调到9月26号".
+      RegExp(r'(把|将)[0-9]+ ?月 ?[0-9]+ ?号.{0,6}(调到|移到|移至|挪到).{0,6}[0-9]+ ?月 ?[0-9]+ ?号'),
       RegExp(r'(恢复|撤销|取消).{0,8}(整日移动|调课|调休|课程移动)'),
     ],
     lookupTools: {'get_schedule'},
@@ -276,27 +384,6 @@ final List<_IntentDef> _writeIntents = [
     ],
     lookupTools: {'get_schedule'},
     terminalTools: {'set_reminder'},
-  ),
-  // create_schedule_relation (conflict / choose-one relation between items).
-  // An explicit relation VERB is required: a bare conflict word ("这周有冲突
-  // 吗") is a READ, never a mutation. Decision markers (决策/就这么定) trailing
-  // a conflict word also route to the write.
-  _IntentDef(
-    patterns: [
-      RegExp(r'(记录|设为|标记|做成|选|决定|确认|建立).{0,12}(冲突|二选一|撞课|相撞|重了)'),
-      RegExp(r'(冲突|二选一|撞课|相撞|重了).{0,6}(决策|就这么定)'),
-      RegExp(r'记录.{0,6}(关系|选择)'),
-    ],
-    // A relation needs "two valid refs" — EITHER from schedule (event-event or
-    // mixed) OR from plan blocks (PlanBlock-PlanBlock or mixed), never an
-    // unconditional success of BOTH query tools. The single-group lookup set is
-    // kept as the broad corrective-stage allowed set.
-    lookupTools: {'get_schedule', 'get_plan_blocks'},
-    anyOfLookupToolGroups: [
-      {'get_schedule'},
-      {'get_plan_blocks'},
-    ],
-    terminalTools: {'create_schedule_relation'},
   ),
   // update_permission_policy
   _IntentDef(

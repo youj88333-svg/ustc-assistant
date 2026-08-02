@@ -673,6 +673,19 @@ void main() {
           reason: '自由聊天/能力讨论不强制调用工具');
     });
 
+    test('version4 states the relation conflict-state priority rules', () {
+      const prompt = AgentSystemPrompt.version4;
+      // 用户完整意图优先：选择一项 / 允许共存 / 课上嵌套完成 -> no_conflict。
+      expect(prompt, contains('以用户完整意图为准'),
+          reason: 'conflict_state 以用户完整意图为准');
+      expect(prompt, contains('no_conflict'),
+          reason: '明确取舍/共存/课上完成 -> no_conflict');
+      expect(prompt, contains('尚未决定'),
+          reason: '未决定/只需登记未解决 -> conflict');
+      expect(prompt, contains('先询问'),
+          reason: '意图不明确先询问，不生成确认卡');
+    });
+
     test('version4 has no secrets, accounts, semester literals, or raw ids', () {
       const prompt = AgentSystemPrompt.version4;
       expect(prompt, isNot(contains('PB12345678')));

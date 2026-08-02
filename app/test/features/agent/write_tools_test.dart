@@ -826,6 +826,24 @@ void main() {
     expect(props.containsKey('importance'), isTrue);
   });
 
+  test('create_schedule_relation guidance states concrete choices are no_conflict',
+      () {
+    final t = tools();
+    final tool = t.firstWhere((x) => x.name == 'create_schedule_relation');
+    final desc = tool.description;
+    // 用户已选择一项 / 允许共存 / 课上完成另一任务 -> no_conflict。
+    expect(desc, contains('另一任务'));
+    expect(desc, contains('no_conflict'));
+    expect(desc, contains('尚未决定'));
+    expect(desc, contains('先询问'));
+    final props =
+        (tool.inputSchema['properties'] as Map<String, Object?>)['conflict_state']
+            as Map<String, Object?>;
+    final stateDesc = props['description'] as String;
+    expect(stateDesc, contains('no_conflict'));
+    expect(stateDesc, contains('不能仅因为'));
+  });
+
   test('create_event rejects invalid field combinations', () async {
     final h = _Harness(tools());
     // 定时无时间对

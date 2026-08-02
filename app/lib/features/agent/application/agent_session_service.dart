@@ -551,8 +551,18 @@ class AgentSessionService {
     );
     controller.add(viewState);
 
+    // --- Grounding state (Task 1) ----------------------------------------
+    // Classify the CURRENT user text once at send() start, BEFORE token
+    // estimation or context build. Free chat and capability/advice wording yield
+    // `null` and take the normal path; an explicit operation must be backed by
+    // a real tool call. For a relation write the requirement also carries the
+    // narrowed tool set and (optionally) the user's expected conflict state.
+    final grounding = _groundingPolicy.classify(userText);
+
     // 3. Build the initial request from prior history + summary + current text.
-    final declarations = _registry.schemas;
+    // For a bounded relation run the FIRST (and every autonomous) request
+    // declares ONLY the relation tool family; otherwise the full registry.
+    final declarations = _initialDeclarations(grounding);
 
     // As of Task 7: reject an oversized CURRENT question BEFORE invoking the
     // provider. If the question alone plus the fixed overhead (system prompt +
@@ -662,10 +672,6 @@ class AgentSessionService {
     String? errorCode;
 
     // --- Grounding state (Task 1) ----------------------------------------
-    // Classify the CURRENT user text once at send() start. Free chat and
-    // capability/advice wording yield `null` and take the normal path; an
-    // explicit operation must be backed by a real tool call.
-    final grounding = _groundingPolicy.classify(userText);
     // Tools that completed successfully this run. A mutation is only grounded
     // once its terminal write tool succeeded (after confirmation); a read is
     // grounded once its required lookup tools succeeded.
@@ -676,6 +682,15 @@ class AgentSessionService {
     // the run as a non-success outcome (no repeat attempt, no reliance on the
     // model honestly reporting the failure).
     final terminalAttempts = <String, _TerminalMutationAttempt>{};
+
+    // Expected-state enforcement (Task 3): when the user text carries an
+    // expected conflict state for a relation write, a `create_schedule_relation`
+    // call whose `conflict_state` disagrees is NEVER executed or silently
+    // rewritten — the FIRST mismatch returns `relation_state_mismatch` with
+    // fixed guidance so the model can change one call; a SECOND mismatch ends
+    // the run safely without a confirmation card.
+    var relationStateMismatchCount = 0;
+    final expectedConflictState = grounding?.expectedConflictState;
 
     // Bounded corrective-retry state: at most one forced `any` retry and at
     // most one compat fallback without `tool_choice` per run.
@@ -1042,6 +1057,65 @@ class AgentSessionService {
               },
             );
             forcedLifecycle = ToolInvocationLifecycleState.error;
+          } else if (_isRelationLookup(tu.name, grounding) &&
+              tu.name == 'get_schedule' &&
+              _noNonblankQuery(tu.input)) {
+            // Relation-run get_schedule without a title query: return the
+            // intent-specific error WITHOUT loading events (Task 3). This
+            // prevents a relation request from pulling the whole semester's
+            // occurrence just to filter by title later.
+            result = const AgentToolResult(
+              status: AgentToolStatus.error,
+              errorCode: 'relation_lookup_requires_title',
+              payload: {
+                'guidance': '填写指定日期与标题后重新查询；不要读取整学期事件后再过滤。',
+              },
+            );
+            forcedLifecycle = ToolInvocationLifecycleState.error;
+          } else if (tu.name == 'create_schedule_relation' &&
+              expectedConflictState != null) {
+            // Expected-state enforcement (Task 3): never execute (nor silently
+            // rewrite) a relation write whose conflict_state disagrees with the
+            // user's expressed choice. First mismatch -> fixed guidance; second
+            // -> end safely without a confirmation card.
+            final proposed = tu.input['conflict_state'];
+            final mismatch = _relationStateMismatches(
+              proposed: proposed,
+              expected: expectedConflictState,
+            );
+            if (mismatch) {
+              relationStateMismatchCount++;
+              if (relationStateMismatchCount >= 2) {
+                // Second consecutive mismatch: end safely, no confirmation.
+                terminalState = AgentRunState.failed;
+                errorCode = 'grounding_failed';
+                result = const AgentToolResult(
+                  status: AgentToolStatus.error,
+                  errorCode: 'relation_state_mismatch',
+                  payload: {
+                    'guidance': '第二次仍与你的选择不一致，已停止，未写入任何关系。',
+                  },
+                );
+                forcedLifecycle = ToolInvocationLifecycleState.error;
+              } else {
+                // First mismatch: fixed guidance, allow one changed call.
+                result = const AgentToolResult(
+                  status: AgentToolStatus.error,
+                  errorCode: 'relation_state_mismatch',
+                  payload: {
+                    'guidance': '用户已经表达了取舍；请把 conflict_state 改为 no_conflict，'
+                        '不要记录为 conflict。',
+                  },
+                );
+                forcedLifecycle = ToolInvocationLifecycleState.error;
+              }
+            } else {
+              result = await _registry.execute(
+                toolName: tu.name,
+                arguments: tu.input,
+                context: context,
+              );
+            }
           } else {
             result = await _registry.execute(
               toolName: tu.name,
@@ -1643,6 +1717,38 @@ class AgentSessionService {
   /// REPLACED by this safe notice.
   static const _groundingFailedText = '我还没有实际查询或执行这项操作，请重试。';
 
+  /// Whether a proposed `conflict_state` argument disagrees with the expected
+  /// state the user has expressed. Only compares when the expected state is
+  /// known; a missing/blank proposed value is a mismatch.
+  static bool _relationStateMismatches({
+    required Object? proposed,
+    required ExpectedConflictState expected,
+  }) {
+    switch (expected) {
+      case ExpectedConflictState.noConflict:
+        return proposed != 'no_conflict';
+      case ExpectedConflictState.conflict:
+        return proposed != 'conflict';
+    }
+  }
+
+  /// Whether the current run is a relation write (i.e. the grounding
+  /// requirement is a `create_schedule_relation` mutation), in which case a
+  /// `get_schedule` call is a relation participant lookup subject to the
+  /// title-query requirement.
+  static bool _isRelationLookup(
+    String toolName,
+    AgentGroundingRequirement? grounding,
+  ) =>
+      grounding != null &&
+      grounding.terminalTools.contains('create_schedule_relation');
+
+  /// Whether a `get_schedule` call carries no nonblank `query` argument.
+  static bool _noNonblankQuery(Map<String, Object?> input) {
+    final query = input['query'];
+    return query is! String || query.trim().isEmpty;
+  }
+
   /// The fixed application correction appended to the conversation before the
   /// single corrective request. It tells the model (with narrowed tool
   /// declarations) to actually perform the required operation.
@@ -1665,6 +1771,21 @@ class AgentSessionService {
       for (final name in names)
         if (byName[name] != null) byName[name]!,
     ];
+  }
+
+  /// The tool declarations declared on the FIRST model request (and reused for
+  /// every model request in an autonomous relation run). For a high-confidence
+  /// relation write with a narrowed [AgentGroundingRequirement.initialAllowedTools]
+  /// set, only those (registered) tools are declared — never unrelated tools
+  /// like `get_conflicts`. Free chat and all other intents get the full
+  /// registry plus `auto`, so nothing is ever forced.
+  List<LlmToolDeclaration> _initialDeclarations(
+    AgentGroundingRequirement? grounding,
+  ) {
+    final all = _registry.schemas;
+    final narrowed = grounding?.initialAllowedTools;
+    if (narrowed == null || narrowed.isEmpty) return all;
+    return _registeredDeclarations(narrowed.toSet(), all);
   }
 
   /// Builds the message list for the single corrective request: the current

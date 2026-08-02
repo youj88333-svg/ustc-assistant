@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_grounding_policy.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_session_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_invocation_summary.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
@@ -322,6 +323,80 @@ class _CountingCatalogTool implements AgentTool {
     return const AgentToolResult(
       status: AgentToolStatus.success,
       payload: {'results': <Object?>[]},
+    );
+  }
+}
+
+/// A get_schedule tool that returns the intent-specific
+/// `relation_lookup_requires_title` error when invoked (as a relation-run
+/// lookup) without a nonblank `query`. Counts executions but never "loads"
+/// events, so a test can assert events were never loaded.
+class _TitleRequiredScheduleTool implements AgentTool {
+  int executeCount = 0;
+  bool loadedEvents = false;
+
+  @override
+  String get name => 'get_schedule';
+
+  @override
+  String get description => 'Requires a title query inside a relation run.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    executeCount++;
+    final query = arguments['query'];
+    if (query is! String || query.trim().isEmpty) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'relation_lookup_requires_title',
+        payload: {
+          'guidance': '填写指定日期与标题后重新查询；不要读取整学期事件后再过滤。',
+        },
+      );
+    }
+    loadedEvents = true;
+    return const AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: {'courses': <Object?>[], 'events': <Object?>[]},
+    );
+  }
+}
+
+/// A create_schedule_relation tool that records the proposed conflict state so
+/// a session test can assert expected-state enforcement passes/repairs it.
+class _RecordingRelationTool implements AgentTool {
+  final List<String> conflictStates = [];
+
+  @override
+  String get name => 'create_schedule_relation';
+
+  @override
+  String get description => 'Records a relation; records the proposed state.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    conflictStates.add((arguments['conflict_state'] as String?) ?? '');
+    return const AgentToolResult(
+      status: AgentToolStatus.success,
+      payload: {'result': 'created_schedule_relation'},
     );
   }
 }
@@ -734,6 +809,7 @@ AgentSessionService _buildService({
   required LlmProvider provider,
   required BeijingClock clock,
   List<AgentTool>? tools,
+  AgentGroundingPolicy? groundingPolicy,
   String model = 'deepseek-v4-flash',
   String protectedAccount = 'PB12345678',
   AgentUserActionResumeCallback? userActionResumer,
@@ -765,6 +841,7 @@ AgentSessionService _buildService({
     // Ephemeral key provider closure: tests must never need real DPAPI.
     apiKeyProvider: ({required String accountId}) async => 'ephemeral-test-key',
     userActionResumer: userActionResumer,
+    groundingPolicy: groundingPolicy ?? const AgentGroundingPolicy(),
   );
 }
 
@@ -2955,6 +3032,253 @@ END
         expect(relation.executeCount, 0);
         expect(schedule.executeCount, 0);
         expect(blocks.executeCount, 0);
+      },
+    );
+  });
+
+  group('grounding: bounded relation runs', () {
+    test(
+      'relation first-request declarations are narrowed to the registered members',
+      () async {
+        final relation = _RecordingRelationTool();
+        final schedule = _TitleRequiredScheduleTool();
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final provider = _ScriptedProvider([
+          // Call 1: the model uses create_schedule_relation directly.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r1',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: final completion prose.
+          [const TextDeltaEvent('已记录。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [relation, schedule, blocks],
+        );
+
+        await service
+            .send(accountId: account, userText: '记录这两节课的冲突')
+            .toList();
+
+        // The FIRST model request declares ONLY the relation family, not the
+        // whole registry.
+        final first = provider.requests.first;
+        final names = first.tools.map((t) => t.name).toSet();
+        expect(names, {'get_schedule', 'get_plan_blocks', 'create_schedule_relation'});
+        // Tool choice remains auto (free chat is never forced).
+        expect(first.toolChoice, LlmToolChoice.auto);
+      },
+    );
+
+    test(
+      'a relation get_schedule without a query returns relation_lookup_requires_title and loads no events',
+      () async {
+        final schedule = _TitleRequiredScheduleTool();
+        final relation = _RecordingRelationTool();
+        final provider = _ScriptedProvider([
+          // Call 1: get_schedule without a query.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-s1',
+              name: 'get_schedule',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: the model fixes it with a query, then relation.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-s2',
+              name: 'get_schedule',
+              input: {'query': '量子物理', 'date': '2026-06-02'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已查到。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [schedule, relation],
+        );
+
+        await service
+            .send(accountId: account, userText: '记录这两节课的冲突')
+            .toList();
+
+        // The no-query call was intercepted by the session service BEFORE the
+        // tool ran: it never reached the registry, so only the WITH-query call
+        // executed. Therefore the no-query call could not have loaded events.
+        expect(schedule.executeCount, 1);
+        expect(
+          provider.requests[1].messages
+              .expand((m) => m.content)
+              .whereType<LlmToolResultBlock>()
+              .any((tr) {
+            final payload =
+                jsonDecode(tr.content as String) as Map<String, Object?>;
+            return payload['code'] == 'relation_lookup_requires_title';
+          }),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'expected no_conflict vs model conflict_state: first mismatch returns relation_state_mismatch, one changed call succeeds',
+      () async {
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final relation = _RecordingRelationTool();
+        final provider = _ScriptedProvider([
+          // Call 1: model records conflict, but the user chose -> expected no_conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r1',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: the model corrected to no_conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r2',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'no_conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已记录为不冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [schedule, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '记录这两节课的冲突，我选择去量子物理 B',
+            )
+            .toList();
+
+        // The FIRST mismatch was surfaced to the model as an error, and the
+        // corrected call (no_conflict) succeeded — the run completes.
+        expect(states.last.state, AgentRunState.completed);
+        expect(relation.conflictStates, contains('no_conflict'));
+      },
+    );
+
+    test(
+      'second consecutive mismatch ends safely without confirmation',
+      () async {
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final relation = _RecordingRelationTool();
+        final provider = _ScriptedProvider([
+          // Two calls both recording conflict despite expected no_conflict.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r1',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-r2',
+              name: 'create_schedule_relation',
+              input: {'conflict_state': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('完成。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [schedule, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '记录这两节课的冲突，我选择去量子物理 B',
+            )
+            .toList();
+
+        // No confirmation card was shown; the run ended without landing on a
+        // success conclusion and the user's choice was never silently written
+        // as conflict.
+        expect(relation.conflictStates, isNot(contains('no_conflict')));
+        expect(states.last.state, isNot(AgentRunState.completed));
+      },
+    );
+  });
+
+  group('grounding: terminal move stay completed (real regression)', () {
+    test(
+      'confirmed move_jw_course_day completes and never becomes grounding_failed',
+      () async {
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final move = _CountingSuccessTool(name: 'move_jw_course_day');
+        final provider = _ScriptedProvider([
+          // Call 1: the terminal write succeeds.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-move',
+              name: 'move_jw_course_day',
+              input: {
+                'action': 'move',
+                'source_date': '2026-10-01',
+                'target_date': '2026-09-26',
+              },
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: plain final model turn (no further tool).
+          [const TextDeltaEvent('已把 10 月 1 号的课程移到 9 月 26 号。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12)),
+          tools: [schedule, move],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '国庆要调课，请把10月1号的调到9月26号',
+            )
+            .toList();
+
+        // The terminal write succeeded -> run completed, null error, no
+        // grounding_failed regression.
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.errorCode, isNull);
+        final runs = await (database.select(database.agentRuns)).get();
+        expect(runs.single.status, AgentRunState.completed.name);
+        expect(runs.single.errorCode, isNull);
+        // One business write (the move executed once).
+        expect(move.executeCount, 1);
+        // One success ActionLog for the run.
+        final logs = await (database.select(
+          database.actionLogs,
+        )..where((row) => row.actionType.equals('read_only_run'))).get();
+        expect(logs, hasLength(1));
+        expect(logs.single.result, 'success');
       },
     );
   });

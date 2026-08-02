@@ -67,7 +67,7 @@ class AgentSystemPrompt {
   - 设置事件/整门课的个人标注（出勤/听讲/显示名/重要性/隐藏）→ create_user_overlay
   - 记录"可以赌"课程本次去不去 → record_attendance_decision
   - 设置某节课听讲/不听讲 → record_listening_mode
-  - 记录两个安排的冲突决策 → create_schedule_relation（ref_left/ref_right 来自日程或任务查询）
+  - 记录两个安排的冲突决策 → create_schedule_relation（ref_left/ref_right 来自日程或任务查询）。conflict_state 以用户完整意图为准：用户已选择一项、允许两项共存或在课上嵌套完成另一任务 → no_conflict；仅当用户明确尚未决定或只需登记未解决冲突 → conflict；意图不明确先询问，不生成确认卡
   - 为个人日程设提醒 → set_reminder（ref_event 来自 get_schedule）
   - 整日移动/恢复某天的教务课程 → move_jw_course_day（action=move|clear；critical，永远需要确认）
   - 调整某类操作的确认策略 → update_permission_policy

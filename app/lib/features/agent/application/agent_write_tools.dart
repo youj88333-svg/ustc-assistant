@@ -999,7 +999,11 @@ class CreateScheduleRelationTool extends AgentWriteTool {
   String get name => 'create_schedule_relation';
   @override
   String get description =>
-      '记录一对日程/执行块之间的关系与冲突决策（如二选一、课上写作业、翘课去二课）。ref_left/ref_right 来自日程或任务查询。';
+      '记录一对日程/执行块之间的冲突决策（如二选一、课上写作业、翘课去二课）。'
+      'ref_left/ref_right 来自日程或任务查询。conflict_state 以用户已表达的完整意图为准：'
+      '用户选择了一项、允许两项共存或在课内嵌套完成另一任务时为 no_conflict；'
+      '仅当用户明确表示尚未决定或只需登记未解决冲突时才为 conflict。'
+      '若意图不明确，先询问，不生成确认卡。';
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
@@ -1007,7 +1011,13 @@ class CreateScheduleRelationTool extends AgentWriteTool {
     'properties': {
       'ref_left': {'type': 'string'},
       'ref_right': {'type': 'string'},
-      'conflict_state': {'type': 'string', 'enum': ['conflict', 'no_conflict']},
+      'conflict_state': {
+        'type': 'string',
+        'enum': ['conflict', 'no_conflict'],
+        'description': '用户已表达的决策：选择了一项/允许共存/课上完成另一任务 -> no_conflict；'
+            '尚未决定或只需登记未解决冲突 -> conflict。以用户完整意图为准，不能仅因为'
+            '时间重叠或出现“冲突”一词就写 conflict。',
+      },
       'reason': {'type': 'string', 'description': '用户意图/备注'},
     },
     'required': ['ref_left', 'ref_right', 'conflict_state'],

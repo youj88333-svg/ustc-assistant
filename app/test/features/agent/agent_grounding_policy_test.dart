@@ -223,4 +223,81 @@ void main() {
       expect(req.requiredTools, contains('create_schedule_relation'));
     });
   });
+
+  group('AgentGroundingPolicy.classify — expected conflict state', () {
+    test('a concrete choice between two items selects no_conflict', () {
+      final req = policy.classify('选择去量子物理 B，不去电路基本理论');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.mutationIntent, isTrue);
+      expect(req.expectedConflictState, ExpectedConflictState.noConflict);
+    });
+
+    test('course-time nested work selects no_conflict', () {
+      final req = policy.classify('课上写操作系统作业');
+      expect(req, isNotNull);
+      expect(req!.expectedConflictState, ExpectedConflictState.noConflict);
+      expect(req.terminalTools, {'create_schedule_relation'});
+    });
+
+    test('coexistence selects no_conflict', () {
+      final req = policy.classify('两个安排可以共存');
+      expect(req, isNotNull);
+      expect(req!.expectedConflictState, ExpectedConflictState.noConflict);
+      expect(req.terminalTools, {'create_schedule_relation'});
+    });
+
+    test('an unresolved decision selects conflict', () {
+      final req = policy.classify('记录为冲突，我还没决定');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.expectedConflictState, ExpectedConflictState.conflict);
+    });
+
+    test('a concrete choice outranks the word 冲突', () {
+      final req = policy.classify('记录冲突，我选择去量子物理 B');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'create_schedule_relation'});
+      expect(req.expectedConflictState, ExpectedConflictState.noConflict);
+    });
+
+    test('ambiguous relation wording is unspecified (free chat)', () {
+      expect(policy.classify('这两个安排怎么办'), isNull);
+    });
+
+    test('relation first-request declarations are exactly the registered members',
+        () {
+      final req = policy.classify('记录这两节课的冲突');
+      expect(req, isNotNull);
+      expect(
+        req!.initialAllowedTools,
+        ['get_schedule', 'get_plan_blocks', 'create_schedule_relation'],
+      );
+    });
+
+    test('a two-date 调课 request routes to move_jw_course_day', () {
+      final req = policy.classify('国庆要调课，请把10月1号的调到9月26号');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'move_jw_course_day'});
+      expect(req.mutationIntent, isTrue);
+    });
+  });
+
+  group('AgentGroundingRequirement — narrowing', () {
+    test('a nullable initialAllowedTools leaves an unrestricted free-chat run',
+        () {
+      const req = AgentGroundingRequirement();
+      expect(req.initialAllowedTools, isNull);
+      expect(req.expectedConflictState, isNull);
+    });
+
+    test('relation intents take the narrowed initial allowed set', () {
+      final req = policy.classify('记录这两个执行块互相冲突');
+      expect(req, isNotNull);
+      expect(
+        req!.initialAllowedTools,
+        ['get_schedule', 'get_plan_blocks', 'create_schedule_relation'],
+      );
+    });
+  });
 }
