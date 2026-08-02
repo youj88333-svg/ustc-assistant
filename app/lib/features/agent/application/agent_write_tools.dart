@@ -84,6 +84,20 @@ String _eventSummary(EventWriteSnapshot snapshot) {
   return '${snapshot.title} / ${_fmtTimeRange(snapshot.startAt!, snapshot.endAt!)}';
 }
 
+/// 关系参与方类型的展示词（仅用于确认预览/安全日志，不暴露 id/ref）。
+String _kindZh(String kind) => switch (kind) {
+  'event' => '日程',
+  'plan_block' => '执行块',
+  _ => '参与方',
+};
+
+/// 冲突状态的中文展示词（仅用于确认预览，不直接暴露存储值）。
+String _conflictStateZh(String state) => switch (state) {
+  'conflict' => '冲突',
+  'no_conflict' => '不冲突',
+  _ => state,
+};
+
 /// 关系参与方的展示摘要（event 用快照，plan_block 用执行块行）。
 Future<String> _relationParticipantLabel(AgentWriteGateway gateway, String kind, String id) async {
   if (kind == 'event') {
@@ -1055,6 +1069,7 @@ class CreateScheduleRelationTool extends AgentWriteTool {
     // 目标存在性 preflight：两个参与方都必须存在，否则不产生可批准提案。
     final leftLabel = await _relationParticipantLabel(gateway, left.kind, left.id);
     final rightLabel = await _relationParticipantLabel(gateway, right.kind, right.id);
+    final stateZh = _conflictStateZh(conflictState);
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -1062,9 +1077,9 @@ class CreateScheduleRelationTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: [
-        '日程 A：$leftLabel',
-        '日程 B：$rightLabel',
-        '关系：$conflictState',
+        '${_kindZh(left.kind)} A：$leftLabel',
+        '${_kindZh(right.kind)} B：$rightLabel',
+        '关系：$stateZh',
         if (reason != null && reason.isNotEmpty) '理由：$reason',
       ],
       commitParams: {

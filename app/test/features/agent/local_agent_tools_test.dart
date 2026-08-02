@@ -96,24 +96,32 @@ Future<AppDatabase> _seedDatabase() async {
   // not_conflict (to exercise the relation table). Note the occurrence date.
   final conflict = ConflictService(database: database, accountId: 'a', now: () => 1);
   await conflict.classifyPair(
-    EventConflictParticipant(
-      eventId: 'event-conflict-a',
+    ScheduleConflictParticipant(
+      kind: 'event',
+      id: 'event-conflict-a',
+      title: 'event-conflict-a',
       occurrenceDate: DateTime(2026, 7, 29),
     ),
-    EventConflictParticipant(
-      eventId: 'event-conflict-b',
+    ScheduleConflictParticipant(
+      kind: 'event',
+      id: 'event-conflict-b',
+      title: 'event-conflict-b',
       occurrenceDate: DateTime(2026, 7, 29),
     ),
     ConflictState.conflict,
     reason: 'time overlap',
   );
   await conflict.classifyPair(
-    EventConflictParticipant(
-      eventId: 'event-conflict-a',
+    ScheduleConflictParticipant(
+      kind: 'event',
+      id: 'event-conflict-a',
+      title: 'event-conflict-a',
       occurrenceDate: DateTime(2026, 7, 29),
     ),
-    EventConflictParticipant(
-      eventId: 'event-solo',
+    ScheduleConflictParticipant(
+      kind: 'event',
+      id: 'event-solo',
+      title: 'event-solo',
       occurrenceDate: DateTime(2026, 7, 29),
     ),
     ConflictState.nonConflict,
@@ -1234,12 +1242,16 @@ void main() {
         accountId: 'a',
         now: () => 1,
       ).classifyPair(
-        EventConflictParticipant(
-          eventId: 'event-conflict-a',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-conflict-a',
+          title: 'event-conflict-a',
           occurrenceDate: DateTime(2026, 7, 29),
         ),
-        EventConflictParticipant(
-          eventId: 'event-conflict-b',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-conflict-b',
+          title: 'event-conflict-b',
           occurrenceDate: DateTime(2026, 7, 29),
         ),
         ConflictState.nonConflict,
@@ -1262,12 +1274,16 @@ void main() {
         accountId: 'a',
         now: () => 1,
       ).classifyPair(
-        EventConflictParticipant(
-          eventId: 'event-conflict-a',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-conflict-a',
+          title: 'event-conflict-a',
           occurrenceDate: DateTime(2026, 7, 29),
         ),
-        EventConflictParticipant(
-          eventId: 'event-solo',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-solo',
+          title: 'event-solo',
           occurrenceDate: DateTime(2026, 7, 29),
         ),
         ConflictState.conflict,

@@ -300,12 +300,16 @@ void main() {
     final service = ConflictService(database: database, accountId: 'account');
     expect(
       await service.stateForPair(
-        EventConflictParticipant(
-          eventId: 'event-a',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-a',
+          title: 'event-a',
           occurrenceDate: DateTime(2026, 7, 27),
         ),
-        EventConflictParticipant(
-          eventId: 'event-b',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'event-b',
+          title: 'event-b',
           occurrenceDate: DateTime(2026, 7, 27),
         ),
       ),

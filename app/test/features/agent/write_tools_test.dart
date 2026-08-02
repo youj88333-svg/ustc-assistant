@@ -1341,7 +1341,7 @@ void main() {
     }, h.ctx());
     expect(proposal.previewLines, contains('日程 A：健身 / 2026-08-01 09:00-10:00'));
     expect(proposal.previewLines, contains('日程 B：健身 / 2026-08-01 09:00-10:00'));
-    expect(proposal.previewLines, contains('关系：conflict'));
+    expect(proposal.previewLines, contains('关系：冲突'));
     expectNoIdsOrRefs(proposal, ['ev-left', 'ev-right']);
   });
 

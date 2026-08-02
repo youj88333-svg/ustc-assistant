@@ -15,8 +15,8 @@ class ConflictPairDraft {
   });
 
   final String id;
-  final EventConflictParticipant left;
-  final EventConflictParticipant right;
+  final ScheduleConflictParticipant left;
+  final ScheduleConflictParticipant right;
   final String leftTitle;
   final String rightTitle;
   final ConflictState state;
@@ -34,8 +34,8 @@ class ConflictEditor extends StatefulWidget {
 
   final List<ConflictPairDraft> pairs;
   final Future<void> Function(
-    EventConflictParticipant left,
-    EventConflictParticipant right,
+    ScheduleConflictParticipant left,
+    ScheduleConflictParticipant right,
     ConflictState state, {
     required ConflictScope scope,
     String? reason,

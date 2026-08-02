@@ -3,6 +3,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../tasks/application/undo_recorder.dart';
+import '../../tasks/domain/plan_block.dart';
+import '../../tasks/domain/task.dart';
 import '../domain/overlap_engine.dart';
 import '../domain/schedule_grid_item.dart';
 import 'schedule_conflict_projection.dart';
@@ -20,24 +22,46 @@ class ConflictValidationError implements Exception {
   String toString() => 'ConflictValidationError: $message';
 }
 
-class EventConflictParticipant {
-  const EventConflictParticipant({
-    required this.eventId,
+/// A unified relation participant. `kind` is `event` (a CalendarEvent) or
+/// `plan_block` (a PlanBlock). PlanBlock participants never carry a fake series
+/// identity, so their series fields (`seriesType`, `seriesId`,
+/// `finiteSeriesEnd`) must stay null and [hasStableSeriesIdentity] is always
+/// false — current-and-future scope is therefore rejected for them.
+class ScheduleConflictParticipant {
+  const ScheduleConflictParticipant({
+    required this.kind,
+    required this.id,
+    required this.title,
     required this.occurrenceDate,
+    this.startAt,
+    this.endAt,
     this.seriesType,
     this.seriesId,
     this.finiteSeriesEnd,
   });
 
-  final String eventId;
+  /// `event` or `plan_block` (matches `schedule_relations.leftKind/rightKind`).
+  final String kind;
+
+  final String id;
+
+  /// Safe display title (never an id/ref).
+  final String title;
+
   final DateTime occurrenceDate;
+  final DateTime? startAt;
+  final DateTime? endAt;
   final String? seriesType;
   final String? seriesId;
   final DateTime? finiteSeriesEnd;
 
   bool get hasStableSeriesIdentity =>
       seriesId != null &&
+      seriesType != null &&
       (seriesType == 'course_series' || seriesType == 'calendar_event_series');
+
+  /// Canonical key for pair ordering and dedup: `kind:id`.
+  String get canonicalKey => '$kind:$id';
 }
 
 class ConflictService {
@@ -56,20 +80,76 @@ class ConflictService {
   static const _uuid = Uuid();
 
   Future<void> classifyPair(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
     ConflictState state, {
     ConflictScope scope = ConflictScope.occurrence,
     String? reason,
   }) {
-    if (a.eventId == b.eventId) {
+    if (a.canonicalKey == b.canonicalKey) {
       throw const ConflictValidationError(
-        'a conflict pair requires two events',
+        'a conflict pair requires two distinct participants',
+      );
+    }
+    if (a.kind != 'event' && a.kind != 'plan_block') {
+      throw ConflictValidationError('unsupported participant kind: ${a.kind}');
+    }
+    if (b.kind != 'event' && b.kind != 'plan_block') {
+      throw ConflictValidationError('unsupported participant kind: ${b.kind}');
+    }
+    if (scope == ConflictScope.currentAndFuture &&
+        (a.kind != 'event' || b.kind != 'event')) {
+      throw const ConflictValidationError(
+        'current-and-future scope is only valid between two stable events',
       );
     }
     return scope == ConflictScope.occurrence
         ? _classifyOccurrence(a, b, state, reason)
         : _classifyCurrentAndFuture(a, b, state, reason);
+  }
+
+  /// Re-validates that both participants still resolve to account-owned,
+  /// nondeleted rows before an occurrence write. Throws
+  /// [ConflictValidationError] for a missing/deleted/foreign target so no
+  /// dangling relation row is ever written.
+  Future<void> _validateOccurrenceTargets(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) async {
+    final okA = await _participantExists(a);
+    if (!okA) throw ConflictValidationError('relation target not found: ${a.kind}:${a.id}');
+    final okB = await _participantExists(b);
+    if (!okB) throw ConflictValidationError('relation target not found: ${b.kind}:${b.id}');
+  }
+
+  Future<bool> _participantExists(ScheduleConflictParticipant p) async {
+    if (p.kind == 'event') {
+      final event = await (database.select(database.calendarEvents)..where(
+            (row) =>
+                row.id.equals(p.id) & row.accountId.equals(accountId),
+          ))
+          .getSingleOrNull();
+      return event != null;
+    }
+    if (p.kind == 'plan_block') {
+      final block = await (database.select(database.planBlocks)..where(
+            (row) =>
+                row.id.equals(p.id) &
+                row.accountId.equals(accountId) &
+                row.deletedAt.isNull(),
+          ))
+          .getSingleOrNull();
+      if (block == null) return false;
+      final task = await (database.select(database.tasks)..where(
+            (row) =>
+                row.id.equals(block.taskId) &
+                row.accountId.equals(accountId) &
+                row.deletedAt.isNull(),
+          ))
+          .getSingleOrNull();
+      return task != null;
+    }
+    return false;
   }
 
   /// Loads the account-scoped conflict relation snapshot (occurrence
@@ -139,8 +219,8 @@ class ConflictService {
   /// Derives from the same precedence as the week grid / `get_conflicts`:
   /// explicit occurrence → explicit series → timed overlap → no conflict.
   Future<ConflictState> stateForPair(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
   ) async {
     final itemA = await _gridItemFor(a);
     final itemB = await _gridItemFor(b);
@@ -154,66 +234,100 @@ class ConflictService {
         : ConflictState.nonConflict;
   }
 
-  /// Builds a [ScheduleGridItem] for an [EventConflictParticipant] from the
-  /// underlying calendar row so the shared projection can resolve overlap and
-  /// series identity. Returns null when the event is missing for this account.
-  Future<ScheduleGridItem?> _gridItemFor(EventConflictParticipant participant) async {
-    final event =
-        await (database.select(database.calendarEvents)..where(
-              (row) =>
-                  row.id.equals(participant.eventId) &
-                  row.accountId.equals(accountId),
-            ))
-            .getSingleOrNull();
-    if (event == null) return null;
-    if (event.allDay) {
+  /// Builds a [ScheduleGridItem] for a [ScheduleConflictParticipant] from the
+  /// underlying account-owned row so the shared projection can resolve overlap
+  /// and series identity. For `event` this is the CalendarEvent row; for
+  /// `plan_block` it is the (nondeleted) PlanBlock plus its nondeleted parent
+  /// Task. Returns null when the participant is missing, deleted, or
+  /// unaccounted.
+  Future<ScheduleGridItem?> _gridItemFor(
+    ScheduleConflictParticipant participant,
+  ) async {
+    if (participant.kind == 'event') {
+      final event =
+          await (database.select(database.calendarEvents)..where(
+                (row) =>
+                    row.id.equals(participant.id) &
+                    row.accountId.equals(accountId),
+              ))
+              .getSingleOrNull();
+      if (event == null) return null;
+      if (event.allDay) {
+        return ScheduleGridItem.fromEvent(
+          EffectiveEvent.allDay(
+            id: event.id,
+            title: event.title,
+            startDate: DateTime.parse(event.startDate!),
+            endDateExclusive: DateTime.parse(event.endDateExclusive!),
+            courseSeriesId: participant.seriesId,
+            eventType: event.type,
+          ),
+        );
+      }
+      final startAt = event.startAt;
+      final endAt = event.endAt;
+      if (startAt == null || endAt == null) return null;
       return ScheduleGridItem.fromEvent(
-        EffectiveEvent.allDay(
+        EffectiveEvent.timed(
           id: event.id,
           title: event.title,
-          startDate: DateTime.parse(event.startDate!),
-          endDateExclusive: DateTime.parse(event.endDateExclusive!),
+          startAt: _beijingDateTime(startAt),
+          endAt: _beijingDateTime(endAt),
           courseSeriesId: participant.seriesId,
           eventType: event.type,
         ),
       );
     }
-    final startAt = event.startAt;
-    final endAt = event.endAt;
-    if (startAt == null || endAt == null) return null;
-    return ScheduleGridItem.fromEvent(
-      EffectiveEvent.timed(
-        id: event.id,
-        title: event.title,
-        startAt: _beijingDateTime(startAt),
-        endAt: _beijingDateTime(endAt),
-        courseSeriesId: participant.seriesId,
-        eventType: event.type,
-      ),
+    // PlanBlock: must be nondeleted and owned by this account, and its parent
+    // Task must be nondeleted too (a deleted plan block / task no longer
+    // participates in the week grid's time conflicts).
+    final block = await (database.select(database.planBlocks)..where(
+          (row) =>
+              row.id.equals(participant.id) &
+              row.accountId.equals(accountId) &
+              row.deletedAt.isNull(),
+        ))
+        .getSingleOrNull();
+    if (block == null) return null;
+    final task = await (database.select(database.tasks)..where(
+          (row) =>
+              row.id.equals(block.taskId) &
+              row.accountId.equals(accountId) &
+              row.deletedAt.isNull(),
+        ))
+        .getSingleOrNull();
+    if (task == null) return null;
+    return ScheduleGridItem.fromPlanBlock(
+      PlanBlockItem.fromRow(block),
+      TaskItem.fromRow(task),
     );
   }
 
   Future<bool> showConflictWarning(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
   ) async => await stateForPair(a, b) == ConflictState.conflict;
 
   Future<void> _classifyOccurrence(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
     ConflictState state,
     String? reason,
   ) async {
-    final events = _canonicalEvents(a.eventId, b.eventId);
+    // Canonicalize by `kind:id` so a reverse insertion lands on the same row.
+    final pair = _canonicalParticipants(a, b);
     await database.transaction(() async {
+      // Re-validate both targets inside the same unit of work (TOCTOU-safe):
+      // a participant deleted between build and commit must not be referenced.
+      await _validateOccurrenceTargets(pair.$1, pair.$2);
       final existing =
           await (database.select(database.scheduleRelations)..where(
                 (row) =>
                     row.accountId.equals(accountId) &
-                    row.leftKind.equals('event') &
-                    row.leftId.equals(events.$1) &
-                    row.rightKind.equals('event') &
-                    row.rightId.equals(events.$2),
+                    row.leftKind.equals(pair.$1.kind) &
+                    row.leftId.equals(pair.$1.id) &
+                    row.rightKind.equals(pair.$2.kind) &
+                    row.rightId.equals(pair.$2.id),
               ))
               .getSingleOrNull();
       final relationId = existing?.id ?? _uuid.v4();
@@ -221,10 +335,10 @@ class ConflictService {
         ..where(
           (row) =>
               row.accountId.equals(accountId) &
-              row.leftKind.equals('event') &
-              row.leftId.equals(events.$1) &
-              row.rightKind.equals('event') &
-              row.rightId.equals(events.$2),
+              row.leftKind.equals(pair.$1.kind) &
+              row.leftId.equals(pair.$1.id) &
+              row.rightKind.equals(pair.$2.kind) &
+              row.rightId.equals(pair.$2.id),
         );
       if (state == ConflictState.unclassified) {
         await query.go();
@@ -236,12 +350,22 @@ class ConflictService {
               ScheduleRelationsCompanion.insert(
                 id: relationId,
                 accountId: accountId,
-                leftKind: const Value('event'),
-                leftId: Value(events.$1),
-                leftEventId: Value(events.$1),
-                rightKind: const Value('event'),
-                rightId: Value(events.$2),
-                rightEventId: Value(events.$2),
+                leftKind: Value(pair.$1.kind),
+                leftId: Value(pair.$1.id),
+                leftEventId: Value(
+                  pair.$1.kind == 'event' ? pair.$1.id : null,
+                ),
+                leftPlanBlockId: Value(
+                  pair.$1.kind == 'plan_block' ? pair.$1.id : null,
+                ),
+                rightKind: Value(pair.$2.kind),
+                rightId: Value(pair.$2.id),
+                rightEventId: Value(
+                  pair.$2.kind == 'event' ? pair.$2.id : null,
+                ),
+                rightPlanBlockId: Value(
+                  pair.$2.kind == 'plan_block' ? pair.$2.id : null,
+                ),
                 conflictState: Value(_stateStorage(state)),
                 reason: Value(reason),
                 createdAt: existing?.createdAt ?? timestamp,
@@ -265,8 +389,8 @@ class ConflictService {
   }
 
   Future<void> _classifyCurrentAndFuture(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
     ConflictState state,
     String? reason,
   ) async {
@@ -353,12 +477,16 @@ class ConflictService {
         occurredAt: now(),
       );
 
-  (String, String) _canonicalEvents(String a, String b) =>
-      a.compareTo(b) <= 0 ? (a, b) : (b, a);
+  (ScheduleConflictParticipant, ScheduleConflictParticipant)
+      _canonicalParticipants(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) =>
+          a.canonicalKey.compareTo(b.canonicalKey) <= 0 ? (a, b) : (b, a);
 
-  (EventConflictParticipant, EventConflictParticipant) _canonicalSeries(
-    EventConflictParticipant a,
-    EventConflictParticipant b,
+  (ScheduleConflictParticipant, ScheduleConflictParticipant) _canonicalSeries(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
   ) {
     final aKey = '${a.seriesType}:${a.seriesId}';
     final bKey = '${b.seriesType}:${b.seriesId}';
@@ -407,7 +535,9 @@ class ConflictService {
     'rightKind': row.rightKind,
     'rightId': row.rightId,
     'leftEventId': row.leftEventId,
+    'leftPlanBlockId': row.leftPlanBlockId,
     'rightEventId': row.rightEventId,
+    'rightPlanBlockId': row.rightPlanBlockId,
     'conflictState': row.conflictState,
     'reason': row.reason,
     'createdAt': row.createdAt,

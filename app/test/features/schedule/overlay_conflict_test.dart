@@ -90,16 +90,41 @@ Future<void> _insertEvent(
       ),
     );
 
-EventConflictParticipant participant(
+ScheduleConflictParticipant participant(
   String eventId,
   String seriesId, {
   DateTime? finiteSeriesEnd,
-}) => EventConflictParticipant(
-  eventId: eventId,
+}) => ScheduleConflictParticipant(
+  kind: 'event',
+  id: eventId,
+  title: eventId,
+  occurrenceDate: DateTime(2026, 8, 10),
   seriesType: 'course_series',
   seriesId: seriesId,
-  occurrenceDate: DateTime(2026, 8, 10),
   finiteSeriesEnd: finiteSeriesEnd,
+);
+
+/// An event-mode participant without any series identity (single instance).
+ScheduleConflictParticipant eventParticipant(
+  String eventId, {
+  DateTime? occurrenceDate,
+}) => ScheduleConflictParticipant(
+  kind: 'event',
+  id: eventId,
+  title: eventId,
+  occurrenceDate: occurrenceDate ?? DateTime(2026, 8, 10),
+);
+
+/// A plan-block participant with the given kind (invariant: no fake series).
+ScheduleConflictParticipant planBlockParticipant(
+  String blockId, {
+  String? title,
+  DateTime? occurrenceDate,
+}) => ScheduleConflictParticipant(
+  kind: 'plan_block',
+  id: blockId,
+  title: title ?? blockId,
+  occurrenceDate: occurrenceDate ?? DateTime(2026, 8, 10),
 );
 
 /// A timed [ScheduleGridItem] event for the conflict-projection tests.
@@ -423,10 +448,7 @@ void main() {
       expect(
         service.classifyPair(
           a,
-          EventConflictParticipant(
-            eventId: 'event-b',
-            occurrenceDate: DateTime(2026, 8, 10),
-          ),
+          eventParticipant('event-b'),
           ConflictState.conflict,
           scope: ConflictScope.currentAndFuture,
         ),
@@ -468,7 +490,7 @@ void main() {
               ),
             ],
             onClassify: (left, right, state, {required scope, reason}) async {
-              saved.add('${left.eventId}:${right.eventId}:${state.name}');
+              saved.add('${left.id}:${right.id}:${state.name}');
             },
           ),
         ),
@@ -746,6 +768,333 @@ void main() {
     await (database.delete(database.scheduleRelations)).go();
     expect(await service.stateForPair(a, b), ConflictState.conflict);
     expect(await database.select(database.scheduleRelations).get(), isEmpty);
+  });
+
+  group('unified event and plan block relation persistence', () {
+    Future<void> insertPlanBlock(
+      AppDatabase database, {
+      required String id,
+      String? taskId,
+      String status = 'accepted',
+      int? deletedAt,
+    }) async {
+      final tid = taskId ?? 'task-$id';
+      await database.into(database.tasks).insert(
+        TasksCompanion.insert(
+          id: tid,
+          accountId: 'a',
+          title: '任务 $tid',
+          state: 'active',
+          importance: 'normal',
+          tagsJson: '[]',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+      await database.into(database.planBlocks).insert(
+        PlanBlocksCompanion.insert(
+          id: id,
+          accountId: 'a',
+          taskId: tid,
+          title: Value('块 $id'),
+          startAt: DateTime(2026, 8, 10, 9, 30).millisecondsSinceEpoch,
+          endAt: DateTime(2026, 8, 10, 11, 0).millisecondsSinceEpoch,
+          status: status,
+          reviewedAt: Value(status == 'skipped' || status == 'cancelled' ? 1 : null),
+          deletedAt: Value(deletedAt),
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+    }
+
+    test('event/event occurrence writes a single canonical row (both states)',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(database: database, accountId: 'a');
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+
+      await service.classifyPair(a, b, ConflictState.conflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final row = (await database.select(database.scheduleRelations).get()).single;
+      expect(row.leftKind, 'event');
+      expect(row.rightKind, 'event');
+      expect(row.leftId, 'event-a');
+      expect(row.rightId, 'event-b');
+      expect(row.leftEventId, 'event-a');
+      expect(row.rightEventId, 'event-b');
+      expect(row.leftPlanBlockId, isNull);
+      expect(row.rightPlanBlockId, isNull);
+      expect(row.conflictState, 'conflict');
+      expect(await service.stateForPair(a, b), ConflictState.conflict);
+
+      await service.classifyPair(a, b, ConflictState.nonConflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      expect(await service.stateForPair(a, b), ConflictState.nonConflict);
+
+      // Reverse insertion canonicalizes → still one row, same canonical shape.
+      await service.classifyPair(b, a, ConflictState.conflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final canonical =
+          (await database.select(database.scheduleRelations).get()).single;
+      expect(canonical.leftId, 'event-a');
+      expect(canonical.rightId, 'event-b');
+    });
+
+    test('event/plan_block occurrence writes a mixed canonical row', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      final service = ConflictService(database: database, accountId: 'a');
+      final event = participant('event-a', 'series-a');
+      final block = planBlockParticipant('pb-1');
+
+      await service.classifyPair(event, block, ConflictState.conflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final row = (await database.select(database.scheduleRelations).get()).single;
+      expect(row.leftKind, 'event');
+      expect(row.leftId, 'event-a');
+      expect(row.rightKind, 'plan_block');
+      expect(row.rightId, 'pb-1');
+      expect(row.leftEventId, 'event-a');
+      expect(row.leftPlanBlockId, isNull);
+      expect(row.rightEventId, isNull);
+      expect(row.rightPlanBlockId, 'pb-1');
+      expect(row.conflictState, 'conflict');
+
+      await service.classifyPair(event, block, ConflictState.nonConflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      expect(
+        (await database.select(database.scheduleRelations).get()).single
+            .conflictState,
+        'no_conflict',
+      );
+
+      // Reverse insertion lands on the same canonical row.
+      await service.classifyPair(block, event, ConflictState.conflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final canonical =
+          (await database.select(database.scheduleRelations).get()).single;
+      expect(canonical.leftId, 'event-a');
+      expect(canonical.rightId, 'pb-1');
+    });
+
+    test('plan_block/plan_block occurrence writes a single canonical row',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      await insertPlanBlock(database, id: 'pb-2', taskId: 'task-x');
+      final service = ConflictService(database: database, accountId: 'a');
+      final a = planBlockParticipant('pb-1');
+      final b = planBlockParticipant('pb-2');
+
+      await service.classifyPair(a, b, ConflictState.conflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final row = (await database.select(database.scheduleRelations).get()).single;
+      expect(row.leftKind, 'plan_block');
+      expect(row.rightKind, 'plan_block');
+      expect(row.leftId, 'pb-1');
+      expect(row.rightId, 'pb-2');
+      expect(row.leftPlanBlockId, 'pb-1');
+      expect(row.rightPlanBlockId, 'pb-2');
+      expect(row.leftEventId, isNull);
+      expect(row.rightEventId, isNull);
+
+      // Reverse → one row.
+      await service.classifyPair(b, a, ConflictState.nonConflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(1),
+      );
+      final canonical =
+          (await database.select(database.scheduleRelations).get()).single;
+      expect(canonical.leftId, 'pb-1');
+      expect(canonical.rightId, 'pb-2');
+      expect(canonical.conflictState, 'no_conflict');
+    });
+
+    test('classification is isolated by account', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.localAccounts).insert(
+        LocalAccountsCompanion.insert(
+          id: 'other',
+          maskedHint: 'PB****0000',
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
+      final serviceA = ConflictService(database: database, accountId: 'a');
+      // event-b already seeded (account a).
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+      await serviceA.classifyPair(a, b, ConflictState.conflict);
+
+      // Same pair under a different account is unresolved.
+      final serviceOther = ConflictService(database: database, accountId: 'other');
+      expect(
+        await serviceOther.stateForPair(a, b),
+        ConflictState.unclassified,
+      );
+    });
+
+    test('missing plan block target is rejected and writes nothing', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(database: database, accountId: 'a');
+      final event = participant('event-a', 'series-a');
+      // pb-missing has no row at all (no task, no plan block).
+      final missing = planBlockParticipant('pb-missing');
+      await expectLater(
+        service.classifyPair(event, missing, ConflictState.conflict),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        isEmpty,
+      );
+      expect(
+        await service.stateForPair(event, missing),
+        ConflictState.unclassified,
+      );
+    });
+
+    test('deleted plan block no longer participates and writes nothing',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-deleted', deletedAt: 5);
+      final service = ConflictService(database: database, accountId: 'a');
+      final event = participant('event-a', 'series-a');
+      final deleted = planBlockParticipant('pb-deleted');
+      await expectLater(
+        service.classifyPair(event, deleted, ConflictState.conflict),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        isEmpty,
+      );
+      expect(
+        await service.stateForPair(event, deleted),
+        ConflictState.unclassified,
+      );
+    });
+
+    test('current-and-future is rejected when either side is a plan block',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      final service = ConflictService(database: database, accountId: 'a');
+      final event = participant('event-a', 'series-a');
+      final block = planBlockParticipant('pb-1');
+
+      // plan_block on the left.
+      await expectLater(
+        () => service.classifyPair(
+          block,
+          event,
+          ConflictState.conflict,
+          scope: ConflictScope.currentAndFuture,
+        ),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      // plan_block on the right.
+      await expectLater(
+        () => service.classifyPair(
+          event,
+          block,
+          ConflictState.conflict,
+          scope: ConflictScope.currentAndFuture,
+        ),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      // plan_block/plan_block.
+      await insertPlanBlock(database, id: 'pb-2', taskId: 'task-z');
+      await expectLater(
+        () => service.classifyPair(
+          block,
+          planBlockParticipant('pb-2'),
+          ConflictState.conflict,
+          scope: ConflictScope.currentAndFuture,
+        ),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      // Nothing written for any of the rejected attempts.
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        isEmpty,
+      );
+      expect(
+        await database.select(database.scheduleRelationRules).get(),
+        isEmpty,
+      );
+    });
+
+    test('undo snapshot captures both plan block and event FK columns',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      final undo = UndoService(database: database, accountId: 'a');
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        undoRecorder: undo,
+      );
+      final event = participant('event-a', 'series-a');
+      final block = planBlockParticipant('pb-1');
+      await service.classifyPair(event, block, ConflictState.conflict);
+      await undo.undo();
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        isEmpty,
+      );
+    });
+
+    test('distinct kinds never collapse: event/plan_block vs event/event differ',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await insertPlanBlock(database, id: 'pb-1');
+      final service = ConflictService(database: database, accountId: 'a');
+      final ev = participant('event-a', 'series-a');
+      final ev2 = participant('event-b', 'series-b');
+      final block = planBlockParticipant('pb-1');
+      // event-a/event-b
+      await service.classifyPair(ev, ev2, ConflictState.conflict);
+      // event-a/pb-1 (different canonical key because kinds differ)
+      await service.classifyPair(ev, block, ConflictState.nonConflict);
+      expect(
+        await database.select(database.scheduleRelations).get(),
+        hasLength(2),
+      );
+    });
   });
 
   test('derived display projection never inserts schedule relation rows',
@@ -1060,14 +1409,8 @@ void main() {
         accountId: 'a',
         now: () => 1,
       ).classifyPair(
-        EventConflictParticipant(
-          eventId: 'cur',
-          occurrenceDate: DateTime(2026, 8, 10),
-        ),
-        EventConflictParticipant(
-          eventId: 'hist',
-          occurrenceDate: DateTime(2026, 6, 1),
-        ),
+        eventParticipant('cur'),
+        eventParticipant('hist', occurrenceDate: DateTime(2026, 6, 1)),
         ConflictState.conflict,
       );
       final repo = EffectiveEventRepository(database, accountId: 'a');

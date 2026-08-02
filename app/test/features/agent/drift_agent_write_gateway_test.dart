@@ -189,6 +189,68 @@ void main() {
     expect(relation.conflictState, 'no_conflict');
   });
 
+  test('createConflictRelation canonicalizes reverse insertions to one row',
+      () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '课程A',
+      startAt: DateTime(2026, 8, 1, 9),
+      endAt: DateTime(2026, 8, 1, 10),
+    ));
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-2',
+      title: '课程B',
+      startAt: DateTime(2026, 8, 1, 9),
+      endAt: DateTime(2026, 8, 1, 10),
+    ));
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: 'ev-1',
+      rightKind: 'event',
+      rightId: 'ev-2',
+      conflictState: 'conflict',
+    );
+    // Reverse insertion must land on the same canonical row.
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: 'ev-2',
+      rightKind: 'event',
+      rightId: 'ev-1',
+      conflictState: 'no_conflict',
+    );
+    final rows = await db.select(db.scheduleRelations).get();
+    expect(rows, hasLength(1));
+    final row = rows.single;
+    expect(row.leftId, 'ev-1');
+    expect(row.rightId, 'ev-2');
+    expect(row.conflictState, 'no_conflict');
+    expect(row.leftEventId, 'ev-1');
+    expect(row.rightEventId, 'ev-2');
+    expect(row.leftPlanBlockId, isNull);
+    expect(row.rightPlanBlockId, isNull);
+  });
+
+  test('createConflictRelation writes plan_block with plan block FK columns',
+      () async {
+    // FK enforcement is off in this fixture, so targets need not exist.
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: 'ev-1',
+      rightKind: 'plan_block',
+      rightId: 'pb-1',
+      conflictState: 'conflict',
+    );
+    final row = await db.select(db.scheduleRelations).getSingle();
+    expect(row.leftKind, 'event');
+    expect(row.leftId, 'ev-1');
+    expect(row.rightKind, 'plan_block');
+    expect(row.rightId, 'pb-1');
+    expect(row.leftEventId, 'ev-1');
+    expect(row.leftPlanBlockId, isNull);
+    expect(row.rightEventId, isNull);
+    expect(row.rightPlanBlockId, 'pb-1');
+  });
+
   test('setReminder writes reminder rows via override service', () async {
     await gateway.createEvent(PersonalEvent.timed(
       id: 'ev-1',

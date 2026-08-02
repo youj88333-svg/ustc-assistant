@@ -181,15 +181,18 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     required String conflictState,
     String? reason,
   }) async {
+    // Canonicalize by `kind:id` so a reverse insertion lands on the same row.
+    final (lKind, lId, rKind, rId) =
+        _canonicalRelationPair(leftKind, leftId, rightKind, rightId);
     final timestamp = now();
     final existing = await (database.select(database.scheduleRelations)
           ..where(
             (row) =>
                 row.accountId.equals(accountId) &
-                row.leftKind.equals(leftKind) &
-                row.leftId.equals(leftId) &
-                row.rightKind.equals(rightKind) &
-                row.rightId.equals(rightId),
+                row.leftKind.equals(lKind) &
+                row.leftId.equals(lId) &
+                row.rightKind.equals(rKind) &
+                row.rightId.equals(rId),
           ))
         .getSingleOrNull();
     final id = existing?.id ?? _uuid.v4();
@@ -198,14 +201,14 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
         id: id,
         accountId: accountId,
         relationType: const Value('conflict'),
-        leftKind: Value(leftKind),
-        leftId: Value(leftId),
-        rightKind: Value(rightKind),
-        rightId: Value(rightId),
-        leftEventId: Value(leftKind == 'event' ? leftId : null),
-        leftPlanBlockId: Value(leftKind == 'plan_block' ? leftId : null),
-        rightEventId: Value(rightKind == 'event' ? rightId : null),
-        rightPlanBlockId: Value(rightKind == 'plan_block' ? rightId : null),
+        leftKind: Value(lKind),
+        leftId: Value(lId),
+        rightKind: Value(rKind),
+        rightId: Value(rId),
+        leftEventId: Value(lKind == 'event' ? lId : null),
+        leftPlanBlockId: Value(lKind == 'plan_block' ? lId : null),
+        rightEventId: Value(rKind == 'event' ? rId : null),
+        rightPlanBlockId: Value(rKind == 'plan_block' ? rId : null),
         conflictState: Value(conflictState),
         reason: Value(reason),
         createdAt: existing?.createdAt ?? timestamp,
@@ -214,6 +217,19 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     );
     // 不在此写 ActionLog：`AgentWriteTool` 基类在写成功后统一写
     // source='agent' 的日志（见类注释），这里不再重复。
+  }
+
+  (String, String, String, String) _canonicalRelationPair(
+    String leftKind,
+    String leftId,
+    String rightKind,
+    String rightId,
+  ) {
+    final leftKey = '$leftKind:$leftId';
+    final rightKey = '$rightKind:$rightId';
+    return leftKey.compareTo(rightKey) <= 0
+        ? (leftKind, leftId, rightKind, rightId)
+        : (rightKind, rightId, leftKind, leftId);
   }
 
   @override

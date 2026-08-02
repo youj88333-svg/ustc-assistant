@@ -226,12 +226,16 @@ void main() {
         accountId: 'account',
         now: () => 300,
       ).classifyPair(
-        EventConflictParticipant(
-          eventId: 'source-event',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'source-event',
+          title: 'source-event',
           occurrenceDate: DateTime(2026, 7, 27),
         ),
-        EventConflictParticipant(
-          eventId: 'personal-event',
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'personal-event',
+          title: 'personal-event',
           occurrenceDate: DateTime(2026, 7, 27),
         ),
         ConflictState.conflict,

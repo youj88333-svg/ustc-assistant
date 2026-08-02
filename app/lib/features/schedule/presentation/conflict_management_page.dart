@@ -200,7 +200,7 @@ class _ConflictManagementPageState extends State<ConflictManagementPage> {
     }
   }
 
-  EventConflictParticipant _participant(EffectiveEventRecord record) {
+  ScheduleConflictParticipant _participant(EffectiveEventRecord record) {
     final event = record.source;
     final occurrence = event.allDay
         ? DateTime.parse(event.startDate!)
@@ -208,8 +208,10 @@ class _ConflictManagementPageState extends State<ConflictManagementPage> {
             event.startAt!,
             isUtc: true,
           ).add(const Duration(hours: 8));
-    return EventConflictParticipant(
-      eventId: event.id,
+    return ScheduleConflictParticipant(
+      kind: 'event',
+      id: event.id,
+      title: record.displayTitle,
       occurrenceDate: DateTime(
         occurrence.year,
         occurrence.month,
