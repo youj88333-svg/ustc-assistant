@@ -2695,6 +2695,136 @@ END
         expect(states.last.errorCode, 'grounding_failed');
       },
     );
+
+    test(
+      'event-event relation is grounded by get_schedule alone, never forced get_plan_blocks',
+      () async {
+        // A create_schedule_relation write that only needs schedule refs. The
+        // EITHER/OR lookup requirement must be satisfied by get_schedule alone;
+        // the run must NOT be re-corrected to demand get_plan_blocks.
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final relation = _CountingSuccessTool(name: 'create_schedule_relation');
+        final provider = _ScriptedProvider([
+          // Call 1: get_schedule, then terminal create_schedule_relation.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-s',
+              name: 'get_schedule',
+              input: {'date': '2026-08-03'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-r',
+              name: 'create_schedule_relation',
+              input: {'kind': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call 2: final completion prose.
+          [const TextDeltaEvent('已记录为冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12, 0, 0)),
+          tools: [schedule, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '把2026年3月的那两节计算机网络课记录为冲突',
+            )
+            .toList();
+
+        // No correction was issued: get_schedule satisfied the lookup group.
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.completed);
+        // get_plan_blocks was never demanded and never called.
+        expect(blocks.executeCount, 0);
+        expect(relation.executeCount, 1);
+      },
+    );
+
+    test(
+      'PlanBlock-PlanBlock relation is grounded by get_plan_blocks alone',
+      () async {
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final relation = _CountingSuccessTool(name: 'create_schedule_relation');
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-b',
+              name: 'get_plan_blocks',
+              input: {'task': '复习'},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-r',
+              name: 'create_schedule_relation',
+              input: {'kind': 'conflict'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已记录为冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12, 0, 0)),
+          tools: [schedule, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '记录这两个执行块互相冲突',
+            )
+            .toList();
+
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.completed);
+        expect(schedule.executeCount, 0);
+        expect(relation.executeCount, 1);
+      },
+    );
+
+    test(
+      'relation with no ref at all is grounding_failed, no fake success',
+      () async {
+        // The model claims success with NO lookup and NO terminal write call.
+        // The EITHER/OR groups must not be considered satisfied by nothing.
+        final schedule = _CountingSuccessTool(name: 'get_schedule');
+        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+        final relation = _CountingSuccessTool(name: 'create_schedule_relation');
+        final provider = _ScriptedProvider([
+          // Call 1: success prose without any relation/lookup tool.
+          [const TextDeltaEvent('已记录两节课的冲突。'), const CompletedEvent()],
+          // Call 2 (forced any): still no legal tool.
+          [const TextDeltaEvent('已记录为冲突。'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 8, 1, 12, 0, 0)),
+          tools: [schedule, blocks, relation],
+        );
+
+        final states = await service
+            .send(
+              accountId: account,
+              userText: '记录这两节课的冲突',
+            )
+            .toList();
+
+        expect(provider.streamCallCount, 2);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'grounding_failed');
+        expect(relation.executeCount, 0);
+        expect(schedule.executeCount, 0);
+        expect(blocks.executeCount, 0);
+      },
+    );
   });
 
   group('privacy and key handling', () {

@@ -10,17 +10,44 @@
 class AgentGroundingRequirement {
   const AgentGroundingRequirement({
     this.lookupTools = const {},
+    this.anyOfLookupToolGroups = const [],
     this.terminalTools = const {},
     this.mutationIntent = false,
   });
 
+  /// Read-only tools the model must call to obtain concrete evidence or a
+  /// `ref_*` target for a follow-on operation. When [anyOfLookupToolGroups] is
+  /// empty, this is read as an ALL-OF requirement (every listed lookup must
+  /// succeed).
   final Set<String> lookupTools;
+
+  /// Alternative lookup groups. When non-empty, only ONE group's tools need to
+  /// succeed to satisfy the lookup requirement (EITHER/OR over groups). Used
+  /// for create_schedule_relation, where event-event relations only need
+  /// schedule refs and PlanBlock-PlanBlock relations only need plan-block
+  /// refs — never an unconditional success of BOTH query tools.
+  final List<Set<String>> anyOfLookupToolGroups;
+
   final Set<String> terminalTools;
   final bool mutationIntent;
 
   /// The union of every tool this request ultimately requires (lookups that
-  /// must provide evidence/refs plus the terminal write).
+  /// must provide evidence/refs plus the terminal write). For corrective-stage
+  /// tool narrowing this keeps all candidate lookup tools allowed.
   Set<String> get requiredTools => {...lookupTools, ...terminalTools};
+
+  /// Whether the given set of succeeded lookup tools satisfies the lookup
+  /// requirement. With [anyOfLookupToolGroups] a single complete group is
+  /// enough; otherwise all [lookupTools] must have succeeded. An empty lookup
+  /// requirement is trivially satisfied.
+  bool isLookupsSatisfied(Set<String> succeededTools) {
+    if (anyOfLookupToolGroups.isNotEmpty) {
+      return anyOfLookupToolGroups.any(
+        (group) => group.every(succeededTools.contains),
+      );
+    }
+    return lookupTools.every(succeededTools.contains);
+  }
 }
 
 /// A conservative, deterministic classifier for explicit operational requests.
@@ -42,26 +69,32 @@ class AgentGroundingPolicy {
     final text = userText.trim().toLowerCase();
     if (text.isEmpty) return null;
 
-    // Advisory / capability / hypothetical / explicit-discussion wording can
-    // never be an operation. Checked before any intent so shared verbs do not
-    // cause a false positive ("为什么课程冲突" must not become a conflict
-    // query; "你能不能修改日程" must not become a schedule edit).
-    if (_matchesAny(text, _forceFreeChatPatterns)) return null;
+    // 1. Explicit no-tool instructions: "不要查询", "只讨论", "只想" etc. are a
+    //    hard override — never an operation, no matter what else is said.
+    if (_matchesAny(text, _hardFreeChatPatterns)) return null;
 
-    // Write intents first: an explicit operation outranks a generic read that
-    // shares its wording (e.g. "给...安排...作业" is plan_task, not a read of
-    // tasks).
+    // 2. Structurally-clear pure capability / advice questions. These are
+    //    decided by full-sentence structure ("你能不能修改日程？",
+    //    "为什么课程会发生冲突？") or has-capability framing, NOT by a single
+    //    politeness word (能不能 / 帮我看看 / 解释 may all appear inside a normal
+    //    operation request).
+    if (_matchesAny(text, _capabilityAdvicePatterns)) return null;
+
+    // 3. Write intents: an explicit operation outranks a generic read that
+    //    shares its wording (e.g. "给...作业安排..." is plan_task, not a read
+    //    of tasks).
     for (final def in _writeIntents) {
       if (_matchesAny(text, def.patterns)) {
         return AgentGroundingRequirement(
           lookupTools: def.lookupTools,
+          anyOfLookupToolGroups: def.anyOfLookupToolGroups,
           terminalTools: def.terminalTools,
           mutationIntent: true,
         );
       }
     }
 
-    // Read intents: explicit factual queries.
+    // 4. Read intents: explicit factual queries.
     for (final def in _readIntents) {
       if (_matchesAny(text, def.patterns)) {
         return AgentGroundingRequirement(
@@ -70,6 +103,7 @@ class AgentGroundingPolicy {
       }
     }
 
+    // 5. Otherwise free chat / ambiguous — let the model answer or clarify.
     return null;
   }
 
@@ -85,45 +119,71 @@ class _IntentDef {
   const _IntentDef({
     required this.patterns,
     this.lookupTools = const {},
+    this.anyOfLookupToolGroups = const [],
     this.terminalTools = const {},
   });
 
   final List<RegExp> patterns;
   final Set<String> lookupTools;
+  final List<Set<String>> anyOfLookupToolGroups;
   final Set<String> terminalTools;
 }
 
-/// Wording that must never be treated as an operation: capability questions,
-/// hypotheticals, why/advice, and explicit "don't query / just discuss"
-/// instructions.
-final List<RegExp> _forceFreeChatPatterns = [
-  RegExp(r'能不能'),
-  RegExp(r'你能(做什么|做哪些|provide)?') ,
-  RegExp(r'为什么'),
-  RegExp(r'假设'),
-  RegExp(r'解释'),
+/// ORDERED, NARROW free-chat guards, evaluated before any operation intent.
+///
+/// Deliberately NOT a broad word blacklist: a single politeness/advice word
+/// (能不能 / 帮我看看 / 解释 / 为什么) may all appear inside a genuine operation
+/// request, so they must not veto one. Only wording that is structurally a
+/// pure capability / advice / assumption question, or an explicit no-tool
+/// instruction, is free chat.
+
+/// Hard overrides: the user explicitly says not to use tools / just discuss.
+final List<RegExp> _hardFreeChatPatterns = [
+  RegExp(r'不要查询'),
+  RegExp(r'只讨论'),
+  RegExp(r'只是想'),
+  RegExp(r'不要用工具'),
+  RegExp(r'别查'),
+];
+
+/// Structurally-clear capability / advice / hypothetical / why questions.
+///
+/// These match only when the whole sentence is a capability question or the
+/// interrogative has a why/advice shape — never inside an operational request.
+final List<RegExp> _capabilityAdvicePatterns = [
+  // Has-capability framing at the START of the sentence: "你能不能修改日程？"
+  // "你能安排日程吗？", "你能否...". The 能...? must be a full standalone
+  // question, not embedded mid-sentence in an operation.
+  RegExp(r'^(能不能|你能|你能否|可不可以|你[是]?否可以).{0,12}(修改|改|安排|调整|删除|创建|新建|处理|帮忙|帮我).{0,4}(日程|事件|任务|作业|课|课表|安排|计划)'),
+  RegExp(r'^(你能|能不能|你能否).{0,10}(做什么|做哪些|provide|提供给).*'),
+  RegExp(r'^(你能|能不能|你能否)(调整|修改|安排|管理|删除|创建|添加)'),
+  // Why/advice questions (not conflict-data queries, which are reads). A
+  // sentence with an explicit data-query verb (查一下/查询/查查/看看/列出)
+  // is an EXPLICIT factual query, not a bare why/advice question — "查一下并
+  // 解释我这周为什么有冲突" is a get_conflicts read, so the why-guard must not
+  // swallow it. Only a pure why-interrogative with no query verb is advice.
+  RegExp(r'^(?!.*(查一下|查询|查查|看看|列出|查)).*为什么.{0,8}(冲突|发生冲突|会冲突).*$'),
+  RegExp(r'^(?!.*(查一下|查询|查查|看看|列出|查)).*为什么.{0,10}(这么安排|这样安排|这么计划|这样计划).*$'),
   RegExp(r'怎么(安排|规划|复习|做|才能)'),
   RegExp(r'如何(安排|规划|复习|做)'),
   RegExp(r'推荐'),
   RegExp(r'介绍一下'),
-  RegExp(r'介绍一下自己'),
-  RegExp(r'不要查询'),
-  RegExp(r'只讨论'),
-  RegExp(r'只是想'),
-  RegExp(r'帮我看看'),
+  RegExp(r'假设'),
   RegExp(r'是怎么(工作|运作|实现)'),
   RegExp(r'工作原理'),
+  RegExp(r'解释一下.{0,6}(plan ?block|任务|概念|机制)'),
 ];
 
 /// Write (mutation) intents, checked in order before read intents.
 final List<_IntentDef> _writeIntents = [
   // plan_task: needs a task ref from get_tasks, then plans an execution window.
+  // REQUIRES a task/作业/复习 entity — a bare "安排" with no task object is a
+  // generic event (create_event) or ambiguous (null), never plan_task.
   _IntentDef(
     patterns: [
       RegExp(r'(任务|作业|复习|project|assignment).{0,20}(安排|规划)'),
       RegExp(r'(安排|规划).{0,20}(任务|作业|复习)'),
       RegExp(r'安排.*(时间段|时段)'),
-      RegExp(r'给.*安排'),
     ],
     lookupTools: {'get_tasks'},
     terminalTools: {'plan_task'},
@@ -136,26 +196,36 @@ final List<_IntentDef> _writeIntents = [
     ],
     terminalTools: {'create_task'},
   ),
-  // create_event
+  // create_event: creating a schedule/event/arrangement, including a generic
+  // "安排一个日程" / "晚上打游戏" that has NO task entity (so NOT plan_task).
   _IntentDef(
     patterns: [
       RegExp(r'(新建|创建|添加|加一个).{0,12}(日程|事件|安排)'),
       RegExp(r'(日程|事件).{0,12}(新建|创建|添加)'),
+      RegExp(r'(安排|添加|创建).{0,8}(一个|个|这次|那天|本周|周五)?\s*(日程|事件|时间|时段|一块|游戏|活动|聚会|吃饭|约会|健身|学习)'),
+      RegExp(r'(给|为|帮我).{0,6}(安排|添加|创建|预约).{0,6}(日程|事件|时段|游戏|活动|聚会|吃饭|约会)'),
     ],
     terminalTools: {'create_event'},
   ),
   // move_jw_course_day: whole-day JW course moves and their clear (restore).
   // Checked BEFORE update_event — both share "把…移到" wording, but a course
-  // (教务课程/调休) day move must route to move_jw_course_day, not update_event.
-  // Terminal move_jw_course_day; the model looks up the target week with
-  // get_schedule before proposing the move (conflict warnings).
+  // day move must route here. It requires BOTH a date/some-day context AND
+  // collection semantics ("当天"/"整日"/"全部"/"所有"/"调休"). A bare `课`
+  // ("把数据结构课程移到周五下午", "把周五课程移到周一") is a single-course
+  // edit (update_event) or ambiguous — never a whole-day JW course move.
   _IntentDef(
     patterns: [
-      // Whole-day markers ONLY: a bare `课` ("把周五的英语课移到下午") is a
-      // single-course edit (update_event), not a whole-day JW course day move.
-      RegExp(r'(把|将).{0,16}(教务|课程|整日|调休).{0,12}(移到|移至|挪到|调至|调整到)'),
-      RegExp(r'(移到|移至|挪到|调至|调整到).{0,12}(教务课程|课程)'),
-      RegExp(r'(教务|课程).{0,8}(整日|整周|全部).{0,4}(移动|调课|调休)'),
+      // [把/将] ... <date> ... day/collection marker ... move verb.
+      RegExp(r'(把|将).{0,20}(这天|当天|那(一)?天|8 ?月 ?[0-9]+日|周[一二三四五六日天]|礼拜[一二三四五六日天]|今天|明天|后天).{0,12}(全部|所有|整日|整整一?天|当天|这个|这些).{0,8}(教务课程|课程|课|教务).{0,12}(移到|移至|挪到|调至|调整到)'),
+      RegExp(r'(把|将).{0,12}(教务|课程).{0,8}(整日|整周|全部|所有|当天).{0,6}(移动|调课|调休|挪到|移到)'),
+      // Day-move with explicit whole-day/course-collection framing even without
+      // a literal date word: "当天所有教务课程", "那天的全部课程".
+      RegExp(r'(当天|整日|那天那|所有|全部).{0,4}(教务课程|课程).{0,12}(移到|移至|挪到|调至|调整到)'),
+      RegExp(r'(教务|课程).{0,8}(整日|整周|全部|所有|当天).{0,4}(移动|调课|调休)'),
+      // "教务课程" names the JW-course set; with a concrete date it is a
+      // whole-day collection move even without a literal 当天/全部 marker.
+      // ("把 8 月 3 日的教务课程移到 8 月 9 日").
+      RegExp(r'(把|将).{0,20}[0-9]+ ?月 ?[0-9]+ ?日.{0,4}的?教务课程.{0,6}(移到|移至|挪到|调至|调整到)'),
       RegExp(r'(恢复|撤销|取消).{0,8}(整日移动|调课|调休|课程移动)'),
     ],
     lookupTools: {'get_schedule'},
@@ -217,7 +287,15 @@ final List<_IntentDef> _writeIntents = [
       RegExp(r'(冲突|二选一|撞课|相撞|重了).{0,6}(决策|就这么定)'),
       RegExp(r'记录.{0,6}(关系|选择)'),
     ],
+    // A relation needs "two valid refs" — EITHER from schedule (event-event or
+    // mixed) OR from plan blocks (PlanBlock-PlanBlock or mixed), never an
+    // unconditional success of BOTH query tools. The single-group lookup set is
+    // kept as the broad corrective-stage allowed set.
     lookupTools: {'get_schedule', 'get_plan_blocks'},
+    anyOfLookupToolGroups: [
+      {'get_schedule'},
+      {'get_plan_blocks'},
+    ],
     terminalTools: {'create_schedule_relation'},
   ),
   // update_permission_policy

@@ -1473,11 +1473,16 @@ class AgentSessionService {
     final req = requirement;
     if (req == null) return _GroundedSettlement.accept;
 
-    // Case 2: every required tool already succeeded this run — accept.
-    // (read: lookup success; mutation: terminal write success after
-    // confirmation.)
-    final required = req.requiredTools;
-    if (required.isNotEmpty && required.every(succeededTools.contains)) {
+    // Case 2: every required terminal tool succeeded AND the lookup requirement
+    // is satisfied — accept. (read: no terminal -> lookup success suffices;
+    // mutation: terminal write success after confirmation.) The lookup
+    // requirement may be an EITHER/OR over groups (e.g. create_schedule_relation:
+    // schedule refs OR plan-block refs), so it is checked via
+    // [isLookupsSatisfied], not a flat every(). An empty terminalTool set is
+    // trivially satisfied (pure read).
+    final terminalSucceeded =
+        req.terminalTools.every(succeededTools.contains);
+    if (terminalSucceeded && req.isLookupsSatisfied(succeededTools)) {
       return _GroundedSettlement.accept;
     }
 
