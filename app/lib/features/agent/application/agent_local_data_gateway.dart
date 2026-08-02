@@ -77,11 +77,16 @@ abstract interface class AgentLocalDataGateway {
   /// restricted to the inclusive-exclusive display range. Returns the keyed
   /// result so callers can stamp events and plan blocks with the same conflict
   /// id set without a second, duplicate projection over all history.
+  ///
+  /// [includeExplicitOutOfWindow] defaults to false (week-grid scope); pass
+  /// true for conflict reporting so an explicit relation to an out-of-window
+  /// partner is still surfaced.
   Future<ConflictProjectionResult> conflictsForItems(
     String accountId,
     List<EffectiveEvent> events, {
     required DateTime from,
     required DateTime throughExclusive,
+    bool includeExplicitOutOfWindow = false,
   });
 
   /// Whether the single event [eventId] conflicts with any overlapping
@@ -210,11 +215,13 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
     List<EffectiveEvent> events, {
     required DateTime from,
     required DateTime throughExclusive,
+    bool includeExplicitOutOfWindow = false,
   }) =>
       EffectiveEventRepository(_database, accountId: accountId).conflictsForItems(
         events,
         from: from,
         throughExclusive: throughExclusive,
+        includeExplicitOutOfWindow: includeExplicitOutOfWindow,
       );
 
   @override

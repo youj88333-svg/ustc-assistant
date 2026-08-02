@@ -878,4 +878,217 @@ void main() {
       expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
     });
   });
+
+  group('explicit cross-window reporting', () {
+    // A get_conflicts-style projection: item A lies inside the window, item B
+    // lies outside, and an explicit occurrence `conflict` relation links them.
+    // The reporting flag must keep this pair materialized (not silently
+    // dropped), because get_conflicts would otherwise under-report.
+    test('explicit conflict between in-window and out-of-window items is reported',
+        () {
+      final a = eventItem(
+        'a',
+        DateTime(2026, 8, 10, 9, 0),
+        DateTime(2026, 8, 10, 10, 30),
+      );
+      final b = eventItem(
+        'b',
+        DateTime(2026, 6, 1, 9, 0),
+        DateTime(2026, 6, 1, 10, 0),
+      );
+      final snapshot = ScheduleConflictRelationSnapshot(
+        occurrenceByPair: {
+          ScheduleConflictProjection.occurrenceKey(
+            'event',
+            'a',
+            'event',
+            'b',
+          ): ConflictPairState.conflict,
+        },
+      );
+      final window = ScheduleConflictProjection.resolveCandidates(
+        [a, b],
+        snapshot,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+        includeExplicitOutOfWindow: true,
+      );
+      expect(window.pairs, hasLength(1));
+      final pair = window.pairs.single;
+      expect(pair.state, ConflictPairState.conflict);
+      expect(pair.origin, ConflictPairOrigin.explicitOccurrence);
+    });
+
+    // An explicit `no_conflict` between an in-window and an out-of-window item
+    // must also be honored when reporting (and resolve to no_conflict, so it
+    // must NOT appear in the conflictKeys).
+    test('explicit no_conflict across the window is honored (not dropped)', () {
+      final a = eventItem(
+        'a',
+        DateTime(2026, 8, 10, 9, 0),
+        DateTime(2026, 8, 10, 10, 30),
+      );
+      final b = eventItem(
+        'b',
+        DateTime(2026, 6, 1, 9, 0),
+        DateTime(2026, 6, 1, 10, 0),
+      );
+      final snapshot = ScheduleConflictRelationSnapshot(
+        occurrenceByPair: {
+          ScheduleConflictProjection.occurrenceKey(
+            'event',
+            'a',
+            'event',
+            'b',
+          ): ConflictPairState.noConflict,
+        },
+      );
+      final window = ScheduleConflictProjection.resolveCandidates(
+        [a, b],
+        snapshot,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+        includeExplicitOutOfWindow: true,
+      );
+      expect(window.pairs, hasLength(1));
+      final pair = window.pairs.single;
+      expect(pair.state, ConflictPairState.noConflict);
+      expect(pair.origin, ConflictPairOrigin.explicitOccurrence);
+      // The no_conflict pair contributes no conflict keys.
+      expect(window.conflictKeys, isEmpty);
+    });
+
+    // The week-grid (default, includeExplicitOutOfWindow=false) stays
+    // "selected-week only": an out-of-window partner is dropped because the
+    // item isn't rendered, so it must not contribute a candidate.
+    test('week grid keeps selected-week-only scope (out-of-window dropped)', () {
+      final a = eventItem(
+        'a',
+        DateTime(2026, 8, 10, 9, 0),
+        DateTime(2026, 8, 10, 10, 30),
+      );
+      final b = eventItem(
+        'b',
+        DateTime(2026, 6, 1, 9, 0),
+        DateTime(2026, 6, 1, 10, 0),
+      );
+      final snapshot = ScheduleConflictRelationSnapshot(
+        occurrenceByPair: {
+          ScheduleConflictProjection.occurrenceKey(
+            'event',
+            'a',
+            'event',
+            'b',
+          ): ConflictPairState.conflict,
+        },
+      );
+      final weekGrid = ScheduleConflictProjection.resolveCandidates(
+        [a, b],
+        snapshot,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+      );
+      // Only in-window item 'a' participates; the out-of-window 'b' is not a
+      // rendered grid item, so no candidate pair forms.
+      expect(weekGrid.pairs, isEmpty);
+    });
+
+    // A cross-window explicit relation via the repository (get_conflicts
+    // pathway) reaches the same conclusion and never touches the deprecated
+    // full projection.
+    test('repository reporting keeps cross-window conflict, week grid drops it',
+        () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'a',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      // In-window event 'cur' and out-of-window event 'hist'.
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'cur',
+              accountId: 'a',
+              source: 'user',
+              externalId: const Value('cur'),
+              title: 'cur',
+              type: 'personal',
+              startAt: Value(
+                DateTime(2026, 8, 10, 9, 0).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime(2026, 8, 10, 10, 30).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'hist',
+              accountId: 'a',
+              source: 'user',
+              externalId: const Value('hist'),
+              title: 'hist',
+              type: 'personal',
+              startAt: Value(
+                DateTime(2026, 6, 1, 9, 0).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime(2026, 6, 1, 10, 30).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 1,
+      ).classifyPair(
+        EventConflictParticipant(
+          eventId: 'cur',
+          occurrenceDate: DateTime(2026, 8, 10),
+        ),
+        EventConflictParticipant(
+          eventId: 'hist',
+          occurrenceDate: DateTime(2026, 6, 1),
+        ),
+        ConflictState.conflict,
+      );
+      final repo = EffectiveEventRepository(database, accountId: 'a');
+      final events = await repo.watchDisplayEvents().first;
+      // Reporting (get_conflicts pathway): cross-window explicit conflict kept.
+      final reporting = await repo.conflictsForItems(
+        events,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+        includeExplicitOutOfWindow: true,
+      );
+      expect(reporting.isConflict('event', 'cur'), isTrue);
+      // Week-grid pathway (default): out-of-window 'hist' is dropped.
+      final weekGrid = await repo.conflictsForItems(
+        events,
+        from: DateTime(2026, 8, 10),
+        throughExclusive: DateTime(2026, 8, 17),
+      );
+      expect(weekGrid.isConflict('event', 'cur'), isFalse);
+      expect(weekGrid.isConflict('event', 'hist'), isFalse);
+      expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
+    });
+  });
 }

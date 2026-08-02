@@ -141,28 +141,27 @@ String _formatDate(DateTime value) {
   return '${value.year}-${two(value.month)}-${two(value.day)}';
 }
 
-/// Computes the set of event ids involved in a conflict within [events] by
-/// running ONE bounded projection over exactly that result set (plus the
-/// account's effective plan blocks). This replaces any repository-wide
-/// projection: the consumer's range/title result is already determined, so the
-/// bounded projection only ever sees the relevant subset.
+/// Computes the set of event ids involved in a conflict by running ONE bounded
+/// projection over [pool] (the full display set, so out-of-window explicit
+/// relation partners remain discoverable) restricted to
+/// `[from, throughExclusive)`. The `includeExplicitOutOfWindow` reporting flag
+/// keeps an explicit conflict between an in-window item and an out-of-window
+/// partner from being silently dropped, while the timed-overlap sweep stays
+/// range-bounded. Returns only event ids (plan-block ids are excluded).
 Future<Set<String>> _conflictEventIds(
   AgentLocalDataGateway gateway,
   String accountId,
-  List<EffectiveEvent> events,
+  List<EffectiveEvent> pool,
+  DateTime from,
+  DateTime throughExclusive,
 ) async {
-  if (events.isEmpty) return const {};
-  var from = events.expand(_startInstantsOf).reduce(
-    (a, b) => a.isBefore(b) ? a : b,
-  );
-  var throughExclusive = events.expand(_endInstantsOf).reduce(
-    (a, b) => a.isAfter(b) ? a : b,
-  );
+  if (pool.isEmpty) return const {};
   final result = await gateway.conflictsForItems(
     accountId,
-    events,
+    pool,
     from: from,
     throughExclusive: throughExclusive,
+    includeExplicitOutOfWindow: true,
   );
   return {
     for (final key in result.conflictKeys)
@@ -460,7 +459,9 @@ class GetScheduleTool implements AgentTool {
     final conflictEventIds = await _conflictEventIds(
       _gateway,
       context.accountId,
-      inRange,
+      events,
+      range.from,
+      range.through.add(const Duration(days: 1)),
     );
     final dtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
@@ -544,11 +545,35 @@ Future<AgentToolResult> _queryEvents(
     return startOf(a).compareTo(startOf(b)); // current/future ascending
   });
 
-  final conflictEventIds = await _conflictEventIds(
-    gateway,
-    context.accountId,
-    matches,
-  );
+  // Conflict state for the returned title matches: report over the candidate
+  // pool (so an out-of-window explicit relation partner remains discoverable),
+  // windowed to the returned matches. includeExplicitOutOfWindow is set inside
+  // _conflictEventIds.
+  DateTime? from;
+  DateTime? through;
+  for (final e in matches) {
+    final starts = _startInstantsOf(e).toList();
+    if (starts.isNotEmpty) {
+      for (final s in starts) {
+        from = (from == null || s.isBefore(from)) ? s : from;
+      }
+    }
+    final ends = _endInstantsOf(e).toList();
+    if (ends.isNotEmpty) {
+      for (final en in ends) {
+        through = (through == null || en.isAfter(through)) ? en : through;
+      }
+    }
+  }
+  final conflictEventIds = from == null || through == null
+      ? const <String>{}
+      : await _conflictEventIds(
+          gateway,
+          context.accountId,
+          candidates,
+          from,
+          through.add(const Duration(days: 1)),
+        );
   final dtos = <Map<String, Object?>>[];
   final references = <AgentToolReference>[];
   for (final event in matches) {
@@ -1106,15 +1131,18 @@ class GetConflictsTool implements AgentTool {
         .where((e) => _eventInRange(e, range))
         .toList(growable: false);
 
-    // Run ONE bounded projection over exactly the in-range result set (events
-    // + effective plan blocks, restricted to the range) via the candidate API.
-    // Only candidate pairs are resolved; unrelated out-of-range history never
-    // grows the projection.
+    // Run ONE bounded projection over the full display set (events + effective
+// plan blocks) restricted to the range via the candidate API. The
+// includeExplicitOutOfWindow reporting flag keeps an explicit conflict between
+// an in-range item and an out-of-range explicit-relation partner from being
+// silently dropped, while the timed-overlap sweep stays range-bounded so
+// unrelated out-of-range history never grows the projection.
     final projection = await _gateway.conflictsForItems(
       context.accountId,
-      inRangeEvents,
+      events,
       from: range.from,
       throughExclusive: range.through.add(const Duration(days: 1)),
+      includeExplicitOutOfWindow: true,
     );
     final pairs = projection.pairs;
     final conflictPairs = pairs

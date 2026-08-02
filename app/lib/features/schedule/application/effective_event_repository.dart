@@ -522,6 +522,11 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
   /// events and plan blocks with the same conflict id set without a second,
   /// duplicate full projection.
   ///
+  /// [includeExplicitOutOfWindow] defaults to false (the week grid's
+  /// "selected-week only" stance). Conflict-reporting consumers (get_conflicts,
+  /// get_schedule conflict state) pass true so an explicit relation to an
+  /// out-of-window partner is still reported.
+  ///
   /// This replaces the old repository-wide `resolvedConflictIdsFor` as the
   /// authority: overlaps default to conflict and explicit relations override.
   /// Derived pairs are never persisted.
@@ -529,6 +534,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     List<EffectiveEvent> events, {
     required DateTime from,
     required DateTime throughExclusive,
+    bool includeExplicitOutOfWindow = false,
   }) async {
     conflictsForItemsCalls++;
     final items = await _effectiveGridItems(events);
@@ -540,6 +546,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       snapshot,
       from: from,
       throughExclusive: throughExclusive,
+      includeExplicitOutOfWindow: includeExplicitOutOfWindow,
     );
     lastCandidatesForItems = result.candidatePairCount;
     return result;

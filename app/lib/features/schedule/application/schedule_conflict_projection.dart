@@ -177,38 +177,52 @@ class ScheduleConflictProjection {
   ///
   /// Only *meaningful* candidate pairs are materialized:
   /// 1. timed interval overlap (via a start-sorted sweep — O(n log n) rather
-  ///    than O(n²) pair construction);
+  ///    than O(n²) pair construction), always bounded to the range window;
   /// 2. explicit occurrence relations (added even when the items do not
   ///    overlap, so a non-overlapping explicit `conflict` still surfaces);
   /// 3. member combinations that may hit an explicit series rule.
   ///
-  /// No `noConflict` pair is ever emitted for two unrelated historical items
-  /// that neither overlap nor share an explicit relation — the returned
-  /// `candidatePairCount` therefore reflects only the consumer's relevant
-  /// subset. All-day items follow the existing product rules (never
-  /// auto-conflict from a shared date). Each candidate resolves with the
-  /// established precedence: occurrence override > series rule > derived
-  /// overlap > no conflict.
+  /// The timed-overlap sweep is ALWAYS range-bounded. The explicit relation /
+  /// series-rule tiers never emit a `noConflict` pair for unrelated historical
+  /// items. When [includeExplicitOutOfWindow] is true (conflict-reporting
+  /// consumers: get_conflicts, get_schedule conflict state), an explicit
+  /// occurrence/series relation is NOT discarded solely because one member's
+  /// occurrence lies outside the `[from, throughExclusive)` window — so an
+  /// explicit conflict between an in-window item and an out-of-window item is
+  /// still reported. When false (the week grid's "selected-week only" stance),
+  /// only in-window items are considered even for explicit relations.
+  ///
+  /// All-day items follow the existing product rules (never auto-conflict from
+  /// a shared date). Each candidate resolves with the established precedence:
+  /// occurrence override > series rule > derived overlap > no conflict.
   static ConflictProjectionResult resolveCandidates(
     List<ScheduleGridItem> items,
     ScheduleConflictRelationSnapshot snapshot, {
     required DateTime from,
     required DateTime throughExclusive,
+    bool includeExplicitOutOfWindow = false,
   }) {
-    final keyed = <ScheduleItemKey, ScheduleGridItem>{};
-    final sorted = <ScheduleGridItem>[];
+    // Build the full, deduped item pool AND the in-window subset.
+    final allKeyed = <ScheduleItemKey, ScheduleGridItem>{};
+    final inWindowKeyed = <ScheduleItemKey, ScheduleGridItem>{};
     for (final item in items) {
-      if (!_intersects(item, from, throughExclusive)) continue;
       final key = (kind: item.relationKind, id: item.id);
-      if (keyed.containsKey(key)) continue;
-      keyed[key] = item;
-      sorted.add(item);
+      if (allKeyed.containsKey(key)) continue;
+      allKeyed[key] = item;
+      if (_intersects(item, from, throughExclusive)) {
+        inWindowKeyed[key] = item;
+      }
     }
+    // The lookup pool for explicit-relation tiers: all items when reporting
+    // cross-window relations, or only in-window items for the week grid.
+    final lookupPool = includeExplicitOutOfWindow ? allKeyed : inWindowKeyed;
+    final sorted = <ScheduleGridItem>[...lookupPool.values];
 
     final candidateKeys = <({int a, int b})>{};
-    // Tier 1: timed interval overlap — start-sorted active-window sweep.
-    // Only in-range timed items are examined; indices are into [sorted].
-    final timed = sorted.where((item) => !item.allDay).toList()
+    // Tier 1: timed interval overlap — start-sorted active-window sweep over
+    // ONLY in-window timed items (indices are into [sorted], which — for the
+    // non-reporting week grid — equals the in-window pool).
+    final timed = inWindowKeyed.values.where((item) => !item.allDay).toList()
       ..sort((a, b) {
         final byStart = a.startAt!.compareTo(b.startAt!);
         return byStart != 0 ? byStart : a.id.compareTo(b.id);
@@ -231,21 +245,35 @@ class ScheduleConflictProjection {
     }
 
     // Tier 2 + 3: explicit occurrence relations and series-rule member pairs
-    // (added even when the members do not overlap).
+    // (added even when the members do not overlap, and — when reporting — even
+    // when one member is out-of-window).
     for (final ruleKey in snapshot.occurrenceByPair.keys) {
       final parsed = _parsePairKey(ruleKey);
       if (parsed == null) continue;
-      final a = keyed[(kind: parsed.leftKind, id: parsed.leftId)];
-      final b = keyed[(kind: parsed.rightKind, id: parsed.rightId)];
+      final a = lookupPool[(kind: parsed.leftKind, id: parsed.leftId)];
+      final b = lookupPool[(kind: parsed.rightKind, id: parsed.rightId)];
       if (a == null || b == null) continue;
+      // A relation is a candidate only when at least one member is in-window.
+      // When reporting (includeExplicitOutOfWindow), this permits an explicit
+      // conflict between an in-window item and an out-of-window partner; when
+      // not reporting, both are in-window already. Pairs where both members are
+      // out-of-window are never reported (matches get_conflicts' range scope).
+      if (!_intersects(a, from, throughExclusive) &&
+          !_intersects(b, from, throughExclusive)) {
+        continue;
+      }
       candidateKeys.add((a: sorted.indexOf(a), b: sorted.indexOf(b)));
     }
     for (final ruleKey in snapshot.seriesByPair.keys) {
       final parsed = _parsePairKey(ruleKey);
       if (parsed == null) continue;
-      final a = _seriesMember(keyed, parsed.leftKind, parsed.leftId);
-      final b = _seriesMember(keyed, parsed.rightKind, parsed.rightId);
+      final a = _seriesMember(lookupPool, parsed.leftKind, parsed.leftId);
+      final b = _seriesMember(lookupPool, parsed.rightKind, parsed.rightId);
       if (a == null || b == null) continue;
+      if (!_intersects(a, from, throughExclusive) &&
+          !_intersects(b, from, throughExclusive)) {
+        continue;
+      }
       candidateKeys.add((a: sorted.indexOf(a), b: sorted.indexOf(b)));
     }
 
