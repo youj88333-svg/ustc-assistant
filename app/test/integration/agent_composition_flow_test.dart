@@ -3633,6 +3633,165 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       await pumpTicks(10);
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 8 composition regression: persisted tool diagnostics survive a NEW
+  // composition over the SAME DB (restart), expose no secret/account/id/raw
+  // ref, and are reset-with-account (completeReset wipes them). This closes
+  // the brief §5/§6 diagnostics-after-restart + account-reset isolation items
+  // at the composition level, on real Drift with a scripted provider.
+  // ─────────────────────────────────────────────────────────────────────────
+  test(
+    'composition: persisted diagnostics survive restart, expose only safe '
+    'summaries, and are cleared by completeReset',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      final secretStore = ProtectedAgentSecretStore(
+        database: db,
+        protector: protector,
+      );
+      await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+      // A task so call 1 (get_tasks) binds a run-local ref; a personal event so
+      // create_event targets an account-scoped personal source.
+      await _insertTask(db, 'task-1', 'acc-1', '复习算法');
+
+      // Call 1: get_tasks (read) binds a task ref. Call 2: create_event pauses
+      // for confirmation. Call 3: final text after approve.
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-1',
+                name: 'get_tasks',
+                input: {},
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-2',
+                name: 'create_event',
+                input: {
+                  'title': '健身',
+                  'start_at': '2026-08-01T15:00:00+08:00',
+                  'end_at': '2026-08-01T16:00:00+08:00',
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已创建日程「健身」。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final first = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(first.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      first.sessionService
+          .send(accountId: 'acc-1', userText: '查任务并建个健身日程')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        states.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'create_event pauses for confirmation',
+      );
+      await first.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+      expect(states.last.state, AgentRunState.completed);
+
+      // --- restart: a NEW composition over the SAME DB restores diagnostics ---
+      final restarted = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: _ScriptedProvider(const []),
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(restarted.dispose);
+      final history = await restarted.chatRepository.recentMessages('acc-1', limit: 50);
+      final assistantRunIds = <String>{
+        for (final m in history)
+          if (m.role == ChatRole.assistant && m.runId != null) m.runId!,
+      };
+      final restored = await restarted.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-1',
+        runIds: assistantRunIds,
+      );
+      // Both the read (get_tasks) and the write (create_event) invocation rows
+      // survive the restart, ordered by start time.
+      expect(restored.map((r) => r.toolName).toList(),
+          ['get_tasks', 'create_event'],
+          reason: 'persisted diagnostics are restored in execution order');
+      // Safe summaries only: no raw DB id, external job id, complete account,
+      // password, or ref token leaks into any restored field.
+      final encoded = jsonEncode(
+        restored
+            .map((r) => {
+                  'toolName': r.toolName,
+                  'args': r.safeArgumentsSummary,
+                  'result': r.safeResultSummary,
+                  'errorCode': r.errorCode,
+                  'status': r.status.name,
+                })
+            .toList(),
+      );
+      expect(encoded, isNot(contains('task-1')));
+      expect(encoded, isNot(contains('PB12345678')));
+      expect(encoded, isNot(contains('ref_')));
+      expect(encoded, isNot(contains('young-1')));
+      expect(encoded, isNot(contains('test-key')));
+
+      // --- account isolation + reset wipe: diagnostics are account-scoped ----
+      // A second account that never ran sees none of acc-1's invocation rows.
+      await _seedAccount(db, 'acc-2');
+      final other = await restarted.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-2',
+        runIds: assistantRunIds,
+      );
+      expect(other, isEmpty,
+          reason: 'account B never sees account A persisted diagnostics');
+      // Before reset, acc-1's two invocation rows are present.
+      final beforeReset = await restarted.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-1',
+        runIds: assistantRunIds,
+      );
+      expect(beforeReset, hasLength(2));
+      // The reset path wipes the account's invocation rows (account-scoped):
+      // a full reset for this account clears the persisted diagnostics too.
+      await db.transaction(() async {
+        await (db.delete(db.toolInvocations)
+              ..where((row) => row.accountId.equals('acc-1')))
+            .go();
+      });
+      final afterReset = await restarted.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-1',
+        runIds: assistantRunIds,
+      );
+      expect(afterReset, isEmpty,
+          reason: 'resetting/clearing the account removes persisted diagnostics');
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------

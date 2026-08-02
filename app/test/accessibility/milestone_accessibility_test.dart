@@ -23,7 +23,9 @@ import 'package:ustc_assistant_app/features/agent/presentation/agent_chat_page.d
 import 'package:ustc_assistant_app/features/agent/presentation/agent_settings_page.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/agent_write_confirmation_card.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/safe_markdown_message.dart';
+import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_projection.dart';
+import 'package:ustc_assistant_app/features/schedule/presentation/conflict_editor.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/week_timetable.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
@@ -408,5 +410,61 @@ void main() {
     expect(find.text('整日移动教务课程'), findsOneWidget);
     expect(find.text('课程数：1'), findsOneWidget);
     expect(find.bySemanticsLabel('此类型以后不再确认'), findsNothing);
+  });
+
+  // Task 5/8: the mixed relation editor (event + PlanBlock pair) exposes the
+  // pair as accessible text (both participant titles), keeps the conflict-state
+  // control reachable, and — because a PlanBlock participant has no overlay
+  // foreground priority — never announces a "优先显示" foreground radio. This
+  // is the accessibility face of the event/PlanBlock no_conflict UI relation.
+  testWidgets('mixed relation editor exposes pair titles and state, no foreground radio', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final course = ScheduleConflictParticipant(
+      kind: 'event',
+      id: 'ev-1',
+      title: '电路基本理论',
+      occurrenceDate: DateTime(2026, 3, 3),
+      startAt: DateTime(2026, 3, 3, 8, 0),
+      endAt: DateTime(2026, 3, 3, 9, 40),
+      seriesType: 'course_series',
+      seriesId: 'series-circuit',
+    );
+    final block = ScheduleConflictParticipant(
+      kind: 'plan_block',
+      id: 'block-1',
+      title: '复习电路',
+      occurrenceDate: DateTime(2026, 3, 3),
+      startAt: DateTime(2026, 3, 3, 8, 30),
+      endAt: DateTime(2026, 3, 3, 10, 0),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConflictEditor(
+            pairs: [
+              ConflictPairDraft(
+                id: 'ev-1|block-1',
+                left: course,
+                right: block,
+                leftTitle: '电路基本理论',
+                rightTitle: '复习电路',
+              ),
+            ],
+            onClassify: (_, _, _, {required scope, reason}) async {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    // Both participant titles are plain accessible text for the pair.
+    expect(find.text('电路基本理论 / 复习电路'), findsOneWidget);
+    // The conflict-state control is reachable and offers the categories.
+    expect(find.byKey(const Key('conflict-state-ev-1|block-1')), findsOneWidget);
+    // No "优先显示" foreground radio exists for a pair containing a PlanBlock.
+    expect(find.text('优先显示'), findsNothing);
   });
 }

@@ -907,6 +907,125 @@ void main() {
         expect(executed, {'get_pending_event_reviews'});
       },
     );
+
+    // Task 8 composition regression at the service level with the REAL local
+    // tools: a semester "what classes do I have this term" request must be
+    // steered to `course_summary`, never allowed to do a preventable whole-
+    // semester detailed `events` read. The model's FIRST call is an over-wide
+    // `events` get_schedule; the runtime refuses with `schedule_summary_required`
+    // (no events read/serialized), then the model falls back to a
+    // `course_summary` view which succeeds and grounds the final answer.
+    test(
+      'over-wide events correction is steered to course_summary and completes',
+      () async {
+        final database = AppDatabase(NativeDatabase.memory());
+        addTearDown(database.close);
+        const account = 'a';
+        await _seedAccount(database, account);
+
+        final now = DateTime.now();
+        await database.into(database.calendarEvents).insert(
+              CalendarEventsCompanion.insert(
+                id: 'c-1',
+                accountId: account,
+                source: 'ustc_jw',
+                externalId: const Value('c-1'),
+                sourceSeriesExternalId: const Value('lesson-x'),
+                title: '计算机网络',
+                type: 'course',
+                startAt: Value(
+                    _beijingEpoch(now.year, now.month, now.day, 8, 40)),
+                endAt: Value(
+                    _beijingEpoch(now.year, now.month, now.day, 9, 25)),
+                allDay: false,
+                timezone: 'Asia/Shanghai',
+                createdAt: 1,
+                updatedAt: 1,
+              ),
+            );
+        await database.into(database.sourceRecords).insert(
+              SourceRecordsCompanion.insert(
+                id: 'sr-c-1',
+                accountId: account,
+                source: 'ustc_jw',
+                entityType: 'calendar_event',
+                externalId: 'c-1',
+                localEntityId: 'c-1',
+                sourceStatus: 'active',
+                presence: 'present',
+                scopeKey: 'scope',
+                firstObservedAt: 1,
+                lastObservedAt: 1,
+              ),
+            );
+
+        // Call 1: over-wide `events` range spanning a whole semester (well over
+        // the 31-day detailed-span cap). Call 2: model corrects to
+        // `course_summary`. Call 3: grounded final answer.
+        final provider = _ScriptedProvider([
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-1',
+                  name: 'get_schedule',
+                  input: {
+                    'from': '2026-02-01',
+                    'through': '2026-07-15',
+                    'view': 'events',
+                  },
+                ),
+                const CompletedEvent(),
+              ]),
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-2',
+                  name: 'get_schedule',
+                  input: {
+                    'from': '2026-02-01',
+                    'through': '2026-07-15',
+                    'view': 'course_summary',
+                  },
+                ),
+                const CompletedEvent(),
+              ]),
+          _ScriptedCall(() => [
+                const TextDeltaEvent('这学期有计算机网络。'),
+                const CompletedEvent(),
+              ]),
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          gateway: FakeQueryGateway(),
+          clock: _SequenceClock(DateTime(now.year, now.month, now.day, 12)),
+        );
+
+        final states =
+            await service.send(accountId: account, userText: '我这学期有什么课？').toList();
+
+        // The over-wide events call was refused with schedule_summary_required
+        // and the model then grounded on a successful course_summary.
+        expect(provider.streamCallCount, 3);
+        final summaries = states
+            .expand((s) => s.toolSummaries)
+            .toList(growable: false);
+        final first = summaries.firstWhere((t) => t.toolName == 'get_schedule');
+        expect(first.status, AgentToolStatus.error,
+            reason: 'the over-wide events read must be refused');
+        expect(first.errorCode, 'schedule_summary_required',
+            reason: 'the wide detailed events range is refused with '
+                'schedule_summary_required (no whole-semester events dump)');
+        // The correction found the course and grounded the answer.
+        expect(states.last.state, AgentRunState.completed);
+        expect(states.last.text, contains('计算机网络'));
+        // No outbound request carries a hardcoded semester.
+        for (final req in provider.requests) {
+          final encoded = jsonEncode(req.toJson());
+          expect(encoded, isNot(contains('semesterId')));
+          expect(encoded, isNot(contains('421')));
+          expect(encoded, isNot(contains('2026spring')));
+        }
+      },
+    );
   });
 
   group('Step 3: cancellation and login-resume', () {

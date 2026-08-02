@@ -19,6 +19,13 @@ Grounding 意图误判（礼貌查询被 free-chat 吞掉、整日移动/plan_ta
 `main`**，合并时机由 finishing-a-development-branch 流程决定；真实学校模型/API
 人工验收尚未执行（见第 7.3 节“真实人工验收待办”）。
 
+**关系收尾修复轮（2026-08-02-agent-relation-closure-repairs）已全部完成**：Tasks
+1–8 闭合持久工具调用生命周期与重启诊断恢复、关系落地“用户决策即对错”、统一事件与
+PlanBlock 关系、混合关系 UI、本地六秒撤销提示、学期 Task 摘要优先 + 澄清，以及收尾的
+集成回归 + 复测文档 + 全量验证。其最终精确 HEAD 与完整验证结果见第 7.4 节。**尚未合并
+到 `main`**，合并时机由 finishing-a-development-branch 流程决定；真实学校模型/API 人工
+验收尚未执行（见第 7.4 节“真实人工验收待办”与 `docs/agent-relation-closure-retest-2026-08-02.md`）。
+
 修复内容概要：
 
 - Grounding Policy：显式操作必须真实调用工具，首次漏调注入一次受限纠错
@@ -581,6 +588,94 @@ git status --short : 仅 3 个受保护 Windows 生成文件 + 4 个未跟踪用
 自动测试全绿 ≠ 上述人工验收通过。`docs/agent-testing.md` 与
 `docs/agent-manual-acceptance-retest-2026-08-01.md` 是未跟踪用户文件，未修改、
 未暂存、未提交。
+
+## 7.4 Agent 关系收尾修复轮验证（feature/write-tools，2026-08-02）
+
+关系收尾修复里程碑（2026-08-02-agent-relation-closure-repairs，Tasks 1–8）在
+`feature/write-tools` 分支上推进，闭合持久工具调用生命周期（schema 6）、会话/聊天恢复、
+有界关系落地与“用户决策即对错”、统一事件与 PlanBlock 关系、混合关系 UI、日程页本地
+六秒撤销提示、学期 Task 摘要优先 + 澄清，以及本轮的集成回归 + 复测文档 + 全量验证。
+
+提交序列（基线 `029b794` → HEAD `9950ea1`，Task 1–7）：
+
+```text
+4108ca4  feat(agent): persist tool invocation lifecycle            Task 1
+3436c6c  feat(agent): restore persistent tool diagnostics          Task 2
+0d292c7  fix(agent): bound relation decisions and settlement       Task 3
+10b04c1  fix(agent): direction-aware relation mismatch guidance    Task 3 fix wave
+9cc4aeb  feat(schedule): unify event and plan block relations      Task 4
+c75a385  fix(schedule): restore plan block FK columns on relation undo  Task 4 fix wave
+febccdc  feat(schedule): manage mixed overlap relations            Task 5
+930e2b0  fix(schedule): scope day move undo feedback               Task 6
+9950ea1  fix(agent): prefer summaries for semester workflows       Task 7
+```
+
+每 Task 均经独立审查（spec compliance + code quality）通过；Task 4 修复波经 scoped 重审
+通过（关系撤销恢复 PlanBlock FK 列）。
+
+Task 8（本轮，收尾）新增组合级回归 + 复测文档 + 全量验证，最终 HEAD 见第 7.4 节末尾
+（Task 8 提交后刷新；最后一个代码提交为 `9950ea1`）。
+
+**Task 8 聚焦测试（15 文件完整聚焦套件）**：
+
+```text
+Flutter test
+  test/core/database/migration_test.dart
+  test/features/agent/chat_repository_test.dart
+  test/features/agent/agent_grounding_policy_test.dart
+  test/features/agent/agent_session_service_test.dart
+  test/features/agent/agent_context_builder_test.dart
+  test/features/agent/local_agent_tools_test.dart
+  test/features/agent/write_tools_test.dart
+  test/features/agent/agent_chat_page_test.dart
+  test/features/schedule/overlay_conflict_test.dart
+  test/features/schedule/event_detail_flow_test.dart
+  test/features/schedule/week_timetable_test.dart
+  test/features/schedule/schedule_page_test.dart
+  test/integration/agent_composition_flow_test.dart
+  test/integration/read_only_agent_flow_test.dart
+  test/accessibility/milestone_accessibility_test.dart : 440 passed
+```
+
+**Task 8 最终完整自动验证**（worktree `E:/107/.worktrees/write-tools`，Python 用
+PowerShell 从主仓库根 `E:/107` 运行，conda env `ustc_assistant`，`-s tests` 指向主仓库）：
+
+```text
+Python unittest discover -s tests   : Ran 388 tests, OK
+Python compileall -q src tests      : exit 0
+Flutter analyze (whole app)         : No issues found
+Flutter test (whole suite)          : 896 passed
+Flutter build windows --release     : Built build\windows\x64\runner\Release\ustc_assistant_app.exe
+                                        （app\build\windows\x64\runner\Release\ustc_assistant_app.exe）
+git diff --check                    : 干净（仅受保护 Windows 生成文件 CRLF 提示）
+```
+
+Task 8 新增组合级回归：
+
+- `agent_composition_flow_test.dart`：持久工具诊断跨“重启”（同一 DB 上新建组合）仍按执行
+  顺序恢复，且只含安全摘要（无 DB id、完整账号、`ref_*`、外部作业句柄或密钥）；账号乙
+  看不到账号甲的诊断行；账号重置/清除会移除该账号的持久诊断。
+- `read_only_agent_flow_test.dart`：整学期“我这学期有什么课”先被过宽 `events` 读取以
+  `schedule_summary_required` 拒绝（不先整学期 dump），再以 `course_summary` 成功落地，
+  最终回答有数据支撑，出站请求无硬编码学期。
+- `milestone_accessibility_test.dart`：混合关系编辑器暴露 pair 标题与关系状态控制语义，
+  含 PlanBlock 的 pair 不暴露“优先显示”前景单选。
+
+**Task 8 复测清单**：`docs/agent-relation-closure-retest-2026-08-02.md`（新建，未执行，
+`完成：` 留空待主人填写）。它按下述 6 项真实人工验收待办逐项复测：
+(1) 2026 春 电路/量子 二选一保存 `no_conflict`；(2) 课程内部 PlanBlock 显式
+`no_conflict` 且两者保持可见、警告消失；(3) 六秒本地撤销提示不遮挡聊天、可撤销；
+(4) 确认后 Agent 整日移动以成功终态结束、无尾随 `grounding_failed`；(5) 重启后工具诊断
+重建且只含安全摘要；(6) 学期 Task 请求先摘要、问未决细节、保留多次 `create_task` 能力。
+
+**真实人工验收待办（尚未执行，等待主人）**：真实 Release、学校 Anthropic 兼容 API Key 与
+校园网 / Panabit iWAN 下，按 `docs/agent-relation-closure-retest-2026-08-02.md` 逐项
+复测上述 6 项；以及沿用 `docs/agent-manual-acceptance-retest-2026-08-01.md` 中仍未通过
+或空白的项目。自动测试全绿 ≠ 人工验收。`docs/agent-manual-acceptance-retest-2026-08-01.md`、
+`docs/agent-manual-acceptance-review-handoff-2026-08-02.md`、`docs/agent-testing.md`、
+`docs/superpowers/plans/2026-08-02-agent-manual-acceptance-review-repairs.md` 是未跟踪
+用户文件，未修改、未暂存、未提交；`docs/agent-relation-closure-retest-2026-08-02.md`
+为本里程碑新建的未执行复测清单。
 
 ## 8. 已知文档边界
 
