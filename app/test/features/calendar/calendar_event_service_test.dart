@@ -392,6 +392,33 @@ void main() {
       expect(service.softDelete(id), throwsA(isA<AlreadyDeletedError>()));
     });
 
+    test('lifecycle actions on a deleted event return already_deleted',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+      await service.softDelete(id);
+
+      // Every non-restore lifecycle action on a soft-deleted event must map to
+      // a deterministic already_deleted error, never a bare StateError.
+      expect(service.complete(id), throwsA(isA<AlreadyDeletedError>()));
+      expect(service.skip(id), throwsA(isA<AlreadyDeletedError>()));
+      expect(service.cancel(id), throwsA(isA<AlreadyDeletedError>()));
+      expect(service.reopen(id), throwsA(isA<AlreadyDeletedError>()));
+    });
+
     test('cancel only cancels future desired reminders and preserves history',
         () async {
       final database = await fixtureDatabase();

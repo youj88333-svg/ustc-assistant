@@ -231,7 +231,11 @@ class CalendarEventService {
   /// active/tentative event is rejected deterministically.
   Future<void> reopen(String id, {int? expectedUpdatedAt}) async {
     await database.transaction(() async {
-      final current = await _ownedRow(id, expectedUpdatedAt: expectedUpdatedAt);
+      final current = await _ownedRow(
+        id,
+        allowDeleted: true,
+        expectedUpdatedAt: expectedUpdatedAt,
+      );
       if (current.deletedAt != null) throw const AlreadyDeletedError();
       if (current.status == EventStatus.active.storage ||
           current.status == EventStatus.tentative.storage) {
@@ -309,7 +313,11 @@ class CalendarEventService {
     int? expectedUpdatedAt,
   }) async {
     await database.transaction(() async {
-      final current = await _ownedRow(id, expectedUpdatedAt: expectedUpdatedAt);
+      final current = await _ownedRow(
+        id,
+        allowDeleted: true,
+        expectedUpdatedAt: expectedUpdatedAt,
+      );
       if (current.deletedAt != null) throw const AlreadyDeletedError();
       // Terminal transitions (complete/skip/cancel) are only valid from an
       // active/tentative (or resurfaced) state; a target already in its own
