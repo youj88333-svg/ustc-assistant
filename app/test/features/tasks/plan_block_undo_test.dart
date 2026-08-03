@@ -759,7 +759,8 @@ void main() {
             TaskEventLinksCompanion.insert(
               accountId: 'a',
               taskId: 'task-composite',
-              eventId: 'ev-c',
+              targetId: 'ev-c',
+              eventId: const Value('ev-c'),
               relationType: 'related',
               createdAt: 1,
             ),

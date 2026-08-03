@@ -233,7 +233,8 @@ class UndoService implements UndoRecorder {
           TaskEventLinksCompanion.insert(
             accountId: accountId,
             taskId: taskId,
-            eventId: eventId,
+            targetId: eventId,
+            eventId: Value(eventId),
             relationType: (row['relationType'] as String?) ?? 'related',
             createdAt: (row['createdAt'] as int?) ?? now(),
           ),

@@ -121,7 +121,8 @@ class TaskLifecycleService {
               TaskEventLinksCompanion.insert(
                 accountId: accountId,
                 taskId: id,
-                eventId: eventId,
+                targetId: eventId,
+                eventId: Value(eventId),
                 relationType: 'related',
                 createdAt: timestamp,
               ),

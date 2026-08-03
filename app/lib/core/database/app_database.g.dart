@@ -8690,6 +8690,18 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _reminderOffsetsJsonMeta =
+      const VerificationMeta('reminderOffsetsJson');
+  @override
+  late final GeneratedColumn<String> reminderOffsetsJson =
+      GeneratedColumn<String>(
+        'reminder_offsets_json',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+        defaultValue: const Constant('[]'),
+      );
   static const VerificationMeta _deletedAtMeta = const VerificationMeta(
     'deletedAt',
   );
@@ -8746,6 +8758,7 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
     completionPolicy,
     tagsJson,
     userNotes,
+    reminderOffsetsJson,
     deletedAt,
     createdAt,
     updatedAt,
@@ -8924,6 +8937,15 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         userNotes.isAcceptableOrUnknown(data['user_notes']!, _userNotesMeta),
       );
     }
+    if (data.containsKey('reminder_offsets_json')) {
+      context.handle(
+        _reminderOffsetsJsonMeta,
+        reminderOffsetsJson.isAcceptableOrUnknown(
+          data['reminder_offsets_json']!,
+          _reminderOffsetsJsonMeta,
+        ),
+      );
+    }
     if (data.containsKey('deleted_at')) {
       context.handle(
         _deletedAtMeta,
@@ -9039,6 +9061,10 @@ class $CalendarEventSeriesTable extends CalendarEventSeries
         DriftSqlType.string,
         data['${effectivePrefix}user_notes'],
       ),
+      reminderOffsetsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reminder_offsets_json'],
+      )!,
       deletedAt: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}deleted_at'],
@@ -9083,6 +9109,7 @@ class CalendarEventSery extends DataClass
   final String completionPolicy;
   final String tagsJson;
   final String? userNotes;
+  final String reminderOffsetsJson;
   final int? deletedAt;
   final int createdAt;
   final int updatedAt;
@@ -9108,6 +9135,7 @@ class CalendarEventSery extends DataClass
     required this.completionPolicy,
     required this.tagsJson,
     this.userNotes,
+    required this.reminderOffsetsJson,
     this.deletedAt,
     required this.createdAt,
     required this.updatedAt,
@@ -9156,6 +9184,7 @@ class CalendarEventSery extends DataClass
     if (!nullToAbsent || userNotes != null) {
       map['user_notes'] = Variable<String>(userNotes);
     }
+    map['reminder_offsets_json'] = Variable<String>(reminderOffsetsJson);
     if (!nullToAbsent || deletedAt != null) {
       map['deleted_at'] = Variable<int>(deletedAt);
     }
@@ -9207,6 +9236,7 @@ class CalendarEventSery extends DataClass
       userNotes: userNotes == null && nullToAbsent
           ? const Value.absent()
           : Value(userNotes),
+      reminderOffsetsJson: Value(reminderOffsetsJson),
       deletedAt: deletedAt == null && nullToAbsent
           ? const Value.absent()
           : Value(deletedAt),
@@ -9242,6 +9272,9 @@ class CalendarEventSery extends DataClass
       completionPolicy: serializer.fromJson<String>(json['completionPolicy']),
       tagsJson: serializer.fromJson<String>(json['tagsJson']),
       userNotes: serializer.fromJson<String?>(json['userNotes']),
+      reminderOffsetsJson: serializer.fromJson<String>(
+        json['reminderOffsetsJson'],
+      ),
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
       updatedAt: serializer.fromJson<int>(json['updatedAt']),
@@ -9272,6 +9305,7 @@ class CalendarEventSery extends DataClass
       'completionPolicy': serializer.toJson<String>(completionPolicy),
       'tagsJson': serializer.toJson<String>(tagsJson),
       'userNotes': serializer.toJson<String?>(userNotes),
+      'reminderOffsetsJson': serializer.toJson<String>(reminderOffsetsJson),
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'createdAt': serializer.toJson<int>(createdAt),
       'updatedAt': serializer.toJson<int>(updatedAt),
@@ -9300,6 +9334,7 @@ class CalendarEventSery extends DataClass
     String? completionPolicy,
     String? tagsJson,
     Value<String?> userNotes = const Value.absent(),
+    String? reminderOffsetsJson,
     Value<int?> deletedAt = const Value.absent(),
     int? createdAt,
     int? updatedAt,
@@ -9333,6 +9368,7 @@ class CalendarEventSery extends DataClass
     completionPolicy: completionPolicy ?? this.completionPolicy,
     tagsJson: tagsJson ?? this.tagsJson,
     userNotes: userNotes.present ? userNotes.value : this.userNotes,
+    reminderOffsetsJson: reminderOffsetsJson ?? this.reminderOffsetsJson,
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
@@ -9380,6 +9416,9 @@ class CalendarEventSery extends DataClass
           : this.completionPolicy,
       tagsJson: data.tagsJson.present ? data.tagsJson.value : this.tagsJson,
       userNotes: data.userNotes.present ? data.userNotes.value : this.userNotes,
+      reminderOffsetsJson: data.reminderOffsetsJson.present
+          ? data.reminderOffsetsJson.value
+          : this.reminderOffsetsJson,
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
@@ -9410,6 +9449,7 @@ class CalendarEventSery extends DataClass
           ..write('completionPolicy: $completionPolicy, ')
           ..write('tagsJson: $tagsJson, ')
           ..write('userNotes: $userNotes, ')
+          ..write('reminderOffsetsJson: $reminderOffsetsJson, ')
           ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
@@ -9440,6 +9480,7 @@ class CalendarEventSery extends DataClass
     completionPolicy,
     tagsJson,
     userNotes,
+    reminderOffsetsJson,
     deletedAt,
     createdAt,
     updatedAt,
@@ -9469,6 +9510,7 @@ class CalendarEventSery extends DataClass
           other.completionPolicy == this.completionPolicy &&
           other.tagsJson == this.tagsJson &&
           other.userNotes == this.userNotes &&
+          other.reminderOffsetsJson == this.reminderOffsetsJson &&
           other.deletedAt == this.deletedAt &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
@@ -9496,6 +9538,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
   final Value<String> completionPolicy;
   final Value<String> tagsJson;
   final Value<String?> userNotes;
+  final Value<String> reminderOffsetsJson;
   final Value<int?> deletedAt;
   final Value<int> createdAt;
   final Value<int> updatedAt;
@@ -9522,6 +9565,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     this.completionPolicy = const Value.absent(),
     this.tagsJson = const Value.absent(),
     this.userNotes = const Value.absent(),
+    this.reminderOffsetsJson = const Value.absent(),
     this.deletedAt = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
@@ -9549,6 +9593,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     this.completionPolicy = const Value.absent(),
     this.tagsJson = const Value.absent(),
     this.userNotes = const Value.absent(),
+    this.reminderOffsetsJson = const Value.absent(),
     this.deletedAt = const Value.absent(),
     required int createdAt,
     required int updatedAt,
@@ -9583,6 +9628,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     Expression<String>? completionPolicy,
     Expression<String>? tagsJson,
     Expression<String>? userNotes,
+    Expression<String>? reminderOffsetsJson,
     Expression<int>? deletedAt,
     Expression<int>? createdAt,
     Expression<int>? updatedAt,
@@ -9610,6 +9656,8 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
       if (completionPolicy != null) 'completion_policy': completionPolicy,
       if (tagsJson != null) 'tags_json': tagsJson,
       if (userNotes != null) 'user_notes': userNotes,
+      if (reminderOffsetsJson != null)
+        'reminder_offsets_json': reminderOffsetsJson,
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
@@ -9639,6 +9687,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     Value<String>? completionPolicy,
     Value<String>? tagsJson,
     Value<String?>? userNotes,
+    Value<String>? reminderOffsetsJson,
     Value<int?>? deletedAt,
     Value<int>? createdAt,
     Value<int>? updatedAt,
@@ -9666,6 +9715,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
       completionPolicy: completionPolicy ?? this.completionPolicy,
       tagsJson: tagsJson ?? this.tagsJson,
       userNotes: userNotes ?? this.userNotes,
+      reminderOffsetsJson: reminderOffsetsJson ?? this.reminderOffsetsJson,
       deletedAt: deletedAt ?? this.deletedAt,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
@@ -9739,6 +9789,11 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
     if (userNotes.present) {
       map['user_notes'] = Variable<String>(userNotes.value);
     }
+    if (reminderOffsetsJson.present) {
+      map['reminder_offsets_json'] = Variable<String>(
+        reminderOffsetsJson.value,
+      );
+    }
     if (deletedAt.present) {
       map['deleted_at'] = Variable<int>(deletedAt.value);
     }
@@ -9778,6 +9833,7 @@ class CalendarEventSeriesCompanion extends UpdateCompanion<CalendarEventSery> {
           ..write('completionPolicy: $completionPolicy, ')
           ..write('tagsJson: $tagsJson, ')
           ..write('userNotes: $userNotes, ')
+          ..write('reminderOffsetsJson: $reminderOffsetsJson, ')
           ..write('deletedAt: $deletedAt, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
@@ -15335,6 +15391,17 @@ class $TaskEventLinksTable extends TaskEventLinks
       'REFERENCES tasks (id) ON DELETE CASCADE',
     ),
   );
+  static const VerificationMeta _targetIdMeta = const VerificationMeta(
+    'targetId',
+  );
+  @override
+  late final GeneratedColumn<String> targetId = GeneratedColumn<String>(
+    'target_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
   static const VerificationMeta _eventIdMeta = const VerificationMeta(
     'eventId',
   );
@@ -15342,11 +15409,25 @@ class $TaskEventLinksTable extends TaskEventLinks
   late final GeneratedColumn<String> eventId = GeneratedColumn<String>(
     'event_id',
     aliasedName,
-    false,
+    true,
     type: DriftSqlType.string,
-    requiredDuringInsert: true,
+    requiredDuringInsert: false,
     defaultConstraints: GeneratedColumn.constraintIsAlways(
       'REFERENCES calendar_events (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _occurrenceExceptionIdMeta =
+      const VerificationMeta('occurrenceExceptionId');
+  @override
+  late final GeneratedColumn<String>
+  occurrenceExceptionId = GeneratedColumn<String>(
+    'occurrence_exception_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES calendar_event_occurrence_exceptions (id) ON DELETE CASCADE',
     ),
   );
   static const VerificationMeta _relationTypeMeta = const VerificationMeta(
@@ -15375,7 +15456,9 @@ class $TaskEventLinksTable extends TaskEventLinks
   List<GeneratedColumn> get $columns => [
     accountId,
     taskId,
+    targetId,
     eventId,
+    occurrenceExceptionId,
     relationType,
     createdAt,
   ];
@@ -15407,13 +15490,28 @@ class $TaskEventLinksTable extends TaskEventLinks
     } else if (isInserting) {
       context.missing(_taskIdMeta);
     }
+    if (data.containsKey('target_id')) {
+      context.handle(
+        _targetIdMeta,
+        targetId.isAcceptableOrUnknown(data['target_id']!, _targetIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_targetIdMeta);
+    }
     if (data.containsKey('event_id')) {
       context.handle(
         _eventIdMeta,
         eventId.isAcceptableOrUnknown(data['event_id']!, _eventIdMeta),
       );
-    } else if (isInserting) {
-      context.missing(_eventIdMeta);
+    }
+    if (data.containsKey('occurrence_exception_id')) {
+      context.handle(
+        _occurrenceExceptionIdMeta,
+        occurrenceExceptionId.isAcceptableOrUnknown(
+          data['occurrence_exception_id']!,
+          _occurrenceExceptionIdMeta,
+        ),
+      );
     }
     if (data.containsKey('relation_type')) {
       context.handle(
@@ -15438,7 +15536,7 @@ class $TaskEventLinksTable extends TaskEventLinks
   }
 
   @override
-  Set<GeneratedColumn> get $primaryKey => {accountId, taskId, eventId};
+  Set<GeneratedColumn> get $primaryKey => {accountId, taskId, targetId};
   @override
   TaskEventLink map(Map<String, dynamic> data, {String? tablePrefix}) {
     final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
@@ -15451,10 +15549,18 @@ class $TaskEventLinksTable extends TaskEventLinks
         DriftSqlType.string,
         data['${effectivePrefix}task_id'],
       )!,
+      targetId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}target_id'],
+      )!,
       eventId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}event_id'],
-      )!,
+      ),
+      occurrenceExceptionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}occurrence_exception_id'],
+      ),
       relationType: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}relation_type'],
@@ -15475,13 +15581,17 @@ class $TaskEventLinksTable extends TaskEventLinks
 class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
   final String accountId;
   final String taskId;
-  final String eventId;
+  final String targetId;
+  final String? eventId;
+  final String? occurrenceExceptionId;
   final String relationType;
   final int createdAt;
   const TaskEventLink({
     required this.accountId,
     required this.taskId,
-    required this.eventId,
+    required this.targetId,
+    this.eventId,
+    this.occurrenceExceptionId,
     required this.relationType,
     required this.createdAt,
   });
@@ -15490,7 +15600,13 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     final map = <String, Expression>{};
     map['account_id'] = Variable<String>(accountId);
     map['task_id'] = Variable<String>(taskId);
-    map['event_id'] = Variable<String>(eventId);
+    map['target_id'] = Variable<String>(targetId);
+    if (!nullToAbsent || eventId != null) {
+      map['event_id'] = Variable<String>(eventId);
+    }
+    if (!nullToAbsent || occurrenceExceptionId != null) {
+      map['occurrence_exception_id'] = Variable<String>(occurrenceExceptionId);
+    }
     map['relation_type'] = Variable<String>(relationType);
     map['created_at'] = Variable<int>(createdAt);
     return map;
@@ -15500,7 +15616,13 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     return TaskEventLinksCompanion(
       accountId: Value(accountId),
       taskId: Value(taskId),
-      eventId: Value(eventId),
+      targetId: Value(targetId),
+      eventId: eventId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(eventId),
+      occurrenceExceptionId: occurrenceExceptionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(occurrenceExceptionId),
       relationType: Value(relationType),
       createdAt: Value(createdAt),
     );
@@ -15514,7 +15636,11 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     return TaskEventLink(
       accountId: serializer.fromJson<String>(json['accountId']),
       taskId: serializer.fromJson<String>(json['taskId']),
-      eventId: serializer.fromJson<String>(json['eventId']),
+      targetId: serializer.fromJson<String>(json['targetId']),
+      eventId: serializer.fromJson<String?>(json['eventId']),
+      occurrenceExceptionId: serializer.fromJson<String?>(
+        json['occurrenceExceptionId'],
+      ),
       relationType: serializer.fromJson<String>(json['relationType']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
     );
@@ -15525,7 +15651,11 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     return <String, dynamic>{
       'accountId': serializer.toJson<String>(accountId),
       'taskId': serializer.toJson<String>(taskId),
-      'eventId': serializer.toJson<String>(eventId),
+      'targetId': serializer.toJson<String>(targetId),
+      'eventId': serializer.toJson<String?>(eventId),
+      'occurrenceExceptionId': serializer.toJson<String?>(
+        occurrenceExceptionId,
+      ),
       'relationType': serializer.toJson<String>(relationType),
       'createdAt': serializer.toJson<int>(createdAt),
     };
@@ -15534,13 +15664,19 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
   TaskEventLink copyWith({
     String? accountId,
     String? taskId,
-    String? eventId,
+    String? targetId,
+    Value<String?> eventId = const Value.absent(),
+    Value<String?> occurrenceExceptionId = const Value.absent(),
     String? relationType,
     int? createdAt,
   }) => TaskEventLink(
     accountId: accountId ?? this.accountId,
     taskId: taskId ?? this.taskId,
-    eventId: eventId ?? this.eventId,
+    targetId: targetId ?? this.targetId,
+    eventId: eventId.present ? eventId.value : this.eventId,
+    occurrenceExceptionId: occurrenceExceptionId.present
+        ? occurrenceExceptionId.value
+        : this.occurrenceExceptionId,
     relationType: relationType ?? this.relationType,
     createdAt: createdAt ?? this.createdAt,
   );
@@ -15548,7 +15684,11 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     return TaskEventLink(
       accountId: data.accountId.present ? data.accountId.value : this.accountId,
       taskId: data.taskId.present ? data.taskId.value : this.taskId,
+      targetId: data.targetId.present ? data.targetId.value : this.targetId,
       eventId: data.eventId.present ? data.eventId.value : this.eventId,
+      occurrenceExceptionId: data.occurrenceExceptionId.present
+          ? data.occurrenceExceptionId.value
+          : this.occurrenceExceptionId,
       relationType: data.relationType.present
           ? data.relationType.value
           : this.relationType,
@@ -15561,7 +15701,9 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
     return (StringBuffer('TaskEventLink(')
           ..write('accountId: $accountId, ')
           ..write('taskId: $taskId, ')
+          ..write('targetId: $targetId, ')
           ..write('eventId: $eventId, ')
+          ..write('occurrenceExceptionId: $occurrenceExceptionId, ')
           ..write('relationType: $relationType, ')
           ..write('createdAt: $createdAt')
           ..write(')'))
@@ -15569,15 +15711,24 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
   }
 
   @override
-  int get hashCode =>
-      Object.hash(accountId, taskId, eventId, relationType, createdAt);
+  int get hashCode => Object.hash(
+    accountId,
+    taskId,
+    targetId,
+    eventId,
+    occurrenceExceptionId,
+    relationType,
+    createdAt,
+  );
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is TaskEventLink &&
           other.accountId == this.accountId &&
           other.taskId == this.taskId &&
+          other.targetId == this.targetId &&
           other.eventId == this.eventId &&
+          other.occurrenceExceptionId == this.occurrenceExceptionId &&
           other.relationType == this.relationType &&
           other.createdAt == this.createdAt);
 }
@@ -15585,14 +15736,18 @@ class TaskEventLink extends DataClass implements Insertable<TaskEventLink> {
 class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
   final Value<String> accountId;
   final Value<String> taskId;
-  final Value<String> eventId;
+  final Value<String> targetId;
+  final Value<String?> eventId;
+  final Value<String?> occurrenceExceptionId;
   final Value<String> relationType;
   final Value<int> createdAt;
   final Value<int> rowid;
   const TaskEventLinksCompanion({
     this.accountId = const Value.absent(),
     this.taskId = const Value.absent(),
+    this.targetId = const Value.absent(),
     this.eventId = const Value.absent(),
+    this.occurrenceExceptionId = const Value.absent(),
     this.relationType = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -15600,19 +15755,23 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
   TaskEventLinksCompanion.insert({
     required String accountId,
     required String taskId,
-    required String eventId,
+    required String targetId,
+    this.eventId = const Value.absent(),
+    this.occurrenceExceptionId = const Value.absent(),
     required String relationType,
     required int createdAt,
     this.rowid = const Value.absent(),
   }) : accountId = Value(accountId),
        taskId = Value(taskId),
-       eventId = Value(eventId),
+       targetId = Value(targetId),
        relationType = Value(relationType),
        createdAt = Value(createdAt);
   static Insertable<TaskEventLink> custom({
     Expression<String>? accountId,
     Expression<String>? taskId,
+    Expression<String>? targetId,
     Expression<String>? eventId,
+    Expression<String>? occurrenceExceptionId,
     Expression<String>? relationType,
     Expression<int>? createdAt,
     Expression<int>? rowid,
@@ -15620,7 +15779,10 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
     return RawValuesInsertable({
       if (accountId != null) 'account_id': accountId,
       if (taskId != null) 'task_id': taskId,
+      if (targetId != null) 'target_id': targetId,
       if (eventId != null) 'event_id': eventId,
+      if (occurrenceExceptionId != null)
+        'occurrence_exception_id': occurrenceExceptionId,
       if (relationType != null) 'relation_type': relationType,
       if (createdAt != null) 'created_at': createdAt,
       if (rowid != null) 'rowid': rowid,
@@ -15630,7 +15792,9 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
   TaskEventLinksCompanion copyWith({
     Value<String>? accountId,
     Value<String>? taskId,
-    Value<String>? eventId,
+    Value<String>? targetId,
+    Value<String?>? eventId,
+    Value<String?>? occurrenceExceptionId,
     Value<String>? relationType,
     Value<int>? createdAt,
     Value<int>? rowid,
@@ -15638,7 +15802,10 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
     return TaskEventLinksCompanion(
       accountId: accountId ?? this.accountId,
       taskId: taskId ?? this.taskId,
+      targetId: targetId ?? this.targetId,
       eventId: eventId ?? this.eventId,
+      occurrenceExceptionId:
+          occurrenceExceptionId ?? this.occurrenceExceptionId,
       relationType: relationType ?? this.relationType,
       createdAt: createdAt ?? this.createdAt,
       rowid: rowid ?? this.rowid,
@@ -15654,8 +15821,16 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
     if (taskId.present) {
       map['task_id'] = Variable<String>(taskId.value);
     }
+    if (targetId.present) {
+      map['target_id'] = Variable<String>(targetId.value);
+    }
     if (eventId.present) {
       map['event_id'] = Variable<String>(eventId.value);
+    }
+    if (occurrenceExceptionId.present) {
+      map['occurrence_exception_id'] = Variable<String>(
+        occurrenceExceptionId.value,
+      );
     }
     if (relationType.present) {
       map['relation_type'] = Variable<String>(relationType.value);
@@ -15674,7 +15849,9 @@ class TaskEventLinksCompanion extends UpdateCompanion<TaskEventLink> {
     return (StringBuffer('TaskEventLinksCompanion(')
           ..write('accountId: $accountId, ')
           ..write('taskId: $taskId, ')
+          ..write('targetId: $targetId, ')
           ..write('eventId: $eventId, ')
+          ..write('occurrenceExceptionId: $occurrenceExceptionId, ')
           ..write('relationType: $relationType, ')
           ..write('createdAt: $createdAt, ')
           ..write('rowid: $rowid')
@@ -15889,6 +16066,34 @@ class $ScheduleRelationsTable extends ScheduleRelations
       'REFERENCES plan_blocks (id) ON DELETE CASCADE',
     ),
   );
+  static const VerificationMeta _leftOccurrenceExceptionIdMeta =
+      const VerificationMeta('leftOccurrenceExceptionId');
+  @override
+  late final GeneratedColumn<String>
+  leftOccurrenceExceptionId = GeneratedColumn<String>(
+    'left_occurrence_exception_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES calendar_event_occurrence_exceptions (id) ON DELETE CASCADE',
+    ),
+  );
+  static const VerificationMeta _rightOccurrenceExceptionIdMeta =
+      const VerificationMeta('rightOccurrenceExceptionId');
+  @override
+  late final GeneratedColumn<String>
+  rightOccurrenceExceptionId = GeneratedColumn<String>(
+    'right_occurrence_exception_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES calendar_event_occurrence_exceptions (id) ON DELETE CASCADE',
+    ),
+  );
   static const VerificationMeta _conflictStateMeta = const VerificationMeta(
     'conflictState',
   );
@@ -15950,6 +16155,8 @@ class $ScheduleRelationsTable extends ScheduleRelations
     leftPlanBlockId,
     rightEventId,
     rightPlanBlockId,
+    leftOccurrenceExceptionId,
+    rightOccurrenceExceptionId,
     conflictState,
     reason,
     createdAt,
@@ -16097,6 +16304,24 @@ class $ScheduleRelationsTable extends ScheduleRelations
         ),
       );
     }
+    if (data.containsKey('left_occurrence_exception_id')) {
+      context.handle(
+        _leftOccurrenceExceptionIdMeta,
+        leftOccurrenceExceptionId.isAcceptableOrUnknown(
+          data['left_occurrence_exception_id']!,
+          _leftOccurrenceExceptionIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('right_occurrence_exception_id')) {
+      context.handle(
+        _rightOccurrenceExceptionIdMeta,
+        rightOccurrenceExceptionId.isAcceptableOrUnknown(
+          data['right_occurrence_exception_id']!,
+          _rightOccurrenceExceptionIdMeta,
+        ),
+      );
+    }
     if (data.containsKey('conflict_state')) {
       context.handle(
         _conflictStateMeta,
@@ -16210,6 +16435,14 @@ class $ScheduleRelationsTable extends ScheduleRelations
         DriftSqlType.string,
         data['${effectivePrefix}right_plan_block_id'],
       ),
+      leftOccurrenceExceptionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}left_occurrence_exception_id'],
+      ),
+      rightOccurrenceExceptionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}right_occurrence_exception_id'],
+      ),
       conflictState: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}conflict_state'],
@@ -16254,6 +16487,8 @@ class ScheduleRelation extends DataClass
   final String? leftPlanBlockId;
   final String? rightEventId;
   final String? rightPlanBlockId;
+  final String? leftOccurrenceExceptionId;
+  final String? rightOccurrenceExceptionId;
   final String? conflictState;
   final String? reason;
   final int createdAt;
@@ -16276,6 +16511,8 @@ class ScheduleRelation extends DataClass
     this.leftPlanBlockId,
     this.rightEventId,
     this.rightPlanBlockId,
+    this.leftOccurrenceExceptionId,
+    this.rightOccurrenceExceptionId,
     this.conflictState,
     this.reason,
     required this.createdAt,
@@ -16326,6 +16563,16 @@ class ScheduleRelation extends DataClass
     }
     if (!nullToAbsent || rightPlanBlockId != null) {
       map['right_plan_block_id'] = Variable<String>(rightPlanBlockId);
+    }
+    if (!nullToAbsent || leftOccurrenceExceptionId != null) {
+      map['left_occurrence_exception_id'] = Variable<String>(
+        leftOccurrenceExceptionId,
+      );
+    }
+    if (!nullToAbsent || rightOccurrenceExceptionId != null) {
+      map['right_occurrence_exception_id'] = Variable<String>(
+        rightOccurrenceExceptionId,
+      );
     }
     if (!nullToAbsent || conflictState != null) {
       map['conflict_state'] = Variable<String>(conflictState);
@@ -16383,6 +16630,14 @@ class ScheduleRelation extends DataClass
       rightPlanBlockId: rightPlanBlockId == null && nullToAbsent
           ? const Value.absent()
           : Value(rightPlanBlockId),
+      leftOccurrenceExceptionId:
+          leftOccurrenceExceptionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(leftOccurrenceExceptionId),
+      rightOccurrenceExceptionId:
+          rightOccurrenceExceptionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rightOccurrenceExceptionId),
       conflictState: conflictState == null && nullToAbsent
           ? const Value.absent()
           : Value(conflictState),
@@ -16421,6 +16676,12 @@ class ScheduleRelation extends DataClass
       leftPlanBlockId: serializer.fromJson<String?>(json['leftPlanBlockId']),
       rightEventId: serializer.fromJson<String?>(json['rightEventId']),
       rightPlanBlockId: serializer.fromJson<String?>(json['rightPlanBlockId']),
+      leftOccurrenceExceptionId: serializer.fromJson<String?>(
+        json['leftOccurrenceExceptionId'],
+      ),
+      rightOccurrenceExceptionId: serializer.fromJson<String?>(
+        json['rightOccurrenceExceptionId'],
+      ),
       conflictState: serializer.fromJson<String?>(json['conflictState']),
       reason: serializer.fromJson<String?>(json['reason']),
       createdAt: serializer.fromJson<int>(json['createdAt']),
@@ -16448,6 +16709,12 @@ class ScheduleRelation extends DataClass
       'leftPlanBlockId': serializer.toJson<String?>(leftPlanBlockId),
       'rightEventId': serializer.toJson<String?>(rightEventId),
       'rightPlanBlockId': serializer.toJson<String?>(rightPlanBlockId),
+      'leftOccurrenceExceptionId': serializer.toJson<String?>(
+        leftOccurrenceExceptionId,
+      ),
+      'rightOccurrenceExceptionId': serializer.toJson<String?>(
+        rightOccurrenceExceptionId,
+      ),
       'conflictState': serializer.toJson<String?>(conflictState),
       'reason': serializer.toJson<String?>(reason),
       'createdAt': serializer.toJson<int>(createdAt),
@@ -16473,6 +16740,8 @@ class ScheduleRelation extends DataClass
     Value<String?> leftPlanBlockId = const Value.absent(),
     Value<String?> rightEventId = const Value.absent(),
     Value<String?> rightPlanBlockId = const Value.absent(),
+    Value<String?> leftOccurrenceExceptionId = const Value.absent(),
+    Value<String?> rightOccurrenceExceptionId = const Value.absent(),
     Value<String?> conflictState = const Value.absent(),
     Value<String?> reason = const Value.absent(),
     int? createdAt,
@@ -16507,6 +16776,12 @@ class ScheduleRelation extends DataClass
     rightPlanBlockId: rightPlanBlockId.present
         ? rightPlanBlockId.value
         : this.rightPlanBlockId,
+    leftOccurrenceExceptionId: leftOccurrenceExceptionId.present
+        ? leftOccurrenceExceptionId.value
+        : this.leftOccurrenceExceptionId,
+    rightOccurrenceExceptionId: rightOccurrenceExceptionId.present
+        ? rightOccurrenceExceptionId.value
+        : this.rightOccurrenceExceptionId,
     conflictState: conflictState.present
         ? conflictState.value
         : this.conflictState,
@@ -16553,6 +16828,12 @@ class ScheduleRelation extends DataClass
       rightPlanBlockId: data.rightPlanBlockId.present
           ? data.rightPlanBlockId.value
           : this.rightPlanBlockId,
+      leftOccurrenceExceptionId: data.leftOccurrenceExceptionId.present
+          ? data.leftOccurrenceExceptionId.value
+          : this.leftOccurrenceExceptionId,
+      rightOccurrenceExceptionId: data.rightOccurrenceExceptionId.present
+          ? data.rightOccurrenceExceptionId.value
+          : this.rightOccurrenceExceptionId,
       conflictState: data.conflictState.present
           ? data.conflictState.value
           : this.conflictState,
@@ -16582,6 +16863,8 @@ class ScheduleRelation extends DataClass
           ..write('leftPlanBlockId: $leftPlanBlockId, ')
           ..write('rightEventId: $rightEventId, ')
           ..write('rightPlanBlockId: $rightPlanBlockId, ')
+          ..write('leftOccurrenceExceptionId: $leftOccurrenceExceptionId, ')
+          ..write('rightOccurrenceExceptionId: $rightOccurrenceExceptionId, ')
           ..write('conflictState: $conflictState, ')
           ..write('reason: $reason, ')
           ..write('createdAt: $createdAt, ')
@@ -16609,6 +16892,8 @@ class ScheduleRelation extends DataClass
     leftPlanBlockId,
     rightEventId,
     rightPlanBlockId,
+    leftOccurrenceExceptionId,
+    rightOccurrenceExceptionId,
     conflictState,
     reason,
     createdAt,
@@ -16635,6 +16920,8 @@ class ScheduleRelation extends DataClass
           other.leftPlanBlockId == this.leftPlanBlockId &&
           other.rightEventId == this.rightEventId &&
           other.rightPlanBlockId == this.rightPlanBlockId &&
+          other.leftOccurrenceExceptionId == this.leftOccurrenceExceptionId &&
+          other.rightOccurrenceExceptionId == this.rightOccurrenceExceptionId &&
           other.conflictState == this.conflictState &&
           other.reason == this.reason &&
           other.createdAt == this.createdAt &&
@@ -16659,6 +16946,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
   final Value<String?> leftPlanBlockId;
   final Value<String?> rightEventId;
   final Value<String?> rightPlanBlockId;
+  final Value<String?> leftOccurrenceExceptionId;
+  final Value<String?> rightOccurrenceExceptionId;
   final Value<String?> conflictState;
   final Value<String?> reason;
   final Value<int> createdAt;
@@ -16682,6 +16971,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     this.leftPlanBlockId = const Value.absent(),
     this.rightEventId = const Value.absent(),
     this.rightPlanBlockId = const Value.absent(),
+    this.leftOccurrenceExceptionId = const Value.absent(),
+    this.rightOccurrenceExceptionId = const Value.absent(),
     this.conflictState = const Value.absent(),
     this.reason = const Value.absent(),
     this.createdAt = const Value.absent(),
@@ -16706,6 +16997,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     this.leftPlanBlockId = const Value.absent(),
     this.rightEventId = const Value.absent(),
     this.rightPlanBlockId = const Value.absent(),
+    this.leftOccurrenceExceptionId = const Value.absent(),
+    this.rightOccurrenceExceptionId = const Value.absent(),
     this.conflictState = const Value.absent(),
     this.reason = const Value.absent(),
     required int createdAt,
@@ -16733,6 +17026,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     Expression<String>? leftPlanBlockId,
     Expression<String>? rightEventId,
     Expression<String>? rightPlanBlockId,
+    Expression<String>? leftOccurrenceExceptionId,
+    Expression<String>? rightOccurrenceExceptionId,
     Expression<String>? conflictState,
     Expression<String>? reason,
     Expression<int>? createdAt,
@@ -16757,6 +17052,10 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
       if (leftPlanBlockId != null) 'left_plan_block_id': leftPlanBlockId,
       if (rightEventId != null) 'right_event_id': rightEventId,
       if (rightPlanBlockId != null) 'right_plan_block_id': rightPlanBlockId,
+      if (leftOccurrenceExceptionId != null)
+        'left_occurrence_exception_id': leftOccurrenceExceptionId,
+      if (rightOccurrenceExceptionId != null)
+        'right_occurrence_exception_id': rightOccurrenceExceptionId,
       if (conflictState != null) 'conflict_state': conflictState,
       if (reason != null) 'reason': reason,
       if (createdAt != null) 'created_at': createdAt,
@@ -16783,6 +17082,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     Value<String?>? leftPlanBlockId,
     Value<String?>? rightEventId,
     Value<String?>? rightPlanBlockId,
+    Value<String?>? leftOccurrenceExceptionId,
+    Value<String?>? rightOccurrenceExceptionId,
     Value<String?>? conflictState,
     Value<String?>? reason,
     Value<int>? createdAt,
@@ -16807,6 +17108,10 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
       leftPlanBlockId: leftPlanBlockId ?? this.leftPlanBlockId,
       rightEventId: rightEventId ?? this.rightEventId,
       rightPlanBlockId: rightPlanBlockId ?? this.rightPlanBlockId,
+      leftOccurrenceExceptionId:
+          leftOccurrenceExceptionId ?? this.leftOccurrenceExceptionId,
+      rightOccurrenceExceptionId:
+          rightOccurrenceExceptionId ?? this.rightOccurrenceExceptionId,
       conflictState: conflictState ?? this.conflictState,
       reason: reason ?? this.reason,
       createdAt: createdAt ?? this.createdAt,
@@ -16869,6 +17174,16 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
     if (rightPlanBlockId.present) {
       map['right_plan_block_id'] = Variable<String>(rightPlanBlockId.value);
     }
+    if (leftOccurrenceExceptionId.present) {
+      map['left_occurrence_exception_id'] = Variable<String>(
+        leftOccurrenceExceptionId.value,
+      );
+    }
+    if (rightOccurrenceExceptionId.present) {
+      map['right_occurrence_exception_id'] = Variable<String>(
+        rightOccurrenceExceptionId.value,
+      );
+    }
     if (conflictState.present) {
       map['conflict_state'] = Variable<String>(conflictState.value);
     }
@@ -16907,6 +17222,8 @@ class ScheduleRelationsCompanion extends UpdateCompanion<ScheduleRelation> {
           ..write('leftPlanBlockId: $leftPlanBlockId, ')
           ..write('rightEventId: $rightEventId, ')
           ..write('rightPlanBlockId: $rightPlanBlockId, ')
+          ..write('leftOccurrenceExceptionId: $leftOccurrenceExceptionId, ')
+          ..write('rightOccurrenceExceptionId: $rightOccurrenceExceptionId, ')
           ..write('conflictState: $conflictState, ')
           ..write('reason: $reason, ')
           ..write('createdAt: $createdAt, ')
@@ -17739,6 +18056,20 @@ class $RemindersTable extends Reminders
       'REFERENCES calendar_events (id) ON DELETE CASCADE',
     ),
   );
+  static const VerificationMeta _occurrenceExceptionIdMeta =
+      const VerificationMeta('occurrenceExceptionId');
+  @override
+  late final GeneratedColumn<String>
+  occurrenceExceptionId = GeneratedColumn<String>(
+    'occurrence_exception_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES calendar_event_occurrence_exceptions (id) ON DELETE CASCADE',
+    ),
+  );
   static const VerificationMeta _taskIdMeta = const VerificationMeta('taskId');
   @override
   late final GeneratedColumn<String> taskId = GeneratedColumn<String>(
@@ -17847,6 +18178,7 @@ class $RemindersTable extends Reminders
     targetType,
     targetId,
     eventId,
+    occurrenceExceptionId,
     taskId,
     planBlockId,
     offsetMinutes,
@@ -17902,6 +18234,15 @@ class $RemindersTable extends Reminders
       context.handle(
         _eventIdMeta,
         eventId.isAcceptableOrUnknown(data['event_id']!, _eventIdMeta),
+      );
+    }
+    if (data.containsKey('occurrence_exception_id')) {
+      context.handle(
+        _occurrenceExceptionIdMeta,
+        occurrenceExceptionId.isAcceptableOrUnknown(
+          data['occurrence_exception_id']!,
+          _occurrenceExceptionIdMeta,
+        ),
       );
     }
     if (data.containsKey('task_id')) {
@@ -18011,6 +18352,10 @@ class $RemindersTable extends Reminders
         DriftSqlType.string,
         data['${effectivePrefix}event_id'],
       ),
+      occurrenceExceptionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}occurrence_exception_id'],
+      ),
       taskId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}task_id'],
@@ -18062,6 +18407,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
   final String targetType;
   final String targetId;
   final String? eventId;
+  final String? occurrenceExceptionId;
   final String? taskId;
   final String? planBlockId;
   final int? offsetMinutes;
@@ -18077,6 +18423,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
     required this.targetType,
     required this.targetId,
     this.eventId,
+    this.occurrenceExceptionId,
     this.taskId,
     this.planBlockId,
     this.offsetMinutes,
@@ -18096,6 +18443,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
     map['target_id'] = Variable<String>(targetId);
     if (!nullToAbsent || eventId != null) {
       map['event_id'] = Variable<String>(eventId);
+    }
+    if (!nullToAbsent || occurrenceExceptionId != null) {
+      map['occurrence_exception_id'] = Variable<String>(occurrenceExceptionId);
     }
     if (!nullToAbsent || taskId != null) {
       map['task_id'] = Variable<String>(taskId);
@@ -18128,6 +18478,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
       eventId: eventId == null && nullToAbsent
           ? const Value.absent()
           : Value(eventId),
+      occurrenceExceptionId: occurrenceExceptionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(occurrenceExceptionId),
       taskId: taskId == null && nullToAbsent
           ? const Value.absent()
           : Value(taskId),
@@ -18161,6 +18514,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
       targetType: serializer.fromJson<String>(json['targetType']),
       targetId: serializer.fromJson<String>(json['targetId']),
       eventId: serializer.fromJson<String?>(json['eventId']),
+      occurrenceExceptionId: serializer.fromJson<String?>(
+        json['occurrenceExceptionId'],
+      ),
       taskId: serializer.fromJson<String?>(json['taskId']),
       planBlockId: serializer.fromJson<String?>(json['planBlockId']),
       offsetMinutes: serializer.fromJson<int?>(json['offsetMinutes']),
@@ -18181,6 +18537,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
       'targetType': serializer.toJson<String>(targetType),
       'targetId': serializer.toJson<String>(targetId),
       'eventId': serializer.toJson<String?>(eventId),
+      'occurrenceExceptionId': serializer.toJson<String?>(
+        occurrenceExceptionId,
+      ),
       'taskId': serializer.toJson<String?>(taskId),
       'planBlockId': serializer.toJson<String?>(planBlockId),
       'offsetMinutes': serializer.toJson<int?>(offsetMinutes),
@@ -18199,6 +18558,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
     String? targetType,
     String? targetId,
     Value<String?> eventId = const Value.absent(),
+    Value<String?> occurrenceExceptionId = const Value.absent(),
     Value<String?> taskId = const Value.absent(),
     Value<String?> planBlockId = const Value.absent(),
     Value<int?> offsetMinutes = const Value.absent(),
@@ -18214,6 +18574,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
     targetType: targetType ?? this.targetType,
     targetId: targetId ?? this.targetId,
     eventId: eventId.present ? eventId.value : this.eventId,
+    occurrenceExceptionId: occurrenceExceptionId.present
+        ? occurrenceExceptionId.value
+        : this.occurrenceExceptionId,
     taskId: taskId.present ? taskId.value : this.taskId,
     planBlockId: planBlockId.present ? planBlockId.value : this.planBlockId,
     offsetMinutes: offsetMinutes.present
@@ -18235,6 +18598,9 @@ class Reminder extends DataClass implements Insertable<Reminder> {
           : this.targetType,
       targetId: data.targetId.present ? data.targetId.value : this.targetId,
       eventId: data.eventId.present ? data.eventId.value : this.eventId,
+      occurrenceExceptionId: data.occurrenceExceptionId.present
+          ? data.occurrenceExceptionId.value
+          : this.occurrenceExceptionId,
       taskId: data.taskId.present ? data.taskId.value : this.taskId,
       planBlockId: data.planBlockId.present
           ? data.planBlockId.value
@@ -18263,6 +18629,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
           ..write('targetType: $targetType, ')
           ..write('targetId: $targetId, ')
           ..write('eventId: $eventId, ')
+          ..write('occurrenceExceptionId: $occurrenceExceptionId, ')
           ..write('taskId: $taskId, ')
           ..write('planBlockId: $planBlockId, ')
           ..write('offsetMinutes: $offsetMinutes, ')
@@ -18283,6 +18650,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
     targetType,
     targetId,
     eventId,
+    occurrenceExceptionId,
     taskId,
     planBlockId,
     offsetMinutes,
@@ -18302,6 +18670,7 @@ class Reminder extends DataClass implements Insertable<Reminder> {
           other.targetType == this.targetType &&
           other.targetId == this.targetId &&
           other.eventId == this.eventId &&
+          other.occurrenceExceptionId == this.occurrenceExceptionId &&
           other.taskId == this.taskId &&
           other.planBlockId == this.planBlockId &&
           other.offsetMinutes == this.offsetMinutes &&
@@ -18319,6 +18688,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
   final Value<String> targetType;
   final Value<String> targetId;
   final Value<String?> eventId;
+  final Value<String?> occurrenceExceptionId;
   final Value<String?> taskId;
   final Value<String?> planBlockId;
   final Value<int?> offsetMinutes;
@@ -18335,6 +18705,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
     this.targetType = const Value.absent(),
     this.targetId = const Value.absent(),
     this.eventId = const Value.absent(),
+    this.occurrenceExceptionId = const Value.absent(),
     this.taskId = const Value.absent(),
     this.planBlockId = const Value.absent(),
     this.offsetMinutes = const Value.absent(),
@@ -18352,6 +18723,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
     required String targetType,
     required String targetId,
     this.eventId = const Value.absent(),
+    this.occurrenceExceptionId = const Value.absent(),
     this.taskId = const Value.absent(),
     this.planBlockId = const Value.absent(),
     this.offsetMinutes = const Value.absent(),
@@ -18376,6 +18748,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
     Expression<String>? targetType,
     Expression<String>? targetId,
     Expression<String>? eventId,
+    Expression<String>? occurrenceExceptionId,
     Expression<String>? taskId,
     Expression<String>? planBlockId,
     Expression<int>? offsetMinutes,
@@ -18393,6 +18766,8 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
       if (targetType != null) 'target_type': targetType,
       if (targetId != null) 'target_id': targetId,
       if (eventId != null) 'event_id': eventId,
+      if (occurrenceExceptionId != null)
+        'occurrence_exception_id': occurrenceExceptionId,
       if (taskId != null) 'task_id': taskId,
       if (planBlockId != null) 'plan_block_id': planBlockId,
       if (offsetMinutes != null) 'offset_minutes': offsetMinutes,
@@ -18412,6 +18787,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
     Value<String>? targetType,
     Value<String>? targetId,
     Value<String?>? eventId,
+    Value<String?>? occurrenceExceptionId,
     Value<String?>? taskId,
     Value<String?>? planBlockId,
     Value<int?>? offsetMinutes,
@@ -18429,6 +18805,8 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
       targetType: targetType ?? this.targetType,
       targetId: targetId ?? this.targetId,
       eventId: eventId ?? this.eventId,
+      occurrenceExceptionId:
+          occurrenceExceptionId ?? this.occurrenceExceptionId,
       taskId: taskId ?? this.taskId,
       planBlockId: planBlockId ?? this.planBlockId,
       offsetMinutes: offsetMinutes ?? this.offsetMinutes,
@@ -18459,6 +18837,11 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
     }
     if (eventId.present) {
       map['event_id'] = Variable<String>(eventId.value);
+    }
+    if (occurrenceExceptionId.present) {
+      map['occurrence_exception_id'] = Variable<String>(
+        occurrenceExceptionId.value,
+      );
     }
     if (taskId.present) {
       map['task_id'] = Variable<String>(taskId.value);
@@ -18501,6 +18884,7 @@ class RemindersCompanion extends UpdateCompanion<Reminder> {
           ..write('targetType: $targetType, ')
           ..write('targetId: $targetId, ')
           ..write('eventId: $eventId, ')
+          ..write('occurrenceExceptionId: $occurrenceExceptionId, ')
           ..write('taskId: $taskId, ')
           ..write('planBlockId: $planBlockId, ')
           ..write('offsetMinutes: $offsetMinutes, ')
@@ -19584,6 +19968,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     ),
     WritePropagation(
       on: TableUpdateQuery.onTableName(
+        'calendar_event_occurrence_exceptions',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('task_event_links', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
         'local_accounts',
         limitUpdateKind: UpdateKind.delete,
       ),
@@ -19613,6 +20004,20 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     WritePropagation(
       on: TableUpdateQuery.onTableName(
         'plan_blocks',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('schedule_relations', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'calendar_event_occurrence_exceptions',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('schedule_relations', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'calendar_event_occurrence_exceptions',
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('schedule_relations', kind: UpdateKind.delete)],
@@ -19634,6 +20039,13 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     WritePropagation(
       on: TableUpdateQuery.onTableName(
         'calendar_events',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [TableUpdate('reminders', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'calendar_event_occurrence_exceptions',
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('reminders', kind: UpdateKind.delete)],
@@ -28431,6 +28843,7 @@ typedef $$CalendarEventSeriesTableCreateCompanionBuilder =
       Value<String> completionPolicy,
       Value<String> tagsJson,
       Value<String?> userNotes,
+      Value<String> reminderOffsetsJson,
       Value<int?> deletedAt,
       required int createdAt,
       required int updatedAt,
@@ -28459,6 +28872,7 @@ typedef $$CalendarEventSeriesTableUpdateCompanionBuilder =
       Value<String> completionPolicy,
       Value<String> tagsJson,
       Value<String?> userNotes,
+      Value<String> reminderOffsetsJson,
       Value<int?> deletedAt,
       Value<int> createdAt,
       Value<int> updatedAt,
@@ -28648,6 +29062,11 @@ class $$CalendarEventSeriesTableFilterComposer
 
   ColumnFilters<String> get userNotes => $composableBuilder(
     column: $table.userNotes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get reminderOffsetsJson => $composableBuilder(
+    column: $table.reminderOffsetsJson,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -28853,6 +29272,11 @@ class $$CalendarEventSeriesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get reminderOffsetsJson => $composableBuilder(
+    column: $table.reminderOffsetsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<int> get deletedAt => $composableBuilder(
     column: $table.deletedAt,
     builder: (column) => ColumnOrderings(column),
@@ -28980,6 +29404,11 @@ class $$CalendarEventSeriesTableAnnotationComposer
 
   GeneratedColumn<String> get userNotes =>
       $composableBuilder(column: $table.userNotes, builder: (column) => column);
+
+  GeneratedColumn<String> get reminderOffsetsJson => $composableBuilder(
+    column: $table.reminderOffsetsJson,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<int> get deletedAt =>
       $composableBuilder(column: $table.deletedAt, builder: (column) => column);
@@ -29129,6 +29558,7 @@ class $$CalendarEventSeriesTableTableManager
                 Value<String> completionPolicy = const Value.absent(),
                 Value<String> tagsJson = const Value.absent(),
                 Value<String?> userNotes = const Value.absent(),
+                Value<String> reminderOffsetsJson = const Value.absent(),
                 Value<int?> deletedAt = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> updatedAt = const Value.absent(),
@@ -29155,6 +29585,7 @@ class $$CalendarEventSeriesTableTableManager
                 completionPolicy: completionPolicy,
                 tagsJson: tagsJson,
                 userNotes: userNotes,
+                reminderOffsetsJson: reminderOffsetsJson,
                 deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -29183,6 +29614,7 @@ class $$CalendarEventSeriesTableTableManager
                 Value<String> completionPolicy = const Value.absent(),
                 Value<String> tagsJson = const Value.absent(),
                 Value<String?> userNotes = const Value.absent(),
+                Value<String> reminderOffsetsJson = const Value.absent(),
                 Value<int?> deletedAt = const Value.absent(),
                 required int createdAt,
                 required int updatedAt,
@@ -29209,6 +29641,7 @@ class $$CalendarEventSeriesTableTableManager
                 completionPolicy: completionPolicy,
                 tagsJson: tagsJson,
                 userNotes: userNotes,
+                reminderOffsetsJson: reminderOffsetsJson,
                 deletedAt: deletedAt,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
@@ -30827,6 +31260,102 @@ final class $$CalendarEventOccurrenceExceptionsTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
+
+  static MultiTypedResultKey<$TaskEventLinksTable, List<TaskEventLink>>
+  _taskEventLinksRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.taskEventLinks,
+    aliasName:
+        'calendar_event_occurrence_exceptions__id__task_event_links__occurrence_exception_id',
+  );
+
+  $$TaskEventLinksTableProcessedTableManager get taskEventLinksRefs {
+    final manager = $$TaskEventLinksTableTableManager($_db, $_db.taskEventLinks)
+        .filter(
+          (f) =>
+              f.occurrenceExceptionId.id.sqlEquals($_itemColumn<String>('id')!),
+        );
+
+    final cache = $_typedResult.readTableOrNull(_taskEventLinksRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$ScheduleRelationsTable, List<ScheduleRelation>>
+  _leftOccurrenceExceptionRelationsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.scheduleRelations,
+    aliasName:
+        'calendar_event_occurrence_exceptions__id__schedule_relations__left_occurrence_exception_id',
+  );
+
+  $$ScheduleRelationsTableProcessedTableManager
+  get leftOccurrenceExceptionRelations {
+    final manager =
+        $$ScheduleRelationsTableTableManager(
+          $_db,
+          $_db.scheduleRelations,
+        ).filter(
+          (f) => f.leftOccurrenceExceptionId.id.sqlEquals(
+            $_itemColumn<String>('id')!,
+          ),
+        );
+
+    final cache = $_typedResult.readTableOrNull(
+      _leftOccurrenceExceptionRelationsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$ScheduleRelationsTable, List<ScheduleRelation>>
+  _rightOccurrenceExceptionRelationsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.scheduleRelations,
+    aliasName:
+        'calendar_event_occurrence_exceptions__id__schedule_relations__right_occurrence_exception_id',
+  );
+
+  $$ScheduleRelationsTableProcessedTableManager
+  get rightOccurrenceExceptionRelations {
+    final manager =
+        $$ScheduleRelationsTableTableManager(
+          $_db,
+          $_db.scheduleRelations,
+        ).filter(
+          (f) => f.rightOccurrenceExceptionId.id.sqlEquals(
+            $_itemColumn<String>('id')!,
+          ),
+        );
+
+    final cache = $_typedResult.readTableOrNull(
+      _rightOccurrenceExceptionRelationsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$RemindersTable, List<Reminder>>
+  _remindersRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.reminders,
+    aliasName:
+        'calendar_event_occurrence_exceptions__id__reminders__occurrence_exception_id',
+  );
+
+  $$RemindersTableProcessedTableManager get remindersRefs {
+    final manager = $$RemindersTableTableManager($_db, $_db.reminders).filter(
+      (f) => f.occurrenceExceptionId.id.sqlEquals($_itemColumn<String>('id')!),
+    );
+
+    final cache = $_typedResult.readTableOrNull(_remindersRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$CalendarEventOccurrenceExceptionsTableFilterComposer
@@ -30942,6 +31471,106 @@ class $$CalendarEventOccurrenceExceptionsTableFilterComposer
           ),
     );
     return composer;
+  }
+
+  Expression<bool> taskEventLinksRefs(
+    Expression<bool> Function($$TaskEventLinksTableFilterComposer f) f,
+  ) {
+    final $$TaskEventLinksTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.taskEventLinks,
+      getReferencedColumn: (t) => t.occurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TaskEventLinksTableFilterComposer(
+            $db: $db,
+            $table: $db.taskEventLinks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> leftOccurrenceExceptionRelations(
+    Expression<bool> Function($$ScheduleRelationsTableFilterComposer f) f,
+  ) {
+    final $$ScheduleRelationsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.scheduleRelations,
+      getReferencedColumn: (t) => t.leftOccurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ScheduleRelationsTableFilterComposer(
+            $db: $db,
+            $table: $db.scheduleRelations,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> rightOccurrenceExceptionRelations(
+    Expression<bool> Function($$ScheduleRelationsTableFilterComposer f) f,
+  ) {
+    final $$ScheduleRelationsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.scheduleRelations,
+      getReferencedColumn: (t) => t.rightOccurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$ScheduleRelationsTableFilterComposer(
+            $db: $db,
+            $table: $db.scheduleRelations,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> remindersRefs(
+    Expression<bool> Function($$RemindersTableFilterComposer f) f,
+  ) {
+    final $$RemindersTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.reminders,
+      getReferencedColumn: (t) => t.occurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RemindersTableFilterComposer(
+            $db: $db,
+            $table: $db.reminders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 }
 
@@ -31163,6 +31792,108 @@ class $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
         );
     return composer;
   }
+
+  Expression<T> taskEventLinksRefs<T extends Object>(
+    Expression<T> Function($$TaskEventLinksTableAnnotationComposer a) f,
+  ) {
+    final $$TaskEventLinksTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.taskEventLinks,
+      getReferencedColumn: (t) => t.occurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$TaskEventLinksTableAnnotationComposer(
+            $db: $db,
+            $table: $db.taskEventLinks,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> leftOccurrenceExceptionRelations<T extends Object>(
+    Expression<T> Function($$ScheduleRelationsTableAnnotationComposer a) f,
+  ) {
+    final $$ScheduleRelationsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.scheduleRelations,
+          getReferencedColumn: (t) => t.leftOccurrenceExceptionId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$ScheduleRelationsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.scheduleRelations,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<T> rightOccurrenceExceptionRelations<T extends Object>(
+    Expression<T> Function($$ScheduleRelationsTableAnnotationComposer a) f,
+  ) {
+    final $$ScheduleRelationsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.id,
+          referencedTable: $db.scheduleRelations,
+          getReferencedColumn: (t) => t.rightOccurrenceExceptionId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$ScheduleRelationsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.scheduleRelations,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<T> remindersRefs<T extends Object>(
+    Expression<T> Function($$RemindersTableAnnotationComposer a) f,
+  ) {
+    final $$RemindersTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.reminders,
+      getReferencedColumn: (t) => t.occurrenceExceptionId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RemindersTableAnnotationComposer(
+            $db: $db,
+            $table: $db.reminders,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$CalendarEventOccurrenceExceptionsTableTableManager
@@ -31181,7 +31912,14 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
             $$CalendarEventOccurrenceExceptionsTableReferences,
           ),
           CalendarEventOccurrenceException,
-          PrefetchHooks Function({bool accountId, bool seriesId})
+          PrefetchHooks Function({
+            bool accountId,
+            bool seriesId,
+            bool taskEventLinksRefs,
+            bool leftOccurrenceExceptionRelations,
+            bool rightOccurrenceExceptionRelations,
+            bool remindersRefs,
+          })
         > {
   $$CalendarEventOccurrenceExceptionsTableTableManager(
     _$AppDatabase db,
@@ -31285,64 +32023,166 @@ class $$CalendarEventOccurrenceExceptionsTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({accountId = false, seriesId = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [],
-              addJoins:
-                  <
-                    T extends TableManagerState<
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic,
-                      dynamic
-                    >
-                  >(state) {
-                    if (accountId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.accountId,
-                                referencedTable:
-                                    $$CalendarEventOccurrenceExceptionsTableReferences
-                                        ._accountIdTable(db),
-                                referencedColumn:
-                                    $$CalendarEventOccurrenceExceptionsTableReferences
-                                        ._accountIdTable(db)
-                                        .id,
-                              )
-                              as T;
-                    }
-                    if (seriesId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.seriesId,
-                                referencedTable:
-                                    $$CalendarEventOccurrenceExceptionsTableReferences
-                                        ._seriesIdTable(db),
-                                referencedColumn:
-                                    $$CalendarEventOccurrenceExceptionsTableReferences
-                                        ._seriesIdTable(db)
-                                        .id,
-                              )
-                              as T;
-                    }
+          prefetchHooksCallback:
+              ({
+                accountId = false,
+                seriesId = false,
+                taskEventLinksRefs = false,
+                leftOccurrenceExceptionRelations = false,
+                rightOccurrenceExceptionRelations = false,
+                remindersRefs = false,
+              }) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (taskEventLinksRefs) db.taskEventLinks,
+                    if (leftOccurrenceExceptionRelations) db.scheduleRelations,
+                    if (rightOccurrenceExceptionRelations) db.scheduleRelations,
+                    if (remindersRefs) db.reminders,
+                  ],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (accountId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.accountId,
+                                    referencedTable:
+                                        $$CalendarEventOccurrenceExceptionsTableReferences
+                                            ._accountIdTable(db),
+                                    referencedColumn:
+                                        $$CalendarEventOccurrenceExceptionsTableReferences
+                                            ._accountIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (seriesId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.seriesId,
+                                    referencedTable:
+                                        $$CalendarEventOccurrenceExceptionsTableReferences
+                                            ._seriesIdTable(db),
+                                    referencedColumn:
+                                        $$CalendarEventOccurrenceExceptionsTableReferences
+                                            ._seriesIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
 
-                    return state;
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (taskEventLinksRefs)
+                        await $_getPrefetchedData<
+                          CalendarEventOccurrenceException,
+                          $CalendarEventOccurrenceExceptionsTable,
+                          TaskEventLink
+                        >(
+                          currentTable: table,
+                          referencedTable:
+                              $$CalendarEventOccurrenceExceptionsTableReferences
+                                  ._taskEventLinksRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$CalendarEventOccurrenceExceptionsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).taskEventLinksRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.occurrenceExceptionId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (leftOccurrenceExceptionRelations)
+                        await $_getPrefetchedData<
+                          CalendarEventOccurrenceException,
+                          $CalendarEventOccurrenceExceptionsTable,
+                          ScheduleRelation
+                        >(
+                          currentTable: table,
+                          referencedTable:
+                              $$CalendarEventOccurrenceExceptionsTableReferences
+                                  ._leftOccurrenceExceptionRelationsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$CalendarEventOccurrenceExceptionsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).leftOccurrenceExceptionRelations,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.leftOccurrenceExceptionId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (rightOccurrenceExceptionRelations)
+                        await $_getPrefetchedData<
+                          CalendarEventOccurrenceException,
+                          $CalendarEventOccurrenceExceptionsTable,
+                          ScheduleRelation
+                        >(
+                          currentTable: table,
+                          referencedTable:
+                              $$CalendarEventOccurrenceExceptionsTableReferences
+                                  ._rightOccurrenceExceptionRelationsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$CalendarEventOccurrenceExceptionsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).rightOccurrenceExceptionRelations,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.rightOccurrenceExceptionId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (remindersRefs)
+                        await $_getPrefetchedData<
+                          CalendarEventOccurrenceException,
+                          $CalendarEventOccurrenceExceptionsTable,
+                          Reminder
+                        >(
+                          currentTable: table,
+                          referencedTable:
+                              $$CalendarEventOccurrenceExceptionsTableReferences
+                                  ._remindersRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$CalendarEventOccurrenceExceptionsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).remindersRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.occurrenceExceptionId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
                   },
-              getPrefetchedDataCallback: (items) async {
-                return [];
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -31362,7 +32202,14 @@ typedef $$CalendarEventOccurrenceExceptionsTableProcessedTableManager =
         $$CalendarEventOccurrenceExceptionsTableReferences,
       ),
       CalendarEventOccurrenceException,
-      PrefetchHooks Function({bool accountId, bool seriesId})
+      PrefetchHooks Function({
+        bool accountId,
+        bool seriesId,
+        bool taskEventLinksRefs,
+        bool leftOccurrenceExceptionRelations,
+        bool rightOccurrenceExceptionRelations,
+        bool remindersRefs,
+      })
     >;
 typedef $$UserOverlaysTableCreateCompanionBuilder =
     UserOverlaysCompanion Function({
@@ -33906,7 +34753,9 @@ typedef $$TaskEventLinksTableCreateCompanionBuilder =
     TaskEventLinksCompanion Function({
       required String accountId,
       required String taskId,
-      required String eventId,
+      required String targetId,
+      Value<String?> eventId,
+      Value<String?> occurrenceExceptionId,
       required String relationType,
       required int createdAt,
       Value<int> rowid,
@@ -33915,7 +34764,9 @@ typedef $$TaskEventLinksTableUpdateCompanionBuilder =
     TaskEventLinksCompanion Function({
       Value<String> accountId,
       Value<String> taskId,
-      Value<String> eventId,
+      Value<String> targetId,
+      Value<String?> eventId,
+      Value<String?> occurrenceExceptionId,
       Value<String> relationType,
       Value<int> createdAt,
       Value<int> rowid,
@@ -33968,14 +34819,37 @@ final class $$TaskEventLinksTableReferences
       .calendarEvents
       .createAlias('task_event_links__event_id__calendar_events__id');
 
-  $$CalendarEventsTableProcessedTableManager get eventId {
-    final $_column = $_itemColumn<String>('event_id')!;
-
+  $$CalendarEventsTableProcessedTableManager? get eventId {
+    final $_column = $_itemColumn<String>('event_id');
+    if ($_column == null) return null;
     final manager = $$CalendarEventsTableTableManager(
       $_db,
       $_db.calendarEvents,
     ).filter((f) => f.id.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_eventIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $CalendarEventOccurrenceExceptionsTable _occurrenceExceptionIdTable(
+    _$AppDatabase db,
+  ) => db.calendarEventOccurrenceExceptions.createAlias(
+    'task_event_links__occurrence_exception_id__calendar_event_occurrence_exceptions__id',
+  );
+
+  $$CalendarEventOccurrenceExceptionsTableProcessedTableManager?
+  get occurrenceExceptionId {
+    final $_column = $_itemColumn<String>('occurrence_exception_id');
+    if ($_column == null) return null;
+    final manager = $$CalendarEventOccurrenceExceptionsTableTableManager(
+      $_db,
+      $_db.calendarEventOccurrenceExceptions,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(
+      _occurrenceExceptionIdTable($_db),
+    );
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -33992,6 +34866,11 @@ class $$TaskEventLinksTableFilterComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnFilters<String> get targetId => $composableBuilder(
+    column: $table.targetId,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get relationType => $composableBuilder(
     column: $table.relationType,
     builder: (column) => ColumnFilters(column),
@@ -34070,6 +34949,31 @@ class $$TaskEventLinksTableFilterComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableFilterComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableFilterComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$TaskEventLinksTableOrderingComposer
@@ -34081,6 +34985,11 @@ class $$TaskEventLinksTableOrderingComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  ColumnOrderings<String> get targetId => $composableBuilder(
+    column: $table.targetId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get relationType => $composableBuilder(
     column: $table.relationType,
     builder: (column) => ColumnOrderings(column),
@@ -34159,6 +35068,31 @@ class $$TaskEventLinksTableOrderingComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableOrderingComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableOrderingComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableOrderingComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$TaskEventLinksTableAnnotationComposer
@@ -34170,6 +35104,9 @@ class $$TaskEventLinksTableAnnotationComposer
     super.$addJoinBuilderToRootComposer,
     super.$removeJoinBuilderFromRootComposer,
   });
+  GeneratedColumn<String> get targetId =>
+      $composableBuilder(column: $table.targetId, builder: (column) => column);
+
   GeneratedColumn<String> get relationType => $composableBuilder(
     column: $table.relationType,
     builder: (column) => column,
@@ -34246,6 +35183,31 @@ class $$TaskEventLinksTableAnnotationComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$TaskEventLinksTableTableManager
@@ -34261,7 +35223,12 @@ class $$TaskEventLinksTableTableManager
           $$TaskEventLinksTableUpdateCompanionBuilder,
           (TaskEventLink, $$TaskEventLinksTableReferences),
           TaskEventLink,
-          PrefetchHooks Function({bool accountId, bool taskId, bool eventId})
+          PrefetchHooks Function({
+            bool accountId,
+            bool taskId,
+            bool eventId,
+            bool occurrenceExceptionId,
+          })
         > {
   $$TaskEventLinksTableTableManager(
     _$AppDatabase db,
@@ -34280,14 +35247,18 @@ class $$TaskEventLinksTableTableManager
               ({
                 Value<String> accountId = const Value.absent(),
                 Value<String> taskId = const Value.absent(),
-                Value<String> eventId = const Value.absent(),
+                Value<String> targetId = const Value.absent(),
+                Value<String?> eventId = const Value.absent(),
+                Value<String?> occurrenceExceptionId = const Value.absent(),
                 Value<String> relationType = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => TaskEventLinksCompanion(
                 accountId: accountId,
                 taskId: taskId,
+                targetId: targetId,
                 eventId: eventId,
+                occurrenceExceptionId: occurrenceExceptionId,
                 relationType: relationType,
                 createdAt: createdAt,
                 rowid: rowid,
@@ -34296,14 +35267,18 @@ class $$TaskEventLinksTableTableManager
               ({
                 required String accountId,
                 required String taskId,
-                required String eventId,
+                required String targetId,
+                Value<String?> eventId = const Value.absent(),
+                Value<String?> occurrenceExceptionId = const Value.absent(),
                 required String relationType,
                 required int createdAt,
                 Value<int> rowid = const Value.absent(),
               }) => TaskEventLinksCompanion.insert(
                 accountId: accountId,
                 taskId: taskId,
+                targetId: targetId,
                 eventId: eventId,
+                occurrenceExceptionId: occurrenceExceptionId,
                 relationType: relationType,
                 createdAt: createdAt,
                 rowid: rowid,
@@ -34317,7 +35292,12 @@ class $$TaskEventLinksTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({accountId = false, taskId = false, eventId = false}) {
+              ({
+                accountId = false,
+                taskId = false,
+                eventId = false,
+                occurrenceExceptionId = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [],
@@ -34382,6 +35362,21 @@ class $$TaskEventLinksTableTableManager
                                   )
                                   as T;
                         }
+                        if (occurrenceExceptionId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.occurrenceExceptionId,
+                                    referencedTable:
+                                        $$TaskEventLinksTableReferences
+                                            ._occurrenceExceptionIdTable(db),
+                                    referencedColumn:
+                                        $$TaskEventLinksTableReferences
+                                            ._occurrenceExceptionIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
 
                         return state;
                       },
@@ -34406,7 +35401,12 @@ typedef $$TaskEventLinksTableProcessedTableManager =
       $$TaskEventLinksTableUpdateCompanionBuilder,
       (TaskEventLink, $$TaskEventLinksTableReferences),
       TaskEventLink,
-      PrefetchHooks Function({bool accountId, bool taskId, bool eventId})
+      PrefetchHooks Function({
+        bool accountId,
+        bool taskId,
+        bool eventId,
+        bool occurrenceExceptionId,
+      })
     >;
 typedef $$ScheduleRelationsTableCreateCompanionBuilder =
     ScheduleRelationsCompanion Function({
@@ -34427,6 +35427,8 @@ typedef $$ScheduleRelationsTableCreateCompanionBuilder =
       Value<String?> leftPlanBlockId,
       Value<String?> rightEventId,
       Value<String?> rightPlanBlockId,
+      Value<String?> leftOccurrenceExceptionId,
+      Value<String?> rightOccurrenceExceptionId,
       Value<String?> conflictState,
       Value<String?> reason,
       required int createdAt,
@@ -34452,6 +35454,8 @@ typedef $$ScheduleRelationsTableUpdateCompanionBuilder =
       Value<String?> leftPlanBlockId,
       Value<String?> rightEventId,
       Value<String?> rightPlanBlockId,
+      Value<String?> leftOccurrenceExceptionId,
+      Value<String?> rightOccurrenceExceptionId,
       Value<String?> conflictState,
       Value<String?> reason,
       Value<int> createdAt,
@@ -34556,6 +35560,54 @@ final class $$ScheduleRelationsTableReferences
       $_db.planBlocks,
     ).filter((f) => f.id.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_rightPlanBlockIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $CalendarEventOccurrenceExceptionsTable
+  _leftOccurrenceExceptionIdTable(
+    _$AppDatabase db,
+  ) => db.calendarEventOccurrenceExceptions.createAlias(
+    'schedule_relations__left_occurrence_exception_id__calendar_event_occurrence_exceptions__id',
+  );
+
+  $$CalendarEventOccurrenceExceptionsTableProcessedTableManager?
+  get leftOccurrenceExceptionId {
+    final $_column = $_itemColumn<String>('left_occurrence_exception_id');
+    if ($_column == null) return null;
+    final manager = $$CalendarEventOccurrenceExceptionsTableTableManager(
+      $_db,
+      $_db.calendarEventOccurrenceExceptions,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(
+      _leftOccurrenceExceptionIdTable($_db),
+    );
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $CalendarEventOccurrenceExceptionsTable
+  _rightOccurrenceExceptionIdTable(
+    _$AppDatabase db,
+  ) => db.calendarEventOccurrenceExceptions.createAlias(
+    'schedule_relations__right_occurrence_exception_id__calendar_event_occurrence_exceptions__id',
+  );
+
+  $$CalendarEventOccurrenceExceptionsTableProcessedTableManager?
+  get rightOccurrenceExceptionId {
+    final $_column = $_itemColumn<String>('right_occurrence_exception_id');
+    if ($_column == null) return null;
+    final manager = $$CalendarEventOccurrenceExceptionsTableTableManager(
+      $_db,
+      $_db.calendarEventOccurrenceExceptions,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(
+      _rightOccurrenceExceptionIdTable($_db),
+    );
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -34766,6 +35818,56 @@ class $$ScheduleRelationsTableFilterComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableFilterComposer
+  get leftOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.leftOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableFilterComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
+
+  $$CalendarEventOccurrenceExceptionsTableFilterComposer
+  get rightOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.rightOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableFilterComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$ScheduleRelationsTableOrderingComposer
@@ -34971,6 +36073,56 @@ class $$ScheduleRelationsTableOrderingComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableOrderingComposer
+  get leftOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableOrderingComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.leftOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableOrderingComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
+
+  $$CalendarEventOccurrenceExceptionsTableOrderingComposer
+  get rightOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableOrderingComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.rightOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableOrderingComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$ScheduleRelationsTableAnnotationComposer
@@ -35158,6 +36310,56 @@ class $$ScheduleRelationsTableAnnotationComposer
     );
     return composer;
   }
+
+  $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
+  get leftOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.leftOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
+
+  $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
+  get rightOccurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.rightOccurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
 }
 
 class $$ScheduleRelationsTableTableManager
@@ -35179,6 +36381,8 @@ class $$ScheduleRelationsTableTableManager
             bool leftPlanBlockId,
             bool rightEventId,
             bool rightPlanBlockId,
+            bool leftOccurrenceExceptionId,
+            bool rightOccurrenceExceptionId,
           })
         > {
   $$ScheduleRelationsTableTableManager(
@@ -35216,6 +36420,9 @@ class $$ScheduleRelationsTableTableManager
                 Value<String?> leftPlanBlockId = const Value.absent(),
                 Value<String?> rightEventId = const Value.absent(),
                 Value<String?> rightPlanBlockId = const Value.absent(),
+                Value<String?> leftOccurrenceExceptionId = const Value.absent(),
+                Value<String?> rightOccurrenceExceptionId =
+                    const Value.absent(),
                 Value<String?> conflictState = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 Value<int> createdAt = const Value.absent(),
@@ -35239,6 +36446,8 @@ class $$ScheduleRelationsTableTableManager
                 leftPlanBlockId: leftPlanBlockId,
                 rightEventId: rightEventId,
                 rightPlanBlockId: rightPlanBlockId,
+                leftOccurrenceExceptionId: leftOccurrenceExceptionId,
+                rightOccurrenceExceptionId: rightOccurrenceExceptionId,
                 conflictState: conflictState,
                 reason: reason,
                 createdAt: createdAt,
@@ -35264,6 +36473,9 @@ class $$ScheduleRelationsTableTableManager
                 Value<String?> leftPlanBlockId = const Value.absent(),
                 Value<String?> rightEventId = const Value.absent(),
                 Value<String?> rightPlanBlockId = const Value.absent(),
+                Value<String?> leftOccurrenceExceptionId = const Value.absent(),
+                Value<String?> rightOccurrenceExceptionId =
+                    const Value.absent(),
                 Value<String?> conflictState = const Value.absent(),
                 Value<String?> reason = const Value.absent(),
                 required int createdAt,
@@ -35287,6 +36499,8 @@ class $$ScheduleRelationsTableTableManager
                 leftPlanBlockId: leftPlanBlockId,
                 rightEventId: rightEventId,
                 rightPlanBlockId: rightPlanBlockId,
+                leftOccurrenceExceptionId: leftOccurrenceExceptionId,
+                rightOccurrenceExceptionId: rightOccurrenceExceptionId,
                 conflictState: conflictState,
                 reason: reason,
                 createdAt: createdAt,
@@ -35308,6 +36522,8 @@ class $$ScheduleRelationsTableTableManager
                 leftPlanBlockId = false,
                 rightEventId = false,
                 rightPlanBlockId = false,
+                leftOccurrenceExceptionId = false,
+                rightOccurrenceExceptionId = false,
               }) {
                 return PrefetchHooks(
                   db: db,
@@ -35403,6 +36619,44 @@ class $$ScheduleRelationsTableTableManager
                                   )
                                   as T;
                         }
+                        if (leftOccurrenceExceptionId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn:
+                                        table.leftOccurrenceExceptionId,
+                                    referencedTable:
+                                        $$ScheduleRelationsTableReferences
+                                            ._leftOccurrenceExceptionIdTable(
+                                              db,
+                                            ),
+                                    referencedColumn:
+                                        $$ScheduleRelationsTableReferences
+                                            ._leftOccurrenceExceptionIdTable(db)
+                                            .id,
+                                  )
+                                  as T;
+                        }
+                        if (rightOccurrenceExceptionId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn:
+                                        table.rightOccurrenceExceptionId,
+                                    referencedTable:
+                                        $$ScheduleRelationsTableReferences
+                                            ._rightOccurrenceExceptionIdTable(
+                                              db,
+                                            ),
+                                    referencedColumn:
+                                        $$ScheduleRelationsTableReferences
+                                            ._rightOccurrenceExceptionIdTable(
+                                              db,
+                                            )
+                                            .id,
+                                  )
+                                  as T;
+                        }
 
                         return state;
                       },
@@ -35433,6 +36687,8 @@ typedef $$ScheduleRelationsTableProcessedTableManager =
         bool leftPlanBlockId,
         bool rightEventId,
         bool rightPlanBlockId,
+        bool leftOccurrenceExceptionId,
+        bool rightOccurrenceExceptionId,
       })
     >;
 typedef $$ScheduleRelationRulesTableCreateCompanionBuilder =
@@ -35929,6 +37185,7 @@ typedef $$RemindersTableCreateCompanionBuilder =
       required String targetType,
       required String targetId,
       Value<String?> eventId,
+      Value<String?> occurrenceExceptionId,
       Value<String?> taskId,
       Value<String?> planBlockId,
       Value<int?> offsetMinutes,
@@ -35947,6 +37204,7 @@ typedef $$RemindersTableUpdateCompanionBuilder =
       Value<String> targetType,
       Value<String> targetId,
       Value<String?> eventId,
+      Value<String?> occurrenceExceptionId,
       Value<String?> taskId,
       Value<String?> planBlockId,
       Value<int?> offsetMinutes,
@@ -35991,6 +37249,29 @@ final class $$RemindersTableReferences
       $_db.calendarEvents,
     ).filter((f) => f.id.sqlEquals($_column));
     final item = $_typedResult.readTableOrNull(_eventIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $CalendarEventOccurrenceExceptionsTable _occurrenceExceptionIdTable(
+    _$AppDatabase db,
+  ) => db.calendarEventOccurrenceExceptions.createAlias(
+    'reminders__occurrence_exception_id__calendar_event_occurrence_exceptions__id',
+  );
+
+  $$CalendarEventOccurrenceExceptionsTableProcessedTableManager?
+  get occurrenceExceptionId {
+    final $_column = $_itemColumn<String>('occurrence_exception_id');
+    if ($_column == null) return null;
+    final manager = $$CalendarEventOccurrenceExceptionsTableTableManager(
+      $_db,
+      $_db.calendarEventOccurrenceExceptions,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(
+      _occurrenceExceptionIdTable($_db),
+    );
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
@@ -36134,6 +37415,31 @@ class $$RemindersTableFilterComposer
                 $removeJoinBuilderFromRootComposer,
           ),
     );
+    return composer;
+  }
+
+  $$CalendarEventOccurrenceExceptionsTableFilterComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableFilterComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
     return composer;
   }
 
@@ -36289,6 +37595,31 @@ class $$RemindersTableOrderingComposer
     return composer;
   }
 
+  $$CalendarEventOccurrenceExceptionsTableOrderingComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableOrderingComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableOrderingComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
+
   $$TasksTableOrderingComposer get taskId {
     final $$TasksTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -36429,6 +37760,31 @@ class $$RemindersTableAnnotationComposer
     return composer;
   }
 
+  $$CalendarEventOccurrenceExceptionsTableAnnotationComposer
+  get occurrenceExceptionId {
+    final $$CalendarEventOccurrenceExceptionsTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.occurrenceExceptionId,
+          referencedTable: $db.calendarEventOccurrenceExceptions,
+          getReferencedColumn: (t) => t.id,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$CalendarEventOccurrenceExceptionsTableAnnotationComposer(
+                $db: $db,
+                $table: $db.calendarEventOccurrenceExceptions,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return composer;
+  }
+
   $$TasksTableAnnotationComposer get taskId {
     final $$TasksTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -36492,6 +37848,7 @@ class $$RemindersTableTableManager
           PrefetchHooks Function({
             bool accountId,
             bool eventId,
+            bool occurrenceExceptionId,
             bool taskId,
             bool planBlockId,
           })
@@ -36514,6 +37871,7 @@ class $$RemindersTableTableManager
                 Value<String> targetType = const Value.absent(),
                 Value<String> targetId = const Value.absent(),
                 Value<String?> eventId = const Value.absent(),
+                Value<String?> occurrenceExceptionId = const Value.absent(),
                 Value<String?> taskId = const Value.absent(),
                 Value<String?> planBlockId = const Value.absent(),
                 Value<int?> offsetMinutes = const Value.absent(),
@@ -36530,6 +37888,7 @@ class $$RemindersTableTableManager
                 targetType: targetType,
                 targetId: targetId,
                 eventId: eventId,
+                occurrenceExceptionId: occurrenceExceptionId,
                 taskId: taskId,
                 planBlockId: planBlockId,
                 offsetMinutes: offsetMinutes,
@@ -36548,6 +37907,7 @@ class $$RemindersTableTableManager
                 required String targetType,
                 required String targetId,
                 Value<String?> eventId = const Value.absent(),
+                Value<String?> occurrenceExceptionId = const Value.absent(),
                 Value<String?> taskId = const Value.absent(),
                 Value<String?> planBlockId = const Value.absent(),
                 Value<int?> offsetMinutes = const Value.absent(),
@@ -36564,6 +37924,7 @@ class $$RemindersTableTableManager
                 targetType: targetType,
                 targetId: targetId,
                 eventId: eventId,
+                occurrenceExceptionId: occurrenceExceptionId,
                 taskId: taskId,
                 planBlockId: planBlockId,
                 offsetMinutes: offsetMinutes,
@@ -36587,6 +37948,7 @@ class $$RemindersTableTableManager
               ({
                 accountId = false,
                 eventId = false,
+                occurrenceExceptionId = false,
                 taskId = false,
                 planBlockId = false,
               }) {
@@ -36631,6 +37993,19 @@ class $$RemindersTableTableManager
                                         ._eventIdTable(db),
                                     referencedColumn: $$RemindersTableReferences
                                         ._eventIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
+                        if (occurrenceExceptionId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.occurrenceExceptionId,
+                                    referencedTable: $$RemindersTableReferences
+                                        ._occurrenceExceptionIdTable(db),
+                                    referencedColumn: $$RemindersTableReferences
+                                        ._occurrenceExceptionIdTable(db)
                                         .id,
                                   )
                                   as T;
@@ -36688,6 +38063,7 @@ typedef $$RemindersTableProcessedTableManager =
       PrefetchHooks Function({
         bool accountId,
         bool eventId,
+        bool occurrenceExceptionId,
         bool taskId,
         bool planBlockId,
       })

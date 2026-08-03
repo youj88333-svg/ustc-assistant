@@ -90,7 +90,8 @@ class CalendarEventService {
               TaskEventLinksCompanion.insert(
                 accountId: accountId,
                 taskId: taskId,
-                eventId: id,
+                targetId: id,
+                eventId: Value(id),
                 relationType: 'related',
                 createdAt: timestamp,
               ),
@@ -177,7 +178,8 @@ class CalendarEventService {
                 TaskEventLinksCompanion.insert(
                   accountId: accountId,
                   taskId: taskId,
-                  eventId: id,
+                  targetId: id,
+                  eventId: Value(id),
                   relationType: 'related',
                   createdAt: timestamp,
                 ),

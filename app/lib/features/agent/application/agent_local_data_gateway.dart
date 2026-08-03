@@ -356,9 +356,12 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
     if (linkRows.isEmpty) return const [];
     final events = <CalendarEvent>[];
     for (final link in linkRows) {
+      // Only event-backed links resolve to a stored calendar event.
+      final eventId = link.eventId;
+      if (eventId == null) continue;
       final row = await (_database.select(_database.calendarEvents)..where(
             (row) =>
-                row.id.equals(link.eventId) &
+                row.id.equals(eventId) &
                 row.accountId.equals(accountId) &
                 row.deletedAt.isNull(),
           ))

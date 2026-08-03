@@ -52,6 +52,8 @@ class CalendarEventSeries extends Table {
       text().withDefault(const Constant('auto_after_end'))();
   TextColumn get tagsJson => text().withDefault(const Constant('[]'))();
   TextColumn get userNotes => text().nullable()();
+  TextColumn get reminderOffsetsJson =>
+      text().withDefault(const Constant('[]'))();
   IntColumn get deletedAt => integer().nullable()();
   IntColumn get createdAt => integer()();
   IntColumn get updatedAt => integer()();

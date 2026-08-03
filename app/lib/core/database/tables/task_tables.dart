@@ -84,8 +84,17 @@ class TaskEventLinks extends Table {
       text().references(LocalAccounts, #id, onDelete: KeyAction.cascade)();
   TextColumn get taskId =>
       text().references(Tasks, #id, onDelete: KeyAction.cascade)();
-  TextColumn get eventId =>
-      text().references(CalendarEvents, #id, onDelete: KeyAction.cascade)();
+  TextColumn get targetId => text()();
+  TextColumn get eventId => text().nullable().references(
+    CalendarEvents,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
+  TextColumn get occurrenceExceptionId => text().nullable().references(
+    CalendarEventOccurrenceExceptions,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get relationType => text()();
   IntColumn get createdAt => integer()();
 
@@ -93,7 +102,14 @@ class TaskEventLinks extends Table {
   String get tableName => 'task_event_links';
 
   @override
-  Set<Column<Object>> get primaryKey => {accountId, taskId, eventId};
+  Set<Column<Object>> get primaryKey => {accountId, taskId, targetId};
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK ('
+        '(event_id IS NOT NULL) != (occurrence_exception_id IS NOT NULL)'
+        ')',
+  ];
 }
 
 class ScheduleRelations extends Table {
@@ -136,6 +152,18 @@ class ScheduleRelations extends Table {
     #id,
     onDelete: KeyAction.cascade,
   )();
+  @ReferenceName('leftOccurrenceExceptionRelations')
+  TextColumn get leftOccurrenceExceptionId => text().nullable().references(
+    CalendarEventOccurrenceExceptions,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
+  @ReferenceName('rightOccurrenceExceptionRelations')
+  TextColumn get rightOccurrenceExceptionId => text().nullable().references(
+    CalendarEventOccurrenceExceptions,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get conflictState => text().nullable()();
   TextColumn get reason => text().nullable()();
   IntColumn get createdAt => integer()();
@@ -156,14 +184,29 @@ class ScheduleRelations extends Table {
   @override
   List<String> get customConstraints => [
     "CHECK ((relation_type = 'conflict' "
-        "AND ((left_event_id IS NOT NULL) != (left_plan_block_id IS NOT NULL)) "
-        "AND ((right_event_id IS NOT NULL) != (right_plan_block_id IS NOT NULL)) "
+        // Left participant: exactly one backing FK for kind='event'
+        // (event_id OR occurrence_exception_id), plan_block otherwise.
+        "AND (((left_kind = 'event' "
+        "AND ((left_event_id IS NOT NULL) != "
+        "(left_occurrence_exception_id IS NOT NULL)) "
+        "AND left_plan_block_id IS NULL "
+        "AND ((left_event_id IS NOT NULL AND left_event_id = left_id) OR "
+        "(left_occurrence_exception_id IS NOT NULL))) OR "
+        "(left_kind = 'plan_block' AND left_plan_block_id = left_id "
+        "AND left_event_id IS NULL "
+        "AND left_occurrence_exception_id IS NULL))) "
+        // Right participant mirror.
+        "AND (((right_kind = 'event' "
+        "AND ((right_event_id IS NOT NULL) != "
+        "(right_occurrence_exception_id IS NOT NULL)) "
+        "AND right_plan_block_id IS NULL "
+        "AND ((right_event_id IS NOT NULL AND right_event_id = right_id) OR "
+        "(right_occurrence_exception_id IS NOT NULL))) OR "
+        "(right_kind = 'plan_block' AND right_plan_block_id = right_id "
+        "AND right_event_id IS NULL "
+        "AND right_occurrence_exception_id IS NULL))) "
         "AND left_kind IN ('event','plan_block') "
         "AND right_kind IN ('event','plan_block') "
-        "AND ((left_kind = 'event' AND left_event_id = left_id) OR "
-        "(left_kind = 'plan_block' AND left_plan_block_id = left_id)) "
-        "AND ((right_kind = 'event' AND right_event_id = right_id) OR "
-        "(right_kind = 'plan_block' AND right_plan_block_id = right_id)) "
         "AND conflict_state IN ('conflict','no_conflict') "
         "AND primary_entity_type IS NULL AND related_entity_type IS NULL) "
         "OR (relation_type = 'exam_for_course' "
@@ -173,7 +216,9 @@ class ScheduleRelations extends Table {
         "AND primary_entity_id IS NOT NULL AND related_entity_id IS NOT NULL "
         "AND left_kind IS NULL AND right_kind IS NULL "
         "AND left_event_id IS NULL AND left_plan_block_id IS NULL "
+        "AND left_occurrence_exception_id IS NULL "
         "AND right_event_id IS NULL AND right_plan_block_id IS NULL "
+        "AND right_occurrence_exception_id IS NULL "
         "AND conflict_state IS NULL))",
   ];
 }
@@ -232,6 +277,11 @@ class Reminders extends Table {
     #id,
     onDelete: KeyAction.cascade,
   )();
+  TextColumn get occurrenceExceptionId => text().nullable().references(
+    CalendarEventOccurrenceExceptions,
+    #id,
+    onDelete: KeyAction.cascade,
+  )();
   TextColumn get taskId =>
       text().nullable().references(Tasks, #id, onDelete: KeyAction.cascade)();
   TextColumn get planBlockId => text().nullable().references(
@@ -262,12 +312,16 @@ class Reminders extends Table {
   List<String> get customConstraints => [
     "CHECK (target_type IN ('event','task','plan_block'))",
     "CHECK (state IN ('desired','delivered','cancelled','missed','failed'))",
-    "CHECK ((target_type = 'event' AND event_id = target_id "
+    "CHECK ((target_type = 'event' "
+        "AND ((event_id = target_id AND occurrence_exception_id IS NULL) OR "
+        "(occurrence_exception_id IS NOT NULL AND event_id IS NULL)) "
         'AND task_id IS NULL AND plan_block_id IS NULL) OR '
         "(target_type = 'task' AND task_id = target_id "
-        'AND event_id IS NULL AND plan_block_id IS NULL) OR '
+        'AND event_id IS NULL AND occurrence_exception_id IS NULL '
+        'AND plan_block_id IS NULL) OR '
         "(target_type = 'plan_block' AND plan_block_id = target_id "
-        'AND event_id IS NULL AND task_id IS NULL))',
+        'AND event_id IS NULL AND occurrence_exception_id IS NULL '
+        'AND task_id IS NULL))',
   ];
 }
 

@@ -66,7 +66,7 @@ class AppDatabase extends _$AppDatabase {
   }
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   late final ActionLogRepository actionLogsRepository = ActionLogRepository(
     this,
@@ -127,6 +127,51 @@ class AppDatabase extends _$AppDatabase {
       // (from = 3, 4, 5) need the new column added.
       if (from >= 3 && from < 6) {
         await migrator.addColumn(toolInvocations, toolInvocations.errorCode);
+      }
+      // Schema seven adds recurring-occurrence targets to the dependent
+      // tables: a series default reminder offset, a nullable
+      // occurrence-exception FK on reminders / Task links, and nullable
+      // left/right occurrence-exception FKs on schedule relations. The
+      // task_event_links primary key changes from (account_id, task_id,
+      // event_id) to (account_id, task_id, target_id), so that table must be
+      // rebuilt; schedule_relations and reminders are rebuilt to install their
+      // updated CHECK constraints. Existing rows are preserved losslessly:
+      // task_event_links.target_id takes the old event_id, series default
+      // offsets are [15] for timed and [] for all-day, and every new
+      // occurrence-exception column is left NULL.
+      if (from >= 6 && from < 7) {
+        await migrator.addColumn(
+          calendarEventSeries,
+          calendarEventSeries.reminderOffsetsJson,
+        );
+        await customStatement(
+          "UPDATE calendar_event_series SET reminder_offsets_json = "
+          "CASE all_day WHEN 1 THEN '[]' ELSE '[15]' END",
+        );
+        await migrator.alterTable(
+          TableMigration(
+            taskEventLinks,
+            newColumns: [taskEventLinks.occurrenceExceptionId],
+            columnTransformer: {
+              taskEventLinks.targetId: taskEventLinks.eventId,
+            },
+          ),
+        );
+        await migrator.alterTable(
+          TableMigration(
+            scheduleRelations,
+            newColumns: [
+              scheduleRelations.leftOccurrenceExceptionId,
+              scheduleRelations.rightOccurrenceExceptionId,
+            ],
+          ),
+        );
+        await migrator.alterTable(
+          TableMigration(
+            reminders,
+            newColumns: [reminders.occurrenceExceptionId],
+          ),
+        );
       }
     },
     beforeOpen: (details) async {

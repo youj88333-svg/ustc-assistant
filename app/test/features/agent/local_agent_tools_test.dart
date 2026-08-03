@@ -244,7 +244,8 @@ Future<AppDatabase> _seedDatabase() async {
         TaskEventLinksCompanion.insert(
           accountId: 'a',
           taskId: 'task-active',
-          eventId: 'event-solo',
+          targetId: 'event-solo',
+          eventId: const Value('event-solo'),
           relationType: 'related',
           createdAt: 1,
         ),
@@ -254,7 +255,8 @@ Future<AppDatabase> _seedDatabase() async {
         TaskEventLinksCompanion.insert(
           accountId: 'a',
           taskId: 'task-active',
-          eventId: 'e-deleted',
+          targetId: 'e-deleted',
+          eventId: const Value('e-deleted'),
           relationType: 'related',
           createdAt: 1,
         ),
