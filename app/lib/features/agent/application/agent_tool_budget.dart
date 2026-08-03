@@ -81,16 +81,17 @@ class AgentRunToolBudget {
             errorCode: 'create_task_burst_too_large',
           );
         }
+        // A single create_task is a normal, low-footprint turn, even after a
+        // burst lease has been granted: it still consumes the ordinary quota.
+        if (toolNames.length == 1) {
+          return const AgentToolTurnBudgetDecision._(
+            kind: AgentToolTurnBudgetKind.normal,
+          );
+        }
         if (_createTaskBurstUsed) {
           return const AgentToolTurnBudgetDecision._(
             kind: AgentToolTurnBudgetKind.rejected,
             errorCode: 'create_task_burst_already_used',
-          );
-        }
-        // A single create_task is still a normal, low-footprint turn.
-        if (toolNames.length == 1) {
-          return const AgentToolTurnBudgetDecision._(
-            kind: AgentToolTurnBudgetKind.normal,
           );
         }
         _createTaskBurstUsed = true;

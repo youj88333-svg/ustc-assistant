@@ -64,6 +64,36 @@ void main() {
       },
     );
 
+    test('a single create_task after an accepted burst stays normal, '
+        'while a second 2+ burst is already-used', () {
+      final budget = AgentRunToolBudget();
+      final first = budget.preflightTurn(
+        toolNames: List.filled(3, 'create_task'),
+        allowedCreateTaskBurstLimit: 32,
+      );
+      expect(first.kind, AgentToolTurnBudgetKind.createTaskBurst);
+      expect(budget.createTaskBurstUsed, isTrue);
+
+      // A lone create_task AFTER the lease was granted must stay normal and
+      // consume ordinary remaining quota, never be rejected as already_used.
+      final single = budget.preflightTurn(
+        toolNames: ['create_task'],
+        allowedCreateTaskBurstLimit: 32,
+      );
+      expect(single.kind, AgentToolTurnBudgetKind.normal);
+      expect(single.isRejected, isFalse);
+      expect(budget.tryConsumeNormalCall(), isTrue);
+      expect(budget.normalCallsUsed, 1);
+
+      // A second eligible BURST turn (2+) is still rejected as already_used.
+      final second = budget.preflightTurn(
+        toolNames: List.filled(2, 'create_task'),
+        allowedCreateTaskBurstLimit: 32,
+      );
+      expect(second.kind, AgentToolTurnBudgetKind.rejected);
+      expect(second.errorCode, 'create_task_burst_already_used');
+    });
+
     test(
       'a one-call create_task turn is normal even when burst is eligible',
       () {
