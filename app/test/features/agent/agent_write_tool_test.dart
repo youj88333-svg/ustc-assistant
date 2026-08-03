@@ -5,6 +5,7 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tool.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_write_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_unit_of_work.dart';
@@ -44,7 +45,7 @@ class _FakeWriteTool extends AgentWriteTool {
   String get operationLabel => '新建日程';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('create_event', 'event', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('create_event')];
 
   bool commitCalled = false;
   bool proposeCalled = false;
@@ -86,7 +87,7 @@ class _AlwaysAskTool extends _FakeWriteTool {
   RiskLevel get riskLevel => RiskLevel.high;
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('event_edit', 'event', RiskLevel.high)];
+      [AgentWriteAllowance.fromRegistry('event_edit')];
 }
 
 /// 可变 action/risk 的假工具，用于验证决议读取 proposal 动态字段而非静态 getter。
@@ -101,9 +102,9 @@ class _DynamicActionTool extends _FakeWriteTool {
   @override
   RiskLevel get riskLevel => RiskLevel.high;
   @override
-  List<AgentWriteAllowance> get agentWriteAllowances => const [
-    AgentWriteAllowance('event_edit', 'event', RiskLevel.high),
-    AgentWriteAllowance('event_delete', 'event', RiskLevel.high),
+  List<AgentWriteAllowance> get agentWriteAllowances => [
+    AgentWriteAllowance.fromRegistry('event_edit'),
+    AgentWriteAllowance.fromRegistry('event_delete'),
   ];
 
   @override
@@ -376,6 +377,45 @@ void main() {
     expect(result.errorCode, 'invalid_write_arguments');
     expect(tool.commitCalled, isFalse);
     expect(await db.actionLogsRepository.selectAll(), isEmpty);
+  });
+
+  test('registry-derived allowances match the permission registry', () {
+    // 交叉校验：从注册表派生的 allowlist 每个 key 都必须在 kPermissionActions 中，
+    // 且其 maxRisk 不高于注册表 defaultRisk（注册表是动作/风险的单一来源，防止
+    // 工具 allowlist 与注册表漂移产生未预期的更低常设授权）。
+    final registry = AgentPermissionPolicyService.kPermissionActions;
+    for (final t in <AgentWriteTool>[
+      _FakeWriteTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+      _AlwaysAskTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+      _DynamicActionTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    ]) {
+      for (final allowance in t.agentWriteAllowances) {
+        expect(registry.containsKey(allowance.actionType), isTrue,
+            reason: '${t.runtimeType} allowlist key ${allowance.actionType} must be in registry');
+        final entry = registry[allowance.actionType]!;
+        expect(allowance.targetType == null || allowance.targetType == entry.targetType, isTrue,
+            reason: '${allowance.actionType} target must match registry');
+        expect(allowance.maxRisk.index <= entry.defaultRisk.index, isTrue,
+            reason: '${allowance.actionType} maxRisk must not exceed registry defaultRisk');
+      }
+    }
+  });
+
+  test('UpdateEventTool allowlists event_edit/event_cancel/event_delete from registry',
+      () async {
+    // 计划步骤 4 要求写工具 allowlist 消费同一注册表；新生命周期动作键必须来自
+    // kPermissionActions 且风险不高于注册表。
+    final registry = AgentPermissionPolicyService.kPermissionActions;
+    final updateTool = agentWriteTools(gateway, policy, store, unitOfWork)
+        .firstWhere((t) => t.name == 'update_event');
+    expect(updateTool.agentWriteAllowances.map((a) => a.actionType).toSet(),
+        {'event_edit', 'event_cancel', 'event_delete'});
+    for (final allowance in updateTool.agentWriteAllowances) {
+      expect(registry.containsKey(allowance.actionType), isTrue);
+      expect(allowance.maxRisk.index <= registry[allowance.actionType]!.defaultRisk.index,
+          isTrue);
+      expect(allowance.targetType, registry[allowance.actionType]!.targetType);
+    }
   });
 
   test('failed commit does not relax the policy', () async {

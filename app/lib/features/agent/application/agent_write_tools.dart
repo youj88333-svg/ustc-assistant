@@ -151,7 +151,7 @@ class CreateEventTool extends AgentWriteTool {
   String get operationLabel => '新建日程';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('create_event', 'event', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('create_event')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -277,7 +277,7 @@ class CreateTaskTool extends AgentWriteTool {
   String get operationLabel => '新建任务';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('create_task', 'task', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('create_task')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -372,7 +372,7 @@ class PlanTaskTool extends AgentWriteTool {
   String get operationLabel => '安排任务时间段';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('plan_task', 'plan_block', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('plan_task')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -475,10 +475,10 @@ class UpdateEventTool extends AgentWriteTool {
   @override
   String get operationLabel => '修改/删除日程';
   @override
-  List<AgentWriteAllowance> get agentWriteAllowances => const [
-    AgentWriteAllowance('event_edit', 'event', RiskLevel.high),
-    AgentWriteAllowance('event_cancel', 'event', RiskLevel.high),
-    AgentWriteAllowance('event_delete', 'event', RiskLevel.high),
+  List<AgentWriteAllowance> get agentWriteAllowances => [
+    AgentWriteAllowance.fromRegistry('event_edit'),
+    AgentWriteAllowance.fromRegistry('event_cancel'),
+    AgentWriteAllowance.fromRegistry('event_delete'),
   ];
 
   @override
@@ -786,7 +786,7 @@ class CreateUserOverlayTool extends AgentWriteTool {
   String get operationLabel => '设置个人标注';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('create_user_overlay', 'overlay', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('create_user_overlay')];
 
   static AttendancePolicy? _attendance(String? value) => switch (value) {
     'must_go' => AttendancePolicy.mustGo,
@@ -929,7 +929,7 @@ class RecordAttendanceDecisionTool extends AgentWriteTool {
   String get operationLabel => '记录出勤决定';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('record_attendance_decision', 'event', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('record_attendance_decision')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -999,7 +999,7 @@ class RecordListeningModeTool extends AgentWriteTool {
   String get operationLabel => '设置听讲模式';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('record_listening_mode', 'event', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('record_listening_mode')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -1079,7 +1079,7 @@ class CreateScheduleRelationTool extends AgentWriteTool {
   String get operationLabel => '记录日程关系';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('create_schedule_relation', 'relation', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('create_schedule_relation')];
 
   /// 先按 event 解析，再回退 planblock（与只读工具绑定 kind 一致）。
   static ({String kind, String id}) _resolveRef(RunReferenceStore refs, String ref) {
@@ -1185,7 +1185,7 @@ class SetReminderTool extends AgentWriteTool {
   String get operationLabel => '设置提醒';
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('set_reminder', 'event', RiskLevel.medium)];
+      [AgentWriteAllowance.fromRegistry('set_reminder')];
 
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
@@ -1283,7 +1283,7 @@ class MoveJwCourseDayTool extends AgentWriteTool {
   bool get forceConfirmation => true;
   @override
   List<AgentWriteAllowance> get agentWriteAllowances =>
-      const [AgentWriteAllowance('move_jw_course_day', 'jw_day_move', RiskLevel.critical)];
+      [AgentWriteAllowance.fromRegistry('move_jw_course_day')];
 
   @override
   Future<AgentToolResult> execute(Map<String, Object?> arguments, AgentToolContext context) async {
@@ -1466,6 +1466,7 @@ class UpdatePermissionPolicyTool extends AgentWriteTool {
     // proposal.targetType 是被调整动作的类型（而非本工具自身的 permission），
     // 因此在 actionType/risk 已是 critical 且恒 force-confirm 的前提下允许 target
     // 通配；actionType 仍锁定为 update_permission_policy，无法注入其它策略键。
+    // risk 取自注册表 defaultRisk（critical）。
     AgentWriteAllowance('update_permission_policy', null, RiskLevel.critical),
   ];
 

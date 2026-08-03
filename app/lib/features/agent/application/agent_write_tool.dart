@@ -41,6 +41,38 @@ class AgentWriteAborted implements Exception {
 class AgentWriteAllowance {
   const AgentWriteAllowance(this.actionType, this.targetType, this.maxRisk);
 
+  /// 从注册表派生一版组合：targetType 默认取 [AgentPermissionPolicyService]
+  /// 注册表中的动作 target，maxRisk 默认取注册表 defaultRisk（也可显式收紧）。
+  /// 让工具 allowlist 与单一注册表保持同源，避免动作键/风险漂移。仅
+  /// [maxRisk] / [targetType] 显式传入才覆盖注册表默认值。
+  factory AgentWriteAllowance.fromRegistry(
+    String actionType, {
+    RiskLevel? maxRisk,
+    String? targetType,
+  }) {
+    final entry = AgentPermissionPolicyService.kPermissionActions[actionType];
+    assert(entry != null, 'allowance actionType not in registry: $actionType');
+    return AgentWriteAllowance(
+      actionType,
+      targetType ?? entry?.targetType,
+      maxRisk ?? entry?.defaultRisk ?? RiskLevel.medium,
+    );
+  }
+
+  /// 允许任意 target（仅权限工具 actionType 锁定 critical 时用）。
+  factory AgentWriteAllowance.fromRegistryAnyTarget(
+    String actionType, {
+    RiskLevel? maxRisk,
+  }) {
+    final entry = AgentPermissionPolicyService.kPermissionActions[actionType];
+    assert(entry != null, 'allowance actionType not in registry: $actionType');
+    return AgentWriteAllowance(
+      actionType,
+      null,
+      maxRisk ?? entry?.defaultRisk ?? RiskLevel.medium,
+    );
+  }
+
   final String actionType;
   final String? targetType;
   final RiskLevel maxRisk;
