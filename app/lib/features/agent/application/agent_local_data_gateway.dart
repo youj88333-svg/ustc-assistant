@@ -11,6 +11,7 @@ import '../../schedule/domain/overlap_engine.dart';
 import '../../schedule/domain/schedule_grid_item.dart';
 import '../../sync/domain/sync_state.dart';
 import '../../tasks/application/undo_recorder.dart';
+import '../../tasks/application/undo_service.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 
@@ -191,6 +192,13 @@ abstract interface class AgentLocalDataGateway {
     String accountId,
     String eventId,
   );
+
+  /// The account-safe preview of the most recent undoable action, for the
+  /// read-only `get_last_undoable_action` tool. Account-scoped: a missing or
+  /// foreign-account slot returns an unavailable preview with no content. The
+  /// preview carries only the safe summary/type/Beijing time and NEVER consumes
+  /// the slot (the write tool decides when to actually undo).
+  Future<UndoPreview> lastUndoableAction(String accountId);
 }
 
 /// A Drift-backed [AgentLocalDataGateway].
@@ -469,6 +477,10 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
   ) =>
       OverlayService(database: _database, accountId: accountId)
           .eventOverlayLayers(eventId);
+
+  @override
+  Future<UndoPreview> lastUndoableAction(String accountId) =>
+      UndoService(database: _database, accountId: accountId).preview();
 
   /// Mirrors `SyncCoordinator.stateFor` without pulling in the Python-bridge /
   /// import dependencies (those arrive in Task 9). Reads only sync_runs and

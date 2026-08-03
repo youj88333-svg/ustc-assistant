@@ -513,6 +513,52 @@ class GetUserOverlayTool implements AgentTool {
 }
 
 // ===========================================================================
+// Tool: get_last_undoable_action
+// ===========================================================================
+
+/// Previews the account's most recent undoable action so the model can tell the
+/// user what reversing the last step would do, before any write tool consumes
+/// the undo slot.
+///
+/// This tool is PREVIEW-ONLY: it never consumes (mutates) the slot. It returns
+/// availability, the safe Chinese summary, the action kind, and a Beijing
+/// wall-clock timestamp. It NEVER returns payload, a DB id, a ref, or an account
+/// identity. A missing or foreign-account slot returns `available: false` with
+/// no content (indistinguishable absence).
+class GetLastUndoableActionTool implements AgentTool {
+  const GetLastUndoableActionTool(this._gateway);
+
+  final AgentLocalDataGateway _gateway;
+
+  @override
+  String get name => 'get_last_undoable_action';
+
+  @override
+  String get description =>
+      'Preview the single most recent local change that can be reversed in one '
+      'step. Returns whether one exists, a safe Chinese summary of what will be '
+      'reversed, the action type, and the Beijing wall-clock time. This is a '
+      'read-only preview: it does not perform or consume the undo. Only one '
+      'step can be reversed at a time; earlier changes use restore.';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+        'type': 'object',
+        'properties': {},
+        'additionalProperties': false,
+      };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final preview = await _gateway.lastUndoableAction(context.accountId);
+    return AgentToolResult(payload: preview.toDto());
+  }
+}
+
+// ===========================================================================
 // Shared helpers
 // ===========================================================================
 

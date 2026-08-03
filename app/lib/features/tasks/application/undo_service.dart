@@ -33,8 +33,42 @@ class UndoService implements UndoRecorder {
         'version': command.version,
         'kind': command.kind,
         'accountId': command.accountId,
+        'safeSummary': command.safeSummary,
         'payload': command.payload,
       }),
+    );
+  }
+
+  /// Account-safe preview of the most recent undoable action.
+  ///
+  /// Returns [UndoPreview.disabled] when no slot exists OR the slot belongs to
+  /// another account. The preview carries ONLY the safe Chinese summary, the
+  /// action kind, and a Beijing wall-clock timestamp — never the payload, a DB
+  /// id, a ref, or an account identity. It never mutates the slot.
+  Future<UndoPreview> preview() async {
+    final slot = await database.select(database.undoSlot).getSingleOrNull();
+    if (slot == null) return const UndoPreview.disabled();
+    final decoded = _decodeValidated(slot.payload);
+    // ACCOUNT SAFETY: a slot owned by another account must look identical to a
+    // missing slot — unavailable with no summary, kind, or timestamp. Only when
+    // the slot belongs to THIS account is any preview content read.
+    if (decoded == null || decoded['accountId'] != accountId) {
+      return const UndoPreview.disabled();
+    }
+    String storedSummary;
+    final rawSummary = decoded['safeSummary'] as String?;
+    if (rawSummary != null && rawSummary.isNotEmpty) {
+      storedSummary = rawSummary;
+    } else {
+      // A v1 slot has no safe summary; fall back to a safe kind-derived label
+      // (never derived from the payload).
+      storedSummary = _summaryForKind(decoded['kind'] as String?);
+    }
+    return UndoPreview(
+      available: true,
+      kind: decoded['kind'] as String? ?? '',
+      summary: storedSummary,
+      beijingAt: _formatBeijing(now()),
     );
   }
 
@@ -46,17 +80,37 @@ class UndoService implements UndoRecorder {
   Future<void> undo() async {
     final slot = await database.select(database.undoSlot).getSingleOrNull();
     if (slot == null) throw const InvalidUndoCommand();
+
+    final decoded = _decodeValidated(slot.payload);
+
+    // A malformed (non-v1 / structurally invalid) slot belonging to this
+    // account: the legacy behavior cleared it and recorded a failure so a bad
+    // slot can never block a later undo. Deleting a malformed slot does not
+    // violate account isolation (there is no legitimate foreign payload to
+    // destroy — it has no account ownership).
+    if (decoded == null) {
+      await database.delete(database.undoSlot).go();
+      await database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: 'undo',
+        result: 'failure',
+        safeSummary: 'Could not reverse the most recent local change.',
+        occurredAt: now(),
+      );
+      throw const InvalidUndoCommand();
+    }
+
+    // ACCOUNT SAFETY: a valid v1 slot owned by another account must be rejected
+    // WITHOUT deleting, mutating, or reverse-applying its payload. Foreign
+    // undo/preview must leave the original slot untouched.
+    if (decoded['accountId'] != accountId) {
+      throw const InvalidUndoCommand();
+    }
+
+    final kind = decoded['kind'] as String;
+    final payload = decoded['payload'] as Map<String, dynamic>;
     try {
-      final decoded = jsonDecode(slot.payload);
-      if (decoded is! Map<String, dynamic> ||
-          decoded['version'] != 1 ||
-          decoded['accountId'] != accountId ||
-          decoded['kind'] is! String ||
-          decoded['payload'] is! Map<String, dynamic>) {
-        throw const InvalidUndoCommand();
-      }
-      final kind = decoded['kind'] as String;
-      final payload = decoded['payload'] as Map<String, dynamic>;
       await database.transaction(() async {
         await _apply(payload);
         await database.actionLogsRepository.append(
@@ -70,7 +124,9 @@ class UndoService implements UndoRecorder {
         await database.delete(database.undoSlot).go();
       });
     } catch (error) {
-      await database.delete(database.undoSlot).go();
+      // Failure while applying (e.g. a composite restore step threw): KEEP the
+      // slot so the change is not silently lost, and log a SAFE failure (no
+      // payload / id / raw exception in the summary).
       await database.actionLogsRepository.append(
         accountId: accountId,
         source: 'user',
@@ -107,9 +163,112 @@ class UndoService implements UndoRecorder {
         await _restoreReminderOverride(payload);
       case 'jw_day_move':
         await _restoreJwDayMove(payload);
+      case 'composite':
+        await _restoreComposite(payload);
       default:
         throw const InvalidUndoCommand();
     }
+  }
+
+  /// Restores a composite snapshot atomically: a sequence of typed restore
+  /// operations covering entity rows, Reminder snapshots, TaskEventLinks, and
+  /// Agent permission-policy config. Every operation reuses the existing
+  /// single-entity restore helpers (no re-implementation of rollback). If ANY
+  /// step throws, the whole transaction rolls back and the slot survives
+  /// (handled by [undo]).
+  Future<void> _restoreComposite(Map<String, dynamic> payload) async {
+    final operations = payload['operations'];
+    if (operations is! List) throw const InvalidUndoCommand();
+    for (final raw in operations) {
+      if (raw is! Map<String, dynamic>) throw const InvalidUndoCommand();
+      switch (raw['entity']) {
+        case 'task':
+          await _restoreTask(raw);
+        case 'plan_block':
+          await _restorePlanBlock(raw);
+        case 'plan_block_split':
+          await _restorePlanBlock(raw);
+          await (database.delete(
+            database.planBlocks,
+          )..where((row) => row.id.equals(raw['createdId'] as String))).go();
+        case 'calendar_event':
+          await _restoreCalendarEvent(raw);
+        case 'user_overlay':
+          await _restoreOverlay(raw);
+        case 'schedule_relation':
+          await _restoreScheduleRelation(raw);
+        case 'schedule_relation_rule':
+          await _restoreScheduleRelationRule(raw);
+        case 'reminder_override':
+          await _restoreReminderOverride(raw);
+        case 'task_event_link':
+          await _restoreTaskEventLink(raw);
+        case 'permission_policy':
+          await _restorePermissionPolicy(raw);
+        case 'jw_day_move':
+          await _restoreJwDayMove(raw);
+        default:
+          throw const InvalidUndoCommand();
+      }
+    }
+  }
+
+  Future<void> _restoreTaskEventLink(Map<String, dynamic> payload) async {
+    final taskId = payload['taskId'] as String;
+    final eventId = payload['eventId'] as String;
+    final before = payload['before'];
+    await (database.delete(database.taskEventLinks)
+          ..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.taskId.equals(taskId) &
+                row.eventId.equals(eventId),
+          ))
+        .go();
+    if (before == null) return;
+    final row = before as Map<String, dynamic>;
+    await database
+        .into(database.taskEventLinks)
+        .insert(
+          TaskEventLinksCompanion.insert(
+            accountId: accountId,
+            taskId: taskId,
+            eventId: eventId,
+            relationType: (row['relationType'] as String?) ?? 'related',
+            createdAt: (row['createdAt'] as int?) ?? now(),
+          ),
+        );
+  }
+
+  Future<void> _restorePermissionPolicy(Map<String, dynamic> payload) async {
+    final id = payload['id'] as String;
+    final before = payload['before'];
+    await (database.delete(database.agentPermissionPolicies)
+          ..where((row) => row.id.equals(id) & row.accountId.equals(accountId)))
+        .go();
+    if (before == null) return;
+    final row = before as Map<String, dynamic>;
+    await database
+        .into(database.agentPermissionPolicies)
+        .insert(
+          AgentPermissionPoliciesCompanion.insert(
+            id: id,
+            accountId: accountId,
+            actionType: (row['actionType'] as String?) ?? 'unknown',
+            targetType: Value((row['targetType'] as String?) ?? '*'),
+            confirmationMode: (row['confirmationMode'] as String?) ??
+                'always',
+            riskLevel: Value((row['riskLevel'] as String?) ?? 'medium'),
+            scope: Value((row['scope'] as String?) ?? 'user_default'),
+            enabled: Value((row['enabled'] as bool?) ?? true),
+            firstConfirmedAt: Value(row['firstConfirmedAt'] as int?),
+            lastConfirmedAt: Value(row['lastConfirmedAt'] as int?),
+            expiresAt: Value(row['expiresAt'] as int?),
+            updatedBy: Value(row['updatedBy'] as String?),
+            createdAt: (row['createdAt'] as int?) ?? now(),
+            updatedAt: (row['updatedAt'] as int?) ?? now(),
+          ),
+        );
   }
 
   Future<void> _restoreJwDayMove(Map<String, dynamic> payload) async {
@@ -414,4 +573,93 @@ class UndoService implements UndoRecorder {
           ),
         );
   }
+
+  /// Decodes and structurally validates the stored slot payload. Returns null
+  /// for a malformed / non-v1 envelope (so it can be treated as a bad slot).
+  /// The caller is responsible for the account-ownership check.
+  Map<String, dynamic>? _decodeValidated(String payload) {
+    final decoded = jsonDecode(payload);
+    if (decoded is! Map<String, dynamic> ||
+        decoded['version'] != 1 ||
+        decoded['accountId'] is! String ||
+        decoded['kind'] is! String ||
+        decoded['payload'] is! Map<String, dynamic>) {
+      return null;
+    }
+    return decoded;
+  }
+
+  /// A safe, Chinese, kind-derived preview label for v1 slots that predate the
+  /// optional safe summary. Never reads the payload, so no ids/refs/account
+  /// identity can leak.
+  static String _summaryForKind(String? kind) => switch (kind) {
+        'task_create' => '创建任务',
+        'task_rename' => '重命名任务',
+        'task_block' => '阻塞任务',
+        'task_unblock' => '解除任务阻塞',
+        'task_complete' => '完成任务',
+        'task_cancel' => '取消任务',
+        'task_reopen' => '重新打开任务',
+        'task_delete' => '删除任务',
+        'task_restore' => '恢复任务',
+        'plan_block_create' => '创建计划块',
+        'plan_block_move' => '移动计划块',
+        'plan_block_lock' => '锁定计划块',
+        'plan_block_split' => '拆分计划块',
+        'plan_block_reschedule' => '重新排程计划块',
+        'plan_block_delete' => '删除计划块',
+        'calendar_event_create' => '创建日程事件',
+        'calendar_event_edit' => '编辑日程事件',
+        'calendar_event_delete' => '删除日程事件',
+        'calendar_event_restore' => '恢复日程事件',
+        'user_overlay_update' => '修改事件覆盖',
+        'reminder_override' => '修改提醒设置',
+        'conflict_classification' => '修改冲突关系',
+        'jw_day_move' => '移动调休日期',
+        'composite' => '组合恢复',
+        _ => '本地更改',
+      };
+
+  /// Formats an epoch-ms timestamp as a Beijing wall-clock string (the same
+  /// +8h wall-clock convention the app uses for display).
+  static String _formatBeijing(int epochMs) {
+    final utc = DateTime.fromMillisecondsSinceEpoch(epochMs, isUtc: true);
+    final shifted = utc.add(const Duration(hours: 8));
+    String two(int v) => v.toString().padLeft(2, '0');
+    return '${shifted.year}-${two(shifted.month)}-${two(shifted.day)} '
+        '${two(shifted.hour)}:${two(shifted.minute)}:${two(shifted.second)}';
+  }
+}
+
+/// An account-safe preview of the most recent undoable action, produced by
+/// [UndoService.preview]. Carries ONLY safe, model-safe content: availability,
+/// the Chinese safe summary, the action kind, and a Beijing wall-clock string.
+/// It never carries the payload, a DB id, a ref, or an account identity, and it
+/// NEVER consumes (mutates) the undo slot.
+class UndoPreview {
+  const UndoPreview({
+    required this.available,
+    this.kind = '',
+    this.summary = '',
+    this.beijingAt = '',
+  });
+
+  const UndoPreview.disabled()
+      : available = false,
+        kind = '',
+        summary = '',
+        beijingAt = '';
+
+  final bool available;
+  final String kind;
+  final String summary;
+  final String beijingAt;
+
+  /// The safe DTO exposed to the Agent tool (and thus the model).
+  Map<String, Object?> toDto() => {
+        'available': available,
+        'actionType': kind,
+        'summary': summary,
+        'beijingAt': beijingAt,
+      };
 }

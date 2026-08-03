@@ -17,6 +17,7 @@ import 'package:ustc_assistant_app/features/schedule/application/conflict_servic
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 final _now = DateTime(2026, 7, 29, 9, 0);
 
@@ -494,6 +495,83 @@ void main() {
       final result = await harness.execute('get_user_overlay', {});
       expect(result.status, AgentToolStatus.error);
       expect(result.errorCode, 'invalid_arguments');
+    });
+  });
+
+  group('get_last_undoable_action', () {
+    test('returns a safe Chinese summary and never the payload/id/ref',
+        () async {
+      // Record a real undoable action for account 'a'.
+      final undo = UndoService(database: database, accountId: 'a', now: () => 1000);
+      await undo.record(
+        UndoCommand(
+          kind: 'task_create',
+          accountId: 'a',
+          safeSummary: '创建了一条任务',
+          payload: {
+            'entity': 'task',
+            'id': 'task-hidden-id',
+            'before': null,
+          },
+        ),
+      );
+
+      final result = await harness.execute('get_last_undoable_action', {});
+      expect(result.status, AgentToolStatus.success);
+      expect(result.payload['available'], isTrue);
+      expect(result.payload['summary'], '创建了一条任务');
+      expect(result.payload['actionType'], 'task_create');
+      expect(result.payload['beijingAt'], isNotEmpty);
+      // SECURITY: no payload / DB id / ref in the DTO.
+      final encoded = jsonEncode(result.payload);
+      expect(encoded, isNot(contains('task-hidden-id')));
+      expect(encoded, isNot(contains('payload')));
+      expect(encoded, isNot(contains('ref_')));
+
+      // The tool only previews; it never consumes the slot.
+      expect(await undo.canUndo(), isTrue);
+    });
+
+    test('returns available:false when no slot exists (and does not error)',
+        () async {
+      final result = await harness.execute('get_last_undoable_action', {});
+      expect(result.status, AgentToolStatus.success);
+      expect(result.payload['available'], isFalse);
+      expect(result.payload['summary'], '');
+      expect(result.payload['actionType'], '');
+    });
+
+    test('another account cannot read the summary', () async {
+      final undo = UndoService(database: database, accountId: 'a', now: () => 1000);
+      await undo.record(
+        UndoCommand(
+          kind: 'task_create',
+          accountId: 'a',
+          safeSummary: '创建了一条任务',
+          payload: {
+            'entity': 'task',
+            'id': 'task-hidden-id',
+            'before': null,
+          },
+        ),
+      );
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****9999',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final otherHarness = _harness(database, 'other');
+      final bytes = await otherHarness.execute('get_last_undoable_action', {});
+      expect(bytes.status, AgentToolStatus.success);
+      expect(bytes.payload['available'], isFalse);
+      expect(bytes.payload['summary'], '');
+      expect(bytes.payload['actionType'], '');
+      final encoded = jsonEncode(bytes.payload);
+      expect(encoded, isNot(contains('task-hidden-id')));
+      expect(encoded, isNot(contains('创建了一条任务')));
     });
   });
 }

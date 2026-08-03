@@ -2184,6 +2184,10 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
             },
           ),
       'get_user_overlay': (raw) => _buildOverlayPayload(raw),
+      'get_last_undoable_action': (raw) => _pick(
+            raw,
+            {'available', 'actionType', 'summary', 'beijingAt'},
+          ),
       // External (Task 9) tools: minimal allowlists. Only normalized fields
       // and ref_* tokens survive; no raw ids, no URLs (the envelope's trusted
       // references are not surfaced to the model).
@@ -2615,6 +2619,7 @@ List<AgentTool> localAgentTools(AgentLocalDataGateway gateway) => [
       GetScheduleRelationsTool(gateway),
       GetRemindersTool(gateway),
       GetUserOverlayTool(gateway),
+      GetLastUndoableActionTool(gateway),
     ];
 
 // ===========================================================================

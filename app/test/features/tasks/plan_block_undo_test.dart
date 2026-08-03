@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -5,6 +7,7 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
@@ -449,5 +452,357 @@ void main() {
     await database.replaceUndoSlot(commandId: 'old', payload: '{}');
     await undo.clearAtStartup();
     expect(await undo.canUndo(), isFalse);
+  });
+
+  group('undo preview account safety', () {
+    test('preview returns a safe summary and type without payload/id/ref',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final tasks = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final taskId = await tasks.create(title: 'Original');
+
+      final preview = await undo.preview();
+
+      expect(preview.available, isTrue);
+      expect(preview.kind, 'task_create');
+      expect(preview.summary, isNotEmpty);
+      // SECURITY: preview must not leak payload, DB id, or ref.
+      final dto = preview.toDto();
+      expect(dto.containsKey('payload'), isFalse);
+      expect(dto.containsKey('id'), isFalse);
+      expect(dto.containsKey('ref'), isFalse);
+      final encoded = jsonEncode(dto);
+      expect(encoded, isNot(contains(taskId)));
+    });
+
+    test('another account preview reports unavailable and cannot read summary',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final tasks = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final taskId = await tasks.create(title: 'Original');
+
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****1111',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      final preview = await UndoService(
+        database: database,
+        accountId: 'other',
+      ).preview();
+
+      expect(preview.available, isFalse);
+      // No summary (or any payload-derived data) for a foreign account.
+      expect(preview.summary, isEmpty);
+      expect(preview.kind, isEmpty);
+      final encoded = jsonEncode(preview.toDto());
+      expect(encoded, isNot(contains(taskId)));
+      // The slot is untouched by a foreign preview.
+      expect(await undo.canUndo(), isTrue);
+    });
+
+    test('foreign account undo does not delete the original undo slot',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final tasks = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final taskId = await tasks.create(title: 'Original');
+      var task = await tasks.byId(taskId);
+      // Rename so the top undo is reversible back to 'Original'.
+      await tasks.rename(taskId, 'Renamed', expectedUpdatedAt: task.updatedAt);
+
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****1111',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      await expectLater(
+        UndoService(database: database, accountId: 'other').undo(),
+        throwsA(isA<InvalidUndoCommand>()),
+      );
+
+      // The original account's slot must survive the failed foreign undo.
+      expect(await undo.canUndo(), isTrue);
+      // The original account can still reverse its own change.
+      await undo.undo();
+      expect((await tasks.byId(taskId)).title, 'Original');
+      expect(await undo.canUndo(), isFalse);
+    });
+  });
+
+  group('composite undo snapshot', () {
+    test('composite restore atomically restores entity rows, reminders, '
+        'links and policy config, consuming the slot once', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+
+      // Seed the original rows the composite snapshot will restore.
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'ev-c',
+              accountId: 'a',
+              source: 'user',
+              title: 'Event C',
+              type: 'personal',
+              startAt: Value(_beijingEpoch(2026, 8, 3, 9)),
+              endAt: Value(_beijingEpoch(2026, 8, 3, 10)),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.tasks).insert(
+            TasksCompanion.insert(
+              id: 'task-composite',
+              accountId: 'a',
+              title: 'Original Title',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.planBlocks).insert(
+            PlanBlocksCompanion.insert(
+              id: 'pb-composite',
+              accountId: 'a',
+              taskId: 'task-composite',
+              startAt: 1000,
+              endAt: 2000,
+              status: 'accepted',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'reminder:event:ev-c:1',
+              accountId: 'a',
+              targetType: 'event',
+              targetId: 'ev-c',
+              eventId: const Value('ev-c'),
+              offsetMinutes: const Value(10),
+              triggerAt: 900,
+              state: 'desired',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.taskEventLinks).insert(
+            TaskEventLinksCompanion.insert(
+              accountId: 'a',
+              taskId: 'task-composite',
+              eventId: 'ev-c',
+              relationType: 'related',
+              createdAt: 1,
+            ),
+          );
+      await database.into(database.agentPermissionPolicies).insert(
+            AgentPermissionPoliciesCompanion.insert(
+              id: 'policy-composite',
+              accountId: 'a',
+              actionType: 'create_event',
+              confirmationMode: 'always',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // Snapshot the original rows, then destroy them so restore has work.
+      final taskBefore =
+          (await database.select(database.tasks)
+                ..where(
+                  (row) =>
+                      row.id.equals('task-composite') &
+                      row.accountId.equals('a'),
+                ))
+              .getSingle();
+      final remindersBefore = await (database.select(database.reminders)
+              ..where(
+                (row) =>
+                    row.accountId.equals('a') &
+                    row.targetType.equals('event') &
+                    row.targetId.equals('ev-c'),
+              ))
+          .get();
+      final linkBefore =
+          (await database.select(database.taskEventLinks)
+                ..where(
+                  (row) =>
+                      row.accountId.equals('a') &
+                      row.taskId.equals('task-composite') &
+                      row.eventId.equals('ev-c'),
+                ))
+              .getSingle();
+      final policyBefore =
+          (await database.select(database.agentPermissionPolicies)
+                ..where(
+                  (row) =>
+                      row.id.equals('policy-composite') &
+                      row.accountId.equals('a'),
+                ))
+              .getSingle();
+
+      await undo.record(
+        UndoCommand(
+          kind: 'composite_test',
+          accountId: 'a',
+          safeSummary: '组合恢复测试',
+          payload: {
+            'entity': 'composite',
+            'operations': [
+              {
+                'entity': 'task',
+                'id': 'task-composite',
+                'before': (await taskBefore).toJson(),
+              },
+              {
+                'entity': 'reminder_override',
+                'targetType': 'event',
+                'targetId': 'ev-c',
+                'before': (await remindersBefore).map((r) => r.toJson()).toList(),
+              },
+              {
+                'entity': 'task_event_link',
+                'taskId': 'task-composite',
+                'eventId': 'ev-c',
+                'before': (await linkBefore).toJson(),
+              },
+              {
+                'entity': 'permission_policy',
+                'id': 'policy-composite',
+                'before': (await policyBefore).toJson(),
+              },
+            ],
+          },
+        ),
+      );
+
+      // Destroy the rows.
+      await (database.delete(database.tasks)..where(
+            (row) => row.id.equals('task-composite'),
+          ))
+          .go();
+      await (database.delete(database.reminders)..where(
+            (row) => row.targetId.equals('ev-c'),
+          ))
+          .go();
+      await (database.delete(database.taskEventLinks)..where(
+            (row) => row.taskId.equals('task-composite'),
+          ))
+          .go();
+      await (database.delete(database.agentPermissionPolicies)..where(
+            (row) => row.id.equals('policy-composite'),
+          ))
+          .go();
+
+      await undo.undo();
+
+      // All four restored atomically.
+      final task = await database.select(database.tasks).getSingle();
+      expect(task.title, 'Original Title');
+      expect(await database.select(database.reminders).get().then((r) => r.length),
+          1);
+      expect(await database.select(database.taskEventLinks).get().then((r) => r.length),
+          1);
+      expect(
+        await database
+            .select(database.agentPermissionPolicies)
+            .get()
+            .then((r) => r.length),
+        1,
+      );
+      // Consumed only once.
+      expect(await undo.canUndo(), isFalse);
+    });
+
+    test('composite restore failure keeps the slot and logs a safe failure',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = UndoService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+
+      // A composite with a task op whose 'before' is malformed -> restore fails.
+      await undo.record(
+        UndoCommand(
+          kind: 'composite_test',
+          accountId: 'a',
+          payload: {
+            'entity': 'composite',
+            'summary': '坏组合',
+            'operations': [
+              {
+                'entity': 'task',
+                'id': 'task-composite',
+                'before': {'title': 'x'}, // missing required fields -> throws
+              },
+            ],
+          },
+        ),
+      );
+
+      await expectLater(undo.undo(), throwsA(isA<InvalidUndoCommand>()));
+
+      // Slot must NOT be cleared on a composite failure.
+      expect(await undo.canUndo(), isTrue);
+      final log = await database.actionLogsRepository.selectAll();
+      expect(log.map((e) => e.result), contains('failure'));
+    });
   });
 }
