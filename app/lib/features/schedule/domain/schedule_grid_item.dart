@@ -37,6 +37,7 @@ class ScheduleGridItem {
     required this.foregroundPriority,
     required this.color,
     required this.colorKey,
+    this.recurringSeries = false,
     this.event,
     this.planBlock,
     this.task,
@@ -59,6 +60,7 @@ class ScheduleGridItem {
     foregroundPriority: event.foregroundPriority,
     color: event.color,
     colorKey: event.courseSeriesId ?? event.id,
+    recurringSeries: event.recurringSeries,
     event: event,
   );
 
@@ -118,6 +120,12 @@ class ScheduleGridItem {
   /// null: the course series for events, the parent task for plan blocks.
   final String colorKey;
 
+  /// Whether this event's series identity ([seriesId]) is a recurring
+  /// `calendar_event_series` (true) rather than a `course_series` (false).
+  /// Drives [seriesType] so conflict series rules resolve the correct
+  /// identity type for recurring occurrences.
+  final bool recurringSeries;
+
   /// Whether this item is eligible for the timed week grid. Events are always
   /// eligible; plan blocks must be approved and non-deleted.
   bool get showsInWeekGrid {
@@ -133,13 +141,14 @@ class ScheduleGridItem {
     ScheduleGridItemKind.planBlock => 'plan_block',
   };
 
-  /// The stable series identity type for conflict series rules
-  /// (`course_series` for events with a course series), or null for items
-  /// without one (plan blocks, personal events).
+  /// The stable series identity type for conflict series rules: `course_series`
+  /// for events bound to a course series, `calendar_event_series` for recurring
+  /// occurrences, or null for items without a series identity (plan blocks,
+  /// personal events).
   String? get seriesType {
     final event = this.event;
     if (event == null || event.courseSeriesId == null) return null;
-    return 'course_series';
+    return recurringSeries ? 'calendar_event_series' : 'course_series';
   }
 
   /// The series id ([EffectiveEvent.courseSeriesId]) used by conflict series
@@ -168,6 +177,7 @@ class ScheduleGridItem {
     foregroundPriority: foregroundPriority,
     color: color,
     colorKey: colorKey,
+    recurringSeries: recurringSeries,
     event: event,
     planBlock: planBlock,
     task: task,

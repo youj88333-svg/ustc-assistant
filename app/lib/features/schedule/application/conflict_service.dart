@@ -711,25 +711,28 @@ class ConflictService {
     } on OccurrenceNotFoundError {
       return null;
     }
+    final locatorText = encodeCalendarEventLocator(locator);
     if (occurrence.allDay) {
       return ScheduleGridItem.fromEvent(
         EffectiveEvent.allDay(
-          id: encodeCalendarEventLocator(locator),
+          id: locatorText,
           title: occurrence.title,
           startDate: occurrence.startDate!,
           endDateExclusive: occurrence.endDateExclusive!,
           courseSeriesId: series.id,
+          recurringSeries: true,
           eventType: 'personal',
         ),
       );
     }
     return ScheduleGridItem.fromEvent(
       EffectiveEvent.timed(
-        id: encodeCalendarEventLocator(locator),
+        id: locatorText,
         title: occurrence.title,
         startAt: occurrence.startAt!,
         endAt: occurrence.endAt!,
         courseSeriesId: series.id,
+        recurringSeries: true,
         eventType: 'personal',
       ),
     );

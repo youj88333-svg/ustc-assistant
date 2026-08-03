@@ -9,6 +9,7 @@ class EffectiveEvent {
     required this.startAt,
     required this.endAt,
     this.courseSeriesId,
+    this.recurringSeries = false,
     this.location,
     this.hasConfirmedConflict = false,
     this.isInactivePreview = false,
@@ -26,6 +27,7 @@ class EffectiveEvent {
     required this.startDate,
     required this.endDateExclusive,
     this.courseSeriesId,
+    this.recurringSeries = false,
     this.location,
     this.hasConfirmedConflict = false,
     this.isInactivePreview = false,
@@ -45,6 +47,13 @@ class EffectiveEvent {
   final DateTime? startDate;
   final DateTime? endDateExclusive;
   final String? courseSeriesId;
+
+  /// Whether [courseSeriesId] identifies a recurring `calendar_event_series`
+  /// (true) rather than a `course_series` row (false). Conflict series rules
+  /// look up the series type by this flag, so a recurring occurrence must be
+  /// resolvable as `calendar_event_series`, never conflated with a course.
+  final bool recurringSeries;
+
   final String? location;
   final bool hasConfirmedConflict;
   final bool isInactivePreview;

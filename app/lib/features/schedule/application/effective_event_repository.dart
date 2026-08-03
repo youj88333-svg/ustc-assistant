@@ -333,6 +333,7 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     final target = await byId(eventId);
     if (!await _isPresent(target.source)) return const [];
     final moves = await _movesBySourceDate();
+    final targetBounds = _recordBounds(target, moves);
     final candidates =
         await (database.select(database.calendarEvents)..where(
               (row) =>
@@ -343,7 +344,11 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
             .get();
     final visible = <CalendarEvent>[];
     for (final candidate in candidates) {
-      if (!_overlaps(target.source, candidate, moves)) continue;
+      final candidateBounds = _localBounds(candidate, moves);
+      if (!(candidateBounds.$1.isBefore(targetBounds.$2) &&
+          candidateBounds.$2.isAfter(targetBounds.$1))) {
+        continue;
+      }
       if (!await _isPresent(candidate)) continue;
       visible.add(candidate);
     }
@@ -630,17 +635,6 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
     return record != null;
   }
 
-  bool _overlaps(
-    CalendarEvent target,
-    CalendarEvent candidate,
-    Map<String, String> moves,
-  ) {
-    final targetBounds = _localBounds(target, moves);
-    final candidateBounds = _localBounds(candidate, moves);
-    return candidateBounds.$1.isBefore(targetBounds.$2) &&
-        candidateBounds.$2.isAfter(targetBounds.$1);
-  }
-
   /// The display bounds of an event: moved courses use their effective
   /// (target-day) times, everything else its raw times.
   (DateTime, DateTime) _localBounds(
@@ -663,6 +657,36 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         ? endAt
         : shiftedStart.add(endAt.difference(startAt));
     return (shiftedStart, shiftedEnd);
+  }
+
+  /// The display bounds of an aligned [EffectiveEventRecord]. Recurring
+  /// occurrences carry their composed time in [EffectiveEventRecord]
+  /// effectiveStartAt/effectiveEndAt (the synthetic `source` only holds the
+  /// series anchor), so those must win over [EffectiveEventRecord.source]
+  /// bounds. For stored events the effective fields hold the whole-day move
+  /// projection (null when unmoved), falling back to the raw row bounds.
+  (DateTime, DateTime) _recordBounds(
+    EffectiveEventRecord record,
+    Map<String, String> moves,
+  ) {
+    final source = record.source;
+    if (source.allDay) {
+      final effectiveStart = record.effectiveStartAt;
+      final effectiveEnd = record.effectiveEndAt;
+      if (effectiveStart != null && effectiveEnd != null) {
+        return (effectiveStart, effectiveEnd);
+      }
+      return (
+        DateTime.parse(source.startDate!),
+        DateTime.parse(source.endDateExclusive!),
+      );
+    }
+    final effectiveStart = record.effectiveStartAt;
+    final effectiveEnd = record.effectiveEndAt;
+    if (effectiveStart != null && effectiveEnd != null) {
+      return (effectiveStart, effectiveEnd);
+    }
+    return _localBounds(source, moves);
   }
 
   /// All whole-day move records of the account, keyed by RAW source date.
@@ -758,7 +782,10 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       throw StateError('calendar event not found');
     }
     final record = EffectiveEventRecord(
-      source: _seriesAsEventSource(series),
+      source: _seriesAsEventSource(
+        series,
+        occurrenceLocator: encodeCalendarEventLocator(locator),
+      ),
       effectiveStartAt: occurrence.allDay ? null : occurrence.startAt,
       effectiveEndAt: occurrence.allDay ? null : occurrence.endAt,
       attendance: AttendancePolicy.unknown,
@@ -777,14 +804,16 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
   /// Builds a synthetic [CalendarEvent] view of a series row so the unified
   /// [EffectiveEventRecord] (which requires a `source`) can carry a recurring
   /// occurrence's display data. The synthetic row is display-only: it is never
-  /// persisted and its id is the encoded locator, never a raw series id.
-  CalendarEvent _seriesAsEventSource(CalendarEventSery series) {
-    final locator = encodeCalendarEventLocator(
-      RecurringSeriesLocator(seriesId: series.id),
-    );
+  /// persisted and its id is the occurrence's encoded locator — so conflict /
+  /// detail attribution keys on the same occurrence locator that
+  /// [eventHasConflict] and the detail loader use.
+  CalendarEvent _seriesAsEventSource(
+    CalendarEventSery series, {
+    required String occurrenceLocator,
+  }) {
     final importance = series.importance;
     return CalendarEvent(
-      id: locator,
+      id: occurrenceLocator,
       accountId: accountId,
       source: 'user',
       title: series.title,
@@ -830,6 +859,8 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
         importance: importance,
         eventType: 'personal',
         color: composed.color,
+        recurringSeries: true,
+        courseSeriesId: composed.seriesId,
       );
     }
     return EffectiveEvent.timed(
@@ -841,6 +872,8 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       importance: importance,
       eventType: 'personal',
       color: composed.color,
+      recurringSeries: true,
+      courseSeriesId: composed.seriesId,
     );
   }
 

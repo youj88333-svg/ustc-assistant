@@ -6,7 +6,9 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_serv
 import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
+import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
+import 'package:ustc_assistant_app/features/schedule/application/schedule_conflict_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/course_color.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
@@ -660,6 +662,228 @@ void main() {
       emissions.last.any((e) => e.title == '每日晨会改'),
       isTrue,
     );
+  });
+
+  test(
+    'recurring series rule overrides derived overlap between two occurrences',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const accountId = 'account';
+      await seedActiveAccount(database, accountId);
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => 100,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '晨A',
+          startAt: DateTime(2026, 7, 27, 9),
+          endAt: DateTime(2026, 7, 27, 10),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 9)),
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '晨B',
+          startAt: DateTime(2026, 7, 27, 9),
+          endAt: DateTime(2026, 7, 27, 10),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 9)),
+      );
+      final seriesRows =
+          await database.select(database.calendarEventSeries).get();
+      final seriesA = seriesRows.firstWhere((s) => s.title == '晨A').id;
+      final seriesB = seriesRows.firstWhere((s) => s.title == '晨B').id;
+
+      // Classify the two recurring series as no_conflict (current_and_future).
+      await ConflictService(database: database, accountId: accountId)
+          .classifyPair(
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'locA',
+          title: '晨A',
+          occurrenceDate: DateTime(2026, 7, 27),
+          seriesType: 'calendar_event_series',
+          seriesId: seriesA,
+        ),
+        ScheduleConflictParticipant(
+          kind: 'event',
+          id: 'locB',
+          title: '晨B',
+          occurrenceDate: DateTime(2026, 7, 27),
+          seriesType: 'calendar_event_series',
+          seriesId: seriesB,
+        ),
+        ConflictState.nonConflict,
+        scope: ConflictScope.currentAndFuture,
+      );
+
+      final repository = EffectiveEventRepository(
+        database,
+        accountId: accountId,
+      );
+      final events = await repository
+          .watchDisplayEvents(
+            from: DateTime(2026, 7, 27),
+            through: DateTime(2026, 7, 27, 23),
+          )
+          .first;
+      final occurrences = events.where((e) => e.id.startsWith('occ_v1.')).toList();
+      expect(occurrences, hasLength(2));
+      // Both occurrences carry the `calendar_event_series` series identity.
+      for (final occurrence in occurrences) {
+        expect(
+          ScheduleGridItem.fromEvent(occurrence).seriesType,
+          'calendar_event_series',
+        );
+      }
+
+      // The no_conflict series rule must override the derived timed overlap.
+      final result = await repository.conflictsForItems(
+        occurrences,
+        from: DateTime(2026, 7, 27),
+        throughExclusive: DateTime(2026, 7, 28),
+      );
+      for (final occurrence in occurrences) {
+        expect(result.isConflict('event', occurrence.id), isFalse);
+      }
+    },
+  );
+
+  test(
+    'overlappingRecords uses the composed occurrence time after an override',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const accountId = 'account';
+      await seedActiveAccount(database, accountId);
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => 100,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日晨会',
+          startAt: DateTime(2026, 7, 27, 8),
+          endAt: DateTime(2026, 7, 27, 8, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 8)),
+      );
+      final seriesId =
+          (await database.select(database.calendarEventSeries).get()).single.id;
+      // Override the 7-27 occurrence from 08:00 to 09:00 (duration 30-min).
+      await service.editOnlyThis(
+        seriesId,
+        '${seriesId}@2026-07-27T08:00:00',
+        OccurrenceOverride(
+          startAt: OverrideValue.set(DateTime(2026, 7, 27, 9)),
+        ),
+      );
+
+      final repository = EffectiveEventRepository(
+        database,
+        accountId: accountId,
+      );
+      final events = await repository
+          .watchDisplayEvents(
+            from: DateTime(2026, 7, 27),
+            through: DateTime(2026, 7, 27, 23),
+          )
+          .first;
+      final locator = events.firstWhere((e) => e.title == '每日晨会').id;
+      expect(locator.startsWith('occ_v1.'), isTrue);
+
+      // Two stored candidates: `late` only overlaps the overridden 09:00-09:30;
+      // `early` only overlaps the original 08:00-08:30 anchor.
+      Future<void> insertTimed(String id, int startMin, int endMin) => database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: id,
+              accountId: accountId,
+              source: 'user',
+              title: id,
+              type: 'personal',
+              startAt: Value(
+                DateTime(2026, 7, 27, 8, startMin).millisecondsSinceEpoch,
+              ),
+              endAt: Value(
+                DateTime(2026, 7, 27, 8, endMin).millisecondsSinceEpoch,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      // `late`: 09:15-09:45 (overlaps 09:00-09:30, not 08:00-08:30).
+      // `early`: 08:15-08:45 (overlaps 08:00-08:30, not 09:00-09:30).
+      await insertTimed('late', 75, 105);
+      await insertTimed('early', 15, 45);
+
+      final overlaps = await repository.overlappingRecords(locator);
+      final ids = overlaps.map((record) => record.source.id).toList();
+      expect(ids, contains('late'));
+      expect(ids, isNot(contains('early')));
+    },
+  );
+
+  test('eventHasConflict attributes a derived overlap to the occurrence', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    const accountId = 'account';
+    await seedActiveAccount(database, accountId);
+    final service = RecurrenceService(
+      database: database,
+      accountId: accountId,
+      now: () => 100,
+    );
+    await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '晨会',
+        startAt: DateTime(2026, 7, 27, 9),
+        endAt: DateTime(2026, 7, 27, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 9)),
+    );
+    // A stored event overlapping the occurrence on 7-27.
+    await database
+        .into(database.calendarEvents)
+        .insert(
+          CalendarEventsCompanion.insert(
+            id: 'rival',
+            accountId: accountId,
+            source: 'user',
+            title: 'rival',
+            type: 'personal',
+            startAt: Value(
+              DateTime(2026, 7, 27, 9, 30).millisecondsSinceEpoch,
+            ),
+            endAt: Value(DateTime(2026, 7, 27, 10, 30).millisecondsSinceEpoch),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+
+    final repository = EffectiveEventRepository(database, accountId: accountId);
+    final events = await repository
+        .watchDisplayEvents(
+          from: DateTime(2026, 7, 27),
+          through: DateTime(2026, 7, 27, 23),
+        )
+        .first;
+    final locator = events.firstWhere((e) => e.title == '晨会').id;
+
+    // The occurrence participates in overlap discovery with its stored rival
+    // and is attributed as the conflict-bearing party by its own locator.
+    final overlaps = await repository.overlappingRecords(locator);
+    expect(overlaps.map((r) => r.source.id), contains('rival'));
+    expect(await repository.eventHasConflict(locator), isTrue);
   });
 }
 
