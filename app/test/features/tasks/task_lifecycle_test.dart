@@ -255,6 +255,31 @@ void main() {
     expect((await service.byId(id)).deletedAt, isNull);
   });
 
+  test('deletedTasks returns only soft-deleted, account-scoped tasks', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    var clock = 45;
+    final service = TaskLifecycleService(
+      database: database,
+      accountId: 'a',
+      now: () => ++clock,
+    );
+    final activeId = await service.create(title: '正常任务');
+    final deletedId = await service.create(title: '已删除');
+    final deletedRow = await service.byId(deletedId);
+    await service.softDelete(
+      deletedId,
+      expectedUpdatedAt: deletedRow.updatedAt,
+    );
+
+    final deleted = await service.deletedTasks();
+    final titles = deleted.map((t) => t.title).toList();
+    expect(titles, contains('已删除'));
+    expect(titles, isNot(contains('正常任务')));
+    // The active task is still readable via the normal path.
+    expect((await service.byId(activeId)).deletedAt, isNull);
+  });
+
   test(
     'default no-op PlanBlock port supports completion and cancellation',
     () async {

@@ -56,6 +56,37 @@ abstract interface class AgentLocalDataGateway {
   /// All non-deleted plan blocks for the account.
   Future<List<PlanBlockItem>> allPlanBlocks(String accountId);
 
+  /// The account's `source=user` management-state events for the read-only
+  /// `get_schedule(view=management)` tool: personal schedule / recurring
+  /// occurrence rows that are cancelled, hidden, completed, skipped, or
+  /// soft-deleted. Account-scoped and `source=user`-filtered inside the DB.
+  ///
+  /// This deliberately does NOT go through
+  /// `EffectiveEventRepository.watchDisplayEvents()` (which excludes
+  /// cancelled/hidden/deleted rows); it is the explicit management read the
+  /// brief requires.
+  Future<List<CalendarEvent>> managementEvents(String accountId);
+
+  /// All soft-deleted tasks for the account (deletedAt != null), for
+  /// `get_tasks(state=deleted)`.
+  Future<List<TaskItem>> deletedTasks(String accountId);
+
+  /// All soft-deleted plan blocks for [taskId] (deletedAt != null), for
+  /// `get_plan_blocks(include_deleted=true)`. Account-scoped and
+  /// task-scoped inside the DB so a caller cannot fetch the whole account's
+  /// deleted blocks without a task scope.
+  Future<List<PlanBlockItem>> deletedPlanBlocksForTask(
+    String accountId,
+    String taskId,
+  );
+
+  /// The still-existing (non-deleted) calendar events linked to [taskId]
+  /// that belong to [accountId], for `get_task_details.linkedEvents`.
+  Future<List<CalendarEvent>> linkedEventsForTask(
+    String accountId,
+    String taskId,
+  );
+
   /// The sync state for a source, derived from sync_runs + source_configs.
   Future<SyncSourceState> syncState(String accountId, SyncSource source);
 
@@ -189,6 +220,77 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
           ..orderBy([(row) => OrderingTerm.asc(row.startAt)]))
         .get();
     return rows.map(PlanBlockItem.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<CalendarEvent>> managementEvents(String accountId) async {
+    final rows = await (_database.select(_database.calendarEvents)
+          ..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.source.equals('user') &
+                (row.status.equals('cancelled') |
+                    row.status.equals('hidden') |
+                    row.status.equals('completed') |
+                    row.status.equals('skipped') |
+                    row.deletedAt.isNotNull()),
+          )
+          ..orderBy([(row) => OrderingTerm.asc(row.startAt)]))
+        .get();
+    return rows;
+  }
+
+  @override
+  Future<List<TaskItem>> deletedTasks(String accountId) async {
+    final rows = await (_database.select(_database.tasks)
+          ..where(
+            (row) => row.accountId.equals(accountId) & row.deletedAt.isNotNull(),
+          )
+          ..orderBy([(row) => OrderingTerm.desc(row.updatedAt)]))
+        .get();
+    return rows.map(TaskItem.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<PlanBlockItem>> deletedPlanBlocksForTask(
+    String accountId,
+    String taskId,
+  ) async {
+    final rows = await (_database.select(_database.planBlocks)
+          ..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.taskId.equals(taskId) &
+                row.deletedAt.isNotNull(),
+          )
+          ..orderBy([(row) => OrderingTerm.asc(row.startAt)]))
+        .get();
+    return rows.map(PlanBlockItem.fromRow).toList(growable: false);
+  }
+
+  @override
+  Future<List<CalendarEvent>> linkedEventsForTask(
+    String accountId,
+    String taskId,
+  ) async {
+    final linkRows = await (_database.select(_database.taskEventLinks)..where(
+          (row) =>
+              row.accountId.equals(accountId) & row.taskId.equals(taskId),
+        ))
+        .get();
+    if (linkRows.isEmpty) return const [];
+    final events = <CalendarEvent>[];
+    for (final link in linkRows) {
+      final row = await (_database.select(_database.calendarEvents)..where(
+            (row) =>
+                row.id.equals(link.eventId) &
+                row.accountId.equals(accountId) &
+                row.deletedAt.isNull(),
+          ))
+          .getSingleOrNull();
+      if (row != null) events.add(row);
+    }
+    return events;
   }
 
   @override

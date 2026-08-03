@@ -92,6 +92,25 @@ class CalendarEventService {
     return rows.map(PersonalEvent.fromRow).toList(growable: false);
   }
 
+  /// The account's `source=user` management-state events (cancelled / hidden /
+  /// completed / skipped / soft-deleted) as [PersonalEvent] snapshots, for the
+  /// read-only management queries. Account- and source-filtered inside the DB.
+  Future<List<PersonalEvent>> managementEvents() async {
+    final rows =
+        await (database.select(database.calendarEvents)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.source.equals('user') &
+                  (row.status.equals('cancelled') |
+                      row.status.equals('hidden') |
+                      row.status.equals('completed') |
+                      row.status.equals('skipped') |
+                      row.deletedAt.isNotNull()),
+            ))
+            .get();
+    return rows.map(PersonalEvent.fromRow).toList(growable: false);
+  }
+
   Future<void> edit(
     String id,
     PersonalEvent replacement, {

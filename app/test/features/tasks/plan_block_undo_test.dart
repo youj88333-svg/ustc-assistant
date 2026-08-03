@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNotNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
@@ -398,6 +398,44 @@ void main() {
       expect(after.targetDate, '2026-08-05');
     },
   );
+
+  test('deletedPlanBlocksForTask is task-scoped and returns deleted blocks', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final taskService = TaskLifecycleService(
+      database: database,
+      accountId: 'a',
+      now: () => 1,
+    );
+    final taskId = await taskService.create(title: 'Task');
+    final otherTaskId = await taskService.create(title: 'Other');
+    var clock = 10;
+    final service = PlanBlockService(
+      database: database,
+      accountId: 'a',
+      now: () => ++clock,
+    );
+    final deletedId = await service.create(
+      taskId: taskId,
+      startAt: DateTime(2026, 7, 27, 9),
+      endAt: DateTime(2026, 7, 27, 10),
+    );
+    final otherId = await service.create(
+      taskId: otherTaskId,
+      startAt: DateTime(2026, 7, 27, 11),
+      endAt: DateTime(2026, 7, 27, 12),
+    );
+    var deletedBlock = await service.byId(deletedId);
+    await service.softDelete(deletedId, expectedUpdatedAt: deletedBlock.updatedAt);
+
+    // Task-scoped: only task's deleted block, not the other task's.
+    final deleted = await service.deletedPlanBlocksForTask(taskId);
+    expect(deleted.map((b) => b.id), contains(deletedId));
+    expect(deleted.map((b) => b.id), isNot(contains(otherId)));
+    // Other task still has its non-deleted block.
+    final otherBlock = await service.byId(otherId);
+    expect(otherBlock.deletedAt, isNull);
+  });
 
   test('undo slot clears on startup and failed undo preserves data', () async {
     final database = await fixtureDatabase();

@@ -245,4 +245,57 @@ void main() {
     expect((await service.byId(id)).title, 'Before');
     expect(await undo.canUndo(), isFalse);
   });
+
+  test('managementEvents returns only user-source lifecycle-state events', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = CalendarEventService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    // Active (normal) event.
+    final activeId = await service.create(
+      PersonalEvent.timed(title: '正常', startAt: instant(9), endAt: instant(10)),
+    );
+    // Lifecycle-state user events.
+    await service.create(
+      PersonalEvent.timed(
+        title: '取消',
+        startAt: instant(11),
+        endAt: instant(12),
+        status: EventStatus.cancelled,
+      ),
+    );
+    final deletedId = await service.create(
+      PersonalEvent.timed(title: '删除', startAt: instant(13), endAt: instant(14)),
+    );
+    await service.softDelete(deletedId);
+    // A source-owned course that must not be surfaced as user management.
+    await database.into(database.calendarEvents).insert(
+          CalendarEventsCompanion.insert(
+            id: 'course-hidden',
+            accountId: 'a',
+            source: 'ustc_jw',
+            title: '课程',
+            type: 'course',
+            startAt: Value(instant(8).millisecondsSinceEpoch),
+            endAt: Value(instant(9).millisecondsSinceEpoch),
+            allDay: false,
+            timezone: 'Asia/Shanghai',
+            status: Value('cancelled'),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+
+    final management = await service.managementEvents();
+    final titles = management.map((e) => e.title).toList();
+    expect(titles, isNot(contains('正常')));
+    expect(titles, containsAll(['取消', '删除']));
+    // The source-owned course is excluded (source=user filter).
+    expect(titles, isNot(contains('课程')));
+    // The normal event is still visible through the normal read.
+    expect((await service.byId(activeId)).title, '正常');
+  });
 }

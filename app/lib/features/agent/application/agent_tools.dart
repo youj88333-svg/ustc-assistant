@@ -11,6 +11,7 @@ import '../../schedule/domain/schedule_grid_item.dart';
 import '../../schedule/domain/ustc_periods.dart';
 import '../../sync/domain/sync_state.dart';
 import '../../tasks/domain/plan_block.dart';
+import '../../tasks/domain/task.dart';
 import '../../tasks/domain/task_projection.dart';
 import '../domain/agent_tool.dart';
 import '../domain/query_source.dart';
@@ -375,11 +376,28 @@ class GetScheduleTool implements AgentTool {
           },
           'view': {
             'type': 'string',
-            'enum': ['events', 'course_summary'],
+            'enum': ['events', 'course_summary', 'management'],
             'default': 'events',
             'description': 'events (default) lists each occurrence; '
                 'course_summary collapses course occurrences into one group '
-                'per offering.',
+                'per offering; management lists the account\'s user-source '
+                'cancelled/hidden/deleted/completed/skipped personal schedule '
+                'items for later restore.',
+          },
+          'lifecycle_states': {
+            'type': 'array',
+            'items': {
+              'type': 'string',
+              'enum': [
+                'cancelled',
+                'hidden',
+                'deleted',
+                'completed',
+                'skipped',
+              ],
+            },
+            'description': 'Only valid with view=management. Filters the '
+                'management list to the given lifecycle states.',
           },
           'query': {
             'type': 'string',
@@ -392,6 +410,7 @@ class GetScheduleTool implements AgentTool {
                 'Invalid with view=course_summary.',
           },
         },
+        'additionalProperties': false,
       };
 
   @override
@@ -404,6 +423,18 @@ class GetScheduleTool implements AgentTool {
     final view = (arguments['view'] as String?) ?? 'events';
     final query = (arguments['query'] as String?)?.trim();
     final hasQuery = query != null && query.isNotEmpty;
+
+    if (view == 'management') {
+      return _managementSchedule(
+        _gateway,
+        arguments,
+        query,
+        hasQuery,
+        fromStr,
+        throughStr,
+        context,
+      );
+    }
 
     // query mode: locate concrete occurrences by title across retained
     // history, independent of the default semester.
@@ -531,6 +562,171 @@ class GetScheduleTool implements AgentTool {
       references: references,
     );
   }
+}
+
+/// The `get_schedule(view=management)` mode: list the account's
+/// `source=user` personal schedule / recurring occurrences that are in a
+/// lifecycle state (cancelled / hidden / deleted / completed / skipped) for
+/// later restore, binding each to a run-local `ref_event`.
+///
+/// Constraints (design §6.1):
+/// - Only `source=user` rows are returned (the gateway enforces this in SQL).
+/// - The request MUST have a non-empty `query` OR a `from`/`through` range of
+///   at most 31 days.
+/// - `lifecycle_states` only accepts cancelled/hidden/deleted/completed/skipped.
+/// - Normal `get_schedule` still excludes these items (it reads the display
+///   projection); only this explicit management read surfaces them.
+/// - Each DTO carries the safe title, time, lifecycle state, a recurrence
+///   identity hint and the available scope, plus `ref_event`. It never returns
+///   the series id, occurrence key, or DB id.
+Future<AgentToolResult> _managementSchedule(
+  AgentLocalDataGateway gateway,
+  Map<String, Object?> arguments,
+  String? query,
+  bool hasQuery,
+  String? fromStr,
+  String? throughStr,
+  AgentToolContext context,
+) async {
+  // lifecycle_states validation.
+  const allowedStates = {'cancelled', 'hidden', 'deleted', 'completed', 'skipped'};
+  final lifecycleArg = arguments['lifecycle_states'];
+  Set<String>? lifecycleStates;
+  if (lifecycleArg != null) {
+    if (lifecycleArg is! List) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    final states = lifecycleArg.whereType<String>().toSet();
+    if (states.isEmpty || !states.every(allowedStates.contains)) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
+    lifecycleStates = states;
+  }
+
+  // Constraint: query non-empty OR a range of at most 31 days.
+  AgentDateRange? range;
+  if (!hasQuery) {
+    final parsed = _parseRange(fromStr, throughStr, context.clock);
+    if (parsed.error != null) {
+      return AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: parsed.error,
+      );
+    }
+    range = parsed.range!;
+  } else if (fromStr != null || throughStr != null) {
+    final parsed = _parseRange(fromStr, throughStr, context.clock);
+    if (parsed.error != null) {
+      return AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: parsed.error,
+      );
+    }
+    range = parsed.range;
+  }
+
+  final events = await gateway.managementEvents(context.accountId);
+  var candidates = events;
+  if (range != null) {
+    candidates = events
+        .where((e) => _managementEventInRange(e, range!))
+        .toList(growable: false);
+  }
+  final folded = query?.toLowerCase();
+  if (folded != null && folded.isNotEmpty) {
+    candidates = candidates
+        .where((e) => e.title.trim().toLowerCase().contains(folded))
+        .toList(growable: false);
+  }
+  if (lifecycleStates != null) {
+    candidates = candidates
+        .where((e) {
+          final state = e.deletedAt != null
+              ? 'deleted'
+              : e.status;
+          return lifecycleStates!.contains(state);
+        })
+        .toList(growable: false);
+  }
+  if (candidates.length > agentEventLimit) {
+    return _tooLarge(
+      'management events',
+      candidates.length,
+      agentEventLimit,
+      'narrow the query or date range',
+    );
+  }
+
+  final dtos = <Map<String, Object?>>[];
+  final references = <AgentToolReference>[];
+  for (final event in candidates) {
+    final ref = context.references.bind(kind: 'event', localId: event.id);
+    final dto = _managementEventDto(event, ref);
+    dtos.add(dto);
+    references.add(AgentToolReference(kind: 'event', ref: ref, localId: event.id));
+  }
+  final payload = <String, Object?>{'managementEvents': dtos};
+  if (range != null) {
+    payload['from'] = _formatDate(range.from);
+    payload['through'] = _formatDate(range.through);
+  }
+  return AgentToolResult(payload: payload, references: references);
+}
+
+/// Whether a management `CalendarEvent` overlaps the inclusive
+/// `[from]..[through]` calendar range. Uses the same day-interval math as
+/// `_eventInRange` but works on the raw stored `CalendarEvent` row (start_at/
+/// end_at epoch-ms UTC, or start_date/end_date_exclusive text).
+bool _managementEventInRange(CalendarEvent event, AgentDateRange range) {
+  final rangeEndInclusive = range.through.add(const Duration(days: 1));
+  if (event.allDay) {
+    final start = DateTime.parse(event.startDate!);
+    final endExclusive = DateTime.parse(event.endDateExclusive!);
+    return start.isBefore(rangeEndInclusive) && endExclusive.isAfter(range.from);
+  }
+  final start = _beijingFromEpoch(event.startAt!);
+  final end = event.endAt == null
+      ? start
+      : _beijingFromEpoch(event.endAt!);
+  return start.isBefore(rangeEndInclusive) && !end.isBefore(range.from);
+}
+
+/// Builds the `get_schedule(view=management)` item DTO: safe title, time,
+/// lifecycle state, recurrence identity hint, the available scope, and the
+/// run-local `ref_event`. Never surfaces series id, occurrence key, or DB id.
+Map<String, Object?> _managementEventDto(
+  CalendarEvent event,
+  String ref,
+) {
+  final lifecycleState = event.deletedAt != null ? 'deleted' : event.status;
+  final dto = <String, Object?>{
+    'ref': ref,
+    'title': event.title,
+    'lifecycleState': lifecycleState,
+    'eventType': event.type,
+    'availableScopes': event.personalSeriesId != null
+        ? const ['only_this', 'this_and_future', 'whole_series']
+        : const ['only_this'],
+    // A safe recurrence identity hint: whether this is one occurrence of a
+    // recurring personal series. The series id / occurrence key are INTERNAL
+    // and never surfaced.
+    'isRecurring': event.personalSeriesId != null,
+  };
+  if (event.allDay) {
+    dto['startDate'] = event.startDate;
+  } else if (event.startAt != null) {
+    dto['startAt'] = _formatDateTime(_beijingFromEpoch(event.startAt!));
+    if (event.endAt != null) {
+      dto['endAt'] = _formatDateTime(_beijingFromEpoch(event.endAt!));
+    }
+  }
+  return dto;
 }
 
 /// The query (title-lookup) mode for `get_schedule`: search [candidates] for
@@ -1318,9 +1514,18 @@ class GetTasksTool implements AgentTool {
           'state': {
             'type': 'string',
             'description':
-                'Optional filter: active | blocked | completed | cancelled.',
+                'Optional filter: active | blocked | completed | cancelled | '
+                'deleted. state=deleted returns only soft-deleted (restorable) '
+                'tasks.',
+          },
+          'query': {
+            'type': 'string',
+            'description':
+                'Optional title keyword. Case-insensitive substring match on '
+                'the task title.',
           },
         },
+        'additionalProperties': false,
       };
 
   @override
@@ -1329,17 +1534,34 @@ class GetTasksTool implements AgentTool {
     AgentToolContext context,
   ) async {
     final stateFilter = arguments['state'] as String?;
-    final tasks = await _gateway.tasks(context.accountId);
-    final filtered = stateFilter == null
-        ? tasks
-        : tasks.where((t) => t.state.storage == stateFilter).toList();
-    if (filtered.length > agentTaskLimit) {
-      return _tooLarge('tasks', filtered.length, agentTaskLimit, 'filter by state');
+    final rawQuery = arguments['query'] as String?;
+    final query = rawQuery?.trim();
+    final hasQuery = query != null && query.isNotEmpty;
+
+    final List<TaskItem> tasks;
+    if (stateFilter == 'deleted') {
+      tasks = await _gateway.deletedTasks(context.accountId);
+    } else {
+      tasks = await _gateway.tasks(context.accountId);
+    }
+    Iterable<TaskItem> filtered = tasks;
+    if (stateFilter != null && stateFilter != 'deleted') {
+      filtered = tasks.where((t) => t.state.storage == stateFilter);
+    }
+    if (hasQuery) {
+      final folded = query.toLowerCase();
+      filtered = filtered.where(
+        (t) => t.title.trim().toLowerCase().contains(folded),
+      );
+    }
+    final filteredList = filtered.toList(growable: false);
+    if (filteredList.length > agentTaskLimit) {
+      return _tooLarge('tasks', filteredList.length, agentTaskLimit, 'filter by state');
     }
     final now = context.clock.now();
     final dtos = <Map<String, Object?>>[];
     final references = <AgentToolReference>[];
-    for (final task in filtered) {
+    for (final task in filteredList) {
       final blocks = await _gateway.planBlocksForTask(context.accountId, task.id);
       final snapshots = blocks
           .map(
@@ -1399,6 +1621,7 @@ class GetTaskDetailsTool implements AgentTool {
           'ref': {'type': 'string', 'description': 'The run-local task ref_*.'},
         },
         'required': ['ref'],
+        'additionalProperties': false,
       };
 
   @override
@@ -1457,6 +1680,23 @@ class GetTaskDetailsTool implements AgentTool {
       blockDtos.add(_planBlockDto(b, bRef, now));
     }
     dto['planBlocks'] = blockDtos;
+
+    // linkedEvents: the still-existing events linked to this task that belong
+    // to the current account. Each carries safe fields + an event ref.
+    final linkedEvents = await _gateway.linkedEventsForTask(
+      context.accountId,
+      taskId,
+    );
+    final linkedDtos = <Map<String, Object?>>[];
+    final linkedReferences = <AgentToolReference>[];
+    for (final event in linkedEvents) {
+      final eventRef = context.references.bind(kind: 'event', localId: event.id);
+      linkedDtos.add(_linkedEventDto(event, eventRef));
+      linkedReferences.add(
+        AgentToolReference(kind: 'event', ref: eventRef, localId: event.id),
+      );
+    }
+    dto['linkedEvents'] = linkedDtos;
     return AgentToolResult(
       payload: dto,
       references: [
@@ -1468,9 +1708,29 @@ class GetTaskDetailsTool implements AgentTool {
             localId: b.id,
           ),
         ),
+        ...linkedReferences,
       ],
     );
   }
+}
+
+/// Builds a `get_task_details.linkedEvents` item: the safe event fields plus a
+/// run-local event ref. Only still-existing, current-account events reach this
+/// (the gateway filters deletedAt + account scope); none of the internal
+/// series/occurrence/DB identity is surfaced.
+Map<String, Object?> _linkedEventDto(CalendarEvent event, String ref) {
+  final dto = <String, Object?>{
+    'ref': ref,
+    'title': event.title,
+    'source': event.source,
+    'eventType': event.type,
+  };
+  if (event.allDay) {
+    dto['startDate'] = event.startDate;
+  } else if (event.startAt != null) {
+    dto['startAt'] = _formatDateTime(_beijingFromEpoch(event.startAt!));
+  }
+  return dto;
 }
 
 // ===========================================================================
@@ -1497,7 +1757,29 @@ class GetPlanBlocksTool implements AgentTool {
             'type': 'string',
             'description': 'Optional run-local task ref to filter by.',
           },
+          'status': {
+            'type': 'string',
+            'enum': [
+              'suggested',
+              'accepted',
+              'done',
+              'skipped',
+              'rescheduled',
+              'cancelled',
+            ],
+            'description':
+                'Optional plan-block status filter. Mutually exclusive with '
+                'include_deleted.',
+          },
+          'include_deleted': {
+            'type': 'boolean',
+            'description':
+                'When true, returns soft-deleted (restorable) plan blocks. '
+                'REQUIRES taskRef — deleted blocks are only ever returned '
+                'task-scoped, never account-wide.',
+          },
         },
+        'additionalProperties': false,
       };
 
   @override
@@ -1506,6 +1788,14 @@ class GetPlanBlocksTool implements AgentTool {
     AgentToolContext context,
   ) async {
     final taskRef = arguments['taskRef'] as String?;
+    final statusFilter = arguments['status'] as String?;
+    final includeDeleted = arguments['include_deleted'] == true;
+    if (includeDeleted && statusFilter != null) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_arguments',
+      );
+    }
     List<PlanBlockItem> blocks;
     if (taskRef != null) {
       final taskId = context.references.resolve(ref: taskRef, kind: 'task');
@@ -1515,9 +1805,26 @@ class GetPlanBlocksTool implements AgentTool {
           errorCode: 'reference_not_found',
         );
       }
-      blocks = await _gateway.planBlocksForTask(context.accountId, taskId);
+      blocks = includeDeleted
+          ? await _gateway.deletedPlanBlocksForTask(context.accountId, taskId)
+          : await _gateway.planBlocksForTask(context.accountId, taskId);
     } else {
+      if (includeDeleted) {
+        // Deleted blocks are never returned unbounded across the whole
+        // account: a taskRef is required.
+        return const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'invalid_arguments',
+          payload: {
+            'guidance': 'include_deleted requires taskRef to scope deleted '
+                'plan blocks to a single task.',
+          },
+        );
+      }
       blocks = await _gateway.allPlanBlocks(context.accountId);
+    }
+    if (statusFilter != null) {
+      blocks = blocks.where((b) => b.status.storage == statusFilter).toList();
     }
     if (blocks.length > agentPlanBlockLimit) {
       return _tooLarge('plan blocks', blocks.length, agentPlanBlockLimit, 'filter by taskRef');
@@ -1787,18 +2094,31 @@ int _pageOffset(Object? raw) {
 /// suspicious-key rejection even runs. The backstop is still present as
 /// defense in depth.
 Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
-      'get_schedule': (raw) => {
-            'from': raw['from'],
-            'through': raw['through'],
-            'events': _filterItems(
-              raw['events'],
-              _eventItemKeys,
-            ),
-            'groups': _filterItems(
+      'get_schedule': (raw) {
+            final out = <String, Object?>{
+              'from': raw['from'],
+              'through': raw['through'],
+              'events': _filterItems(
+                raw['events'],
+                _eventItemKeys,
+              ),
+            };
+            // view=management returns events with management-safe fields; the
+            // per-item allowlist re-derives each item so ONLY those keys
+            // survive (series/occurrence/DB identity can never leak).
+            final managementEvents = raw['managementEvents'];
+            if (managementEvents != null) {
+              out['managementEvents'] = _filterItems(
+                managementEvents,
+                _managementEventItemKeys,
+              );
+            }
+            out['groups'] = _filterItems(
               raw['groups'],
               _courseSummaryGroupKeys,
-            ),
-            'guidance': raw['guidance'],
+            );
+            out['guidance'] = raw['guidance'];
+            return out;
           },
       'get_event_details': (raw) => _pick(raw, _eventDetailsKeys),
       'get_free_time': (raw) => {
@@ -1825,6 +2145,9 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
             final out = _pick(raw, _taskDetailsKeys);
             // planBlocks is a nested list with its own per-item allowlist.
             out['planBlocks'] = _filterItems(raw['planBlocks'], _planBlockItemKeys);
+            // linkedEvents is a nested list with its own per-item allowlist.
+            out['linkedEvents'] =
+                _filterItems(raw['linkedEvents'], _linkedEventItemKeys);
             return out;
           },
       'get_plan_blocks': (raw) => {
@@ -1970,6 +2293,34 @@ const _eventItemKeys = <String>{
   'listeningMode',
   'attendanceNote',
   'listeningNote',
+};
+
+/// Per-item allowlisted keys for `get_schedule(view=management)` items. Only
+/// these safe fields survive: ref (a bind token, never a DB id), safe title,
+/// lifecycle state, event type, recurrence identity hint, available scope and
+/// time. Series id / occurrence key / DB id are never produced by the DTO and
+/// the allowlist would drop them even if they leaked.
+const _managementEventItemKeys = <String>{
+  'ref',
+  'title',
+  'lifecycleState',
+  'eventType',
+  'isRecurring',
+  'availableScopes',
+  'startAt',
+  'endAt',
+  'startDate',
+};
+
+/// Per-item allowlisted keys for `get_task_details.linkedEvents`. Safe event
+/// fields + an event ref; no internal identity.
+const _linkedEventItemKeys = <String>{
+  'ref',
+  'title',
+  'source',
+  'eventType',
+  'startAt',
+  'startDate',
 };
 
 /// Per-participant allowlisted keys inside a `get_conflicts` conflict-pair

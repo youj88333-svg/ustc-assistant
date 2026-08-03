@@ -138,6 +138,19 @@ class TaskLifecycleService {
     return TaskItem.fromRow(row);
   }
 
+  /// All soft-deleted (restorable) tasks for the account, for the read-only
+  /// management queries. Account-scoped inside the DB.
+  Future<List<TaskItem>> deletedTasks() async {
+    final rows =
+        await (database.select(database.tasks)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.deletedAt.isNotNull(),
+            ))
+            .get();
+    return rows.map(TaskItem.fromRow).toList(growable: false);
+  }
+
   Future<void> rename(
     String id,
     String title, {

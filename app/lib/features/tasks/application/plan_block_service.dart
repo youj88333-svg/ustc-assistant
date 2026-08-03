@@ -90,6 +90,21 @@ class PlanBlockService implements PlanBlockLifecyclePort {
     return PlanBlockItem.fromRow(row);
   }
 
+  /// All soft-deleted (restorable) plan blocks for [taskId], for the read-only
+  /// management queries. Account- and task-scoped inside the DB so a caller
+  /// cannot fetch the whole account's deleted blocks without a task scope.
+  Future<List<PlanBlockItem>> deletedPlanBlocksForTask(String taskId) async {
+    final rows =
+        await (database.select(database.planBlocks)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.taskId.equals(taskId) &
+                  row.deletedAt.isNotNull(),
+            ))
+            .get();
+    return rows.map(PlanBlockItem.fromRow).toList(growable: false);
+  }
+
   Future<void> move(
     String id, {
     required DateTime startAt,

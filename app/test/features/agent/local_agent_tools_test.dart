@@ -172,6 +172,93 @@ Future<AppDatabase> _seedDatabase() async {
       title: '已完成章节',
       start: DateTime(2026, 7, 27, 19, 0), end: DateTime(2026, 7, 27, 21, 0),
       status: 'done', reviewedAt: 1);
+  // A soft-deleted plan block (restorable) under task-active.
+  await _insertPlanBlock(database, 'pb-deleted', 'a', 'task-active',
+      title: '已删除章节',
+      start: DateTime(2026, 7, 26, 19, 0), end: DateTime(2026, 7, 26, 21, 0),
+      status: 'suggested', deletedAt: 2000);
+  // A soft-deleted task (restorable) for account 'a'.
+  await database
+      .into(database.tasks)
+      .insert(
+        TasksCompanion.insert(
+          id: 'task-deleted',
+          accountId: 'a',
+          title: '已删除任务',
+          state: 'active',
+          importance: 'normal',
+          tagsJson: '[]',
+          deletedAt: const Value(2000),
+          createdAt: 1,
+          updatedAt: 2000,
+        ),
+      );
+  // A soft-deleted account-'b' task that must never surface for 'a'.
+  await database
+      .into(database.tasks)
+      .insert(
+        TasksCompanion.insert(
+          id: 'task-b-deleted',
+          accountId: 'b',
+          title: 'B已删除',
+          state: 'active',
+          importance: 'normal',
+          tagsJson: '[]',
+          deletedAt: const Value(2000),
+          createdAt: 1,
+          updatedAt: 2000,
+        ),
+      );
+
+  // --- Management-state events (source=user) for account 'a': one cancelled,
+  // one hidden, one soft-deleted, one completed, one skipped. ---
+  await _insertTimedEvent(database, 'e-cancelled', 'a', '已取消日程',
+      type: 'personal',
+      start: DateTime(2026, 7, 29, 9, 0), end: DateTime(2026, 7, 29, 10, 0),
+      status: 'cancelled');
+  await _insertTimedEvent(database, 'e-hidden', 'a', '已隐藏日程',
+      type: 'personal',
+      start: DateTime(2026, 7, 29, 11, 0), end: DateTime(2026, 7, 29, 12, 0),
+      status: 'hidden');
+  await _insertTimedEvent(database, 'e-completed', 'a', '已完成日程',
+      type: 'personal',
+      start: DateTime(2026, 7, 29, 13, 0), end: DateTime(2026, 7, 29, 14, 0),
+      status: 'completed');
+  await _insertTimedEvent(database, 'e-skipped', 'a', '已跳过日程',
+      type: 'personal',
+      start: DateTime(2026, 7, 29, 15, 0), end: DateTime(2026, 7, 29, 16, 0),
+      status: 'skipped');
+  await _insertTimedEvent(database, 'e-deleted', 'a', '已删除日程',
+      type: 'personal',
+      start: DateTime(2026, 7, 29, 17, 0), end: DateTime(2026, 7, 29, 18, 0),
+      status: 'active', deletedAt: 2000);
+  // A course (source != user) that is cancelled — must NOT appear in the
+  // management view (source=user filter).
+  await _insertTimedEvent(database, 'course-cancelled', 'a', '被取消课程',
+      type: 'course', source: 'ustc_jw',
+      start: DateTime(2026, 7, 29, 8, 0), end: DateTime(2026, 7, 29, 9, 0),
+      status: 'cancelled');
+
+  // Link task-active to a still-existing event (for linkedEvents).
+  await database.into(database.taskEventLinks).insert(
+        TaskEventLinksCompanion.insert(
+          accountId: 'a',
+          taskId: 'task-active',
+          eventId: 'event-solo',
+          relationType: 'related',
+          createdAt: 1,
+        ),
+      );
+  // Link task-active to a deleted event — must NOT appear in linkedEvents.
+  await database.into(database.taskEventLinks).insert(
+        TaskEventLinksCompanion.insert(
+          accountId: 'a',
+          taskId: 'task-active',
+          eventId: 'e-deleted',
+          relationType: 'related',
+          createdAt: 1,
+        ),
+      );
 
   // --- Sync state for account 'a': a successful jw run + source config ---
   await database.into(database.syncRuns).insert(
@@ -259,6 +346,7 @@ Future<void> _insertTimedEvent(
   String? seriesExternalId,
   String? externalId,
   String status = 'active',
+  int? deletedAt,
 }) async {
   await database.into(database.calendarEvents).insert(
         CalendarEventsCompanion.insert(
@@ -275,6 +363,7 @@ Future<void> _insertTimedEvent(
           timezone: 'Asia/Shanghai',
           locationName: Value(location),
           status: Value(status),
+          deletedAt: Value(deletedAt),
           createdAt: 1,
           updatedAt: 1,
         ),
@@ -375,6 +464,7 @@ Future<void> _insertPlanBlock(
   required DateTime end,
   required String status,
   int? reviewedAt,
+  int? deletedAt,
 }) async {
   await database.into(database.planBlocks).insert(
         PlanBlocksCompanion.insert(
@@ -386,6 +476,7 @@ Future<void> _insertPlanBlock(
           endAt: end.toUtc().millisecondsSinceEpoch,
           status: status,
           reviewedAt: Value(reviewedAt),
+          deletedAt: Value(deletedAt),
           createdAt: 1,
           updatedAt: 1,
         ),
@@ -1084,6 +1175,119 @@ void main() {
     });
   });
 
+  group('get_schedule management view', () {
+    test(
+      'view=management returns only user-source lifecycle-state items with '
+      'safe fields and ref_event, no internal identity',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'view': 'management',
+          'from': '2026-07-29',
+          'through': '2026-08-04',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final events = result.payload['managementEvents']! as List;
+        // The 5 user-source lifecycle items are present; the cancelled COURSE
+        // (source != user) is NOT, and normal events are excluded.
+        final byTitle = {
+          for (final e in events)
+            (e! as Map<String, Object?>)['title'] as String: e,
+        };
+        expect(byTitle.keys, containsAll(['已取消日程', '已隐藏日程', '已完成日程']));
+        expect(byTitle.keys, containsAll(['已跳过日程', '已删除日程']));
+        expect(byTitle.containsKey('被取消课程'), isFalse);
+        // Normal (active) events are not in the management view.
+        expect(byTitle.containsKey('自习'), isFalse);
+        // Each carries a lifecycle state and a ref.
+        expect(
+          (byTitle['已取消日程']! as Map<String, Object?>)['lifecycleState'],
+          'cancelled',
+        );
+        expect(
+          (byTitle['已删除日程']! as Map<String, Object?>)['lifecycleState'],
+          'deleted',
+        );
+        expect((byTitle['已隐藏日程']! as Map<String, Object?>)['lifecycleState'],
+            'hidden');
+        expect(
+          (byTitle['已完成日程']! as Map<String, Object?>)['lifecycleState'],
+          'completed',
+        );
+        // Non-recurring events only expose 'only_this' scope.
+        expect(
+          (byTitle['已取消日程']! as Map<String, Object?>)['availableScopes'],
+          ['only_this'],
+        );
+        expect(
+          (byTitle['已取消日程']! as Map<String, Object?>)['isRecurring'],
+          isFalse,
+        );
+        for (final e in events) {
+          expect((e! as Map<String, Object?>)['ref'], startsWith('ref_'));
+        }
+        // SECURITY: no DB ids, no source access, and no status of a normal
+        // course; the cancelled-course id never leaks.
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('e-cancelled')));
+        expect(encoded, isNot(contains('e-deleted')));
+        expect(encoded, isNot(contains('course-cancelled')));
+        expect(encoded, isNot(contains('event-solo')));
+      },
+    );
+
+    test(
+      'view=management without a query and wider than 31 days returns '
+      'range_too_large',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'view': 'management',
+          'from': '2026-01-01',
+          'through': '2026-12-31',
+        });
+        expect(result.status, AgentToolStatus.error);
+        expect(result.errorCode, 'range_too_large');
+      },
+    );
+
+    test(
+      'view=management accepts an unbounded query and applies lifecycle_states',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'view': 'management',
+          'query': '日程',
+          'lifecycle_states': ['deleted', 'completed'],
+        });
+        expect(result.status, AgentToolStatus.success);
+        final events = result.payload['managementEvents']! as List;
+        final titles = events
+            .map((e) => (e! as Map<String, Object?>)['title'])
+            .toList();
+        expect(titles, contains('已删除日程'));
+        expect(titles, contains('已完成日程'));
+        expect(titles, isNot(contains('已取消日程')));
+        expect(titles, isNot(contains('已隐藏日程')));
+      },
+    );
+
+    test(
+      'view=management rejects invalid lifecycle_states with '
+      'invalid_arguments',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'view': 'management',
+          'query': '日程',
+          'lifecycle_states': ['active'],
+        });
+        expect(result.status, AgentToolStatus.error);
+        expect(result.errorCode, 'invalid_arguments');
+      },
+    );
+  });
+
   group('get_event_details', () {
     test('resolves a ref to full attendance/listening/notes, no raw id',
         () async {
@@ -1407,6 +1611,44 @@ void main() {
       );
     });
 
+    test('query filters by title keyword', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_tasks', {'query': '考试'});
+      final tasks = result.payload['tasks']! as List;
+      expect(tasks, hasLength(1));
+      expect((tasks.first! as Map<String, Object?>)['title'], '准备考试');
+    });
+
+    test(
+      'state=deleted returns only restorable deleted tasks, account-scoped',
+      () async {
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_tasks', {'state': 'deleted'});
+        expect(result.status, AgentToolStatus.success);
+        final tasks = result.payload['tasks']! as List;
+        expect(tasks, hasLength(1));
+        final task = tasks.first! as Map<String, Object?>;
+        expect(task['title'], '已删除任务');
+        expect(task['ref'], startsWith('ref_'));
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('task-deleted')));
+        expect(encoded, isNot(contains('task-b-deleted')));
+      },
+    );
+
+    test('state=deleted is account-scoped (b sees its own, not a\'s)', () async {
+      final harness = _harness(database, 'b');
+      final result = await harness.execute('get_tasks', {'state': 'deleted'});
+      expect(result.status, AgentToolStatus.success);
+      final tasks = result.payload['tasks']! as List;
+      expect(tasks, hasLength(1));
+      expect(
+        (tasks.first! as Map<String, Object?>)['title'],
+        'B已删除',
+      );
+      expect(jsonEncode(result.payload), isNot(contains('task-deleted')));
+    });
+
     test('account b sees none of account a tasks', () async {
       final harness = _harness(database, 'b');
       final result = await harness.execute('get_tasks', {});
@@ -1434,6 +1676,35 @@ void main() {
       final encoded = jsonEncode(result.payload);
       expect(encoded, isNot(contains('task-active')));
       expect(encoded, isNot(contains('pb-pending')));
+    });
+
+    test('linkedEvents returns only still-existing, current-account linked events',
+        () async {
+      final harness = _harness(database, 'a');
+      final list = await harness.execute('get_tasks', {});
+      final tasks = list.payload['tasks']! as List;
+      final activeRef = (tasks
+              .firstWhere((t) =>
+                  (t! as Map<String, Object?>)['title'] == '准备考试')
+              as Map<String, Object?>)['ref']! as String;
+
+      final result = await harness.execute('get_task_details', {
+        'ref': activeRef,
+      });
+      expect(result.status, AgentToolStatus.success);
+      final linked = result.payload['linkedEvents']! as List;
+      // task-active is linked to event-solo (exists) and e-deleted (deleted).
+      // Only event-solo is still existing and belongs to the account.
+      expect(linked, hasLength(1));
+      final event = linked.first! as Map<String, Object?>;
+      expect(event['title'], '自习');
+      expect(event['source'], 'user');
+      expect(event['eventType'], 'personal');
+      expect(event['startAt'], '2026-07-29T14:00:00');
+      expect(event['ref'], startsWith('ref_'));
+      final encoded = jsonEncode(result.payload);
+      expect(encoded, isNot(contains('event-solo')));
+      expect(encoded, isNot(contains('e-deleted')));
     });
 
     test('unknown task ref returns reference_not_found', () async {
@@ -1466,6 +1737,52 @@ void main() {
           false);
       final encoded = jsonEncode(result.payload);
       expect(encoded, isNot(contains('pb-pending')));
+    });
+
+    test('status filter narrows the list', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_plan_blocks', {
+        'status': 'done',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final blocks = result.payload['planBlocks']! as List;
+      expect(blocks, hasLength(1));
+      expect((blocks.first! as Map<String, Object?>)['title'], '已完成章节');
+    });
+
+    test(
+      'include_deleted with taskRef returns only that task\'s deleted blocks',
+      () async {
+        final harness = _harness(database, 'a');
+        // Resolve a task ref for task-active.
+        final tasks = await harness.execute('get_tasks', {});
+        final taskList = tasks.payload['tasks']! as List;
+        final activeRef = (taskList
+                .firstWhere((t) =>
+                    (t! as Map<String, Object?>)['title'] == '准备考试')
+                as Map<String, Object?>)['ref']! as String;
+        final result = await harness.execute('get_plan_blocks', {
+          'taskRef': activeRef,
+          'include_deleted': true,
+        });
+        expect(result.status, AgentToolStatus.success);
+        final blocks = result.payload['planBlocks']! as List;
+        expect(blocks, hasLength(1));
+        final block = blocks.first! as Map<String, Object?>;
+        expect(block['title'], '已删除章节');
+        expect(block['ref'], startsWith('ref_'));
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('pb-deleted')));
+      },
+    );
+
+    test('include_deleted without taskRef is refused', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_plan_blocks', {
+        'include_deleted': true,
+      });
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_arguments');
     });
   });
 
