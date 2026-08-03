@@ -371,6 +371,11 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       startDate: series.anchorStartDate == null
           ? null
           : DateTime.parse(series.anchorStartDate!),
+      endDateExclusive: (series.allDay == true &&
+              series.anchorStartDate != null)
+          ? DateTime.parse(series.anchorStartDate!)
+              .add(Duration(days: series.durationDays ?? 1))
+          : null,
       location: series.locationName,
       personalSeriesId: series.id,
       occurrenceKey: null,

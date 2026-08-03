@@ -550,4 +550,37 @@ void main() {
     expect(event.startAt, anchor);
     expect(event.startAt!.isAfter(anchor), isFalse);
   });
+
+  test('eventSnapshotByLocator all-day series preflight carries an endDateExclusive', () async {
+    final anchor = DateTime(2026, 8, 3);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.allDay(
+        title: '全天系列',
+        startDate: anchor,
+        endDateExclusive: anchor.add(const Duration(days: 1)),
+      ),
+      rule: RecurrenceRule.daily(
+        anchor: anchor,
+        interval: 1,
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final locator = encodeCalendarEventLocator(
+      RecurringSeriesLocator(seriesId: seriesId),
+    );
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    expect(snapshot.allDay, isTrue);
+    expect(snapshot.startDate, anchor);
+    // Whole-series preflight must not crash on the allDay end exclusive used by
+    // _eventTargetLines; it is derived from the series anchor + default day count.
+    expect(snapshot.endDateExclusive, isNotNull);
+    expect(snapshot.endDateExclusive, anchor.add(const Duration(days: 1)));
+    expect(snapshot.personalSeriesId, seriesId);
+    expect(snapshot.occurrenceKey, isNull);
+  });
 }
