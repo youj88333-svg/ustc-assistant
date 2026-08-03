@@ -42,6 +42,9 @@ class _FakeWriteTool extends AgentWriteTool {
   String get targetType => 'event';
   @override
   String get operationLabel => '新建日程';
+  @override
+  List<AgentWriteAllowance> get agentWriteAllowances =>
+      const [AgentWriteAllowance('create_event', 'event', RiskLevel.medium)];
 
   bool commitCalled = false;
   bool proposeCalled = false;
@@ -74,13 +77,87 @@ class _ForceConfirmTool extends _FakeWriteTool {
   bool get forceConfirmation => true;
 }
 
-/// 模拟 update_event：默认 always_ask（首次确认后仍每次确认）。
+/// 模拟 event_edit（原 update_event）：默认 always_ask（首次确认后仍每次确认）。
 class _AlwaysAskTool extends _FakeWriteTool {
   _AlwaysAskTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
   @override
-  String get actionType => 'update_event';
+  String get actionType => 'event_edit';
   @override
   RiskLevel get riskLevel => RiskLevel.high;
+  @override
+  List<AgentWriteAllowance> get agentWriteAllowances =>
+      const [AgentWriteAllowance('event_edit', 'event', RiskLevel.high)];
+}
+
+/// 可变 action/risk 的假工具，用于验证决议读取 proposal 动态字段而非静态 getter。
+/// 静态 getter 恒为旧键 update_event / event，proposal 用 [actionTypeOverride]
+/// 动态覆盖；通过 observable 行为断言（event_edit 首次确认后放行、event_delete 仍
+/// 需确认）验证 execute 实际按 proposal 的动态键决议。
+class _DynamicActionTool extends _FakeWriteTool {
+  _DynamicActionTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
+  String actionTypeOverride = 'event_edit';
+  @override
+  String get actionType => 'update_event'; // 静态 getter 是旧键；proposal 动态覆盖
+  @override
+  RiskLevel get riskLevel => RiskLevel.high;
+  @override
+  List<AgentWriteAllowance> get agentWriteAllowances => const [
+    AgentWriteAllowance('event_edit', 'event', RiskLevel.high),
+    AgentWriteAllowance('event_delete', 'event', RiskLevel.high),
+  ];
+
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> arguments, AgentToolContext context) async {
+    proposeCalled = true;
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: actionTypeOverride,
+      riskLevel: RiskLevel.high,
+      targetType: 'event',
+      operationLabel: operationLabel,
+      previewLines: const ['变更日程'],
+      commitParams: const {'k': 'v'},
+      safeLogSummary: '修改日程',
+    );
+  }
+}
+
+/// 伪造不在 allowlist 内的 proposal（actionType 是未知/未声明键）。
+class _ForgedProposalTool extends _FakeWriteTool {
+  _ForgedProposalTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> arguments, AgentToolContext context) async {
+    proposeCalled = true;
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: 'event_delete', // 未在 allowlist（本工具只声明 create_event）
+      riskLevel: RiskLevel.high,
+      targetType: 'event',
+      operationLabel: operationLabel,
+      previewLines: const ['伪造'],
+      commitParams: const {'k': 'v'},
+      safeLogSummary: '伪造删除',
+    );
+  }
+}
+
+/// proposal.riskLevel 超出工具 allowlist 最大 risk 的假工具。
+class _EscalatedRiskTool extends _FakeWriteTool {
+  _EscalatedRiskTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
+  @override
+  Future<AgentWriteProposal> propose(Map<String, Object?> arguments, AgentToolContext context) async {
+    proposeCalled = true;
+    return AgentWriteProposal(
+      toolName: name,
+      actionType: 'create_event',
+      riskLevel: RiskLevel.critical, // allowlist 最大为 medium
+      targetType: 'event',
+      operationLabel: operationLabel,
+      previewLines: const ['升级'],
+      commitParams: const {'k': 'v'},
+      safeLogSummary: '伪造升级',
+    );
+  }
 }
 
 /// 模拟提交失败：用于验证"先提交、成功后才放宽"的次序。
@@ -217,7 +294,7 @@ void main() {
   });
 
   test('always_ask tool approval does not record a first confirmation', () async {
-    // update_event 默认 always_ask：首次确认后仍每次确认，记录 firstConfirmedAt
+    // event_edit 默认 always_ask：首次确认后仍每次确认，记录 firstConfirmedAt
     // 无意义，不应写策略行（findings 5）。
     final tool = _AlwaysAskTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
     final result = await tool.execute(const {}, _ctx('a1', 'r1'));
@@ -225,9 +302,80 @@ void main() {
     final resumed = await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(resumed.status, AgentToolStatus.success);
     expect(
-      (await policy.listPolicies('a1')).where((r) => r.actionType == 'update_event'),
+      (await policy.listPolicies('a1')).where((r) => r.actionType == 'event_edit'),
       isEmpty,
     );
+  });
+
+  test('resolution uses proposal actionType for distinct lifecycle actions', () async {
+    // 同一工具产生 event_edit / event_delete 时，策略决议必须读取 proposal 的动态
+    // actionType 而非工具静态 getter（静态 getter 恒为旧键 update_event）。
+    //
+    // 把 event_edit 显式放宽为 always_allow：proposal.actionType=event_edit 应命中
+    // 该行而 allow（直接提交）；而 event_delete 无任何记录，默认 always_ask 仍应
+    // confirm（暂停等待用户）。若决议误用静态 getter（update_event），则第一条也会
+    // 因 update_event 默认 always_ask 而 confirm——从而证明用的是 proposal 动态键。
+    await policy.updatePolicy(accountId: 'a1', actionType: 'event_edit', targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow, riskLevel: RiskLevel.high, enabled: true, updatedBy: 'user');
+
+    final tool = _DynamicActionTool(gateway: gateway, policy: policy,
+        confirmationStore: store, unitOfWork: unitOfWork);
+
+    // event_edit：命中 always_allow 行 -> 直接提交（证明决议用 proposal.actionType）。
+    final editResult = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(editResult.status, AgentToolStatus.success);
+    expect(tool.commitCalled, isTrue);
+
+    // event_delete：无行，默认 always_ask -> needsUserAction。
+    tool.actionTypeOverride = 'event_delete';
+    final delResult = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(delResult.status, AgentToolStatus.needsUserAction);
+    expect(delResult.userAction?.type, AgentUserActionType.writeConfirmation);
+  });
+
+  test('old static update_event policy cannot relax the delete action', () async {
+    // 旧的 update_event 策略覆盖最多作为 event_edit 的一版兼容 fallback，绝不能
+    // 扩展到 event_delete/event_cancel/event_restore。这里把 event_edit 放宽为
+    // always_allow，再验证 event_delete 仍凭其自身默认 always_ask 需要确认。
+    await policy.updatePolicy(
+        accountId: 'a1', actionType: 'event_edit', targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.high, enabled: true, updatedBy: 'user');
+
+    final tool = _DynamicActionTool(gateway: gateway, policy: policy,
+        confirmationStore: store, unitOfWork: unitOfWork);
+    tool.actionTypeOverride = 'event_delete';
+    final delResult = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(delResult.status, AgentToolStatus.needsUserAction,
+        reason: 'event_edit 的放宽不得泄漏到 event_delete');
+    // 仍可被这次标记为 event_delete 的首次确认放行（走它自己的键），而非被
+    // event_edit 的 always_allow 自动放行。
+    expect(tool.commitCalled, isFalse);
+  });
+
+  test('forged proposal outside the tool allowlist is rejected before approval', () async {
+    // 伪造不在工具 allowlist 内的 proposal（actionType 不在声明组合）必须在审批前
+    // 以安全错误拒绝：不触发策略查询、不产生业务提交。
+    final tool = _ForgedProposalTool(
+        gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
+    final result = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+    expect(tool.commitCalled, isFalse);
+    // 未触发策略查询 / 未写任何审计或权限行。
+    expect(await db.actionLogsRepository.selectAll(), isEmpty);
+  });
+
+  test('risk above the tool allowlist max is rejected before approval', () async {
+    // proposal.riskLevel 超过工具声明的最大 risk 也在审批前拒绝（critical 不能被
+    // 普通工具伪造）。
+    final tool = _EscalatedRiskTool(
+        gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork);
+    final result = await tool.execute(const {}, _ctx('a1', 'r1'));
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+    expect(tool.commitCalled, isFalse);
+    expect(await db.actionLogsRepository.selectAll(), isEmpty);
   });
 
   test('failed commit does not relax the policy', () async {

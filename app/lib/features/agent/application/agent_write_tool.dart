@@ -21,12 +21,36 @@ class AgentWriteAborted implements Exception {
 
 /// 写工具基类：`propose` 产提案（不碰库），`commit` 经网关写库。
 ///
-/// `execute` 统一实现"审批门"：提案 → 策略决议 → 直接提交 / 拒绝 /
-/// 暂停等待用户（复用 needsUserAction 机制）。
+/// `execute` 统一实现"审批门"：提案 → allowlist 校验 → 策略决议 → 直接提交 /
+/// 拒绝 / 暂停等待用户（复用 needsUserAction 机制）。策略决议读取 proposal 的
+/// 动态 actionType/riskLevel/targetType（proposal 是唯一审批权威），而非工具
+/// 静态 getter。
 ///
 /// `_commitAndLog` 是直接放行路径与已确认批准路径共享的原子操作：业务提交、
 /// `source='agent'` 审计日志与提交成功后的权限变更（首确认/放宽）全部装进
 /// 同一个 [AgentWriteUnitOfWork]。其中任何一步失败，其余全部回滚。
+/// 工具允许产生的一个 (actionType, targetType, 最大 risk) 组合。
+///
+/// 审批前按此 allowlist 校验 proposal：proposal 的 (actionType, targetType,
+/// riskLevel) 必须落在工具的声明组合内，且 riskLevel 不超过 [maxRisk]。伪造/
+/// 子类注入任意策略键会在审批前以安全错误拒绝，不触发策略查询或业务提交。
+///
+/// [targetType] 为 null 表示任意 target 都允许（仅限 actionType 本身已锁定、
+/// 恒为 critical 且 force-confirm 的权限工具，如 update_permission_policy——
+/// actionType/risk 已不可变，target 通配不构成权限放宽）。
+class AgentWriteAllowance {
+  const AgentWriteAllowance(this.actionType, this.targetType, this.maxRisk);
+
+  final String actionType;
+  final String? targetType;
+  final RiskLevel maxRisk;
+
+  bool allows(String actionType, String targetType, RiskLevel riskLevel) =>
+      actionType == this.actionType &&
+      (this.targetType == null || this.targetType == targetType) &&
+      riskLevel.index <= maxRisk.index;
+}
+
 abstract class AgentWriteTool implements AgentTool {
   AgentWriteTool({
     required this.gateway,
@@ -49,6 +73,11 @@ abstract class AgentWriteTool implements AgentTool {
   RiskLevel get riskLevel;
   String get targetType;
   String get operationLabel;
+
+  /// 本工具允许产生的 (actionType, targetType, 最大 risk) 组合的不变 allowlist。
+  /// proposal 的 (actionType,targetType,riskLevel) 必须落在其中，否则在审批前
+  /// 以安全错误拒绝——伪造/子类注入任意策略键不得进入策略查询或业务提交。
+  List<AgentWriteAllowance> get agentWriteAllowances;
 
   /// 确认卡是否提供「此类型以后不再确认」。critical 动作覆盖为 false。
   bool get rememberAllowed => true;
@@ -84,13 +113,32 @@ abstract class AgentWriteTool implements AgentTool {
     // 其余异常不在此吞掉：交由 registry 兜底为 tool_execution_failed，避免把
     // 真正的 bug 伪装成"参数不合法"而难以排查。
 
+    // Proposal 成为唯一审批权威前，先校验它确实出自本工具声明的 allowlist：
+    // proposal.toolName 必须等于本工具 name，且 (actionType,targetType,riskLevel)
+    // 必须落在允许组合内。不合法时在审批前以安全错误拒绝——不触发策略查询，
+    // 不产生任何业务写，防止伪造/子类注入任意策略键。
+    final allowed = agentWriteAllowances.any(
+      (a) => a.allows(proposal.actionType, proposal.targetType, proposal.riskLevel),
+    );
+    if (proposal.toolName != name || !allowed) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_write_arguments',
+        payload: {
+          'guidance': '工具产生了未声明的策略组合，操作已拒绝。',
+        },
+      );
+    }
+
+    // 策略决议读取 proposal 的动态 actionType/riskLevel/targetType（propose 赋值
+    // 之后），而非工具静态 getter：同一工具可对不同生命周期动作采用不同权限策略。
     final decision = proposal.forceConfirmation
         ? PermissionDecision.confirm
         : await policy.resolve(
             accountId: context.accountId,
-            actionType: actionType,
-            targetType: targetType,
-            riskLevel: riskLevel,
+            actionType: proposal.actionType,
+            targetType: proposal.targetType,
+            riskLevel: proposal.riskLevel,
           );
 
     switch (decision) {

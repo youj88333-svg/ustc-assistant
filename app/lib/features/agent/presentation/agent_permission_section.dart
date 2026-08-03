@@ -19,30 +19,15 @@ class AgentPermissionSection extends StatefulWidget {
   State<AgentPermissionSection> createState() => _AgentPermissionSectionState();
 }
 
-/// 策略项的展示标签（actionType -> 中文标签）。targetType 由服务层的单一映射
-/// [AgentPermissionPolicyService.targetTypeFor] 导出，不在设置页独立维护一份
-/// action/target 清单。
-const kAgentPermissionLabels = <String, String>{
-  'create_event': '新建日程',
-  'update_event': '修改/删除日程',
-  'create_task': '新建任务',
-  'plan_task': '安排任务时间段',
-  'create_user_overlay': '设置个人标注',
-  'record_attendance_decision': '记录出勤决定',
-  'record_listening_mode': '设置听讲模式',
-  'create_schedule_relation': '记录日程关系',
-  'set_reminder': '设置提醒',
-  'update_permission_policy': '调整确认策略',
-};
-
-/// 设置页展示的策略项（actionType, targetType, label），按服务层映射顺序、
-/// targetType 取自单一映射，避免两份 list。
+/// 设置页展示的策略项（actionType, targetType, label），全部消费
+/// [AgentPermissionPolicyService.kPolicyTargetMap] 的单一映射与注册表
+/// [AgentPermissionPolicyService.labelFor]，不在设置页独立维护一份 label 清单。
 final kAgentPermissionRows = <(String actionType, String targetType, String label)>[
   for (final actionType in AgentPermissionPolicyService.kPolicyTargetMap.keys)
     (
       actionType,
       AgentPermissionPolicyService.targetTypeFor(actionType),
-      kAgentPermissionLabels[actionType] ?? actionType,
+      AgentPermissionPolicyService.labelFor(actionType),
     ),
 ];
 

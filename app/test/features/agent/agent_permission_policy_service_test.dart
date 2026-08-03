@@ -139,6 +139,79 @@ void main() {
     expect(AgentPermissionPolicyService.kAgentPolicyActionTypes.contains('update_permission_policy'), isFalse);
   });
 
+  test('kPermissionActions covers Spec §17.3 action keys and shared registry', () {
+    const requiredKeys = {
+      'event_cancel', 'event_delete', 'event_restore',
+      'task_cancel', 'task_delete', 'task_restore', 'task_complete',
+      'plan_block_cancel', 'plan_block_delete', 'plan_block_restore',
+      'delete_schedule_relation', 'delete_schedule_relation_rule',
+      'clear_reminder_offsets', 'clear_all_reminders',
+      'clear_event_overlay_fields', 'clear_all_event_overlay', 'clear_course_overlay',
+      'unlink_task_event', 'reset_permission_policy', 'undo_last_action',
+      'event_edit', 'create_event', 'create_task', 'plan_task',
+      'create_user_overlay', 'record_attendance_decision', 'record_listening_mode',
+      'create_schedule_relation', 'set_reminder', 'move_jw_course_day',
+      'update_permission_policy',
+    };
+    for (final key in requiredKeys) {
+      expect(AgentPermissionPolicyService.kPermissionActions.containsKey(key), isTrue,
+          reason: 'registry must register $key');
+      final a = AgentPermissionPolicyService.kPermissionActions[key]!;
+      expect(a.key, key);
+      expect(a.targetType, isNotEmpty);
+    }
+    // 每个注册动作的 defaultMode/defaultRisk/label 都可由单个查询消费（无平行 list）。
+    expect(AgentPermissionPolicyService.defaultMode('event_cancel'), ConfirmationMode.alwaysAsk);
+    expect(AgentPermissionPolicyService.defaultRisk('event_delete'), RiskLevel.high);
+    expect(AgentPermissionPolicyService.defaultRisk('event_restore'), RiskLevel.medium);
+    expect(AgentPermissionPolicyService.defaultMode('event_restore'), ConfirmationMode.askFirstTime);
+    expect(AgentPermissionPolicyService.labelFor('event_cancel'), isNotEmpty);
+    // 兼容/预留键保留：旧 update_event 与 move_plan_block 仍在注册表中。
+    expect(AgentPermissionPolicyService.targetTypeFor('update_event'), 'event');
+    expect(AgentPermissionPolicyService.targetTypeFor('move_plan_block'), 'plan_block');
+  });
+
+  test('non-relaxable actions reject markAlwaysAllow and are excluded from the tool', () async {
+    // critical / 锁定动作（reset_permission_policy、move_jw_course_day、event_edit？
+    // 不——event_edit 是 relaxable）不在可调整动作集合，且 markAlwaysAllow 拒绝。
+    for (final key in const ['reset_permission_policy', 'move_jw_course_day', 'update_permission_policy']) {
+      expect(AgentPermissionPolicyService.kPermissionActions[key]!.relaxable, isFalse,
+          reason: '$key must not be relaxable');
+      await expectLater(
+        service.markAlwaysAllow(accountId: 'a1', actionType: key,
+            targetType: AgentPermissionPolicyService.targetTypeFor(key)),
+        throwsStateError,
+        reason: '$key must refuse auto-allow',
+      );
+    }
+    expect(AgentPermissionPolicyService.kPermissionActions['event_edit']!.relaxable, isTrue);
+  });
+
+  test('event_edit resolves new-style row and falls back to legacy update_event row only for event_edit',
+      () async {
+    // 新键 event_edit 优先：先写一条 event_edit 行，其模式生效。
+    await service.updatePolicy(accountId: 'a1', actionType: 'event_edit', targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow, riskLevel: RiskLevel.high, enabled: true, updatedBy: 'user');
+    expect(await service.resolve(accountId: 'a1', actionType: 'event_edit',
+        targetType: 'event', riskLevel: RiskLevel.high), PermissionDecision.allow);
+
+    // 清空后再写旧键 update_event：event_edit 作为兼容 fallback 读取它。
+    await service.resetDefaults('a1');
+    await service.updatePolicy(accountId: 'a1', actionType: 'update_event', targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow, riskLevel: RiskLevel.high, enabled: true, updatedBy: 'user');
+    expect(await service.resolve(accountId: 'a1', actionType: 'event_edit',
+        targetType: 'event', riskLevel: RiskLevel.high), PermissionDecision.allow,
+        reason: '旧 update_event 行仅作为 event_edit 的兼容 fallback');
+
+    // 关键：该兼容行绝不能泄漏到 event_delete / event_cancel / event_restore。
+    for (final key in const ['event_delete', 'event_cancel', 'event_restore']) {
+      expect(await service.resolve(accountId: 'a1', actionType: key,
+          targetType: 'event', riskLevel: AgentPermissionPolicyService.defaultRisk(key)),
+          PermissionDecision.confirm,
+          reason: '$key must not inherit the legacy update_event override');
+    }
+  });
+
   test('recentPermissionChanges includes update and reset, newest first, honors limit',
       () async {
     await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
