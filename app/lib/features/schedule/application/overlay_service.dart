@@ -211,6 +211,67 @@ class OverlayService {
     }
   }
 
+  /// Loads the overlay configuration for [eventId] in two explicit layers:
+  /// the `single_event` layer and the `course_series` layer (resolved via the
+  /// event's source series). Each layer is the explicit, set-fields-only
+  /// overlay row — never the merged EffectiveEvent value. Also computes what
+  /// the effective value would be after clearing each layer alone, so the Agent
+  /// can preview "if I clear this layer, what takes over?". Account-scoped and
+  /// read-only; exposes no DB id.
+  ///
+  /// [courseSeriesIdOverride] lets a caller that already knows the event's
+  /// series id skip the series lookup; when null it is derived from the event's
+  /// `sourceSeriesExternalId`.
+  Future<EventOverlayLayers> eventOverlayLayers(
+    String eventId, {
+    String? courseSeriesIdOverride,
+  }) async {
+    final event =
+        await (database.select(database.calendarEvents)..where(
+              (row) =>
+                  row.id.equals(eventId) & row.accountId.equals(accountId),
+            ))
+            .getSingleOrNull();
+    if (event == null) {
+      throw StateError('overlay event not found');
+    }
+    UserOverlay? seriesRow;
+    var seriesId = courseSeriesIdOverride;
+    if (seriesId == null && event.sourceSeriesExternalId != null) {
+      final series =
+          await (database.select(database.courseSeries)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    row.source.equals(event.source) &
+                    row.externalId.equals(event.sourceSeriesExternalId!),
+              ))
+              .getSingleOrNull();
+      seriesId = series?.id;
+      seriesRow = series == null ? null : await _overlayBySeriesId(series.id);
+    } else if (seriesId != null) {
+      seriesRow = await _overlayBySeriesId(seriesId);
+    }
+    final eventRow =
+        await (database.select(database.userOverlays)..where(
+              (row) =>
+                  row.accountId.equals(accountId) & row.eventId.equals(eventId),
+            ))
+            .getSingleOrNull();
+    return EventOverlayLayers._computed(
+      event: event,
+      eventRow: eventRow,
+      seriesRow: seriesRow,
+    );
+  }
+
+  Future<UserOverlay?> _overlayBySeriesId(String courseSeriesId) =>
+      (database.select(database.userOverlays)..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.courseSeriesId.equals(courseSeriesId),
+          ))
+          .getSingleOrNull();
+
   Map<String, Object?> _snapshot(UserOverlay row) => {
     'id': row.id,
     'eventId': row.eventId,
@@ -233,4 +294,114 @@ class OverlayService {
     'createdAt': row.createdAt,
     'updatedAt': row.updatedAt,
   };
+}
+
+/// The overlay layer that owns a set of explicit fields.
+enum OverlayLayer { singleEvent, courseSeries }
+
+/// A read-only decomposition of an event's overlay configuration into its two
+/// explicit layers (`single_event` and `course_series`), plus the effective
+/// value that would take over after clearing each layer. Used by the Agent
+/// `get_user_overlay` tool. Never exposes a UserOverlay DB id, event id, or
+/// series id.
+class EventOverlayLayers {
+  const EventOverlayLayers._({
+    required this.singleEvent,
+    required this.courseSeries,
+    required this.afterClearingSingle,
+    required this.afterClearingSeries,
+    required this.hasSingleEventLayer,
+    required this.hasCourseSeriesLayer,
+  });
+
+  /// Explicitly-set fields on the `single_event` layer (an event-scoped
+  /// UserOverlay row). Only allowlisted field keys survive.
+  final Map<String, Object?> singleEvent;
+
+  /// Explicitly-set fields on the `course_series` layer (a series-scoped
+  /// UserOverlay row). Only allowlisted field keys survive.
+  final Map<String, Object?> courseSeries;
+
+  /// The effective field values after clearing the single_event layer (series
+  /// layer + source defaults then apply). Only allowlisted field keys.
+  final Map<String, Object?> afterClearingSingle;
+
+  /// The effective field values after clearing the course_series layer (source
+  /// defaults apply). Only allowlisted field keys.
+  final Map<String, Object?> afterClearingSeries;
+
+  final bool hasSingleEventLayer;
+  final bool hasCourseSeriesLayer;
+
+  /// Compute the two layers and clear-preview values for [event] given its
+  /// event-scoped and series-scoped overlay rows (either may be null).
+  factory EventOverlayLayers._computed({
+    required CalendarEvent event,
+    required UserOverlay? eventRow,
+    required UserOverlay? seriesRow,
+  }) {
+    final single = _allowlistedFields(eventRow);
+    final series = _allowlistedFields(seriesRow);
+
+    // After clearing the single_event layer: series + source defaults.
+    final afterSingle = _merge(sourceDefaults(event), series);
+
+    // After clearing the course_series layer: single layer + source defaults.
+    final afterSeries = _merge(sourceDefaults(event), single);
+
+    return EventOverlayLayers._(
+      singleEvent: single,
+      courseSeries: series,
+      afterClearingSingle: afterSingle,
+      afterClearingSeries: afterSeries,
+      hasSingleEventLayer: eventRow != null,
+      hasCourseSeriesLayer: seriesRow != null,
+    );
+  }
+
+  /// The default effective values straight from the event row (no overlay).
+  static Map<String, Object?> sourceDefaults(CalendarEvent event) => {
+    'displayTitle': event.title,
+    'displayLocation': event.locationName,
+    'attendancePolicy': switch (event.type) {
+      'exam' || 'second_class' => 'must_go',
+      _ => 'unknown',
+    },
+    'importance': event.importance,
+    'color': event.color,
+    'hidden': false,
+  };
+
+  static Map<String, Object?> _merge(
+    Map<String, Object?> base,
+    Map<String, Object?> override,
+  ) =>
+      {...base, ...override};
+
+  /// Extracts only the model-safe, explicitly-set overlay fields from [row].
+  /// Null fields in the overlay row mean "not set" and are omitted. Never
+  /// includes the DB id, event id, or series id.
+  static Map<String, Object?> _allowlistedFields(UserOverlay? row) {
+    if (row == null) return const {};
+    final out = <String, Object?>{};
+    void add(String key, Object? value) {
+      if (value != null) out[key] = value;
+    }
+
+    add('displayTitle', row.displayTitle);
+    add('displayLocation', row.displayLocation);
+    add('attendancePolicy', row.attendancePolicy);
+    add('attendanceNote', row.attendanceNote);
+    add('attendanceDecision', row.attendanceDecision);
+    add('attendanceOutcome', row.attendanceOutcome);
+    add('listeningMode', row.listeningMode);
+    add('listeningNote', row.listeningNote);
+    add('importance', row.importance);
+    add('color', row.color);
+    add('foregroundPriority', row.foregroundPriority);
+    add('hidden', row.hidden);
+    add('userNotes', row.userNotes);
+    add('tagsJson', row.tagsJson);
+    return out;
+  }
 }

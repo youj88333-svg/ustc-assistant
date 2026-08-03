@@ -2,11 +2,15 @@ import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../history/application/history_repository.dart';
+import '../../reminders/application/reminder_override_service.dart';
 import '../../schedule/application/conflict_service.dart';
 import '../../schedule/application/effective_event_repository.dart';
+import '../../schedule/application/overlay_service.dart';
 import '../../schedule/application/schedule_conflict_projection.dart';
 import '../../schedule/domain/overlap_engine.dart';
+import '../../schedule/domain/schedule_grid_item.dart';
 import '../../sync/domain/sync_state.dart';
+import '../../tasks/application/undo_recorder.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 
@@ -124,6 +128,69 @@ abstract interface class AgentLocalDataGateway {
   /// candidate, via a bounded projection (never all history). Used by
   /// `get_event_details`.
   Future<bool> eventHasConflict(String accountId, String eventId);
+
+  /// The account's `source=user`, `relationType=conflict` occurrence relations
+  /// involving [left] on either side. Read-only; no mutation.
+  Future<List<ScheduleRelation>> userConflictRelationsFor(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  );
+
+  /// The account's series conflict rules involving [participant]'s series on
+  /// either side. Empty when the participant has no stable series identity.
+  Future<List<ScheduleRelationRule>> userConflictRulesFor(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  );
+
+  /// The loadable grid-item view of a conflict participant, or null for a
+  /// missing/deleted/foreign participant. Read-only.
+  Future<ScheduleGridItem?> gridItemForParticipant(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  );
+
+  /// Resolves the current state of a conflict pair via the shared projection.
+  /// Returns null when either participant's grid item does not resolve.
+  Future<ResolvedConflictPair?> resolvePairBetween(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  );
+
+  /// The would-be pair state after removing the occurrence relation keyed by
+  /// [ignoredOccurrenceKey] (series rule → derived overlap → no conflict).
+  Future<ResolvedConflictPair?> resolvePairIgnoringOccurrence(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+    String ignoredOccurrenceKey,
+  );
+
+  /// The would-be pair state after removing the series rules for a/b's series
+  /// pair (occurrence relation → derived overlap → no conflict).
+  Future<ResolvedConflictPair?> resolvePairIgnoringSeries(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  );
+
+  /// The target's Reminder configuration (future desired offsets, explicit
+  /// disable marker, delivered/missed/failed counts). Account-scoped, read-only,
+  /// never exposes a Reminder DB id.
+  Future<ReminderConfiguration> reminderConfiguration(
+    String accountId, {
+    required String targetType,
+    required String targetId,
+  });
+
+  /// The two explicit overlay layers (`single_event` / `course_series`) for
+  /// [eventId] plus the clear-preview values. Account-scoped, read-only, never
+  /// exposes a DB id.
+  Future<EventOverlayLayers> eventOverlayLayers(
+    String accountId,
+    String eventId,
+  );
 }
 
 /// A Drift-backed [AgentLocalDataGateway].
@@ -330,6 +397,78 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
   Future<bool> eventHasConflict(String accountId, String eventId) =>
       EffectiveEventRepository(_database, accountId: accountId)
           .eventHasConflict(eventId);
+
+  @override
+  Future<List<ScheduleRelation>> userConflictRelationsFor(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .userConflictRelationsFor(participant);
+
+  @override
+  Future<List<ScheduleRelationRule>> userConflictRulesFor(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .userConflictRulesFor(participant);
+
+  @override
+  Future<ScheduleGridItem?> gridItemForParticipant(
+    String accountId,
+    ScheduleConflictParticipant participant,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .gridItemForParticipant(participant);
+
+  @override
+  Future<ResolvedConflictPair?> resolvePairBetween(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .resolvePairBetween(a, b);
+
+  @override
+  Future<ResolvedConflictPair?> resolvePairIgnoringOccurrence(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+    String ignoredOccurrenceKey,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .resolvePairIgnoringOccurrence(a, b, ignoredOccurrenceKey);
+
+  @override
+  Future<ResolvedConflictPair?> resolvePairIgnoringSeries(
+    String accountId,
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) =>
+      ConflictService(database: _database, accountId: accountId)
+          .resolvePairIgnoringSeries(a, b);
+
+  @override
+  Future<ReminderConfiguration> reminderConfiguration(
+    String accountId, {
+    required String targetType,
+    required String targetId,
+  }) =>
+      ReminderOverrideService(
+        database: _database,
+        accountId: accountId,
+        undoRecorder: const NoopUndoRecorder(),
+      ).configurationFor(targetType: targetType, targetId: targetId);
+
+  @override
+  Future<EventOverlayLayers> eventOverlayLayers(
+    String accountId,
+    String eventId,
+  ) =>
+      OverlayService(database: _database, accountId: accountId)
+          .eventOverlayLayers(eventId);
 
   /// Mirrors `SyncCoordinator.stateFor` without pulling in the Python-bridge /
   /// import dependencies (those arrive in Task 9). Reads only sync_runs and

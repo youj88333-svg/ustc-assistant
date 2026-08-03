@@ -308,6 +308,118 @@ class ConflictService {
     ScheduleConflictParticipant b,
   ) async => await stateForPair(a, b) == ConflictState.conflict;
 
+  /// The loadable grid-item view of a participant (reads the account-owned,
+  /// nondeleted event / plan-block + task rows). Public so the Agent read tool
+  /// can feed the shared projection for fallback previews. Returns null for a
+  /// missing / deleted / unaccounted participant.
+  Future<ScheduleGridItem?> gridItemForParticipant(
+    ScheduleConflictParticipant participant,
+  ) => _gridItemFor(participant);
+
+  /// The account-scoped, `source=user`, `relationType=conflict` occurrence
+  /// relations involving [participant] as either side. Read-only.
+  Future<List<ScheduleRelation>> userConflictRelationsFor(
+    ScheduleConflictParticipant participant,
+  ) =>
+      (database.select(database.scheduleRelations)..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.source.equals('user') &
+                row.relationType.equals('conflict') &
+                ((row.leftKind.equals(participant.kind) &
+                            row.leftId.equals(participant.id)) |
+                        (row.rightKind.equals(participant.kind) &
+                            row.rightId.equals(participant.id))),
+          ))
+          .get();
+
+  /// The account-scoped series conflict rules involving [participant]'s series
+  /// as either side. Empty when the participant has no stable series identity.
+  /// Read-only.
+  Future<List<ScheduleRelationRule>> userConflictRulesFor(
+    ScheduleConflictParticipant participant,
+  ) async {
+    final seriesType = participant.seriesType;
+    final seriesId = participant.seriesId;
+    if (seriesType == null || seriesId == null) return const [];
+    return (database.select(database.scheduleRelationRules)..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              ((row.leftSeriesType.equals(seriesType) &
+                          row.leftSeriesId.equals(seriesId)) |
+                      (row.rightSeriesType.equals(seriesType) &
+                          row.rightSeriesId.equals(seriesId))),
+        ))
+        .get();
+  }
+
+  /// Resolves the current state of the (a, b) pair via the shared projection.
+  /// Returns null when either participant's grid item does not resolve (e.g.
+  /// deleted/foreign), in which case the pair is `unclassified`. Read-only.
+  Future<ResolvedConflictPair?> resolvePairBetween(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) async {
+    final itemA = await _gridItemFor(a);
+    final itemB = await _gridItemFor(b);
+    if (itemA == null || itemB == null) return null;
+    final snapshot = await relationSnapshot();
+    return ScheduleConflictProjection.resolvePair(itemA, itemB, snapshot);
+  }
+
+  /// The would-be state of the (a, b) pair if the occurrence relation
+  /// [ignoredOccurrenceKey] were removed: series rule → derived overlap → no
+  /// conflict. Used to preview a single-relation deletion. Returns null when
+  /// either participant's grid item does not resolve.
+  Future<ResolvedConflictPair?> resolvePairIgnoringOccurrence(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+    String ignoredOccurrenceKey,
+  ) async {
+    final itemA = await _gridItemFor(a);
+    final itemB = await _gridItemFor(b);
+    if (itemA == null || itemB == null) return null;
+    final snapshot = await relationSnapshot();
+    final filtered = ScheduleConflictRelationSnapshot(
+      occurrenceByPair: Map.of(snapshot.occurrenceByPair)
+        ..remove(ignoredOccurrenceKey),
+      seriesByPair: snapshot.seriesByPair,
+    );
+    return ScheduleConflictProjection.resolvePair(itemA, itemB, filtered);
+  }
+
+  /// The would-be state of the (a, b) pair if the series rules for their series
+  /// pair were removed: occurrence relation → derived overlap → no conflict.
+  /// Used to preview a series-rule deletion. Returns null when either
+  /// participant's grid item does not resolve.
+  Future<ResolvedConflictPair?> resolvePairIgnoringSeries(
+    ScheduleConflictParticipant a,
+    ScheduleConflictParticipant b,
+  ) async {
+    final itemA = await _gridItemFor(a);
+    final itemB = await _gridItemFor(b);
+    if (itemA == null || itemB == null) return null;
+    final snapshot = await relationSnapshot();
+    final filtered = ScheduleConflictRelationSnapshot(
+      occurrenceByPair: snapshot.occurrenceByPair,
+      seriesByPair: Map.of(snapshot.seriesByPair),
+    );
+    // Remove the two canonical series-pair keys involving a and b's series.
+    if (a.seriesType != null &&
+        a.seriesId != null &&
+        b.seriesType != null &&
+        b.seriesId != null) {
+      final key = ScheduleConflictProjection.seriesKey(
+        a.seriesType!,
+        a.seriesId!,
+        b.seriesType!,
+        b.seriesId!,
+      );
+      filtered.seriesByPair.remove(key);
+    }
+    return ScheduleConflictProjection.resolvePair(itemA, itemB, filtered);
+  }
+
   Future<void> _classifyOccurrence(
     ScheduleConflictParticipant a,
     ScheduleConflictParticipant b,

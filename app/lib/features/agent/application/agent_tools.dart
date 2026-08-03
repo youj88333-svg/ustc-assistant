@@ -16,8 +16,9 @@ import '../../tasks/domain/task_projection.dart';
 import '../domain/agent_tool.dart';
 import '../domain/query_source.dart';
 import 'agent_configuration_service.dart';
-import 'cancellation_signal.dart';
 import 'agent_local_data_gateway.dart';
+import 'agent_management_tools.dart';
+import 'cancellation_signal.dart';
 import 'outbound_privacy_filter.dart';
 
 /// The maximum number of events a schedule tool returns before refusing with
@@ -2165,6 +2166,24 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'get_safe_action_history': (raw) => {
             'history': _filterItems(raw['history'], _historyItemKeys),
           },
+      'get_schedule_relations': (raw) => {
+            'relations': _filterRelations(raw['relations']),
+            'ref_left': raw['ref_left'],
+            'ref_right': raw['ref_right'],
+          },
+      'get_reminders': (raw) => _pick(
+            raw,
+            {
+              'ref',
+              'targetType',
+              'desiredOffsets',
+              'explicitDisabled',
+              'deliveredCount',
+              'missedCount',
+              'failedCount',
+            },
+          ),
+      'get_user_overlay': (raw) => _buildOverlayPayload(raw),
       // External (Task 9) tools: minimal allowlists. Only normalized fields
       // and ref_* tokens survive; no raw ids, no URLs (the envelope's trusted
       // references are not surfaced to the model).
@@ -2271,6 +2290,68 @@ List<Map<String, Object?>> _filterConflictPairs(Object? raw) {
   return out;
 }
 
+/// Re-derives the `get_schedule_relations` `relations` list from [raw]: each
+/// item is reduced to its flat allowlisted relation fields plus a re-allowlisted
+/// `left`/`right` participant map. The participant allowlist prevents any
+/// non-DTO participant field (e.g. a smuggled id) from leaking.
+List<Map<String, Object?>> _filterRelations(Object? raw) {
+  if (raw is! List) return const [];
+  final out = <Map<String, Object?>>[];
+  for (final item in raw) {
+    if (item is! Map<String, Object?>) continue;
+    final cleaned = <String, Object?>{
+      if (item.containsKey('ref')) 'ref': item['ref'],
+      if (item.containsKey('scope')) 'scope': item['scope'],
+      if (item.containsKey('conflictState'))
+        'conflictState': item['conflictState'],
+      if (item.containsKey('reason')) 'reason': item['reason'],
+      if (item.containsKey('validFrom')) 'validFrom': item['validFrom'],
+      if (item.containsKey('validThrough'))
+        'validThrough': item['validThrough'],
+      if (item.containsKey('fallback')) 'fallback': item['fallback'],
+    };
+    final left = item['left'];
+    if (left is Map<String, Object?>) {
+      cleaned['left'] = _pick(left, _relationParticipantKeys);
+    }
+    final right = item['right'];
+    if (right is Map<String, Object?>) {
+      // An occurrence relation's right side is a participant (kind/title); a
+      // series rule's right side is a series descriptor (seriesName/recurring).
+      cleaned['right'] = _pick(
+        right,
+        item['scope'] == 'occurrence'
+            ? _relationParticipantKeys
+            : _relationSeriesKeys,
+      );
+    }
+    out.add(cleaned);
+  }
+  return out;
+}
+
+/// Builds the `get_user_overlay` payload, re-allowlisting the two explicit
+/// layer maps and the two clear-preview maps field-by-field from `raw`.
+Map<String, Object?> _buildOverlayPayload(Map<String, Object?> raw) {
+  return <String, Object?>{
+    if (raw.containsKey('ref')) 'ref': raw['ref'],
+    'singleEvent': _pickOverlayFields(raw['singleEvent']),
+    'courseSeries': _pickOverlayFields(raw['courseSeries']),
+    'afterClearingSingle': _pickOverlayFields(raw['afterClearingSingle']),
+    'afterClearingSeries': _pickOverlayFields(raw['afterClearingSeries']),
+    if (raw.containsKey('hasSingleEventLayer'))
+      'hasSingleEventLayer': raw['hasSingleEventLayer'],
+    if (raw.containsKey('hasCourseSeriesLayer'))
+      'hasCourseSeriesLayer': raw['hasCourseSeriesLayer'],
+  };
+}
+
+/// Re-allowlists an overlay layer / clear-preview field map.
+Map<String, Object?> _pickOverlayFields(Object? raw) {
+  if (raw is! Map<String, Object?>) return const {};
+  return _pick(raw, _overlayFieldKeys);
+}
+
 // Per-item allowlisted string keys for each nested list DTO. These are the
 // ONLY fields that survive from a nested item; anything else (e.g. a smuggled
 // `db_id`) is dropped here, before the OutboundPrivacyFilter backstop.
@@ -2333,6 +2414,45 @@ const _conflictParticipantKeys = <String>{
   'endAt',
   'startDate',
   'endDateExclusive',
+};
+
+/// Per-participant allowed keys inside a `get_schedule_relations` relation item
+/// `left`. Only a safe kind, title, and optional time surface.
+const _relationParticipantKeys = <String>{
+  'kind',
+  'title',
+  'startAt',
+  'endAt',
+  'startDate',
+  'recurring',
+};
+
+/// Per-partner allowed keys inside a `get_schedule_relations` relation item
+/// `right`. Series rules carry only a safe series description, never the series
+/// id.
+const _relationSeriesKeys = <String>{
+  'seriesName',
+  'recurring',
+};
+
+/// Allowed field keys in a `get_user_overlay` layer / clear-preview map. The
+/// explicit per-field allowlist means an overlay row's DB id / event id / series
+/// id can never leak even if a tool DTO accidentally carried them.
+const _overlayFieldKeys = <String>{
+  'displayTitle',
+  'displayLocation',
+  'attendancePolicy',
+  'attendanceNote',
+  'attendanceDecision',
+  'attendanceOutcome',
+  'listeningMode',
+  'listeningNote',
+  'importance',
+  'color',
+  'foregroundPriority',
+  'hidden',
+  'userNotes',
+  'tagsJson',
 };
 
 const _eventDetailsKeys = <String>{
@@ -2492,6 +2612,9 @@ List<AgentTool> localAgentTools(AgentLocalDataGateway gateway) => [
       GetPendingPlanBlockReviewsTool(gateway),
       GetSyncStatusTool(gateway),
       GetSafeActionHistoryTool(gateway),
+      GetScheduleRelationsTool(gateway),
+      GetRemindersTool(gateway),
+      GetUserOverlayTool(gateway),
     ];
 
 // ===========================================================================

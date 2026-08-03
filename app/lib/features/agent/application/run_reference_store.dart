@@ -65,6 +65,37 @@ class RunReferenceStore {
   /// Returns whether [ref] is known to this store under any kind.
   bool knows(String ref) => _byRef.containsKey(ref);
 
+  /// Safely resolves [ref] to its INTERNAL `(kind, localId)` binding, without
+  /// the caller pre-committing to a single [kind].
+  ///
+  /// This is the "which kind is this ref really" API used by multi-target tools
+  /// (e.g. `ref_target` for `get_reminders`, `ref_left`/`ref_right` for
+  /// `get_schedule_relations`) that may bind event, task, or planblock refs.
+  /// Unlike [resolve], it does not fail when the caller guesses the wrong kind —
+  /// it returns whatever kind the ref was actually bound under, so the caller
+  /// can then act on the real target.
+  ///
+  /// Security is preserved:
+  /// - [allowedKinds] (default event/task/planblock) restricts which kinds are
+  ///   acceptable. A ref bound under a kind outside this set resolves to null.
+  /// - An unknown ref (never bound, or bound in a different run's store)
+  ///   resolves to null.
+  /// - The returned `(kind, localId)` is an INTERNAL identity. It is read by
+  ///   the tool to locate the row; it is never placed in the model payload —
+  ///   only the opaque `ref_*` token crosses that boundary.
+  ///
+  /// Returns null when the ref is unknown, belongs to a disallowed kind, or was
+  /// bound in a different run (a different store instance).
+  ({String kind, String localId})? resolveTarget(
+    String ref, {
+    Set<String> allowedKinds = const {'event', 'task', 'planblock'},
+  }) {
+    final bound = _byRef[ref];
+    if (bound == null) return null;
+    if (!allowedKinds.contains(bound.kind)) return null;
+    return (kind: bound.kind, localId: bound.localId);
+  }
+
   /// Generates an unguessable `ref_<base64url-random>` token. The random
   /// suffix is 16 bytes (128 bits) from [Random.secure].
   String _generateRef() {

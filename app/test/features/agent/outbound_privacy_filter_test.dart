@@ -370,6 +370,95 @@ void main() {
       },
     );
 
+    test('get_schedule_relations drops nested db_id/cookie on participants', () {
+      final raw = <String, Object?>{
+        'ref_left': 'ref_l',
+        'relations': <Object?>[
+          <String, Object?>{
+            'ref': 'ref_1',
+            'scope': 'occurrence',
+            'conflictState': 'conflict',
+            'fallback': 'derived_overlap',
+            'left': <String, Object?>{
+              'kind': 'event',
+              'title': '事件A',
+              'db_id': 987654,
+              'cookie': 'session=COOKIE_CANARY',
+            },
+            'right': <String, Object?>{
+              'kind': 'event',
+              'title': '事件B',
+              'seriesId': 'series-INTERNAL',
+              'profile_path': '/profile/PB12345678',
+            },
+          },
+        ],
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_schedule_relations',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, contains('事件A'));
+      expect(out, isNot(contains('db_id')));
+      expect(out, isNot(contains('cookie')));
+      expect(out, isNot(contains('profile_path')));
+      expect(out, isNot(contains('seriesId')));
+      expect(out, isNot(contains('series-INTERNAL')));
+      expect(out, isNot(contains('COOKIE_CANARY')));
+      expect(out, isNot(contains(_account)));
+    });
+
+    test('get_reminders drops nested db_id/cookie inside the target', () {
+      final raw = <String, Object?>{
+        'ref': 'ref_t',
+        'targetType': 'event',
+        'desiredOffsets': <Object?>[10, 30],
+        'explicitDisabled': false,
+        'deliveredCount': 1,
+        'db_id': 555,
+        'cookie': 'session=COOKIE_CANARY',
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_reminders',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, contains('desiredOffsets'));
+      expect(out, isNot(contains('db_id')));
+      expect(out, isNot(contains('cookie')));
+      expect(out, isNot(contains('COOKIE_CANARY')));
+    });
+
+    test('get_user_overlay drops nested db_id/cookie inside layer maps', () {
+      final raw = <String, Object?>{
+        'ref': 'ref_e',
+        'singleEvent': <String, Object?>{
+          'displayTitle': '用户标题',
+          'attendancePolicy': 'gamble',
+          'db_id': 999,
+          'Cookie': 'session=COOKIE_CANARY',
+        },
+        'courseSeries': <String, Object?>{
+          'attendancePolicy': 'must_go',
+          'eventId': 'ev-INTERNAL',
+        },
+        'hasSingleEventLayer': true,
+        'hasCourseSeriesLayer': true,
+      };
+      final sanitized = filter.sanitizeToolPayload(
+        toolName: 'get_user_overlay',
+        rawPayload: raw,
+      );
+      final out = sanitized.toString();
+      expect(out, contains('用户标题'));
+      expect(out, isNot(contains('db_id')));
+      expect(out, isNot(contains('cookie')));
+      expect(out, isNot(contains('eventId')));
+      expect(out, isNot(contains('ev-INTERNAL')));
+      expect(out, isNot(contains('COOKIE_CANARY')));
+    });
+
     test('suspicious keys are rejected case-insensitively', () {
       final raw = <String, Object?>{
         'events': <Object?>[

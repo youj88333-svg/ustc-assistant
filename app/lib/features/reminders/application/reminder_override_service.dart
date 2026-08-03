@@ -91,6 +91,58 @@ class ReminderOverrideService {
     });
   }
 
+  /// Loads the target's future desired offsets, whether an explicit-disable
+  /// sentinel is present, and the delivered/missed/failed history counts.
+  ///
+  /// [targetType] is one of `event` / `task` / `plan_block`; [targetId] is the
+  /// underlying local id. Account-scoped and read-only — never returns the
+  /// Reminder DB id.
+  Future<ReminderConfiguration> configurationFor({
+    required String targetType,
+    required String targetId,
+  }) async {
+    final rows =
+        await (database.select(database.reminders)..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.targetType.equals(targetType) &
+                  row.targetId.equals(targetId),
+            ))
+            .get();
+    final desiredOffsets = <int>{};
+    var hasExplicitDisable = false;
+    var delivered = 0;
+    var missed = 0;
+    var failed = 0;
+    for (final row in rows) {
+      final offset = row.offsetMinutes;
+      if (row.state == 'desired' && offset != null) {
+        desiredOffsets.add(offset);
+      } else if (row.state == 'cancelled' && offset == null) {
+        // The no-offset cancelled sentinel written when the target's remaining
+        // offsets ran out — an explicit disable marker that suppresses default
+        // rule rebuild.
+        hasExplicitDisable = true;
+      } else if (row.state == 'delivered') {
+        delivered++;
+      } else if (row.state == 'missed') {
+        missed++;
+      } else if (row.state == 'failed') {
+        failed++;
+      }
+    }
+    final future = <int>[
+      ...desiredOffsets,
+    ]..sort();
+    return ReminderConfiguration(
+      futureDesiredOffsets: List.unmodifiable(future),
+      hasExplicitDisable: hasExplicitDisable,
+      deliveredCount: delivered,
+      missedCount: missed,
+      failedCount: failed,
+    );
+  }
+
   Map<String, Object?> _snapshot(Reminder row) => {
     'id': row.id,
     'targetType': row.targetType,
@@ -106,4 +158,27 @@ class ReminderOverrideService {
     'createdAt': row.createdAt,
     'updatedAt': row.updatedAt,
   };
+}
+
+/// A read-only snapshot of a target's Reminder configuration, for the Agent
+/// `get_reminders` tool. Carries no Reminder DB id.
+class ReminderConfiguration {
+  const ReminderConfiguration({
+    required this.futureDesiredOffsets,
+    required this.hasExplicitDisable,
+    required this.deliveredCount,
+    required this.missedCount,
+    required this.failedCount,
+  });
+
+  /// Distinct, ascending future `desired` offsets (minutes before the target).
+  final List<int> futureDesiredOffsets;
+
+  /// Whether an explicit no-offset cancelled sentinel is present (i.e. the
+  /// user disabled the target's reminders so reconcile must not rebuild them).
+  final bool hasExplicitDisable;
+
+  final int deliveredCount;
+  final int missedCount;
+  final int failedCount;
 }

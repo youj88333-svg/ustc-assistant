@@ -1919,4 +1919,46 @@ void main() {
       expect(history, hasLength(50));
     });
   });
+
+  group('management read tools registration', () {
+    test(
+      'get_schedule_relations/get_reminders/get_user_overlay are registered '
+      'with additionalProperties:false schemas',
+      () {
+        final harness = _harness(database, 'a');
+        final tools = localAgentTools(harness.gateway);
+        final names = tools.map((t) => t.name).toSet();
+        expect(names, contains('get_schedule_relations'));
+        expect(names, contains('get_reminders'));
+        expect(names, contains('get_user_overlay'));
+        for (final t in tools) {
+          if (t.name == 'get_schedule_relations' ||
+              t.name == 'get_reminders' ||
+              t.name == 'get_user_overlay') {
+            final schema = t.inputSchema;
+            expect(schema['additionalProperties'], isFalse);
+          }
+        }
+      },
+    );
+
+    test(
+      'an injected db_id argument never leaks into the sanitized payload',
+      () async {
+        final harness = _harness(database, 'a');
+        final evRef = harness.references.bind(
+          kind: 'event',
+          localId: 'event-solo',
+        );
+        final result = await harness.execute('get_schedule_relations', {
+          'ref_left': evRef,
+          'db_id': 123, // injected — must be dropped by the payload allowlist.
+        });
+        expect(result.status, AgentToolStatus.success);
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains('db_id')));
+        expect(encoded, isNot(contains('123')));
+      },
+    );
+  });
 }
