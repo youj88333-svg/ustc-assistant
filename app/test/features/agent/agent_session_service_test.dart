@@ -9,6 +9,7 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_context_builder.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_grounding_policy.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_session_service.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_tool_budget.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_invocation_summary.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
@@ -659,7 +660,10 @@ class _ConfigurablePlanTaskTool implements AgentTool {
     executeCount++;
     onExecute?.call();
     if (status == AgentToolStatus.success) {
-      return const AgentToolResult(status: AgentToolStatus.success, payload: {});
+      return const AgentToolResult(
+        status: AgentToolStatus.success,
+        payload: {},
+      );
     }
     return AgentToolResult(
       status: status,
@@ -716,6 +720,75 @@ class _ConfigurableRelationTool implements AgentTool {
       payload: {'guidance': '关系未写入，请检查后重试。'},
     );
   }
+}
+
+/// A `create_task` write tool whose outcome is driven per call by the
+/// [outcomes] list (indexed by call ordinal) and which counts executions so
+/// tests can assert the burst runs each planned write exactly once. A result
+/// `code` of `'success'` yields a successful write; anything else is an error
+/// with that error code.
+class _BurstCreateTaskTool implements AgentTool {
+  _BurstCreateTaskTool(List<String> outcomes, {this.cancelOn})
+    : outcomes = List.of(outcomes);
+
+  final List<String> outcomes;
+  final int? cancelOn;
+  int executeCount = 0;
+
+  @override
+  String get name => 'create_task';
+
+  @override
+  String get description => 'Creates an independent Task (configurable).';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final index = executeCount;
+    executeCount++;
+    if (cancelOn != null && index == cancelOn) {
+      context.cancellation.cancel();
+    }
+    final code = index < outcomes.length ? outcomes[index] : 'success';
+    if (code == 'success') {
+      return const AgentToolResult(
+        status: AgentToolStatus.success,
+        payload: {'result': 'created_task'},
+      );
+    }
+    return AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: code,
+      payload: {'guidance': '写操作未成功，请检查后重试。'},
+    );
+  }
+}
+
+/// A grounding policy that always classifies the user text as a create-task
+/// burst with [limit] (32 by default) allowed create_task calls and a narrowed
+/// first-request tool set of `{get_schedule, create_task}`. Used so the burst
+/// tests exercise the session service's burst path deterministically regardless
+/// of the userText phrasing.
+class _CreateTaskBurstPolicy extends AgentGroundingPolicy {
+  const _CreateTaskBurstPolicy();
+
+  @override
+  AgentGroundingRequirement? classify(String userText) =>
+      AgentGroundingRequirement(
+        lookupTools: const {'get_schedule'},
+        terminalTools: const {'create_task'},
+        mutationIntent: true,
+        initialAllowedTools: const ['get_schedule', 'create_task'],
+        createTaskBurstLimit: 32,
+      );
 }
 
 class _ConcurrentBlockingProvider implements LlmProvider {
@@ -1112,58 +1185,61 @@ void main() {
       },
     );
 
-    test('schedule + tasks tools produce one action each, deduplicated', () async {
-      final scheduleTool = _FakeScheduleTool();
-      final tasksTool = _ManyEventRefsTasksTool();
-      final provider = _ScriptedProvider([
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-1',
-            name: 'get_schedule',
-            input: {},
-          ),
-          const ToolUseCompletedEvent(
-            id: 'tu-2',
-            name: 'get_tasks',
-            input: {},
-          ),
-          const CompletedEvent(),
-        ],
-        // Call both AGAIN — must NOT duplicate the actions.
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-3',
-            name: 'get_schedule',
-            input: {},
-          ),
-          const ToolUseCompletedEvent(
-            id: 'tu-4',
-            name: 'get_tasks',
-            input: {},
-          ),
-          const CompletedEvent(),
-        ],
-        [const TextDeltaEvent('done'), const CompletedEvent()],
-      ]);
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
-        tools: [scheduleTool, tasksTool],
-      );
+    test(
+      'schedule + tasks tools produce one action each, deduplicated',
+      () async {
+        final scheduleTool = _FakeScheduleTool();
+        final tasksTool = _ManyEventRefsTasksTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-1',
+              name: 'get_schedule',
+              input: {},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-2',
+              name: 'get_tasks',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          // Call both AGAIN — must NOT duplicate the actions.
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-3',
+              name: 'get_schedule',
+              input: {},
+            ),
+            const ToolUseCompletedEvent(
+              id: 'tu-4',
+              name: 'get_tasks',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('done'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [scheduleTool, tasksTool],
+        );
 
-      final states = await service
-          .send(accountId: account, userText: '查日程和任务')
-          .toList();
+        final states = await service
+            .send(accountId: account, userText: '查日程和任务')
+            .toList();
 
-      final terminal = states.last;
-      // One schedule + one tasks, despite each being called twice.
-      expect(terminal.localActions, hasLength(2));
-      expect(terminal.localActions, contains(AgentLocalAction.schedule));
-      expect(terminal.localActions, contains(AgentLocalAction.tasks));
-      // No local refs forwarded to sourceReferences.
-      expect(terminal.sourceReferences, isEmpty);
-    });
+        final terminal = states.last;
+        // One schedule + one tasks, despite each being called twice.
+        expect(terminal.localActions, hasLength(2));
+        expect(terminal.localActions, contains(AgentLocalAction.schedule));
+        expect(terminal.localActions, contains(AgentLocalAction.tasks));
+        // No local refs forwarded to sourceReferences.
+        expect(terminal.sourceReferences, isEmpty);
+      },
+    );
   });
 
   group('first model request shape', () {
@@ -1895,82 +1971,76 @@ END
       });
     });
 
-    test(
-      'summary guard guidance reaches the next request and a changed '
-      'course_summary call is not duplicate-blocked',
-      () async {
-        // Call 1: the model makes a wrong no-query `events` (default view)
-        // call, which the guard rejects with schedule_summary_required.
-        // Call 2: after seeing the guidance, the model retries with
-        // view=course_summary, which succeeds.
-        final tool = _SummaryFirstScheduleTool();
-        final provider = _ScriptedProvider([
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-wide',
-              name: 'get_schedule',
-              input: {'from': '2026-07-01', 'through': '2026-08-04'},
-            ),
-            const CompletedEvent(),
-          ],
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-summary',
-              name: 'get_schedule',
-              input: {
-                'view': 'course_summary',
-                'from': '2026-07-01',
-                'through': '2026-08-04',
-              },
-            ),
-            const CompletedEvent(),
-          ],
-          [const TextDeltaEvent('这是本学期课程概览。'), const CompletedEvent()],
-        ]);
-        final service = _buildService(
-          database: database,
-          provider: provider,
-          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
-          tools: [tool],
-        );
+    test('summary guard guidance reaches the next request and a changed '
+        'course_summary call is not duplicate-blocked', () async {
+      // Call 1: the model makes a wrong no-query `events` (default view)
+      // call, which the guard rejects with schedule_summary_required.
+      // Call 2: after seeing the guidance, the model retries with
+      // view=course_summary, which succeeds.
+      final tool = _SummaryFirstScheduleTool();
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-wide',
+            name: 'get_schedule',
+            input: {'from': '2026-07-01', 'through': '2026-08-04'},
+          ),
+          const CompletedEvent(),
+        ],
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-summary',
+            name: 'get_schedule',
+            input: {
+              'view': 'course_summary',
+              'from': '2026-07-01',
+              'through': '2026-08-04',
+            },
+          ),
+          const CompletedEvent(),
+        ],
+        [const TextDeltaEvent('这是本学期课程概览。'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+      );
 
-        final states = await service
-            .send(accountId: account, userText: '我下学期有什么课')
-            .toList();
+      final states = await service
+          .send(accountId: account, userText: '我下学期有什么课')
+          .toList();
 
-        // The run completes grounded.
-        expect(states.last.state, AgentRunState.completed);
+      // The run completes grounded.
+      expect(states.last.state, AgentRunState.completed);
 
-        // The first tool_result (fed to call 2) carried the guard error code
-        // and its guidance. Each subsequent request replays prior turns, so we
-        // target the LAST tool result block in the request, which is the one
-        // just produced by the preceding call.
-        final firstToolResult = provider.requests[1].messages
-            .expand((message) => message.content)
-            .whereType<LlmToolResultBlock>()
-            .last;
-        final firstPayload = jsonDecode(firstToolResult.content as String)
-            as Map<String, Object?>;
-        expect(firstPayload['code'], 'schedule_summary_required');
-        expect(
-          firstPayload['guidance'],
-          contains('course_summary'),
-        );
+      // The first tool_result (fed to call 2) carried the guard error code
+      // and its guidance. Each subsequent request replays prior turns, so we
+      // target the LAST tool result block in the request, which is the one
+      // just produced by the preceding call.
+      final firstToolResult = provider.requests[1].messages
+          .expand((message) => message.content)
+          .whereType<LlmToolResultBlock>()
+          .last;
+      final firstPayload =
+          jsonDecode(firstToolResult.content as String) as Map<String, Object?>;
+      expect(firstPayload['code'], 'schedule_summary_required');
+      expect(firstPayload['guidance'], contains('course_summary'));
 
-        // The changed course_summary call executed and was NOT duplicate
-        // blocked (its arguments differ from the rejected events call, so its
-        // fingerprint differs).
-        expect(tool.executeCount, 2);
+      // The changed course_summary call executed and was NOT duplicate
+      // blocked (its arguments differ from the rejected events call, so its
+      // fingerprint differs).
+      expect(tool.executeCount, 2);
 
-        // The tool_result for the successful course_summary (the last block in
-        // request 2 = call 3's input) reflects the success.
-        final secondToolResult = provider.requests[2].messages
-            .expand((message) => message.content)
-            .whereType<LlmToolResultBlock>()
-            .last;
-        expect(secondToolResult.isError, isFalse);
-      },
-    );
+      // The tool_result for the successful course_summary (the last block in
+      // request 2 = call 3's input) reflects the success.
+      final secondToolResult = provider.requests[2].messages
+          .expand((message) => message.content)
+          .whereType<LlmToolResultBlock>()
+          .last;
+      expect(secondToolResult.isError, isFalse);
+    });
   });
 
   group('summary scheduling', () {
@@ -2476,10 +2546,7 @@ END
             const CompletedEvent(),
           ],
           // Call 3: grounded final answer.
-          [
-            const TextDeltaEvent('你有 2 节课需要确认出勤。'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('你有 2 节课需要确认出勤。'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -2489,10 +2556,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .toList();
 
         // 3 model calls: initial, one forced correction, final.
@@ -2509,44 +2573,37 @@ END
       },
     );
 
-    test(
-      'pending planblock review follows the same forced path',
-      () async {
-        final provider = _ScriptedProvider([
-          [const TextDeltaEvent('已列出待确认的执行块。'), const CompletedEvent()],
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-pb',
-              name: 'get_pending_planblock_reviews',
-              input: {},
-            ),
-            const CompletedEvent(),
-          ],
-          [const TextDeltaEvent('有 1 个执行块待你确认。'), const CompletedEvent()],
-        ]);
-        final service = _buildService(
-          database: database,
-          provider: provider,
-          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
-          tools: [_FakePendingPlanBlockReviewsTool()],
-        );
+    test('pending planblock review follows the same forced path', () async {
+      final provider = _ScriptedProvider([
+        [const TextDeltaEvent('已列出待确认的执行块。'), const CompletedEvent()],
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-pb',
+            name: 'get_pending_planblock_reviews',
+            input: {},
+          ),
+          const CompletedEvent(),
+        ],
+        [const TextDeltaEvent('有 1 个执行块待你确认。'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+        tools: [_FakePendingPlanBlockReviewsTool()],
+      );
 
-        final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些执行块需要我确认？',
-            )
-            .toList();
+      final states = await service
+          .send(accountId: account, userText: '有哪些执行块需要我确认？')
+          .toList();
 
-        expect(provider.streamCallCount, 3);
-        expect(provider.requests[1].toolChoice, LlmToolChoice.any);
-        expect(
-          provider.requests[1].tools.map((t) => t.name).toSet(),
-          {'get_pending_planblock_reviews'},
-        );
-        expect(states.last.state, AgentRunState.completed);
-      },
-    );
+      expect(provider.streamCallCount, 3);
+      expect(provider.requests[1].toolChoice, LlmToolChoice.any);
+      expect(provider.requests[1].tools.map((t) => t.name).toSet(), {
+        'get_pending_planblock_reviews',
+      });
+      expect(states.last.state, AgentRunState.completed);
+    });
 
     test(
       'plan task hallucination: two success-prose responses -> grounding_failed',
@@ -2570,10 +2627,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '给完成操作系统大作业安排明天下午两点',
-            )
+            .send(accountId: account, userText: '给完成操作系统大作业安排明天下午两点')
             .toList();
 
         // Two model calls, no corrective loop runs on forever.
@@ -2630,10 +2684,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '给完成操作系统大作业安排明天下午两点',
-            )
+            .send(accountId: account, userText: '给完成操作系统大作业安排明天下午两点')
             .toList();
 
         // Two calls only — the attempted (failed) write was NOT re-corrected.
@@ -2652,10 +2703,7 @@ END
       'free greeting: one auto call, no tools, original response preserved',
       () async {
         final provider = _ScriptedProvider([
-          [
-            const TextDeltaEvent('你好！我是你的校园助手。'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('你好！我是你的校园助手。'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -2675,31 +2723,25 @@ END
       },
     );
 
-    test(
-      'capability question does not force a write',
-      () async {
-        final provider = _ScriptedProvider([
-          [
-            const TextDeltaEvent('我可以帮你修改日程。'),
-            const CompletedEvent(),
-          ],
-        ]);
-        final service = _buildService(
-          database: database,
-          provider: provider,
-          clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
-        );
+    test('capability question does not force a write', () async {
+      final provider = _ScriptedProvider([
+        [const TextDeltaEvent('我可以帮你修改日程。'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+      );
 
-        final states = await service
-            .send(accountId: account, userText: '你能不能修改日程？')
-            .toList();
+      final states = await service
+          .send(accountId: account, userText: '你能不能修改日程？')
+          .toList();
 
-        // One plain auto call; no forced write, no correction.
-        expect(provider.streamCallCount, 1);
-        expect(provider.requests.single.toolChoice, LlmToolChoice.auto);
-        expect(states.last.state, AgentRunState.completed);
-      },
-    );
+      // One plain auto call; no forced write, no correction.
+      expect(provider.streamCallCount, 1);
+      expect(provider.requests.single.toolChoice, LlmToolChoice.auto);
+      expect(states.last.state, AgentRunState.completed);
+    });
 
     test(
       'forced-choice protocol error: one fallback auto request, no infinite retry',
@@ -2718,10 +2760,7 @@ END
             ),
             const CompletedEvent(),
           ],
-          [
-            const TextDeltaEvent('确认完成。'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('确认完成。'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -2731,10 +2770,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .toList();
 
         // 4 calls: initial + any(protocol error) + auto fallback + final.
@@ -2763,10 +2799,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .toList();
 
         // auth_failed is NOT a compatibility problem: exactly two model calls,
@@ -2795,10 +2828,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .toList();
 
         expect(provider.streamCallCount, 2);
@@ -2810,7 +2840,10 @@ END
     test(
       'forced-choice transport error: fail immediately, NOT a compatibility issue',
       () async {
-        for (final code in const ['transport_error', 'stream_transport_error']) {
+        for (final code in const [
+          'transport_error',
+          'stream_transport_error',
+        ]) {
           final provider = _ScriptedProvider([
             [const TextDeltaEvent('这是出勤情况。'), const CompletedEvent()],
             [ErrorEvent(code)],
@@ -2823,10 +2856,7 @@ END
           );
 
           final states = await service
-              .send(
-                accountId: account,
-                userText: '有哪些需要我确认的课程出勤或听讲？',
-              )
+              .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
               .toList();
 
           expect(provider.streamCallCount, 2, reason: 'code=$code');
@@ -2862,10 +2892,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .toList();
 
         // The tool was attempted but the stream errored AFTER content, so the
@@ -2892,10 +2919,7 @@ END
 
         final states = <AgentRunViewState>[];
         final sub = service
-            .send(
-              accountId: account,
-              userText: '有哪些需要我确认的课程出勤或听讲？',
-            )
+            .send(accountId: account, userText: '有哪些需要我确认的课程出勤或听讲？')
             .listen(states.add);
         // Wait for the first model call to start (plain answer blocks), then
         // cancel while the corrective request is pending.
@@ -2942,10 +2966,7 @@ END
               const CompletedEvent(),
             ],
             // Call 2: the model dishonestly claims success.
-            [
-              const TextDeltaEvent('已经完成，任务时间段已安排成功。'),
-              const CompletedEvent(),
-            ],
+            [const TextDeltaEvent('已经完成，任务时间段已安排成功。'), const CompletedEvent()],
           ]);
           final service = _buildService(
             database: database,
@@ -2955,10 +2976,7 @@ END
           );
 
           final states = await service
-              .send(
-                accountId: account,
-                userText: '给完成操作系统大作业安排明天下午两点',
-              )
+              .send(accountId: account, userText: '给完成操作系统大作业安排明天下午两点')
               .toList();
 
           // Two calls only: the failed terminal write is NOT re-corrected into
@@ -2976,11 +2994,13 @@ END
             isNot(contains('安排成功')),
             reason: 'code=$code',
           );
-          expect(states.last.text, contains('没有修改数据'),
-              reason: 'code=$code');
+          expect(states.last.text, contains('没有修改数据'), reason: 'code=$code');
           // The run never lands on a success conclusion.
-          expect(states.last.state, isNot(AgentRunState.completed),
-              reason: 'code=$code');
+          expect(
+            states.last.state,
+            isNot(AgentRunState.completed),
+            reason: 'code=$code',
+          );
           // The safe error code is preserved.
           expect(states.last.errorCode, code, reason: 'code=$code');
         }
@@ -2990,9 +3010,7 @@ END
     test(
       'a successful terminal write preserves the model completion prose',
       () async {
-        final tool = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final tool = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final provider = _ScriptedProvider([
           // Call 1: attempt the terminal write (succeeds).
           [
@@ -3004,10 +3022,7 @@ END
             const CompletedEvent(),
           ],
           // Call 2: the model reports completion.
-          [
-            const TextDeltaEvent('已经完成，任务时间段已安排成功。'),
-            const CompletedEvent(),
-          ],
+          [const TextDeltaEvent('已经完成，任务时间段已安排成功。'), const CompletedEvent()],
         ]);
         final service = _buildService(
           database: database,
@@ -3017,10 +3032,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '给完成操作系统大作业安排明天下午两点',
-            )
+            .send(accountId: account, userText: '给完成操作系统大作业安排明天下午两点')
             .toList();
 
         // Success grounded by the structured result: the completion prose is
@@ -3109,10 +3121,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '把2026年3月的那两节计算机网络课记录为冲突',
-            )
+            .send(accountId: account, userText: '把2026年3月的那两节计算机网络课记录为冲突')
             .toList();
 
         // No correction was issued: get_schedule satisfied the lookup group.
@@ -3154,10 +3163,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '记录这两个执行块互相冲突',
-            )
+            .send(accountId: account, userText: '记录这两个执行块互相冲突')
             .toList();
 
         expect(provider.streamCallCount, 2);
@@ -3189,10 +3195,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '记录这两节课的冲突',
-            )
+            .send(accountId: account, userText: '记录这两节课的冲突')
             .toList();
 
         expect(provider.streamCallCount, 2);
@@ -3232,15 +3235,17 @@ END
           tools: [relation, schedule, blocks],
         );
 
-        await service
-            .send(accountId: account, userText: '记录这两节课的冲突')
-            .toList();
+        await service.send(accountId: account, userText: '记录这两节课的冲突').toList();
 
         // The FIRST model request declares ONLY the relation family, not the
         // whole registry.
         final first = provider.requests.first;
         final names = first.tools.map((t) => t.name).toSet();
-        expect(names, {'get_schedule', 'get_plan_blocks', 'create_schedule_relation'});
+        expect(names, {
+          'get_schedule',
+          'get_plan_blocks',
+          'create_schedule_relation',
+        });
         // Tool choice remains auto (free chat is never forced).
         expect(first.toolChoice, LlmToolChoice.auto);
       },
@@ -3249,46 +3254,43 @@ END
     test(
       'relation get_schedule bounds: exact-day no-query and query views run once, unbounded calls are rejected and never reach the registry',
       () async {
-        final cases = <({
-          Map<String, Object?> input,
-          bool executes,
-          String? error,
-        })>[
-          (
-            input: {'from': '2026-09-01', 'through': '2026-09-01'},
-            executes: true,
-            error: null,
-          ),
-          (
-            input: {'query': '计算机网络', 'view': 'events'},
-            executes: true,
-            error: null,
-          ),
-          (
-            input: const {},
-            executes: false,
-            error: 'relation_lookup_requires_bound',
-          ),
-          (
-            input: {'from': '2026-09-01'},
-            executes: false,
-            error: 'relation_lookup_requires_bound',
-          ),
-          (
-            input: {'from': '2026-09-01', 'through': '2026-09-02'},
-            executes: false,
-            error: 'relation_lookup_requires_bound',
-          ),
-          (
-            input: {
-              'from': '2026-09-01',
-              'through': '2026-09-01',
-              'view': 'course_summary',
-            },
-            executes: false,
-            error: 'relation_lookup_requires_bound',
-          ),
-        ];
+        final cases =
+            <({Map<String, Object?> input, bool executes, String? error})>[
+              (
+                input: {'from': '2026-09-01', 'through': '2026-09-01'},
+                executes: true,
+                error: null,
+              ),
+              (
+                input: {'query': '计算机网络', 'view': 'events'},
+                executes: true,
+                error: null,
+              ),
+              (
+                input: const {},
+                executes: false,
+                error: 'relation_lookup_requires_bound',
+              ),
+              (
+                input: {'from': '2026-09-01'},
+                executes: false,
+                error: 'relation_lookup_requires_bound',
+              ),
+              (
+                input: {'from': '2026-09-01', 'through': '2026-09-02'},
+                executes: false,
+                error: 'relation_lookup_requires_bound',
+              ),
+              (
+                input: {
+                  'from': '2026-09-01',
+                  'through': '2026-09-01',
+                  'view': 'course_summary',
+                },
+                executes: false,
+                error: 'relation_lookup_requires_bound',
+              ),
+            ];
 
         for (final c in cases) {
           final schedule = _CountingEventScheduleTool();
@@ -3327,11 +3329,7 @@ END
 
           // The session guard gates BEFORE the registry: bounded cases run the
           // tool's counter, unbounded cases are intercepted and never execute.
-          expect(
-            schedule.executeCount,
-            c.executes ? 1 : 0,
-            reason: 'input=$c',
-          );
+          expect(schedule.executeCount, c.executes ? 1 : 0, reason: 'input=$c');
 
           if (c.error != null) {
             // The rejected call persists an error row in its own invocation
@@ -3339,12 +3337,16 @@ END
             // across loop cases, and each send adds exactly one get_schedule
             // invocation, so the last get_schedule row is THIS send's.
             final rows = await database.select(database.toolInvocations).get();
-            final scheduleRows =
-                rows.where((r) => r.toolName == 'get_schedule').toList();
+            final scheduleRows = rows
+                .where((r) => r.toolName == 'get_schedule')
+                .toList();
             expect(scheduleRows, isNotEmpty, reason: 'input=$c');
             final row = scheduleRows.last;
-            expect(row.errorCode, 'relation_lookup_requires_bound',
-                reason: 'input=$c');
+            expect(
+              row.errorCode,
+              'relation_lookup_requires_bound',
+              reason: 'input=$c',
+            );
             expect(
               row.status,
               ToolInvocationLifecycleState.error.storageName,
@@ -3355,10 +3357,11 @@ END
                   .expand((m) => m.content)
                   .whereType<LlmToolResultBlock>()
                   .any((tr) {
-                final payload =
-                    jsonDecode(tr.content as String) as Map<String, Object?>;
-                return payload['code'] == 'relation_lookup_requires_bound';
-              }),
+                    final payload =
+                        jsonDecode(tr.content as String)
+                            as Map<String, Object?>;
+                    return payload['code'] == 'relation_lookup_requires_bound';
+                  }),
               isTrue,
               reason: 'input=$c',
             );
@@ -3401,10 +3404,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '记录这两节课的冲突，我选择去量子物理 B',
-            )
+            .send(accountId: account, userText: '记录这两节课的冲突，我选择去量子物理 B')
             .toList();
 
         // The FIRST mismatch was surfaced to the model as an error, and the
@@ -3447,10 +3447,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '记录这两节课的冲突，我选择去量子物理 B',
-            )
+            .send(accountId: account, userText: '记录这两节课的冲突，我选择去量子物理 B')
             .toList();
 
         // No confirmation card was shown; the run ended without landing on a
@@ -3501,10 +3498,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '记录为冲突，我还没决定',
-            )
+            .send(accountId: account, userText: '记录为冲突，我还没决定')
             .toList();
 
         // The first mismatch was surfaced as an error carrying the
@@ -3583,7 +3577,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -3643,7 +3640,8 @@ END
         // executions here are the five supporting/terminal calls (well under
         // the 12-call budget).
         expect(provider.streamCallCount, 5);
-        final totalToolExecutions = plan.executeCount +
+        final totalToolExecutions =
+            plan.executeCount +
             relation.executeCount +
             blocks.executeCount +
             tasks.executeCount +
@@ -3682,7 +3680,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -3716,59 +3717,56 @@ END
       },
     );
 
-    test(
-      'cancelled planning settles failed cancelled, 未创建执行时间段',
-      () async {
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.error,
-          errorCode: 'cancelled',
-        );
-        final relation = _ConfigurableRelationTool(
-          status: AgentToolStatus.success,
-        );
-        final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
-        final tasks = _CountingSuccessTool(name: 'get_tasks');
-        final schedule = _CountingSuccessTool(name: 'get_schedule');
-        final provider = _ScriptedProvider([
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-tasks',
-              name: 'get_tasks',
-              input: {'status': 'active'},
-            ),
-            const CompletedEvent(),
-          ],
-          [
-            const ToolUseCompletedEvent(
-              id: 'tu-plan',
-              name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
-            ),
-            const CompletedEvent(),
-          ],
-          [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
-        ]);
-        final service = _buildService(
-          database: database,
-          provider: provider,
-          clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
-          tools: [tasks, schedule, plan, blocks, relation],
-        );
+    test('cancelled planning settles failed cancelled, 未创建执行时间段', () async {
+      final plan = _ConfigurablePlanTaskTool(
+        status: AgentToolStatus.error,
+        errorCode: 'cancelled',
+      );
+      final relation = _ConfigurableRelationTool(
+        status: AgentToolStatus.success,
+      );
+      final blocks = _CountingSuccessTool(name: 'get_plan_blocks');
+      final tasks = _CountingSuccessTool(name: 'get_tasks');
+      final schedule = _CountingSuccessTool(name: 'get_schedule');
+      final provider = _ScriptedProvider([
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-tasks',
+            name: 'get_tasks',
+            input: {'status': 'active'},
+          ),
+          const CompletedEvent(),
+        ],
+        [
+          const ToolUseCompletedEvent(
+            id: 'tu-plan',
+            name: 'plan_task',
+            input: {
+              'ref_task': 'ref_1',
+              'start_at': '2026-08-03T14:00:00+08:00',
+            },
+          ),
+          const CompletedEvent(),
+        ],
+        [const TextDeltaEvent('已经完成。'), const CompletedEvent()],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 8, 3, 12)),
+        tools: [tasks, schedule, plan, blocks, relation],
+      );
 
-        final states = await service
-            .send(
-              accountId: account,
-              userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突',
-            )
-            .toList();
+      final states = await service
+          .send(accountId: account, userText: '给完成操作系统大作业安排明天下午两点，并记录它与其他安排不冲突')
+          .toList();
 
-        expect(states.last.state, AgentRunState.failed);
-        expect(states.last.errorCode, 'cancelled');
-        expect(states.last.text, contains('未创建执行时间段'));
-        expect(plan.executeCount, 1);
-        expect(relation.executeCount, 0);
-      },
-    );
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'cancelled');
+      expect(states.last.text, contains('未创建执行时间段'));
+      expect(plan.executeCount, 1);
+      expect(relation.executeCount, 0);
+    });
 
     test(
       'technical error planning settles failed safe error, 未创建执行时间段',
@@ -3796,7 +3794,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -3831,9 +3832,7 @@ END
         // PlanBlock succeeds; relation is declined (user_declined). This is a
         // PARTIAL completion: the PlanBlock is preserved, the relation reports
         // the declined partial fact. Must NOT say "没有修改数据".
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final plan = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final relation = _ConfigurableRelationTool(
           status: AgentToolStatus.error,
           errorCode: 'user_declined',
@@ -3854,7 +3853,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -3903,9 +3905,7 @@ END
     test(
       'successful plan then cancelled relation: partial success, 已取消 variant',
       () async {
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final plan = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final relation = _ConfigurableRelationTool(
           status: AgentToolStatus.error,
           errorCode: 'cancelled',
@@ -3926,7 +3926,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -3971,9 +3974,7 @@ END
     test(
       'successful plan then technical relation error: partial success, safe relation error',
       () async {
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final plan = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final relation = _ConfigurableRelationTool(
           status: AgentToolStatus.error,
           errorCode: 'write_commit_failed',
@@ -3994,7 +3995,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -4045,9 +4049,7 @@ END
         // after the single correction. Correction is exhausted with no relation
         // attempt -> partialFailure with relation_not_grounded_after_plan; the
         // PlanBlock (and its ActionLog) must remain recorded.
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final plan = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final relation = _ConfigurableRelationTool(
           status: AgentToolStatus.success,
         );
@@ -4067,7 +4069,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -4115,9 +4120,7 @@ END
     test(
       'successful plan then successful relation: completed, model final text accepted',
       () async {
-        final plan = _ConfigurablePlanTaskTool(
-          status: AgentToolStatus.success,
-        );
+        final plan = _ConfigurablePlanTaskTool(status: AgentToolStatus.success);
         final relation = _ConfigurableRelationTool(
           status: AgentToolStatus.success,
         );
@@ -4137,7 +4140,10 @@ END
             const ToolUseCompletedEvent(
               id: 'tu-plan',
               name: 'plan_task',
-              input: {'ref_task': 'ref_1', 'start_at': '2026-08-03T14:00:00+08:00'},
+              input: {
+                'ref_task': 'ref_1',
+                'start_at': '2026-08-03T14:00:00+08:00',
+              },
             ),
             const CompletedEvent(),
           ],
@@ -4204,7 +4210,10 @@ END
             const CompletedEvent(),
           ],
           // Call 2: plain final model turn (no further tool).
-          [const TextDeltaEvent('已把 10 月 1 号的课程移到 9 月 26 号。'), const CompletedEvent()],
+          [
+            const TextDeltaEvent('已把 10 月 1 号的课程移到 9 月 26 号。'),
+            const CompletedEvent(),
+          ],
         ]);
         final service = _buildService(
           database: database,
@@ -4214,10 +4223,7 @@ END
         );
 
         final states = await service
-            .send(
-              accountId: account,
-              userText: '国庆要调课，请把10月1号的调到9月26号',
-            )
+            .send(accountId: account, userText: '国庆要调课，请把10月1号的调到9月26号')
             .toList();
 
         // The terminal write succeeded -> run completed, null error, no
@@ -4330,7 +4336,10 @@ END
         expect(terminal.text, '你明天上午有课。');
         expect(terminal.text, isNot(contains('我来查一下')));
         // The interstitial chatter was not persisted either.
-        final persisted = await chatRepository.recentMessages(account, limit: 50);
+        final persisted = await chatRepository.recentMessages(
+          account,
+          limit: 50,
+        );
         final assistantMsgs = persisted
             .where((m) => m.role == ChatRole.assistant)
             .toList();
@@ -4376,7 +4385,10 @@ END
         // Legitimate answer preserved.
         expect(text, contains('明天有课'));
         // And the persisted copy matches the filtered view (no raw ref).
-        final persisted = await chatRepository.recentMessages(account, limit: 50);
+        final persisted = await chatRepository.recentMessages(
+          account,
+          limit: 50,
+        );
         final assistant = persisted
             .where((m) => m.role == ChatRole.assistant)
             .single;
@@ -4443,8 +4455,7 @@ END
             .toList();
         expect(toolResults, hasLength(2));
         final codes = toolResults.map((tr) {
-          final json =
-              jsonDecode(tr.content as String) as Map<String, Object?>;
+          final json = jsonDecode(tr.content as String) as Map<String, Object?>;
           return json['code'];
         }).toList();
         // First result is a real success payload; second is the bounded repeat.
@@ -4502,10 +4513,7 @@ END
           'startAt': '2026-08-02T14:00:00+08:00',
           'scope': 'week',
           'count': 3,
-          'nested': {
-            'studentId': 'PB2408',
-            'name': 'Alice',
-          },
+          'nested': {'studentId': 'PB2408', 'name': 'Alice'},
         };
         final summary = summarizeToolArguments('plan_task', args);
         expect(summary, isNot(contains('ref_')));
@@ -4571,10 +4579,7 @@ END
         expect(names, {'get_schedule', 'search_campus_catalog'});
         // Every row reached a terminal success state with a finish time.
         for (final row in rows) {
-          expect(
-            row.status,
-            ToolInvocationLifecycleState.success.storageName,
-          );
+          expect(row.status, ToolInvocationLifecycleState.success.storageName);
           expect(row.finishedAt, isNotNull);
           expect(row.accountId, account);
         }
@@ -4618,9 +4623,7 @@ END
           tools: [_GuidanceScheduleTool()],
         );
 
-        await service
-            .send(accountId: account, userText: '查课表')
-            .toList();
+        await service.send(accountId: account, userText: '查课表').toList();
 
         final rows = await database.select(database.toolInvocations).get();
         expect(rows, hasLength(1));
@@ -4709,9 +4712,7 @@ END
         final rows = await database.select(database.toolInvocations).get();
         expect(rows, isNotEmpty);
         expect(
-          rows.any(
-            (r) => r.errorCode == 'tool_call_budget_exceeded',
-          ),
+          rows.any((r) => r.errorCode == 'tool_call_budget_exceeded'),
           isTrue,
         );
       },
@@ -4794,6 +4795,458 @@ END
         );
       },
     );
+  });
+
+  group('create task burst — session integration', () {
+    // Builds a provider that emits a single model-call turn of [count]
+    // create_task tool uses (ids tu-0..tu-count-1, distinct inputs so each
+    // call is a unique fingerprint), then a final text turn with no tools.
+    List<List<LlmEvent>> burstScript(int count) => [
+      [
+        for (var i = 0; i < count; i++)
+          ToolUseCompletedEvent(
+            id: 'tu-$i',
+            name: 'create_task',
+            input: {'title': 'T$i', 'date': '2026-08-${(i % 9) + 1}'},
+          ),
+        const CompletedEvent(),
+      ],
+      [const TextDeltaEvent('final burst answer'), const CompletedEvent()],
+    ];
+
+    test('13 create_task calls under a 32 limit run as a burst: all execute, '
+        '13 rows, no budget error, completed', () async {
+      final tool = _BurstCreateTaskTool(List.filled(13, 'success'));
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(tool.executeCount, 13);
+      expect(provider.streamCallCount, 2);
+      final errorCodes = states.map((s) => s.errorCode).toSet();
+      expect(errorCodes.contains('tool_call_budget_exceeded'), isFalse);
+      expect(states.last.state, AgentRunState.completed);
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows, hasLength(13));
+      expect(rows.where((r) => r.status == 'success').length, 13);
+    });
+
+    test(
+      'a normal turn before and after the burst leaves the normal count at two '
+      'and the burst does not consume the normal quota',
+      () async {
+        // Call 1: one course_summary-ish normal get_schedule before.
+        // Call 2: the 13-call burst.
+        // Call 3: one normal read after.
+        // Call 4: final text.
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pre',
+              name: 'get_schedule',
+              input: {'date': '2026-07-29'},
+            ),
+            const CompletedEvent(),
+          ],
+          [
+            for (var i = 0; i < 13; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-b$i',
+                name: 'create_task',
+                input: {'title': 'B$i'},
+              ),
+            const CompletedEvent(),
+          ],
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-post',
+              name: 'search_campus_catalog',
+              input: {'q': 'x'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('done'), const CompletedEvent()],
+        ]);
+        final tool = _BurstCreateTaskTool(List.filled(13, 'success'));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _CreateTaskBurstPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '每周创建 Task')
+            .toList();
+
+        expect(states.last.state, AgentRunState.completed);
+        // 1 normal get_schedule + 1 normal search + 13 burst = 15 tool rows.
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(15));
+        expect(tool.executeCount, 13);
+      },
+    );
+
+    test('33 create_task calls return create_task_burst_too_large with zero '
+        'registry executions and zero successful rows', () async {
+      final tool = _BurstCreateTaskTool(List.filled(33, 'success'));
+      final provider = _ScriptedProvider([
+        [
+          for (var i = 0; i < 33; i++)
+            ToolUseCompletedEvent(
+              id: 'tu-t$i',
+              name: 'create_task',
+              input: {'title': 'T$i'},
+            ),
+          const CompletedEvent(),
+        ],
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'create_task_burst_too_large');
+      expect(tool.executeCount, 0);
+      // Blocked/error invocation rows for every received block.
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows, hasLength(33));
+      expect(rows.where((r) => r.status == 'error').length, 33);
+      expect(rows.where((r) => r.status == 'success'), isEmpty);
+      // Zero Task writes. Tasks live in a separate table; assert no success
+      // summary rows were produced.
+      expect(
+        rows
+            .map((r) => r.safeResultSummary)
+            .where((s) => s.contains('status=success')),
+        isEmpty,
+      );
+    });
+
+    test(
+      'a mixed turn that exceeds remaining normal quota is rejected with '
+      'create_task_burst_requires_dedicated_turn and nothing executes',
+      () async {
+        // Consume the full normal budget with non-burst turns first, so the
+        // mixed create_task turn cannot fit. Use repeated get_schedule calls.
+        final pre = List.generate(
+          AgentRunToolBudget.normalLimit,
+          (i) => const ToolUseCompletedEvent(
+            id: 'tu-pre',
+            name: 'get_schedule',
+            input: {'date': '2026-07-29'},
+          ),
+        );
+        final provider = _ScriptedProvider([
+          [...pre, const CompletedEvent()],
+          // Mixed turn: 8 calls, includes create_task but exceeds none remaining.
+          [
+            for (var i = 0; i < 4; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-m$i',
+                name: 'get_schedule',
+                input: {'date': '2026-07-29'},
+              ),
+            for (var i = 0; i < 4; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-c$i',
+                name: 'create_task',
+                input: {'title': 'C$i'},
+              ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final tool = _BurstCreateTaskTool(List.filled(4, 'success'));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _CreateTaskBurstPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '每周创建 Task')
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(
+          states.last.errorCode,
+          'create_task_burst_requires_dedicated_turn',
+        );
+        // None of the mixed turn's create_task tools executed.
+        expect(tool.executeCount, 0);
+      },
+    );
+
+    test(
+      'a second eligible pure burst turn returns create_task_burst_already_used '
+      'and none of its calls executes',
+      () async {
+        final tool = _BurstCreateTaskTool(List.filled(13, 'success'));
+        final provider = _ScriptedProvider([
+          // First burst turn.
+          [
+            for (var i = 0; i < 13; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-a$i',
+                name: 'create_task',
+                input: {'title': 'A$i'},
+              ),
+            const CompletedEvent(),
+          ],
+          // Second burst turn (still 13 pure create_task).
+          [
+            for (var i = 0; i < 13; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-b$i',
+                name: 'create_task',
+                input: {'title': 'B$i'},
+              ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _CreateTaskBurstPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '每周创建 Task')
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'create_task_burst_already_used');
+        // Only the first burst's 13 create_task ran.
+        expect(tool.executeCount, 13);
+        final rows = await database.select(database.toolInvocations).get();
+        // 13 successful burst rows + 13 rejected rows.
+        expect(rows, hasLength(26));
+      },
+    );
+
+    test('13 success -> completed with the lease accepting and 13 independent '
+        'writes remaining', () async {
+      final tool = _BurstCreateTaskTool(List.filled(13, 'success'));
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(tool.executeCount, 13);
+      expect(states.last.state, AgentRunState.completed);
+      expect(states.last.text, contains('final burst answer'));
+    });
+
+    test('12 success + 1 declined -> failed/create_task_burst_partial with the '
+        'lease message persisted and 12 writes remaining', () async {
+      final outcomes = List.generate(12, (_) => 'success');
+      outcomes.add('user_declined');
+      final tool = _BurstCreateTaskTool(outcomes);
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(tool.executeCount, 13);
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'create_task_burst_partial');
+      expect(states.last.text, '已创建 12 个 Task，1 个未完成。其中 1 个已取消。');
+      expect(states.last.text, isNot(contains('没有修改数据')));
+      expect(states.last.text, isNot(contains('请求失败，未生成回答')));
+
+      final persisted = await database.select(database.chatMessages).get();
+      final assistant = persisted
+          .where((m) => m.role == ChatRole.assistant.name)
+          .last;
+      expect(assistant.content, '已创建 12 个 Task，1 个未完成。其中 1 个已取消。');
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows.where((r) => r.status == 'success').length, 12);
+      expect(rows.where((r) => r.status == 'error').length, 1);
+    });
+
+    test('12 success + 1 technical error -> failed/create_task_burst_partial, '
+        '12 writes remaining', () async {
+      final outcomes = List.generate(12, (_) => 'success');
+      outcomes.add('write_failed');
+      final tool = _BurstCreateTaskTool(outcomes);
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'create_task_burst_partial');
+      expect(states.last.text, '已创建 12 个 Task，1 个未完成。失败原因：write_failed 1 个。');
+      expect(states.last.text, isNot(contains('没有修改数据')));
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows.where((r) => r.status == 'success').length, 12);
+    });
+
+    test('0 success + 13 declined -> failed/create_task_burst_failed with zero '
+        'successful writes', () async {
+      final tool = _BurstCreateTaskTool(List.filled(13, 'user_declined'));
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      expect(tool.executeCount, 13);
+      expect(states.last.state, AgentRunState.failed);
+      expect(states.last.errorCode, 'create_task_burst_failed');
+      expect(states.last.text, '未创建任何 Task。其中 13 个已取消。');
+      expect(states.last.text, isNot(contains('没有修改数据')));
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows.where((r) => r.status == 'success'), isEmpty);
+    });
+
+    test(
+      '12 success + 1 duplicate -> repeated_tool_call counted and partial',
+      () async {
+        // 12 distinct successes, then a 13th call that is an EXACT duplicate
+        // of the first (same title -> same fingerprint). The fingerprint guard
+        // blocks it as repeated_tool_call before a second registry execution.
+        final tool = _BurstCreateTaskTool(List.filled(12, 'success'));
+        final provider = _ScriptedProvider([
+          [
+            for (var i = 0; i < 12; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-d$i',
+                name: 'create_task',
+                input: {'title': 'Dup$i'},
+              ),
+            // Exact duplicate of tu-d0.
+            const ToolUseCompletedEvent(
+              id: 'tu-dup',
+              name: 'create_task',
+              input: {'title': 'Dup0'},
+            ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('final'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _CreateTaskBurstPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '每周创建 Task')
+            .toList();
+
+        // The duplicate is never re-executed.
+        expect(tool.executeCount, 12);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'create_task_burst_partial');
+        expect(
+          states.last.text,
+          '已创建 12 个 Task，1 个未完成。失败原因：repeated_tool_call 1 个。',
+        );
+        final rows = await database.select(database.toolInvocations).get();
+        expect(rows, hasLength(13));
+        expect(
+          rows.where((r) => r.errorCode == 'repeated_tool_call').length,
+          1,
+        );
+      },
+    );
+
+    test('Stop after N success -> cancelled with N writes remaining and '
+        'remaining calls not replayed', () async {
+      // 13 success outcomes but cancel during the 5th call (index 4).
+      final tool = _BurstCreateTaskTool(
+        List.filled(13, 'success'),
+        cancelOn: 4,
+      );
+      final provider = _ScriptedProvider(burstScript(13));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _CreateTaskBurstPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '每周创建 Task')
+          .toList();
+
+      // Cancellation wins over any partial aggregation.
+      expect(states.last.state, AgentRunState.cancelled);
+      // The 5th call (index 4) executes successfully and itself triggers the
+      // cancel; the 8 remaining blocks are recorded cancelled and NEVER
+      // replayed or executed.
+      expect(tool.executeCount, 5);
+      final rows = await database.select(database.toolInvocations).get();
+      // 5 succeeded + 8 cancelled rows.
+      expect(rows.where((r) => r.status == 'success').length, 5);
+      expect(
+        rows
+            .where(
+              (r) =>
+                  r.status ==
+                  ToolInvocationLifecycleState.cancelled.storageName,
+            )
+            .length,
+        8,
+      );
+    });
   });
 }
 

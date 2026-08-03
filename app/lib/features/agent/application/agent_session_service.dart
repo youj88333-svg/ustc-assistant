@@ -9,6 +9,7 @@ import '../domain/agent_tool.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_context_builder.dart';
 import 'agent_grounding_policy.dart';
+import 'agent_tool_budget.dart';
 import 'agent_tool_invocation_summary.dart';
 import 'agent_tool_registry.dart';
 import 'assistant_text_filter.dart';
@@ -96,9 +97,12 @@ class _ActiveRun {
 /// 8. After a successful run, schedules a tool-disabled summary request when
 ///    `AgentContextBuilder.needsSummary` is true; summary failure is swallowed.
 ///
-/// Hard limits (per run): 8 model calls, 12 tool calls. Exceeding either
-/// hard-stops the run in a safe terminal state — a new call is never started
-/// past the limit.
+/// Hard limits (per run): 8 model calls; the ordinary tool budget is
+/// [AgentRunToolBudget.normalLimit] (12) shared calls, with a one-turn
+/// create-task burst (up to [AgentRunToolBudget.createTaskBurstLimit]) granted
+/// once per eligible run and not drawn from that ordinary budget. Exceeding a
+/// limit hard-stops the run in a safe terminal state — a new call is never
+/// started past the limit.
 ///
 /// Stop semantics: once [cancel] fires mid-loop, the in-flight stream is
 /// allowed to drain, but no new model call is started; the run is marked
@@ -138,8 +142,9 @@ class AgentSessionService {
   /// Hard limit on model calls per run.
   static const int maxModelCalls = 8;
 
-  /// Hard limit on tool calls per run.
-  static const int maxToolCalls = 12;
+  /// The single source of the ordinary per-run tool-call limit is
+  /// [AgentRunToolBudget.normalLimit] (12). The session service must not define
+  /// a second independent normal-limit constant.
 
   /// Active user runs keyed by account. Cleanup compares the exact run object
   /// so a late summary from an older run cannot clear a newer run.
@@ -611,7 +616,11 @@ class AgentSessionService {
 
     final references = RunReferenceStore(runId: runId);
     final toolCallCount = <String, int>{}; // toolName -> count, for ActionLog
-    var totalToolCalls = 0;
+    // The ordinary tool budget and the one-per-run create-task burst lease
+    // (Task 3). `createTaskBurstLease` is RUN-MEMORY ONLY: it is never rebuilt
+    // from persisted invocation rows after a restart.
+    final toolBudget = AgentRunToolBudget();
+    CreateTaskBurstLease? createTaskBurstLease;
     var modelCallCount = 0;
     var lastInputTokens = 0;
     var lastOutputTokens = 0;
@@ -702,9 +711,11 @@ class AgentSessionService {
     // Bounded corrective-retry state: at most one forced `any` retry and at
     // most one compat fallback without `tool_choice` per run.
     var correctiveUsed = false; // a corrective request has already been issued
-    var correctivePending = false; // the NEXT model call must be the corrective one
+    var correctivePending =
+        false; // the NEXT model call must be the corrective one
     var correctiveToolChoice = LlmToolChoice.auto;
-    var correctiveToolNames = <String>{}; // narrowed declarations for the correction
+    var correctiveToolNames =
+        <String>{}; // narrowed declarations for the correction
     List<LlmMessage> correctiveMessages = const [];
     // Set once a forced `any` request fails before content: the provider does
     // not support forced choice for this session, so we fall back to `auto`.
@@ -756,8 +767,7 @@ class AgentSessionService {
           );
           requestMessages = correctiveMessages;
           requestToolChoice = correctiveToolChoice;
-          thisCallWasForcedAny =
-              correctiveToolChoice == LlmToolChoice.any;
+          thisCallWasForcedAny = correctiveToolChoice == LlmToolChoice.any;
         }
 
         try {
@@ -851,6 +861,7 @@ class AgentSessionService {
             supportingAttempts: supportingAttempts,
             isCancelled: signal.isCancelled,
             usedCorrective: correctiveUsed,
+            createTaskBurstLease: createTaskBurstLease,
           );
           switch (grounded) {
             case _GroundedSettlement.accept:
@@ -859,6 +870,18 @@ class AgentSessionService {
               terminalState = signal.isCancelled
                   ? AgentRunState.cancelled
                   : AgentRunState.completed;
+              break;
+            case _GroundedSettlement.createTaskBurstPartial:
+            case _GroundedSettlement.createTaskBurstFailed:
+              // A burst that ran to a complete but not-all-success settlement:
+              // replace the model's (possibly false) text with the lease's
+              // deterministic terminal report. Never fall through to
+              // `_terminalFailureText`, which would falsely claim nothing
+              // changed for a partial burst.
+              terminalState = AgentRunState.failed;
+              errorCode = createTaskBurstLease!.terminalErrorCode;
+              assistantText =
+                  createTaskBurstLease.terminalMessage ?? assistantText;
               break;
             case _GroundedSettlement.correct:
               // Case 3: no required tool succeeded and no corrective call used
@@ -969,6 +992,40 @@ class AgentSessionService {
         // defect where the session service accumulated one ref per event.
         final newLocalActions = <AgentLocalAction>{};
 
+        // Preflight the WHOLE turn before any registry execution (Task 3). A
+        // pure create_task turn under the burst allowance is classified here and
+        // the single lease is granted; every rejected turn is side-effect free.
+        final turnBudget = toolBudget.preflightTurn(
+          toolNames: [for (final use in toolUses) use.name],
+          allowedCreateTaskBurstLimit: grounding?.createTaskBurstLimit,
+        );
+
+        if (turnBudget.isRejected) {
+          // Reject the whole turn before ANY write: record one blocked/error
+          // invocation row per received block, well-formed error tool_results,
+          // and terminate independently of the model's next turn.
+          await rejectToolTurn(
+            accountId: accountId,
+            runId: runId,
+            toolUses: toolUses,
+            errorCode: turnBudget.errorCode!,
+            toolResults: toolResults,
+            toolSummaries: newToolSummaries,
+          );
+          terminalState = AgentRunState.failed;
+          errorCode = turnBudget.errorCode;
+          if (signal.isCancelled) {
+            terminalState = AgentRunState.cancelled;
+          }
+          break;
+        }
+
+        if (turnBudget.kind == AgentToolTurnBudgetKind.createTaskBurst) {
+          createTaskBurstLease = CreateTaskBurstLease(
+            plannedCount: toolUses.length,
+          );
+        }
+
         for (var toolIndex = 0; toolIndex < toolUses.length; toolIndex++) {
           final tu = toolUses[toolIndex];
 
@@ -1006,12 +1063,22 @@ class AgentSessionService {
                 ),
               );
             }
+            // A burst interrupted mid-turn: account for every still-unstarted
+            // planned write so the lease's processed count stays truthful
+            // without replaying them (cancellation wins).
+            createTaskBurstLease?.recordInterrupted(
+              toolUses.length - toolIndex,
+            );
             break;
           }
 
           // Budget: never execute a tool past the limit. The exceeded call
-          // itself consumes one lifecycle row finished as an error.
-          if (totalToolCalls >= maxToolCalls) {
+          // itself consumes one lifecycle row finished as an error. For a burst
+          // turn the normal budget is not consumed (the lease covers it); for a
+          // normal turn a failed `tryConsumeNormalCall` bounds the run exactly
+          // as before.
+          if (turnBudget.kind != AgentToolTurnBudgetKind.createTaskBurst &&
+              !toolBudget.tryConsumeNormalCall()) {
             terminalState = AgentRunState.failed;
             errorCode = 'tool_call_budget_exceeded';
             // Append an error tool_result so the model's turn is well-formed.
@@ -1047,7 +1114,6 @@ class AgentSessionService {
             );
             break;
           }
-          totalToolCalls++;
           toolCallCount.update(tu.name, (v) => v + 1, ifAbsent: () => 1);
 
           // The call will actually be processed, so persist a `running` row
@@ -1103,7 +1169,8 @@ class AgentSessionService {
               status: AgentToolStatus.error,
               errorCode: 'relation_lookup_requires_bound',
               payload: {
-                'guidance': '关系参与方需要具体事件引用。请提供事件标题，或把 '
+                'guidance':
+                    '关系参与方需要具体事件引用。请提供事件标题，或把 '
                     'from/through 限定为同一天并使用 view=events；不要读取整学期详细事件后再过滤。',
               },
             );
@@ -1133,9 +1200,7 @@ class AgentSessionService {
               result = const AgentToolResult(
                 status: AgentToolStatus.error,
                 errorCode: 'relation_state_mismatch',
-                payload: {
-                  'guidance': '第二次仍与你的选择不一致，已停止，未写入任何关系。',
-                },
+                payload: {'guidance': '第二次仍与你的选择不一致，已停止，未写入任何关系。'},
               );
               forcedLifecycle = ToolInvocationLifecycleState.error;
             } else {
@@ -1146,7 +1211,9 @@ class AgentSessionService {
                 status: AgentToolStatus.error,
                 errorCode: 'relation_state_mismatch',
                 payload: {
-                  'guidance': _relationStateMismatchGuidance(expectedConflictState),
+                  'guidance': _relationStateMismatchGuidance(
+                    expectedConflictState,
+                  ),
                 },
               );
               forcedLifecycle = ToolInvocationLifecycleState.error;
@@ -1241,11 +1308,20 @@ class AgentSessionService {
             //   second execution.
             final outcomeBlocksRepeat =
                 result.status == AgentToolStatus.success ||
-                    (result.status == AgentToolStatus.error &&
-                        _repeatedBlockingErrors.contains(result.errorCode));
+                (result.status == AgentToolStatus.error &&
+                    _repeatedBlockingErrors.contains(result.errorCode));
             if (outcomeBlocksRepeat) {
               fingerprintBlocked.add(fp);
             }
+          }
+
+          // Record the terminal outcome of this create_task EXACTLY ONCE at the
+          // single result boundary (Task 3). It equally covers success, user
+          // decline, permission rejection, fingerprint rejection and technical
+          // error — no second registry call, no second confirmation lifecycle.
+          if (turnBudget.kind == AgentToolTurnBudgetKind.createTaskBurst &&
+              tu.name == 'create_task') {
+            createTaskBurstLease!.record(result);
           }
 
           // Track which tools actually completed successfully this run. This
@@ -1267,7 +1343,11 @@ class AgentSessionService {
           //   reads are NOT writes: they are never recorded here and never emit
           //   a mutation message.
           if (grounding != null &&
-              grounding.terminalTools.contains(tu.name)) {
+              grounding.terminalTools.contains(tu.name) &&
+              // A burst's per-call outcomes are aggregated by the lease, which
+              // is authoritative for burst runs — the last same-name create_task
+              // attempt must never overwrite the lease's aggregated truth here.
+              turnBudget.kind != AgentToolTurnBudgetKind.createTaskBurst) {
             terminalAttempts[tu.name] = _MutationAttempt.fromResult(
               tu.name,
               result,
@@ -1319,7 +1399,8 @@ class AgentSessionService {
           // summary. A normal registry completion maps by result status; a
           // forcedLifecycle (fingerprint dedup, invalid_user_action, or
           // needsUserAction-cancel) wins for blocked calls.
-          final terminalLifecycle = forcedLifecycle ??
+          final terminalLifecycle =
+              forcedLifecycle ??
               (result.status == AgentToolStatus.success
                   ? ToolInvocationLifecycleState.success
                   : ToolInvocationLifecycleState.error);
@@ -1531,9 +1612,7 @@ class AgentSessionService {
     required AgentToolResult? result,
   }) async {
     if (invocationId == null) return;
-    final safeResult = result == null
-        ? ''
-        : summarizeToolResult(result);
+    final safeResult = result == null ? '' : summarizeToolResult(result);
     final errorCode = result?.status == AgentToolStatus.error
         ? (result?.errorCode ?? 'tool_error')
         : null;
@@ -1581,6 +1660,56 @@ class AgentSessionService {
     );
   }
 
+  /// Rejects a whole tool turn BEFORE any registry execution (Task 3). For
+  /// every received `tool_use` it persists one invocation row finished as an
+  /// error, adds one folded summary, and adds one well-formed
+  /// `LlmToolResultBlock(isError:true)` with payload `{'code': errorCode}`.
+  ///
+  /// It never executes the registry, never binds references, never increments
+  /// the normal budget, and never includes raw input in summaries. Used for
+  /// whole-turn preflight rejection (create_task_burst_*): the run then
+  /// terminates autonomously without asking the provider to repair by issuing
+  /// another burst.
+  Future<void> rejectToolTurn({
+    required String accountId,
+    required String runId,
+    required List<ToolUseCompletedEvent> toolUses,
+    required String errorCode,
+    required List<LlmContentBlock> toolResults,
+    required List<AgentToolSummary> toolSummaries,
+  }) async {
+    for (final tu in toolUses) {
+      final invId = await _startInvocation(
+        accountId: accountId,
+        runId: runId,
+        tu: tu,
+      );
+      await _finishInvocation(
+        accountId: accountId,
+        invocationId: invId,
+        state: ToolInvocationLifecycleState.error,
+        result: AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: errorCode,
+        ),
+      );
+      toolSummaries.add(
+        _toolSummaryBlocked(
+          toolName: tu.name,
+          lifecycleState: ToolInvocationLifecycleState.error,
+          errorCode: errorCode,
+        ),
+      );
+      toolResults.add(
+        LlmToolResultBlock(
+          toolUseId: tu.id,
+          content: _encodePayload({'code': errorCode}),
+          isError: true,
+        ),
+      );
+    }
+  }
+
   Future<void> _maybeSummarize({
     required String accountId,
     required String runId,
@@ -1624,7 +1753,10 @@ class AgentSessionService {
       // the budget, trim to the newest turns that fit (rather than sending an
       // oversized request or skipping). If nothing fits, skip the summary.
       var summaryHistory = freshHistory;
-      if (!_contextBuilder.summaryHistoryFits(history: freshHistory, clock: _clock)) {
+      if (!_contextBuilder.summaryHistoryFits(
+        history: freshHistory,
+        clock: _clock,
+      )) {
         summaryHistory = _contextBuilder.trimSummaryHistory(
           history: freshHistory,
           clock: _clock,
@@ -1809,9 +1941,7 @@ class AgentSessionService {
   /// is a concrete, bounded set of event refs. Date parsing is deliberately NOT
   /// performed here: malformed date strings pass through to `GetScheduleTool`,
   /// which remains the single date-validation authority.
-  static bool _isBoundedRelationScheduleLookup(
-    Map<String, Object?> input,
-  ) {
+  static bool _isBoundedRelationScheduleLookup(Map<String, Object?> input) {
     final view = input['view'];
     if (view != null && view != 'events') return false;
 
@@ -1874,10 +2004,7 @@ class AgentSessionService {
     String? systemPrompt,
     String unsupportedTurnText,
   ) {
-    return [
-      ...conversation,
-      LlmMessage.user(text: _groundingCorrectionText),
-    ];
+    return [...conversation, LlmMessage.user(text: _groundingCorrectionText)];
   }
 
   /// Decides how a no-tool-use model turn settles under grounding.
@@ -1888,7 +2015,9 @@ class AgentSessionService {
   /// outcomes for any terminal write tool(s) run this session;
   /// [supportingAttempts] holds structured outcomes for the `plan_task`
   /// supporting write (a partial completion); [usedCorrective] reports whether
-  /// the single corrective request has already been issued.
+  /// the single corrective request has already been issued;
+  /// [createTaskBurstLease] carries the aggregated create-task burst outcome
+  /// (authoritative for a burst run), or `null` when no burst ran.
   _GroundedSettlement _settleNoToolUse({
     required AgentGroundingRequirement? requirement,
     required Set<String> succeededTools,
@@ -1896,6 +2025,7 @@ class AgentSessionService {
     required Map<String, _MutationAttempt> supportingAttempts,
     required bool isCancelled,
     required bool usedCorrective,
+    required CreateTaskBurstLease? createTaskBurstLease,
   }) {
     // Stop cancels everything; do not issue any further model call.
     if (isCancelled) return _GroundedSettlement.accept;
@@ -1904,6 +2034,22 @@ class AgentSessionService {
     final req = requirement;
     if (req == null) return _GroundedSettlement.accept;
 
+    // Case 8 (Task 3): a completed create-task burst is the SOLE authority on
+    // its own truth. This runs AFTER the cancellation check (so interruption
+    // wins over any partial aggregation) but BEFORE the generic terminal-success
+    // logic, so a single successful create_task never implies every planned
+    // write succeeded. An incomplete lease (still running) falls through so the
+    // existing settlement paths stay authoritative.
+    if (createTaskBurstLease != null && createTaskBurstLease.isComplete) {
+      if (createTaskBurstLease.allSucceeded) {
+        return _GroundedSettlement.accept;
+      }
+      if (createTaskBurstLease.hasAnySuccess) {
+        return _GroundedSettlement.createTaskBurstPartial;
+      }
+      return _GroundedSettlement.createTaskBurstFailed;
+    }
+
     // Case 2: every required terminal tool succeeded AND the lookup requirement
     // is satisfied — accept. (read: no terminal -> lookup success suffices;
     // mutation: terminal write success after confirmation.) The lookup
@@ -1911,8 +2057,7 @@ class AgentSessionService {
     // schedule refs OR plan-block refs), so it is checked via
     // [isLookupsSatisfied], not a flat every(). An empty terminalTool set is
     // trivially satisfied (pure read).
-    final terminalSucceeded =
-        req.terminalTools.every(succeededTools.contains);
+    final terminalSucceeded = req.terminalTools.every(succeededTools.contains);
     if (terminalSucceeded && req.isLookupsSatisfied(succeededTools)) {
       return _GroundedSettlement.accept;
     }
@@ -2007,11 +2152,11 @@ class AgentSessionService {
   /// Every variant explicitly states that no data was modified. The fallback
   /// must at least convey "没有修改数据".
   static String _terminalFailureText(String? code) => switch (code) {
-        'user_declined' => '本次操作已取消，没有修改数据。',
-        'permission_denied' => '权限策略拒绝了本次操作，没有修改数据。',
-        'cancelled' => '本次操作已停止，没有修改数据。',
-        _ => '操作未完成，没有修改数据，请检查信息后重试。',
-      };
+    'user_declined' => '本次操作已取消，没有修改数据。',
+    'permission_denied' => '权限策略拒绝了本次操作，没有修改数据。',
+    'cancelled' => '本次操作已停止，没有修改数据。',
+    _ => '操作未完成，没有修改数据，请检查信息后重试。',
+  };
 
   /// The preserved safe error code for a failed supporting `plan_task` write.
   /// Unlike a terminal failure, the relation was never attempted, so the code
@@ -2027,10 +2172,10 @@ class AgentSessionService {
   /// This is the "declined planning / never reached relation" case, so it
   /// explicitly states neither the time block nor the relation was saved.
   static String _supportingFailureText(String? code) => switch (code) {
-        'user_declined' => '本次安排已取消，未创建执行时间段，也未保存不冲突关系。',
-        'cancelled' => '本次安排已停止，未创建执行时间段，也未保存不冲突关系。',
-        _ => '执行时间段未创建，不冲突关系也未保存，请检查信息后重试。',
-      };
+    'user_declined' => '本次安排已取消，未创建执行时间段，也未保存不冲突关系。',
+    'cancelled' => '本次安排已停止，未创建执行时间段，也未保存不冲突关系。',
+    _ => '执行时间段未创建，不冲突关系也未保存，请检查信息后重试。',
+  };
 
   /// The preserved safe error code for a partial relation completion (PlanBlock
   /// succeeded, relation did not). Prefers the relation terminal code; falls
@@ -2056,10 +2201,10 @@ class AgentSessionService {
   /// the REAL partial fact: the PlanBlock (执行时间段) was created, but the
   /// relation was not saved. No variant claims "没有修改数据".
   static String _partialRelationFailureText(String? code) => switch (code) {
-        'user_declined' => '执行时间段已创建，但不冲突关系已取消、尚未保存。',
-        'cancelled' => '执行时间段已创建，但不冲突关系未保存。',
-        _ => '执行时间段已创建，但不冲突关系未保存，请检查后重试。',
-      };
+    'user_declined' => '执行时间段已创建，但不冲突关系已取消、尚未保存。',
+    'cancelled' => '执行时间段已创建，但不冲突关系未保存。',
+    _ => '执行时间段已创建，但不冲突关系未保存，请检查后重试。',
+  };
 }
 
 /// A structured record of a mutation attempt during this session run — either
@@ -2081,12 +2226,11 @@ class _MutationAttempt {
   factory _MutationAttempt.fromResult(
     String toolName,
     AgentToolResult result,
-  ) =>
-      _MutationAttempt(
-        toolName: toolName,
-        status: result.status,
-        errorCode: result.errorCode,
-      );
+  ) => _MutationAttempt(
+    toolName: toolName,
+    status: result.status,
+    errorCode: result.errorCode,
+  );
 
   final String toolName;
   final AgentToolStatus status;
@@ -2100,22 +2244,36 @@ enum _GroundedSettlement {
   /// Accept the model's final text (free chat, or all required tools
   /// succeeded, or the run was cancelled).
   accept,
+
   /// Issue the single bounded corrective request.
   correct,
+
   /// A terminal write was attempted but did not succeed and no PlanBlock was
   /// created — deterministically settle as non-success (override the model's
   /// text, never re-call).
   overrideFailure,
+
   /// The supporting `plan_task` write was attempted but did not succeed and no
   /// relation terminal write was attempted. Settle as a completed supporting
   /// failure (no relation can be completed without a PlanBlock) rather than
   /// looping toward a relation that cannot exist.
   overrideSupportingFailure,
+
   /// A successful PlanBlock (supporting write) was created but the relation
   /// terminal write did not complete (declined, failed, or omitted after
   /// correction). This is a PARTIAL completion: preserve the PlanBlock, report
   /// the partial fact, run stays failed.
   partialFailure,
+
+  /// A create-task burst completed with at least one (but not all) write
+  /// succeeding. Run is failed with `create_task_burst_partial` and the lease's
+  /// deterministic terminal message.
+  createTaskBurstPartial,
+
+  /// A create-task burst completed with no successful write. Run is failed with
+  /// `create_task_burst_failed` and the lease's deterministic terminal message.
+  createTaskBurstFailed,
+
   /// No legal required tool after correction/fallback: grounding failed.
   fail,
 }
