@@ -29,6 +29,7 @@ class AgentGroundingRequirement {
     this.mutationIntent = false,
     this.initialAllowedTools,
     this.expectedConflictState,
+    this.createTaskBurstLimit,
   });
 
   /// Read-only tools the model must call to obtain concrete evidence or a
@@ -67,6 +68,14 @@ class AgentGroundingRequirement {
   /// disagrees is corrected (never silently rewritten) with at most one changed
   /// call.
   final ExpectedConflictState? expectedConflictState;
+
+  /// When non-null, the user asked to create MANY independent `create_task`
+  /// calls in ONE run (a recurring weekly / explicit multi-date burst), and the
+  /// terminal write tool is exactly `create_task`. Caps how many independent
+  /// Task creates may be issued in a single run. The requesting run's first
+  /// request declares only [initialAllowedTools] (a lookup + the terminal
+  /// write). Null for every other read/write classification.
+  final int? createTaskBurstLimit;
 
   /// The union of every tool this request ultimately requires (lookups that
   /// must provide evidence/refs plus the terminal write). For corrective-stage
@@ -175,14 +184,28 @@ class AgentGroundingPolicy {
     final expected = isRelation
         ? _classifyExpectedConflictState(text)
         : null;
+    // An explicit multi-create ("recurring weekly / explicit date list") burst
+    // run whose terminal write is EXACTLY `create_task`. Such a run is grounded
+    // on the schedule lookup (course range via course_summary) plus the single
+    // terminal write; the first request declares only those two tools. A
+    // single-create request, or one that also plans/uses other write tools,
+    // gets NO burst limit and NO narrowing.
+    final isCreateTaskBurst =
+        def.terminalTools.length == 1 &&
+        def.terminalTools.contains('create_task') &&
+        _matchesAny(text, _multiTaskCreatePatterns);
     return AgentGroundingRequirement(
       lookupTools: def.lookupTools,
       anyOfLookupToolGroups: def.anyOfLookupToolGroups,
       terminalTools: def.terminalTools,
       supportingTools: plansTask ? const {'get_tasks', 'plan_task'} : const {},
       mutationIntent: true,
-      initialAllowedTools: relationSet,
+      initialAllowedTools: relationSet ??
+          (isCreateTaskBurst
+              ? const ['get_schedule', 'create_task']
+              : null),
       expectedConflictState: expected,
+      createTaskBurstLimit: isCreateTaskBurst ? 32 : null,
     );
   }
 
@@ -260,7 +283,7 @@ final List<RegExp> _capabilityAdvicePatterns = [
   // Has-capability framing at the START of the sentence: "你能不能修改日程？"
   // "你能安排日程吗？", "你能否...". The 能...? must be a full standalone
   // question, not embedded mid-sentence in an operation.
-  RegExp(r'^(能不能|你能|你能否|可不可以|你[是]?否可以).{0,12}(修改|改|安排|调整|删除|创建|新建|处理|帮忙|帮我).{0,4}(日程|事件|任务|作业|课|课表|安排|计划)'),
+  RegExp(r'^(能不能|你能|你能否|可不可以|你[是]?否可以).{0,12}(修改|改|安排|调整|删除|创建|新建|处理|帮忙|帮我).{0,4}(日程|事件|任务|作业|课|课表|安排|计划|task)', caseSensitive: false),
   RegExp(r'^(你能|能不能|你能否).{0,10}(做什么|做哪些|provide|提供给).*'),
   RegExp(r'^(你能|能不能|你能否)(调整|修改|安排|管理|删除|创建|添加)'),
   // Why/advice questions (not conflict-data queries, which are reads). A
@@ -287,6 +310,17 @@ final List<RegExp> _planTaskPatterns = [
   RegExp(r'(任务|作业|复习|project|assignment).{0,20}(安排|规划)'),
   RegExp(r'(安排|规划).{0,20}(任务|作业|复习)'),
   RegExp(r'安排.*(时间段|时段)'),
+];
+
+/// High-confidence multi-create ("create task burst") patterns. These require
+/// BOTH a creation verb AND an explicit plurality/recurrence marker, so a
+/// single create_task request ("创建一个Task") never trips one. Matching one
+/// of these on a run whose terminal tool is exactly `create_task` marks the
+/// run as a burst (capped at ONE-request-allowed-tools + a burst limit).
+final List<RegExp> _multiTaskCreatePatterns = [
+  RegExp(r'(每周|每星期|每个周[一二三四五六日天]).{0,24}(创建|新建|建立|设置).{0,10}(task|任务)', caseSensitive: false),
+  RegExp(r'(连续\s*\d+\s*周|这些日期|每个日期|各个日期).{0,24}(分别|各自|逐个)?.{0,12}(创建|新建|建立|设置).{0,10}(task|任务)', caseSensitive: false),
+  RegExp(r'(分别|各自|逐个).{0,12}(创建|新建|建立|设置).{0,10}(task|任务)', caseSensitive: false),
 ];
 
 /// Write (mutation) intents, checked in order before read intents.
@@ -335,8 +369,8 @@ final List<_IntentDef> _writeIntents = [
   // create_task
   _IntentDef(
     patterns: [
-      RegExp(r'(新建|创建|添加|加一个).{0,12}(任务|作业)'),
-      RegExp(r'(任务|作业).{0,12}(记下来|添加|新建)'),
+      RegExp(r'(新建|创建|添加|加一个).{0,12}(task|任务|作业)', caseSensitive: false),
+      RegExp(r'(task|任务|作业).{0,12}(记下来|添加|新建)', caseSensitive: false),
     ],
     terminalTools: {'create_task'},
   ),

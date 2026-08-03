@@ -103,6 +103,8 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
+        expect(request.system, contains(AgentSystemPrompt.version7));
+        // version7 preserves version6 verbatim, so the whole v1-v6 body is sent.
         expect(request.system, contains(AgentSystemPrompt.version6));
 
         // 2. The summary text is present as an assistant context message,
@@ -574,8 +576,43 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 6', () {
-      expect(AgentSystemPrompt.version, 6);
+    test('version is 7', () {
+      expect(AgentSystemPrompt.version, 7);
+    });
+
+    test('version7 preserves every v1-v6 rule and adds multi-Task burst rules', () {
+      const v7 = AgentSystemPrompt.version7;
+      // Every v6 rule (hence v1-v5) is preserved verbatim.
+      expect(v7, contains(AgentSystemPrompt.version6),
+          reason: 'version7 must preserve every v6 rule');
+      // v7 multi-Task burst rules:
+      expect(v7, contains('同一个模型响应'),
+          reason: '多 Task 在同一个模型响应中一次发出全部 create_task');
+      expect(v7, contains('最多 32'),
+          reason: '单次最多 32 个 create_task');
+      expect(v7, contains('不要逐轮只调用一次 create_task'),
+          reason: '不要逐轮只调用一次 create_task');
+      // Use course_summary to fix the course effective range first.
+      expect(v7, contains('course_summary'),
+          reason: '先用 course_summary 确定课程有效范围');
+      // Confirm missing deadline / special-week detail.
+      expect(v7, contains('先询问'),
+          reason: '信息不明确时先询问，不能猜测');
+      // Ask explicit permission before splitting a burst over 32.
+      expect(v7, contains('取得用户对首批最多 32 项的明确同意'),
+          reason: '超过 32 个时先说明拆分范围并取得明确同意');
+      expect(v7, contains('不自动跨 run 续建'),
+          reason: '不自动跨 run 续建');
+      // Report partial results exactly; never claim full success prematurely.
+      expect(v7, contains('部分成功不得说成全部成功'),
+          reason: '部分成功不得说成全部成功');
+      expect(v7, contains('收到全部 tool_result 后再报告'),
+          reason: '收到全部 tool_result 后再报告真实的成功/取消/失败数量');
+      // No semester / id literals.
+      expect(v7, isNot(contains('2026spring')));
+      expect(v7, isNot(contains('2026fall')));
+      expect(v7, isNot(contains('421')));
+      expect(v7, isNot(contains('461')));
     });
 
     test('version4 contains the safety sections, the read tool names and the write-tool confirmation gate', () {

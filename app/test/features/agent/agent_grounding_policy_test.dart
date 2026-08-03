@@ -315,6 +315,33 @@ void main() {
     });
   });
 
+  group('AgentGroundingPolicy.classify — create task burst eligibility', () {
+    test('recurring/burst multi-task requests carry burst metadata', () {
+      final recurring = policy.classify(
+        '电磁场与波作业连续13周每周六截止，请分别为每周创建一个Task',
+      );
+      expect(recurring, isNotNull);
+      expect(recurring!.terminalTools, {'create_task'});
+      expect(recurring.createTaskBurstLimit, 32);
+      expect(recurring.initialAllowedTools, ['get_schedule', 'create_task']);
+
+      final explicitDates = policy.classify(
+        '请为这些日期分别创建独立Task：9月5日、9月12日、9月19日',
+      );
+      expect(explicitDates!.createTaskBurstLimit, 32);
+    });
+
+    test('a single create_task request gets no burst limit', () {
+      final single = policy.classify('请创建一个9月5日截止的作业Task')!;
+      expect(single.createTaskBurstLimit, isNull);
+    });
+
+    test('vague / capability recurring phrasing gets no burst limit', () {
+      expect(policy.classify('每周作业怎么安排比较好'), isNull);
+      expect(policy.classify('你能不能每周创建Task？'), isNull);
+    });
+  });
+
   group('AgentGroundingPolicy.classify — relation runs that plan an existing task',
       () {
     test('exact real request exposes task-planning tools and no_conflict', () {

@@ -1,12 +1,12 @@
 /// The fixed, versioned application system prompt for the campus Agent.
 ///
-/// This is **version 6**. The prompt is fixed application text: it contains
+/// This is **version 7**. The prompt is fixed application text: it contains
 /// the safety/behavior sections verbatim and nothing user-configurable is
 /// concatenated above or inside it. The current time is appended dynamically
 /// by `AgentContextBuilder` (to the second, Asia/Shanghai) so the model can
 /// resolve relative dates; this constant itself holds no date.
 ///
-/// The Agent runtime passes [version6] (plus the dynamic time suffix) as the
+/// The Agent runtime passes [version7] (plus the dynamic time suffix) as the
 /// `system` field of the outbound [LlmRequest]. The privacy filter and context
 /// builder treat this string as immutable.
 ///
@@ -33,13 +33,35 @@
 /// special-week detail must be confirmed before calling `create_task`
 /// repeatedly, and partial outcomes reported accurately. No hidden default and
 /// no semester literal.
+///
+/// v6 -> v7: added multi-Task create-burst rules — batch all `create_task`
+/// calls into ONE model response (never one call per turn), cap a single burst
+/// at 32 independent Tasks, confirm missing course-range/deadline/special-week
+/// detail, ask explicit permission before splitting a burst over 32 (never
+/// auto-resume across runs), and report the exact success/cancel/failure counts
+/// only after ALL tool_results arrive. No semester literal and no id literal.
 class AgentSystemPrompt {
   const AgentSystemPrompt._();
 
   /// The prompt version. Bumped only when the fixed text changes; stored on
   /// `agent_settings.system_prompt_version` so old conversations can be
   /// re-summarized under a new version if needed.
-  static const int version = 6;
+  static const int version = 7;
+
+  /// The fixed application system prompt, version 7.
+  ///
+  /// Built by taking [version6] verbatim (so every v1-v6 rule is preserved) and
+  /// appending the v7 sections. The sections below are the authoritative
+  /// safety/behavior rules and MUST NOT be edited without bumping [version].
+  /// There is intentionally no user-configurable preamble: the role section is
+  /// the first thing the model reads.
+  static const String version7 = '$version6' '''
+
+## 多 Task 创建与一次性额度
+- 明确要求为多个日期分别创建 Task 时，先用 course_summary 确定课程有效范围；日期、截止时刻或特殊周次不明确时先询问，不能猜测。
+- 候选列表确定后，在同一个模型响应中一次发出全部 create_task 工具调用，每项参数独立完整；不要逐轮只调用一次 create_task。
+- 单次最多发出 32 个 create_task；超过 32 个时先说明拆分范围并取得用户对首批最多 32 项的明确同意，不自动跨 run 续建。
+- 收到全部 tool_result 后再报告真实的成功、取消和失败数量；部分成功不得说成全部成功或没有修改数据。''';
 
   /// The fixed application system prompt, version 6.
   ///
