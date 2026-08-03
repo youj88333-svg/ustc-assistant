@@ -38,6 +38,7 @@ class TaskLifecycleService {
     int Function()? now,
     UndoRecorder? undoRecorder,
     PlanBlockLifecyclePort? planBlocks,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder(),
        planBlocks = planBlocks ?? const NoopPlanBlockLifecyclePort();
@@ -47,6 +48,12 @@ class TaskLifecycleService {
   final int Function() now;
   final UndoRecorder undoRecorder;
   final PlanBlockLifecyclePort planBlocks;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep `true`.
+  /// Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   Future<String> create({
@@ -378,15 +385,17 @@ class TaskLifecycleService {
           ))
           .getSingleOrNull();
 
-  Future<void> _log(String actionType, String summary, int timestamp) =>
-      database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: actionType,
-        result: 'success',
-        safeSummary: summary,
-        occurredAt: timestamp,
-      );
+  Future<void> _log(String actionType, String summary, int timestamp) async {
+    if (!logToActionLog) return;
+    await database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: actionType,
+      result: 'success',
+      safeSummary: summary,
+      occurredAt: timestamp,
+    );
+  }
 
   Map<String, Object?> _safeBeforeState(Task task) => {
     'id': task.id,

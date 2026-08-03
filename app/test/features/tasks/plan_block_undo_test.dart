@@ -11,6 +11,13 @@ import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
+class FakeUndoRecorder implements UndoRecorder {
+  final commands = <UndoCommand>[];
+
+  @override
+  Future<void> record(UndoCommand command) async => commands.add(command);
+}
+
 /// Beijing wall-clock -> storage epoch-ms (app reads stored UTC + 8h).
 int _beijingEpoch(int year, int month, int day, int hour) =>
     DateTime.utc(year, month, day, hour).millisecondsSinceEpoch -
@@ -440,7 +447,116 @@ void main() {
     expect(otherBlock.deletedAt, isNull);
   });
 
-  test('undo slot clears on startup and failed undo preserves data', () async {
+  test('plan block restore restores original status and preserves task and '
+        'replacement chain', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 10;
+      final taskService = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final taskId = await taskService.create(title: 'Task');
+      final service = PlanBlockService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(
+        taskId: taskId,
+        startAt: DateTime(2026, 7, 27, 9),
+        endAt: DateTime(2026, 7, 27, 10),
+      );
+      final block = await service.byId(id);
+      await service.markDone(id, expectedUpdatedAt: block.updatedAt);
+      expect((await service.byId(id)).status, PlanBlockStatus.done);
+
+      // Delete then restore.
+      final done = await service.byId(id);
+      await service.softDelete(id, expectedUpdatedAt: done.updatedAt);
+      final deleted = await service.byId(id, includeDeleted: true);
+      await service.restore(id, expectedUpdatedAt: deleted.updatedAt);
+
+      final restored = await service.byId(id);
+      expect(restored.deletedAt, isNull);
+      // Restore restores the original status (done).
+      expect(restored.status, PlanBlockStatus.done);
+      // Parent task preserved.
+      expect((await taskService.byId(taskId)).title, 'Task');
+    });
+
+    test('plan block delete preserves replacement chain', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 20;
+      final taskId = await TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      ).create(title: 'Task');
+      final service = PlanBlockService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(
+        taskId: taskId,
+        startAt: DateTime(2026, 7, 27, 9),
+        endAt: DateTime(2026, 7, 27, 10),
+      );
+      final replacement = await service.reschedule(
+        id,
+        startAt: DateTime(2026, 7, 28, 9),
+        endAt: DateTime(2026, 7, 28, 10),
+        expectedUpdatedAt: (await service.byId(id)).updatedAt,
+      );
+      final oldBlock = await service.byId(id);
+      await service.softDelete(oldBlock.id, expectedUpdatedAt: oldBlock.updatedAt);
+
+      // Deleting the rescheduled (old) block keeps the accepted replacement.
+      expect((await service.byId(replacement)).status, PlanBlockStatus.accepted);
+      // The replacement is still reachable (not cascade-deleted).
+      expect(
+        (await service.deletedPlanBlocksForTask(taskId)).map((b) => b.id),
+        contains(oldBlock.id),
+      );
+    });
+
+    test('no-op delete returns already_deleted and writes nothing', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 30;
+      final taskId = await TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      ).create(title: 'Task');
+      final undo = FakeUndoRecorder();
+      final service = PlanBlockService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final id = await service.create(
+        taskId: taskId,
+        startAt: DateTime(2026, 7, 27, 9),
+        endAt: DateTime(2026, 7, 27, 10),
+      );
+      var block = await service.byId(id);
+      await service.softDelete(id, expectedUpdatedAt: block.updatedAt);
+      block = await service.byId(id, includeDeleted: true);
+
+      expect(
+        service.softDelete(id, expectedUpdatedAt: block.updatedAt),
+        throwsA(isA<AlreadyDeletedError>()),
+      );
+      // No new undo / log for the no-op delete.
+      expect(undo.commands.where((c) => c.kind == 'plan_block_delete'), hasLength(1));
+    });
+
+    test('undo slot clears on startup and failed undo preserves data', () async {
     final database = await fixtureDatabase();
     addTearDown(database.close);
     final undo = UndoService(database: database, accountId: 'a');

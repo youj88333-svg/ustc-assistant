@@ -4,7 +4,15 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
+
+class _FakeUndoRecorder implements UndoRecorder {
+  final commands = <UndoCommand>[];
+
+  @override
+  Future<void> record(UndoCommand command) async => commands.add(command);
+}
 
 DateTime instant(int hour, {int day = 27}) => DateTime(2026, 7, day, hour);
 
@@ -298,4 +306,181 @@ void main() {
     // The normal event is still visible through the normal read.
     expect((await service.byId(activeId)).title, '正常');
   });
+
+  group('deterministic lifecycle state machine', () {
+    test('reopen returns an already_active error when the event is active',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+
+      expect(service.reopen(id), throwsA(isA<InvalidLifecycleTransition>()));
+    });
+
+    test('skip on a cancelled event returns invalid_lifecycle_transition',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+      await service.cancel(id);
+
+      expect(service.skip(id), throwsA(isA<InvalidLifecycleTransition>()));
+    });
+
+    test('cancelled event can be reopened to active with reminders intact',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+      await service.cancel(id);
+      // Reopen is NOT undone by a reminder restore: state returns to active.
+      await service.reopen(id);
+      expect((await service.byId(id)).status, EventStatus.active);
+      expect((await service.byId(id)).deletedAt, isNull);
+    });
+
+    test('delete on a deleted event returns already_deleted', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(title: 'x', startAt: instant(9), endAt: instant(10)),
+      );
+      await service.softDelete(id);
+
+      expect(service.softDelete(id), throwsA(isA<AlreadyDeletedError>()));
+    });
+
+    test('cancel only cancels future desired reminders and preserves history',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+      // A delivered reminder from the past history must survive cancelling.
+      await (database.update(
+        database.reminders,
+      )..where((row) => row.eventId.equals(id))).write(
+        const RemindersCompanion(
+          state: Value('delivered'),
+          deliveredAt: Value(50),
+        ),
+      );
+      // A missed already-triggered history reminder with a distinct trigger.
+      final timestamp = nowAt(8).millisecondsSinceEpoch;
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'reminder:event:$id:1',
+              accountId: 'a',
+              targetType: 'event',
+              targetId: id,
+              eventId: Value(id),
+              offsetMinutes: const Value(15),
+              triggerAt: timestamp,
+              state: 'missed',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      await service.cancel(id);
+
+      final rows = await database.select(database.reminders).get();
+      expect(rows.any((r) => r.state == 'delivered'), isTrue);
+      // Missed (already-triggered) history is also preserved.
+      expect(rows.any((r) => r.state == 'missed'), isTrue);
+      // No desired reminder remains.
+      expect(rows.any((r) => r.state == 'desired'), isFalse);
+    });
+
+    test('lifecycle writes an Undo snapshot and an user action log', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 100;
+      final undo = _FakeUndoRecorder();
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'x',
+          startAt: instant(9),
+          endAt: instant(10),
+          completionPolicy: CompletionPolicy.manualConfirmation,
+        ),
+      );
+      final before = undo.commands.length;
+
+      await service.complete(id);
+
+      expect(undo.commands.length, before + 1);
+      expect(
+        undo.commands.last.kind,
+        'calendar_event_complete',
+      );
+      final logs = await database.actionLogsRepository.selectAll();
+      expect(
+        logs.map((log) => log.actionType),
+        contains('calendar_event_complete'),
+      );
+    });
+  });
 }
+
+DateTime nowAt(int hour) => DateTime(2026, 7, 27, hour);

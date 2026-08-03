@@ -24,12 +24,31 @@ class IllegalPlanBlockTransition implements Exception {
   final String message;
 }
 
+/// The plan block has already been soft-deleted. Deterministic error
+/// (Spec §20 `already_deleted`).
+class AlreadyDeletedError implements Exception {
+  const AlreadyDeletedError();
+
+  @override
+  String toString() => 'AlreadyDeletedError';
+}
+
+/// The plan block has not been deleted and cannot be restored. Deterministic
+/// error (Spec §20 `invalid_lifecycle_transition`).
+class NotDeletedError implements Exception {
+  const NotDeletedError();
+
+  @override
+  String toString() => 'NotDeletedError';
+}
+
 class PlanBlockService implements PlanBlockLifecyclePort {
   PlanBlockService({
     required this.database,
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -37,6 +56,11 @@ class PlanBlockService implements PlanBlockLifecyclePort {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log.
+  /// Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   Future<String> create({
@@ -299,14 +323,72 @@ class PlanBlockService implements PlanBlockLifecyclePort {
     return replacementId;
   }
 
-  Future<void> softDelete(String id, {required int expectedUpdatedAt}) =>
-      _mutate(
-        id,
-        expectedUpdatedAt: expectedUpdatedAt,
-        actionType: 'plan_block_delete',
-        changes: (row, timestamp) =>
-            PlanBlocksCompanion(deletedAt: Value(timestamp)),
+  Future<void> softDelete(String id, {required int expectedUpdatedAt}) async {
+    final timestamp = now();
+    await database.transaction(() async {
+      final row = await _find(id, includeDeleted: true);
+      if (row == null) throw const PlanBlockNotFoundError();
+      if (row.updatedAt != expectedUpdatedAt) {
+        throw const StalePlanBlockCommand();
+      }
+      if (row.deletedAt != null) throw const AlreadyDeletedError();
+      await (database.update(
+        database.planBlocks,
+      )..where((table) => table.id.equals(id))).write(
+        PlanBlocksCompanion(
+          deletedAt: Value(timestamp),
+          updatedAt: Value(timestamp),
+        ),
       );
+      await _log('plan_block_delete', 'Deleted a planning block.', timestamp);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'plan_block_delete',
+          accountId: accountId,
+          payload: {
+            'entity': 'plan_block',
+            'id': id,
+            'before': _snapshot(row),
+          },
+        ),
+      );
+    });
+  }
+
+  /// Restores a soft-deleted plan block back to its original (pre-delete)
+  /// status. The parent Task and any reschedule replacement chain are left
+  /// untouched — restoring never cascades.
+  Future<void> restore(String id, {required int expectedUpdatedAt}) async {
+    final timestamp = now();
+    await database.transaction(() async {
+      final row = await _find(id, includeDeleted: true);
+      if (row == null) throw const PlanBlockNotFoundError();
+      if (row.updatedAt != expectedUpdatedAt) {
+        throw const StalePlanBlockCommand();
+      }
+      if (row.deletedAt == null) throw const NotDeletedError();
+      await (database.update(
+        database.planBlocks,
+      )..where((table) => table.id.equals(id))).write(
+        PlanBlocksCompanion(
+          deletedAt: const Value(null),
+          updatedAt: Value(timestamp),
+        ),
+      );
+      await _log('plan_block_restore', 'Restored a planning block.', timestamp);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'plan_block_restore',
+          accountId: accountId,
+          payload: {
+            'entity': 'plan_block',
+            'id': id,
+            'before': _snapshot(row),
+          },
+        ),
+      );
+    });
+  }
 
   @override
   Future<PlanBlockImpact> summarize(String taskId, DateTime now) async {
@@ -445,15 +527,17 @@ class PlanBlockService implements PlanBlockLifecyclePort {
     if (row == null) throw StateError('parent task not found');
   }
 
-  Future<void> _log(String actionType, String summary, int timestamp) =>
-      database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: actionType,
-        result: 'success',
-        safeSummary: summary,
-        occurredAt: timestamp,
-      );
+  Future<void> _log(String actionType, String summary, int timestamp) async {
+    if (!logToActionLog) return;
+    await database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: actionType,
+      result: 'success',
+      safeSummary: summary,
+      occurredAt: timestamp,
+    );
+  }
 
   static Map<String, Object?> _snapshot(PlanBlock row) => {
     'id': row.id,

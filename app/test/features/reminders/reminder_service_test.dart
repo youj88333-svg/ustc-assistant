@@ -279,6 +279,88 @@ void main() {
     );
 
     test(
+      'cancel/delete only cancel future desired reminders and preserve history',
+      () async {
+        final start = now + const Duration(days: 3).inMilliseconds;
+        void seed(String id, String status) async {
+          await database
+              .into(database.tasks)
+              .insert(
+                TasksCompanion.insert(
+                  id: id,
+                  accountId: accountId,
+                  title: id,
+                  state: 'active',
+                  importance: 'normal',
+                  deadlineAt: Value(start),
+                  tagsJson: '[]',
+                  createdAt: now,
+                  updatedAt: now,
+                ),
+              );
+          await database
+              .into(database.reminders)
+              .insert(
+                RemindersCompanion.insert(
+                  id: 'reminder:task:$id:1',
+                  accountId: accountId,
+                  targetType: 'task',
+                  targetId: id,
+                  taskId: Value(id),
+                  offsetMinutes: const Value(10),
+                  triggerAt: start,
+                  state: status,
+                  createdAt: now,
+                  updatedAt: now,
+                ),
+              );
+        }
+
+        // A future-desired reminder that reconcile must cancel.
+        seed('future', 'desired');
+        // A delivered historical reminder that must be preserved.
+        seed('done-hist', 'delivered');
+        // A missed already-triggered reminder that must be preserved.
+        seed('missed-hist', 'missed');
+        final service = ReminderService(database: database, now: () => now);
+
+        // All three owning tasks become terminal (cancelled / soft-deleted), so
+        // reconcile suppresses them and must never recreate default reminders.
+        await (database.update(
+          database.tasks,
+        )..where((r) => r.id.equals('future'))).write(
+          TasksCompanion(
+            state: const Value('cancelled'),
+            cancelledAt: Value(now),
+          ),
+        );
+        for (final id in ['done-hist', 'missed-hist']) {
+          await (database.update(
+            database.tasks,
+          )..where((r) => r.id.equals(id))).write(
+            TasksCompanion(deletedAt: Value(now + 1)),
+          );
+        }
+        await service.reconcileAll(accountId);
+
+        final rows = await database.select(database.reminders).get();
+        // Future desired is cancelled (row preserved, never recreated).
+        final future = rows.singleWhere((r) => r.targetId == 'future');
+        expect(future.state, 'cancelled');
+        // Delivered + missed history preserved exactly.
+        final delivered = rows.singleWhere((r) => r.targetId == 'done-hist');
+        expect(delivered.state, 'delivered');
+        final missed = rows.singleWhere((r) => r.targetId == 'missed-hist');
+        expect(missed.state, 'missed');
+        // Ensure no new desired reminders were created for terminal tasks.
+        expect(
+          rows.where((r) => r.taskId != null && r.state == 'desired'),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
       'startup marks elapsed desired reminders missed without delivery',
       () async {
         await database

@@ -332,4 +332,94 @@ void main() {
       expect(port.cancelled, 1);
     },
   );
+
+  group('deterministic lifecycle state machine', () {
+    test('delete sets parent deletedAt but preserves children and links',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 70;
+      final service = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(title: '任务');
+      var task = await service.byId(id);
+      await service.softDelete(id, expectedUpdatedAt: task.updatedAt);
+
+      // Parent is suppressed (not readable through the normal path).
+      expect(service.byId(id), throwsA(isA<TaskNotFoundError>()));
+      // Deleted task is restorable.
+      expect((await service.byId(id, includeDeleted: true)).deletedAt, isNotNull);
+    });
+
+    test('reopen does not restore cancelled plan blocks', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 80;
+      final service = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+      );
+      final id = await service.create(title: '任务');
+      // Seed an already-cancelled plan block for the task that predates reopen.
+      await database.into(database.planBlocks).insert(
+            PlanBlocksCompanion.insert(
+              id: 'old-block',
+              accountId: 'a',
+              taskId: id,
+              startAt: DateTime(2026, 7, 28, 9).millisecondsSinceEpoch,
+              endAt: DateTime(2026, 7, 28, 10).millisecondsSinceEpoch,
+              status: 'cancelled',
+              reviewedAt: const Value(1),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      var task = await service.byId(id);
+      await service.cancel(id, expectedUpdatedAt: task.updatedAt);
+      task = await service.byId(id);
+      await service.reopen(id, expectedUpdatedAt: task.updatedAt);
+
+      // Reopen never resurrects cancelled plan blocks.
+      final row = await (database.select(database.planBlocks)
+            ..where((block) => block.id.equals('old-block')))
+          .getSingle();
+      expect(row.status, 'cancelled');
+      expect((await service.byId(id)).state, TaskState.active);
+    });
+
+    test('logToActionLog=false skips the user log but still records undo',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      var clock = 90;
+      final undo = FakeUndoRecorder();
+      final service = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => ++clock,
+        undoRecorder: undo,
+        logToActionLog: false,
+      );
+      final id = await service.create(title: '任务');
+      var task = await service.byId(id);
+
+      await service.cancel(id, expectedUpdatedAt: task.updatedAt);
+
+      // No service-internal user ActionLog is written (Agent owns the log).
+      final logs = await database.actionLogsRepository.selectAll();
+      expect(
+        logs.map((log) => log.actionType),
+        isNot(contains('task_cancel')),
+      );
+      // Undo snapshot is STILL recorded (lifecycle undo is not skipped).
+      expect(
+        undo.commands.where((c) => c.kind == 'task_cancel'),
+        hasLength(1),
+      );
+    });
+  });
 }
