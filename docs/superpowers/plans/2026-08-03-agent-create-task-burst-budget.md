@@ -696,19 +696,75 @@ Never use `git add .`.
 
 ## Embedded Execution Handoff
 
-### Pre-Execution Snapshot
+### Execution Handoff (post-execution, updated by Task 4)
 
-- Workspace: `E:/107/.worktrees/write-tools`
-- Branch: `feature/write-tools`
-- Plan/design baseline HEAD before this plan commit: `070e4d3` (`docs: design create task burst budget`)
-- Design authority: `docs/superpowers/specs/2026-08-03-agent-create-task-burst-budget-design.md`
-- Required predecessor: date-bounded relation implementation is present in commits `66c625f`, `92ad76d`, `55b7dfe`, `fc2e533`, with corrective docs commit `83d640a`; verify code shape rather than trusting hashes alone.
-- Current runtime defect: `AgentSessionService.maxToolCalls=12` and per-tool `totalToolCalls` reject the 13th legitimate `create_task`; terminal attempts remain keyed by tool name, so repeated same-name writes need a separate aggregate to preserve truthful partial outcomes.
-- Last recorded full baseline from the predecessor plan: Python 388 tests, Flutter 910 tests, analyze clean, Windows Release built. These are historical results and must be rerun for this plan.
+- Final HEAD (Task 4 commit): see this plan's Task 4 commit below.
+- Branch: `feature/write-tools` (isolated worktree `E:/107/.worktrees/write-tools`).
 
-### Protected Pre-Existing Worktree State
+#### Final HEAD and ordered Task commit hashes
 
-At plan creation, these paths were already modified or untracked. Do not revert them, overwrite them wholesale, or stage them accidentally:
+- Task 1 (classify create task burst runs): `c909952` — `feat(agent): classify create task burst runs`
+- Task 2 (tool-turn budget state machine + aggregator): `245856f` — `feat(agent): add create task burst lease`
+- Task 2 corrective (single create_task after burst stays normal): `b154506` — `fix(agent): single create_task after burst stays normal`
+- Task 3 (session preflight, sequential execution, truthful settlement): `9cfc63a` — `fix(agent): aggregate create task burst results`
+- Task 4 (real composition regression + manual acceptance + handoff): one commit `test(agent): close create task burst workflow` (this Task).
+
+#### Files changed by each Task
+
+- **Task 1:** `app/lib/features/agent/application/agent_grounding_policy.dart`, `app/lib/features/agent/application/agent_system_prompt.dart`, `app/lib/features/agent/application/agent_context_builder.dart` + their tests.
+- **Task 2:** created `app/lib/features/agent/application/agent_tool_budget.dart` + `app/test/features/agent/agent_tool_budget_test.dart`.
+- **Task 3:** `app/lib/features/agent/application/agent_session_service.dart` + `app/test/features/agent/agent_session_service_test.dart`.
+- **Task 4:** `app/test/integration/agent_composition_flow_test.dart` (two new burst composition regressions), created `docs/agent-create-task-burst-retest-2026-08-03.md`, modified `docs/superpowers/plans/2026-08-03-agent-create-task-burst-budget.md` (this handoff).
+
+#### Focused and full verification commands and exact counts
+
+Focused regression suite (`agent_grounding_policy_test`, `agent_context_builder_test`, `agent_tool_budget_test`, `agent_session_service_test`, `agent_composition_flow_test`, `read_only_agent_flow_test`): **223 tests, all passed** (`00:10 +223: All tests passed!`).
+
+Full repository verification (measured, not historical):
+
+- Python `unittest discover -s tests`: **394 tests, OK** (run with the worktree `src` on `PYTHONPATH`; see note below).
+- Python `compileall -q src tests`: **exit 0**, no errors.
+- `flutter analyze`: **No issues found** (0 errors/warnings/infos; ran in 3.5s).
+- `flutter test` (full): **949 tests, all passed** (`+949: All tests passed!`).
+- `flutter build windows --release`: **exit 0**, `√ Built build\windows\x64\runner\Release\ustc_assistant_app.exe`.
+- `git diff --check`: **exit 0** (only CRLF warnings on protected pre-existing files).
+- `git status --short` after Task 4: listed under "Protected Pre-Existing Worktree State" below (only the Task 4 changed files are staged/committed).
+
+> Python environment note: the `ustc_assistant` conda env has an editable install whose `ustc_assistant.config` resolves to the MAIN repo `E:\107\src` (missing the newer `render_flutter_source_defaults`), causing 4 import/CLI errors when run without the worktree `src` first. Running the exact brief command with the worktree's `src` on `PYTHONPATH` (`PYTHONPATH=E:/107/.worktrees/write-tools/src`) yields **394 tests OK**. This is an environment install-path mismatch, not a worktree code defect; no Python code was changed by this plan.
+
+#### Release executable path
+
+`E:/107/.worktrees/write-tools/app/build/windows/x64/runner/Release/ustc_assistant_app.exe`
+(Build command: `flutter build windows --release`; Task 4 changes no production code, so the artifact is functionally identical to the Tasks 1-3 release.)
+
+#### Code review findings and fixes
+
+Direct final review of the 8 Step-7 points against the committed production code (Tasks 1-3) and the new composition tests (Task 4):
+
+1. **Burst eligibility** — OK. `agent_grounding_policy.dart` `_buildRequirement` sets `createTaskBurstLimit`/`initialAllowedTools` only when the selected write intent's terminal tool is *exactly* `create_task` AND an `_multiTaskCreatePatterns` pattern matches (requires a creation verb + plurality/recurrence). Free chat, a single task, unrelated write intents, and model self-selection cannot obtain it (eligibility is derived from user wording + terminal-tool shape, never from the model's own tool names).
+2. **Preflight before writes** — OK. `agent_session_service.dart` calls `toolBudget.preflightTurn` (line 998) before any registry execution; a rejected turn goes through `rejectToolTurn`, which persists blocked invocation rows + well-formed `LlmToolResultBlock(isError, {code})` without any write. Rejected turns are side-effect free (`agent_tool_budget.dart`).
+3. **Normal 12-call / model 8-call protections unchanged** — OK. `tryConsumeNormalCall` and the normal-call branch (line 1080) are untouched; only a pure `create_task` turn under the burst lease bypasses the ordinary quota, exactly once per run (`create_task_burst_already_used` on a second burst).
+4. **Burst still runs each validation/confirmation/transaction/ActionLog** — OK. The burst does not skip the per-call `AgentWriteTool.execute` confirmation gate, `commitAgentWriteAtomically`, the Drift Task gateway, or ActionLog. The Task 4 composition tests drive the REAL `confirmWriteProposal` confirmation API (first is confirmed; remaining ask_first_time calls auto-execute after the first confirmation releases create_task) and assert 13 persisted Task rows + 13 invocation lifecycle rows.
+5. **Success cannot mask later decline/error; partial text never claims no data changed** — OK. `CreateTaskBurstLease.allSucceeded`/`hasAnySuccess`/`terminalErrorCode` are the sole authority; `_settleNoToolUse` case 8 settles `create_task_burst_partial` / `create_task_burst_failed`. The deterministic terminal message reports exact counts and never uses the "没有修改数据" fixed text. Covered by the decline-path composition test (12 created + 1 cancelled).
+6. **No unknown error strings, titles, dates, refs, account IDs, school IDs in burst summaries/logs** — OK for the burst aggregation path: `CreateTaskBurstLease` carries only counts + allowlisted codes (unknowns collapse to `tool_error`). *Observation (pre-existing, out of scope):* the per-write `AgentWriteTool.propose` `safeLogSummary` for create_task is `'新建任务 $title'`, which includes the title; this is inherited from the earlier write-tools design and is a user-facing internal audit summary, not the burst aggregation summary added by this plan. No change made (Task 4 is test/docs only).
+7. **Stop/restart never auto-replays; no DB migration** — OK. Burst state is in-memory only; a mid-burst interruption uses `recordInterrupted` and never replays (`create_task_burst_*` rejected on next pure turn). No schema/migration introduced (`git status` shows no migration files).
+8. **No default semester / semesterId=421/461 / 2026spring / 2026fall to derive deadlines** — OK. The composition tests seed and assert explicit Beijing Saturdays (2026-09-05..2026-11-28) with `semesterKey: 'aug2026'` and no semester literals in outbound requests; `_courseSummary` derives the active range from occurrence data, never a hardcoded semester.
+
+No accepted findings required a fix (Task 4 changes no production code; all 8 points confirmed satisfied and exercised by the new tests). The composition + read-only + focused + full suites all pass.
+
+#### Remaining manual acceptance status
+
+`docs/agent-create-task-burst-retest-2026-08-03.md` is created (owner-fillable) but **NOT** executed: all `完成：` fields are left blank. This plan's automatic verification does not populate the manual acceptance fields. Manual acceptance items cover: the exact 13-week sentence, first course_summary lookup, single clarification on unresolved deadline/special-week, 13 distinct `create_task` in one tool group, per-item confirmation + cancel-does-not-roll-back, final 13/13 completed vs 12+1 cancelled => `create_task_burst_partial`, no `tool_call_budget_exceeded` / no hidden second Burst / no TaskSeries-batch tool, another account sees zero new Tasks/invocations, and over-32 split consent. Historical counts from the predecessor plan (Python 388 / Flutter 910) are superseded by the measured counts above.
+
+#### Accepted residual limitations
+
+- The runtime deterministically proves that the model's *actually emitted* batch executed and aggregated truthfully, but cannot alone prove model *semantic coverage* of all 13 user-intended dates; completeness is bounded by `course_summary` active range, the versioned system prompt date-enumeration rules, the 13 explicit deadline composition fixture, and the user's manual check on confirm cards + final summary. No batch-list signature / TaskSeries / new pre-planning persistence protocol is introduced.
+- Python suite must be run with the worktree `src` first on `PYTHONPATH` (env editable-install path points at the main repo), as documented above.
+- The `safeLogSummary` for create_task includes the task title (pre-existing write-tools behavior), outside this plan's burst aggregation scope.
+
+#### Final `git status --short` (after Task 4)
+
+Protected pre-existing files (untouched, not staged by this plan):
 
 ```text
  M app/windows/flutter/generated_plugin_registrant.cc
@@ -721,21 +777,13 @@ At plan creation, these paths were already modified or untracked. Do not revert 
 ?? docs/superpowers/plans/2026-08-02-agent-manual-acceptance-review-repairs.md
 ```
 
-The relation retest document is intentionally modified and is outside this plan; do not edit or stage it. All protected files remain outside this plan.
+Task 4 implementation changes (staged and committed as ONE commit):
 
-### Executor Start Order
-
-1. Invoke `superpowers:using-git-worktrees` only to verify this existing isolated worktree; do not create a second worktree unless the user explicitly requests one.
-2. Read the design authority and this plan completely.
-3. Run `git status --short` and compare it with the protected snapshot.
-4. Verify current code contains `AgentGroundingRequirement.supportingTools`, `_MutationAttempt`, `AgentSystemPrompt.version6`, date-only relation lookup and partial relation settlement. Stop and report if any is missing or materially renamed.
-5. Execute Tasks 1-4 in order with TDD and one commit per Task. Use `superpowers:subagent-driven-development` or `superpowers:executing-plans` as selected by the owner.
-6. Do not trust historical test counts; run every listed command and record measured output.
-7. Do not modify or stage any protected file.
-
-### Execution Evidence
-
-Not yet executed. Task 4 Step 8 must replace this paragraph with measured final evidence. Automatic verification will not mark the manual acceptance `完成：` field.
+```text
+ M app/test/integration/agent_composition_flow_test.dart
+?? docs/agent-create-task-burst-retest-2026-08-03.md
+ M docs/superpowers/plans/2026-08-03-agent-create-task-burst-budget.md
+```
 
 ## Self-Review
 

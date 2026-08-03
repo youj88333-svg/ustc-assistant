@@ -4154,7 +4154,420 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'no raw event DB id may reach the model feed');
     },
   );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 4 FINAL composition regression: the create-task burst workflow, end to
+  // end, through the real composed registry + confirmation store + Drift Task
+  // gateway with a scripted provider.
+  //
+  //   seed : account acc-1 with course 电磁场与波 whose occurrences run weekly
+  //          on 13 consecutive Saturdays (2026-09-05 .. 2026-11-28, explicit
+  //          Beijing dates, never a semester constant).
+  //   send : 电磁场与波作业连续13周每周六截止，请根据这门课的有效周次分别创建独立Task。
+  //
+  // The TRUTH exercised here (spec §14.4), on the REAL registry + confirmation
+  // store + Drift gateway:
+  //
+  //   1. the run is grounded as a create-task burst: the FIRST model request
+  //      declares only `get_schedule` + `create_task`;
+  //   2. the first tool call is a course_summary lookup (the course effective
+  //      range), never an unbounded semester `events` dump;
+  //   3. the NEXT single assistant response contains 13 distinct `create_task`
+  //      tool uses (one block per expected Saturday deadline);
+  //   4. each create_task still follows the current permission policy through
+  //      the REAL confirmation store (the first is confirmed via
+  //      confirmWriteProposal; the remaining ask_first_time calls auto-execute),
+  //      and every write commits via the Drift Task gateway in its own row;
+  //   5. the run completes with 13 independent Tasks, no tool_call_budget_exceeded,
+  //      no hidden second Burst, and no TaskSeries/batch tool appears.
+  //
+  // A SECOND test then declines one confirmation and re-runs the same fixture:
+  // the successful writes are NOT rolled back, the run settles as
+  // create_task_burst_partial with accurate counts, and the declined item is
+  // recorded as a user decline.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /// The 13 explicit Beijing Saturday deadlines of the course range. Computed
+  /// once so both burst tests share identical explicit dates (never derived
+  /// from a semester constant).
+  final decl = _createTaskBurstFixture();
+
+  test(
+    'composition: 13-week create-task burst completes 13 independent Tasks '
+    'with no budget error and no second Burst',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedBurstCourse(db, 'acc-1', decl);
+
+      final provider = _ScriptedProvider(decl.burstScript(decl.saturdays.length));
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      composition.sessionService
+          .send(
+              accountId: 'acc-1',
+              userText: '电磁场与波作业连续13周每周六截止，'
+                  '请根据这门课的有效周次分别创建独立Task。')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+
+      // The first create_task pauses for the REAL write-confirmation card
+      // (create_task defaults to ask_first_time). Approve WITHOUT remember:
+      // the first confirmation records firstConfirmedAt, so the remaining 12
+      // calls auto-execute through the same real permission path. This drives
+      // the pending-action API without bypassing production confirmation.
+      for (var i = 0; i < 300; i++) {
+        if (states.any((s) =>
+            s.userAction?.type == AgentUserActionType.writeConfirmation)) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        states.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'the first create_task must pause for write confirmation',
+      );
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+
+      // --- terminal truth ---------------------------------------------------
+      final run = states.last;
+      expect(run.state, AgentRunState.completed,
+          reason: '13/13 successful writes must complete the run');
+      expect(run.errorCode, isNull,
+          reason: 'a fully-successful burst reports NO error code');
+
+      // The run was grounded as a create-task burst: the FIRST model request
+      // declared only get_schedule + create_task (the burst narrowing), and the
+      // model issued exactly one course_summary lookup before the burst turn.
+      final firstDeclared = provider.requests.first.tools
+          .map((t) => t.name)
+          .toSet();
+      expect(firstDeclared, {'get_schedule', 'create_task'},
+          reason: 'the burst grounding narrows the first request to '
+              'get_schedule + create_task');
+
+      // 13 independent Tasks, all deadlines distinct and inside the course range.
+      final tasks = await db.select(db.tasks).get();
+      expect(tasks, hasLength(13),
+          reason: 'exactly 13 Tasks are created by the 13-block burst turn');
+      final deadlinesMs = tasks.map((t) => t.deadlineAt).toList();
+      expect(deadlinesMs, isNot(contains(null)),
+          reason: 'every burst Task carries a deadline');
+      // Reconstruct each deadline's Beijing calendar DAY and month (independent
+      // of the machine timezone) and assert the 13 distinct dates are exactly
+      // the course's Saturday range.
+      final deadlineBeijingDates = <String>[
+        for (final ms in deadlinesMs.cast<int>())
+          _beijingDateKey(DateTime.fromMillisecondsSinceEpoch(ms)),
+      ];
+      expect(deadlineBeijingDates.toSet(), hasLength(13),
+          reason: 'thirteen distinct Beijing Saturday deadlines');
+      final expectedDays = <String>{
+        for (final d in decl.saturdays)
+          _beijingDateKey(DateTime(d.year, d.month, d.day)),
+      };
+      expect(deadlineBeijingDates.toSet(), expectedDays,
+          reason: 'every deadline must lie within the course effective range '
+              '(exactly the 13 Saturdays)');
+      // Every Task is INDEPENDENT: distinct titles, no shared series/batch field.
+      expect(tasks.map((t) => t.title).toSet(), hasLength(13),
+          reason: 'each of the 13 Tasks is a distinct independent write');
+
+      // 13 create_task invocations persisted, none with a budget error.
+      final mkInv = await composition.chatRepository.toolInvocationsForRuns(
+        accountId: 'acc-1',
+        runIds: {run.runId},
+      );
+      final createInvocations =
+          mkInv.where((r) => r.toolName == 'create_task').toList();
+      expect(createInvocations, hasLength(13),
+          reason: '13 independent create_task lifecycle rows');
+      final errorCodes = mkInv.map((r) => r.errorCode).toSet();
+      expect(errorCodes, isNot(contains('tool_call_budget_exceeded')),
+          reason: 'the burst must not trip the ordinary tool budget');
+      expect(errorCodes, isNot(contains('create_task_burst_already_used')),
+          reason: 'no hidden second Burst turn');
+      // No TaskSeries/batch tool/schema appears anywhere in the run.
+      final executedNames = _executedSequence(mkInv);
+      expect(executedNames.where((n) => n == 'create_task'), hasLength(13));
+      expect(
+        composition.registry.schemas.any((t) =>
+            t.name.contains('task_series') || t.name.contains('batch')),
+        isFalse,
+        reason: 'no TaskSeries or batch tool is registered',
+      );
+
+      // The first lookup was the course_summary range, never an unbounded
+      // semester events read.
+      final scheduleInvocations =
+          mkInv.where((r) => r.toolName == 'get_schedule').toList();
+      expect(scheduleInvocations, hasLength(1),
+          reason: 'exactly one schedule lookup (course_summary) before the burst');
+      expect(scheduleInvocations.single.safeArgumentsSummary, contains('course_summary'),
+          reason: 'the first lookup is the course_summary view, never a whole-'
+              'semester events dump');
+
+      // The other seeded account sees zero new Tasks and zero invocations.
+      await _seedAccount(db, 'acc-2');
+      expect(
+        await (db.select(db.tasks)..where((row) => row.accountId.equals('acc-2')))
+            .get(),
+        isEmpty,
+        reason: 'the other account must not inherit the burst Tasks',
+      );
+      expect(
+        await (db.select(db.toolInvocations)
+              ..where((row) => row.accountId.equals('acc-2')))
+            .get(),
+        isEmpty,
+        reason: 'the other account must not see the burst invocation records',
+      );
+    },
+  );
+
+  test(
+    'composition: declining one create_task does not roll back the others and '
+    'reports create_task_burst_partial with accurate counts',
+    () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedBurstCourse(db, 'acc-1', decl);
+
+      final provider =
+          _ScriptedProvider(decl.burstScript(decl.saturdays.length));
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      composition.sessionService
+          .send(
+              accountId: 'acc-1',
+              userText: '电磁场与波作业连续13周每周六截止，'
+                  '请根据这门课的有效周次分别创建独立Task。')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+
+      Future<void> waitForConfirmation() async {
+        for (var i = 0; i < 300; i++) {
+          if (states.any((s) =>
+              s.userAction?.type == AgentUserActionType.writeConfirmation)) {
+            return;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        fail('expected a write confirmation');
+      }
+
+      // Decline the FIRST create_task: it never sets firstConfirmedAt, so the
+      // second task confirms again and is approved, which relaxes the remaining
+      // 11 to auto-execute. This drives the REAL confirmation API twice and
+      // proves a declined write does not roll back the others.
+      await waitForConfirmation();
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: false, remember: false)
+          .drain<void>();
+
+      // After the decline the loop advances to the next create_task and pauses
+      // again (ask_first_time still unbound). Approve it.
+      final before = states.length;
+      for (var i = 0; i < 300; i++) {
+        final idx = states.lastIndexWhere((s) =>
+            s.userAction?.type == AgentUserActionType.writeConfirmation);
+        if (idx >= before) break;
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+
+      // The run settles as create_task_burst_partial, NOT success, and the
+      // deterministic terminal message reports accurate partial counts.
+      final run = states.last;
+      expect(run.state, AgentRunState.failed,
+          reason: 'a burst with a declined write must not report success');
+      expect(run.errorCode, 'create_task_burst_partial');
+      expect(run.text, '已创建 12 个 Task，1 个未完成。其中 1 个已取消。',
+          reason: 'the deterministic partial report states 12 created + 1 cancelled');
+
+      // The 12 approved writes persist; the declined one leaves no Task.
+      final tasks = await db.select(db.tasks).get();
+      expect(tasks, hasLength(12),
+          reason: 'declining one write must not roll back the 12 approved ones');
+      final logs = await db.actionLogsRepository.selectAll();
+      expect(
+        logs.where((l) =>
+            l.source == 'user' &&
+            l.actionType == 'agent_write_decline' &&
+            l.result == 'declined'),
+        hasLength(1),
+        reason: 'exactly one declined write is audited as a user decline',
+      );
+      final survivingDays = <String>{
+        for (final t in tasks)
+          if (t.deadlineAt != null)
+            _beijingDateKey(DateTime.fromMillisecondsSinceEpoch(t.deadlineAt!)),
+      };
+      expect(survivingDays, hasLength(12),
+          reason: 'the 12 surviving Tasks have distinct Beijing deadlines');
+    },
+  );
 }
+
+// ---------------------------------------------------------------------------
+// Task 4 (create-task burst) composition helpers.
+// ---------------------------------------------------------------------------
+
+/// The shared fixture for the burst composition tests.
+///
+/// [saturdays] holds the 13 explicit Beijing Saturdays (2026-09-05 ..
+/// 2026-11-28) and [titles]/[deadlines] the per-task distinct inputs. The
+/// deadline is an explicit Beijing wall-clock (18:00), never a semester
+/// constant.
+class _CreateTaskBurstFixture {
+  final List<DateTime> saturdays;
+
+  _CreateTaskBurstFixture._(this.saturdays);
+
+  String _deadline(int i) {
+    final d = saturdays[i];
+    String two(int v) => v.toString().padLeft(2, '0');
+    // Explicit Beijing offset so `DateTime.parse` returns a deterministic UTC
+    // instant independent of the machine timezone.
+    return '${d.year}-${two(d.month)}-${two(d.day)}T18:00:00+08:00';
+  }
+
+  String _title(int i) => '电磁场与波作业第${i + 1}周';
+
+  /// The scripted provider sequence: call 1 performs the course_summary lookup,
+  /// call 2 emits all [count] `create_task` tool uses in ONE assistant response
+  /// (the burst turn), call 3 is the final answer.
+  List<_ScriptedCall> burstScript(int count) => [
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-summary',
+                name: 'get_schedule',
+                input: {
+                  'from': '2026-09-01',
+                  'through': '2026-11-30',
+                  'view': 'course_summary',
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              for (var i = 0; i < count; i++)
+                ToolUseCompletedEvent(
+                  id: 'tu-create-$i',
+                  name: 'create_task',
+                  input: {'title': _title(i), 'deadline_at': _deadline(i)},
+                ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已为电磁场与波连续 13 周的每周六分别创建了 Task。'),
+              const CompletedEvent(),
+            ]),
+      ];
+}
+
+/// Seeds account [accountId] with a course 电磁场与波 whose occurrences land on
+/// every Saturday in [_.saturdays] (the shared explicit Beijing dates).
+Future<void> _seedBurstCourse(
+  AppDatabase db,
+  String accountId,
+  _CreateTaskBurstFixture fixture,
+) async {
+  const protector = _NoopProtector();
+  await _seedAccount(db, accountId);
+  final secretStore = ProtectedAgentSecretStore(database: db, protector: protector);
+  await _seedAgentConfig(db, accountId, secrets: secretStore, apiKey: 'test-key');
+  await _insertCourseSeries(
+    db,
+    'series-em',
+    accountId,
+    externalId: 'lesson-em',
+    title: '电磁场与波',
+    semesterKey: 'aug2026',
+  );
+  final saturdays = fixture.saturdays;
+  for (var i = 0; i < saturdays.length; i++) {
+    final day = saturdays[i];
+    await _insertCourseOccurrence(
+      db,
+      'em-occ-$i',
+      accountId,
+      '电磁场与波',
+      seriesExternalId: 'lesson-em',
+      location: '三教101',
+      start: DateTime(day.year, day.month, day.day, 8, 0),
+      end: DateTime(day.year, day.month, day.day, 9, 45),
+    );
+  }
+}
+
+/// The executed tool-name sequence from [rows], in start order.
+List<String> _executedSequence(List<ToolInvocationRecord> rows) =>
+    [for (final r in rows) r.toolName];
+
+/// The Beijing calendar date key 'YYYY-MM-DD' for [value], independent of the
+/// machine timezone. [value] is an epoch instant (UTC components); Beijing is
+/// UTC+8, so +8h is added before reading the calendar fields.
+String _beijingDateKey(DateTime value) {
+  final bj = value.toUtc().add(const Duration(hours: 8));
+  String two(int v) => v.toString().padLeft(2, '0');
+  return '${bj.year}-${two(bj.month)}-${two(bj.day)}';
+}
+
+/// Constructs the shared burst fixture (explicit 13 Saturday dates).
+_CreateTaskBurstFixture _createTaskBurstFixture() =>
+    _CreateTaskBurstFixture._(<DateTime>[
+      DateTime(2026, 9, 5),
+      DateTime(2026, 9, 12),
+      DateTime(2026, 9, 19),
+      DateTime(2026, 9, 26),
+      DateTime(2026, 10, 3),
+      DateTime(2026, 10, 10),
+      DateTime(2026, 10, 17),
+      DateTime(2026, 10, 24),
+      DateTime(2026, 10, 31),
+      DateTime(2026, 11, 7),
+      DateTime(2026, 11, 14),
+      DateTime(2026, 11, 21),
+      DateTime(2026, 11, 28),
+    ]);
 
 // ---------------------------------------------------------------------------
 // Task 10 combined-regression helpers.
