@@ -456,6 +456,22 @@ void main() {
   });
 
   group('bounds', () {
+    test('reversed range throws even with no series at all', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = await serviceFor(database, 'a');
+      final projector = RecurringEventProjector(service: service);
+      // No series exist in the account. The reversed range must still throw.
+      expect(
+        projector.projectRange(
+          from: at(2026, 7, 10),
+          through: at(2026, 7, 6),
+          mode: RecurringProjectionMode.display,
+        ),
+        throwsA(isA<RecurrenceLimitError>()),
+      );
+    });
+
     test('reversed range throws RecurrenceLimitError', () async {
       final database = await fixtureDatabase();
       addTearDown(database.close);

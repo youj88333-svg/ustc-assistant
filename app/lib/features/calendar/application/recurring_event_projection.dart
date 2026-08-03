@@ -120,6 +120,13 @@ class RecurringEventProjector {
     final stateFilter = _stateFilterFor(mode, lifecycleStates);
     final projected = <ProjectedRecurringOccurrence>[];
 
+    // The range bounds are enforced unconditionally, before considering any
+    // series: a reversed range or one spanning more than 366 inclusive days
+    // must throw even when the account has no series (or none intersect the
+    // range). Delegating to the shared expander with a throwaway rule triggers
+    // exactly the same reversed / day-limit guards the per-series path uses.
+    _validateRangeBounds(from, through);
+
     // The entire query must succeed atomically: if expanding every intersecting
     // series would generate more than 1000 occurrence targets, fail rather than
     // return a partial list. Single series are already bounded to 366 days by
@@ -216,6 +223,21 @@ class RecurringEventProjector {
       return byTitle != 0 ? byTitle : a.seriesId.compareTo(b.seriesId);
     });
     return results;
+  }
+
+  /// Validates the inclusive range bounds regardless of how many series exist.
+  ///
+  /// A reversed range ([through] before [from]) or a range spanning more than
+  /// 366 inclusive days throws [RecurrenceLimitError], even when the account
+  /// has no series. A throwaway daily rule anchored at [from] (no until date)
+  /// triggers the same reversed/day-limit guards the per-series path uses,
+  /// without tripping the rule validator's own until/anchor ordering check.
+  void _validateRangeBounds(DateTime from, DateTime through) {
+    expandRecurrence(
+      RecurrenceRule.daily(anchor: from),
+      from: from,
+      through: through,
+    );
   }
 
   /// Expands every intersecting series' originals within [from]..[through],
