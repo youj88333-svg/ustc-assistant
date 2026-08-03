@@ -289,6 +289,262 @@ void main() {
     expect(values.last.endDateExclusive, DateTime(2026, 7, 15));
   });
 
+  test('occurrences() performs no inserts', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每日',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+
+    final before = await service.exceptionRows(seriesId);
+    final values = await service.occurrences(
+      seriesId,
+      from: DateTime(2026, 7, 6),
+      through: DateTime(2026, 7, 8, 23),
+    );
+    expect(values, hasLength(3));
+    final after = await service.exceptionRows(seriesId);
+    expect(after, hasLength(before.length));
+  });
+
+  test('ensureOccurrenceAnchor creates an empty override anchor', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '早晚',
+        startAt: at(2026, 7, 6, 20),
+        endAt: at(2026, 7, 6, 22),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: at(2026, 7, 6, 20),
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 13, 20));
+
+    final anchor = await service.ensureOccurrenceAnchor(seriesId, key);
+    expect(anchor.kind, 'override');
+    expect(anchor.overriddenFieldsJson, '[]');
+    expect(anchor.overrideJson, '{}');
+    expect(anchor.originalStartAt, at(2026, 7, 13, 20).millisecondsSinceEpoch);
+    expect(anchor.originalStartDate, isNull);
+    expect(anchor.deletedAt, isNull);
+  });
+
+  test('ensureOccurrenceAnchor is idempotent', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每日',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 7));
+
+    final first = await service.ensureOccurrenceAnchor(seriesId, key);
+    final second = await service.ensureOccurrenceAnchor(seriesId, key);
+    expect(second.id, first.id);
+    expect(await service.exceptionRows(seriesId), hasLength(1));
+  });
+
+  test('anchor for unknown series, wrong account, bad key, and out-of-rule key fails without writes',
+      () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    await database.into(database.localAccounts).insert(
+          LocalAccountsCompanion.insert(
+            id: 'b',
+            maskedHint: 'PB****0001',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周一',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: at(2026, 7, 6),
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final rowsBefore = await database
+        .select(database.calendarEventOccurrenceExceptions)
+        .get();
+
+    await expectLater(
+      service.ensureOccurrenceAnchor('no-such-series', 'no-such-series@2026-07-07T09:00:00.000'),
+      throwsA(isA<OccurrenceNotFoundError>()),
+    );
+    await expectLater(
+      service.ensureOccurrenceAnchor(seriesId, 'wrong-account@2026-07-07T09:00:00.000'),
+      throwsA(isA<OccurrenceNotFoundError>()),
+    );
+    await expectLater(
+      service.ensureOccurrenceAnchor(seriesId, 'malformed-key'),
+      throwsA(isA<OccurrenceNotFoundError>()),
+    );
+    await expectLater(
+      service.ensureOccurrenceAnchor(
+        seriesId,
+        occurrenceKey(seriesId, at(2026, 7, 8)),
+      ),
+      throwsA(isA<OccurrenceNotFoundError>()),
+    );
+
+    final rowsAfter = await database
+        .select(database.calendarEventOccurrenceExceptions)
+        .get();
+    expect(rowsAfter, hasLength(rowsBefore.length));
+  });
+
+  test('existing real override is returned unchanged by anchor', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '会',
+        startAt: at(2026, 7, 6, 10),
+        endAt: at(2026, 7, 6, 11),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: at(2026, 7, 6, 10),
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 13, 10));
+    await service.editOnlyThis(
+      seriesId,
+      key,
+      OccurrenceOverride(
+        title: const OverrideValue.set('真实例外'),
+        startAt: OverrideValue.set(at(2026, 7, 13, 11)),
+      ),
+    );
+
+    final anchor = await service.ensureOccurrenceAnchor(seriesId, key);
+    final exception = (await service.exceptionRows(seriesId)).single;
+    expect(anchor.id, exception.id);
+    expect(exception.overrideJson.contains('真实例外'), isTrue);
+    expect(exception.overriddenFieldsJson, contains('title'));
+  });
+
+  test('timed series defaults reminder offsets to [15] and all-day to []', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final timedId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '定时',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+    final allDayId = await service.createSeries(
+      anchor: PersonalEvent.allDay(
+        title: '全天',
+        startDate: DateTime(2026, 7, 6),
+        endDateExclusive: DateTime(2026, 7, 7),
+      ),
+      rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 6)),
+    );
+    expect((await service.seriesRow(timedId)).reminderOffsetsJson, '[15]');
+    expect((await service.seriesRow(allDayId)).reminderOffsetsJson, '[]');
+  });
+
+  test('custom reminder offsets are persisted on the series', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '定时',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+      reminderOffsetsMinutes: [5, 15],
+    );
+    final rec = await service.occurrence(
+      seriesId,
+      occurrenceKey(seriesId, at(2026, 7, 7)),
+    );
+    expect(rec.reminderOffsetsMinutes, [5, 15]);
+  });
+
+  test('occurrence override can replace reminder offsets including empty list', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '定时',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 7));
+    await service.editOnlyThis(
+      seriesId,
+      key,
+      const OccurrenceOverride(
+        reminderOffsetsMinutes: OverrideValue.set([]),
+      ),
+    );
+    final rec = await service.occurrence(seriesId, key);
+    expect(rec.reminderOffsetsMinutes, isEmpty);
+  });
+
   testWidgets('recurrence editor emits weekly multi-day rules', (tester) async {
     RecurrenceRule? changed;
     await tester.pumpWidget(

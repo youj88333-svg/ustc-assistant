@@ -37,6 +37,7 @@ class OccurrenceOverride {
     this.importance = const OverrideValue.absent(),
     this.color = const OverrideValue.absent(),
     this.tags = const OverrideValue.absent(),
+    this.reminderOffsetsMinutes = const OverrideValue.absent(),
   });
 
   final OverrideValue<String> title;
@@ -51,6 +52,7 @@ class OccurrenceOverride {
   final OverrideValue<String> importance;
   final OverrideValue<String?> color;
   final OverrideValue<List<String>> tags;
+  final OverrideValue<List<int>> reminderOffsetsMinutes;
 
   Set<String> get fields => {
     if (title.isSet) 'title',
@@ -65,6 +67,7 @@ class OccurrenceOverride {
     if (importance.isSet) 'importance',
     if (color.isSet) 'color',
     if (tags.isSet) 'tags',
+    if (reminderOffsetsMinutes.isSet) 'reminderOffsetsMinutes',
   };
 
   Map<String, Object?> toJson() => {
@@ -82,6 +85,8 @@ class OccurrenceOverride {
     if (importance.isSet) 'importance': importance.value,
     if (color.isSet) 'color': color.value,
     if (tags.isSet) 'tags': tags.value,
+    if (reminderOffsetsMinutes.isSet)
+      'reminderOffsetsMinutes': reminderOffsetsMinutes.value,
   };
 
   static OccurrenceOverride decode(String fieldsJson, String payloadJson) {
@@ -137,6 +142,12 @@ class OccurrenceOverride {
       tags: has('tags')
           ? OverrideValue.set((payload['tags'] as List<dynamic>).cast<String>())
           : const OverrideValue.absent(),
+      reminderOffsetsMinutes: has('reminderOffsetsMinutes')
+          ? OverrideValue.set(
+              (payload['reminderOffsetsMinutes'] as List<dynamic>)
+                  .cast<int>(),
+            )
+          : const OverrideValue.absent(),
     );
   }
 
@@ -156,6 +167,7 @@ class RecurringOccurrence {
     required this.importance,
     required this.tags,
     required this.overriddenFields,
+    this.reminderOffsetsMinutes = const [],
     this.startAt,
     this.endAt,
     this.startDate,
@@ -181,6 +193,7 @@ class RecurringOccurrence {
   final String importance;
   final String? color;
   final List<String> tags;
+  final List<int> reminderOffsetsMinutes;
   final Set<String> overriddenFields;
 }
 
@@ -211,11 +224,16 @@ class RecurrenceService {
   Future<String> createSeries({
     required PersonalEvent anchor,
     required RecurrenceRule rule,
+    List<int>? reminderOffsetsMinutes,
   }) async {
     _validateAnchor(anchor, rule);
+    final offsets = _normalizeOrValidateOffsets(
+      reminderOffsetsMinutes,
+      allDay: anchor.allDay,
+    );
     final id = _uuid.v4();
     await database.transaction(() async {
-      await _insertSeries(id, anchor, rule);
+      await _insertSeries(id, anchor, rule, reminderOffsetsMinutes: offsets);
       await _log('calendar_series_create', 'Created a recurring event.');
     });
     return id;
@@ -226,6 +244,12 @@ class RecurrenceService {
             (row) => row.id.equals(seriesId) & row.accountId.equals(accountId),
           ))
           .getSingle();
+
+  Future<CalendarEventSery?> seriesRowOrNull(String seriesId) =>
+      (database.select(database.calendarEventSeries)..where(
+            (row) => row.id.equals(seriesId) & row.accountId.equals(accountId),
+          ))
+          .getSingleOrNull();
 
   Future<List<CalendarEventOccurrenceException>> exceptionRows(
     String seriesId,
@@ -282,6 +306,71 @@ class RecurrenceService {
             exceptions[occurrenceKey(seriesId, original)],
           ),
     ];
+  }
+
+  Future<CalendarEventOccurrenceException?> existingOccurrenceAnchor(
+    String seriesId,
+    String occurrenceKey,
+  ) async {
+    return (database.select(database.calendarEventOccurrenceExceptions)
+          ..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.seriesId.equals(seriesId) &
+                row.occurrenceKey.equals(occurrenceKey),
+          ))
+        .getSingleOrNull();
+  }
+
+  Future<CalendarEventOccurrenceException> ensureOccurrenceAnchor(
+    String seriesId,
+    String occurrenceKey,
+  ) async {
+    final series = await seriesRowOrNull(seriesId);
+    if (series == null) {
+      throw const OccurrenceNotFoundError();
+    }
+    final original = _originalFromKey(seriesId, occurrenceKey);
+    if (!_contains(series, original)) {
+      throw const OccurrenceNotFoundError();
+    }
+    final timestamp = now();
+    return database.transaction(() async {
+      final existing = await existingOccurrenceAnchor(
+        seriesId,
+        occurrenceKey,
+      );
+      if (existing != null) {
+        return existing;
+      }
+      final id = _uuid.v4();
+      await database
+          .into(database.calendarEventOccurrenceExceptions)
+          .insert(
+            CalendarEventOccurrenceExceptionsCompanion.insert(
+              id: id,
+              accountId: accountId,
+              seriesId: seriesId,
+              occurrenceKey: occurrenceKey,
+              originalStartAt: Value(
+                series.allDay
+                    ? null
+                    : original.millisecondsSinceEpoch,
+              ),
+              originalStartDate: Value(
+                series.allDay ? dateText(original) : null,
+              ),
+              kind: 'override',
+              overriddenFieldsJson: const Value('[]'),
+              overrideJson: '{}',
+              orphaned: const Value(false),
+              createdAt: timestamp,
+              updatedAt: timestamp,
+            ),
+            mode: InsertMode.insertOrIgnore,
+          );
+      return (await existingOccurrenceAnchor(seriesId, occurrenceKey))!;
+    });
   }
 
   Future<void> editOnlyThis(
@@ -445,8 +534,9 @@ class RecurrenceService {
   Future<void> _insertSeries(
     String id,
     PersonalEvent anchor,
-    RecurrenceRule rule,
-  ) async {
+    RecurrenceRule rule, {
+    List<int>? reminderOffsetsMinutes,
+  }) async {
     final timestamp = now();
     await database
         .into(database.calendarEventSeries)
@@ -454,6 +544,15 @@ class RecurrenceService {
           CalendarEventSeriesCompanion.insert(
             id: id,
             accountId: accountId,
+            reminderOffsetsJson: Value(
+              jsonEncode(
+                reminderOffsetsMinutes ??
+                    _normalizeOrValidateOffsets(
+                      null,
+                      allDay: anchor.allDay,
+                    ),
+              ),
+            ),
             title: anchor.title,
             description: Value(anchor.description),
             eventType: anchor.type.storage,
@@ -542,6 +641,7 @@ class RecurrenceService {
       originalStart: original,
       title: series.title,
       allDay: allDay,
+      reminderOffsetsMinutes: _decodeOffsets(series.reminderOffsetsJson),
       startAt: allDay ? null : original,
       endAt: allDay
           ? null
@@ -618,9 +718,15 @@ class RecurrenceService {
           : base.importance,
       color: value.color.isSet ? value.color.value : base.color,
       tags: value.tags.isSet ? value.tags.value! : base.tags,
+      reminderOffsetsMinutes: value.reminderOffsetsMinutes.isSet
+          ? value.reminderOffsetsMinutes.value!
+          : base.reminderOffsetsMinutes,
       overriddenFields: Set.unmodifiable(value.fields),
     );
   }
+
+  static List<int> _decodeOffsets(String json) =>
+      (jsonDecode(json) as List<dynamic>).cast<int>();
 
   bool _contains(CalendarEventSery series, DateTime original) =>
       _withinSeriesBounds(series, original) &&
@@ -654,7 +760,22 @@ class RecurrenceService {
       ? DateTime.fromMillisecondsSinceEpoch(exception.originalStartAt!)
       : DateTime.parse(exception.originalStartDate!);
 
-  void _validateAnchor(PersonalEvent anchor, RecurrenceRule rule) {
+  List<int> _normalizeOrValidateOffsets(
+  List<int>? offsets, {
+  required bool allDay,
+}) {
+  final value = offsets ?? (allDay ? const [] : const [15]);
+  if (value.any((offset) => offset < 0) ||
+      value.toSet().length != value.length) {
+    throw const RecurrenceValidationError(
+      'reminder offsets must be non-negative, unique integers',
+    );
+  }
+  final validated = List<int>.of(value)..sort();
+  return validated;
+}
+
+void _validateAnchor(PersonalEvent anchor, RecurrenceRule rule) {
     final start = anchor.allDay ? anchor.startDate! : anchor.startAt!;
     if (start != rule.anchor) {
       throw const RecurrenceValidationError(
