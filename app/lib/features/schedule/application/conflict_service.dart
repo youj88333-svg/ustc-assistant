@@ -2,6 +2,8 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../../tasks/application/undo_recorder.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
@@ -244,6 +246,14 @@ class ConflictService {
     ScheduleConflictParticipant participant,
   ) async {
     if (participant.kind == 'event') {
+      // A recurring occurrence participant is identified by its encoded locator
+      // (logical id); it is not a stored `calendar_events` row. Load the series
+      // plus the composed occurrence so overlap and series-identity resolution
+      // still work.
+      final decoded = _tryDecodeLocator(participant.id);
+      if (decoded is RecurringOccurrenceLocator) {
+        return _occurrenceGridItem(decoded);
+      }
       final event =
           await (database.select(database.calendarEvents)..where(
                 (row) =>
@@ -668,4 +678,60 @@ class ConflictService {
     'createdAt': row.createdAt,
     'updatedAt': row.updatedAt,
   };
+
+  CalendarEventLocator? _tryDecodeLocator(String id) {
+    if (!id.startsWith('occ_v1.') &&
+        !id.startsWith('event_v1.') &&
+        !id.startsWith('series_v1.')) {
+      return null;
+    }
+    try {
+      return decodeCalendarEventLocator(id);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Builds a [ScheduleGridItem] for a recurring occurrence from its series +
+  /// composed occurrence so the shared conflict projection can resolve timed
+  /// overlap and series identity. The item id stays the encoded locator; the
+  /// raw series id / occurrence key never surface.
+  Future<ScheduleGridItem?> _occurrenceGridItem(
+    RecurringOccurrenceLocator locator,
+  ) async {
+    final service = RecurrenceService(database: database, accountId: accountId);
+    final series = await service.seriesRowOrNull(locator.seriesId);
+    if (series == null) return null;
+    final RecurringOccurrence occurrence;
+    try {
+      occurrence = await service.occurrence(
+        locator.seriesId,
+        locator.occurrenceKey,
+      );
+    } on OccurrenceNotFoundError {
+      return null;
+    }
+    if (occurrence.allDay) {
+      return ScheduleGridItem.fromEvent(
+        EffectiveEvent.allDay(
+          id: encodeCalendarEventLocator(locator),
+          title: occurrence.title,
+          startDate: occurrence.startDate!,
+          endDateExclusive: occurrence.endDateExclusive!,
+          courseSeriesId: series.id,
+          eventType: 'personal',
+        ),
+      );
+    }
+    return ScheduleGridItem.fromEvent(
+      EffectiveEvent.timed(
+        id: encodeCalendarEventLocator(locator),
+        title: occurrence.title,
+        startAt: occurrence.startAt!,
+        endAt: occurrence.endAt!,
+        courseSeriesId: series.id,
+        eventType: 'personal',
+      ),
+    );
+  }
 }

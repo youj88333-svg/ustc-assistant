@@ -2,6 +2,10 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/course_color.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
@@ -464,4 +468,213 @@ void main() {
       expect(visible.map((event) => event.id), isNot(contains('missing')));
     },
   );
+
+  test(
+    'range-aware stream merges recurring occurrences with a bounded expansion',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const accountId = 'account';
+      await seedActiveAccount(database, accountId);
+      await RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => 100,
+      ).createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日晨读',
+          startAt: DateTime(2026, 7, 27, 8),
+          endAt: DateTime(2026, 7, 27, 9),
+          locationName: '图书馆',
+          color: '#FF0000',
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 8)),
+      );
+
+      final events = await EffectiveEventRepository(
+        database,
+        accountId: accountId,
+      )
+          .watchDisplayEvents(
+            from: DateTime(2026, 7, 27),
+            through: DateTime(2026, 7, 28, 23),
+          )
+          .first;
+
+      final locators = events.map((e) => e.id).where((id) => id.startsWith('occ_v1.'));
+      // 7-27 and 7-28 fall inside the inclusive range.
+      expect(locators, hasLength(2));
+      final firstOccurrence = events.firstWhere((e) => e.id == locators.first);
+      expect(firstOccurrence.title, '每日晨读');
+      expect(firstOccurrence.location, '图书馆');
+      expect(firstOccurrence.color, '#FF0000');
+      expect(
+        decodeCalendarEventLocator(locators.first),
+        isA<RecurringOccurrenceLocator>(),
+      );
+      // No raw series id / occurrence key leaks into the model id.
+      expect(events.map((e) => e.id), everyElement(isNot(contains('@'))));
+    },
+  );
+
+  test('occurrence disappears when the week changes outside its range', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    const accountId = 'account';
+    await seedActiveAccount(database, accountId);
+    await RecurrenceService(
+      database: database,
+      accountId: accountId,
+      now: () => 100,
+    ).createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: DateTime(2026, 7, 27, 10),
+        endAt: DateTime(2026, 7, 27, 11),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: DateTime(2026, 7, 27, 10),
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 7, 27),
+      ),
+    );
+
+    final repository = EffectiveEventRepository(database, accountId: accountId);
+    final inWeek = await repository
+        .watchDisplayEvents(
+          from: DateTime(2026, 7, 27),
+          through: DateTime(2026, 8, 2, 23),
+        )
+        .first;
+    expect(inWeek.any((e) => e.title == '每周例会'), isTrue);
+
+    final outside = await repository
+        .watchDisplayEvents(
+          from: DateTime(2026, 8, 10),
+          through: DateTime(2026, 8, 16, 23),
+        )
+        .first;
+    expect(outside.any((e) => e.title == '每周例会'), isFalse);
+  });
+
+  test('an exception anchor never duplicates the effective occurrence', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    const accountId = 'account';
+    await seedActiveAccount(database, accountId);
+    final service = RecurrenceService(
+      database: database,
+      accountId: accountId,
+      now: () => 100,
+    );
+    await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每日打卡',
+        startAt: DateTime(2026, 7, 27, 9),
+        endAt: DateTime(2026, 7, 27, 9, 30),
+      ),
+      rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 9)),
+    );
+    // Anchor 7-27; the exception row is a FK back-reference and must not appear
+    // as a second display entry for the same occurrence.
+    final seriesRows = await database.select(database.calendarEventSeries).get();
+    await service.ensureOccurrenceAnchor(seriesRows.single.id, '${seriesRows.single.id}@2026-07-27T09:00:00');
+
+    final events = await EffectiveEventRepository(
+      database,
+      accountId: accountId,
+    )
+        .watchDisplayEvents(
+          from: DateTime(2026, 7, 27),
+          through: DateTime(2026, 7, 27, 23),
+        )
+        .first;
+    expect(
+      events.where((e) => e.id.startsWith('occ_v1.')).toList(),
+      hasLength(1),
+    );
+  });
+
+  test('watch stream re-emits after series and exception table writes', () async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    const accountId = 'account';
+    await seedActiveAccount(database, accountId);
+    final service = RecurrenceService(
+      database: database,
+      accountId: accountId,
+      now: () => 100,
+    );
+    await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每日晨会',
+        startAt: DateTime(2026, 7, 27, 8),
+        endAt: DateTime(2026, 7, 27, 9),
+      ),
+      rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 8)),
+    );
+    final seriesId =
+        (await database.select(database.calendarEventSeries).get()).single.id;
+
+    final repository = EffectiveEventRepository(database, accountId: accountId);
+    final emissions = <List<EffectiveEvent>>[];
+    final sub = repository
+        .watchDisplayEvents(
+          from: DateTime(2026, 7, 27),
+          through: DateTime(2026, 7, 27, 23),
+        )
+        .listen((events) => emissions.add(events));
+    addTearDown(sub.cancel);
+
+    // Initial emission.
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(emissions, hasLength(1));
+
+    // An exception-table write (a time override on one occurrence) must re-emit
+    // and update only that occurrence while preserving its locator.
+    await service.editOnlyThis(
+      seriesId,
+      '${seriesId}@2026-07-27T08:00:00',
+      OccurrenceOverride(startAt: OverrideValue.set(DateTime(2026, 7, 27, 8, 45))),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(emissions, hasLength(2));
+    final updated = emissions.last.firstWhere((e) => e.title == '每日晨会');
+    expect(updated.startAt!.minute, 45);
+    expect(updated.id, emissions.first.firstWhere((e) => e.title == '每日晨会').id,
+        reason: 'edit only this occurrence must preserve its locator');
+
+    // A further series-table write (whole-series edit) must re-emit again.
+    await service.editWholeSeries(
+      seriesId,
+      anchor: PersonalEvent.timed(
+        title: '每日晨会改',
+        startAt: DateTime(2026, 7, 27, 8),
+        endAt: DateTime(2026, 7, 27, 9),
+      ),
+      rule: RecurrenceRule.daily(anchor: DateTime(2026, 7, 27, 8)),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(emissions, hasLength(greaterThanOrEqualTo(3)));
+    expect(
+      emissions.last.any((e) => e.title == '每日晨会改'),
+      isTrue,
+    );
+  });
+}
+
+/// Seeds an active local account so [EffectiveEventRepository] can query its
+/// account-scoped events.
+Future<void> seedActiveAccount(AppDatabase database, String accountId) async {
+  await database
+      .into(database.localAccounts)
+      .insert(
+        LocalAccountsCompanion.insert(
+          id: accountId,
+          maskedHint: 'PB****0000',
+          isActive: const Value(true),
+          createdAt: 1,
+          updatedAt: 1,
+        ),
+      );
 }

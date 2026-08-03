@@ -2,6 +2,9 @@ import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/application/recurring_event_projection.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import '../domain/overlap_engine.dart';
@@ -144,11 +147,22 @@ class EffectiveEventRepository {
   static int resolvedConflictIdsForCalls = 0;
 
   /// The effective events for the account: overlay-resolved, hidden rows
-  /// excluded, whole-day JW course moves projected. This stream is ONLY about
-  /// loading effective events — it does NOT run any conflict projection.
-  /// Consumers (the week page, Agent tools) filter to their own range and run
-  /// ONE bounded projection over that range via [conflictsForItems].
-  Stream<List<EffectiveEvent>> watchDisplayEvents() => database
+  /// excluded, whole-day JW course moves projected. When [from] and
+  /// [through] are supplied, personal recurring series projected over that
+  /// inclusive range are merged into the storage-event stream, so a range-aware
+  /// consumer (the week page) sees stored events and recurring occurrences
+  /// together. This stream is ONLY about loading effective events — it does NOT
+  /// run any conflict projection. Consumers (the week page, Agent tools) filter
+  /// to their own range and run ONE bounded projection over that range via
+  /// [conflictsForItems].
+  ///
+  /// No unbounded recurrence expansion is ever performed: when [from]/[through]
+  /// are absent, no recurring occurrences are projected (no-arg legacy callers
+  /// see only stored events; they do not expand infinite series).
+  Stream<List<EffectiveEvent>> watchDisplayEvents({
+    DateTime? from,
+    DateTime? through,
+  }) => database
       .customSelect(
         '''
 SELECT
@@ -208,16 +222,34 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
           database.planBlocks,
           database.tasks,
           database.jwDayMoves,
+          database.calendarEventSeries,
+          database.calendarEventOccurrenceExceptions,
         },
       )
       .watch()
       .asyncMap((rows) async {
         final moves = await _movesBySourceDate();
-        return [
+        final stored = <EffectiveEvent>[
           for (final row in rows)
             if (row.read<int>('hidden') == 0)
               _displayEvent(row, hasConfirmedConflict: false, moves: moves),
         ];
+        // Merge the bounded recurrence projection only when a range bounds the
+        // expansion; no-arg callers never expand recurring history.
+        if (from == null || through == null) return stored;
+        final recurring = await RecurringEventProjector(
+          service: RecurrenceService(database: database, accountId: accountId),
+        ).projectRange(
+          from: from,
+          through: through,
+          mode: RecurringProjectionMode.display,
+        );
+        final merged = <EffectiveEvent>[
+          ...stored,
+          for (final occurrence in recurring) _occurrenceEvent(occurrence),
+        ];
+        _sortEffective(merged);
+        return merged;
       });
 
   /// Whether the single event [eventId] participates in a conflict, derived by
@@ -337,6 +369,13 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       );
 
   Future<EffectiveEventRecord> byId(String eventId) async {
+    // Recurring occurrences are not stored in `calendar_events`; their load
+    // path expands the series + effective occurrence instead. The locator keeps
+    // the raw series id / occurrence key out of the model-facing id.
+    final decoded = _tryDecodeLocator(eventId);
+    if (decoded is RecurringOccurrenceLocator) {
+      return _occurrenceRecordFromLocator(decoded);
+    }
     final event =
         await (database.select(database.calendarEvents)..where(
               (row) => row.id.equals(eventId) & row.accountId.equals(accountId),
@@ -682,6 +721,142 @@ ORDER BY COALESCE(e.start_at, 0), COALESCE(e.start_date, ''), e.id
       '${value.year.toString().padLeft(4, '0')}-'
       '${value.month.toString().padLeft(2, '0')}-'
       '${value.day.toString().padLeft(2, '0')}';
+
+  /// Decodes an id when it is a well-formed locator; returns null for plain
+  /// stored event ids (which never parse as a locator).
+  CalendarEventLocator? _tryDecodeLocator(String id) {
+    if (!id.startsWith('occ_v1.') &&
+        !id.startsWith('event_v1.') &&
+        !id.startsWith('series_v1.')) {
+      return null;
+    }
+    try {
+      return decodeCalendarEventLocator(id);
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Loads the series plus the effective occurrence for a recurring-occurrence
+  /// locator and maps it into the unified [EffectiveEventRecord] shape so the
+  /// detail loader and conflict editor treat it like any other event.
+  Future<EffectiveEventRecord> _occurrenceRecordFromLocator(
+    RecurringOccurrenceLocator locator,
+  ) async {
+    final service = RecurrenceService(database: database, accountId: accountId);
+    final series = await service.seriesRowOrNull(locator.seriesId);
+    if (series == null) {
+      throw StateError('calendar event not found');
+    }
+    final RecurringOccurrence occurrence;
+    try {
+      occurrence = await service.occurrence(
+        locator.seriesId,
+        locator.occurrenceKey,
+      );
+    } on OccurrenceNotFoundError {
+      throw StateError('calendar event not found');
+    }
+    final record = EffectiveEventRecord(
+      source: _seriesAsEventSource(series),
+      effectiveStartAt: occurrence.allDay ? null : occurrence.startAt,
+      effectiveEndAt: occurrence.allDay ? null : occurrence.endAt,
+      attendance: AttendancePolicy.unknown,
+      attendanceDecision: AttendanceDecision.undecided,
+      attendanceOutcome: AttendanceOutcome.unknown,
+      listeningMode: ListeningMode.unknown,
+      displayTitle: occurrence.title,
+      displayLocation: occurrence.locationName,
+      importance: occurrence.importance,
+      hidden: false,
+      color: occurrence.color,
+    );
+    return record;
+  }
+
+  /// Builds a synthetic [CalendarEvent] view of a series row so the unified
+  /// [EffectiveEventRecord] (which requires a `source`) can carry a recurring
+  /// occurrence's display data. The synthetic row is display-only: it is never
+  /// persisted and its id is the encoded locator, never a raw series id.
+  CalendarEvent _seriesAsEventSource(CalendarEventSery series) {
+    final locator = encodeCalendarEventLocator(
+      RecurringSeriesLocator(seriesId: series.id),
+    );
+    final importance = series.importance;
+    return CalendarEvent(
+      id: locator,
+      accountId: accountId,
+      source: 'user',
+      title: series.title,
+      type: 'personal',
+      status: series.status,
+      allDay: series.allDay,
+      timezone: series.timezone,
+      participantsJson: '[]',
+      sourceDetailsJson: '{}',
+      importance: importance,
+      completionPolicy: series.completionPolicy,
+      tagsJson: series.tagsJson,
+      createdAt: series.createdAt,
+      updatedAt: series.updatedAt,
+      deletedAt: series.deletedAt,
+      locationName: series.locationName,
+      color: series.color,
+      startAt: series.startAt,
+      startDate: series.anchorStartDate,
+    );
+  }
+
+  /// Converts a projected recurring occurrence into an [EffectiveEvent] bound
+  /// to its encoded `occ_v1...` locator. Only safe display fields (title,
+  /// time, location, color) are forwarded — the raw series id / occurrence key
+  /// stay inside the locator and never reach the model/UI.
+  EffectiveEvent _occurrenceEvent(ProjectedRecurringOccurrence occurrence) {
+    final composed = occurrence.occurrence;
+    final locator = encodeCalendarEventLocator(occurrence.locator);
+    final importance = switch (composed.importance) {
+      'low' => EventImportance.low,
+      'high' => EventImportance.high,
+      'critical' => EventImportance.critical,
+      _ => EventImportance.normal,
+    };
+    if (composed.allDay) {
+      return EffectiveEvent.allDay(
+        id: locator,
+        title: composed.title,
+        startDate: composed.startDate!,
+        endDateExclusive: composed.endDateExclusive!,
+        location: composed.locationName,
+        importance: importance,
+        eventType: 'personal',
+        color: composed.color,
+      );
+    }
+    return EffectiveEvent.timed(
+      id: locator,
+      title: composed.title,
+      startAt: composed.startAt!,
+      endAt: composed.endAt!,
+      location: composed.locationName,
+      importance: importance,
+      eventType: 'personal',
+      color: composed.color,
+    );
+  }
+
+  /// Deterministic merge order for the combined stored+recurring event set:
+  /// all-day first by date, then timed by start instant, then a stable id
+  /// tiebreak so the grid layout never flickers between stream emissions.
+  static void _sortEffective(List<EffectiveEvent> events) {
+    events.sort((a, b) {
+      if (a.allDay != b.allDay) return a.allDay ? -1 : 1;
+      final aStart = a.allDay ? a.startDate! : a.startAt!;
+      final bStart = b.allDay ? b.startDate! : b.startAt!;
+      final byStart = aStart.compareTo(bStart);
+      if (byStart != 0) return byStart;
+      return a.id.compareTo(b.id);
+    });
+  }
 
   DateTime _beijingDateTime(int millisecondsSinceEpoch) {
     final shifted = DateTime.fromMillisecondsSinceEpoch(

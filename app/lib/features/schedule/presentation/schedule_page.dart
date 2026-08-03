@@ -316,8 +316,12 @@ class _ScheduleData extends StatelessWidget {
                 database,
                 accountId: account.id,
               );
+              final week = WeekRange.forDate(selectedDate);
               return StreamBuilder<List<EffectiveEvent>>(
-                stream: repository.watchDisplayEvents(),
+                stream: repository.watchDisplayEvents(
+                  from: week.start,
+                  through: week.days.last,
+                ),
                 builder: (context, eventSnapshot) {
                   final events = eventSnapshot.data ?? const [];
                   // ONE bounded projection over the selected 7-day range. The
@@ -325,7 +329,6 @@ class _ScheduleData extends StatelessWidget {
                   // and candidate generation happen here, once, for both the
                   // event and plan-block sides. This removes the old duplicate
                   // repository-wide projection + widget projection.
-                  final week = WeekRange.forDate(selectedDate);
                   final conflictFuture = repository.conflictsForItems(
                     events,
                     from: week.start,

@@ -78,16 +78,23 @@ class _EventDetailLoaderState extends State<EventDetailLoader> {
         final value = snapshot.data;
         if (value == null) return const _MissingEventPage();
         final personal = value.event.source.source == 'user';
+        // Recurring occurrences are not stored as `calendar_events` rows, so
+        // the one-off edit/delete/hide (which target a stored row id) are not
+        // applicable; the detail page still shows the composed occurrence.
+        final recurring = widget.eventId.startsWith('occ_v1.');
         return EventDetailPage(
           event: value.event,
-          onEditPreferences: () => _editPreferences(value),
+          onEditPreferences: recurring ? null : () => _editPreferences(value),
           onHandleOverlaps:
               value.overlaps.length > 1 && widget.onManageOverlaps != null
               ? () => widget.onManageOverlaps!(widget.eventId)
               : null,
-          onHideSourceEvent: personal ? null : () => _hide(value),
-          onEditPersonalEvent: personal ? () => _editPersonal(value) : null,
-          onDeletePersonalEvent: personal ? () => _deletePersonal(value) : null,
+          onHideSourceEvent:
+              personal && !recurring ? null : () => _hide(value),
+          onEditPersonalEvent:
+              personal && !recurring ? () => _editPersonal(value) : null,
+          onDeletePersonalEvent:
+              personal && !recurring ? () => _deletePersonal(value) : null,
         );
       },
     );
