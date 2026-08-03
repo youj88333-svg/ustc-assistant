@@ -260,6 +260,30 @@ class RecurrenceService {
           ))
           .get();
 
+  /// All series owned by the bound [accountId], regardless of effective bounds
+  /// or lifecycle state. Used by the read-only recurrence projection; it never
+  /// materializes occurrences into `calendar_events`.
+  Future<List<CalendarEventSery>> allSeries() =>
+      (database.select(database.calendarEventSeries)
+            ..where((row) => row.accountId.equals(accountId)))
+          .get();
+
+  /// Exposes occurrence composition to the read-only projection. Composes the
+  /// series anchor with an optional exception (override/cancel), preserving the
+  /// original recurrence position even when a time override moves the
+  /// occurrence to a different effective time.
+  RecurringOccurrence composeOccurrence(
+    CalendarEventSery series,
+    DateTime original,
+    CalendarEventOccurrenceException? exception,
+  ) =>
+      _compose(series, original, exception);
+
+  /// Whether [original] falls within the series' stored effective bounds
+  /// (effective_from/effective_through), independent of the recurrence rule.
+  bool withinSeriesBounds(CalendarEventSery series, DateTime original) =>
+      _withinSeriesBounds(series, original);
+
   Future<RecurringOccurrence> occurrence(String seriesId, String key) async {
     final series = await seriesRow(seriesId);
     final original = _originalFromKey(seriesId, key);
