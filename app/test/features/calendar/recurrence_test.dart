@@ -407,8 +407,17 @@ void main() {
       service.ensureOccurrenceAnchor('no-such-series', 'no-such-series@2026-07-07T09:00:00.000'),
       throwsA(isA<OccurrenceNotFoundError>()),
     );
+    // A service bound to a different account must not see account 'a''s series.
+    final otherService = RecurrenceService(
+      database: database,
+      accountId: 'b',
+      now: () => 100,
+    );
     await expectLater(
-      service.ensureOccurrenceAnchor(seriesId, 'wrong-account@2026-07-07T09:00:00.000'),
+      otherService.ensureOccurrenceAnchor(
+        seriesId,
+        occurrenceKey(seriesId, at(2026, 7, 13)),
+      ),
       throwsA(isA<OccurrenceNotFoundError>()),
     );
     await expectLater(
@@ -543,6 +552,65 @@ void main() {
     );
     final rec = await service.occurrence(seriesId, key);
     expect(rec.reminderOffsetsMinutes, isEmpty);
+  });
+
+  test('override with invalid reminder offsets is rejected without writes', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '定时',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 7));
+
+    await expectLater(
+      service.editOnlyThis(
+        seriesId,
+        key,
+        const OccurrenceOverride(
+          reminderOffsetsMinutes: OverrideValue.set([-5, 5, 5]),
+        ),
+      ),
+      throwsA(isA<RecurrenceValidationError>()),
+    );
+    expect(await service.exceptionRows(seriesId), isEmpty);
+  });
+
+  test('override normalizes valid unsorted unique reminder offsets', () async {
+    final database = await fixtureDatabase();
+    addTearDown(database.close);
+    final service = RecurrenceService(
+      database: database,
+      accountId: 'a',
+      now: () => 100,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '定时',
+        startAt: at(2026, 7, 6),
+        endAt: at(2026, 7, 6, 10),
+      ),
+      rule: RecurrenceRule.daily(anchor: at(2026, 7, 6)),
+    );
+    final key = occurrenceKey(seriesId, at(2026, 7, 7));
+    await service.editOnlyThis(
+      seriesId,
+      key,
+      const OccurrenceOverride(
+        reminderOffsetsMinutes: OverrideValue.set([30, 5]),
+      ),
+    );
+    final rec = await service.occurrence(seriesId, key);
+    expect(rec.reminderOffsetsMinutes, [5, 30]);
   });
 
   testWidgets('recurrence editor emits weekly multi-day rules', (tester) async {

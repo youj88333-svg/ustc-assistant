@@ -378,9 +378,10 @@ class RecurrenceService {
     String key,
     OccurrenceOverride override,
   ) async {
+    final normalizedOverride = _normalizeOverrideOffsets(override);
     await database.transaction(() async {
       final current = await occurrence(seriesId, key);
-      final updated = _applyOverride(current, override);
+      final updated = _applyOverride(current, normalizedOverride);
       _validateOccurrence(updated);
       final existing =
           await (database.select(database.calendarEventOccurrenceExceptions)
@@ -410,10 +411,10 @@ class RecurrenceService {
               ),
               kind: 'override',
               overriddenFieldsJson: Value(
-                jsonEncode(override.fields.toList()..sort()),
+                jsonEncode(normalizedOverride.fields.toList()..sort()),
               ),
-              overrideJson: jsonEncode(override.toJson()),
-              status: Value(override.status.value?.storage),
+              overrideJson: jsonEncode(normalizedOverride.toJson()),
+              status: Value(normalizedOverride.status.value?.storage),
               orphaned: const Value(false),
               createdAt: existing?.createdAt ?? timestamp,
               updatedAt: timestamp,
@@ -761,19 +762,43 @@ class RecurrenceService {
       : DateTime.parse(exception.originalStartDate!);
 
   List<int> _normalizeOrValidateOffsets(
-  List<int>? offsets, {
-  required bool allDay,
-}) {
-  final value = offsets ?? (allDay ? const [] : const [15]);
-  if (value.any((offset) => offset < 0) ||
-      value.toSet().length != value.length) {
-    throw const RecurrenceValidationError(
-      'reminder offsets must be non-negative, unique integers',
+    List<int>? offsets, {
+    required bool allDay,
+  }) {
+    final value = offsets ?? (allDay ? const [] : const [15]);
+    return _validateOffsets(value);
+  }
+
+  OccurrenceOverride _normalizeOverrideOffsets(OccurrenceOverride override) {
+    if (!override.reminderOffsetsMinutes.isSet) return override;
+    final normalized = _validateOffsets(override.reminderOffsetsMinutes.value!);
+    return OccurrenceOverride(
+      title: override.title,
+      description: override.description,
+      locationName: override.locationName,
+      startAt: override.startAt,
+      endAt: override.endAt,
+      startDate: override.startDate,
+      endDateExclusive: override.endDateExclusive,
+      status: override.status,
+      completionPolicy: override.completionPolicy,
+      importance: override.importance,
+      color: override.color,
+      tags: override.tags,
+      reminderOffsetsMinutes: OverrideValue.set(normalized),
     );
   }
-  final validated = List<int>.of(value)..sort();
-  return validated;
-}
+
+  List<int> _validateOffsets(List<int> value) {
+    if (value.any((offset) => offset < 0) ||
+        value.toSet().length != value.length) {
+      throw const RecurrenceValidationError(
+        'reminder offsets must be non-negative, unique integers',
+      );
+    }
+    final validated = List<int>.of(value)..sort();
+    return validated;
+  }
 
 void _validateAnchor(PersonalEvent anchor, RecurrenceRule rule) {
     final start = anchor.allDay ? anchor.startDate! : anchor.startAt!;
