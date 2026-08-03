@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import '../../../core/time/beijing_clock.dart';
 import '../../../core/database/app_database.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../../history/application/history_repository.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/application/schedule_conflict_projection.dart';
@@ -453,9 +454,12 @@ class GetScheduleTool implements AgentTool {
       // With no dates: search ALL retained effective events for the account.
       // With dates: apply the same title filter inside the parsed range.
       final noDates = fromStr == null && throughStr == null;
-      final allEvents = await _gateway.displayEvents(context.accountId);
       AgentDateRange? range;
       if (noDates) {
+        // Query-only ordinary-event historical search: read stored display
+        // events across all history (never expands unbounded recurring).
+        final allEvents =
+            await _gateway.allStoredDisplayEvents(context.accountId);
         return _queryEvents(
           allEvents,
           query,
@@ -472,7 +476,12 @@ class GetScheduleTool implements AgentTool {
         );
       }
       range = parsed.range!;
-      final inRange = allEvents
+      final events = await _gateway.displayEvents(
+        context.accountId,
+        from: range.from,
+        through: range.through,
+      );
+      final inRange = events
           .where((e) => _eventInRange(e, range!))
           .toList(growable: false);
       return _queryEvents(
@@ -513,7 +522,11 @@ class GetScheduleTool implements AgentTool {
       );
     }
 
-    final events = await _gateway.displayEvents(context.accountId);
+    final events = await _gateway.displayEvents(
+      context.accountId,
+      from: range.from,
+      through: range.through,
+    );
     final inRange =
         events.where((e) => _eventInRange(e, range)).toList(growable: false);
     if (view == 'course_summary') {
@@ -632,6 +645,7 @@ Future<AgentToolResult> _managementSchedule(
     range = parsed.range;
   }
 
+  // Stored lifecycle events (source=user), filtered by range / title / state.
   final events = await gateway.managementEvents(context.accountId);
   var candidates = events;
   if (range != null) {
@@ -655,10 +669,31 @@ Future<AgentToolResult> _managementSchedule(
         })
         .toList(growable: false);
   }
-  if (candidates.length > agentEventLimit) {
+
+  // Recurring targets: occurrences over the range, or series summaries for a
+  // query-only search. The gateway enforces the range/lifecycle bound (never an
+  // unbounded recurring expansion) and scopes to the account.
+  var recurring = await gateway.recurringManagementTargets(
+    context.accountId,
+    from: range?.from,
+    through: range?.through,
+    query: hasQuery ? query : null,
+    lifecycleStates: lifecycleStates ?? const {},
+  );
+  // When both a range AND a title query are given, the gateway returns all
+  // in-range occurrences (the projection is not title-filtered); apply the
+  // title filter here so only matching occurrences surface.
+  if (range != null && folded != null && folded.isNotEmpty) {
+    recurring = recurring
+        .where((t) => t.title.trim().toLowerCase().contains(folded))
+        .toList(growable: false);
+  }
+
+  final total = candidates.length + recurring.length;
+  if (total > agentEventLimit) {
     return _tooLarge(
       'management events',
-      candidates.length,
+      total,
       agentEventLimit,
       'narrow the query or date range',
     );
@@ -667,10 +702,24 @@ Future<AgentToolResult> _managementSchedule(
   final dtos = <Map<String, Object?>>[];
   final references = <AgentToolReference>[];
   for (final event in candidates) {
-    final ref = context.references.bind(kind: 'event', localId: event.id);
+    // Bind the management ref from the reversible stored-event locator so a
+    // later write preflight can decode it back to the event id.
+    final locator = encodeCalendarEventLocator(
+      StoredEventLocator(eventId: event.id),
+    );
+    final ref = context.references.bind(kind: 'event', localId: locator);
     final dto = _managementEventDto(event, ref);
     dtos.add(dto);
-    references.add(AgentToolReference(kind: 'event', ref: ref, localId: event.id));
+    references.add(
+      AgentToolReference(kind: 'event', ref: ref, localId: locator),
+    );
+  }
+  for (final target in recurring) {
+    final ref = context.references.bind(kind: 'event', localId: target.locator);
+    dtos.add(managementRecurringTargetDto(target, ref));
+    references.add(
+      AgentToolReference(kind: 'event', ref: ref, localId: target.locator),
+    );
   }
   final payload = <String, Object?>{'managementEvents': dtos};
   if (range != null) {
@@ -1160,7 +1209,11 @@ class GetFreeTimeTool implements AgentTool {
       );
     }
     final range = parsed.range!;
-    final events = await _gateway.displayEvents(context.accountId);
+    final events = await _gateway.displayEvents(
+      context.accountId,
+      from: range.from,
+      through: range.through,
+    );
     // As of Task 7: filter to the requested range BEFORE the 200-event limit.
     // The old code checked the limit on ALL events before filtering, so 201
     // out-of-range events plus one in-range event wrongly returned
@@ -1362,7 +1415,11 @@ class GetConflictsTool implements AgentTool {
     }
     final range = parsed.range!;
 
-    final events = await _gateway.displayEvents(context.accountId);
+    final events = await _gateway.displayEvents(
+      context.accountId,
+      from: range.from,
+      through: range.through,
+    );
     final inRangeEvents = events
         .where((e) => _eventInRange(e, range))
         .toList(growable: false);

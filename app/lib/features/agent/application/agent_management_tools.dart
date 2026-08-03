@@ -4,6 +4,40 @@ import '../../schedule/domain/schedule_grid_item.dart';
 import '../domain/agent_tool.dart';
 import 'agent_local_data_gateway.dart';
 
+/// Builds the `get_schedule(view=management)` item DTO for a recurring target
+/// (concrete occurrence or whole-series summary) from the gateway's
+/// [ScheduleManagementTarget]. Never surfaces the locator text, series id,
+/// occurrence key, or DB id.
+///
+/// This is the single place that serializes a recurring management target into
+/// the model-facing three-state shape: a stored event (single scope), a
+/// concrete occurrence (all three scopes), or a series-only summary
+/// (`whole_series` only, no fabricated occurrence time).
+Map<String, Object?> managementRecurringTargetDto(
+  ScheduleManagementTarget target,
+  String ref,
+) {
+  final dto = <String, Object?>{
+    'ref': ref,
+    'title': target.title,
+    'lifecycleState': target.lifecycleState,
+    'isRecurring': true,
+    'availableScopes': target.availableScopes,
+    'eventType': 'personal',
+  };
+  if (target is RecurringOccurrenceManagementTarget) {
+    if (target.startDate != null) {
+      dto['startDate'] = target.startDate;
+    } else if (target.startAt != null) {
+      dto['startAt'] = _fmtDateTime(target.startAt!);
+      if (target.endAt != null) dto['endAt'] = _fmtDateTime(target.endAt!);
+    }
+  }
+  return dto;
+}
+
+String _fmtDateTime(DateTime value) => value.toIso8601String().substring(0, 19);
+
 /// The run-local reference kinds a `ref_target` may resolve to for the
 /// management read tools. Note the RunReferenceStore binds events as `event`,
 /// tasks as `task`, and plan blocks as `planblock`.
@@ -611,5 +645,3 @@ Map<String, Object?> _participantDto(
   }
   return dto;
 }
-
-String _fmtDateTime(DateTime value) => value.toIso8601String().substring(0, 19);

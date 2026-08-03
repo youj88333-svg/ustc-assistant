@@ -6,6 +6,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_local_data_gateway.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_expander.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
@@ -528,6 +533,35 @@ _Harness _harness(AppDatabase database, String accountId) {
   final gateway = DriftAgentLocalDataGateway(database);
   final references = RunReferenceStore(runId: 'run-$accountId');
   return _Harness(gateway, accountId, references);
+}
+
+/// Creates a real recurring series for [accountId] via `RecurrenceService`
+/// (no fake gateway supplies `personalSeriesId`/`occurrenceKey`). Returns the
+/// series id. The anchor is a timed personal event at [anchorStart].
+Future<String> _createRealSeries(
+  AppDatabase database,
+  String accountId,
+  DateTime anchorStart, {
+  String title = '每周例会',
+  DateTime? through,
+}) async {
+  final service = RecurrenceService(
+    database: database,
+    accountId: accountId,
+    now: () => anchorStart.millisecondsSinceEpoch,
+  );
+  return service.createSeries(
+    anchor: PersonalEvent.timed(
+      title: title,
+      startAt: anchorStart,
+      endAt: anchorStart.add(const Duration(hours: 1)),
+    ),
+    rule: RecurrenceRule.weekly(
+      anchor: anchorStart,
+      weekdays: {anchorStart.weekday},
+      untilDate: through,
+    ),
+  );
 }
 
 void main() {
@@ -1288,6 +1322,239 @@ void main() {
         expect(result.errorCode, 'invalid_arguments');
       },
     );
+  });
+
+  group('get_schedule recurring occurrence reachability', () {
+    // Step 1: the REAL DriftAgentLocalDataGateway must return a projected
+    // recurring occurrence when a range is supplied, bind an event ref, and let
+    // that ref decode back to the exact series id + occurrence key. No fake
+    // gateway supplies personalSeriesId/occurrenceKey here.
+    test(
+      'real gateway get_schedule returns a recurring occurrence behind an '
+      'event ref that decodes to the exact series/occurrence',
+      () async {
+        // Mon 2026-08-03 recurring weekly through the month. The shared seed
+        // already creates accounts 'a' and 'b'.
+        final anchor = DateTime(2026, 8, 3, 10, 0);
+        final seriesId = await _createRealSeries(
+          database,
+          'a',
+          anchor,
+          through: DateTime(2026, 8, 31),
+        );
+
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'from': '2026-08-03',
+          'through': '2026-08-04',
+        });
+        expect(result.status, AgentToolStatus.success);
+        final events = result.payload['events']! as List;
+        final byTitle = {
+          for (final e in events)
+            (e! as Map<String, Object?>)['title'] as String: e,
+        };
+        expect(byTitle.containsKey('每周例会'), isTrue,
+            reason: 'the recurring occurrence must appear in the display view');
+
+        // Bind an event ref, resolve it back to the internal id, and decode it.
+        final dto = byTitle['每周例会']! as Map<String, Object?>;
+        final ref = dto['ref']! as String;
+        expect(ref, startsWith('ref_'));
+        final localId = harness.references.resolve(ref: ref, kind: 'event');
+        expect(localId, isNotNull);
+        final decoded = decodeCalendarEventLocator(localId!);
+        expect(decoded, isA<RecurringOccurrenceLocator>());
+        final occ = decoded as RecurringOccurrenceLocator;
+        expect(occ.seriesId, seriesId);
+        // The 2026-08-03 occurrence key encodes the original start.
+        expect(occ.occurrenceKey, occurrenceKey(seriesId, anchor));
+
+        // SECURITY: the raw series id / occurrence key never reach the payload.
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains(seriesId)));
+        expect(encoded, isNot(contains(occurrenceKey(seriesId, anchor))));
+      },
+    );
+
+    // Step 1 edge: an exact-date range that misses the series returns nothing.
+    test('real gateway get_schedule returns no occurrence outside the range',
+        () async {
+      await _createRealSeries(database, 'a', DateTime(2026, 8, 3, 10, 0));
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'from': '2026-09-01',
+        'through': '2026-09-02',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final events = result.payload['events']! as List;
+      expect(
+        events.where(
+          (e) => (e! as Map<String, Object?>)['title'] == '每周例会',
+        ),
+        isEmpty,
+      );
+    });
+
+    // Step 2: management date range + lifecycle state -> concrete occurrence
+    // ref with all three scopes.
+    test(
+      'management date range returns a concrete occurrence ref with all '
+      'three scopes and no identity leak',
+      () async {
+        // A cancelled recurring series within the range: management projects it.
+        final service = RecurrenceService(
+          database: database,
+          accountId: 'a',
+          now: () => DateTime(2026, 8, 3, 10, 0).millisecondsSinceEpoch,
+        );
+        final seriesId = await service.createSeries(
+          anchor: PersonalEvent.timed(
+            title: '已取消的例会',
+            startAt: DateTime(2026, 8, 3, 10, 0),
+            endAt: DateTime(2026, 8, 3, 11, 0),
+            status: EventStatus.cancelled,
+          ),
+          rule: RecurrenceRule.weekly(
+            anchor: DateTime(2026, 8, 3, 10, 0),
+            weekdays: {DateTime.monday},
+            untilDate: DateTime(2026, 8, 31),
+          ),
+        );
+
+        final harness = _harness(database, 'a');
+        final result = await harness.execute('get_schedule', {
+          'view': 'management',
+          'from': '2026-08-03',
+          'through': '2026-08-04',
+          'lifecycle_states': ['cancelled'],
+        });
+        expect(result.status, AgentToolStatus.success);
+        final items = result.payload['managementEvents']! as List;
+        final dto = items.where((i) =>
+            (i! as Map<String, Object?>)['title'] == '已取消的例会');
+        expect(dto, hasLength(1));
+        final target = dto.first! as Map<String, Object?>;
+        expect(target['lifecycleState'], 'cancelled');
+        expect(target['isRecurring'], isTrue);
+        expect(target['availableScopes'],
+            ['only_this', 'this_and_future', 'whole_series']);
+        expect(target['eventType'], 'personal');
+        expect(target['startAt'], '2026-08-03T10:00:00');
+
+        // The ref decodes to the exact occurrence.
+        final ref = target['ref']! as String;
+        final localId = harness.references.resolve(ref: ref, kind: 'event');
+        final decoded = decodeCalendarEventLocator(localId!);
+        expect(decoded, isA<RecurringOccurrenceLocator>());
+        expect((decoded as RecurringOccurrenceLocator).seriesId, seriesId);
+
+        // SECURITY: no series id / occurrence key / DB id leak.
+        final encoded = jsonEncode(result.payload);
+        expect(encoded, isNot(contains(seriesId)));
+        expect(
+          encoded,
+          isNot(contains(occurrenceKey(seriesId, DateTime(2026, 8, 3, 10)))),
+        );
+      },
+    );
+  });
+
+  group('get_schedule management recurring query', () {
+    // Step 2: query only -> whole-series summary, whole_series only.
+    test('query-only management returns a whole-series ref with whole_series scope',
+        () async {
+      await _createRealSeries(database, 'a', DateTime(2026, 8, 3, 10, 0),
+          title: '周培训');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'view': 'management',
+        'query': '培训',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final items = result.payload['managementEvents']! as List;
+      final dto = items.where(
+        (i) => (i! as Map<String, Object?>)['title'] == '周培训',
+      );
+      expect(dto, hasLength(1));
+      final target = dto.first! as Map<String, Object?>;
+      expect(target['isRecurring'], isTrue);
+      expect(target['availableScopes'], ['whole_series']);
+      // A whole-series summary carries NO fabricated occurrence time.
+      expect(target.containsKey('startAt'), isFalse);
+      expect(target.containsKey('startDate'), isFalse);
+
+      // The ref decodes to a series locator (whole-series only).
+      final ref = target['ref']! as String;
+      final localId = harness.references.resolve(ref: ref, kind: 'event');
+      expect(decodeCalendarEventLocator(localId!), isA<RecurringSeriesLocator>());
+    });
+
+    // Step 2: query + date range -> concrete matching occurrence refs.
+    test('query + date range returns concrete matching occurrence refs',
+        () async {
+      await _createRealSeries(database, 'a', DateTime(2026, 8, 3, 10, 0),
+          title: '周培训');
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'view': 'management',
+        'query': '培训',
+        'from': '2026-08-03',
+        'through': '2026-08-04',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final items = result.payload['managementEvents']! as List;
+      final dto = items.where(
+        (i) => (i! as Map<String, Object?>)['title'] == '周培训',
+      );
+      expect(dto, hasLength(1));
+      final target = dto.first! as Map<String, Object?>;
+      expect(target['availableScopes'],
+          ['only_this', 'this_and_future', 'whole_series']);
+      expect(target['startAt'], '2026-08-03T10:00:00');
+    });
+
+    // Step 2: wrong account -> no result.
+    test('wrong account sees none of another account recurring targets',
+        () async {
+      // Accounts 'a' and 'b' are created by _seedDatabase; do not re-insert 'b'.
+      await _createRealSeries(database, 'a', DateTime(2026, 8, 3, 10, 0),
+          title: '周培训');
+      final harness = _harness(database, 'b');
+      final resultRange = await harness.execute('get_schedule', {
+        'view': 'management',
+        'from': '2026-08-03',
+        'through': '2026-08-04',
+      });
+      expect(resultRange.status, AgentToolStatus.success);
+      final allRange = resultRange.payload['managementEvents']! as List;
+      expect(
+        allRange.where(
+          (i) => (i! as Map<String, Object?>)['title'] == '周培训',
+        ),
+        isEmpty,
+      );
+    });
+
+    // Step 2: ordinary (non-recurring) event refs stay unchanged.
+    test('ordinary event refs remain unchanged in management view', () async {
+      final harness = _harness(database, 'a');
+      final result = await harness.execute('get_schedule', {
+        'view': 'management',
+        'from': '2026-07-29',
+        'through': '2026-08-04',
+      });
+      expect(result.status, AgentToolStatus.success);
+      final items = result.payload['managementEvents']! as List;
+      final cancelled = items.where(
+        (i) => (i! as Map<String, Object?>)['title'] == '已取消日程',
+      );
+      expect(cancelled, hasLength(1));
+      final target = cancelled.first! as Map<String, Object?>;
+      expect(target['isRecurring'], isFalse);
+      expect(target['availableScopes'], ['only_this']);
+      expect(target['lifecycleState'], 'cancelled');
+    });
   });
 
   group('get_event_details', () {

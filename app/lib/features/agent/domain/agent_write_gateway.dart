@@ -72,6 +72,23 @@ abstract interface class AgentWriteGateway {
   Future<void> setReminder(String eventId, List<int> offsetsMinutes);
   Future<EventWriteSnapshot> eventSnapshot(String eventId);
   Future<PersonalEvent> personalEvent(String eventId);
+
+  /// Locator-aware event-identity snapshot for the write preflight. Decodes
+  /// [locator] (`event_v1` / `occ_v1` / `series_v1`) and returns the write
+  /// snapshot without any database change:
+  /// - stored event → the stored row's snapshot;
+  /// - recurring occurrence → the composed (override-aware) occurrence;
+  /// - recurring series → the whole-series identity (occurrenceKey null).
+  ///
+  /// Malformed / unknown locators throw deterministically (FormatException for
+  /// a malformed locator, an account-scoped not-found for a missing target) so
+  /// the caller can map to `reference_not_found` / `occurrence_not_found`.
+  Future<EventWriteSnapshot> eventSnapshotByLocator(String locator);
+
+  /// Locator-aware [PersonalEvent] load for the write preflight. Same
+  /// resolution as [eventSnapshotByLocator]; series locators return the
+  /// whole-series anchor as a [PersonalEvent].
+  Future<PersonalEvent> personalEventByLocator(String locator);
   Future<String?> courseSeriesIdForEvent(String eventId);
   Future<TaskItem> taskById(String taskId);
   Future<PlanBlockItem> planBlockById(String planBlockId);

@@ -1,6 +1,10 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/application/recurring_event_projection.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
+import '../../calendar/domain/recurrence_rule.dart';
 import '../../history/application/history_repository.dart';
 import '../../reminders/application/reminder_override_service.dart';
 import '../../schedule/application/conflict_service.dart';
@@ -14,6 +18,93 @@ import '../../tasks/application/undo_recorder.dart';
 import '../../tasks/application/undo_service.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
+
+/// One `get_schedule(view=management)` target: a stored lifecycle event, a
+/// concrete recurring occurrence, or a whole recurring series.
+///
+/// Each target carries a reversible internal [locator] (encoded) plus only the
+/// safe display fields a caller may surface. The raw series id, occurrence key,
+/// and DB id never leave the locator; the tool binds an opaque `ref_*` from
+/// [locator] and re-allowlists the safe fields.
+sealed class ScheduleManagementTarget {
+  const ScheduleManagementTarget({
+    required this.locator,
+    required this.title,
+    required this.lifecycleState,
+    required this.availableScopes,
+  });
+
+  /// The reversible internal locator (event_v1 / occ_v1 / series_v1). This is
+  /// an internal identity bound into the tool reference store; its encoded text
+  /// is never surfaced to the model.
+  final String locator;
+  final String title;
+  final String lifecycleState;
+  final List<String> availableScopes;
+
+  bool get isRecurring;
+}
+
+/// A stored (non-recurring) lifecycle event, e.g. a single cancelled/deleted
+/// personal schedule row.
+class StoredScheduleManagementTarget extends ScheduleManagementTarget {
+  const StoredScheduleManagementTarget({
+    required super.locator,
+    required super.title,
+    required super.lifecycleState,
+    required super.availableScopes,
+    required this.eventType,
+    this.startAt,
+    this.endAt,
+    this.startDate,
+  }) : isRecurring = false;
+
+  final String eventType;
+
+  /// Beijing wall-clock times (naive local), mirroring the raw row encoding.
+  final DateTime? startAt;
+  final DateTime? endAt;
+  final String? startDate;
+
+  @override
+  final bool isRecurring;
+}
+
+/// A concrete occurrence of a recurring personal series within a requested
+/// date range. `availableScopes` is the full only_this/this_and_future/
+/// whole_series set.
+class RecurringOccurrenceManagementTarget extends ScheduleManagementTarget {
+  const RecurringOccurrenceManagementTarget({
+    required super.locator,
+    required super.title,
+    required super.lifecycleState,
+    required super.availableScopes,
+    this.startAt,
+    this.endAt,
+    this.startDate,
+  }) : isRecurring = true;
+
+  final DateTime? startAt;
+  final DateTime? endAt;
+  final String? startDate;
+
+  @override
+  final bool isRecurring;
+}
+
+/// A whole recurring series returned from query-only management search. Carries
+/// no fabricated occurrence time; `availableScopes` is `['whole_series']`.
+class RecurringSeriesManagementTarget extends ScheduleManagementTarget {
+  const RecurringSeriesManagementTarget({
+    required super.locator,
+    required super.title,
+    required super.lifecycleState,
+    required super.availableScopes,
+  }) : isRecurring = true;
+
+  @override
+  final bool isRecurring;
+}
 
 /// A read-only, account-scoped data gateway for the local Agent tools.
 ///
@@ -30,9 +121,25 @@ import '../../tasks/domain/task.dart';
 ///   implementation may import Drift (it owns the DB seam) but no platform
 ///   APIs.
 abstract interface class AgentLocalDataGateway {
-  /// The effective schedule events for the account, as the schedule UI sees
-  /// them (overlay-resolved, conflict-flagged, hidden rows excluded).
-  Future<List<EffectiveEvent>> displayEvents(String accountId);
+  /// The effective schedule events for the account within the inclusive
+  /// Beijing [from]..[through] range, as the schedule UI sees them
+  /// (overlay-resolved, conflict-flagged, hidden rows excluded). The gateway
+  /// reads exactly this range (stored events plus any recurring occurrences
+  /// projected over it); the caller passes the parsed view bound rather than
+  /// fetching all history and filtering in Dart.
+  Future<List<EffectiveEvent>> displayEvents(
+    String accountId, {
+    required DateTime from,
+    required DateTime through,
+  });
+
+  /// The stored display events across ALL retained history for the account
+  /// (overlay-resolved, hidden rows excluded, cancelled/hidden/skipped
+  /// excluded). Used ONLY by query-only title search, which must not expand
+  /// unbounded recurring history: recurring occurrences are not stored, so this
+  /// read never fabricates them. Recurring titles are surfaced separately via
+  /// [recurringManagementTargets] series summaries.
+  Future<List<EffectiveEvent>> allStoredDisplayEvents(String accountId);
 
   /// The full effective record (overlay + attendance/listening/notes) for a
   /// single event. Throws if the event does not exist for this account.
@@ -71,6 +178,23 @@ abstract interface class AgentLocalDataGateway {
   /// cancelled/hidden/deleted rows); it is the explicit management read the
   /// brief requires.
   Future<List<CalendarEvent>> managementEvents(String accountId);
+
+  /// The recurring part of `get_schedule(view=management)`.
+  ///
+  /// When [from]/[through] are supplied, projects the account's recurring
+  /// occurrences over the inclusive range (management mode, filtered to
+  /// [lifecycleStates]) and returns them as [RecurringOccurrenceManagementTarget]s.
+  /// When only [query] is supplied (no range), returns a whole-series summary
+  /// per matching title ([RecurringSeriesManagementTarget], `whole_series` only)
+  /// — never an unbounded recurring expansion. Returns an empty list when
+  /// neither a range nor a query is given. Account-scoped inside the database.
+  Future<List<ScheduleManagementTarget>> recurringManagementTargets(
+    String accountId, {
+    DateTime? from,
+    DateTime? through,
+    String? query,
+    Set<String> lifecycleStates = const {},
+  });
 
   /// All soft-deleted tasks for the account (deletedAt != null), for
   /// `get_tasks(state=deleted)`.
@@ -212,10 +336,26 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
   final AppDatabase _database;
 
   @override
-  Future<List<EffectiveEvent>> displayEvents(String accountId) {
+  Future<List<EffectiveEvent>> displayEvents(
+    String accountId, {
+    required DateTime from,
+    required DateTime through,
+  }) {
     final repository = EffectiveEventRepository(_database, accountId: accountId);
     // `watchDisplayEvents` is a stream; take the first emission so the tool
-    // gets a one-shot future. The underlying custom select runs once.
+    // gets a one-shot future. The underlying custom select runs once, scoped to
+    // the inclusive range, and the repository merges the bounded recurring
+    // projection over that same range.
+    return repository
+        .watchDisplayEvents(from: from, through: through)
+        .first;
+  }
+
+  @override
+  Future<List<EffectiveEvent>> allStoredDisplayEvents(String accountId) {
+    final repository = EffectiveEventRepository(_database, accountId: accountId);
+    // No range -> the repository returns stored events ONLY (no unbounded
+    // recurring expansion), which is exactly the query-only historical pool.
     return repository.watchDisplayEvents().first;
   }
 
@@ -313,6 +453,60 @@ class DriftAgentLocalDataGateway implements AgentLocalDataGateway {
           ..orderBy([(row) => OrderingTerm.asc(row.startAt)]))
         .get();
     return rows;
+  }
+
+  @override
+  Future<List<ScheduleManagementTarget>> recurringManagementTargets(
+    String accountId, {
+    DateTime? from,
+    DateTime? through,
+    String? query,
+    Set<String> lifecycleStates = const {},
+  }) async {
+    final service = RecurrenceService(database: _database, accountId: accountId);
+    final projector = RecurringEventProjector(service: service);
+    if (from != null && through != null) {
+      final occurrences = await projector.projectRange(
+        from: from,
+        through: through,
+        mode: RecurringProjectionMode.management,
+        lifecycleStates: lifecycleStates,
+      );
+      return [
+        for (final occurrence in occurrences)
+          RecurringOccurrenceManagementTarget(
+            locator: encodeCalendarEventLocator(occurrence.locator),
+            title: occurrence.title,
+            lifecycleState: occurrence.lifecycleState,
+            availableScopes: occurrence.availableScopes,
+            startAt: occurrence.occurrence.allDay
+                ? null
+                : occurrence.occurrence.startAt,
+            endAt: occurrence.occurrence.allDay
+                ? null
+                : occurrence.occurrence.endAt,
+            startDate: occurrence.occurrence.allDay
+                ? dateText(occurrence.occurrence.startDate!)
+                : null,
+          ),
+      ];
+    }
+    if (query != null && query.isNotEmpty) {
+      final series = await projector.searchSeries(
+        query: query,
+        lifecycleStates: lifecycleStates,
+      );
+      return [
+        for (final target in series)
+          RecurringSeriesManagementTarget(
+            locator: encodeCalendarEventLocator(target.locator),
+            title: target.title,
+            lifecycleState: target.lifecycleState,
+            availableScopes: target.availableScopes,
+          ),
+      ];
+    }
+    return const [];
   }
 
   @override

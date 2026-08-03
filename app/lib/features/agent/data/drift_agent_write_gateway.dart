@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import '../../../core/database/app_database.dart';
 import '../../calendar/application/calendar_event_service.dart';
 import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../../calendar/domain/personal_event.dart';
 import '../../calendar/domain/recurrence_rule.dart';
 import '../../reminders/application/reminder_override_service.dart';
@@ -238,6 +239,13 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
 
   @override
   Future<EventWriteSnapshot> eventSnapshot(String eventId) async {
+    // A locator id (from the recurring display path or a management ref)
+    // routes to the locator-aware resolution; a plain stored event id follows
+    // the stored-row path below.
+    final locator = _tryDecodeLocator(eventId);
+    if (locator != null) {
+      return eventSnapshotByLocator(eventId);
+    }
     final row = await (database.select(database.calendarEvents)
           ..where((r) => r.id.equals(eventId) & r.accountId.equals(accountId)))
         .getSingleOrNull();
@@ -270,7 +278,146 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   }
 
   @override
-  Future<PersonalEvent> personalEvent(String eventId) => _events.byId(eventId);
+  Future<PersonalEvent> personalEvent(String eventId) {
+    final locator = _tryDecodeLocator(eventId);
+    if (locator != null) {
+      return personalEventByLocator(eventId);
+    }
+    return _events.byId(eventId);
+  }
+
+  @override
+  Future<EventWriteSnapshot> eventSnapshotByLocator(String locator) async {
+    final decoded = decodeCalendarEventLocator(locator);
+    switch (decoded) {
+      case StoredEventLocator(:final eventId):
+        return eventSnapshot(eventId);
+      case RecurringOccurrenceLocator(:final seriesId, :final occurrenceKey):
+        // Deterministic `occurrence_not_found`: a missing series or a non-
+        // contained occurrence both surface as OccurrenceNotFoundError.
+        if (await _recurrence.seriesRowOrNull(seriesId) == null) {
+          throw const OccurrenceNotFoundError();
+        }
+        final occurrence = await _recurrence.occurrence(
+          seriesId,
+          occurrenceKey,
+        );
+        return _snapshotFromOccurrence(occurrence);
+      case RecurringSeriesLocator(:final seriesId):
+        final series = await _recurrence.seriesRow(seriesId);
+        return _snapshotFromSeries(series);
+    }
+  }
+
+  @override
+  Future<PersonalEvent> personalEventByLocator(String locator) async {
+    final decoded = decodeCalendarEventLocator(locator);
+    switch (decoded) {
+      case StoredEventLocator(:final eventId):
+        return personalEvent(eventId);
+      case RecurringOccurrenceLocator(:final seriesId, :final occurrenceKey):
+        if (await _recurrence.seriesRowOrNull(seriesId) == null) {
+          throw const OccurrenceNotFoundError();
+        }
+        final occurrence = await _recurrence.occurrence(
+          seriesId,
+          occurrenceKey,
+        );
+        return _personalEventFromOccurrence(occurrence);
+      case RecurringSeriesLocator(:final seriesId):
+        return seriesAnchor(seriesId);
+    }
+  }
+
+  /// Builds an [EventWriteSnapshot] from a composed recurring occurrence. Only
+  /// safe display fields are forwarded; the series id / occurrence key live
+  /// behind the id (the encoded occurrence locator).
+  EventWriteSnapshot _snapshotFromOccurrence(RecurringOccurrence occurrence) {
+    final id = encodeCalendarEventLocator(
+      RecurringOccurrenceLocator(
+        seriesId: occurrence.seriesId,
+        occurrenceKey: occurrence.occurrenceKey,
+      ),
+    );
+    return EventWriteSnapshot(
+      id: id,
+      source: 'user',
+      type: 'personal',
+      title: occurrence.title,
+      allDay: occurrence.allDay,
+      startAt: occurrence.allDay ? null : occurrence.startAt,
+      endAt: occurrence.allDay ? null : occurrence.endAt,
+      startDate: occurrence.allDay ? occurrence.startDate : null,
+      endDateExclusive: occurrence.allDay ? occurrence.endDateExclusive : null,
+      location: occurrence.locationName,
+      personalSeriesId: occurrence.seriesId,
+      occurrenceKey: occurrence.occurrenceKey,
+    );
+  }
+
+  /// Builds an [EventWriteSnapshot] from a whole-series row. `occurrenceKey` is
+  /// null (whole-series preflight only); the id is the encoded series locator.
+  EventWriteSnapshot _snapshotFromSeries(CalendarEventSery series) {
+    final id = encodeCalendarEventLocator(
+      RecurringSeriesLocator(seriesId: series.id),
+    );
+    return EventWriteSnapshot(
+      id: id,
+      source: 'user',
+      type: 'personal',
+      title: series.title,
+      allDay: series.allDay,
+      startAt: series.startAt == null ? null : _beijingDateTime(series.startAt!),
+      startDate: series.anchorStartDate == null
+          ? null
+          : DateTime.parse(series.anchorStartDate!),
+      location: series.locationName,
+      personalSeriesId: series.id,
+      occurrenceKey: null,
+    );
+  }
+
+  PersonalEvent _personalEventFromOccurrence(RecurringOccurrence occurrence) {
+    if (occurrence.allDay) {
+      return PersonalEvent.allDay(
+        title: occurrence.title,
+        startDate: occurrence.startDate!,
+        endDateExclusive: occurrence.endDateExclusive!,
+        description: occurrence.description,
+        locationName: occurrence.locationName,
+        type: personalEventTypeFromStorage('personal'),
+        status: occurrence.status,
+        completionPolicy: occurrence.completionPolicy,
+        importance: occurrence.importance,
+      );
+    }
+    return PersonalEvent.timed(
+      title: occurrence.title,
+      startAt: occurrence.startAt!,
+      endAt: occurrence.endAt!,
+      description: occurrence.description,
+      locationName: occurrence.locationName,
+      type: personalEventTypeFromStorage('personal'),
+      status: occurrence.status,
+      completionPolicy: occurrence.completionPolicy,
+      importance: occurrence.importance,
+    );
+  }
+
+  /// Decodes [id] when it is a well-formed locator; returns null for a plain
+  /// stored event id (which never parses as a locator).
+  CalendarEventLocator? _tryDecodeLocator(String id) {
+    if (!id.startsWith('event_v1.') &&
+        !id.startsWith('occ_v1.') &&
+        !id.startsWith('series_v1.')) {
+      return null;
+    }
+    try {
+      return decodeCalendarEventLocator(id);
+    } on FormatException {
+      return null;
+    }
+  }
 
   @override
   Future<String?> courseSeriesIdForEvent(String eventId) async {

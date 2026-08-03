@@ -6,7 +6,10 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
@@ -407,5 +410,144 @@ void main() {
       gateway.jwDayMoveClear('2026-08-03'),
       throwsA(isA<MissingJwDayMove>()),
     );
+  });
+
+  // ===========================================================================
+  // Step 5: locator-aware write preflight (read-only; no DB mutation).
+  // ===========================================================================
+
+  test('eventSnapshotByLocator resolves a stored event locator via CalendarEventService', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-pre',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    final locator = encodeCalendarEventLocator(
+      StoredEventLocator(eventId: 'ev-pre'),
+    );
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    expect(snapshot.title, '健身');
+    expect(snapshot.isPersonal, isTrue);
+    expect(snapshot.isRecurring, isFalse);
+    // The stored path uses the DB row directly.
+    expect(snapshot.id, 'ev-pre');
+  });
+
+  test('eventSnapshotByLocator resolves an occurrence locator from RecurrenceService', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    // Resolve the occurrence via RecurrenceService to get its real occurrence key.
+    final occ = (await service.occurrences(seriesId,
+        from: anchor, through: anchor)).single;
+    final locator = encodeCalendarEventLocator(RecurringOccurrenceLocator(
+      seriesId: seriesId,
+      occurrenceKey: occ.occurrenceKey,
+    ));
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    expect(snapshot.title, '每周例会');
+    expect(snapshot.isRecurring, isTrue);
+    expect(snapshot.personalSeriesId, seriesId);
+    expect(snapshot.occurrenceKey, occ.occurrenceKey);
+    // No stored calendar_events row is ever created by the projection/preflight.
+    final storedRows = await db.select(db.calendarEvents).get();
+    expect(storedRows, isEmpty);
+  });
+
+  test('eventSnapshotByLocator resolves a series locator for whole-series preflight', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final locator = encodeCalendarEventLocator(
+      RecurringSeriesLocator(seriesId: seriesId),
+    );
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    expect(snapshot.personalSeriesId, seriesId);
+    // Whole-series preflight carries no occurrence key.
+    expect(snapshot.occurrenceKey, isNull);
+    expect(snapshot.isRecurring, isFalse);
+    expect(snapshot.id, locator);
+  });
+
+  test('eventSnapshotByLocator throws for a malformed locator', () async {
+    await expectLater(
+      gateway.eventSnapshotByLocator('event_v1.%%%not-base64'),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('eventSnapshotByLocator throws OccurrenceNotFoundError for an unknown occurrence', () async {
+    // A plausible series id + occurrence key that no series owns.
+    final locator = encodeCalendarEventLocator(RecurringOccurrenceLocator(
+      seriesId: 'series-missing',
+      occurrenceKey: 'series-missing@2026-08-03T10:00:00',
+    ));
+    await expectLater(
+      gateway.eventSnapshotByLocator(locator),
+      throwsA(isA<OccurrenceNotFoundError>()),
+    );
+  });
+
+  test('eventSnapshot and personalEvent accept a recurring occurrence locator directly', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final occ = (await service.occurrences(seriesId,
+        from: anchor, through: anchor)).single;
+    final locator = encodeCalendarEventLocator(RecurringOccurrenceLocator(
+      seriesId: seriesId,
+      occurrenceKey: occ.occurrenceKey,
+    ));
+    // The existing tool-facing entry points route to the locator-aware path.
+    final snapshot = await gateway.eventSnapshot(locator);
+    expect(snapshot.personalSeriesId, seriesId);
+    final event = await gateway.personalEventByLocator(locator);
+    expect(event.title, '每周例会');
+    expect(event.startAt, anchor);
+    expect(event.startAt!.isAfter(anchor), isFalse);
   });
 }
