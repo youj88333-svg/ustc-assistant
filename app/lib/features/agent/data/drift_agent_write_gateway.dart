@@ -9,11 +9,14 @@ import '../../calendar/domain/calendar_event_locator.dart';
 import '../../calendar/domain/personal_event.dart';
 import '../../calendar/domain/recurrence_rule.dart';
 import '../../reminders/application/reminder_override_service.dart';
+import '../../schedule/application/conflict_service.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/application/overlay_service.dart';
 import '../../tasks/application/plan_block_service.dart';
+import '../../tasks/application/task_event_link_service.dart';
 import '../../tasks/application/task_lifecycle_service.dart';
 import '../../tasks/application/undo_recorder.dart';
+import '../../tasks/application/undo_service.dart';
 import '../../tasks/domain/plan_block.dart';
 import '../../tasks/domain/task.dart';
 import '../../schedule/application/jw_day_move_service.dart';
@@ -58,6 +61,15 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       );
   ReminderOverrideService get _reminders =>
       ReminderOverrideService(database: database, accountId: accountId, undoRecorder: _noopUndo, now: now);
+  ConflictService get _conflicts =>
+      ConflictService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+  TaskEventLinkService get _links => TaskEventLinkService(
+        database: database,
+        accountId: accountId,
+        now: now,
+        undoRecorder: _noopUndo,
+      );
+  UndoService get _undo => UndoService(database: database, accountId: accountId, now: now);
   JwDayMoveService get _dayMoves =>
       JwDayMoveService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
 
@@ -555,6 +567,119 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     enabled: enabled,
     updatedBy: updatedBy,
   );
+
+  @override
+  Future<void> reopenTask(String id, {required int expectedUpdatedAt}) =>
+      _tasks.reopen(id, expectedUpdatedAt: expectedUpdatedAt);
+
+  @override
+  Future<void> restoreTask(String id, {required int expectedUpdatedAt}) =>
+      _tasks.restore(id, expectedUpdatedAt: expectedUpdatedAt);
+
+  @override
+  Future<void> markPlanBlockDone(String id, {required int expectedUpdatedAt, String? note}) =>
+      _planBlocks.markDone(id, expectedUpdatedAt: expectedUpdatedAt, note: note);
+
+  @override
+  Future<void> markPlanBlockSkipped(String id, {required int expectedUpdatedAt, String? note}) =>
+      _planBlocks.markSkipped(id, expectedUpdatedAt: expectedUpdatedAt, note: note);
+
+  @override
+  Future<void> cancelPlanBlock(String id, {required int expectedUpdatedAt}) =>
+      _planBlocks.cancel(id, expectedUpdatedAt: expectedUpdatedAt);
+
+  @override
+  Future<void> softDeletePlanBlock(String id, {required int expectedUpdatedAt}) =>
+      _planBlocks.softDelete(id, expectedUpdatedAt: expectedUpdatedAt);
+
+  @override
+  Future<void> restorePlanBlock(String id, {required int expectedUpdatedAt}) =>
+      _planBlocks.restore(id, expectedUpdatedAt: expectedUpdatedAt);
+
+  @override
+  Future<void> reopenEvent(String eventId) => _events.reopen(eventId);
+
+  @override
+  Future<void> restoreEvent(String eventId) => _events.restore(eventId);
+
+  @override
+  Future<void> clearReminders({
+    required String targetType,
+    required String targetId,
+    required String scope,
+    List<int>? offsets,
+  }) {
+    final clearScope = scope == 'all'
+        ? ReminderClearScope.all
+        : ReminderClearScope.selectedOffsets;
+    return _reminders.clearReminders(
+      targetType: targetType,
+      targetId: targetId,
+      scope: clearScope,
+      offsets: offsets,
+    );
+  }
+
+  @override
+  Future<void> clearOverlayFields({
+    String? eventId,
+    String? courseSeriesId,
+    required List<String> fields,
+  }) =>
+      _overlays.clearOverlayFields(
+        eventId: eventId,
+        courseSeriesId: courseSeriesId,
+        fields: fields,
+      );
+
+  @override
+  Future<void> deleteConflictRelation(String relationId) =>
+      _conflicts.deleteConflictRelation(relationId);
+
+  @override
+  Future<void> deleteConflictRule(String ruleId) =>
+      _conflicts.deleteConflictRule(ruleId);
+
+  @override
+  Future<({int affectedDays, bool over366Days, bool infinite})>
+      conflictRuleRemovalImpact(String ruleId) async {
+    final impact = await _conflicts.conflictRuleRemovalImpact(ruleId);
+    return (
+      affectedDays: impact.affectedOccurrenceCount,
+      over366Days: impact.over366Days,
+      infinite: impact.infinite,
+    );
+  }
+
+  @override
+  Future<void> unlinkTaskEvent({
+    required String taskId,
+    required String eventId,
+    int? expectedTaskUpdatedAt,
+    int? expectedEventUpdatedAt,
+  }) =>
+      _links.unlink(
+        taskId: taskId,
+        eventId: eventId,
+        expectedTaskUpdatedAt: expectedTaskUpdatedAt,
+        expectedEventUpdatedAt: expectedEventUpdatedAt,
+      );
+
+  @override
+  Future<bool> resetPermissionPolicy({
+    required String actionType,
+    required String targetType,
+  }) async {
+    final outcome = await policy.resetPolicy(
+      accountId: accountId,
+      actionType: actionType,
+      targetType: targetType,
+    );
+    return outcome == ResetPolicyOutcome.reset;
+  }
+
+  @override
+  Future<void> undoLastAction() => _undo.undo();
 
   @override
   Future<JwDayMovePreview> jwDayMovePreview(String sourceDate) =>

@@ -122,6 +122,85 @@ abstract interface class AgentWriteGateway {
   Future<PlanBlockItem> planBlockById(String planBlockId);
   Future<void> updatePermissionPolicy({required String actionType, required String targetType, required ConfirmationMode mode, required RiskLevel riskLevel, required bool enabled, required String updatedBy});
 
+  // ---- Task lifecycle (complete/cancel exist above; reopen/restore added) ----
+  Future<void> reopenTask(String id, {required int expectedUpdatedAt});
+  Future<void> restoreTask(String id, {required int expectedUpdatedAt});
+
+  // ---- PlanBlock lifecycle (done/skip/cancel/delete/restore) ----
+  Future<void> markPlanBlockDone(String id, {required int expectedUpdatedAt, String? note});
+  Future<void> markPlanBlockSkipped(String id, {required int expectedUpdatedAt, String? note});
+  Future<void> cancelPlanBlock(String id, {required int expectedUpdatedAt});
+  Future<void> softDeletePlanBlock(String id, {required int expectedUpdatedAt});
+  Future<void> restorePlanBlock(String id, {required int expectedUpdatedAt});
+
+  // ---- Event lifecycle (complete/skip/cancel/softDelete exist; reopen/restore) ----
+  Future<void> reopenEvent(String eventId);
+  Future<void> restoreEvent(String eventId);
+
+  // ---- Reminder clear (Task 7 generalized ReminderOverrideService) ----
+  /// Clears future `desired` reminders for the target. [targetType] is
+  /// `event`/`task`/`plan_block`. `all` scope ignores [offsets];
+  /// `selected_offsets` requires non-empty offsets, every one of which must
+  /// already be a future desired offset (atomic fail on mismatch).
+  Future<void> clearReminders({
+    required String targetType,
+    required String targetId,
+    required String scope, // all | selected_offsets
+    List<int>? offsets,
+  });
+
+  // ---- Overlay clear (Task 7 tri-state OverlayService.clearOverlayFields) ----
+  /// Clears the listed overlay fields for the event's single-event layer
+  /// ([eventId] non-null) or its course-series layer ([courseSeriesId]
+  /// non-null). Exactly one target must be set. Fields may include group
+  /// keys (`attendance`/`listening`/`display`/`appearance`/`all`); an
+  /// unknown key aborts atomically before any write.
+  Future<void> clearOverlayFields({
+    String? eventId,
+    String? courseSeriesId,
+    required List<String> fields,
+  });
+
+  // ---- Schedule relation / rule deletion (Task 8) ----
+  /// Deletes a single user-authored conflict relation row. Missing/foreign
+  /// id throws [ConflictRelationNotFoundError]; a non-user/non-conflict row
+  /// (exam_for_course / derived_overlap) throws [ConflictNotDeletableError].
+  Future<void> deleteConflictRelation(String relationId);
+  /// Deletes a user series conflict rule. Missing/foreign id throws
+  /// [ConflictRelationNotFoundError].
+  Future<void> deleteConflictRule(String ruleId);
+  /// 366-day removal-impact preview for a series rule (affected day count,
+  /// over-366/infinite flags). Missing/foreign id throws
+  /// [ConflictRelationNotFoundError].
+  Future<({int affectedDays, bool over366Days, bool infinite})>
+      conflictRuleRemovalImpact(String ruleId);
+
+  // ---- TaskEventLink unlink (Task 8) ----
+  /// Removes the unique `(account, task, event)` `related` link. Foreign /
+  /// missing / deleted target throws [TaskEventLinkTargetNotFoundError]; a
+  /// missing link throws [TaskEventLinkNotFoundError].
+  Future<void> unlinkTaskEvent({
+    required String taskId,
+    required String eventId,
+    int? expectedTaskUpdatedAt,
+    int? expectedEventUpdatedAt,
+  });
+
+  // ---- Permission policy reset (Task 8) ----
+  /// Removes the `(account, actionType, targetType)` override row, restoring
+  /// the lazy default. Returns true when a row was removed, false when no
+  /// override existed (already_default — no write). A non-resettable action
+  /// (kNonResetableActions) throws [StateError].
+  Future<bool> resetPermissionPolicy({
+    required String actionType,
+    required String targetType,
+  });
+
+  // ---- One-step undo (UndoService) ----
+  /// Reverses the account's most recent undoable action and clears the slot.
+  /// A missing/foreign/malformed slot throws [InvalidUndoCommand].
+  Future<void> undoLastAction();
+
   /// 整日教务课程移动预览：返回符合条件课程的标题（永不含 id）与已有目标日期。
   /// 由 `JwDayMoveService.preview` 支撑；工具本身不触表。
   Future<JwDayMovePreview> jwDayMovePreview(String sourceDate);
