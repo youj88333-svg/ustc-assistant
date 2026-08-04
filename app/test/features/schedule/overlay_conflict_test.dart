@@ -1785,4 +1785,225 @@ void main() {
       );
     });
   });
+
+  group('tri-state overlay clear', () {
+    Future<OverlayService> service(AppDatabase db) => Future.value(
+          OverlayService(
+            database: db,
+            accountId: 'a',
+            now: () => 100,
+          ),
+        );
+
+    test('clear fields physically deletes an all-empty row', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(displayTitle: '改标题'),
+      );
+
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['display_title'],
+      );
+
+      // The only set field was cleared -> row physically deleted.
+      expect(
+        await database.select(database.userOverlays).get(),
+        isEmpty,
+      );
+    });
+
+    test('partial clear preserves other fields', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(displayTitle: 'A', color: 'red'),
+      );
+
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['display_title'],
+      );
+
+      final row = (await database.select(database.userOverlays).get()).single;
+      expect(row.displayTitle, isNull);
+      expect(row.color, 'red');
+    });
+
+    test('field group expands to all member columns', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(
+          displayTitle: 'A',
+          displayLocation: 'L',
+          color: 'red',
+        ),
+      );
+
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['display'],
+      );
+
+      final row = (await database.select(database.userOverlays).get()).single;
+      expect(row.displayTitle, isNull);
+      expect(row.displayLocation, isNull);
+      // Unrelated field preserved.
+      expect(row.color, 'red');
+    });
+
+    test('clearing attendance_decision also clears its timestamp', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+
+      await overlays.recordAttendanceDecision(
+        'event-a',
+        AttendanceDecision.skip,
+      );
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(color: 'red'),
+      );
+
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['attendance_decision'],
+      );
+
+      final row = (await database.select(database.userOverlays).get()).single;
+      expect(row.attendanceDecision, isNull);
+      expect(row.attendanceDecisionAt, isNull);
+      // Other fields preserved.
+      expect(row.color, 'red');
+    });
+
+    test('invalid field aborts atomically with no write', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(color: 'red'),
+      );
+
+      await expectLater(
+        overlays.clearOverlayFields(
+          eventId: 'event-a',
+          fields: ['not_a_field'],
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      final row = (await database.select(database.userOverlays).get()).single;
+      expect(row.color, 'red');
+    });
+
+    test('missing overlay layer is a clean success (already default)', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['display_title'],
+      );
+      expect(await database.select(database.userOverlays).get(), isEmpty);
+      expect(
+        (await database.actionLogsRepository.selectAll())
+            .any((r) => r.result == 'success'),
+        isTrue,
+      );
+    });
+
+    test('single layer clear re-exposes series layer and source default',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+      final repository = EffectiveEventRepository(database, accountId: 'a');
+
+      // Series layer sets attendance=skip; single layer overrides to must_go.
+      await overlays.setSeriesAttendance('series-a', AttendancePolicy.skip);
+      await overlays.setEventAttendance('event-a', AttendancePolicy.mustGo);
+      expect(
+        (await repository.byId('event-a')).attendance,
+        AttendancePolicy.mustGo,
+      );
+
+      // Clear the single_event attendance field -> series layer re-applies.
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['attendance_policy'],
+      );
+      expect(
+        (await repository.byId('event-a')).attendance,
+        AttendancePolicy.skip,
+      );
+    });
+
+    test('series layer clear re-exposes source default', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final overlays = await service(database);
+      final repository = EffectiveEventRepository(database, accountId: 'a');
+
+      await overlays.setSeriesAttendance(
+        'series-a',
+        AttendancePolicy.gamble,
+      );
+      expect(
+        (await repository.byId('event-a')).attendance,
+        AttendancePolicy.gamble,
+      );
+
+      // series-a is a course (event-a type=course) -> source default (unknown).
+      await overlays.clearOverlayFields(
+        courseSeriesId: 'series-a',
+        fields: ['attendance_policy'],
+      );
+      expect(
+        (await repository.byId('event-a')).attendance,
+        AttendancePolicy.unknown,
+      );
+    });
+
+    test('undo restores physically deleted overlay row', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final undo = UndoService(database: database, accountId: 'a');
+      final overlays = OverlayService(
+        database: database,
+        accountId: 'a',
+        undoRecorder: undo,
+      );
+
+      await overlays.setEventOverlay(
+        'event-a',
+        const OverlayMutation(displayTitle: 'A', color: 'red'),
+      );
+      await overlays.clearOverlayFields(
+        eventId: 'event-a',
+        fields: ['display_title', 'color'],
+      );
+      expect(await database.select(database.userOverlays).get(), isEmpty);
+
+      await undo.undo();
+
+      final row = (await database.select(database.userOverlays).get()).single;
+      expect(row.displayTitle, 'A');
+      expect(row.color, 'red');
+    });
+  });
 }

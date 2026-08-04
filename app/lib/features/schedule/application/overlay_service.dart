@@ -5,6 +5,101 @@ import '../../../core/database/app_database.dart';
 import '../../tasks/application/undo_recorder.dart';
 import 'effective_event_repository.dart';
 
+/// The three-state disposition of a single overlay field.
+///
+/// A plain `null` cannot express both "not provided" and "cleared to null",
+/// so edits carry an explicit intent:
+/// - [OverlayFieldIntent.absent]: leave the field unchanged.
+/// - [OverlayFieldIntent.set]: write [value] into the field.
+/// - [OverlayFieldIntent.clear]: set the field back to null (restore default).
+enum OverlayFieldIntent { absent, set, clear }
+
+/// A single overlay field edit carrying its three-state intent.
+class OverlayFieldEdit {
+  const OverlayFieldEdit._(this.intent, this.value);
+
+  const OverlayFieldEdit.absent() : this._(OverlayFieldIntent.absent, null);
+
+  const OverlayFieldEdit.set(Object? value)
+      : this._(OverlayFieldIntent.set, value);
+
+  const OverlayFieldEdit.clear() : this._(OverlayFieldIntent.clear, null);
+
+  final OverlayFieldIntent intent;
+  final Object? value;
+
+  /// The new storage value given the current [current] value.
+  Object? resolveValue(Object? current) => switch (intent) {
+    OverlayFieldIntent.absent => current,
+    OverlayFieldIntent.set => value,
+    OverlayFieldIntent.clear => null,
+  };
+}
+
+/// Overlay field-key vocabulary and group expansion.
+///
+/// Individual keys map 1:1 to a storage column; group keys (`attendance`,
+/// `listening`, `display`, `appearance`, `all`) expand to the union of their
+/// member columns. Unknown keys throw so an invalid field aborts the whole
+/// (atomic) call.
+abstract final class OverlayFieldKeys {
+  static const displayTitle = 'display_title';
+  static const displayLocation = 'display_location';
+  static const attendancePolicy = 'attendance_policy';
+  static const attendanceNote = 'attendance_note';
+  static const attendanceDecision = 'attendance_decision';
+  static const attendanceOutcome = 'attendance_outcome';
+  static const listeningMode = 'listening_mode';
+  static const listeningNote = 'listening_note';
+  static const importance = 'importance';
+  static const color = 'color';
+  static const foregroundPriority = 'foreground_priority';
+  static const hidden = 'hidden';
+  static const userNotes = 'user_notes';
+  static const tags = 'tags';
+
+  static const attendance = 'attendance';
+  static const listening = 'listening';
+  static const display = 'display';
+  static const appearance = 'appearance';
+  static const all = 'all';
+
+  /// Expands [key] (which may be a group) into the set of individual field
+  /// keys it covers. Throws [ArgumentError] for an unknown key.
+  static Set<String> expand(String key) => switch (key) {
+    displayTitle || displayLocation || attendancePolicy || attendanceNote ||
+    attendanceDecision || attendanceOutcome || listeningMode || listeningNote ||
+    importance || color || foregroundPriority || hidden || userNotes || tags =>
+      {key},
+    attendance => {
+      attendancePolicy,
+      attendanceNote,
+      attendanceDecision,
+      attendanceOutcome,
+    },
+    listening => {listeningMode, listeningNote},
+    display => {displayTitle, displayLocation},
+    appearance => {importance, color, foregroundPriority},
+    all => {
+      displayTitle,
+      displayLocation,
+      attendancePolicy,
+      attendanceNote,
+      attendanceDecision,
+      attendanceOutcome,
+      listeningMode,
+      listeningNote,
+      importance,
+      color,
+      foregroundPriority,
+      hidden,
+      userNotes,
+      tags,
+    },
+    _ => throw ArgumentError.value(key, 'field', 'unknown overlay field'),
+  };
+}
+
 class OverlayMutation {
   const OverlayMutation({
     this.displayTitle,
@@ -68,6 +163,124 @@ class OverlayService {
     String courseSeriesId,
     OverlayMutation mutation,
   ) => _upsert(courseSeriesId: courseSeriesId, mutation: mutation);
+
+  /// Clears the given [fields] from an overlay layer atomically.
+  ///
+  /// [courseSeriesId] selects the `course_series` overlay layer; otherwise
+  /// [eventId] selects the `single_event` layer; exactly one is required. Each
+  /// element of [fields] is an individual field key or a group key (expanded by
+  /// [OverlayFieldKeys]). Every key must be valid, the target must exist and be
+  /// owned by the account, and the requested scope must be resolvable —
+  /// otherwise the whole call throws and nothing is written.
+  ///
+  /// Rules:
+  /// - `attendance_decision` clearing also clears `attendance_decision_at`.
+  /// - Partial clearing preserves the other fields on the row.
+  /// - If every field on the row ends up null/empty, the overlay row is
+  ///   physically deleted (restoring pure source defaults).
+  /// - A single_event layer clear re-exposes the course_series layer; a
+  ///   course_series clear re-exposes source defaults.
+  ///
+  /// The write, the `user_overlay_update` ActionLog, and the one-step Undo
+  /// snapshot all land in the same Drift transaction.
+  Future<void> clearOverlayFields({
+    String? eventId,
+    String? courseSeriesId,
+    required List<String> fields,
+  }) async {
+    if (fields.isEmpty) {
+      throw ArgumentError.value(fields, 'fields', 'at least one field required');
+    }
+    if ((eventId == null) == (courseSeriesId == null)) {
+      throw ArgumentError('exactly one overlay target is required');
+    }
+    // Expand groups up-front so an invalid key aborts before any write.
+    final targets = <String>{};
+    for (final field in fields) {
+      targets.addAll(OverlayFieldKeys.expand(field));
+    }
+    // Resolving `course_series_id` needs the event's source series; when the
+    // caller passes an event id but a field implies the series layer they must
+    // pass courseSeriesId explicitly. We only support clearing one layer per
+    // call via the explicit target argument.
+    await database.transaction(() async {
+      await _requireOwnedTarget(
+        eventId: eventId,
+        courseSeriesId: courseSeriesId,
+      );
+      final existing =
+          await (database.select(database.userOverlays)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    (eventId != null
+                        ? row.eventId.equals(eventId)
+                        : row.courseSeriesId.equals(courseSeriesId!)),
+              ))
+              .getSingleOrNull();
+      final timestamp = now();
+      // Clearing attendance_decision always clears its paired timestamp too.
+      final mutableFields = {...targets};
+      if (targets.contains(OverlayFieldKeys.attendanceDecision)) {
+        mutableFields.add('attendance_decision_at');
+      }
+
+      // No overlay row means the target is already at pure defaults — there is
+      // nothing to clear. A successful no-op (absent == default).
+      if (existing == null) {
+        await database.actionLogsRepository.append(
+          accountId: accountId,
+          source: 'user',
+          actionType: 'user_overlay_update',
+          result: 'success',
+          safeSummary: eventId == null
+              ? 'Updated course preferences.'
+              : 'Updated event preferences.',
+          occurredAt: timestamp,
+        );
+        return;
+      }
+
+      final before = _snapshot(existing);
+      final after = _applyClears(existing, mutableFields);
+
+      if (_isEmptyOverlay(after)) {
+        // Every field cleared -> physically delete the row so pure source
+        // defaults (or the series layer) take over.
+        await (database.delete(database.userOverlays)
+              ..where(
+                (row) =>
+                    row.id.equals(existing.id) & row.accountId.equals(accountId),
+              ))
+            .go();
+      } else {
+        await _updateOverlayRow(existing, after, timestamp);
+      }
+
+      await database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: 'user_overlay_update',
+        result: 'success',
+        safeSummary: eventId == null
+            ? 'Updated course preferences.'
+            : 'Updated event preferences.',
+        occurredAt: timestamp,
+      );
+      // Undo captures the complete before row; restoring it reproduces the
+      // pre-clear state even when the row was physically deleted.
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'user_overlay_update',
+          accountId: accountId,
+          payload: {
+            'entity': 'user_overlay',
+            'id': existing.id,
+            'before': before,
+          },
+        ),
+      );
+    });
+  }
 
   Future<void> recordAttendanceDecision(
     String eventId,
@@ -210,6 +423,88 @@ class OverlayService {
       throw StateError('overlay target not found');
     }
   }
+
+  /// Returns a copy of [row] with every field in [fields] (storage-column
+  /// names) set to null. Unlisted fields are preserved.
+  UserOverlay _applyClears(UserOverlay row, Set<String> fields) {
+    String? n(String? v, String field) => fields.contains(field) ? null : v;
+    int? ni(int? v, String field) => fields.contains(field) ? null : v;
+    bool? nb(bool? v, String field) => fields.contains(field) ? null : v;
+    return UserOverlay(
+      id: row.id,
+      accountId: row.accountId,
+      eventId: row.eventId,
+      courseSeriesId: row.courseSeriesId,
+      displayTitle: n(row.displayTitle, 'display_title'),
+      displayLocation: n(row.displayLocation, 'display_location'),
+      attendancePolicy: n(row.attendancePolicy, 'attendance_policy'),
+      attendanceDecision: n(row.attendanceDecision, 'attendance_decision'),
+      attendanceDecisionAt: ni(
+        row.attendanceDecisionAt,
+        'attendance_decision_at',
+      ),
+      attendanceNote: n(row.attendanceNote, 'attendance_note'),
+      attendanceOutcome: n(row.attendanceOutcome, 'attendance_outcome'),
+      listeningMode: n(row.listeningMode, 'listening_mode'),
+      listeningNote: n(row.listeningNote, 'listening_note'),
+      importance: n(row.importance, 'importance'),
+      color: n(row.color, 'color'),
+      foregroundPriority: ni(row.foregroundPriority, 'foreground_priority'),
+      hidden: nb(row.hidden, 'hidden'),
+      userNotes: n(row.userNotes, 'user_notes'),
+      tagsJson: n(row.tagsJson, 'tags'),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    );
+  }
+
+  /// True when no user-facing field on [row] is set (pure defaults / empty).
+  bool _isEmptyOverlay(UserOverlay row) =>
+      row.displayTitle == null &&
+      row.displayLocation == null &&
+      row.attendancePolicy == null &&
+      row.attendanceDecision == null &&
+      row.attendanceDecisionAt == null &&
+      row.attendanceNote == null &&
+      row.attendanceOutcome == null &&
+      row.listeningMode == null &&
+      row.listeningNote == null &&
+      row.importance == null &&
+      row.color == null &&
+      row.foregroundPriority == null &&
+      row.hidden == null &&
+      row.userNotes == null &&
+      row.tagsJson == null;
+
+  /// Persists [updated] (already carrying the post-clear values) over [previous]
+  /// on the existing overlay row.
+  Future<void> _updateOverlayRow(
+    UserOverlay previous,
+    UserOverlay updated,
+    int timestamp,
+  ) =>
+      (database.update(database.userOverlays)
+            ..where((row) => row.id.equals(previous.id)))
+          .write(
+            UserOverlaysCompanion(
+              displayTitle: Value(updated.displayTitle),
+              displayLocation: Value(updated.displayLocation),
+              attendancePolicy: Value(updated.attendancePolicy),
+              attendanceDecision: Value(updated.attendanceDecision),
+              attendanceDecisionAt: Value(updated.attendanceDecisionAt),
+              attendanceNote: Value(updated.attendanceNote),
+              attendanceOutcome: Value(updated.attendanceOutcome),
+              listeningMode: Value(updated.listeningMode),
+              listeningNote: Value(updated.listeningNote),
+              importance: Value(updated.importance),
+              color: Value(updated.color),
+              foregroundPriority: Value(updated.foregroundPriority),
+              hidden: Value(updated.hidden),
+              userNotes: Value(updated.userNotes),
+              tagsJson: Value(updated.tagsJson),
+              updatedAt: Value(timestamp),
+            ),
+          );
 
   /// Loads the overlay configuration for [eventId] in two explicit layers:
   /// the `single_event` layer and the `course_series` layer (resolved via the

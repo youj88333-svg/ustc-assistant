@@ -393,6 +393,90 @@ void main() {
         );
       },
     );
+
+    test('explicit sentinel blocks reconcile rebuild even with history rows',
+        () async {
+      // A course event with a default reminder.
+      await database
+          .into(database.calendarEvents)
+          .insert(
+            CalendarEventsCompanion.insert(
+              id: 'event',
+              accountId: accountId,
+              source: 'user',
+              title: 'event',
+              type: 'course',
+              startAt: Value(now + const Duration(days: 3).inMilliseconds),
+              endAt: Value(
+                now + const Duration(days: 3, hours: 1).inMilliseconds,
+              ),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      final service = ReminderService(database: database, now: () => now);
+      await service.reconcileAll(accountId);
+      // Default 15-min reminder exists.
+      expect(
+        await database.select(database.reminders).get(),
+        hasLength(1),
+      );
+
+      // Write the disable sentinel PLUS delivered/missed history rows. The old
+      // `existing.every(cancelled)` heuristic would see a delivered row and
+      // conclude the target is NOT explicitly disabled, then rebuild defaults.
+      await database
+          .into(database.reminders)
+          .insert(
+            RemindersCompanion.insert(
+              id: 'sentinel',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'event',
+              eventId: const Value('event'),
+              triggerAt: now + const Duration(days: 3).inMilliseconds,
+              state: 'cancelled',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await database
+          .into(database.reminders)
+          .insert(
+            RemindersCompanion.insert(
+              id: 'hist-delivered',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'event',
+              eventId: const Value('event'),
+              offsetMinutes: const Value(15),
+              triggerAt: now - 1000,
+              state: 'delivered',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+      await service.reconcileAll(accountId);
+      await service.reconcileAll(accountId);
+
+      final rows = await database.select(database.reminders).get();
+      // No future desired reminder is (re)built; the sentinel is explicitly
+      // recognized as the disable marker.
+      expect(
+        rows.where((r) => r.state == 'desired'),
+        isEmpty,
+      );
+      // History preserved.
+      expect(rows.singleWhere((r) => r.id == 'hist-delivered').state, 'delivered');
+      // The no-offset cancelled sentinel survived and still means disabled.
+      expect(
+        rows.any((r) => r.state == 'cancelled' && r.offsetMinutes == null),
+        isTrue,
+      );
+    });
   });
 
   group('recurring series reminder reconciliation', () {

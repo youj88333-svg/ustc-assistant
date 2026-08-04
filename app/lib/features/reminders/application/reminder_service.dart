@@ -246,10 +246,13 @@ class ReminderService {
         .map((row) => row.offsetMinutes)
         .whereType<int>()
         .toSet();
-    final explicitlyDisabled =
-        existing.isNotEmpty &&
-        existing.every((row) => row.state == 'cancelled') &&
-        priorOffsets.isEmpty;
+    // Explicitly recognize the disable sentinel (a cancelled row with NO
+    // offset) rather than the previous `every(cancelled)` heuristic, which
+    // stopped recognizing an explicit disable once delivered/missed/failed
+    // history rows (state != cancelled) existed alongside the sentinel.
+    final explicitlyDisabled = existing.any(
+      (row) => row.state == 'cancelled' && row.offsetMinutes == null,
+    );
     final offsets = <int>[
       ...(explicitlyDisabled
           ? const <int>[]
