@@ -22,7 +22,13 @@ class AgentContextBuilder {
   const AgentContextBuilder();
 
   /// Hard ceiling on estimated input tokens sent to the model in one turn.
-  static const int inputTokenBudget = 24000;
+  ///
+  /// Sized to fit the full registered tool set (read + external + write tools,
+  /// including the Task 9 lifecycle/clear/unlink/reset/undo family) plus the
+  /// fixed system prompt and a normal-sized question. The conservative
+  /// `_charsPerToken = 1.0` over-estimates ASCII JSON tool declarations, so
+  /// this ceiling stays well under the model's real context window.
+  static const int inputTokenBudget = 28000;
 
   /// Estimated-input-token watermark at/above which a summary should be
   /// scheduled before the next turn.

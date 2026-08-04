@@ -185,7 +185,9 @@ void main() {
   /// (Flutter lazily builds off-screen children, which would make bottom
   /// tiles unfindable in the default 800x600 surface).
   Future<void> pumpTall(WidgetTester tester, _FakeLlmProvider provider) async {
-    tester.view.physicalSize = const Size(800, 2400);
+    // Task 9 enlarged the Agent permission section (more tool-backed action
+    // rows); the taller viewport keeps the summary/clear buttons on-screen.
+    tester.view.physicalSize = const Size(800, 4800);
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(harness(provider));

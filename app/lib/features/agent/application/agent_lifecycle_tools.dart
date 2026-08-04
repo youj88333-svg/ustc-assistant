@@ -982,29 +982,29 @@ class ResetPermissionPolicyTool extends AgentWriteTool {
   ) async {
     final r = WriteArgumentReader(a, const {'target_action_type'});
     r.rejectUnknownKeys();
-    final actionType = r.requiredString('target_action_type');
+    final targetAction = r.requiredString('target_action_type');
     // 必须是已注册动作；target 由注册表确定，工具不接受任意 target_type。
-    final entry = AgentPermissionPolicyService.kPermissionActions[actionType];
+    final entry = AgentPermissionPolicyService.kPermissionActions[targetAction];
     if (entry == null) {
       throw const FormatException('unknown action type');
     }
-    if (kNonResetableActions.contains(actionType)) {
+    if (kNonResetableActions.contains(targetAction)) {
       throw const FormatException('this action cannot be reset');
     }
     return AgentWriteProposal(
       toolName: name,
-      actionType: actionType,
+      actionType: actionType, // 'reset_permission_policy' (the tool's own action)
       riskLevel: riskLevel,
-      targetType: entry.targetType,
+      targetType: targetType, // 'permission'
       operationLabel: operationLabel,
       previewLines: [
-        '变更：恢复动作 $actionType 的确认策略为默认',
+        '变更：恢复动作 $targetAction 的确认策略为默认',
       ],
       commitParams: {
-        'targetActionType': actionType,
+        'targetActionType': targetAction,
         'targetType': entry.targetType,
       },
-      safeLogSummary: '重置确认策略 $actionType',
+      safeLogSummary: '重置确认策略 $targetAction',
     );
   }
 

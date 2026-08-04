@@ -89,51 +89,53 @@ class _AgentPermissionSectionState extends State<AgentPermissionSection> {
         child: Center(child: CircularProgressIndicator()),
       );
     }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Padding(
-          padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
-          child: Row(children: [
-            Text('Agent 权限', style: Theme.of(context).textTheme.titleMedium),
-            const Spacer(),
-            TextButton(onPressed: _restoreDefaults, child: const Text('恢复默认')),
-          ]),
-        ),
-        for (final (actionType, targetType, label) in kAgentPermissionRows)
-          ListTile(
-            key: Key('perm-$actionType'),
-            title: Text(label),
-            subtitle: Text(_modeLabel(_modes['$actionType:$targetType'] ??
-                AgentPermissionPolicyService.defaultMode(actionType))),
-            trailing: actionType == 'update_permission_policy'
-                ? const Text('始终人工确认')
-                : DropdownButton<ConfirmationMode>(
-                    value: _modes['$actionType:$targetType'] ??
-                        AgentPermissionPolicyService.defaultMode(actionType),
-                    items: ConfirmationMode.values
-                        .map((mode) => DropdownMenuItem(
-                            value: mode, child: Text(_modeLabel(mode))))
-                        .toList(),
-                    onChanged: (mode) {
-                      if (mode != null) _setMode(actionType, targetType, mode);
-                    },
-                  ),
-          ),
-        if (_recent.isNotEmpty) ...[
-          const Divider(),
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text('最近权限变更', style: Theme.of(context).textTheme.titleSmall),
+            padding: const EdgeInsets.only(top: 16, left: 16, right: 16),
+            child: Row(children: [
+              Text('Agent 权限', style: Theme.of(context).textTheme.titleMedium),
+              const Spacer(),
+              TextButton(onPressed: _restoreDefaults, child: const Text('恢复默认')),
+            ]),
           ),
-          for (final log in _recent)
+          for (final (actionType, targetType, label) in kAgentPermissionRows)
             ListTile(
-              dense: true,
-              title: Text(log.safeSummary, maxLines: 1, overflow: TextOverflow.ellipsis),
-              subtitle: Text('${DateTime.fromMillisecondsSinceEpoch(log.occurredAt).toLocal()}'),
+              key: Key('perm-$actionType'),
+              title: Text(label),
+              subtitle: Text(_modeLabel(_modes['$actionType:$targetType'] ??
+                  AgentPermissionPolicyService.defaultMode(actionType))),
+              trailing: actionType == 'update_permission_policy'
+                  ? const Text('始终人工确认')
+                  : DropdownButton<ConfirmationMode>(
+                      value: _modes['$actionType:$targetType'] ??
+                          AgentPermissionPolicyService.defaultMode(actionType),
+                      items: ConfirmationMode.values
+                          .map((mode) => DropdownMenuItem(
+                              value: mode, child: Text(_modeLabel(mode))))
+                          .toList(),
+                      onChanged: (mode) {
+                        if (mode != null) _setMode(actionType, targetType, mode);
+                      },
+                    ),
             ),
+          if (_recent.isNotEmpty) ...[
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Text('最近权限变更', style: Theme.of(context).textTheme.titleSmall),
+            ),
+            for (final log in _recent)
+              ListTile(
+                dense: true,
+                title: Text(log.safeSummary, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text('${DateTime.fromMillisecondsSinceEpoch(log.occurredAt).toLocal()}'),
+              ),
+          ],
         ],
-      ],
+      ),
     );
   }
 }

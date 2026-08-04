@@ -401,7 +401,7 @@ void main() {
     }
   });
 
-  test('UpdateEventTool allowlists event_edit/event_cancel/event_delete from registry',
+  test('UpdateEventTool allowlists event lifecycle actions from registry',
       () async {
     // 计划步骤 4 要求写工具 allowlist 消费同一注册表；新生命周期动作键必须来自
     // kPermissionActions 且风险不高于注册表。
@@ -409,7 +409,10 @@ void main() {
     final updateTool = agentWriteTools(gateway, policy, store, unitOfWork)
         .firstWhere((t) => t.name == 'update_event');
     expect(updateTool.agentWriteAllowances.map((a) => a.actionType).toSet(),
-        {'event_edit', 'event_cancel', 'event_delete'});
+        {
+          'event_edit', 'event_complete', 'event_skip', 'event_cancel',
+          'event_reopen', 'event_delete', 'event_restore',
+        });
     for (final allowance in updateTool.agentWriteAllowances) {
       expect(registry.containsKey(allowance.actionType), isTrue);
       expect(allowance.maxRisk.index <= registry[allowance.actionType]!.defaultRisk.index,

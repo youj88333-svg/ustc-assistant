@@ -703,7 +703,10 @@ void main() {
 
       await tester.pumpWidget(MaterialApp.router(routerConfig: router));
       // Let the account lookup + composition build + history load settle.
-      for (var i = 0; i < 15; i++) {
+      // Task 9 added 8 lifecycle write tools to the registry; the larger
+      // schema set needs more pumps for the composition FutureBuilder to
+      // resolve before the chat input mounts.
+      for (var i = 0; i < 40; i++) {
         await tester.pump(const Duration(milliseconds: 20));
       }
 
@@ -1922,7 +1925,8 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       addTearDown(router.dispose);
 
       await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-      for (var i = 0; i < 15; i++) {
+      // Task 9: enlarged registry needs more pumps for composition build.
+      for (var i = 0; i < 40; i++) {
         await tester.pump(const Duration(milliseconds: 20));
       }
 
@@ -3282,7 +3286,8 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       addTearDown(router.dispose);
 
       await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-      for (var i = 0; i < 20; i++) {
+      // Task 9: enlarged registry needs more pumps for composition build.
+      for (var i = 0; i < 40; i++) {
         await tester.pump(const Duration(milliseconds: 20));
       }
       expect(find.byKey(const Key('agent-chat-input')), findsOneWidget);

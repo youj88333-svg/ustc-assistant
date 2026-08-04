@@ -6,6 +6,7 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tool.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_write_tools.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_lifecycle_tools.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
@@ -18,6 +19,8 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_life
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
+import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
@@ -114,6 +117,8 @@ class _UpdateGateway implements AgentWriteGateway {
   String? cancelledId;
   String? completedId;
   String? skippedId;
+  String? reopenedId;
+  String? restoredId;
   String? editedId;
   PersonalEvent? editedReplacement;
   ({String seriesId, String key, OccurrenceOverride override})? occurrenceEdit;
@@ -149,6 +154,12 @@ class _UpdateGateway implements AgentWriteGateway {
 
   @override
   Future<void> skipEvent(String eventId) async => skippedId = eventId;
+
+  @override
+  Future<void> reopenEvent(String eventId) async => reopenedId = eventId;
+
+  @override
+  Future<void> restoreEvent(String eventId) async => restoredId = eventId;
 
   @override
   Future<void> editPersonalEvent(String eventId, PersonalEvent replacement, {List<int>? reminderOffsetsMinutes}) async {
@@ -347,6 +358,162 @@ class _RelationGateway implements AgentWriteGateway {
   }
 }
 
+/// Task 9 lifecycle/clear/unlink/reset/undo 工具假网关：记录被调方法。
+class _LifecycleGateway implements AgentWriteGateway {
+  String? completedTaskId;
+  Object? completeTaskThrows;
+  String? doneBlockId;
+  String? doneNote;
+  String? cancelledBlockId;
+  String? softDeletedBlockId;
+  String? restoredBlockId;
+  String? reopenedTaskId;
+  String? restoredTaskId;
+  String? reopenedEventId;
+  String? restoredEventId;
+  ({String targetType, String targetId, String scope, List<int>? offsets})?
+      clearedReminders;
+  ({String? eventId, String? courseSeriesId, List<String> fields})?
+      clearedOverlayFields;
+  String? courseSeriesIdForEventResult;
+  ({String taskId, String eventId})? unlinked;
+  bool resetPolicyRemoved = true;
+  String? deletedRelationId;
+  String? deletedRuleId;
+  ({int affectedDays, bool over366Days, bool infinite})? ruleImpact;
+  ({bool available, String summary, String kind, String beijingAt})
+      undoPreviewResult = (available: false, summary: '', kind: '', beijingAt: '');
+  bool undoCalled = false;
+  Object? undoThrows;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
+
+  @override
+  Future<TaskItem> taskById(String taskId) async => TaskItem(
+        id: taskId,
+        title: '准备考试',
+        state: TaskState.active,
+        importance: TaskImportance.normal,
+        createdAt: 1,
+        updatedAt: 1,
+      );
+
+  @override
+  Future<PlanBlockItem> planBlockById(String planBlockId) async => PlanBlockItem(
+        id: planBlockId,
+        taskId: 't1',
+        startAt: DateTime(2026, 8, 4, 9),
+        endAt: DateTime(2026, 8, 4, 10),
+        status: PlanBlockStatus.accepted,
+        locked: false,
+        createdAt: 1,
+        updatedAt: 1,
+      );
+
+  @override
+  Future<void> completeTask(String id, {required int expectedUpdatedAt}) async {
+    final e = completeTaskThrows;
+    if (e != null) throw e;
+    completedTaskId = id;
+  }
+
+  @override
+  Future<void> reopenTask(String id, {required int expectedUpdatedAt}) async =>
+      reopenedTaskId = id;
+
+  @override
+  Future<void> restoreTask(String id, {required int expectedUpdatedAt}) async =>
+      restoredTaskId = id;
+
+  @override
+  Future<void> markPlanBlockDone(String id,
+          {required int expectedUpdatedAt, String? note}) async =>
+      () { doneBlockId = id; doneNote = note; }();
+
+  @override
+  Future<void> markPlanBlockSkipped(String id,
+          {required int expectedUpdatedAt, String? note}) async =>
+      doneBlockId = id;
+
+  @override
+  Future<void> cancelPlanBlock(String id, {required int expectedUpdatedAt}) async =>
+      cancelledBlockId = id;
+
+  @override
+  Future<void> softDeletePlanBlock(String id,
+          {required int expectedUpdatedAt}) async =>
+      softDeletedBlockId = id;
+
+  @override
+  Future<void> restorePlanBlock(String id,
+          {required int expectedUpdatedAt}) async =>
+      restoredBlockId = id;
+
+  @override
+  Future<void> clearReminders({
+    required String targetType,
+    required String targetId,
+    required String scope,
+    List<int>? offsets,
+  }) async {
+    clearedReminders = (targetType: targetType, targetId: targetId, scope: scope, offsets: offsets);
+  }
+
+  @override
+  Future<void> clearOverlayFields({
+    String? eventId,
+    String? courseSeriesId,
+    required List<String> fields,
+  }) async {
+    clearedOverlayFields = (eventId: eventId, courseSeriesId: courseSeriesId, fields: fields);
+  }
+
+  @override
+  Future<String?> courseSeriesIdForEvent(String eventId) async =>
+      courseSeriesIdForEventResult;
+
+  @override
+  Future<void> unlinkTaskEvent({
+    required String taskId,
+    required String eventId,
+    int? expectedTaskUpdatedAt,
+    int? expectedEventUpdatedAt,
+  }) async {
+    unlinked = (taskId: taskId, eventId: eventId);
+  }
+
+  @override
+  Future<bool> resetPermissionPolicy({
+    required String actionType,
+    required String targetType,
+  }) async =>
+      resetPolicyRemoved;
+
+  @override
+  Future<void> deleteConflictRelation(String relationId) async =>
+      deletedRelationId = relationId;
+
+  @override
+  Future<void> deleteConflictRule(String ruleId) async => deletedRuleId = ruleId;
+
+  @override
+  Future<({int affectedDays, bool over366Days, bool infinite})>
+      conflictRuleRemovalImpact(String ruleId) async =>
+          ruleImpact ?? (affectedDays: 0, over366Days: false, infinite: false);
+
+  @override
+  Future<({bool available, String summary, String kind, String beijingAt})>
+      undoPreview() async => undoPreviewResult;
+
+  @override
+  Future<void> undoLastAction() async {
+    undoCalled = true;
+    final e = undoThrows;
+    if (e != null) throw e;
+  }
+}
+
 AgentToolContext _ctx(String runId, {String accountId = 'a1'}) =>
     AgentToolContext(
       accountId: accountId,
@@ -413,6 +580,7 @@ void main() {
     SetReminderTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
     MoveJwCourseDayTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
     UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: store, unitOfWork: unitOfWork),
+    ...agentLifecycleTools(gateway, policy, store, unitOfWork),
   ];
 
   test('schemas declare required args', () {
@@ -1952,5 +2120,499 @@ void main() {
     expect(result.errorCode, 'invalid_write_arguments');
     expect(gw.policyUpdate, isNull,
         reason: 'critical 整日移动不可被权限工具放宽');
+  });
+
+  // ===========================================================================
+  // Task 9: lifecycle tools, update_event compat layer, error mapping
+  // ===========================================================================
+
+  group('Task 9 lifecycle tools', () {
+    test('all schemas declare additionalProperties:false', () {
+      final t = tools();
+      for (final name in const [
+        'update_task',
+        'update_plan_block',
+        'delete_schedule_relation',
+        'clear_reminder',
+        'clear_user_overlay',
+        'unlink_task_event',
+        'reset_permission_policy',
+        'undo_last_action',
+      ]) {
+        final schema = t.firstWhere((x) => x.name == name).inputSchema;
+        expect(schema['additionalProperties'], false,
+            reason: '$name schema must lock additionalProperties:false');
+      }
+    });
+
+    test('update_task completes a task after approval', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'complete'}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.completedTaskId, 't1');
+    });
+
+    test('update_task rejects unknown action', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task');
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'bogus'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('update_plan_block done with note commits after approval', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_plan_block') as UpdatePlanBlockTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'planblock', localId: 'pb1');
+      final result = await tool.execute(
+          {'ref_plan_block': ref, 'action': 'done', 'note': '完成了'}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.doneBlockId, 'pb1');
+      expect(gw.doneNote, '完成了');
+    });
+
+    test('update_plan_block rejects note with cancel', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_plan_block');
+      final ref = h.refs.bind(kind: 'planblock', localId: 'pb1');
+      final result = await tool.execute(
+          {'ref_plan_block': ref, 'action': 'cancel', 'note': 'x'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('clear_reminder selected_offsets clears after approval', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_reminder') as ClearReminderTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_target': ref,
+        'scope': 'selected_offsets',
+        'offsets_minutes': [15, 30],
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.clearedReminders, isNot(isNull));
+      expect(gw.clearedReminders!.scope, 'selected_offsets');
+      expect(gw.clearedReminders!.offsets, [15, 30]);
+    });
+
+    test('clear_reminder all rejects offsets_minutes', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_reminder');
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_target': ref,
+        'scope': 'all',
+        'offsets_minutes': [15],
+      }, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('clear_user_overlay clears single_event fields after approval',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_user_overlay') as ClearUserOverlayTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_event': ref,
+        'scope': 'single_event',
+        'fields': ['display_title'],
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.clearedOverlayFields, isNot(isNull));
+      expect(gw.clearedOverlayFields!.eventId, 'ev1');
+      expect(gw.clearedOverlayFields!.fields, ['display_title']);
+    });
+
+    test('clear_user_overlay course_series resolves series id', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_user_overlay') as ClearUserOverlayTool;
+      final gw = _LifecycleGateway();
+      gw.courseSeriesIdForEventResult = 'ser-1';
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_event': ref,
+        'scope': 'course_series',
+        'fields': ['hidden'],
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.clearedOverlayFields!.courseSeriesId, 'ser-1');
+    });
+
+    test('unlink_task_event commits after approval', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('unlink_task_event') as UnlinkTaskEventTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final taskRef = h.refs.bind(kind: 'task', localId: 't1');
+      final eventRef = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute(
+          {'ref_task': taskRef, 'ref_event': eventRef}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.unlinked, (taskId: 't1', eventId: 'ev1'));
+    });
+
+    test('reset_permission_policy returns already_default when no override',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('reset_permission_policy') as ResetPermissionPolicyTool;
+      final gw = _LifecycleGateway();
+      gw.resetPolicyRemoved = false;
+      tool.attachGateway(gw);
+      final result = await tool.execute(
+          {'target_action_type': 'event_delete'}, h.ctx());
+      // critical + forceConfirmation -> needs confirmation.
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      // already_default is a success result with no log/undo.
+      expect(result.pendingInvocation!.result,
+          completion(predicate<AgentToolResult>((r) =>
+              r.status == AgentToolStatus.success &&
+              r.payload['result'] == 'already_default')));
+    });
+
+    test('reset_permission_policy rejects non-resettable action', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('reset_permission_policy');
+      final result = await tool.execute(
+          {'target_action_type': 'move_jw_course_day'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('reset_permission_policy rejects unknown action', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('reset_permission_policy');
+      final result = await tool.execute(
+          {'target_action_type': 'bogus_action'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('undo_last_action proposes with preview and commits', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('undo_last_action') as UndoLastActionTool;
+      final gw = _LifecycleGateway();
+      gw.undoPreviewResult = (
+        available: true,
+        summary: '删除日程 健身',
+        kind: 'calendar_event_delete',
+        beijingAt: '2026-08-04T15:00',
+      );
+      tool.attachGateway(gw);
+      final result = await tool.execute({}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.undoCalled, isTrue);
+    });
+
+    test('undo_last_action with no slot returns invalid_write_arguments',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('undo_last_action') as UndoLastActionTool;
+      final gw = _LifecycleGateway();
+      gw.undoPreviewResult = (
+        available: false,
+        summary: '',
+        kind: '',
+        beijingAt: '',
+      );
+      tool.attachGateway(gw);
+      final result = await tool.execute({}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('delete_schedule_relation resolves a relation ref', () async {
+      final h = _Harness(tools());
+      final tool =
+          h.tool('delete_schedule_relation') as DeleteScheduleRelationTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'schedule_relation', localId: 'rel-1');
+      final result = await tool.execute({'ref_relation': ref}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.deletedRelationId, 'rel-1');
+    });
+
+    test('delete_schedule_relation resolves a rule ref with impact preview',
+        () async {
+      final h = _Harness(tools());
+      final tool =
+          h.tool('delete_schedule_relation') as DeleteScheduleRelationTool;
+      final gw = _LifecycleGateway();
+      gw.ruleImpact = (affectedDays: 42, over366Days: false, infinite: false);
+      tool.attachGateway(gw);
+      final ref =
+          h.refs.bind(kind: 'schedule_relation_rule', localId: 'rule-1');
+      final proposal = await tool.propose({'ref_relation': ref}, h.ctx());
+      expect(proposal.actionType, 'delete_schedule_relation_rule');
+      expect(proposal.previewLines.any((l) => l.contains('42 天')), isTrue);
+    });
+
+    test('lifecycle tool commit maps TaskNotFoundError to target_not_found',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      gw.completeTaskThrows = TaskNotFoundError();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'complete'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'target_not_found');
+    });
+
+    test('lifecycle tool commit maps StaleTaskCommand to stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      gw.completeTaskThrows = StaleTaskCommand();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'complete'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'stale_target');
+    });
+
+    test('lifecycle tool commit maps InvalidUndoCommand to no_undo_available',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('undo_last_action') as UndoLastActionTool;
+      final gw = _LifecycleGateway();
+      gw.undoPreviewResult = (
+        available: true,
+        summary: '删除日程',
+        kind: 'calendar_event_delete',
+        beijingAt: '2026-08-04T15:00',
+      );
+      gw.undoThrows = const InvalidUndoCommand();
+      tool.attachGateway(gw);
+      final result = await tool.execute({}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'no_undo_available');
+    });
+
+    test('lifecycle tool results contain no DB id or ref', () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't-secret-123');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'complete'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      final payload = commitResult.payload;
+      // Safe fields only.
+      expect(payload.keys.toSet(), {'result', 'action'});
+      expect(payload.toString(), isNot(contains('t-secret-123')));
+    });
+  });
+
+  group('update_event compat layer', () {
+    UpdateEventTool newTool(_UpdateGateway gw) {
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      return tool;
+    }
+
+    test('action=cancel commits via cancelEvent', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'action': 'cancel'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.cancelledId, 'ev-1');
+    });
+
+    test('action=restore commits via restoreEvent', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'action': 'restore'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.restoredId, 'ev-1');
+    });
+
+    test('action=complete commits via completeEvent', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'action': 'complete'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.completedId, 'ev-1');
+    });
+
+    test('legacy delete:true still maps to delete action', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'delete': true}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.softDeletedId, 'ev-1');
+    });
+
+    test('mixing action with legacy delete returns invalid_write_arguments',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'delete', 'delete': true}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('lifecycle action with field edits returns invalid_write_arguments',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'cancel', 'title': '改标题'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('edit action without fields returns invalid_write_arguments',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'action': 'edit'}, h.ctx());
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
+
+    test('source!=user returns source_event_not_editable', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'ustc_jw',
+          type: 'course',
+          title: '线性代数',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 8),
+          endAt: DateTime(2026, 8, 1, 9));
+      final tool = newTool(gw);
+      final h = _Harness(tools());
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'cancel'}, h.ctx());
+      // source!=user is rejected in propose as FormatException -> invalid.
+      expect(result.status, AgentToolStatus.error);
+      expect(result.errorCode, 'invalid_write_arguments');
+    });
   });
 }
