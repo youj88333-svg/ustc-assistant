@@ -100,4 +100,71 @@ void main() {
     await pumpSection(tester);
     expect(find.text('重置全部权限策略为默认'), findsOneWidget);
   });
+
+  testWidgets('a custom override row is marked and offers per-item restore',
+      (tester) async {
+    await policy.updatePolicy(
+        accountId: 'a1',
+        actionType: 'create_event',
+        targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium,
+        enabled: true,
+        updatedBy: 'user');
+    await pumpSection(tester);
+
+    // The overridden row is marked as a custom override.
+    expect(find.byKey(const Key('perm-override-create_event')), findsOneWidget);
+    // A per-item restore-to-default control is present for the custom row.
+    expect(find.byKey(const Key('perm-restore-create_event')), findsOneWidget);
+  });
+
+  testWidgets('a default (non-overridden) row shows no per-item restore',
+      (tester) async {
+    await pumpSection(tester);
+    // No custom override exists, so no per-item restore control renders.
+    expect(find.byKey(const Key('perm-restore-create_event')), findsNothing);
+    expect(find.byKey(const Key('perm-override-create_event')), findsNothing);
+  });
+
+  testWidgets('per-item restore removes only that single override', (
+    tester,
+  ) async {
+    await policy.updatePolicy(
+        accountId: 'a1',
+        actionType: 'create_event',
+        targetType: 'event',
+        mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium,
+        enabled: true,
+        updatedBy: 'user');
+    await policy.updatePolicy(
+        accountId: 'a1',
+        actionType: 'create_task',
+        targetType: 'task',
+        mode: ConfirmationMode.alwaysAllow,
+        riskLevel: RiskLevel.medium,
+        enabled: true,
+        updatedBy: 'user');
+    await pumpSection(tester);
+
+    await tester.tap(find.byKey(const Key('perm-restore-create_event')));
+    await tester.pumpAndSettle();
+
+    final remaining = await policy.listPolicies('a1');
+    // Only the create_task override remains; create_event was reset to default.
+    expect(remaining.map((r) => r.actionType).toSet(), {'create_task'});
+  });
+
+  testWidgets('critical rows stay non-relaxable with no per-item restore', (
+    tester,
+  ) async {
+    await pumpSection(tester);
+    // update_permission_policy is critical: shows the locked label, no
+    // dropdown, and crucially no per-item restore control (it is in
+    // kNonResetableActions).
+    expect(find.text('始终人工确认'), findsWidgets);
+    expect(find.byKey(const Key('perm-restore-update_permission_policy')),
+        findsNothing);
+  });
 }

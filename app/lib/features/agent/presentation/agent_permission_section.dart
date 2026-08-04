@@ -81,6 +81,24 @@ class _AgentPermissionSectionState extends State<AgentPermissionSection> {
     await _load();
   }
 
+  /// Restores a SINGLE policy override to its lazy default (the Agent
+  /// `reset_permission_policy` tool resets one item at a time; this is the
+  /// manual UI equivalent). Critical actions in [kNonResetableActions] never
+  /// get this control — the row stays locked to its default.
+  Future<void> _restoreSingle(String actionType, String targetType) async {
+    await widget.policyService.resetPolicy(
+      accountId: widget.accountId,
+      actionType: actionType,
+      targetType: targetType,
+    );
+    await _load();
+  }
+
+  /// Whether a row carries a custom override (a stored policy row), distinct
+  /// from the lazy default.
+  bool _isOverridden(String actionType, String targetType) =>
+      _modes.containsKey('$actionType:$targetType');
+
   @override
   Widget build(BuildContext context) {
     if (_loading) {
@@ -104,22 +122,27 @@ class _AgentPermissionSectionState extends State<AgentPermissionSection> {
           for (final (actionType, targetType, label) in kAgentPermissionRows)
             ListTile(
               key: Key('perm-$actionType'),
-              title: Text(label),
+              title: Row(
+                children: [
+                  Flexible(child: Text(label)),
+                  if (_isOverridden(actionType, targetType)) ...[
+                    const SizedBox(width: 6),
+                    // Marks this row as carrying a custom override (a stored
+                    // policy row distinct from the lazy default). Kept as a
+                    // keyed widget so tests can assert its presence without
+                    // matching translatable text.
+                    Icon(
+                      key: Key('perm-override-$actionType'),
+                      Icons.tune,
+                      size: 14,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
+                  ],
+                ],
+              ),
               subtitle: Text(_modeLabel(_modes['$actionType:$targetType'] ??
                   AgentPermissionPolicyService.defaultMode(actionType))),
-              trailing: actionType == 'update_permission_policy'
-                  ? const Text('始终人工确认')
-                  : DropdownButton<ConfirmationMode>(
-                      value: _modes['$actionType:$targetType'] ??
-                          AgentPermissionPolicyService.defaultMode(actionType),
-                      items: ConfirmationMode.values
-                          .map((mode) => DropdownMenuItem(
-                              value: mode, child: Text(_modeLabel(mode))))
-                          .toList(),
-                      onChanged: (mode) {
-                        if (mode != null) _setMode(actionType, targetType, mode);
-                      },
-                    ),
+              trailing: _rowTrailing(actionType, targetType),
             ),
           if (_recent.isNotEmpty) ...[
             const Divider(),
@@ -136,6 +159,46 @@ class _AgentPermissionSectionState extends State<AgentPermissionSection> {
           ],
         ],
       ),
+    );
+  }
+
+  /// Builds the trailing control for a policy row.
+  ///
+  /// Critical actions (`update_permission_policy`, `reset_permission_policy`,
+  /// `move_jw_course_day` — [kNonResetableActions]) stay locked to their
+  /// default with a plain "始终人工确认" label: no dropdown to relax them, and
+  /// no per-item restore (the reset tool itself rejects them). Configurable
+  /// actions get a dropdown; when a custom override exists, a per-item
+  /// restore-to-default icon is appended next to the dropdown so the user can
+  /// revert just that one row without touching the others.
+  Widget _rowTrailing(String actionType, String targetType) {
+    if (actionType == 'update_permission_policy' ||
+        kNonResetableActions.contains(actionType)) {
+      return const Text('始终人工确认');
+    }
+    final dropdown = DropdownButton<ConfirmationMode>(
+      value: _modes['$actionType:$targetType'] ??
+          AgentPermissionPolicyService.defaultMode(actionType),
+      items: ConfirmationMode.values
+          .map((mode) =>
+              DropdownMenuItem(value: mode, child: Text(_modeLabel(mode))))
+          .toList(),
+      onChanged: (mode) {
+        if (mode != null) _setMode(actionType, targetType, mode);
+      },
+    );
+    if (!_isOverridden(actionType, targetType)) return dropdown;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        IconButton(
+          key: Key('perm-restore-$actionType'),
+          tooltip: '恢复此项默认',
+          icon: const Icon(Icons.restore, size: 18),
+          onPressed: () => _restoreSingle(actionType, targetType),
+        ),
+        dropdown,
+      ],
     );
   }
 }
