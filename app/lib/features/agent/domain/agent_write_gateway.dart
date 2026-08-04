@@ -1,3 +1,4 @@
+import '../../calendar/application/recurrence_lifecycle_service.dart';
 import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/personal_event.dart';
 import '../../calendar/domain/recurrence_rule.dart';
@@ -95,6 +96,27 @@ abstract interface class AgentWriteGateway {
   /// resolution as [eventSnapshotByLocator]; series locators return the
   /// whole-series anchor as a [PersonalEvent].
   Future<PersonalEvent> personalEventByLocator(String locator);
+  /// The scoped lifecycle preview for a repeating occurrence/series, used by
+  /// the write preflight to decide whether `scope_required` must be returned.
+  /// [occurrenceKey] is null for a whole-series target. Account-scoped.
+  Future<RecurringImpactPreview> recurringLifecycleImpactPreview(
+    String seriesId, {
+    String? occurrenceKey,
+    RecurringActionScope? scope,
+    RecurringLifecycleAction? action,
+  });
+
+  /// Applies a scoped lifecycle action to a repeating occurrence or the whole
+  /// series ([RecurringActionScope.wholeSeries] when [occurrenceKey] is null).
+  /// Agent writes suppress the per-action Undo slot (the outer unit-of-work
+  /// owns the undo slot), so the implementation uses a Noop undo recorder.
+  Future<void> recurringLifecycle(
+    String seriesId, {
+    required String? occurrenceKey,
+    required RecurringActionScope scope,
+    required RecurringLifecycleAction action,
+  });
+
   Future<String?> courseSeriesIdForEvent(String eventId);
   Future<TaskItem> taskById(String taskId);
   Future<PlanBlockItem> planBlockById(String planBlockId);

@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../calendar/application/calendar_event_service.dart';
+import '../../calendar/application/recurrence_lifecycle_service.dart';
 import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/calendar_event_locator.dart';
 import '../../calendar/domain/personal_event.dart';
@@ -50,6 +51,11 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       OverlayService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
   RecurrenceService get _recurrence =>
       RecurrenceService(database: database, accountId: accountId, now: now);
+  RecurringLifecycleService get _lifecycle => RecurringLifecycleService(
+        database: database,
+        accountId: accountId,
+        now: now,
+      );
   ReminderOverrideService get _reminders =>
       ReminderOverrideService(database: database, accountId: accountId, undoRecorder: _noopUndo, now: now);
   JwDayMoveService get _dayMoves =>
@@ -453,6 +459,67 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       return decodeCalendarEventLocator(id);
     } on FormatException {
       return null;
+    }
+  }
+
+  @override
+  Future<RecurringImpactPreview> recurringLifecycleImpactPreview(
+    String seriesId, {
+    String? occurrenceKey,
+    RecurringActionScope? scope,
+    RecurringLifecycleAction? action,
+  }) => _lifecycle.previewImpact(
+    seriesId: seriesId,
+    occurrenceKey: occurrenceKey,
+    scope: scope,
+    action: action,
+  );
+
+  @override
+  Future<void> recurringLifecycle(
+    String seriesId, {
+    required String? occurrenceKey,
+    required RecurringActionScope scope,
+    required RecurringLifecycleAction action,
+  }) {
+    if (occurrenceKey == null) {
+      switch (action) {
+        case RecurringLifecycleAction.cancel:
+          return _lifecycle.cancelSeries(seriesId);
+        case RecurringLifecycleAction.delete:
+          return _lifecycle.deleteSeries(seriesId);
+        case RecurringLifecycleAction.reopen:
+          return _lifecycle.reopenSeries(seriesId);
+        case RecurringLifecycleAction.restore:
+          return _lifecycle.restoreSeries(seriesId);
+      }
+    }
+    final key = occurrenceKey;
+    switch (action) {
+      case RecurringLifecycleAction.cancel:
+        return _lifecycle.cancel(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: scope,
+        );
+      case RecurringLifecycleAction.delete:
+        return _lifecycle.delete(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: scope,
+        );
+      case RecurringLifecycleAction.reopen:
+        return _lifecycle.reopen(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: scope,
+        );
+      case RecurringLifecycleAction.restore:
+        return _lifecycle.restore(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: scope,
+        );
     }
   }
 

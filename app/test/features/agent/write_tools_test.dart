@@ -14,6 +14,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_unit_of_work.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
@@ -117,6 +118,8 @@ class _UpdateGateway implements AgentWriteGateway {
   PersonalEvent? editedReplacement;
   ({String seriesId, String key, OccurrenceOverride override})? occurrenceEdit;
   ({String seriesId, PersonalEvent anchor})? wholeSeriesEdit;
+  ({String seriesId, String? key, RecurringActionScope scope, RecurringLifecycleAction action})?
+      lifecycleCall;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
@@ -160,6 +163,39 @@ class _UpdateGateway implements AgentWriteGateway {
   Future<SeriesEditImpact> editWholeSeries(String seriesId, {required PersonalEvent anchor}) async {
     wholeSeriesEdit = (seriesId: seriesId, anchor: anchor);
     return const SeriesEditImpact(affectedOccurrences: 8, newlyOrphaned: 0, continuesBeyondHorizon: true);
+  }
+
+  @override
+  Future<RecurringImpactPreview> recurringLifecycleImpactPreview(
+    String seriesId, {
+    String? occurrenceKey,
+    RecurringActionScope? scope,
+    RecurringLifecycleAction? action,
+  }) async => const RecurringImpactPreview(
+    title: '例会',
+    occurrenceStart: null,
+    affectedOccurrences: 1,
+    over366Days: false,
+    infinite: false,
+    affectedReminders: 0,
+    affectedExceptions: 0,
+    affectedRelations: 0,
+    availableScopes: ['only_this', 'this_and_future', 'whole_series'],
+  );
+
+  @override
+  Future<void> recurringLifecycle(
+    String seriesId, {
+    required String? occurrenceKey,
+    required RecurringActionScope scope,
+    required RecurringLifecycleAction action,
+  }) async {
+    lifecycleCall = (
+      seriesId: seriesId,
+      key: occurrenceKey,
+      scope: scope,
+      action: action,
+    );
   }
 }
 
@@ -608,6 +644,46 @@ void main() {
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.wholeSeriesEdit!.seriesId, 'ser-1');
     expect(gw.wholeSeriesEdit!.anchor.title, '例会（改）');
+  });
+
+  test('update_event recurring delete routes to lifecycle with this_and_future scope', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    final result = await update.execute(
+      {'ref_event': ref, 'scope': 'this_and_future', 'delete': true}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.lifecycleCall!.seriesId, 'ser-1');
+    expect(gw.lifecycleCall!.key, 'ser-1@2026-08-05T15:00:00');
+    expect(gw.lifecycleCall!.scope, RecurringActionScope.thisAndFuture);
+    expect(gw.lifecycleCall!.action, RecurringLifecycleAction.delete);
+    expect(gw.softDeletedId, isNull);
+  });
+
+  test('update_event recurring cancel routes to lifecycle with whole_series scope', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    final result = await update.execute(
+      {'ref_event': ref, 'scope': 'whole_series', 'status': 'cancelled'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.lifecycleCall!.seriesId, 'ser-1');
+    expect(gw.lifecycleCall!.key, 'ser-1@2026-08-05T15:00:00');
+    expect(gw.lifecycleCall!.scope, RecurringActionScope.wholeSeries);
+    expect(gw.lifecycleCall!.action, RecurringLifecycleAction.cancel);
+    expect(gw.cancelledId, isNull);
   });
 
   test('update_event rejects whole_series time changes', () async {

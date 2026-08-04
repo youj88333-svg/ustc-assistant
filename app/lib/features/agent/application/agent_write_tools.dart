@@ -1,3 +1,4 @@
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_expander.dart';
@@ -622,8 +623,8 @@ class UpdateEventTool extends AgentWriteTool {
     'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string', 'description': '来自 get_schedule 的 ref_*'},
-      'scope': {'type': 'string', 'enum': ['only_this', 'whole_series'], 'default': 'only_this',
-          'description': '重复系列编辑范围；非重复事件忽略此字段'},
+      'scope': {'type': 'string', 'enum': ['only_this', 'this_and_future', 'whole_series'], 'default': 'only_this',
+          'description': '重复系列编辑/删除/取消范围；非重复事件忽略此字段'},
       'title': {'type': 'string'},
       'start_at': {'type': 'string'},
       'end_at': {'type': 'string'},
@@ -667,7 +668,7 @@ class UpdateEventTool extends AgentWriteTool {
     final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
-    final scope = r.optionalEnum('scope', const {'only_this', 'whole_series'}) ?? 'only_this';
+    final scope = r.optionalEnum('scope', const {'only_this', 'this_and_future', 'whole_series'}) ?? 'only_this';
     final status = r.optionalEnum('status', const {'cancelled', 'completed', 'skipped'});
     final delete = r.optionalBool('delete') ?? false;
 
@@ -779,10 +780,45 @@ class UpdateEventTool extends AgentWriteTool {
     }
 
     if (delete) {
+      // Recurring occurrences/series delete across the chosen scope.
+      final seriesId = identity.personalSeriesId;
+      if (seriesId != null) {
+        await gateway.recurringLifecycle(
+          seriesId,
+          occurrenceKey: identity.occurrenceKey,
+          scope: _actionScope(scope),
+          action: RecurringLifecycleAction.delete,
+        );
+        return AgentToolResult(
+          payload: {
+            'result': 'deleted_event',
+            if (identity.occurrenceKey != null) 'scope': scope,
+          },
+        );
+      }
       await gateway.softDeleteEvent(eventId);
       return AgentToolResult(payload: {'result': 'deleted_event'});
     }
     if (status != null) {
+      if (status == 'cancelled') {
+        // Recurring occurrences/series cancel across the chosen scope.
+        final seriesId = identity.personalSeriesId;
+        if (seriesId != null) {
+          await gateway.recurringLifecycle(
+            seriesId,
+            occurrenceKey: identity.occurrenceKey,
+            scope: _actionScope(scope),
+            action: RecurringLifecycleAction.cancel,
+          );
+          return AgentToolResult(
+            payload: {
+              'result': 'updated_event',
+              'status': status,
+              if (identity.occurrenceKey != null) 'scope': scope,
+            },
+          );
+        }
+      }
       switch (status) {
         case 'cancelled':
           await gateway.cancelEvent(eventId);
@@ -895,6 +931,12 @@ class UpdateEventTool extends AgentWriteTool {
 
   static DateTime _dateOnly(DateTime value) => DateTime(value.year, value.month, value.day);
 
+  static RecurringActionScope _actionScope(String scope) => switch (scope) {
+        'this_and_future' => RecurringActionScope.thisAndFuture,
+        'whole_series' => RecurringActionScope.wholeSeries,
+        _ => RecurringActionScope.onlyThis,
+      };
+
   static OccurrenceOverride _buildOverride(Map<String, Object?> fields) => OccurrenceOverride(
     title: fields.containsKey('title') ? OverrideValue.set(fields['title'] as String) : const OverrideValue.absent(),
     description: fields.containsKey('description')
@@ -924,7 +966,6 @@ class UpdateEventTool extends AgentWriteTool {
   );
 }
 
-/// 为用户对某个事件或整门课设置个人标注（出勤/听讲/显示名/重要性/隐藏）。
 class CreateUserOverlayTool extends AgentWriteTool {
   CreateUserOverlayTool({required super.gateway, required super.policy, required super.confirmationStore, required super.unitOfWork});
 

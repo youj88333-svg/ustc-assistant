@@ -8,6 +8,7 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
@@ -749,5 +750,79 @@ void main() {
       reminders.single.triggerAt,
       anchor.subtract(const Duration(minutes: 15)).millisecondsSinceEpoch,
     );
+  });
+
+  test('recurringLifecycle delete only_this writes a tombstone, account-scoped', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final occurrence = (await service.occurrences(
+      seriesId,
+      from: DateTime(2026, 8, 10),
+      through: DateTime(2026, 8, 10, 23),
+    )).single;
+
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: occurrence.occurrenceKey,
+      scope: RecurringActionScope.onlyThis,
+      action: RecurringLifecycleAction.delete,
+    );
+
+    final exception = await service.existingOccurrenceAnchor(
+      seriesId,
+      occurrence.occurrenceKey,
+    );
+    expect(exception, isNotNull);
+    expect(exception!.deletedAt, isNotNull);
+    // Whole-series still active; no occurrence materialized.
+    expect((await service.seriesRow(seriesId)).deletedAt, isNull);
+    expect(await db.select(db.calendarEvents).get(), isEmpty);
+  });
+
+  test('recurringLifecycle delete whole_series sets deletedAt only', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: null,
+      scope: RecurringActionScope.wholeSeries,
+      action: RecurringLifecycleAction.delete,
+    );
+
+    expect((await service.seriesRow(seriesId)).deletedAt, isNotNull);
+    expect(await db.select(db.calendarEvents).get(), isEmpty);
   });
 }

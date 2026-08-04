@@ -2,11 +2,13 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_expander.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/calendar/presentation/recurrence_editor.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 DateTime at(int year, int month, int day, [int hour = 9]) =>
     DateTime(year, month, day, hour);
@@ -632,5 +634,492 @@ void main() {
     await tester.pump();
     expect(changed?.frequency, RecurrenceFrequency.weekly);
     expect(changed?.weekdays, {DateTime.monday, DateTime.wednesday});
+  });
+
+  group('recurring lifecycle (three scopes)', () {
+    RecurringLifecycleService lifecycle(AppDatabase database) =>
+        RecurringLifecycleService(
+          database: database,
+          accountId: 'a',
+          now: () => 100,
+        );
+
+    Future<String> weeklySeries(
+      RecurrenceService service, {
+      required DateTime anchor,
+      DateTime? through,
+    }) => service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {anchor.weekday},
+        untilDate: through,
+      ),
+    );
+
+    test('unscoped infinite repeat action surface scope_required via preview',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(service, anchor: at(2026, 7, 6)); // infinite
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      final preview = await lifecycle(database).previewImpact(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        action: RecurringLifecycleAction.delete,
+      );
+      expect(preview.requiresScope, isTrue);
+      expect(preview.scopeRequired, isTrue);
+
+      final scoped = await lifecycle(database).previewImpact(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+        action: RecurringLifecycleAction.delete,
+      );
+      expect(scoped.scopeRequired, isFalse);
+    });
+
+    test('preview of an infinite weekly series marks infinite and over366',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(service, anchor: at(2026, 7, 6)); // infinite
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      // scope_required must be surfaced for an unscoped delete/restore.
+      final ambiguous = await lifecycle(database).previewImpact(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        action: RecurringLifecycleAction.delete,
+      );
+      expect(ambiguous.scopeRequired, isTrue);
+      expect(ambiguous.requiresScope, isTrue);
+
+      final scoped = await lifecycle(database).previewImpact(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.thisAndFuture,
+        action: RecurringLifecycleAction.delete,
+      );
+      expect(scoped.infinite, isTrue);
+      expect(scoped.over366Days, isTrue);
+      expect(scoped.availableScopes, [
+        'only_this',
+        'this_and_future',
+        'whole_series',
+      ]);
+    });
+
+    test('only_this cancel writes a status override and reopen reverts it',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      await lifecycle(database).cancel(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+
+      final occurrence = await service.occurrence(seriesId, key);
+      expect(occurrence.status, EventStatus.cancelled);
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception!.status, 'cancelled');
+      expect(exception.deletedAt, isNull);
+
+      // Reopen restores the series' own status.
+      await lifecycle(database).reopen(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+      final reopened = await service.occurrence(seriesId, key);
+      expect(reopened.status, EventStatus.active);
+      // Reopen reverted the cancel by removing the status-only override row.
+      final after = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(after, isNull);
+    });
+
+    test('only_this delete creates a tombstone and restore clears it', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      await lifecycle(database).delete(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception, isNotNull);
+      expect(exception!.deletedAt, isNotNull);
+
+      await lifecycle(database).restore(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+      final restored = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(restored!.deletedAt, isNull);
+    });
+
+    test('only_this delete on a real override keeps the override and sets deletedAt',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+      await service.editOnlyThis(
+        seriesId,
+        key,
+        const OccurrenceOverride(title: OverrideValue.set('改名')),
+      );
+
+      await lifecycle(database).delete(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception!.deletedAt, isNotNull);
+      expect(exception.overrideJson.contains('改名'), isTrue);
+    });
+
+    test('whole_series cancel/deactivate/restore never materializes occurrences',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final before = await database
+          .select(database.calendarEvents)
+          .get();
+
+      await lifecycle(database).cancelSeries(seriesId);
+      expect((await service.seriesRow(seriesId)).status, 'cancelled');
+      expect((await service.seriesRow(seriesId)).deletedAt, isNull);
+
+      await lifecycle(database).reopenSeries(seriesId);
+      expect((await service.seriesRow(seriesId)).status, 'active');
+      final after = await database.select(database.calendarEvents).get();
+      expect(after, hasLength(before.length));
+    });
+
+    test('whole_series delete sets deletedAt and restore clears it', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+
+      await lifecycle(database).deleteSeries(seriesId);
+      expect((await service.seriesRow(seriesId)).deletedAt, 100);
+
+      await lifecycle(database).restoreSeries(seriesId);
+      expect((await service.seriesRow(seriesId)).deletedAt, isNull);
+    });
+
+    test('this_and_future delete splits, hits the new segment, keeps history',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId = await weeklySeries(
+        service,
+        anchor: at(2026, 7, 6),
+        through: DateTime(2026, 7, 27),
+      );
+      // A history-only exception before the split stays on the old segment.
+      final beforeKey = occurrenceKey(seriesId, at(2026, 7, 6));
+      await service.editOnlyThis(
+        seriesId,
+        beforeKey,
+        const OccurrenceOverride(title: OverrideValue.set('历史')),
+      );
+
+      await lifecycle(database).delete(
+        seriesId: seriesId,
+        occurrenceKey: occurrenceKey(seriesId, at(2026, 7, 13)),
+        scope: RecurringActionScope.thisAndFuture,
+      );
+
+      // The old segment no longer contains the deleted future occurrence.
+      final oldSeries = await service.seriesRow(seriesId);
+      expect(oldSeries.effectiveThrough, '2026-07-12');
+      final oldException = await service.existingOccurrenceAnchor(
+        seriesId,
+        occurrenceKey(seriesId, at(2026, 7, 6)),
+      );
+      expect(oldException!.overrideJson.contains('历史'), isTrue);
+      expect(oldException.deletedAt, isNull);
+
+      // A NEW segment exists and is soft-deleted.
+      final allSeries = await service.allSeries();
+      expect(allSeries, hasLength(2));
+      final newSeries = allSeries.firstWhere((row) => row.deletedAt != null);
+      expect(newSeries.deletedAt, isNotNull);
+      expect(newSeries.id, isNot(seriesId));
+    });
+
+    test('this_and_future cancel + reopen acts only on the new segment', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId = await weeklySeries(
+        service,
+        anchor: at(2026, 7, 6),
+        through: DateTime(2026, 7, 27),
+      );
+
+      await lifecycle(database).cancel(
+        seriesId: seriesId,
+        occurrenceKey: occurrenceKey(seriesId, at(2026, 7, 13)),
+        scope: RecurringActionScope.thisAndFuture,
+      );
+      final cancelled = await service.allSeries();
+      expect(cancelled, hasLength(2));
+      final cancelledNew =
+          cancelled.firstWhere((row) => row.id != seriesId);
+      expect(cancelledNew.status, 'cancelled');
+      // Old segment untouched.
+      expect((await service.seriesRow(seriesId)).status, 'active');
+
+      // Reopen must target the NEW segment that owns the 7/13 occurrence after
+// the split (the original series was truncated to end 7/12).
+final reopenedSeriesId = cancelledNew.id;
+      await lifecycle(database).reopen(
+        seriesId: reopenedSeriesId,
+        occurrenceKey: occurrenceKey(reopenedSeriesId, at(2026, 7, 13)),
+        scope: RecurringActionScope.thisAndFuture,
+      );
+      final afterReopen = await service.allSeries();
+      expect(afterReopen, hasLength(2));
+      final reopenedNew =
+          afterReopen.firstWhere((row) => row.id == reopenedSeriesId);
+      expect(reopenedNew.status, 'active');
+      expect((await service.seriesRow(seriesId)).status, 'active');
+    });
+
+    test('finite series beyond the 366-day horizon is flagged', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      // Weekly for ~2 years -> untilDate well beyond a 366-day horizon.
+      final seriesId = await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '长线例会',
+          startAt: at(2026, 7, 6),
+          endAt: at(2026, 7, 6, 10),
+        ),
+        rule: RecurrenceRule.weekly(
+          anchor: at(2026, 7, 6),
+          weekdays: {DateTime.monday},
+          untilDate: DateTime(2028, 7, 31),
+        ),
+      );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      final preview = await lifecycle(database).previewImpact(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.thisAndFuture,
+        action: RecurringLifecycleAction.delete,
+      );
+      expect(preview.infinite, isFalse);
+      expect(preview.over366Days, isTrue);
+      expect(preview.requiresScope, isTrue);
+      expect(preview.availableScopes, [
+        'only_this',
+        'this_and_future',
+        'whole_series',
+      ]);
+    });
+
+    test('version recheck rejects a stale series', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+      final series = await service.seriesRow(seriesId);
+
+      await expectLater(
+        lifecycle(database).delete(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: RecurringActionScope.onlyThis,
+          expectedSeriesUpdatedAt: series.updatedAt - 1,
+        ),
+        throwsA(isA<StaleRecurringTarget>()),
+      );
+    });
+
+    test('lifecycle action records an Undo snapshot in the same transaction',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId = await weeklySeries(
+        service,
+        anchor: at(2026, 7, 6),
+        through: DateTime(2026, 7, 27),
+      );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      // Use a real UndoService so the lifecycle's undoRecorder writes the slot
+      // inside the same Drift transaction as the mutation.
+      final undo = UndoService(database: database, accountId: 'a');
+      final lifecycle = RecurringLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+        undoRecorder: undo,
+      );
+
+      await lifecycle.cancel(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+
+      final slot = await database.select(database.undoSlot).getSingle();
+      expect(slot.payload, contains('recurring_cancel'));
+      expect(slot.payload, isNot(contains('RawException')));
+    });
+
+    test('a wrong account cannot act on another account series', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'b',
+              maskedHint: 'PB****0001',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId =
+          await weeklySeries(
+            service,
+            anchor: at(2026, 7, 6),
+            through: DateTime(2026, 7, 27),
+          );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+
+      final other = RecurringLifecycleService(
+        database: database,
+        accountId: 'b',
+        now: () => 100,
+      );
+      await expectLater(
+        other.delete(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: RecurringActionScope.onlyThis,
+        ),
+        throwsA(isA<OccurrenceNotFoundError>()),
+      );
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception, isNull);
+    });
   });
 }
