@@ -682,6 +682,18 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   Future<void> undoLastAction() => _undo.undo();
 
   @override
+  Future<({bool available, String summary, String kind, String beijingAt})>
+      undoPreview() async {
+    final preview = await _undo.preview();
+    return (
+      available: preview.available,
+      summary: preview.summary,
+      kind: preview.kind,
+      beijingAt: preview.beijingAt,
+    );
+  }
+
+  @override
   Future<JwDayMovePreview> jwDayMovePreview(String sourceDate) =>
       _dayMoves.preview(sourceDate);
 

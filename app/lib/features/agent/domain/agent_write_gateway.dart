@@ -201,6 +201,12 @@ abstract interface class AgentWriteGateway {
   /// A missing/foreign/malformed slot throws [InvalidUndoCommand].
   Future<void> undoLastAction();
 
+  /// Account-safe preview of the most recent undoable action (availability,
+  /// safe summary, action kind, Beijing timestamp). Never mutates the slot;
+  /// a missing or foreign-account slot reports `available: false`.
+  Future<({bool available, String summary, String kind, String beijingAt})>
+      undoPreview();
+
   /// 整日教务课程移动预览：返回符合条件课程的标题（永不含 id）与已有目标日期。
   /// 由 `JwDayMoveService.preview` 支撑；工具本身不触表。
   Future<JwDayMovePreview> jwDayMovePreview(String sourceDate);
