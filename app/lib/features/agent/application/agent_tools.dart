@@ -2286,6 +2286,15 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
       'set_reminder': (raw) => _pick(raw, _writeResultKeys),
       'move_jw_course_day': (raw) => _pick(raw, _writeResultKeys),
       'update_permission_policy': (raw) => _pick(raw, _writeResultKeys),
+      // Task 9 lifecycle/clear/unlink/reset/undo tools: same safe allowlist.
+      'update_task': (raw) => _pick(raw, _writeResultKeys),
+      'update_plan_block': (raw) => _pick(raw, _writeResultKeys),
+      'delete_schedule_relation': (raw) => _pick(raw, _writeResultKeys),
+      'clear_reminder': (raw) => _pick(raw, _writeResultKeys),
+      'clear_user_overlay': (raw) => _pick(raw, _writeResultKeys),
+      'unlink_task_event': (raw) => _pick(raw, _writeResultKeys),
+      'reset_permission_policy': (raw) => _pick(raw, _writeResultKeys),
+      'undo_last_action': (raw) => _pick(raw, _writeResultKeys),
     };
 
 /// Write-tool results only carry safe summary fields. This unified allowlist
@@ -2293,7 +2302,7 @@ Map<String, ToolPayloadBuilder> agentToolPayloadBuilders() => {
 /// produced by commit payloads, and even if one leaked it would be dropped here.
 const _writeResultKeys = {
   'result', 'guidance', 'title', 'status', 'decision',
-  'action_type', 'affected_occurrences', 'start_at',
+  'action', 'scope', 'action_type', 'affected_occurrences', 'start_at',
 };
 
 /// Copies only the allowlisted [keys] from [raw] into a fresh map. Keys not

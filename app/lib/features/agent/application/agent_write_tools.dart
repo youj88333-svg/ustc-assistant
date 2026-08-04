@@ -17,6 +17,7 @@ import '../domain/agent_write_proposal.dart';
 import '../domain/agent_write_unit_of_work.dart';
 import 'agent_permission_policy_service.dart';
 import 'agent_write_tool.dart';
+import 'agent_lifecycle_tools.dart';
 import 'run_reference_store.dart';
 import 'write_argument_reader.dart';
 
@@ -1896,4 +1897,5 @@ List<AgentWriteTool> agentWriteTools(
   SetReminderTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
   MoveJwCourseDayTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
   UpdatePermissionPolicyTool(gateway: gateway, policy: policy, confirmationStore: confirmationStore, unitOfWork: unitOfWork),
+  ...agentLifecycleTools(gateway, policy, confirmationStore, unitOfWork),
 ];
