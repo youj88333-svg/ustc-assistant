@@ -34,6 +34,26 @@ Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保�
    预览只显示目标标题/时间等模型安全信息，不含 DB id/ref；写参数经
    WriteArgumentReader 严格运行时校验，非法参数拒绝为 `invalid_write_arguments`
    且不产生 DB 变更。
+   完整删除与生命周期工具（`feature/delete-tools` 分支，提示词版本 8）：在 11 个
+   写工具之上新增 9 个生命周期/清除/撤回写工具（update_task/update_plan_block/
+   delete_schedule_relation/clear_reminder/clear_user_overlay/unlink_task_event/
+   reset_permission_policy/undo_last_action，以及 update_event 扩展 action=
+   cancel/reopen/delete/restore 与重复 scope only_this/this_and_future/
+   whole_series）和 8 个管理态/配置态只读工具（get_schedule(view=management)、
+   get_tasks(state=deleted)、get_plan_blocks(include_deleted)、
+   get_schedule_relations、get_reminders、get_user_overlay、
+   get_last_undoable_action、get_task_details）。个人 CalendarEvent/Task/PlanBlock/
+   重复系列只软删除（`deletedAt`），学校课程/考试/二课/SourceRecord 不可由这些工具
+   删除；课程/考试/二课删除请求被拒绝并解释，仅在用户明确同意后本地隐藏。配置型
+   记录可物理清除但同事务写 Agent ActionLog 与完整 Undo 快照。普通工具额度仍为
+   12/run，create_task Burst 32 一次性 Lease 不变，删除工具不借用 Burst；多对象
+   逐项执行无 batch/delete-all，顺序 mutation ledger 准确汇总。Agent 写入用
+   NoopUndoRecorder 不占用一步撤回槽；undo_last_action 撤回最近一次用户可撤回操作，
+   账号隔离、一次性消费。最小管理 UI 提供取消/删除分组与重开/恢复入口。组合级
+   生命周期回归（13 个场景）与只读来源回归见
+   `app/test/integration/agent_composition_flow_test.dart`、
+   `app/test/integration/read_only_agent_flow_test.dart`。本轮真实人工验收尚未执行，
+   清单见 `docs/agent-complete-delete-tools-retest-2026-08-03.md`（`完成：`留空）。
    人工验收修复轮（2026-08-01 调试计划 Tasks 1–10）已全部完成：Grounding Policy
    + tool_choice 受限纠错（显式操作必须真实调用工具，自由聊天从不强制；提示词
    版本 4）、输出净化与重复调用熔断、`get_schedule(query=...)` 标题查询跨历史定位

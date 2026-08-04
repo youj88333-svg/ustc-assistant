@@ -631,4 +631,31 @@ Next: Task N+1
 
 ## 执行证据（由 Task 12 更新）
 
-计划编写阶段只完成 Spec/Plan/交接文档，没有修改生产代码，也没有执行人工验收。Task 12 必须把本节替换为：最终 HEAD、按序 Task commits、聚焦和全量测试准确结果、Windows Release 路径、人工验收状态、残余限制和最终工作树状态。
+Tasks 1–11 在 `feature/delete-tools` 分支逐 Task 提交并各自独立审查（见
+`git log --oneline feature/delete-tools`）。Task 12 为收尾任务，最终验证如下
+（worktree `E:/107/.worktrees/delete-tools-plan`，2026-08-05）：
+
+- **最终 HEAD**：`685cb86 test(agent): add lifecycle composite regression for delete tools`
+  （后续 `test(agent): close complete deletion workflows` 提交会改写哈希）。
+- **Task 12 commit**：`685cb86 test(agent): add lifecycle composite regression for delete tools`
+  （组合回归 13 场景 + 只读来源回归）。
+- **组合测试**：`agent_composition_flow_test.dart` 的 `Task 12 lifecycle composite
+  regression` 组覆盖 brief 13 场景（真实 composition registry + Drift + unit-of-work）；
+  `read_only_agent_flow_test.dart` 的 `Task 12 read-only source regression` 组确认
+  catalog 来源仍可执行。既有 Burst/管理态/服务级/预算/grounding 覆盖未重复。
+- **全量 Python**：`python -m unittest discover -s tests` → 394 项全部通过。
+- **Python 编译**：`python -m compileall -q src tests` → 退出码 0。
+- **Flutter analyze**：13 项既有 info/warning（本轮未改动文件，无 error）；本轮两个
+  集成测试文件 analyze 无问题。
+- **Flutter 全量测试**：`flutter test` → 1291 项全部通过。
+- **Windows Release**：`flutter build windows --release` → 成功，exe 路径
+  `app/build/windows/x64/runner/Release/ustc_assistant_app.exe`。
+- **人工验收**：新建 `docs/agent-complete-delete-tools-retest-2026-08-03.md`，每个
+  `完成：` 均留空，未代填。自动测试通过 ≠ 人工验收通过；真实人工验收尚未执行。
+- **残余限制**：Agent `update_task(restore)`/`update_plan_block(restore)` propose 经
+  `taskById/planBlockById`（默认过滤已删除行），生产恢复由管理 UI 授权路径承担；
+  Agent 写入用 `NoopUndoRecorder`，`undo_last_action` 只撤回用户最近一次可撤回操作；
+  既有 13 项 analyze info/warning 未清理（位于未改动文件）。
+- **最终工作树**：`git status --short` 见
+  `docs/agent-complete-delete-tools-handoff-2026-08-03.md` 第 9.7 节；受保护 regenerated
+  插件文件未暂存，本分支始终精确 `git add <paths>`。

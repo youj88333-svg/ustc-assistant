@@ -186,15 +186,105 @@ git status --short
 
 ## 9. 最终交还内容
 
-Task 12 完成时更新本文件，补充：
+Task 12 已完成。以下为本轮最终交还事实（自动测试通过，人工验收未执行）。
 
-- 最终 HEAD 与每个 Task commit；
-- 每个 Task RED/GREEN 证据；
-- 全量 Python/Flutter 测试准确数量；
-- `flutter analyze` 与 Windows Release 构建结果和 exe 路径；
-- 新人工验收文档路径及未执行状态；
-- 重复日程生产可达性结论；
-- 残余限制；
-- 最终 `git status --short`，并与根工作树受保护改动分开说明。
+### 9.1 最终 HEAD 与本轮 Task 12 commit
+
+- 最终 HEAD：`685cb86 test(agent): add lifecycle composite regression for delete tools`
+  （后续最终提交 `test(agent): close complete deletion workflows` 会改写本哈希）。
+- Task 12 首个 commit：`685cb86 test(agent): add lifecycle composite regression for delete tools`
+  （组合回归 13 场景 + 只读来源回归）。
+- Tasks 1–11 commit 见 `git log --oneline feature/delete-tools`（逐 Task 提交，各自独立审查）。
+
+### 9.2 组合测试覆盖
+
+新增组合级回归（真实 composition registry + Drift gateway + unit-of-work），位于
+`app/test/integration/agent_composition_flow_test.dart` 的 `Task 12 lifecycle composite
+regression` 组，覆盖 brief 13 个场景：
+
+1. 查询 -> 取消/重开个人事件（`update_event` cancel/reopen）；
+2. 单次事件 delete/restore + 重复 scope_required 守卫；
+3. Task delete 抑制子块、restore 重新显露、Agent 写入不占 Undo 槽（restore 经管理 UI
+   授权的 `TaskLifecycleService` 路径，与生产管理 UI 一致）；
+4. PlanBlock delete 保留父 Task + replacement 链，restore 经管理 UI 路径恢复；
+5. `delete_schedule_relation` 物理删除显式关系；
+6. `clear_reminder(all)` 写禁用 sentinel；
+7. `clear_user_overlay(single_event)` 清除字段后系列层回退；
+8. `unlink_task_event` 物理删除单条 link；
+9. `reset_permission_policy` 强制确认（未批准前不删除覆盖）；非可重置动作拒绝；
+10. `get_last_undoable_action` 预览 -> `undo_last_action` 一次性消费；
+11. 课程（来源）事件 delete 被拒绝，不静默隐藏；
+12. 12 个普通 delete 调用成功，第 13 个被预算阻止；删除工具不消耗 Burst；
+13. 跨账号 ref 不可解析、stale target 拒绝、不泄漏原始 id、账号隔离。
+
+只读来源回归（`app/test/integration/read_only_agent_flow_test.dart` 的 `Task 12
+read-only source regression` 组）确认 catalog/二课来源在生命周期工具族加入后仍可执行。
+
+既有覆盖（未重复）：`agent_management_tools_test.dart`（管理态/配置态只读工具）、
+`write_tools_test.dart` Task 9 组（生命周期写工具 schema/commit）、
+`task_lifecycle_test.dart`/`plan_block_undo_test.dart`/`reminder_override_undo_test.dart`
+（服务级生命周期与 Undo）、`agent_tool_budget_test.dart`（额度/Burst/ledger 边界）、
+`agent_grounding_policy_test.dart`（grounding lifecycle 分类）、组合级 Burst（`agent_composition_flow_test.dart`
+13 周/32 上限/聚合文案）、Task 9 重复生产可达性硬门。
+
+### 9.3 全量验证结果
+
+- Python：`conda run -n ustc_assistant python -m unittest discover -s tests` →
+  **394 项测试全部通过**（OK）。Conda editable install 仍指向主工作树 `E:\107\src`，
+  运行时把当前 worktree `src` 置于 `PYTHONPATH` 首位（未重装/改环境）。
+- Python 编译：`python -m compileall -q src tests` → 退出码 0。
+- Flutter analyze：`flutter analyze` → 13 项既有 info/warning（均位于本轮未改动的
+  `event_detail_loader_test.dart`/`schedule_page_test.dart`/`schedule_projection_test.dart`/
+  `plan_block_undo_test.dart`，无 error）；本轮改动的两个集成测试文件 analyze 无问题。
+- Flutter 全量测试：`flutter test` → **1291 项测试全部通过**（All tests passed!）。
+- Windows Release：`flutter build windows --release` → 构建成功，exe 路径
+  `app/build/windows/x64/runner/Release/ustc_assistant_app.exe`。
+- `git diff --check`：仅 `app/windows/flutter/generated_plugin_registrant.*` /
+  `generated_plugins.cmake` 的 LF→CRLF 提示（受保护的 regenerated 文件，本分支未暂存）。
+
+### 9.4 人工验收文档与未执行状态
+
+- 新建人工验收文档：`docs/agent-complete-delete-tools-retest-2026-08-03.md`。
+- 该文档每个 `完成：` 均留空，未由执行 Agent 代填。
+- 本轮自动测试通过不等同于人工验收通过；真实 Key + 校园网/iWAN + Windows Release UI +
+  学校登录的人工验收尚未执行，由主人按该文档逐项填写。
+
+### 9.5 重复日程生产可达性结论
+
+Task 6A 硬门已通过（组合级 `Task 9 hard gate` 测试）：生产 `create_event` 重复系列只写
+一条 `CalendarEventSeries`，`RecurringEventProjector` 在有界范围内投影 occurrence，
+查询/写入均不向 `calendar_events` 物化 occurrence 行；locator/seriesId/occurrenceKey/
+DB id 不泄漏给模型。本轮未改动该路径。
+
+### 9.6 残余限制
+
+- Agent `update_task(action=restore)` / `update_plan_block(action=restore)` 的 propose
+  经 `taskById`/`planBlockById`（默认过滤已删除行），因此对已删除目标的 Agent-tool
+  restore 在 propose 阶段不可读。生产恢复路径由管理 UI 的授权
+  `TaskLifecycleService.restore`/`PlanBlockService.restore`（`includeDeleted: true`）承担，
+  本轮组合测试按此生产路径断言。这是 Task 9 写工具实现的一个既有特性边界，不是本轮
+  新增回归；如需 Agent 工具可直接 restore 已删除目标，需后续在
+  `DriftAgentWriteGateway.taskById/planBlockById` 为 restore action 启用
+  `includeDeleted`（属新功能，超出 Task 12 范围）。
+- Agent 写入使用 `NoopUndoRecorder`，故 `undo_last_action` 只撤回用户最近一次可撤回操作，
+  不撤回 Agent 写入（设计意图，非缺陷）。
+- 既有 13 项 `flutter analyze` info/warning 未在本轮清理（位于未改动文件，避免无关扩散）。
+
+### 9.7 最终工作树状态
+
+`git status --short`（本功能工作树）：
+
+```text
+ M AGENTS.md
+ M docs/architecture.md
+?? docs/agent-complete-delete-tools-retest-2026-08-03.md
+?? .flutter-test-output.txt（临时验证输出，不提交）
+ M app/windows/flutter/generated_plugin_registrant.cc    （受保护，不暂存）
+ M app/windows/flutter/generated_plugin_registrant.h     （受保护，不暂存）
+ M app/windows/flutter/generated_plugins.cmake            （受保护，不暂存）
+```
+
+根工作树 `E:/107` 的受保护 regenerated 文件与本分支无关，本分支始终使用精确
+`git add <paths>`，未 `git add .`，未暂存或覆盖根工作树改动。
 
 不要在实现完成前把本交接写成“人工验收通过”。

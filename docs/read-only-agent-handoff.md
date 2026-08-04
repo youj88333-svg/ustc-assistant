@@ -704,6 +704,40 @@ Task 8 新增组合级回归：
 **该硬门测试只证明本地生产组合的代码行为，不构成真实校园网络/学校 API 的人工
 验收。**
 
+## 7.6 完整删除与生命周期工具最终验证（feature/delete-tools，2026-08-05）
+
+`feature/delete-tools` 分支完成了
+`docs/superpowers/plans/2026-08-03-agent-complete-delete-tools.md`（Tasks 1–12）。
+Task 12 为收尾任务：组合回归、人工验收文档、全量验证与文档同步。
+
+最终自动验证（worktree `E:/107/.worktrees/delete-tools-plan`，Conda `ustc_assistant`，
+PYTHONPATH 首位指向当前 worktree `src`，未重装/改环境）：
+
+- `python -m unittest discover -s tests` → **394 项测试全部通过**。
+- `python -m compileall -q src tests` → 退出码 0。
+- `flutter analyze` → 13 项既有 info/warning（均位于本轮未改动文件，无 error）；
+  本轮改动的两个集成测试文件 analyze 无问题。
+- `flutter test` → **1291 项测试全部通过**。
+- `flutter build windows --release` → 成功，exe 路径
+  `app/build/windows/x64/runner/Release/ustc_assistant_app.exe`。
+- `git diff --check` → 仅受保护 regenerated 插件文件的 LF→CRLF 提示（未暂存）。
+
+新增组合级回归：`agent_composition_flow_test.dart` 的 `Task 12 lifecycle composite
+regression` 组（13 个 brief 场景，真实 composition registry + Drift + unit-of-work）；
+`read_only_agent_flow_test.dart` 的 `Task 12 read-only source regression` 组（catalog
+来源在生命周期工具族加入后仍可执行）。既有 Burst/只读来源/管理态/服务级生命周期/
+预算/grounding 覆盖未重复。
+
+人工验收：新建 `docs/agent-complete-delete-tools-retest-2026-08-03.md`，每个 `完成：`
+均留空，未由执行 Agent 代填。自动测试通过不等同于人工验收通过；真实 Key + 校园网/iWAN
++ Windows Release UI + 学校登录的人工验收尚未执行。
+
+残余限制：Agent `update_task(restore)` / `update_plan_block(restore)` 的 propose 经
+`taskById/planBlockById`（默认过滤已删除行），生产恢复由管理 UI 授权路径
+（`TaskLifecycleService.restore` / `PlanBlockService.restore`，`includeDeleted: true`）
+承担；Agent 写入用 `NoopUndoRecorder`，`undo_last_action` 只撤回用户最近一次可撤回
+操作。详见 `docs/agent-complete-delete-tools-handoff-2026-08-03.md` 第 9 节。
+
 ## 8. 已知文档边界
 
 - `docs/acceptance/windows-first-milestone.md` 是第一轮人工结果归档，不是修复后

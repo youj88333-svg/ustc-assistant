@@ -153,6 +153,40 @@ set_reminder/update_permission_policy/move_jw_course_day）。全部只作用于
 - 手动界面整日调课对话框同样提供清除与"一步撤回"（UndoService 记录
   `jw_day_move` 撤销槽）。
 
+### 完整删除与生命周期工具（feature/delete-tools）
+
+`feature/delete-tools` 分支在写工具里程碑之上补齐了 Agent 对个人日程、重复日程、
+Task、PlanBlock、显式日程关系、Reminder、UserOverlay、TaskEventLink 与自定义权限
+策略的取消/删除/恢复/清除/解除关联/一步撤回能力。本轮工具总数从 11 增至 22
+（11 个既有写工具 + 9 个生命周期/清除/撤回写工具 + 8 个管理态/配置态只读工具，
+其中 `get_schedule`/`get_tasks`/`get_plan_blocks` 复用并扩展了管理态视图）：
+
+- **生命周期写工具**：`update_event`(action: cancel/reopen/delete/restore，重复
+  scope `only_this`/`this_and_future`/`whole_series`，缺省 `scope_required`)、
+  `update_task`(complete/cancel/reopen/delete/restore)、
+  `update_plan_block`(done/skip/cancel/delete/restore)、`delete_schedule_relation`、
+  `clear_reminder`、`clear_user_overlay`、`unlink_task_event`、
+  `reset_permission_policy`、`undo_last_action`。
+- **管理态/配置态只读工具**：`get_schedule(view=management)`、`get_tasks(state=
+  deleted)`、`get_plan_blocks(include_deleted)`、`get_schedule_relations`、
+  `get_reminders`、`get_user_overlay`、`get_last_undoable_action`、
+  `get_task_details(linkedEvents)`，全部返回 run-local `ref_*`，不返回 DB 主键。
+- **不变量**：个人 CalendarEvent/Task/PlanBlock/重复系列只软删除（`deletedAt`）；
+  学校课程/考试/二课/SourceRecord/账号/凭据/聊天/ActionLog 不可由这些工具删除；
+  课程/考试/二课删除请求被拒绝并解释，仅在用户明确同意后本地隐藏（隐藏不等于取消
+  报名或删除来源）。配置型记录（Reminder 配置/Overlay 字段/TaskEventLink/用户冲突
+  关系与规则/自定义权限覆盖）可物理清除，但必须同事务写安全 Agent ActionLog 与完整
+  Undo 快照。普通工具额度仍为 12/run（第 13 个被 `tool_call_budget_exceeded` 阻止），
+  `create_task` Burst 32 一次性 Lease 不变，删除工具不借用 Burst。多对象逐项执行，
+  无 batch/delete-all，顺序 mutation ledger 准确汇总成功/拒绝/失败/未处理计数。
+- **Undo**：Agent 写入仍用 `NoopUndoRecorder`，不占用一步撤回槽；一步撤回
+  （`undo_last_action`）撤回最近一次**用户**可撤回操作，槽账号隔离、一次性消费。
+- **Prompt v8 + grounding**：系统提示词升级到 v8，grounding 为每个生命周期写工具
+  声明 lookup→terminal 工具对，重复 scope 缺省由 `update_event` 映射 `scope_required`。
+- **最小管理 UI**：个人日程管理页按取消/删除分组并提供重开/恢复入口；任务详情含
+  已删除 PlanBlock 恢复区；权限页按行显示默认/自定义状态与单项重置；Agent 导航
+  chips 与折叠工具调用过程，撤回入口刷新。
+
 ### 重复日程生产可达性（Task 6A 硬门）
 
 重复个人日程的生产读取/写路径已端到端固化（组合级硬门测试）。核心事实：
