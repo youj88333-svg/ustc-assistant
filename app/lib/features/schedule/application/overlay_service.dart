@@ -5,37 +5,6 @@ import '../../../core/database/app_database.dart';
 import '../../tasks/application/undo_recorder.dart';
 import 'effective_event_repository.dart';
 
-/// The three-state disposition of a single overlay field.
-///
-/// A plain `null` cannot express both "not provided" and "cleared to null",
-/// so edits carry an explicit intent:
-/// - [OverlayFieldIntent.absent]: leave the field unchanged.
-/// - [OverlayFieldIntent.set]: write [value] into the field.
-/// - [OverlayFieldIntent.clear]: set the field back to null (restore default).
-enum OverlayFieldIntent { absent, set, clear }
-
-/// A single overlay field edit carrying its three-state intent.
-class OverlayFieldEdit {
-  const OverlayFieldEdit._(this.intent, this.value);
-
-  const OverlayFieldEdit.absent() : this._(OverlayFieldIntent.absent, null);
-
-  const OverlayFieldEdit.set(Object? value)
-      : this._(OverlayFieldIntent.set, value);
-
-  const OverlayFieldEdit.clear() : this._(OverlayFieldIntent.clear, null);
-
-  final OverlayFieldIntent intent;
-  final Object? value;
-
-  /// The new storage value given the current [current] value.
-  Object? resolveValue(Object? current) => switch (intent) {
-    OverlayFieldIntent.absent => current,
-    OverlayFieldIntent.set => value,
-    OverlayFieldIntent.clear => null,
-  };
-}
-
 /// Overlay field-key vocabulary and group expansion.
 ///
 /// Individual keys map 1:1 to a storage column; group keys (`attendance`,
@@ -435,24 +404,36 @@ class OverlayService {
       accountId: row.accountId,
       eventId: row.eventId,
       courseSeriesId: row.courseSeriesId,
-      displayTitle: n(row.displayTitle, 'display_title'),
-      displayLocation: n(row.displayLocation, 'display_location'),
-      attendancePolicy: n(row.attendancePolicy, 'attendance_policy'),
-      attendanceDecision: n(row.attendanceDecision, 'attendance_decision'),
+      displayTitle: n(row.displayTitle, OverlayFieldKeys.displayTitle),
+      displayLocation: n(row.displayLocation, OverlayFieldKeys.displayLocation),
+      attendancePolicy: n(
+        row.attendancePolicy,
+        OverlayFieldKeys.attendancePolicy,
+      ),
+      attendanceDecision: n(
+        row.attendanceDecision,
+        OverlayFieldKeys.attendanceDecision,
+      ),
       attendanceDecisionAt: ni(
         row.attendanceDecisionAt,
         'attendance_decision_at',
       ),
-      attendanceNote: n(row.attendanceNote, 'attendance_note'),
-      attendanceOutcome: n(row.attendanceOutcome, 'attendance_outcome'),
-      listeningMode: n(row.listeningMode, 'listening_mode'),
-      listeningNote: n(row.listeningNote, 'listening_note'),
-      importance: n(row.importance, 'importance'),
-      color: n(row.color, 'color'),
-      foregroundPriority: ni(row.foregroundPriority, 'foreground_priority'),
-      hidden: nb(row.hidden, 'hidden'),
-      userNotes: n(row.userNotes, 'user_notes'),
-      tagsJson: n(row.tagsJson, 'tags'),
+      attendanceNote: n(row.attendanceNote, OverlayFieldKeys.attendanceNote),
+      attendanceOutcome: n(
+        row.attendanceOutcome,
+        OverlayFieldKeys.attendanceOutcome,
+      ),
+      listeningMode: n(row.listeningMode, OverlayFieldKeys.listeningMode),
+      listeningNote: n(row.listeningNote, OverlayFieldKeys.listeningNote),
+      importance: n(row.importance, OverlayFieldKeys.importance),
+      color: n(row.color, OverlayFieldKeys.color),
+      foregroundPriority: ni(
+        row.foregroundPriority,
+        OverlayFieldKeys.foregroundPriority,
+      ),
+      hidden: nb(row.hidden, OverlayFieldKeys.hidden),
+      userNotes: n(row.userNotes, OverlayFieldKeys.userNotes),
+      tagsJson: n(row.tagsJson, OverlayFieldKeys.tags),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     );
