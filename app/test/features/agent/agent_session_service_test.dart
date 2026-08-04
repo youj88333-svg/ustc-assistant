@@ -5248,6 +5248,237 @@ END
       );
     });
   });
+
+  // Task 10: the sequential mutation ledger aggregates a lifecycle mutation
+  // run's terminal results into a 成功/拒绝/失败/未处理 count and overrides the
+  // model's (possibly false) text. It never expands the budget, never saves
+  // titles/refs, and never auto-continues.
+  group('mutation ledger — sequential lifecycle aggregation (Task 10)', () {
+    // A configurable lifecycle write tool whose outcome sequence is scripted.
+    // Each execute() returns the next outcome in the list. Distinct inputs keep
+    // every call a unique fingerprint so the dedup guard never fires.
+    final lifecycleScript = (int count, List<String> outcomes) =>
+        [
+          [
+            for (var i = 0; i < count; i++)
+              ToolUseCompletedEvent(
+                id: 'tu-$i',
+                name: 'delete_schedule_relation',
+                input: {'ref_relation': 'ref_$i'},
+              ),
+            const CompletedEvent(),
+          ],
+          [const TextDeltaEvent('已删除全部关系。'), const CompletedEvent()],
+        ];
+
+    test(
+      'all-success lifecycle run stays completed (ledger has no override)',
+      () async {
+        final tool = _LifecycleWriteTool(
+          name: 'delete_schedule_relation',
+          outcomes: List.filled(3, 'success'),
+        );
+        final provider = _ScriptedProvider(lifecycleScript(3, ['success']));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _DeleteRelationPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '删除这两节课的冲突关系')
+            .toList();
+
+        expect(tool.executeCount, 3);
+        expect(states.last.state, AgentRunState.completed);
+      },
+    );
+
+    test(
+      'partial lifecycle run (2 success + 1 declined) -> failed '
+      'mutation_partial with the ledger count message',
+      () async {
+        final tool = _LifecycleWriteTool(
+          name: 'delete_schedule_relation',
+          outcomes: ['success', 'success', 'user_declined'],
+        );
+        final provider = _ScriptedProvider(lifecycleScript(3, ['x']));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _DeleteRelationPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '删除这两节课的冲突关系')
+            .toList();
+
+        expect(tool.executeCount, 3);
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'mutation_partial');
+        // The ledger's deterministic count message overrides the model's false
+        // "已删除全部关系" text.
+        expect(states.last.text, contains('成功 2'));
+        expect(states.last.text, contains('拒绝 1'));
+        expect(states.last.text, isNot(contains('已删除全部关系')));
+      },
+    );
+
+    test(
+      'all-failed lifecycle run -> failed mutation_failed with the count '
+      'message and safe error code',
+      () async {
+        final tool = _LifecycleWriteTool(
+          name: 'delete_schedule_relation',
+          outcomes: ['target_not_found', 'permission_denied'],
+        );
+        final provider = _ScriptedProvider(lifecycleScript(2, ['x']));
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+          groundingPolicy: const _DeleteRelationPolicy(),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '删除这两节课的冲突关系')
+            .toList();
+
+        expect(states.last.state, AgentRunState.failed);
+        expect(states.last.errorCode, 'mutation_failed');
+        expect(states.last.text, contains('成功 0'));
+        expect(states.last.text, contains('失败 2'));
+        expect(states.last.text, contains('target_not_found 1'));
+        expect(states.last.text, contains('permission_denied 1'));
+      },
+    );
+
+    test('the ledger message never leaks titles, refs, or ids', () async {
+      final tool = _LifecycleWriteTool(
+        name: 'delete_schedule_relation',
+        outcomes: ['reference_not_found'],
+        payload: {'title': '量子物理 B', 'ref': 'ref_42', 'id': 'rel-999'},
+      );
+      final provider = _ScriptedProvider(lifecycleScript(1, ['x']));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _DeleteRelationPolicy(),
+      );
+
+      final states = await service
+          .send(accountId: account, userText: '删除这两节课的冲突关系')
+          .toList();
+
+      expect(states.last.text, isNot(contains('量子物理')));
+      expect(states.last.text, isNot(contains('ref_42')));
+      expect(states.last.text, isNot(contains('rel-999')));
+    });
+
+    test('the ledger does not expand the budget (3 calls stay within 12)',
+        () async {
+      final tool = _LifecycleWriteTool(
+        name: 'delete_schedule_relation',
+        outcomes: List.filled(3, 'success'),
+      );
+      final provider = _ScriptedProvider(lifecycleScript(3, ['x']));
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        tools: [tool],
+        groundingPolicy: const _DeleteRelationPolicy(),
+      );
+
+      await service
+          .send(accountId: account, userText: '删除这两节课的冲突关系')
+          .toList();
+
+      // 3 normal tool rows, no budget error.
+      final rows = await database.select(database.toolInvocations).get();
+      expect(rows, hasLength(3));
+      expect(
+        rows.where((r) => r.errorCode == 'tool_call_budget_exceeded').length,
+        0,
+      );
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Task 10 helpers: a configurable lifecycle write tool and a delete-relation
+// grounding policy, used by the mutation-ledger integration tests.
+// ---------------------------------------------------------------------------
+
+/// A lifecycle write tool whose outcome sequence is scripted. Each execute()
+/// returns the next outcome in [outcomes]. Distinct inputs keep every call a
+/// unique fingerprint so the dedup guard never fires prematurely. An optional
+/// [payload] is attached to error results so tests can assert it never leaks.
+class _LifecycleWriteTool implements AgentTool {
+  _LifecycleWriteTool({
+    required this.name,
+    required this.outcomes,
+    this.payload,
+  });
+
+  @override
+  final String name;
+  final List<String> outcomes;
+  final Map<String, Object?>? payload;
+  int executeCount = 0;
+
+  @override
+  String get description => 'A lifecycle write tool (configurable).';
+
+  @override
+  Map<String, Object?> get inputSchema => const {
+    'type': 'object',
+    'properties': <String, Object?>{},
+  };
+
+  @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    final index = executeCount;
+    executeCount++;
+    final code = index < outcomes.length ? outcomes[index] : 'success';
+    if (code == 'success') {
+      return const AgentToolResult(
+        status: AgentToolStatus.success,
+        payload: {'result': 'ok'},
+      );
+    }
+    return AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: code,
+      payload: payload ?? const {'guidance': '写操作未成功。'},
+    );
+  }
+}
+
+/// A grounding policy that always classifies the user text as a
+/// delete_schedule_relation mutation with a get_schedule_relations lookup.
+/// Used so the ledger integration tests exercise the lifecycle mutation path
+/// deterministically regardless of the userText phrasing.
+class _DeleteRelationPolicy extends AgentGroundingPolicy {
+  const _DeleteRelationPolicy();
+
+  @override
+  AgentGroundingRequirement? classify(String userText) =>
+      const AgentGroundingRequirement(
+        lookupTools: {'get_schedule_relations'},
+        terminalTools: {'delete_schedule_relation'},
+        mutationIntent: true,
+      );
 }
 
 // ---------------------------------------------------------------------------

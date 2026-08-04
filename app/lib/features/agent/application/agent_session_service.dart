@@ -9,6 +9,7 @@ import '../domain/agent_tool.dart';
 import '../domain/llm_protocol.dart';
 import 'agent_context_builder.dart';
 import 'agent_grounding_policy.dart';
+import 'agent_mutation_ledger.dart';
 import 'agent_tool_budget.dart';
 import 'agent_tool_invocation_summary.dart';
 import 'agent_tool_registry.dart';
@@ -564,6 +565,21 @@ class AgentSessionService {
     // narrowed tool set and (optionally) the user's expected conflict state.
     final grounding = _groundingPolicy.classify(userText);
 
+    // Task 10: when the grounding is a lifecycle mutation (its terminal tools
+    // intersect the lifecycle write-tool family), create the sequential
+    // mutation ledger so each actually-issued terminal result is aggregated
+    // into a 成功/拒绝/失败/未处理 count. The ledger only summarizes already-
+    // issued calls; it never expands the budget or auto-continues. Declared
+    // here (before the tool-budget block) so it is in scope for the whole loop.
+    MutationLedger? mutationLedger;
+    final isLifecycleMutation = grounding != null &&
+        grounding.mutationIntent &&
+        grounding.terminalTools
+            .any(MutationLedger.isLifecycleWriteTool);
+    if (isLifecycleMutation) {
+      mutationLedger = MutationLedger();
+    }
+
     // 3. Build the initial request from prior history + summary + current text.
     // For a bounded relation run the FIRST (and every autonomous) request
     // declares ONLY the relation tool family; otherwise the full registry.
@@ -862,6 +878,7 @@ class AgentSessionService {
             isCancelled: signal.isCancelled,
             usedCorrective: correctiveUsed,
             createTaskBurstLease: createTaskBurstLease,
+            mutationLedger: mutationLedger,
           );
           switch (grounded) {
             case _GroundedSettlement.accept:
@@ -882,6 +899,17 @@ class AgentSessionService {
               errorCode = createTaskBurstLease!.terminalErrorCode;
               assistantText =
                   createTaskBurstLease.terminalMessage ?? assistantText;
+              break;
+            case _GroundedSettlement.mutationLedgerSettle:
+              // A lifecycle mutation run settled by the sequential ledger: not
+              // every recorded terminal write succeeded. Replace the model's
+              // (possibly false) text with the ledger's deterministic
+              // 成功/拒绝/失败/未处理 count. Never re-correct into a repeat
+              // write attempt; never carry titles/refs/ids.
+              terminalState = AgentRunState.failed;
+              errorCode = mutationLedger!.terminalErrorCode;
+              assistantText =
+                  mutationLedger.terminalMessage ?? assistantText;
               break;
             case _GroundedSettlement.correct:
               // Case 3: no required tool succeeded and no corrective call used
@@ -1322,6 +1350,21 @@ class AgentSessionService {
           if (turnBudget.kind == AgentToolTurnBudgetKind.createTaskBurst &&
               tu.name == 'create_task') {
             createTaskBurstLease!.record(result);
+          }
+
+          // Task 10: record each actually-issued lifecycle terminal write
+          // result into the sequential mutation ledger. The ledger aggregates
+          // success/declined/failed/unhandled counts IN ORDER (unlike
+          // terminalAttempts which is keyed by tool name and would drop a
+          // second same-name call). Only lifecycle write tools of the CURRENT
+          // grounding requirement are recorded; a read or a create_task call
+          // never pollutes the counts. The ledger never expands the budget.
+          if (mutationLedger != null &&
+              grounding != null &&
+              grounding.terminalTools.contains(tu.name) &&
+              MutationLedger.isLifecycleWriteTool(tu.name) &&
+              turnBudget.kind != AgentToolTurnBudgetKind.createTaskBurst) {
+            mutationLedger.record(tu.name, result);
           }
 
           // Track which tools actually completed successfully this run. This
@@ -2017,7 +2060,10 @@ class AgentSessionService {
   /// supporting write (a partial completion); [usedCorrective] reports whether
   /// the single corrective request has already been issued;
   /// [createTaskBurstLease] carries the aggregated create-task burst outcome
-  /// (authoritative for a burst run), or `null` when no burst ran.
+  /// (authoritative for a burst run), or `null` when no burst ran;
+  /// [mutationLedger] carries the sequential lifecycle mutation aggregation
+  /// (authoritative for a lifecycle mutation run with at least one recorded
+  /// terminal result), or `null` when no lifecycle mutation ran.
   _GroundedSettlement _settleNoToolUse({
     required AgentGroundingRequirement? requirement,
     required Set<String> succeededTools,
@@ -2026,6 +2072,7 @@ class AgentSessionService {
     required bool isCancelled,
     required bool usedCorrective,
     required CreateTaskBurstLease? createTaskBurstLease,
+    required MutationLedger? mutationLedger,
   }) {
     // Stop cancels everything; do not issue any further model call.
     if (isCancelled) return _GroundedSettlement.accept;
@@ -2048,6 +2095,19 @@ class AgentSessionService {
         return _GroundedSettlement.createTaskBurstPartial;
       }
       return _GroundedSettlement.createTaskBurstFailed;
+    }
+
+    // Task 10: a lifecycle mutation run (terminal tools intersect the lifecycle
+    // write-tool family) is settled by the sequential mutation ledger, which is
+    // the SOLE authority when it has recorded at least one terminal result. This
+    // runs BEFORE the generic Case-2 terminal-success check because
+    // `succeededTools` is a name set and cannot distinguish a partial run (3 of
+    // 5 delete_schedule_relation calls succeeded) from a full success — the
+    // ledger's per-call aggregation can. A ledger with no override (every
+    // recorded write succeeded, or nothing recorded) falls through so the
+    // existing settlement paths stay authoritative.
+    if (mutationLedger != null && mutationLedger.terminalErrorCode != null) {
+      return _GroundedSettlement.mutationLedgerSettle;
     }
 
     // Case 2: every required terminal tool succeeded AND the lookup requirement
@@ -2273,6 +2333,13 @@ enum _GroundedSettlement {
   /// A create-task burst completed with no successful write. Run is failed with
   /// `create_task_burst_failed` and the lease's deterministic terminal message.
   createTaskBurstFailed,
+
+  /// A lifecycle mutation run (cancel/delete/restore/clear/unlink/reset/undo)
+  /// settled by the sequential mutation ledger: at least one terminal result
+  /// was recorded and not every recorded write succeeded. Run is failed with
+  /// the ledger's safe error code and its deterministic 成功/拒绝/失败/未处理
+  /// terminal message (never titles/refs/ids).
+  mutationLedgerSettle,
 
   /// No legal required tool after correction/fallback: grounding failed.
   fail,

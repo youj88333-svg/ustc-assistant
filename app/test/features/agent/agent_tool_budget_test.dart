@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
+import 'package:ustc_assistant_app/features/agent/application/agent_mutation_ledger.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_budget.dart';
 
 void main() {
@@ -373,6 +374,214 @@ void main() {
       // No replay metadata about interrupted tasks beyond the count.
       expect(lease.successCount, 1);
       expect(lease.declinedCount, 0);
+    });
+  });
+
+  // Task 10: the sequential mutation ledger aggregates lifecycle write tools'
+  // (cancel/delete/restore/clear/unlink/reset/undo) terminal results into a
+  // 成功/拒绝/失败/未处理 count. It only summarizes already-issued calls, never
+  // expands the budget, never saves titles/refs, and never auto-continues.
+  group('MutationLedger — sequential lifecycle aggregation (Task 10)', () {
+    test('a single successful delete yields success=1 and no override', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(status: AgentToolStatus.success),
+      );
+      expect(ledger.processedCount, 1);
+      expect(ledger.successCount, 1);
+      expect(ledger.declinedCount, 0);
+      expect(ledger.failedCount, 0);
+      expect(ledger.unhandledCount, 0);
+      expect(ledger.terminalErrorCode, isNull);
+      expect(ledger.terminalMessage, isNull);
+    });
+
+    test('a declined delete yields declined=1 and a non-success override', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'user_declined',
+        ),
+      );
+      expect(ledger.successCount, 0);
+      expect(ledger.declinedCount, 1);
+      expect(ledger.failedCount, 0);
+      expect(ledger.unhandledCount, 0);
+      expect(ledger.terminalErrorCode, 'mutation_declined');
+    });
+
+    test('a technical error yields failed=1 with a safe error code', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'clear_reminder',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'target_not_found',
+        ),
+      );
+      expect(ledger.successCount, 0);
+      expect(ledger.declinedCount, 0);
+      expect(ledger.failedCount, 1);
+      expect(ledger.unhandledCount, 0);
+      expect(ledger.safeErrorCounts, {'target_not_found': 1});
+      expect(ledger.terminalErrorCode, 'mutation_failed');
+    });
+
+    test('a cancelled/interrupted write yields unhandled=1', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'undo_last_action',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'cancelled',
+        ),
+      );
+      expect(ledger.successCount, 0);
+      expect(ledger.declinedCount, 0);
+      expect(ledger.failedCount, 0);
+      expect(ledger.unhandledCount, 1);
+      expect(ledger.terminalErrorCode, 'mutation_unhandled');
+    });
+
+    test(
+      'an unknown arbitrary error string folds to tool_error and counts as '
+      'failed',
+      () {
+        final ledger = MutationLedger();
+        ledger.record(
+          'update_task',
+          const AgentToolResult(
+            status: AgentToolStatus.error,
+            errorCode: 'SELECT * FROM tasks -- raw db text should not leak',
+          ),
+        );
+        expect(ledger.failedCount, 1);
+        expect(ledger.safeErrorCounts, {'tool_error': 1});
+      },
+    );
+
+    test('a null error string folds to tool_error', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'update_task',
+        const AgentToolResult(status: AgentToolStatus.error),
+      );
+      expect(ledger.safeErrorCounts, {'tool_error': 1});
+    });
+
+    test('lifecycle safe codes are retained (already_deleted, stale_target)',
+        () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'update_task',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'already_deleted',
+        ),
+      );
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'stale_target',
+        ),
+      );
+      expect(ledger.failedCount, 2);
+      expect(ledger.safeErrorCounts, {'already_deleted': 1, 'stale_target': 1});
+    });
+
+    test('mixed outcomes keep disjoint counts and a terminal message', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(status: AgentToolStatus.success),
+      );
+      ledger.record(
+        'clear_reminder',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'user_declined',
+        ),
+      );
+      ledger.record(
+        'update_task',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'permission_denied',
+        ),
+      );
+      ledger.record(
+        'clear_user_overlay',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'cancelled',
+        ),
+      );
+      expect(ledger.processedCount, 4);
+      expect(ledger.successCount, 1);
+      expect(ledger.declinedCount, 1);
+      expect(ledger.failedCount, 1);
+      expect(ledger.unhandledCount, 1);
+      expect(ledger.hasAnySuccess, isTrue);
+      expect(ledger.terminalErrorCode, 'mutation_partial');
+      // The terminal message reports the four counts and never leaks titles.
+      final msg = ledger.terminalMessage!;
+      expect(msg, contains('成功 1'));
+      expect(msg, contains('拒绝 1'));
+      expect(msg, contains('失败 1'));
+      expect(msg, contains('未处理 1'));
+      expect(msg, isNot(contains('SELECT')));
+    });
+
+    test('all-success ledger has no override', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(status: AgentToolStatus.success),
+      );
+      ledger.record(
+        'clear_reminder',
+        const AgentToolResult(status: AgentToolStatus.success),
+      );
+      expect(ledger.successCount, 2);
+      expect(ledger.terminalErrorCode, isNull);
+      expect(ledger.terminalMessage, isNull);
+    });
+
+    test('no-success all-failed ledger is mutation_failed', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'update_task',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'target_not_found',
+        ),
+      );
+      expect(ledger.hasAnySuccess, isFalse);
+      expect(ledger.terminalErrorCode, 'mutation_failed');
+    });
+
+    test('the terminal message never contains titles, refs, or ids', () {
+      final ledger = MutationLedger();
+      ledger.record(
+        'delete_schedule_relation',
+        const AgentToolResult(
+          status: AgentToolStatus.error,
+          errorCode: 'reference_not_found',
+          payload: {
+            'title': '量子物理 B',
+            'ref': 'ref_42',
+            'id': 'rel-999',
+          },
+        ),
+      );
+      final msg = ledger.terminalMessage!;
+      expect(msg, isNot(contains('量子物理')));
+      expect(msg, isNot(contains('ref_42')));
+      expect(msg, isNot(contains('rel-999')));
     });
   });
 }
