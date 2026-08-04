@@ -658,6 +658,26 @@ class UpdateEventTool extends AgentWriteTool {
   ];
 
   @override
+  Future<AgentToolResult> execute(
+    Map<String, Object?> arguments,
+    AgentToolContext context,
+  ) async {
+    // P1: 无明确 scope 的重复 delete/cancel 在 propose 预检抛
+    // ScopeRequiredError，映射为安全的专用错误码而非静默默认 only_this。
+    try {
+      return await super.execute(arguments, context);
+    } on ScopeRequiredError {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'scope_required',
+        payload: {
+          'guidance': '重复日程删除/取消/恢复必须指定范围：only_this / this_and_future / whole_series。',
+        },
+      );
+    }
+  }
+
+  @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
     final r = WriteArgumentReader(a, const {
       'ref_event', 'scope', 'title', 'start_at', 'end_at', 'all_day', 'start_date',
@@ -724,6 +744,26 @@ class UpdateEventTool extends AgentWriteTool {
     final snapshot = await gateway.eventSnapshot(eventId);
     if (!snapshot.isPersonal) {
       throw const FormatException('source event cannot be edited with update_event');
+    }
+
+    // P1: 对重复日程的 delete/cancel 若模型未显式给 scope 且目标 ambiguous
+    // （无限 / 超 366 天），必须在 preflight 拒绝并返回 scope_required，而
+    // 不是静默默认 only_this 生成可提交提案。schema 给 scope 一个
+    // default=only_this 仅用于文档提示，这里用 `r.contains('scope')` 精确区分
+    // 「显式 only_this」与「未给」——只有未给且 requiresScope 才需要处理澄清。
+    if ((delete || status == 'cancelled') &&
+        snapshot.personalSeriesId != null &&
+        !r.contains('scope')) {
+      final preview = await gateway.recurringLifecycleImpactPreview(
+        snapshot.personalSeriesId!,
+        occurrenceKey: snapshot.occurrenceKey,
+        action: delete
+            ? RecurringLifecycleAction.delete
+            : RecurringLifecycleAction.cancel,
+      );
+      if (preview.requiresScope) {
+        throw const ScopeRequiredError();
+      }
     }
 
     final lines = <String>[

@@ -528,8 +528,7 @@ class RecurringLifecycleService {
         'restore a deleted occurrence instead of reopening',
       );
     }
-    await _clearStatusOverride(exception, timestamp,
-        originalStartAt: series.allDay ? null : null);
+    await _clearStatusOverride(exception, timestamp);
   }
 
   Future<void> _restoreOnlyThis(
@@ -558,7 +557,12 @@ class RecurringLifecycleService {
   ) async {
     final existing =
         await _recurrence.existingOccurrenceAnchor(series.id, occurrence.occurrenceKey);
-    final override = OccurrenceOverride(status: OverrideValue.set(status));
+    // When an override row already exists (e.g. the user renamed the occurrence
+    // via editOnlyThis before cancelling), MERGE into it instead of replacing
+    // the whole override, so non-status fields (title/time/etc.) are preserved.
+    final (fields, override) = existing == null
+        ? (<String>{'status'}, OccurrenceOverride(status: OverrideValue.set(status)))
+        : _mergeStatusIntoOverride(existing, status);
     await database
         .into(database.calendarEventOccurrenceExceptions)
         .insertOnConflictUpdate(
@@ -576,7 +580,7 @@ class RecurringLifecycleService {
               occurrence.allDay ? dateText(occurrence.originalStart) : null,
             ),
             kind: 'override',
-            overriddenFieldsJson: const Value('["status"]'),
+            overriddenFieldsJson: Value(jsonEncode(fields.toList()..sort())),
             overrideJson: jsonEncode(override.toJson()),
             status: Value(status.storage),
             orphaned: const Value(false),
@@ -586,11 +590,38 @@ class RecurringLifecycleService {
         );
   }
 
+  /// Returns the merged (fields, override) that keeps an existing override's
+  /// non-status fields and only sets/overwrites the [status] field.
+  (Set<String>, OccurrenceOverride) _mergeStatusIntoOverride(
+    CalendarEventOccurrenceException existing,
+    EventStatus status,
+  ) {
+    final decoded = OccurrenceOverride.decode(
+      existing.overriddenFieldsJson,
+      existing.overrideJson,
+    );
+    final merged = OccurrenceOverride(
+      title: decoded.title,
+      description: decoded.description,
+      locationName: decoded.locationName,
+      startAt: decoded.startAt,
+      endAt: decoded.endAt,
+      startDate: decoded.startDate,
+      endDateExclusive: decoded.endDateExclusive,
+      status: OverrideValue.set(status),
+      completionPolicy: decoded.completionPolicy,
+      importance: decoded.importance,
+      color: decoded.color,
+      tags: decoded.tags,
+      reminderOffsetsMinutes: decoded.reminderOffsetsMinutes,
+    );
+    return (merged.fields, merged);
+  }
+
   Future<void> _clearStatusOverride(
     CalendarEventOccurrenceException? exception,
-    int timestamp, {
-    int? originalStartAt,
-  }) async {
+    int timestamp,
+  ) async {
     if (exception == null || exception.status == null) return;
     // If status was the only overridden field, drop the whole exception row.
     final fields = (jsonDecode(exception.overriddenFieldsJson) as List<dynamic>)

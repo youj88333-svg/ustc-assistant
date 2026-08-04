@@ -120,6 +120,8 @@ class _UpdateGateway implements AgentWriteGateway {
   ({String seriesId, PersonalEvent anchor})? wholeSeriesEdit;
   ({String seriesId, String? key, RecurringActionScope scope, RecurringLifecycleAction action})?
       lifecycleCall;
+  ({String seriesId, String? key, RecurringLifecycleAction? action})? impactPreviewCall;
+  bool impactRequiresScope = false;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
@@ -171,17 +173,25 @@ class _UpdateGateway implements AgentWriteGateway {
     String? occurrenceKey,
     RecurringActionScope? scope,
     RecurringLifecycleAction? action,
-  }) async => const RecurringImpactPreview(
-    title: '例会',
-    occurrenceStart: null,
-    affectedOccurrences: 1,
-    over366Days: false,
-    infinite: false,
-    affectedReminders: 0,
-    affectedExceptions: 0,
-    affectedRelations: 0,
-    availableScopes: ['only_this', 'this_and_future', 'whole_series'],
-  );
+  }) async {
+    impactPreviewCall = (
+      seriesId: seriesId,
+      key: occurrenceKey,
+      action: action,
+    );
+    return RecurringImpactPreview(
+      title: '例会',
+      occurrenceStart: null,
+      affectedOccurrences: 1,
+      over366Days: impactRequiresScope,
+      infinite: false,
+      affectedReminders: 0,
+      affectedExceptions: 0,
+      affectedRelations: 0,
+      availableScopes: const ['only_this', 'this_and_future', 'whole_series'],
+      scopeRequired: impactRequiresScope,
+    );
+  }
 
   @override
   Future<void> recurringLifecycle(
@@ -684,6 +694,84 @@ void main() {
     expect(gw.lifecycleCall!.scope, RecurringActionScope.wholeSeries);
     expect(gw.lifecycleCall!.action, RecurringLifecycleAction.cancel);
     expect(gw.cancelledId, isNull);
+  });
+
+  test('update_event recurring delete without scope on ambiguous target returns scope_required', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    // The fake target is ambiguous (infinite / beyond 366 days).
+    gw.impactRequiresScope = true;
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    // No scope key supplied -> must be refused before any confirm/proposal.
+    final result = await update.execute({'ref_event': ref, 'delete': true}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'scope_required');
+    expect(result.userAction, isNull);
+    expect(gw.lifecycleCall, isNull);
+    expect(gw.softDeletedId, isNull);
+  });
+
+  test('update_event recurring cancel without scope on ambiguous target returns scope_required', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    gw.impactRequiresScope = true;
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    final result = await update.execute(
+      {'ref_event': ref, 'status': 'cancelled'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'scope_required');
+    expect(result.userAction, isNull);
+    expect(gw.lifecycleCall, isNull);
+    expect(gw.cancelledId, isNull);
+  });
+
+  test('update_event recursive delete with explicit only_this bypasses scope_required', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    gw.impactRequiresScope = true;
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+      startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+      personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+    // Explicit only_this -> preflight is skipped and the lifecycle commit runs.
+    final result = await update.execute(
+      {'ref_event': ref, 'scope': 'only_this', 'delete': true}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.lifecycleCall!.scope, RecurringActionScope.onlyThis);
+    expect(gw.lifecycleCall!.action, RecurringLifecycleAction.delete);
+  });
+
+  test('update_event cancel on a non-recurring event only calls cancelEvent', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+      startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
+    final result = await update.execute(
+      {'ref_event': ref, 'status': 'cancelled'}, h.ctx());
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gw.cancelledId, 'ev-1');
+    expect(gw.completedId, isNull);
+    expect(gw.skippedId, isNull);
+    expect(gw.lifecycleCall, isNull);
   });
 
   test('update_event rejects whole_series time changes', () async {

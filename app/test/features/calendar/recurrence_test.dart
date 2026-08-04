@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -835,6 +837,61 @@ void main() {
       final exception = await service.existingOccurrenceAnchor(seriesId, key);
       expect(exception!.deletedAt, isNotNull);
       expect(exception.overrideJson.contains('改名'), isTrue);
+    });
+
+    test('only_this cancel after a rename merges, preserving the title override',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId = await weeklySeries(
+        service,
+        anchor: at(2026, 7, 6),
+        through: DateTime(2026, 7, 27),
+      );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+      // User renames the occurrence before cancelling it.
+      await service.editOnlyThis(
+        seriesId,
+        key,
+        const OccurrenceOverride(title: OverrideValue.set('改名后再取消')),
+      );
+
+      await lifecycle(database).cancel(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+
+      // M-1: the existing title override must survive the cancel (merged), and
+      // the status override must also be present.
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception!.status, 'cancelled');
+      expect(exception.overrideJson.contains('改名后再取消'), isTrue);
+      final fields = (jsonDecode(exception.overriddenFieldsJson) as List)
+          .cast<String>();
+      expect(fields, containsAll(['title', 'status']));
+
+      // Reopen must remove ONLY the status, keeping the title override.
+      await lifecycle(database).reopen(
+        seriesId: seriesId,
+        occurrenceKey: key,
+        scope: RecurringActionScope.onlyThis,
+      );
+      final after = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(after!.status, isNull);
+      expect(after.overrideJson.contains('改名后再取消'), isTrue);
+      final afterFields = (jsonDecode(after.overriddenFieldsJson) as List)
+          .cast<String>();
+      expect(afterFields, isNot(contains('status')));
+      expect(afterFields, contains('title'));
+      final occurrence = await service.occurrence(seriesId, key);
+      expect(occurrence.title, '改名后再取消');
+      expect(occurrence.status, EventStatus.active);
     });
 
     test('whole_series cancel/deactivate/restore never materializes occurrences',
