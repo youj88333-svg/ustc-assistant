@@ -1,3 +1,4 @@
+import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
@@ -616,15 +617,21 @@ class UpdateEventTool extends AgentWriteTool {
   String get name => 'update_event';
   @override
   String get description =>
-      '修改或删除一个个人日程（标题/时间/地点/状态/删除）。课程/考试/二课事件不可改，请用 create_user_overlay。';
+      '修改或切换一个个人日程的生命周期状态（编辑/完成/跳过/取消/重新打开/删除/恢复）。'
+      '课程/考试/二课事件不可改，请用 create_user_overlay。重复日程的取消/删除/恢复须指定 scope。';
   @override
   Map<String, Object?> get inputSchema => {
     'type': 'object',
     'additionalProperties': false,
     'properties': {
       'ref_event': {'type': 'string', 'description': '来自 get_schedule 的 ref_*'},
+      'action': {
+        'type': 'string',
+        'enum': ['edit', 'complete', 'skip', 'cancel', 'reopen', 'delete', 'restore'],
+        'description': '要执行的动作；edit 时可同时提供字段编辑，其余动作与字段互斥',
+      },
       'scope': {'type': 'string', 'enum': ['only_this', 'this_and_future', 'whole_series'], 'default': 'only_this',
-          'description': '重复系列编辑/删除/取消范围；非重复事件忽略此字段'},
+          'description': '重复系列取消/删除/恢复范围；非重复事件忽略此字段'},
       'title': {'type': 'string'},
       'start_at': {'type': 'string'},
       'end_at': {'type': 'string'},
@@ -636,10 +643,13 @@ class UpdateEventTool extends AgentWriteTool {
       'importance': {'type': 'string', 'enum': ['low', 'normal', 'high', 'critical']},
       'description': {'type': 'string'},
       'tags': {'type': 'array', 'items': {'type': 'string'}},
-      'status': {'type': 'string', 'enum': ['cancelled', 'completed', 'skipped']},
-      'delete': {'type': 'boolean'},
+      // 兼容期：旧的 delete:true / status=... 仍被接受并映射到 action，但不得与
+      // action 同时出现。公开 Prompt 以 action 为准。
+      'status': {'type': 'string', 'enum': ['cancelled', 'completed', 'skipped'],
+          'description': '已弃用，请改用 action=cancel/complete/skip'},
+      'delete': {'type': 'boolean', 'description': '已弃用，请改用 action=delete'},
     },
-    'required': ['ref_event'],
+    'required': ['ref_event', 'action'],
   };
 
   @override
@@ -653,8 +663,12 @@ class UpdateEventTool extends AgentWriteTool {
   @override
   List<AgentWriteAllowance> get agentWriteAllowances => [
     AgentWriteAllowance.fromRegistry('event_edit'),
+    AgentWriteAllowance.fromRegistry('event_complete'),
+    AgentWriteAllowance.fromRegistry('event_skip'),
     AgentWriteAllowance.fromRegistry('event_cancel'),
+    AgentWriteAllowance.fromRegistry('event_reopen'),
     AgentWriteAllowance.fromRegistry('event_delete'),
+    AgentWriteAllowance.fromRegistry('event_restore'),
   ];
 
   @override
@@ -680,17 +694,43 @@ class UpdateEventTool extends AgentWriteTool {
   @override
   Future<AgentWriteProposal> propose(Map<String, Object?> a, AgentToolContext ctx) async {
     final r = WriteArgumentReader(a, const {
-      'ref_event', 'scope', 'title', 'start_at', 'end_at', 'all_day', 'start_date',
-      'end_date_exclusive', 'location', 'type', 'importance', 'description', 'tags',
-      'status', 'delete',
+      'ref_event', 'action', 'scope', 'title', 'start_at', 'end_at', 'all_day',
+      'start_date', 'end_date_exclusive', 'location', 'type', 'importance',
+      'description', 'tags', 'status', 'delete',
     });
     r.rejectUnknownKeys();
     final ref = r.requiredString('ref_event');
     final eventId = ctx.references.resolve(ref: ref, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
     final scope = r.optionalEnum('scope', const {'only_this', 'this_and_future', 'whole_series'}) ?? 'only_this';
-    final status = r.optionalEnum('status', const {'cancelled', 'completed', 'skipped'});
-    final delete = r.optionalBool('delete') ?? false;
+
+    // ---- 兼容层：公开 Schema 以 action 为准；内部保留 delete/status 解析 ----
+    // action 与 legacy delete/status 不得混用；混用返回 invalid_write_arguments。
+    final hasAction = r.contains('action');
+    final hasLegacy = r.contains('delete') || r.contains('status');
+    if (hasAction && hasLegacy) {
+      throw const FormatException('action cannot be combined with legacy delete/status');
+    }
+    final String action;
+    if (hasAction) {
+      action = r.requiredEnum('action',
+          const {'edit', 'complete', 'skip', 'cancel', 'reopen', 'delete', 'restore'});
+    } else {
+      // 兼容期：legacy delete:true / status=... 映射到 action。
+      final status = r.optionalEnum('status', const {'cancelled', 'completed', 'skipped'});
+      final delete = r.optionalBool('delete') ?? false;
+      if (delete && status != null) {
+        throw const FormatException('delete cannot be combined with status');
+      }
+      action = delete
+          ? 'delete'
+          : switch (status) {
+              'cancelled' => 'cancel',
+              'completed' => 'complete',
+              'skipped' => 'skip',
+              _ => 'edit',
+            };
+    }
 
     final typeValue = r.optionalEnum('type', _personalTypeValues);
     final type = switch (typeValue) {
@@ -714,16 +754,13 @@ class UpdateEventTool extends AgentWriteTool {
       throw const FormatException('start_at and end_at must be provided together');
     }
 
-    // delete / status / 字段编辑三模式互斥。
-    if (delete && (status != null || hasFieldEdits)) {
-      throw const FormatException('delete cannot be combined with status or field edits');
+    // 生命周期动作与字段编辑互斥（edit 是唯一可带字段的动作）。
+    if (action != 'edit' && hasFieldEdits) {
+      throw const FormatException('lifecycle actions cannot be combined with field edits');
     }
-    if (status != null && hasFieldEdits) {
-      throw const FormatException('status change cannot be combined with field edits');
-    }
-    // 拒绝零改动。
-    if (!delete && status == null && !hasFieldEdits) {
-      throw const FormatException('no fields to update');
+    // edit 必须实际带字段改动。
+    if (action == 'edit' && !hasFieldEdits) {
+      throw const FormatException('edit action requires at least one field');
     }
 
     final fields = <String, Object?>{
@@ -746,20 +783,18 @@ class UpdateEventTool extends AgentWriteTool {
       throw const FormatException('source event cannot be edited with update_event');
     }
 
-    // P1: 对重复日程的 delete/cancel 若模型未显式给 scope 且目标 ambiguous
-    // （无限 / 超 366 天），必须在 preflight 拒绝并返回 scope_required，而
-    // 不是静默默认 only_this 生成可提交提案。schema 给 scope 一个
+    // P1: 对重复日程的 delete/cancel/restore 若模型未显式给 scope 且目标
+    // ambiguous（无限 / 超 366 天），必须在 preflight 拒绝并返回 scope_required，
+    // 而不是静默默认 only_this 生成可提交提案。schema 给 scope 一个
     // default=only_this 仅用于文档提示，这里用 `r.contains('scope')` 精确区分
     // 「显式 only_this」与「未给」——只有未给且 requiresScope 才需要处理澄清。
-    if ((delete || status == 'cancelled') &&
+    if (const {'delete', 'cancel', 'restore'}.contains(action) &&
         snapshot.personalSeriesId != null &&
         !r.contains('scope')) {
       final preview = await gateway.recurringLifecycleImpactPreview(
         snapshot.personalSeriesId!,
         occurrenceKey: snapshot.occurrenceKey,
-        action: delete
-            ? RecurringLifecycleAction.delete
-            : RecurringLifecycleAction.cancel,
+        action: _lifecycleAction(action),
       );
       if (preview.requiresScope) {
         throw const ScopeRequiredError();
@@ -769,35 +804,31 @@ class UpdateEventTool extends AgentWriteTool {
     final lines = <String>[
       ..._eventTargetLines(snapshot),
     ];
-    if (delete) {
-      lines.add('变更：删除该日程（软删除，可从管理页恢复）');
-    } else if (status != null) {
-      lines.add('变更：状态改为 $status');
-    } else {
+    if (action == 'edit') {
       if (r.contains('title')) lines.add('变更：标题改为 ${r.requiredString('title')}');
       if (r.contains('start_at') || r.contains('end_at')) lines.add('变更：时间有改动');
       lines.add(scope == 'whole_series' ? '影响：整个重复系列' : '影响：仅本次');
+    } else {
+      lines.add('变更：${_actionZh(action)}'
+          '${action == 'delete' ? '（软删除，可从管理页恢复）' : ''}');
     }
 
     // 同一 update_event 工具对不同生命周期动作采用不同审批策略键（proposal 是
-    // 唯一审批权威）。delete 与 cancel 分解为独立动作键，字段编辑/complete/skip
-    // 保持 event_edit——绝不回退到旧的 update_event 兼容键（那只作为 event_edit
-    // 的一版 fallback）。
-    final effectiveActionType = delete
-        ? 'event_delete'
-        : (status == 'cancelled' ? 'event_cancel' : 'event_edit');
+    // 唯一审批权威）。各动作分解为独立动作键，绝不回退到旧的 update_event
+    // 兼容键（那只作为 event_edit 的一版 fallback）。
+    final (effectiveActionType, effectiveRisk) = _actionPolicy(action);
 
     return AgentWriteProposal(
       toolName: name,
       actionType: effectiveActionType,
-      riskLevel: riskLevel,
+      riskLevel: effectiveRisk,
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'status': status, 'delete': delete, 'snapshot': snapshot},
-      safeLogSummary: delete
-          ? '删除日程 ${_eventSummary(snapshot)}'
-          : (status != null ? '修改日程状态 $status（${_eventSummary(snapshot)}）' : '修改日程 ${_eventSummary(snapshot)}'),
+      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'action': action, 'snapshot': snapshot},
+      safeLogSummary: action == 'edit'
+          ? '修改日程 ${_eventSummary(snapshot)}'
+          : '${_actionZh(action)}日程 ${_eventSummary(snapshot)}',
     );
   }
 
@@ -807,8 +838,7 @@ class UpdateEventTool extends AgentWriteTool {
     final eventId = p['eventId'] as String;
     final scope = p['scope'] as String;
     final fields = p['fields'] as Map<String, Object?>;
-    final status = p['status'] as String?;
-    final delete = p['delete'] == true;
+    final action = p['action'] as String;
 
     final identity = await gateway.eventSnapshot(eventId);
     if (!identity.isPersonal) {
@@ -819,55 +849,51 @@ class UpdateEventTool extends AgentWriteTool {
       );
     }
 
-    if (delete) {
-      // Recurring occurrences/series delete across the chosen scope.
+    // 生命周期动作（非 edit）：按 action 分发，重复日程走 recurringLifecycle。
+    if (action != 'edit') {
       final seriesId = identity.personalSeriesId;
-      if (seriesId != null) {
+      final isRecurringLifecycle =
+          seriesId != null && const {'delete', 'cancel', 'restore'}.contains(action);
+      if (isRecurringLifecycle) {
         await gateway.recurringLifecycle(
           seriesId,
           occurrenceKey: identity.occurrenceKey,
           scope: _actionScope(scope),
-          action: RecurringLifecycleAction.delete,
+          action: _lifecycleAction(action),
         );
         return AgentToolResult(
           payload: {
-            'result': 'deleted_event',
+            'result': _resultFor(action),
+            'action': action,
             if (identity.occurrenceKey != null) 'scope': scope,
           },
         );
       }
-      await gateway.softDeleteEvent(eventId);
-      return AgentToolResult(payload: {'result': 'deleted_event'});
-    }
-    if (status != null) {
-      if (status == 'cancelled') {
-        // Recurring occurrences/series cancel across the chosen scope.
-        final seriesId = identity.personalSeriesId;
-        if (seriesId != null) {
-          await gateway.recurringLifecycle(
-            seriesId,
-            occurrenceKey: identity.occurrenceKey,
-            scope: _actionScope(scope),
-            action: RecurringLifecycleAction.cancel,
-          );
-          return AgentToolResult(
-            payload: {
-              'result': 'updated_event',
-              'status': status,
-              if (identity.occurrenceKey != null) 'scope': scope,
-            },
-          );
+      // 非重复事件，或 complete/skip/reopen（单次语义，无 scope 分发）。
+      try {
+        switch (action) {
+          case 'delete':
+            await gateway.softDeleteEvent(eventId);
+          case 'cancel':
+            await gateway.cancelEvent(eventId);
+          case 'complete':
+            await gateway.completeEvent(eventId);
+          case 'skip':
+            await gateway.skipEvent(eventId);
+          case 'reopen':
+            await gateway.reopenEvent(eventId);
+          case 'restore':
+            await gateway.restoreEvent(eventId);
         }
+      } catch (error) {
+        final mapped = _mapEventLifecycleError(error);
+        if (mapped != null) return mapped;
+        rethrow;
       }
-      switch (status) {
-        case 'cancelled':
-          await gateway.cancelEvent(eventId);
-        case 'completed':
-          await gateway.completeEvent(eventId);
-        case 'skipped':
-          await gateway.skipEvent(eventId);
-      }
-      return AgentToolResult(payload: {'result': 'updated_event', 'status': status});
+      return AgentToolResult(payload: {
+        'result': _resultFor(action),
+        'action': action,
+      });
     }
 
     // 字段修改
@@ -902,6 +928,65 @@ class UpdateEventTool extends AgentWriteTool {
     final replacement = _applyToEvent(current, fields);
     await gateway.editPersonalEvent(eventId, replacement);
     return AgentToolResult(payload: {'result': 'updated_event'});
+  }
+
+  /// 各 action 的 (actionType, riskLevel) 策略组合（Spec §17.2）。
+  static (String, RiskLevel) _actionPolicy(String action) => switch (action) {
+        'edit' => ('event_edit', RiskLevel.high),
+        'complete' => ('event_complete', RiskLevel.medium),
+        'skip' => ('event_skip', RiskLevel.medium),
+        'cancel' => ('event_cancel', RiskLevel.high),
+        'reopen' => ('event_reopen', RiskLevel.medium),
+        'delete' => ('event_delete', RiskLevel.high),
+        'restore' => ('event_restore', RiskLevel.medium),
+        _ => ('event_edit', RiskLevel.high),
+      };
+
+  static String _actionZh(String action) => switch (action) {
+        'edit' => '修改',
+        'complete' => '完成',
+        'skip' => '跳过',
+        'cancel' => '取消',
+        'reopen' => '重新打开',
+        'delete' => '删除',
+        'restore' => '恢复',
+        _ => action,
+      };
+
+  static String _resultFor(String action) => switch (action) {
+        'delete' => 'deleted_event',
+        'restore' => 'restored_event',
+        _ => 'updated_event',
+      };
+
+  static RecurringLifecycleAction _lifecycleAction(String action) => switch (action) {
+        'delete' => RecurringLifecycleAction.delete,
+        'cancel' => RecurringLifecycleAction.cancel,
+        'restore' => RecurringLifecycleAction.restore,
+        _ => RecurringLifecycleAction.cancel,
+      };
+
+  /// 把事件生命周期服务抛出的领域异常映射为 Spec §20 安全码（commit 阶段）。
+  static AgentToolResult? _mapEventLifecycleError(Object error) {
+    if (error is AlreadyDeletedError) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'already_deleted',
+      );
+    }
+    if (error is InvalidLifecycleTransition) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_lifecycle_transition',
+      );
+    }
+    if (error is StaleEventCommand) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'stale_target',
+      );
+    }
+    return null;
   }
 
   static PersonalEvent _applyToEvent(PersonalEvent current, Map<String, Object?> fields) {

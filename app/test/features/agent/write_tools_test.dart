@@ -1533,11 +1533,11 @@ void main() {
       startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16),
       location: '健身房',
     );
-    final proposal = await update.propose({'ref_event': ref, 'status': 'completed'}, h.ctx());
+    final proposal = await update.propose({'ref_event': ref, 'action': 'complete'}, h.ctx());
     expect(proposal.previewLines, contains('目标：健身'));
     expect(proposal.previewLines, contains('当前时间：2026-08-01 15:00-16:00'));
     expect(proposal.previewLines, contains('地点：健身房'));
-    expect(proposal.previewLines, contains('变更：状态改为 completed'));
+    expect(proposal.previewLines, contains('变更：完成'));
     expectNoIdsOrRefs(proposal, ['ev-secret']);
   });
 

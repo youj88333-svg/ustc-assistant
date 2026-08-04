@@ -180,6 +180,27 @@ class AgentPermissionPolicyService {
         defaultRisk: RiskLevel.medium,
         relaxable: true,
         label: '恢复日程'),
+    'event_complete': AgentPermissionAction(
+        key: 'event_complete',
+        targetType: 'event',
+        defaultMode: ConfirmationMode.askFirstTime,
+        defaultRisk: RiskLevel.medium,
+        relaxable: true,
+        label: '完成日程'),
+    'event_skip': AgentPermissionAction(
+        key: 'event_skip',
+        targetType: 'event',
+        defaultMode: ConfirmationMode.askFirstTime,
+        defaultRisk: RiskLevel.medium,
+        relaxable: true,
+        label: '跳过日程'),
+    'event_reopen': AgentPermissionAction(
+        key: 'event_reopen',
+        targetType: 'event',
+        defaultMode: ConfirmationMode.askFirstTime,
+        defaultRisk: RiskLevel.medium,
+        relaxable: true,
+        label: '重新打开日程'),
     'task_cancel': AgentPermissionAction(
         key: 'task_cancel',
         targetType: 'task',
@@ -308,6 +329,16 @@ class AgentPermissionPolicyService {
     'create_user_overlay', 'record_attendance_decision', 'record_listening_mode',
     'create_schedule_relation', 'set_reminder',
     'update_permission_policy', 'move_jw_course_day',
+    // Task 9 lifecycle/delete tools (Spec §17.3).
+    'event_cancel', 'event_delete', 'event_restore',
+    'event_complete', 'event_skip', 'event_reopen',
+    'task_cancel', 'task_delete', 'task_restore', 'task_complete',
+    'plan_block_cancel', 'plan_block_delete', 'plan_block_restore',
+    'plan_block_done',
+    'delete_schedule_relation', 'delete_schedule_relation_rule',
+    'clear_reminder_offsets', 'clear_all_reminders',
+    'clear_event_overlay_fields', 'clear_all_event_overlay', 'clear_course_overlay',
+    'unlink_task_event', 'reset_permission_policy', 'undo_last_action',
   };
 
   /// actionType -> targetType 的单一映射（由注册表派生）。设置页策略行与权限
