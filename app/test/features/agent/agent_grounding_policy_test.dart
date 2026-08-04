@@ -374,4 +374,118 @@ void main() {
       ]);
     });
   });
+
+  // Task 10: grounding routing for the lifecycle write-tool family. Each
+  // explicit cancel/delete/restore/clear/unlink/reset/undo wording must open
+  // ONLY its corresponding lookup + terminal write tool, never a raw
+  // update_event delete for source events.
+  group('AgentGroundingPolicy.classify — lifecycle write tools (Task 10)', () {
+    test('complete a task is update_task with get_tasks lookup', () {
+      final req = policy.classify('把操作系统作业标记为完成');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'update_task'});
+      expect(req.lookupTools, {'get_tasks'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('cancel a task is update_task with get_tasks lookup', () {
+      final req = policy.classify('取消操作系统作业');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'update_task'});
+      expect(req.lookupTools, {'get_tasks'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('delete a task is update_task with get_tasks lookup', () {
+      final req = policy.classify('删除操作系统作业');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'update_task'});
+      expect(req.lookupTools, {'get_tasks'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('restore a task is update_task with get_tasks lookup', () {
+      final req = policy.classify('恢复刚才删除的操作系统作业');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'update_task'});
+      expect(req.lookupTools, {'get_tasks'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('delete a schedule relation is delete_schedule_relation with '
+        'get_schedule_relations lookup', () {
+      final req = policy.classify('删除这两节课的冲突关系');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'delete_schedule_relation'});
+      expect(req.lookupTools, {'get_schedule_relations'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('clear a reminder is clear_reminder with get_reminders lookup', () {
+      final req = policy.classify('清除这节课的提醒');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'clear_reminder'});
+      expect(req.lookupTools, {'get_reminders'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('clear user overlay is clear_user_overlay with get_user_overlay lookup',
+        () {
+      final req = policy.classify('清除这节课的个人标注');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'clear_user_overlay'});
+      expect(req.lookupTools, {'get_user_overlay'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('unlink a task and event is unlink_task_event with get_task_details '
+        'lookup', () {
+      final req = policy.classify('解除这个任务和这节课的关联');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'unlink_task_event'});
+      expect(req.lookupTools, {'get_task_details'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('reset permission policy is reset_permission_policy (no lookup)', () {
+      final req = policy.classify('重置确认策略为默认');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'reset_permission_policy'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('undo last action is undo_last_action with get_last_undoable_action '
+        'lookup', () {
+      final req = policy.classify('撤回刚才的操作');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'undo_last_action'});
+      expect(req.lookupTools, {'get_last_undoable_action'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test(
+      'source-event delete (course) does NOT route to update_event delete',
+      () {
+        // A user asking to delete a school/course source event must NOT open a
+        // raw update_event delete. It stays free chat / restricted so the model
+        // must ask and can only locally hide after explicit user selection.
+        final req = policy.classify('删除数据结构这门课');
+        // Source-event delete must not produce an update_event write intent.
+        expect(req, isNull);
+      },
+    );
+
+    test('delete a personal event IS update_event delete', () {
+      // A personal event (个人日程) delete still routes to update_event.
+      final req = policy.classify('删除这个个人日程');
+      expect(req, isNotNull);
+      expect(req!.terminalTools, {'update_event'});
+      expect(req.mutationIntent, isTrue);
+    });
+
+    test('ambiguous object allows model to ask first (free chat)', () {
+      // No concrete object/scope/field -> not a grounded operation yet.
+      expect(policy.classify('帮我处理一下'), isNull);
+    });
+  });
 }

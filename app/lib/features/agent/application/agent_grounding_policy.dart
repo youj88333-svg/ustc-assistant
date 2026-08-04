@@ -422,6 +422,86 @@ final List<_IntentDef> _writeIntents = [
     lookupTools: {'get_schedule'},
     terminalTools: {'update_event'},
   ),
+  // update_task (complete/cancel/reopen/delete/restore a Task). Targets a
+  // task/作业 entity with a lifecycle verb. A source-event delete (课程/考试/
+  // 二课) never matches here: it has no 任务/作业 object, so it stays free chat
+  // (the model must ask; only an explicit user selection may locally hide it).
+  // Checked AFTER update_event so a personal-event delete (删除...日程/事件)
+  // still routes to update_event, and BEFORE the overlay/attendance tools so a
+  // task lifecycle verb never collides with an attendance marker.
+  _IntentDef(
+    patterns: [
+      RegExp(
+        r'(完成|取消|重新打开|重开|删除|恢复|标记为完成|标为完成).{0,12}(task|任务|作业)',
+        caseSensitive: false,
+      ),
+      RegExp(
+        r'(把|将).{0,20}(task|任务|作业).{0,12}(完成|取消|删除|恢复|重新打开|重开)',
+        caseSensitive: false,
+      ),
+    ],
+    lookupTools: {'get_tasks'},
+    terminalTools: {'update_task'},
+  ),
+  // update_plan_block (delete/restore a PlanBlock execution window).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(删除|恢复|取消).{0,12}(执行块|plan ?block|planblock|时间段|时间块)',
+          caseSensitive: false),
+      RegExp(
+        r'(把|将).{0,20}(执行块|plan ?block|planblock|时间段|时间块).{0,12}(删除|恢复|取消)',
+        caseSensitive: false,
+      ),
+    ],
+    lookupTools: {'get_plan_blocks'},
+    terminalTools: {'update_plan_block'},
+  ),
+  // delete_schedule_relation (remove an explicit user relation/series rule).
+  // Requires a 关系 object so a personal-event delete (删除...日程/事件) never
+  // routes here.
+  _IntentDef(
+    patterns: [
+      RegExp(r'(删除|取消|去掉|移除).{0,12}(冲突关系|关系|不冲突关系)'),
+      RegExp(r'(解除).{0,12}(冲突关系|关系)'),
+    ],
+    lookupTools: {'get_schedule_relations'},
+    terminalTools: {'delete_schedule_relation'},
+  ),
+  // clear_reminder (remove reminder offsets on an event/task/planblock).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(清除|取消|删除|去掉|移除).{0,12}(提醒|闹钟)'),
+    ],
+    lookupTools: {'get_reminders'},
+    terminalTools: {'clear_reminder'},
+  ),
+  // clear_user_overlay (remove personal overlay layers on an event). Targets
+  // 标注/个人标注/overlay so an attendance MARK (设为/标注+必去...) still routes
+  // to create_user_overlay, not here.
+  _IntentDef(
+    patterns: [
+      RegExp(r'(清除|取消|去掉|移除|删除).{0,12}(个人标注|标注|overlay)', caseSensitive: false),
+    ],
+    lookupTools: {'get_user_overlay'},
+    terminalTools: {'clear_user_overlay'},
+  ),
+  // unlink_task_event (remove a task-event link).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(解除|取消|删除|去掉|移除).{0,12}(关联|链接|link)', caseSensitive: false),
+    ],
+    lookupTools: {'get_task_details'},
+    terminalTools: {'unlink_task_event'},
+  ),
+  // undo_last_action (reverse the single most recent local change in one step).
+  _IntentDef(
+    patterns: [
+      RegExp(r'(撤回|撤销|回退|undo).{0,12}(操作|动作|刚才|上一步|最近)', caseSensitive: false),
+      RegExp(r'(刚才|最近).{0,8}(操作|动作).{0,6}(撤回|撤销|回退|退回)'),
+    ],
+    lookupTools: {'get_last_undoable_action'},
+    terminalTools: {'undo_last_action'},
+  ),
   // create_user_overlay (attendance/listening/mark on a schedule item)
   _IntentDef(
     patterns: [
@@ -465,6 +545,16 @@ final List<_IntentDef> _writeIntents = [
       RegExp(r'(每次|以后).{0,6}(都问|都要|别确认).{0,4}'),
     ],
     terminalTools: {'update_permission_policy'},
+  ),
+  // reset_permission_policy (restore a category's confirmation policy to the
+  // default, deleting a custom override). critical + always_ask. No lookup:
+  // the reset targets a policy category, not a run-local entity ref.
+  _IntentDef(
+    patterns: [
+      RegExp(r'(重置|恢复|还原).{0,12}(确认策略|策略|权限策略|确认设置)'),
+      RegExp(r'(把|将).{0,20}(确认策略|策略|权限策略).{0,8}(重置|恢复|还原|改回默认)'),
+    ],
+    terminalTools: {'reset_permission_policy'},
   ),
 ];
 
