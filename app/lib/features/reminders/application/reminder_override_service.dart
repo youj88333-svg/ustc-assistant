@@ -210,6 +210,7 @@ class ReminderOverrideService {
     'targetType': row.targetType,
     'targetId': row.targetId,
     'eventId': row.eventId,
+    'occurrenceExceptionId': row.occurrenceExceptionId,
     'taskId': row.taskId,
     'planBlockId': row.planBlockId,
     'offsetMinutes': row.offsetMinutes,
