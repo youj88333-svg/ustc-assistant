@@ -13,9 +13,12 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_serv
 import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
+import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
+import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
 class _FixedClock implements BeijingClock {
@@ -824,5 +827,409 @@ void main() {
 
     expect((await service.seriesRow(seriesId)).deletedAt, isNotNull);
     expect(await db.select(db.calendarEvents).get(), isEmpty);
+  });
+
+  // =========================================================================
+  // Task 9: drift gateway delegation for the 16 new lifecycle/clear/unlink/
+  // reset/undo methods. Real Drift memory DB, real services — no fakes.
+  // =========================================================================
+
+  Future<void> seedTask(String id, {String state = 'active'}) async {
+    await db.into(db.tasks).insert(TasksCompanion.insert(
+          id: id,
+          accountId: 'acc-1',
+          title: 'Task $id',
+          state: state,
+          importance: 'normal',
+          tagsJson: '[]',
+          createdAt: 1,
+          updatedAt: 1,
+          cancelledAt: Value(state == 'cancelled' ? 1 : null),
+          completedAt: Value(state == 'completed' ? 1 : null),
+        ));
+  }
+
+  Future<void> seedPlanBlock(String id, String taskId,
+      {String status = 'accepted', int? deletedAt}) async {
+    await db.into(db.planBlocks).insert(PlanBlocksCompanion.insert(
+          id: id,
+          accountId: 'acc-1',
+          taskId: taskId,
+          startAt: 1000,
+          endAt: 2000,
+          status: status,
+          createdAt: 1,
+          updatedAt: 1,
+          deletedAt: Value(deletedAt),
+        ));
+  }
+
+  test('reopenTask delegates to TaskLifecycleService.reopen', () async {
+    await seedTask('t1', state: 'cancelled');
+    await gateway.reopenTask('t1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.tasks)
+          ..where((r) => r.id.equals('t1')))
+        .getSingle();
+    expect(row.state, 'active');
+    expect(row.updatedAt, 1_700_000_000_000);
+  });
+
+  test('restoreTask delegates to TaskLifecycleService.restore', () async {
+    await seedTask('t1');
+    await db.customStatement(
+        "UPDATE tasks SET deleted_at = 1 WHERE id = 't1'");
+    await gateway.restoreTask('t1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.tasks)
+          ..where((r) => r.id.equals('t1')))
+        .getSingle();
+    expect(row.deletedAt, isNull);
+  });
+
+  test('markPlanBlockDone delegates to PlanBlockService.markDone with note',
+      () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1');
+    await gateway.markPlanBlockDone('pb1',
+        expectedUpdatedAt: 1, note: '完成了');
+    final row = await (db.select(db.planBlocks)
+          ..where((r) => r.id.equals('pb1')))
+        .getSingle();
+    expect(row.status, 'done');
+    expect(row.reviewNote, '完成了');
+  });
+
+  test('markPlanBlockSkipped delegates to PlanBlockService.markSkipped',
+      () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1');
+    await gateway.markPlanBlockSkipped('pb1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.planBlocks)
+          ..where((r) => r.id.equals('pb1')))
+        .getSingle();
+    expect(row.status, 'skipped');
+  });
+
+  test('cancelPlanBlock delegates to PlanBlockService.cancel', () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1');
+    await gateway.cancelPlanBlock('pb1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.planBlocks)
+          ..where((r) => r.id.equals('pb1')))
+        .getSingle();
+    expect(row.status, 'cancelled');
+  });
+
+  test('softDeletePlanBlock delegates to PlanBlockService.softDelete', () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1');
+    await gateway.softDeletePlanBlock('pb1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.planBlocks)
+          ..where((r) => r.id.equals('pb1')))
+        .getSingle();
+    expect(row.deletedAt, isNotNull);
+  });
+
+  test('restorePlanBlock delegates to PlanBlockService.restore', () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1', deletedAt: 5);
+    await gateway.restorePlanBlock('pb1', expectedUpdatedAt: 1);
+    final row = await (db.select(db.planBlocks)
+          ..where((r) => r.id.equals('pb1')))
+        .getSingle();
+    expect(row.deletedAt, isNull);
+  });
+
+  test('reopenEvent delegates to CalendarEventService.reopen', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.cancelEvent('ev-1');
+    await gateway.reopenEvent('ev-1');
+    final row = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    expect(row.status, 'active');
+  });
+
+  test('restoreEvent delegates to CalendarEventService.restore', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.softDeleteEvent('ev-1');
+    await gateway.restoreEvent('ev-1');
+    final row = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    expect(row.deletedAt, isNull);
+  });
+
+  test('clearReminders all delegates to ReminderOverrideService.clearReminders',
+      () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setReminder('ev-1', const [15, 30]);
+    await gateway.clearReminders(
+        targetType: 'event', targetId: 'ev-1', scope: 'all');
+    final desired = await (db.select(db.reminders)
+          ..where((r) =>
+              r.eventId.equals('ev-1') & r.state.equals('desired')))
+        .get();
+    expect(desired, isEmpty);
+  });
+
+  test('clearReminders selected_offsets removes only listed offset', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setReminder('ev-1', const [15, 30]);
+    await gateway.clearReminders(
+        targetType: 'event',
+        targetId: 'ev-1',
+        scope: 'selected_offsets',
+        offsets: const [15]);
+    final remaining = await (db.select(db.reminders)
+          ..where((r) =>
+              r.eventId.equals('ev-1') & r.state.equals('desired')))
+        .get();
+    expect(remaining.single.offsetMinutes, 30);
+  });
+
+  test('clearOverlayFields delegates to OverlayService.clearOverlayFields',
+      () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setEventOverlay(
+        'ev-1',
+        const OverlayMutation(
+            displayTitle: '健身改', importance: 'high'));
+    await gateway.clearOverlayFields(
+        eventId: 'ev-1', fields: const ['display_title']);
+    final row = await (db.select(db.userOverlays)
+          ..where((r) => r.eventId.equals('ev-1')))
+        .getSingle();
+    expect(row.displayTitle, isNull);
+    expect(row.importance, 'high'); // 未清除的字段保留
+  });
+
+  test('deleteConflictRelation removes a user conflict row', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: 'A',
+      startAt: DateTime(2026, 8, 1, 9),
+      endAt: DateTime(2026, 8, 1, 10),
+    ));
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-2',
+      title: 'B',
+      startAt: DateTime(2026, 8, 1, 9),
+      endAt: DateTime(2026, 8, 1, 10),
+    ));
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: 'ev-1',
+      rightKind: 'event',
+      rightId: 'ev-2',
+      conflictState: 'conflict',
+    );
+    final rel = (await db.select(db.scheduleRelations).get()).single;
+    await gateway.deleteConflictRelation(rel.id);
+    expect(await db.select(db.scheduleRelations).get(), isEmpty);
+  });
+
+  test('deleteConflictRelation throws ConflictRelationNotFoundError for missing',
+      () async {
+    await expectLater(
+      gateway.deleteConflictRelation('nope'),
+      throwsA(isA<ConflictRelationNotFoundError>()),
+    );
+  });
+
+  test('deleteConflictRule removes a series rule row', () async {
+    await db.into(db.scheduleRelationRules).insert(
+          ScheduleRelationRulesCompanion.insert(
+            id: 'rule-1',
+            accountId: 'acc-1',
+            leftSeriesType: 'calendar_event_series',
+            leftSeriesId: 'ser-1',
+            rightSeriesType: 'calendar_event_series',
+            rightSeriesId: 'ser-2',
+            conflictState: 'conflict',
+            effectiveFrom: '2026-08-01',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await gateway.deleteConflictRule('rule-1');
+    expect(await db.select(db.scheduleRelationRules).get(), isEmpty);
+  });
+
+  test('conflictRuleRemovalImpact returns day count and flags', () async {
+    // Fixed clock (1_700_000_000_000 ms) is 2023-11-15 Beijing; the 366-day
+    // horizon ends 2024-11-15. Use dates inside that window so over366=false.
+    await db.into(db.scheduleRelationRules).insert(
+          ScheduleRelationRulesCompanion.insert(
+            id: 'rule-1',
+            accountId: 'acc-1',
+            leftSeriesType: 'calendar_event_series',
+            leftSeriesId: 'ser-1',
+            rightSeriesType: 'calendar_event_series',
+            rightSeriesId: 'ser-2',
+            conflictState: 'conflict',
+            effectiveFrom: '2023-11-15',
+            effectiveThrough: const Value('2023-11-20'),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    final impact = await gateway.conflictRuleRemovalImpact('rule-1');
+    expect(impact.infinite, isFalse);
+    expect(impact.over366Days, isFalse);
+    expect(impact.affectedDays, greaterThan(0));
+  });
+
+  test('unlinkTaskEvent removes the link row', () async {
+    await seedTask('t1');
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await db.into(db.taskEventLinks).insert(TaskEventLinksCompanion.insert(
+          accountId: 'acc-1',
+          taskId: 't1',
+          targetId: 'ev-1',
+          eventId: const Value('ev-1'),
+          relationType: 'related',
+          createdAt: 1,
+        ));
+    await gateway.unlinkTaskEvent(taskId: 't1', eventId: 'ev-1');
+    expect(await db.select(db.taskEventLinks).get(), isEmpty);
+  });
+
+  test('unlinkTaskEvent throws TaskEventLinkNotFoundError for missing link',
+      () async {
+    await seedTask('t1');
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await expectLater(
+      gateway.unlinkTaskEvent(taskId: 't1', eventId: 'ev-1'),
+      throwsA(isA<TaskEventLinkNotFoundError>()),
+    );
+  });
+
+  test('resetPermissionPolicy returns false when no override exists',
+      () async {
+    final removed = await gateway.resetPermissionPolicy(
+        actionType: 'event_delete', targetType: 'event');
+    expect(removed, isFalse);
+  });
+
+  test('resetPermissionPolicy removes an override and returns true', () async {
+    await db.into(db.agentPermissionPolicies).insert(
+          AgentPermissionPoliciesCompanion.insert(
+            id: 'p1',
+            accountId: 'acc-1',
+            actionType: 'event_delete',
+            targetType: const Value('event'),
+            confirmationMode: 'always_allow',
+            riskLevel: const Value('high'),
+            scope: const Value('user_default'),
+            enabled: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    final removed = await gateway.resetPermissionPolicy(
+        actionType: 'event_delete', targetType: 'event');
+    expect(removed, isTrue);
+    expect(await db.select(db.agentPermissionPolicies).get(), isEmpty);
+  });
+
+  test('undoLastAction throws InvalidUndoCommand when slot is empty', () async {
+    await expectLater(
+      gateway.undoLastAction(),
+      throwsA(isA<InvalidUndoCommand>()),
+    );
+  });
+
+  test('undoLastAction consumes a populated slot', () async {
+    // Seed an undo slot via a real write (createEvent records an undo command).
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    // The createEvent path uses the gateway's NoopUndoRecorder, so seed a slot
+    // directly via UndoService to test undoLastAction delegation.
+    final undo = UndoService(database: db, accountId: 'acc-1', now: () => 1);
+    await db.customStatement(
+        "DELETE FROM undo_slot");
+    await db.into(db.undoSlot).insert(UndoSlotCompanion.insert(
+          commandId: 'cmd-1',
+          payload: jsonEncode({
+            'version': 1,
+            'kind': 'calendar_event_create',
+            'accountId': 'acc-1',
+            'safeSummary': '新建日程 健身',
+            'payload': {
+              'entity': 'calendar_event',
+              'id': 'ev-1',
+            },
+          }),
+          createdAt: 1,
+        ));
+    await gateway.undoLastAction();
+    expect(await db.select(db.undoSlot).get(), isEmpty);
+    // The undo restored the event -> soft-deleted then recreated? Actually the
+    // create undo deletes the event. Assert the slot was consumed (above) and
+    // no exception thrown.
+    await undo.clearAtStartup();
+  });
+
+  test('undoPreview returns available:false when slot is empty', () async {
+    final preview = await gateway.undoPreview();
+    expect(preview.available, isFalse);
+  });
+
+  test('undoPreview returns available:true with safe summary for own slot',
+      () async {
+    await db.into(db.undoSlot).insert(UndoSlotCompanion.insert(
+          commandId: 'cmd-1',
+          payload: jsonEncode({
+            'version': 1,
+            'kind': 'calendar_event_delete',
+            'accountId': 'acc-1',
+            'safeSummary': '删除日程 健身',
+            'payload': {},
+          }),
+          createdAt: 1,
+        ));
+    final preview = await gateway.undoPreview();
+    expect(preview.available, isTrue);
+    expect(preview.summary, '删除日程 健身');
+    expect(preview.kind, 'calendar_event_delete');
   });
 }

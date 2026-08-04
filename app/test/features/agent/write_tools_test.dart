@@ -21,6 +21,7 @@ import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart'
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart' show NotDeletedError;
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
@@ -204,6 +205,9 @@ class _UpdateGateway implements AgentWriteGateway {
     );
   }
 
+  /// When set, recurringLifecycle throws this instead of recording the call.
+  Object? recurringLifecycleThrows;
+
   @override
   Future<void> recurringLifecycle(
     String seriesId, {
@@ -211,6 +215,8 @@ class _UpdateGateway implements AgentWriteGateway {
     required RecurringActionScope scope,
     required RecurringLifecycleAction action,
   }) async {
+    final e = recurringLifecycleThrows;
+    if (e != null) throw e;
     lifecycleCall = (
       seriesId: seriesId,
       key: occurrenceKey,
@@ -445,10 +451,15 @@ class _LifecycleGateway implements AgentWriteGateway {
           {required int expectedUpdatedAt}) async =>
       softDeletedBlockId = id;
 
+  Object? restorePlanBlockThrows;
+
   @override
   Future<void> restorePlanBlock(String id,
-          {required int expectedUpdatedAt}) async =>
-      restoredBlockId = id;
+          {required int expectedUpdatedAt}) async {
+    final e = restorePlanBlockThrows;
+    if (e != null) throw e;
+    restoredBlockId = id;
+  }
 
   @override
   Future<void> clearReminders({
@@ -2444,6 +2455,111 @@ void main() {
       // Safe fields only.
       expect(payload.keys.toSet(), {'result', 'action'});
       expect(payload.toString(), isNot(contains('t-secret-123')));
+    });
+
+    // P1-1: PlanBlock restore on a non-deleted block maps to already_active.
+    test('update_plan_block restore on non-deleted block maps to already_active',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_plan_block') as UpdatePlanBlockTool;
+      final gw = _LifecycleGateway();
+      gw.restorePlanBlockThrows = const NotDeletedError();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'planblock', localId: 'pb1');
+      final result = await tool.execute(
+          {'ref_plan_block': ref, 'action': 'restore'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'already_active');
+    });
+
+    // P1-2: recurring lifecycle commit errors map deterministically.
+    test('update_event recurring delete AlreadyLifecycleDeleted maps to already_deleted',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+      gw.recurringLifecycleThrows = const AlreadyLifecycleDeleted();
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'delete', 'scope': 'only_this'},
+          h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'already_deleted');
+    });
+
+    test('update_event recurring cancel StaleRecurringTarget maps to stale_target',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+      gw.recurringLifecycleThrows = const StaleRecurringTarget();
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'cancel', 'scope': 'whole_series'},
+          h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'stale_target');
+    });
+
+    test('update_event recurring restore InvalidRecurringTransition maps to invalid_lifecycle_transition',
+        () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+      gw.recurringLifecycleThrows =
+          const InvalidRecurringTransition('bad transition');
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'restore', 'scope': 'only_this'},
+          h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'invalid_lifecycle_transition');
+      // No raw exception text leaks.
+      expect(commitResult.payload.toString(),
+          isNot(contains('bad transition')));
     });
   });
 

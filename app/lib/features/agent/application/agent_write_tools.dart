@@ -858,12 +858,18 @@ class UpdateEventTool extends AgentWriteTool {
       final isRecurringLifecycle =
           seriesId != null && const {'delete', 'cancel', 'restore'}.contains(action);
       if (isRecurringLifecycle) {
-        await gateway.recurringLifecycle(
-          seriesId,
-          occurrenceKey: identity.occurrenceKey,
-          scope: _actionScope(scope),
-          action: _lifecycleAction(action),
-        );
+        try {
+          await gateway.recurringLifecycle(
+            seriesId,
+            occurrenceKey: identity.occurrenceKey,
+            scope: _actionScope(scope),
+            action: _lifecycleAction(action),
+          );
+        } catch (error) {
+          final mapped = _mapRecurringLifecycleError(error);
+          if (mapped != null) return mapped;
+          rethrow;
+        }
         return AgentToolResult(
           payload: {
             'result': _resultFor(action),
@@ -987,6 +993,30 @@ class UpdateEventTool extends AgentWriteTool {
       return const AgentToolResult(
         status: AgentToolStatus.error,
         errorCode: 'stale_target',
+      );
+    }
+    return null;
+  }
+
+  /// 把重复生命周期服务（RecurringLifecycleService）抛出的领域异常映射为
+  /// Spec §20 安全码（commit 阶段）。绝不回传原始异常文本。
+  static AgentToolResult? _mapRecurringLifecycleError(Object error) {
+    if (error is AlreadyLifecycleDeleted) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'already_deleted',
+      );
+    }
+    if (error is StaleRecurringTarget) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'stale_target',
+      );
+    }
+    if (error is InvalidRecurringTransition) {
+      return const AgentToolResult(
+        status: AgentToolStatus.error,
+        errorCode: 'invalid_lifecycle_transition',
       );
     }
     return null;

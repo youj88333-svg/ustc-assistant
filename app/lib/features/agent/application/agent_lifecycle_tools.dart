@@ -1,4 +1,5 @@
 import '../../calendar/application/calendar_event_service.dart';
+import '../../calendar/application/recurrence_lifecycle_service.dart';
 import '../../schedule/application/conflict_service.dart';
 import '../../schedule/application/overlay_service.dart';
 import '../../tasks/application/plan_block_service.dart' hide AlreadyDeletedError;
@@ -27,6 +28,11 @@ import 'write_argument_reader.dart';
 /// - `AlreadyDeletedError`（事件已软删除）→ `already_deleted`
 /// - `Illegal*Transition` / `InvalidLifecycleTransition`（状态机拒绝）→ 按消息
 ///   细分 `already_*` / `invalid_lifecycle_transition`，消息不外泄
+/// - `NotDeletedError`（PlanBlock restore 未删除块）→ `already_active`
+/// - `AlreadyLifecycleDeleted`（重复生命周期目标已软删除）→ `already_deleted`
+/// - `StaleRecurringTarget`（重复目标 preflight 后变更）→ `stale_target`
+/// - `InvalidRecurringTransition`（重复生命周期状态机拒绝）→
+///   `invalid_lifecycle_transition`，消息不外泄
 /// - `ConflictNotDeletableError` → `relation_not_deletable`（非 user 来源）
 /// - `ConflictRelationNotFoundError` → `relation_not_found`
 /// - `TaskEventLinkNotFoundError` → `link_not_found`
@@ -57,6 +63,34 @@ AgentToolResult? mapLifecycleError(Object error) {
   }
   if (error is InvalidLifecycleTransition) {
     return _mapTransition(error.toString());
+  }
+  // PlanBlock restore on a non-deleted block (PlanBlockService.restore throws
+  // NotDeletedError). Deterministic, no text leak — the block is already
+  // active/visible, so restoring is a no-op identity.
+  if (error is NotDeletedError) {
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'already_active',
+    );
+  }
+  // Recurring lifecycle (RecurrenceLifecycleService) deterministic errors.
+  if (error is AlreadyLifecycleDeleted) {
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'already_deleted',
+    );
+  }
+  if (error is StaleRecurringTarget) {
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'stale_target',
+    );
+  }
+  if (error is InvalidRecurringTransition) {
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'invalid_lifecycle_transition',
+    );
   }
   if (error is ConflictNotDeletableError) {
     return const AgentToolResult(

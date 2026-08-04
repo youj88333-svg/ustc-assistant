@@ -14,7 +14,7 @@ import 'agent_system_prompt.dart';
 /// (which already excludes failed/cancelled/interrupted assistant drafts) and
 /// for invoking the summary provider when [needsSummary] says so.
 ///
-/// Token budgeting uses a conservative 24,000 estimated-input-token ceiling
+/// Token budgeting uses a conservative 28,000 estimated-input-token ceiling
 /// and schedules summarization after 18,000. When a completed run's real
 /// provider usage is available it is preferred over the deterministic
 /// fallback estimator.
