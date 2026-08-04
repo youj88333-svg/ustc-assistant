@@ -377,6 +377,91 @@ void main() {
     });
   });
 
+  // Task 10 §4: protect the ordinary budget (12) and the createTask Burst.
+  // Lifecycle/delete-tool turns must draw on the NORMAL budget (never a
+  // createTask Burst), and the 13th normal call must be blocked.
+  group('AgentRunToolBudget — lifecycle/delete tools budget edges (Task 10)',
+      () {
+    test('12 normal delete calls are executable, the 13th is blocked', () {
+      final budget = AgentRunToolBudget();
+      // A delete-tool turn is a normal turn (never a burst).
+      for (var i = 0; i < 12; i++) {
+        final decision = budget.preflightTurn(
+          toolNames: const ['delete_schedule_relation'],
+          allowedCreateTaskBurstLimit: 32,
+        );
+        expect(decision.kind, AgentToolTurnBudgetKind.normal,
+            reason: 'delete call ${i + 1} should be normal');
+        expect(budget.tryConsumeNormalCall(), isTrue, reason: 'call ${i + 1}');
+      }
+      expect(budget.normalCallsUsed, 12);
+      expect(budget.normalCallsRemaining, 0);
+      // The 13th normal call is blocked by the exhausted budget.
+      expect(budget.tryConsumeNormalCall(), isFalse, reason: 'the 13th call');
+    });
+
+    test(
+      'a delete-tool turn never gets a createTask Burst even with an '
+      'allowance',
+      () {
+        final budget = AgentRunToolBudget();
+        // 13 delete calls with an active burst allowance: still normal, never a
+        // burst (the burst is create_task-specific).
+        final decision = budget.preflightTurn(
+          toolNames: List.filled(13, 'delete_schedule_relation'),
+          allowedCreateTaskBurstLimit: 32,
+        );
+        expect(decision.kind, AgentToolTurnBudgetKind.normal);
+        expect(budget.createTaskBurstUsed, isFalse);
+      },
+    );
+
+    test(
+      'a mixed turn of lifecycle delete tools and create_task stays normal '
+      '(no burst)',
+      () {
+        final budget = AgentRunToolBudget();
+        final names = <String>[
+          'delete_schedule_relation',
+          'create_task',
+        ];
+        final mixed = List<String>.generate(4, (i) => names[i % 2]);
+        final decision = budget.preflightTurn(
+          toolNames: mixed,
+          allowedCreateTaskBurstLimit: 32,
+        );
+        // A mixed turn is never a dedicated burst; it stays normal and draws on
+        // the ordinary quota.
+        expect(decision.kind, AgentToolTurnBudgetKind.normal);
+        expect(budget.createTaskBurstUsed, isFalse);
+      },
+    );
+
+    test('each lifecycle tool family member is a normal turn', () {
+      const lifecycleTools = [
+        'update_event',
+        'update_task',
+        'update_plan_block',
+        'delete_schedule_relation',
+        'clear_reminder',
+        'clear_user_overlay',
+        'unlink_task_event',
+        'reset_permission_policy',
+        'undo_last_action',
+      ];
+      for (final tool in lifecycleTools) {
+        final b = AgentRunToolBudget();
+        final decision = b.preflightTurn(
+          toolNames: [tool],
+          allowedCreateTaskBurstLimit: 32,
+        );
+        expect(decision.kind, AgentToolTurnBudgetKind.normal,
+            reason: '$tool should be a normal turn');
+        expect(b.createTaskBurstUsed, isFalse, reason: '$tool must not use burst');
+      }
+    });
+  });
+
   // Task 10: the sequential mutation ledger aggregates lifecycle write tools'
   // (cancel/delete/restore/clear/unlink/reset/undo) terminal results into a
   // 成功/拒绝/失败/未处理 count. It only summarizes already-issued calls, never

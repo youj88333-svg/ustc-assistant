@@ -5410,6 +5410,164 @@ END
       );
     });
   });
+
+  // Task 10 §5: a single forced-correction boundary. A lifecycle mutation
+  // that calls NO tool on the first try is forced ONCE with the related tools
+  // + tool_choice=any; free chat is never corrected; after a reject/stale/
+  // cancel/tech-error the same delete is never auto-retried.
+  group(
+    'mutation ledger — single forced-correction boundary (Task 10 §5)',
+    () {
+      test(
+        'lifecycle mutation with no tool on first try -> one forced any call '
+        'with narrowed tools',
+        () async {
+          final tool = _LifecycleWriteTool(
+            name: 'delete_schedule_relation',
+            outcomes: ['success'],
+          );
+          final provider = _ScriptedProvider([
+            // Call 1 (auto): plain answer, no tool call.
+            [const TextDeltaEvent('已删除关系。'), const CompletedEvent()],
+            // Call 2 (any, narrowed): forced to call delete_schedule_relation.
+            [
+              const ToolUseCompletedEvent(
+                id: 'tu-del',
+                name: 'delete_schedule_relation',
+                input: {'ref_relation': 'ref_1'},
+              ),
+              const CompletedEvent(),
+            ],
+            // Call 3: grounded final answer.
+            [
+              const TextDeltaEvent('已删除该冲突关系。'),
+              const CompletedEvent(),
+            ],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+            tools: [tool],
+            groundingPolicy: const _DeleteRelationPolicy(),
+          );
+
+          final states = await service
+              .send(accountId: account, userText: '删除这两节课的冲突关系')
+              .toList();
+
+          // 3 model calls: initial, one forced correction, final.
+          expect(provider.streamCallCount, 3);
+          // The corrective (second) request forced `any`.
+          final second = provider.requests[1];
+          expect(second.toolChoice, LlmToolChoice.any);
+          final secondToolNames = second.tools.map((t) => t.name).toSet();
+          expect(secondToolNames, contains('delete_schedule_relation'));
+          // Final answer grounded and accepted.
+          expect(states.last.state, AgentRunState.completed);
+        },
+      );
+
+      test(
+        'a rejected lifecycle delete is never auto-retried (no second '
+        'correction)',
+        () async {
+          final tool = _LifecycleWriteTool(
+            name: 'delete_schedule_relation',
+            outcomes: ['user_declined'],
+          );
+          final provider = _ScriptedProvider([
+            // Call 1: attempt delete, declined by user.
+            [
+              const ToolUseCompletedEvent(
+                id: 'tu-del',
+                name: 'delete_schedule_relation',
+                input: {'ref_relation': 'ref_1'},
+              ),
+              const CompletedEvent(),
+            ],
+            // Call 2: the model falsely claims success.
+            [const TextDeltaEvent('已删除该关系。'), const CompletedEvent()],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+            tools: [tool],
+            groundingPolicy: const _DeleteRelationPolicy(),
+          );
+
+          final states = await service
+              .send(accountId: account, userText: '删除这两节课的冲突关系')
+              .toList();
+
+          // Two calls only — the declined write was NOT re-corrected.
+          expect(provider.streamCallCount, 2);
+          expect(states.last.state, AgentRunState.failed);
+          // The ledger's count overrides the false success claim.
+          expect(states.last.text, contains('拒绝 1'));
+          expect(states.last.text, isNot(contains('已删除该关系')));
+        },
+      );
+
+      test(
+        'a technical-error lifecycle delete is never auto-retried',
+        () async {
+          final tool = _LifecycleWriteTool(
+            name: 'delete_schedule_relation',
+            outcomes: ['stale_target'],
+          );
+          final provider = _ScriptedProvider([
+            [
+              const ToolUseCompletedEvent(
+                id: 'tu-del',
+                name: 'delete_schedule_relation',
+                input: {'ref_relation': 'ref_1'},
+              ),
+              const CompletedEvent(),
+            ],
+            [const TextDeltaEvent('已删除。'), const CompletedEvent()],
+          ]);
+          final service = _buildService(
+            database: database,
+            provider: provider,
+            clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+            tools: [tool],
+            groundingPolicy: const _DeleteRelationPolicy(),
+          );
+
+          final states = await service
+              .send(accountId: account, userText: '删除这两节课的冲突关系')
+              .toList();
+
+          expect(provider.streamCallCount, 2);
+          expect(states.last.state, AgentRunState.failed);
+          expect(states.last.text, contains('失败 1'));
+          expect(states.last.text, contains('stale_target 1'));
+        },
+      );
+
+      test('free chat is never corrected (one auto call, no forcing)', () async {
+        final provider = _ScriptedProvider([
+          [const TextDeltaEvent('你好！'), const CompletedEvent()],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+        );
+
+        final states = await service
+            .send(accountId: account, userText: '你好，介绍一下自己')
+            .toList();
+
+        expect(provider.streamCallCount, 1);
+        final request = provider.requests.single;
+        expect(request.toolChoice, LlmToolChoice.auto);
+        expect(states.last.state, AgentRunState.completed);
+      });
+    },
+  );
 }
 
 // ---------------------------------------------------------------------------
