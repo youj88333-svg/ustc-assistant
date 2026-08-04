@@ -650,7 +650,9 @@ class UpdateEventTool extends AgentWriteTool {
           'description': '已弃用，请改用 action=cancel/complete/skip'},
       'delete': {'type': 'boolean', 'description': '已弃用，请改用 action=delete'},
     },
-    'required': ['ref_event', 'action'],
+    // action 在兼容期不强制 required：旧调用可只给 delete/status。propose 内部
+    // 要求三者至少出现一个，否则 invalid_write_arguments。
+    'required': ['ref_event'],
   };
 
   @override

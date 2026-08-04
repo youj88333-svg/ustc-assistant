@@ -250,6 +250,13 @@ class AgentPermissionPolicyService {
         defaultRisk: RiskLevel.medium,
         relaxable: true,
         label: '恢复计划块'),
+    'plan_block_done': AgentPermissionAction(
+        key: 'plan_block_done',
+        targetType: 'plan_block',
+        defaultMode: ConfirmationMode.askFirstTime,
+        defaultRisk: RiskLevel.medium,
+        relaxable: true,
+        label: '完成/跳过计划块'),
     'delete_schedule_relation': AgentPermissionAction(
         key: 'delete_schedule_relation',
         targetType: 'relation',
