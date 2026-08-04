@@ -1,5 +1,7 @@
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_expander.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
@@ -137,6 +139,23 @@ class CreateEventTool extends AgentWriteTool {
       'description': {'type': 'string'},
       'tags': {'type': 'array', 'items': {'type': 'string'}},
       'reminder_offsets_minutes': {'type': 'array', 'items': {'type': 'integer'}},
+      'recurrence': {
+        'type': 'object',
+        'description': '可选：把本日程创建为固定重复系列。anchor 取自 start_at/start_date，'
+            '模型不能提供冲突 anchor。',
+        'additionalProperties': false,
+        'properties': {
+          'frequency': {'type': 'string', 'enum': ['daily', 'weekly', 'monthly']},
+          'interval': {'type': 'integer', 'description': '间隔，默认 1，必须为正'},
+          'weekdays': {
+            'type': 'array',
+            'items': {'type': 'integer'},
+            'description': '仅 weekly 必填且非空；ISO 星期 1-7，去重',
+          },
+          'until_date': {'type': 'string', 'description': '包含的结束日期 YYYY-MM-DD，可空'},
+        },
+        'required': ['frequency'],
+      },
     },
     'required': ['title'],
   };
@@ -158,6 +177,7 @@ class CreateEventTool extends AgentWriteTool {
     final r = WriteArgumentReader(a, const {
       'title', 'start_at', 'end_at', 'all_day', 'start_date', 'end_date_exclusive',
       'location', 'type', 'importance', 'description', 'tags', 'reminder_offsets_minutes',
+      'recurrence',
     });
     r.rejectUnknownKeys();
     final title = r.requiredString('title');
@@ -219,6 +239,16 @@ class CreateEventTool extends AgentWriteTool {
       );
     }
 
+    // 可选重复规则：构造并校验 RecurrenceRule（anchor 取 start_at/start_date，
+    // 模型不能提供冲突 anchor）。缺失时保持单次日程行为完全不变。
+    final anchor = allDay ? event.startDate! : event.startAt!;
+    final RecurrenceRule? recurrenceRule = r.contains('recurrence')
+        ? _parseRecurrence(_requiredMap(a['recurrence'], 'recurrence'), anchor)
+        : null;
+    final recurrenceLines = recurrenceRule == null
+        ? const <String>[]
+        : _recurrencePreviewLines(recurrenceRule, allDay);
+
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -229,16 +259,161 @@ class CreateEventTool extends AgentWriteTool {
         '标题：$title',
         '时间：${_fmtRange(event)}',
         if (location != null && location.isNotEmpty) '地点：$location',
+        ...recurrenceLines,
       ],
-      commitParams: {'event': event, 'reminderOffsetsMinutes': offsets},
-      safeLogSummary: '新建日程 $title ${_fmtRange(event)}',
+      commitParams: {
+        'event': event,
+        'reminderOffsetsMinutes': offsets,
+        'recurrenceRule': ?recurrenceRule,
+      },
+      safeLogSummary: recurrenceRule == null
+          ? '新建日程 $title ${_fmtRange(event)}'
+          : '新建重复日程 $title ${_fmtRange(event)}（${_recurrenceSummary(recurrenceRule)}）',
     );
+  }
+
+  /// 读取必需的嵌套对象参数（如 `recurrence`）。类型不匹配抛 [FormatException]。
+  static Map<String, Object?> _requiredMap(Object? value, String key) {
+    if (value is! Map) throw FormatException('$key must be an object');
+    return value.map((k, v) => MapEntry(k.toString(), v));
+  }
+
+  /// 解析并校验 `recurrence` 参数为 [RecurrenceRule]。校验失败抛
+  /// [FormatException]（映射为 `invalid_write_arguments`）或
+  /// [RecurrenceValidationError]。
+  static RecurrenceRule _parseRecurrence(Map<String, Object?> raw, DateTime anchor) {
+    final r = WriteArgumentReader(raw, const {'frequency', 'interval', 'weekdays', 'until_date'});
+    r.rejectUnknownKeys();
+    final frequency = r.requiredEnum('frequency', const {'daily', 'weekly', 'monthly'});
+    final interval = r.optionalInt('interval') ?? 1;
+    if (interval <= 0) throw const FormatException('interval must be positive');
+    DateTime? untilDate;
+    if (r.contains('until_date')) {
+      untilDate = _parseCalendarDate(r.requiredString('until_date'));
+    }
+    try {
+      return switch (frequency) {
+        'daily' => RecurrenceRule.daily(anchor: anchor, interval: interval, untilDate: untilDate),
+        'weekly' => RecurrenceRule.weekly(
+            anchor: anchor,
+            interval: interval,
+            weekdays: _parseWeekdays(r),
+            untilDate: untilDate,
+          ),
+        _ => RecurrenceRule.monthly(anchor: anchor, interval: interval, untilDate: untilDate),
+      };
+    } on RecurrenceValidationError catch (e) {
+      // 把领域校验失败（如 until_Date 早于 anchor）映射为参数错误，由基类统一
+      // 转为 invalid_write_arguments。
+      throw FormatException(e.message);
+    }
+  }
+
+  /// 严格解析 weekly 的 `weekdays`：1-7、非空、去重。缺失/空/越界抛 [FormatException]。
+  static Set<int> _parseWeekdays(WriteArgumentReader r) {
+    final weekdays = r.contains('weekdays') ? r.requiredIntList('weekdays') : const <int>[];
+    if (weekdays.isEmpty) throw const FormatException('weekdays is required for weekly recurrence');
+    if (weekdays.any((d) => d < 1 || d > 7)) {
+      throw const FormatException('weekdays must be ISO 1-7');
+    }
+    return weekdays.toSet();
+  }
+
+  /// 严格解析 `YYYY-MM-DD` 并返回本地零点 DateTime；非法/不存在的日历日抛 [FormatException]。
+  static DateTime _parseCalendarDate(String value) {
+    final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
+    if (match == null) throw const FormatException('date must be YYYY-MM-DD');
+    final y = int.parse(match.group(1)!);
+    final m = int.parse(match.group(2)!);
+    final d = int.parse(match.group(3)!);
+    final rounded = DateTime(y, m, d);
+    if (rounded.year != y || rounded.month != m || rounded.day != d) {
+      throw const FormatException('invalid calendar date');
+    }
+    return rounded;
+  }
+
+  static const Map<int, String> _isoWeekdayZh = {
+    1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日',
+  };
+
+  String _frequencyZh(RecurrenceRule rule) => switch (rule.frequency) {
+    RecurrenceFrequency.daily => '每天',
+    RecurrenceFrequency.weekly => '每周',
+    RecurrenceFrequency.monthly => '每月',
+  };
+
+  /// 重复规则的确认预览行：频率/间隔/星期（weekly）、结束（含“持续重复”）、
+  /// 前五个发生日期时间。只含安全字段，无任何 id/rule 原始 JSON。
+  List<String> _recurrencePreviewLines(RecurrenceRule rule, bool allDay) {
+    final lines = <String>[
+      '重复：${_frequencyZh(rule)}'
+          '${rule.interval > 1 ? '（每 ${rule.interval} ${_intervalUnitZh(rule)}）' : ''}'
+          '${rule.frequency == RecurrenceFrequency.weekly ? ' ${_weekdayPreview(rule)}' : ''}',
+      rule.untilDate != null
+          ? '结束：至 ${dateText(rule.untilDate!)}（含）'
+          : '结束：持续重复',
+    ];
+    final occurrences = _firstOccurrences(rule);
+    if (occurrences.isNotEmpty) {
+      final firstFive = occurrences.take(5).map((d) => allDay
+          ? d.toIso8601String().substring(0, 10)
+          : _fmtOccurrenceDateTime(d)).toList();
+      lines.add('前五次：${firstFive.join('、')}');
+    }
+    return lines;
+  }
+
+  /// 发生时刻的展示（定时事件）：`YYYY-MM-DD HH:MM`。不显示结束时间，聚焦发生点。
+  String _fmtOccurrenceDateTime(DateTime value) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${value.year}-${two(value.month)}-${two(value.day)} '
+        '${two(value.hour)}:${two(value.minute)}';
+  }
+
+  String _weekdayPreview(RecurrenceRule rule) {
+    final sorted = rule.weekdays.toList()..sort();
+    return sorted.map((d) => _isoWeekdayZh[d] ?? '$d').join('、');
+  }
+
+  String _intervalUnitZh(RecurrenceRule rule) => switch (rule.frequency) {
+    RecurrenceFrequency.daily => '天',
+    RecurrenceFrequency.weekly => '周',
+    RecurrenceFrequency.monthly => '月',
+  };
+
+  /// 前若干个发生时刻（最多取 5），用于确认预览。用有限窗口调用 expandRecurrence，
+  /// 由扩展器按 until/间隔约束裁剪。
+  List<DateTime> _firstOccurrences(RecurrenceRule rule) {
+    final through = rule.anchor.add(const Duration(days: 300));
+    try {
+      return expandRecurrence(rule, from: rule.anchor, through: through);
+    } on Object {
+      return [];
+    }
+  }
+
+  String _recurrenceSummary(RecurrenceRule rule) {
+    final freq = switch (rule.frequency) {
+      RecurrenceFrequency.daily => '每天',
+      RecurrenceFrequency.weekly => '每周',
+      RecurrenceFrequency.monthly => '每月',
+    };
+    final end = rule.untilDate != null ? '至${dateText(rule.untilDate!)}' : '持续重复';
+    return '$freq${rule.interval > 1 ? 'x${rule.interval}' : ''}$end';
   }
 
   @override
   Future<AgentToolResult> commit(AgentWriteProposal proposal, AgentToolContext ctx) async {
     final event = proposal.commitParams['event'] as PersonalEvent;
     final offsets = proposal.commitParams['reminderOffsetsMinutes'] as List<int>?;
+    final rule = proposal.commitParams['recurrenceRule'] as RecurrenceRule?;
+    if (rule != null) {
+      // 重复系列：委托 RecurrenceService.createSeries（缺省 reminder 由 service
+      // 归一化：timed=[15]、all-day=[]）。系列 id 只在 commit 内使用，不进结果。
+      await gateway.createRecurringEvent(event, rule, reminderOffsetsMinutes: offsets);
+      return AgentToolResult(payload: {'result': 'created_recurring_event', 'title': event.title});
+    }
     await gateway.createEvent(event, reminderOffsetsMinutes: offsets);
     return AgentToolResult(payload: {'result': 'created_event', 'title': event.title});
   }

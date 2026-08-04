@@ -3794,6 +3794,192 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
   );
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Task 7 composition regression: recurring create_event through the REAL
+  // production tool registry + confirmation store + Drift gateway.
+  //
+  //   send : 建一个每周一/三/五重复的例会
+  //   call : get_schedule -> create_event(with recurrence) -> final text
+  //
+  // The TRUTH exercised here, on the real composed registry:
+  //   1. create_event(with recurrence) pauses for a write confirmation;
+  //   2. approving writes EXACTLY one calendar_event_series row and ZERO
+  //      calendar_events (no occurrence materialization on the agent path);
+  //   3. the series reminder default is the timed [15];
+  //   4. the confirmation preview names the rule (frequency/weekdays/end) and
+  //      never leaks a series id / occurrence key / raw rule JSON;
+  //   5. a separate fixture that DECLINES the same confirmation leaves BOTH
+  //      calendar_event_series and calendar_events empty.
+  // ─────────────────────────────────────────────────────────────────────────
+  test(
+    'composition: recurring create_event commits one series on approval and '
+    'nothing on decline',
+    () async {
+      // --- Fixture A: approve. ---------------------------------------------
+      final dbA = AppDatabase(NativeDatabase.memory());
+      addTearDown(dbA.close);
+      const protector = _NoopProtector();
+      await _seedAccount(dbA, 'acc-1');
+      await _seedAgentConfig(
+        dbA,
+        'acc-1',
+        secrets: ProtectedAgentSecretStore(database: dbA, protector: protector),
+        apiKey: 'test-key',
+      );
+      final providerA = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-a1',
+                name: 'create_event',
+                input: {
+                  'title': '每周例会',
+                  'start_at': '2026-08-03T10:00:00+08:00',
+                  'end_at': '2026-08-03T11:00:00+08:00',
+                  'recurrence': {
+                    'frequency': 'weekly',
+                    'interval': 1,
+                    'weekdays': [1, 3, 5],
+                    'until_date': '2026-08-31',
+                  },
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已创建每周例会。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final compositionA = await _buildTestComposition(
+        dbA,
+        'acc-1',
+        provider: providerA,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(compositionA.dispose);
+
+      final statesA = <AgentRunViewState>[];
+      final doneA = Completer<void>();
+      late String runIdA;
+      compositionA.sessionService
+          .send(accountId: 'acc-1', userText: '建一个每周一三五重复的例会')
+          .listen((s) {
+        statesA.add(s);
+        if (s.state == AgentRunState.waitingForUser) runIdA = s.runId;
+      }, onDone: doneA.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+
+      // pauses for write confirmation.
+      final pendingA = statesA.firstWhere(
+        (s) => s.userAction?.type == AgentUserActionType.writeConfirmation,
+        orElse: () => throw StateError('recurring create_event did not pause'),
+      );
+      // 确认预览展示重复规则，且不泄漏系列 id / occurrence key / rule JSON。
+      final previewA = pendingA.userAction!.writeProposal!.previewLines.join('\n');
+      expect(previewA, contains('每周'));
+      expect(previewA, contains('2026-08-31'));
+      expect(previewA, contains('前五次'));
+      expect(previewA, isNot(contains('seriesId')));
+      expect(previewA, isNot(contains('occurrenceKey')));
+      expect(previewA, isNot(contains('recurrenceJson')));
+      expect(previewA, isNot(allOf(contains('weekly'), contains('anchor'))));
+
+      await compositionA.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runIdA, approve: true, remember: false)
+          .drain<void>();
+      await doneA.future;
+      expect(statesA.last.state, AgentRunState.completed);
+
+      // 恰 1 条 series 行、0 条 occurrence 行。
+      final seriesRowsA = await dbA.select(dbA.calendarEventSeries).get();
+      expect(seriesRowsA, hasLength(1), reason: 'approve must create exactly one series row');
+      expect(await dbA.select(dbA.calendarEvents).get(), isEmpty,
+          reason: 'no calendar_events occurrence row on the agent recurring path');
+      // 定时默认 reminder = [15]。
+      expect(
+        (jsonDecode(seriesRowsA.single.reminderOffsetsJson) as List).cast<int>(),
+        [15],
+        reason: 'timed series default reminder is [15]',
+      );
+
+      // --- Fixture B: decline the same confirmation -> both tables unchanged. ---
+      final dbB = AppDatabase(NativeDatabase.memory());
+      addTearDown(dbB.close);
+      await _seedAccount(dbB, 'acc-1');
+      await _seedAgentConfig(
+        dbB,
+        'acc-1',
+        secrets: ProtectedAgentSecretStore(database: dbB, protector: protector),
+        apiKey: 'test-key',
+      );
+      final providerB = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-b1',
+                name: 'create_event',
+                input: {
+                  'title': '每周例会',
+                  'start_at': '2026-08-03T10:00:00+08:00',
+                  'end_at': '2026-08-03T11:00:00+08:00',
+                  'recurrence': {
+                    'frequency': 'weekly',
+                    'weekdays': [1, 3, 5],
+                  },
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('好的。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final compositionB = await _buildTestComposition(
+        dbB,
+        'acc-1',
+        provider: providerB,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(compositionB.dispose);
+
+      final statesB = <AgentRunViewState>[];
+      final doneB = Completer<void>();
+      late String runIdB;
+      compositionB.sessionService
+          .send(accountId: 'acc-1', userText: '建一个每周一三五重复的例会')
+          .listen((s) {
+        statesB.add(s);
+        if (s.state == AgentRunState.waitingForUser) runIdB = s.runId;
+      }, onDone: doneB.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        statesB.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'recurring create_event pauses for confirmation across fixtures',
+      );
+      await compositionB.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runIdB, approve: false, remember: false)
+          .drain<void>();
+      await doneB.future;
+      expect(statesB.last.state, AgentRunState.completed);
+
+      // 拒绝后两表均不变。
+      expect(await dbB.select(dbB.calendarEventSeries).get(), isEmpty,
+          reason: 'decline must leave series table untouched');
+      expect(await dbB.select(dbB.calendarEvents).get(), isEmpty,
+          reason: 'decline must leave events table untouched');
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
   // Task 4 FINAL composition regression: the REAL date-bounded relation
   // workflow, end to end, through the real composed registry with a scripted
   // provider.

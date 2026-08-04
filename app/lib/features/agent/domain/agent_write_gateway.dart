@@ -1,5 +1,6 @@
 import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/personal_event.dart';
+import '../../calendar/domain/recurrence_rule.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/application/overlay_service.dart';
 import '../../schedule/domain/jw_day_move.dart';
@@ -50,6 +51,11 @@ final class EventWriteSnapshot {
 /// （类似 `CalendarEventService`），不接收 `accountId` 参数。
 abstract interface class AgentWriteGateway {
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes});
+
+  /// 创建重复个人日程系列：以 [anchor] 为锚点、[rule] 为规则，委托
+  /// [RecurrenceService.createSeries]。返回新系列 id（仅 commit 内使用，绝不
+  /// 进入预览/日志）。
+  Future<String> createRecurringEvent(PersonalEvent anchor, RecurrenceRule rule, {List<int>? reminderOffsetsMinutes});
   Future<void> editPersonalEvent(String eventId, PersonalEvent replacement, {List<int>? reminderOffsetsMinutes});
   Future<void> editOccurrenceOnly(String seriesId, String occurrenceKey, OccurrenceOverride override);
   Future<SeriesEditImpact> editWholeSeries(String seriesId, {required PersonalEvent anchor});

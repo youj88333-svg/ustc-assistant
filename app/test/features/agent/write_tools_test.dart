@@ -16,6 +16,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.da
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_unit_of_work.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
@@ -30,6 +31,7 @@ class _FixedClock implements BeijingClock {
 /// 记录被调用方法的假网关；未覆盖方法抛错。
 class _RecordingGateway implements AgentWriteGateway {
   final List<PersonalEvent> createdEvents = [];
+  final List<({PersonalEvent anchor, RecurrenceRule rule, List<int>? offsets})> createdRecurring = [];
   final List<Map<String, Object?>> createdTasks = [];
   final List<Map<String, Object?>> plannedBlocks = [];
   /// 模拟目标在提案后被删除：taskById 在 propose 通过后抛错，触发 commit 的
@@ -56,6 +58,12 @@ class _RecordingGateway implements AgentWriteGateway {
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes}) async {
     createdEvents.add(event);
     return 'ev-created';
+  }
+
+  @override
+  Future<String> createRecurringEvent(PersonalEvent anchor, RecurrenceRule rule, {List<int>? reminderOffsetsMinutes}) async {
+    createdRecurring.add((anchor: anchor, rule: rule, offsets: reminderOffsetsMinutes));
+    return 'series-created';
   }
 
   @override
@@ -394,6 +402,100 @@ void main() {
     }, _ctx('r1'));
     expect(result.status, AgentToolStatus.error);
     expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_event without recurrence keeps one-off behavior byte-identical', () async {
+    final h = _Harness(tools());
+    final result = await h.tool('create_event').execute({
+      'title': '健身',
+      'start_at': '2026-08-01T15:00:00+08:00',
+      'end_at': '2026-08-01T16:00:00+08:00',
+      'location': '健身房',
+    }, _ctx('r1'));
+    expect(result.status, AgentToolStatus.needsUserAction);
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    expect(gateway.createdEvents, hasLength(1));
+    expect(gateway.createdRecurring, isEmpty);
+    expect(gateway.createdEvents.single.title, '健身');
+  });
+
+  test('create_event with recurrence previews rule and commits a series via createRecurringEvent', () async {
+    final h = _Harness(tools());
+    final result = await h.tool('create_event').execute({
+      'title': '每周例会',
+      'start_at': '2026-08-03T10:00:00+08:00',
+      'end_at': '2026-08-03T11:00:00+08:00',
+      'recurrence': {
+        'frequency': 'weekly',
+        'interval': 1,
+        'weekdays': [1, 3, 5],
+        'until_date': '2026-08-31',
+      },
+      'reminder_offsets_minutes': [30],
+    }, _ctx('r1'));
+    expect(result.status, AgentToolStatus.needsUserAction);
+    // 确认预览展示频率/间隔/星期/结束/前五次，且只含安全字段。
+    final preview = result.userAction!.writeProposal!.previewLines.join('\n');
+    expect(preview, contains('重复：每周 周一、周三、周五'));
+    expect(preview, contains('结束：至 2026-08-31（含）'));
+    expect(preview, contains('前五次：'));
+    expect(preview, isNot(contains('seriesId')));
+    expect(preview, isNot(contains('occurrenceKey')));
+    expect(preview, isNot(contains('recurrenceJson')));
+    await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
+    // 走 createRecurringEvent，绝不再创建单次数行。
+    expect(gateway.createdRecurring, hasLength(1));
+    expect(gateway.createdEvents, isEmpty);
+    final recorded = gateway.createdRecurring.single;
+    expect(recorded.rule.frequency, RecurrenceFrequency.weekly);
+    expect(recorded.rule.weekdays, {1, 3, 5});
+    expect(recorded.offsets, [30]);
+  });
+
+  test('create_event recurrence uses the anchor from start_at and rejects until_date before anchor', () async {
+    final h = _Harness(tools());
+    final result = await h.tool('create_event').execute({
+      'title': '每天冥想',
+      'start_at': '2026-08-05T07:00:00+08:00',
+      'end_at': '2026-08-05T07:30:00+08:00',
+      'recurrence': {'frequency': 'daily', 'until_date': '2026-08-03'}, // 早于 anchor
+    }, _ctx('r1'));
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_event weekly recurrence requires non-empty weekdays', () async {
+    final h = _Harness(tools());
+    final result = await h.tool('create_event').execute({
+      'title': '周会',
+      'start_at': '2026-08-03T10:00:00+08:00',
+      'end_at': '2026-08-03T11:00:00+08:00',
+      'recurrence': {'frequency': 'weekly'},
+    }, _ctx('r1'));
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'invalid_write_arguments');
+  });
+
+  test('create_event rejects out-of-range weekday and rejects a conflicting anchor field', () async {
+    final h = _Harness(tools());
+    // weekday 8 越界。
+    final badWeekday = await h.tool('create_event').execute({
+      'title': '周会',
+      'start_at': '2026-08-03T10:00:00+08:00',
+      'end_at': '2026-08-03T11:00:00+08:00',
+      'recurrence': {'frequency': 'weekly', 'weekdays': [8]},
+    }, _ctx('r1'));
+    expect(badWeekday.status, AgentToolStatus.error);
+    expect(badWeekday.errorCode, 'invalid_write_arguments');
+    // 冲突 anchor 字段（模型绝不能提供）被 rejectUnknownKeys 拒绝。
+    final conflictAnchor = await h.tool('create_event').execute({
+      'title': '周会',
+      'start_at': '2026-08-03T10:00:00+08:00',
+      'end_at': '2026-08-03T11:00:00+08:00',
+      'recurrence': {'frequency': 'daily', 'anchor': '2026-08-03T10:00:00+08:00'},
+    }, _ctx('r1'));
+    expect(conflictAnchor.status, AgentToolStatus.error);
+    expect(conflictAnchor.errorCode, 'invalid_write_arguments');
   });
 
   test('create_task propose and commit', () async {

@@ -60,6 +60,11 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       _events.create(event, reminderOffsetsMinutes: reminderOffsetsMinutes);
 
   @override
+  Future<String> createRecurringEvent(PersonalEvent anchor, RecurrenceRule rule,
+          {List<int>? reminderOffsetsMinutes}) =>
+      _recurrence.createSeries(anchor: anchor, rule: rule, reminderOffsetsMinutes: reminderOffsetsMinutes);
+
+  @override
   Future<void> editPersonalEvent(String eventId, PersonalEvent replacement, {List<int>? reminderOffsetsMinutes}) =>
       _events.edit(eventId, replacement, reminderOffsetsMinutes: reminderOffsetsMinutes);
 

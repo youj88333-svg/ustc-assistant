@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -95,6 +97,64 @@ void main() {
     final row = await (db.select(db.calendarEvents)..where((r) => r.id.equals('ev-1'))).getSingle();
     expect(row.title, '健身');
     expect(row.source, 'user');
+  });
+
+  test('createRecurringEvent delegates to RecurrenceService.createSeries', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final seriesId = await gateway.createRecurringEvent(
+      PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday, DateTime.wednesday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    // 恰 1 条 series 行，且不发生任何 calendar_events 单次 occurrence 行。
+    final series = await db.select(db.calendarEventSeries).get();
+    expect(series, hasLength(1));
+    expect(series.single.id, seriesId);
+    expect(await db.select(db.calendarEvents).get(), isEmpty);
+    final rule = RecurrenceRule.decode(series.single.recurrenceJson);
+    expect(rule.frequency, RecurrenceFrequency.weekly);
+    expect(rule.weekdays, {DateTime.monday, DateTime.wednesday});
+  });
+
+  test('createRecurringEvent default all-day reminder is empty, timed default is [15]', () async {
+    // 全天：缺省 reminder → []
+    final allDayAnchor = DateTime(2026, 8, 3);
+    await gateway.createRecurringEvent(
+      PersonalEvent.allDay(
+        title: '每周复盘',
+        startDate: allDayAnchor,
+        endDateExclusive: allDayAnchor.add(const Duration(days: 1)),
+      ),
+      RecurrenceRule.weekly(
+        anchor: allDayAnchor,
+        weekdays: {DateTime.sunday},
+      ),
+    );
+    final allDaySeries = await db.select(db.calendarEventSeries).getSingle();
+    expect(jsonDecode(allDaySeries.reminderOffsetsJson).cast<int>(), isEmpty);
+    expect(await db.select(db.calendarEvents).get(), isEmpty);
+
+    // 定时：缺省 reminder → [15]
+    final timedAnchor = DateTime(2026, 8, 4, 9, 0);
+    await gateway.createRecurringEvent(
+      PersonalEvent.timed(
+        title: '每日站会',
+        startAt: timedAnchor,
+        endAt: timedAnchor.add(const Duration(minutes: 30)),
+      ),
+      RecurrenceRule.daily(anchor: timedAnchor),
+    );
+    final rows = await db.select(db.calendarEventSeries).get();
+    final timedSeries = rows.firstWhere((r) => r.title == '每日站会');
+    expect(jsonDecode(timedSeries.reminderOffsetsJson).cast<int>(), [15]);
+    expect(await db.select(db.calendarEvents).get(), isEmpty);
   });
 
   test('createTask and planTask insert rows', () async {
