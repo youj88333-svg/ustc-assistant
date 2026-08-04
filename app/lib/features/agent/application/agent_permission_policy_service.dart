@@ -3,7 +3,21 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
+import '../../tasks/application/undo_recorder.dart';
 import '../domain/agent_permission_policy.dart';
+
+/// The action keys the `reset_permission_policy` tool may NOT reset its own
+/// protection. A critical, non-relaxable action (`update_permission_policy`,
+/// `reset_permission_policy`, `move_jw_course_day`) can never be reset by the
+/// reset tool, because doing so would let the model weaken its own guard.
+const Set<String> kNonResetableActions = {
+  'update_permission_policy',
+  'reset_permission_policy',
+  'move_jw_course_day',
+};
+
+/// Result of a single `reset_permission_policy` attempt.
+enum ResetPolicyOutcome { reset, alreadyDefault }
 
 /// 单一动作注册表中的一条：动作键、target、默认风险、默认模式、是否允许在设置页
 /// 放宽、中文标签。所有写工具 allowlist、设置页、`update_permission_policy` 与
@@ -36,10 +50,15 @@ class AgentPermissionAction {
 /// 默认策略按数据模型 §10.5 与设计 §17.2/§17.3 映射惰性生效（无行时用默认值，
 /// 不物理播种）。任何权限变更写 `ActionLog`。
 class AgentPermissionPolicyService {
-  AgentPermissionPolicyService({required this.database, required this.clock});
+  AgentPermissionPolicyService({
+    required this.database,
+    required this.clock,
+    UndoRecorder? undoRecorder,
+  }) : undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
   final AppDatabase database;
   final BeijingClock clock;
+  final UndoRecorder undoRecorder;
   static const _uuid = Uuid();
 
   /// 唯一动作注册表（设计 §17.3 动作键 + 现有 11 个写工具动作 + 兼容/预留键）。
@@ -547,6 +566,85 @@ class AgentPermissionPolicyService {
       occurredAt: clock.now().millisecondsSinceEpoch,
     );
   }
+
+  /// Removes exactly ONE custom policy override row for
+  /// `(accountId, actionType, targetType)`, restoring the action to its lazy
+  /// default. `firstConfirmedAt`/`lastConfirmedAt` are cleared with the row, so
+  /// a default `ask_first_time` action re-prompts on the next use.
+  ///
+  /// Returns [ResetPolicyOutcome.reset] when a row was removed (ActionLog +
+  /// Undo written in the same transaction), or
+  /// [ResetPolicyOutcome.alreadyDefault] when no override exists — in which
+  /// case NOTHING is written: no ActionLog, no Undo, no row mutation.
+  ///
+  /// The action itself must be a registered, configurable action. The tool
+  /// cannot reset its own protection: `update_permission_policy`,
+  /// `reset_permission_policy`, and `move_jw_course_day` ([kNonResetableActions])
+  /// are rejected with [StateError], since doing so would let the model weaken
+  /// the critical guard that always requires explicit confirmation.
+  Future<ResetPolicyOutcome> resetPolicy({
+    required String accountId,
+    required String actionType,
+    required String targetType,
+  }) async {
+    if (kNonResetableActions.contains(actionType)) {
+      throw StateError('action $actionType cannot be reset');
+    }
+    final now = clock.now().millisecondsSinceEpoch;
+    final existing = await _find(accountId, actionType, targetType);
+    if (existing == null) return ResetPolicyOutcome.alreadyDefault;
+
+    await database.transaction(() async {
+      await (database.delete(database.agentPermissionPolicies)..where(
+            (row) =>
+                row.id.equals(existing.id) &
+                row.accountId.equals(accountId),
+          ))
+          .go();
+      await database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: 'reset_permission_policy',
+        result: 'success',
+        safeSummary: '权限已恢复默认 $actionType($targetType)',
+        riskLevel: RiskLevel.critical.storage,
+        occurredAt: now,
+      );
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'reset_permission_policy',
+          accountId: accountId,
+          payload: {
+            'entity': 'composite',
+            'operations': [
+              {
+                'entity': 'permission_policy',
+                'id': existing.id,
+                'before': _policySnapshot(existing),
+              },
+            ],
+          },
+        ),
+      );
+    });
+    return ResetPolicyOutcome.reset;
+  }
+
+  Map<String, Object?> _policySnapshot(AgentPermissionPolicyRecord r) => {
+    'accountId': r.accountId,
+    'actionType': r.actionType,
+    'targetType': r.targetType,
+    'confirmationMode': r.confirmationMode.storage,
+    'riskLevel': r.riskLevel.storage,
+    'scope': 'user_default',
+    'enabled': r.enabled,
+    'firstConfirmedAt': r.firstConfirmedAt,
+    'lastConfirmedAt': r.lastConfirmedAt,
+    'expiresAt': r.expiresAt,
+    'updatedBy': r.updatedBy,
+    'createdAt': r.createdAt,
+    'updatedAt': r.updatedAt,
+  };
 
   /// 最近的权限变更记录（update/reset_permission_policy 的 ActionLog）。
   Future<List<ActionLog>> recentPermissionChanges(

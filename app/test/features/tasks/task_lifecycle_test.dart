@@ -3,8 +3,10 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/tasks/application/plan_block_lifecycle_port.dart';
+import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task_projection.dart';
 
@@ -418,6 +420,186 @@ void main() {
       // Undo snapshot is STILL recorded (lifecycle undo is not skipped).
       expect(
         undo.commands.where((c) => c.kind == 'task_cancel'),
+        hasLength(1),
+      );
+    });
+  });
+
+  group('TaskEventLink unlink', () {
+    Future<(TaskLifecycleService, String, String)> seedLinkedPair(
+      AppDatabase database, {
+      String eventSource = 'user',
+    }) async {
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'link-event',
+              accountId: 'a',
+              source: eventSource,
+              title: '日程',
+              type: 'personal',
+              startAt: Value(DateTime(2026, 7, 27, 9).millisecondsSinceEpoch),
+              endAt: Value(DateTime(2026, 7, 27, 10).millisecondsSinceEpoch),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final lifecycle = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => 40,
+      );
+      final id = await lifecycle.create(
+        title: '关联任务',
+        eventIds: const ['link-event'],
+      );
+      return (lifecycle, id, 'link-event');
+    }
+
+    test('unlink removes the single related link and writes a composite undo',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final undo = UndoService(database: database, accountId: 'a');
+      final service = TaskEventLinkService(
+        database: database,
+        accountId: 'a',
+        undoRecorder: undo,
+      );
+      final (_, taskId, eventId) = await seedLinkedPair(database);
+      expect(
+        await database.select(database.taskEventLinks).get(),
+        hasLength(1),
+      );
+
+      await service.unlink(taskId: taskId, eventId: eventId);
+
+      expect(await database.select(database.taskEventLinks).get(), isEmpty);
+      // Task and event rows are untouched.
+      final taskRow = await (database.select(database.tasks)
+                ..where((r) => r.id.equals(taskId)))
+            .getSingle();
+      expect(taskRow.deletedAt, isNull);
+      expect(
+        await database.select(database.calendarEvents).get(),
+        hasLength(1),
+      );
+      expect(
+        (await database.actionLogsRepository.selectAll())
+            .where((l) => l.actionType == 'unlink_task_event'),
+        hasLength(1),
+      );
+      // Composite undo restores the link.
+      await undo.undo();
+      expect(
+        await database.select(database.taskEventLinks).get(),
+        hasLength(1),
+      );
+    });
+
+    test('missing link yields link_not_found with no write', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'only-event',
+              accountId: 'a',
+              source: 'user',
+              title: '日程',
+              type: 'personal',
+              startAt: Value(DateTime(2026, 7, 27, 9).millisecondsSinceEpoch),
+              endAt: Value(DateTime(2026, 7, 27, 10).millisecondsSinceEpoch),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final lifecycle = TaskLifecycleService(
+        database: database,
+        accountId: 'a',
+        now: () => 40,
+      );
+      final taskId = await lifecycle.create(title: '无关联');
+      final service = TaskEventLinkService(database: database, accountId: 'a');
+      await expectLater(
+        service.unlink(taskId: taskId, eventId: 'only-event'),
+        throwsA(isA<TaskEventLinkNotFoundError>()),
+      );
+      expect(await database.select(database.taskEventLinks).get(), isEmpty);
+      expect(
+        (await database.actionLogsRepository.selectAll())
+            .where((l) => l.actionType == 'unlink_task_event'),
+        isEmpty,
+      );
+    });
+
+    test('school-sourced event can still be unlinked locally', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = TaskEventLinkService(database: database, accountId: 'a');
+      final (_, taskId, eventId) =
+          await seedLinkedPair(database, eventSource: 'ustc_jw');
+      await service.unlink(taskId: taskId, eventId: eventId);
+      expect(await database.select(database.taskEventLinks).get(), isEmpty);
+    });
+
+    test('stale task or event version rejects the unlink atomically',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = TaskEventLinkService(database: database, accountId: 'a');
+      final (_, taskId, eventId) = await seedLinkedPair(database);
+
+      await expectLater(
+        service.unlink(
+          taskId: taskId,
+          eventId: eventId,
+          expectedTaskUpdatedAt: 999999,
+        ),
+        throwsA(isA<TaskEventLinkTargetNotFoundError>()),
+      );
+      expect(
+        await database.select(database.taskEventLinks).get(),
+        hasLength(1),
+      );
+      await expectLater(
+        service.unlink(
+          taskId: taskId,
+          eventId: eventId,
+          expectedEventUpdatedAt: 999999,
+        ),
+        throwsA(isA<TaskEventLinkTargetNotFoundError>()),
+      );
+      expect(
+        await database.select(database.taskEventLinks).get(),
+        hasLength(1),
+      );
+    });
+
+    test('unlink is account-isolated', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final (_, taskId, eventId) = await seedLinkedPair(database);
+      final other = TaskEventLinkService(
+        database: database,
+        accountId: 'other',
+      );
+      await expectLater(
+        other.unlink(taskId: taskId, eventId: eventId),
+        throwsA(isA<TaskEventLinkTargetNotFoundError>()),
+      );
+      expect(
+        await database.select(database.taskEventLinks).get(),
         hasLength(1),
       );
     });

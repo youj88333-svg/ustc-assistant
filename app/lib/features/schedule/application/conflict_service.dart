@@ -15,6 +15,23 @@ enum ConflictState { unclassified, conflict, nonConflict }
 
 enum ConflictScope { occurrence, currentAndFuture }
 
+/// The account-scoped result of a series-rule deletion-impact preview:
+/// how many calendar days the rule's shared window would affect over the next
+/// 366 days, whether the paired series continues beyond that horizon, and
+/// whether it is infinite. Exposed fields never carry a series id, a rule id,
+/// or an occurrence key.
+class SeriesRemovalImpact {
+  const SeriesRemovalImpact({
+    required this.affectedOccurrenceCount,
+    required this.over366Days,
+    required this.infinite,
+  });
+
+  final int affectedOccurrenceCount;
+  final bool over366Days;
+  final bool infinite;
+}
+
 class ConflictValidationError implements Exception {
   const ConflictValidationError(this.message);
 
@@ -22,6 +39,28 @@ class ConflictValidationError implements Exception {
 
   @override
   String toString() => 'ConflictValidationError: $message';
+}
+
+/// Deterministic error returned when a caller tries to delete an object that
+/// is not user-authored: an imported `exam_for_course` relation or a derived
+/// overlap with no stored row.
+class ConflictNotDeletableError implements Exception {
+  const ConflictNotDeletableError(this.code);
+
+  /// One of `exam_for_course`, `derived_overlap`.
+  final String code;
+
+  @override
+  String toString() => 'ConflictNotDeletableError($code)';
+}
+
+/// Deterministic error returned when the requested relation / rule row does
+/// not exist for the account (or does not match the supplied state/version).
+class ConflictRelationNotFoundError implements Exception {
+  const ConflictRelationNotFoundError();
+
+  @override
+  String toString() => 'ConflictRelationNotFoundError';
 }
 
 /// A unified relation participant. `kind` is `event` (a CalendarEvent) or
@@ -444,6 +483,201 @@ class ConflictService {
     }
     return ScheduleConflictProjection.resolvePair(itemA, itemB, filtered);
   }
+
+  /// Removes the single user-authored occurrence relation identified by
+  /// [relationId] from the account's conflict config, then recomputes the pair
+  /// state through the shared projection (occurrence -> series -> overlap ->
+  /// no conflict) so callers can report the fallback.
+  ///
+  /// Only account-owned `source=user` + `relationType=conflict` occurrence rows
+  /// are accepted. Imported `exam_for_course` rows (source != user) and derived
+  /// overlaps (no stored row) are rejected with [ConflictNotDeletableError].
+  /// Missing / foreign ids yield [ConflictRelationNotFoundError]. The row
+  /// deletion, ActionLog and Undo snapshot share one database transaction.
+  ///
+  /// Returns the [ResolvedConflictPair] that would govern the (left, right)
+  /// pair after the deletion (or null when a grid item does not resolve), so
+  /// the caller can show the fallback without an extra read.
+  Future<ResolvedConflictPair?> deleteConflictRelation(
+    String relationId, {
+    ScheduleGridItem? left,
+    ScheduleGridItem? right,
+  }) async {
+    ResolvedConflictPair? fallback;
+    await database.transaction(() async {
+      final row = await (database.select(database.scheduleRelations)..where(
+            (entry) =>
+                entry.id.equals(relationId) & entry.accountId.equals(accountId),
+          ))
+          .getSingleOrNull();
+      if (row == null) throw const ConflictRelationNotFoundError();
+      // Only user-authored conflict occurrence rows are deletable.
+      if (row.relationType != 'conflict' || row.source != 'user') {
+        throw ConflictNotDeletableError(
+          row.relationType == 'exam_for_course'
+              ? 'exam_for_course'
+              : 'derived_overlap',
+        );
+      }
+      final pair = (
+        _rowParticipant(row, isLeft: true),
+        _rowParticipant(row, isLeft: false),
+      );
+      final a = left ?? await _gridItemFor(pair.$1);
+      final b = right ?? await _gridItemFor(pair.$2);
+      fallback = await _fallbackAfterOccurrenceRemoval(a, b, row);
+      await (database.delete(database.scheduleRelations)..where(
+            (entry) =>
+                entry.id.equals(relationId) & entry.accountId.equals(accountId),
+          ))
+          .go();
+      await _logRelationRemoval('relation', row.conflictState);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'conflict_relation_removal',
+          accountId: accountId,
+          payload: {
+            'entity': 'schedule_relation',
+            'id': relationId,
+            'before': _relationSnapshot(row),
+          },
+        ),
+      );
+    });
+    return fallback;
+  }
+
+  /// Removes the single user series rule identified by [ruleId] (an account-
+  /// owned `schedule_relation_rules` row, user-authored by construction).
+  /// Missing/foreign ids yield [ConflictRelationNotFoundError]. Row deletion,
+  /// ActionLog and Undo snapshot share one transaction.
+  ///
+  /// A series rule references two series (not concrete occurrences), so no
+  /// single fallback pair can be derived from the rule id alone; callers use
+  /// [conflictRuleRemovalImpact] for the 366-day deletion-impact preview.
+  Future<void> deleteConflictRule(String ruleId) async {
+    await database.transaction(() async {
+      final row = await (database.select(database.scheduleRelationRules)..where(
+            (entry) =>
+                entry.id.equals(ruleId) & entry.accountId.equals(accountId),
+          ))
+          .getSingleOrNull();
+      if (row == null) throw const ConflictRelationNotFoundError();
+      await (database.delete(database.scheduleRelationRules)..where(
+            (entry) =>
+                entry.id.equals(ruleId) & entry.accountId.equals(accountId),
+          ))
+          .go();
+      await _logRelationRemoval('rule', row.conflictState);
+      await undoRecorder.record(
+        UndoCommand(
+          kind: 'conflict_rule_removal',
+          accountId: accountId,
+          payload: {
+            'entity': 'schedule_relation_rule',
+            'id': ruleId,
+            'before': _ruleSnapshot(row),
+          },
+        ),
+      );
+    });
+  }
+
+  /// Predicted number of calendar days the [ruleId] series rule would affect
+  /// over the next 366 days if deleted, plus whether the paired series
+  /// continues beyond that horizon or is infinite.
+  ///
+  /// The rule carries its own effective window ([effectiveFrom] inclusive,
+  /// [effectiveThrough] inclusive-or-unbounded). The affected window is that
+  /// window clamped to the next 366 days from *today*; each distinct calendar
+  /// day both series are in effect counts as one affected day. This is an
+  /// upper-bound preview (a series rule applies to the whole paired series, so
+  /// the shared day window is the conservative affected scope) — it never
+  /// claims an exact occurrence count. `over366Days` is true when the window
+  /// reaches past the horizon or is unbounded; `infinite` when
+  /// [effectiveThrough] is null. Throws [ConflictRelationNotFoundError] for a
+  /// missing/foreign id.
+  Future<SeriesRemovalImpact> conflictRuleRemovalImpact(String ruleId) async {
+    final row = await (database.select(database.scheduleRelationRules)..where(
+          (entry) =>
+              entry.id.equals(ruleId) & entry.accountId.equals(accountId),
+        ))
+        .getSingleOrNull();
+    if (row == null) throw const ConflictRelationNotFoundError();
+
+    final today = _dateOnly(DateTime.fromMillisecondsSinceEpoch(now()));
+    final horizonEndExclusive = today.add(const Duration(days: 366));
+    final rawFrom = DateTime.parse(row.effectiveFrom);
+    final from = rawFrom.isAfter(today) ? rawFrom : today;
+    final throughRaw = row.effectiveThrough;
+
+    final over366 = throughRaw == null ||
+        DateTime.parse(throughRaw).isAfter(horizonEndExclusive);
+
+    final throughDate = throughRaw == null ? null : DateTime.parse(throughRaw);
+    int count = 0;
+    var cursor = from;
+    while (cursor.isBefore(horizonEndExclusive) &&
+        (throughDate == null || !cursor.isAfter(throughDate))) {
+      count++;
+      cursor = cursor.add(const Duration(days: 1));
+    }
+    return SeriesRemovalImpact(
+      affectedOccurrenceCount: count,
+      over366Days: over366,
+      infinite: throughRaw == null,
+    );
+  }
+
+  DateTime _dateOnly(DateTime value) =>
+      DateTime(value.year, value.month, value.day);
+
+  /// A participant extracted from a stored relation row for fallback-grid
+  /// resolution. Logical ids are reused (never a DB id) and never surface.
+  ScheduleConflictParticipant _rowParticipant(
+    ScheduleRelation row, {
+    required bool isLeft,
+  }) =>
+      ScheduleConflictParticipant(
+        kind: isLeft ? row.leftKind ?? '' : row.rightKind ?? '',
+        id: isLeft ? row.leftId ?? '' : row.rightId ?? '',
+        title: '',
+        occurrenceDate: DateTime(1970),
+      );
+
+  Future<ResolvedConflictPair?> _fallbackAfterOccurrenceRemoval(
+    ScheduleGridItem? a,
+    ScheduleGridItem? b,
+    ScheduleRelation row,
+  ) async {
+    if (a == null || b == null) return null;
+    final snapshot = await relationSnapshot();
+    final key = ScheduleConflictProjection.occurrenceKey(
+      row.leftKind ?? '',
+      row.leftId ?? '',
+      row.rightKind ?? '',
+      row.rightId ?? '',
+    );
+    final filtered = ScheduleConflictRelationSnapshot(
+      occurrenceByPair: Map.of(snapshot.occurrenceByPair)..remove(key),
+      seriesByPair: snapshot.seriesByPair,
+    );
+    return ScheduleConflictProjection.resolvePair(a, b, filtered);
+  }
+
+  Future<void> _logRelationRemoval(String kind, String? state) =>
+      database.actionLogsRepository.append(
+        accountId: accountId,
+        source: 'user',
+        actionType: kind == 'rule'
+            ? 'delete_schedule_relation_rule'
+            : 'delete_schedule_relation',
+        result: 'success',
+        safeSummary: kind == 'rule'
+            ? 'Deleted a series conflict rule.'
+            : 'Deleted an event-pair conflict relation.',
+        occurredAt: now(),
+      );
 
   Future<void> _classifyOccurrence(
     ScheduleConflictParticipant a,

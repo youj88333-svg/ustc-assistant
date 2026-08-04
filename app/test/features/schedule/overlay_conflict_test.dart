@@ -16,6 +16,7 @@ import 'package:ustc_assistant_app/features/schedule/application/schedule_confli
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/conflict_editor.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
@@ -187,6 +188,13 @@ ScheduleGridItem planBlockItem(
     updatedAt: 1,
   ),
 );
+
+class _RecordingUndoRecorder implements UndoRecorder {
+  final commands = <UndoCommand>[];
+
+  @override
+  Future<void> record(UndoCommand command) async => commands.add(command);
+}
 
 void main() {
   test('effective event stream emits imports and overlay changes', () async {
@@ -741,6 +749,206 @@ void main() {
       );
       expect(ab.state, ConflictPairState.noConflict);
       expect(ab.origin, ConflictPairOrigin.explicitOccurrence);
+    });
+  });
+
+  group('explicit relation and rule deletion', () {
+    test('deleting an explicit occurrence relation returns pair to derived '
+        'conflict and keeps the relation table empty', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+
+      // event-a/event-b overlap -> derived conflict by default.
+      expect(await service.stateForPair(a, b), ConflictState.conflict);
+
+      // An explicit no_conflict row suppresses it; deleting the explicit row
+      // returns to derived conflict (the fallback path).
+      await service.classifyPair(a, b, ConflictState.nonConflict);
+      expect(await service.stateForPair(a, b), ConflictState.nonConflict);
+      final row =
+          (await database.select(database.scheduleRelations).get()).single;
+      final fallback = await service.deleteConflictRelation(row.id);
+      expect(fallback, isNotNull);
+      expect(fallback!.state, ConflictPairState.conflict);
+      expect(fallback.origin, ConflictPairOrigin.derivedOverlap);
+      expect(await service.stateForPair(a, b), ConflictState.conflict);
+      expect(await database.select(database.scheduleRelations).get(), isEmpty);
+    });
+
+    test('missing relation id yields a deterministic not-found error and '
+        'writes nothing', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final undo = _RecordingUndoRecorder();
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+        undoRecorder: undo,
+      );
+      await expectLater(
+        service.deleteConflictRelation('nope'),
+        throwsA(isA<ConflictRelationNotFoundError>()),
+      );
+      expect(await database.select(database.scheduleRelations).get(), isEmpty);
+      expect(undo.commands, isEmpty);
+    });
+
+    test('imported exam_for_course relation is not deletable', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.scheduleRelations).insert(
+            ScheduleRelationsCompanion.insert(
+              id: 'exam-rel',
+              accountId: 'a',
+              source: const Value('ustc_jw'),
+              externalId: const Value('exam-rel-ext'),
+              relationType: const Value('exam_for_course'),
+              primaryEntityType: const Value('calendar_event'),
+              relatedEntityType: const Value('course_series'),
+              primaryEntityId: const Value('event-a'),
+              relatedEntityId: const Value('series-a'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final service = ConflictService(database: database, accountId: 'a');
+      await expectLater(
+        service.deleteConflictRelation('exam-rel'),
+        throwsA(isA<ConflictNotDeletableError>()),
+      );
+      // Row preserved.
+      expect(
+        (await database.select(database.scheduleRelations).get()).single
+            .relationType,
+        'exam_for_course',
+      );
+    });
+
+    test('deleting a user series rule removes it and a missing rule is rejected',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+      await service.classifyPair(
+        a,
+        b,
+        ConflictState.nonConflict,
+        scope: ConflictScope.currentAndFuture,
+      );
+      final rule =
+          (await database.select(database.scheduleRelationRules).get()).single;
+      await service.deleteConflictRule(rule.id);
+      expect(
+        await database.select(database.scheduleRelationRules).get(),
+        isEmpty,
+      );
+      await expectLater(
+        service.deleteConflictRule('nope'),
+        throwsA(isA<ConflictRelationNotFoundError>()),
+      );
+    });
+
+    test('series-rule removal impact counts the shared 366-day window and '
+        'flags unbounded/infinite', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => DateTime(2026, 8, 4, 12).millisecondsSinceEpoch,
+      );
+      // A rule effective from 2026-08-04 with a finite through of 2026-12-31.
+      await database.into(database.scheduleRelationRules).insert(
+            ScheduleRelationRulesCompanion.insert(
+              id: 'rule-finite',
+              accountId: 'a',
+              leftSeriesType: 'course_series',
+              leftSeriesId: 'series-a',
+              rightSeriesType: 'course_series',
+              rightSeriesId: 'series-b',
+              conflictState: 'no_conflict',
+              effectiveFrom: '2026-08-04',
+              effectiveThrough: const Value('2026-12-31'),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      // A rule with an unbounded through -> infinite + over366.
+      await database.into(database.scheduleRelationRules).insert(
+            ScheduleRelationRulesCompanion.insert(
+              id: 'rule-unbounded',
+              accountId: 'a',
+              leftSeriesType: 'course_series',
+              leftSeriesId: 'series-a',
+              rightSeriesType: 'course_series',
+              rightSeriesId: 'series-b',
+              conflictState: 'no_conflict',
+              effectiveFrom: '2025-01-01',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      final finite = await service.conflictRuleRemovalImpact('rule-finite');
+      // From 2026-08-04 .. 2026-12-31 inclusive.
+      expect(finite.affectedOccurrenceCount, 150);
+      expect(finite.over366Days, isFalse);
+      expect(finite.infinite, isFalse);
+
+      final unbounded = await service.conflictRuleRemovalImpact('rule-unbounded');
+      // Unbounded window -> the full 366-day horizon from today.
+      expect(unbounded.affectedOccurrenceCount, 366);
+      expect(unbounded.over366Days, isTrue);
+      expect(unbounded.infinite, isTrue);
+
+      await expectLater(
+        service.conflictRuleRemovalImpact('nope'),
+        throwsA(isA<ConflictRelationNotFoundError>()),
+      );
+    });
+
+    test('deletion is isolated by account', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final serviceA = ConflictService(database: database, accountId: 'a');
+      final a = participant('event-a', 'series-a');
+      final b = participant('event-b', 'series-b');
+      await serviceA.classifyPair(a, b, ConflictState.nonConflict);
+      final row =
+          (await database.select(database.scheduleRelations).get()).single;
+
+      final serviceOther = ConflictService(
+        database: database,
+        accountId: 'other',
+      );
+      await expectLater(
+        serviceOther.deleteConflictRelation(row.id),
+        throwsA(isA<ConflictRelationNotFoundError>()),
+      );
+      // Row still owned by account 'a'.
+      expect(await database.select(database.scheduleRelations).get(), isNotEmpty);
     });
   });
 

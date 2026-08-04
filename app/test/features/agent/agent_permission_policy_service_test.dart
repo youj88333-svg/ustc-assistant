@@ -5,6 +5,7 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
+import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
 class _FixedClock implements BeijingClock {
   _FixedClock(this._epochMs);
@@ -258,5 +259,96 @@ void main() {
     final logs = await db.actionLogsRepository.selectAll();
     expect(logs.any((l) => l.actionType == 'reset_permission_policy'), isTrue);
     expect(logs.last.source, 'user');
+  });
+
+  group('resetPolicy single override restore', () {
+    test('removes exactly one override and clears first-confirmation, '
+        'returning the action to its default', () async {
+      // Create an override that also carries a first-confirmation timestamp.
+      await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+          targetType: 'event', mode: ConfirmationMode.askFirstTime,
+          riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+      await service.recordFirstConfirmation(
+          accountId: 'a1', actionType: 'create_event', targetType: 'event');
+
+      // Another unrelated override must survive.
+      await service.updatePolicy(accountId: 'a1', actionType: 'set_reminder',
+          targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+          riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+
+      final outcome = await service.resetPolicy(
+          accountId: 'a1', actionType: 'create_event', targetType: 'event');
+      expect(outcome, ResetPolicyOutcome.reset);
+
+      final remaining = await service.listPolicies('a1');
+      expect(remaining, hasLength(1));
+      expect(remaining.single.actionType, 'set_reminder');
+      // The removed action now resolves to its default (ask_first_time asks).
+      expect(await service.resolve(accountId: 'a1', actionType: 'create_event',
+          targetType: 'event', riskLevel: RiskLevel.medium), PermissionDecision.confirm);
+      // A reset action-log entry was written.
+      final logs = await db.actionLogsRepository.selectAll();
+      expect(logs.any((l) => l.actionType == 'reset_permission_policy'), isTrue);
+    });
+
+    test('no override -> already_default with no log and no undo', () async {
+      final undo = UndoService(database: db, accountId: 'a1');
+      final svc = AgentPermissionPolicyService(database: db, clock: clock,
+          undoRecorder: undo);
+      expect(await db.actionLogsRepository.selectAll(), isEmpty);
+      final outcome = await svc.resetPolicy(
+          accountId: 'a1', actionType: 'create_event', targetType: 'event');
+      expect(outcome, ResetPolicyOutcome.alreadyDefault);
+      // No ActionLog, no undo slot.
+      expect(await db.actionLogsRepository.selectAll(), isEmpty);
+      expect(await undo.canUndo(), isFalse);
+    });
+
+    test('resetPolicy atomic consistency: composite undo restores the row',
+        () async {
+      await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+          targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+          riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+      final undo = UndoService(database: db, accountId: 'a1');
+      final svc = AgentPermissionPolicyService(database: db, clock: clock,
+          undoRecorder: undo);
+      await svc.resetPolicy(
+          accountId: 'a1', actionType: 'create_event', targetType: 'event');
+      expect(await svc.listPolicies('a1'), isEmpty);
+
+      await undo.undo();
+
+      expect((await svc.listPolicies('a1')).single.actionType, 'create_event');
+    });
+
+    test('cannot reset the tool\'s own critical guard', () async {
+      for (final key in const ['reset_permission_policy', 'update_permission_policy', 'move_jw_course_day']) {
+        await expectLater(
+          service.resetPolicy(accountId: 'a1', actionType: key,
+              targetType: AgentPermissionPolicyService.targetTypeFor(key)),
+          throwsStateError,
+          reason: '$key must not be reset',
+        );
+      }
+      expect(kNonResetableActions,
+          containsAll(const ['reset_permission_policy', 'update_permission_policy', 'move_jw_course_day']));
+    });
+
+    test('resetPolicy is account-scoped', () async {
+      await service.updatePolicy(accountId: 'a1', actionType: 'create_event',
+          targetType: 'event', mode: ConfirmationMode.alwaysAllow,
+          riskLevel: RiskLevel.medium, enabled: true, updatedBy: 'user');
+      await db.into(db.localAccounts).insert(
+        LocalAccountsCompanion.insert(
+          id: 'a2', maskedHint: 'PB****0001', isActive: const Value(true),
+          createdAt: 1, updatedAt: 1,
+        ),
+      );
+      final other = AgentPermissionPolicyService(database: db, clock: clock);
+      // a2 has no override -> already default; a1's row is untouched.
+      expect(await other.resetPolicy(accountId: 'a2', actionType: 'create_event',
+          targetType: 'event'), ResetPolicyOutcome.alreadyDefault);
+      expect((await service.listPolicies('a1')).single.actionType, 'create_event');
+    });
   });
 }
