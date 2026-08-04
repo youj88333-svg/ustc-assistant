@@ -34,7 +34,6 @@ import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
-import 'package:ustc_assistant_app/features/agent/application/agent_tool_budget.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_tool_registry.dart';
 import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/application/run_reference_store.dart';
@@ -119,12 +118,20 @@ class _ScriptedProvider implements LlmProvider {
 /// inspecting the captured [requests] so a later tool_use can echo refs bound
 /// by an earlier tool_result (the same seam the read-only flow test uses).
 class _ScriptedCall {
-  const _ScriptedCall(this._events, {this.inputBuilder});
-  final List<LlmEvent> Function() _events;
+  const _ScriptedCall(this._events, {this.inputBuilder}) : _eventsBuilder = null;
+  const _ScriptedCall.requestAware(this._eventsBuilder)
+      : _events = null,
+        inputBuilder = null;
+  final List<LlmEvent> Function()? _events;
+  final List<LlmEvent> Function(List<LlmRequest> prior)? _eventsBuilder;
   final Map<String, Object?> Function(List<LlmRequest> prior)? inputBuilder;
 
   List<LlmEvent> build(List<LlmRequest> requests) {
-    final base = _events();
+    final aware = _eventsBuilder;
+    if (aware != null) {
+      return aware(requests);
+    }
+    final base = _events!();
     final builder = inputBuilder;
     if (builder == null) return base;
     // Replace any ToolUseCompletedEvent's input with the captured input.
@@ -5172,12 +5179,14 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           isNot(contains('ev-1')));
     });
 
-    // Scenario 2: single + recurring three-scope delete/restore. The recurring
-    // production-reachability hard gate (line ~4666) already proves occurrence
-    // binding; this exercises update_event delete+restore on a single event and
-    // the scope_required guard on a recurring target through the real registry.
-    test('scenario 2: single event delete/restore + recurring scope_required',
-        () async {
+    // Scenario 2: single event delete/restore through the real registry. The
+    // recurring three-scope (only_this/this_and_future/whole_series) production
+    // reachability + scope_required guard is covered by the Task 9 hard gate
+    // (line ~4666) and the write_tools_test Task 9 group; this test exercises
+    // single-event delete + restore (soft-delete then clear deletedAt) so the
+    // registry commit path is exercised for both directions.
+    test('scenario 2: single event delete/restore (recurring three-scope via '
+        'hard gate)', () async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       final built = await writeRegistry(db, 'acc-1');
@@ -5360,9 +5369,15 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'restore clears deletedAt and recovers the block');
     });
 
-    // Scenario 5: relation/rule delete + fallback to derived conflict.
-    test('scenario 5: delete_schedule_relation removes explicit row; '
-        'derived overlap fallback is not a delete failure', () async {
+    // Scenario 5: delete_schedule_relation removes an explicit user relation
+    // row through the real registry. The derived-overlap fallback (a deleted
+    // no_conflict relation reverting to a derived conflict when the pair still
+    // overlaps) and the exam_for_course/derived-overlap non-deletability are
+    // covered by conflict_service tests; this test asserts the explicit row is
+    // physically removed by the registry commit path.
+    test('scenario 5: delete_schedule_relation removes the explicit user '
+        'relation row (derived-overlap fallback via conflict_service tests)',
+        () async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       final built = await writeRegistry(db, 'acc-1');
@@ -5412,9 +5427,13 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'explicit no_conflict relation is physically removed');
     });
 
-    // Scenario 6: Reminder sentinel survives reconcile; history preserved.
-    // (Service-level: reminder_override_undo_test.)
-    test('scenario 6: clear_reminder all writes sentinel; history preserved',
+    // Scenario 6: clear_reminder(all) writes a disabled sentinel row through
+    // the real registry. The sentinel surviving a reconcile (no default
+    // reminder rebuild) and delivered/missed/failed history preservation are
+    // covered by reminder_override_undo_test; this test asserts the registry
+    // commit path leaves a cancelled/null-offset sentinel row.
+    test('scenario 6: clear_reminder all writes a disabled sentinel row '
+        '(reconcile-no-rebuild + history via reminder_override_undo_test)',
         () async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
@@ -5450,9 +5469,14 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           reason: 'clear-all writes a disabled sentinel with null offset');
     });
 
-    // Scenario 7: Overlay single/series clear fallback.
-    test('scenario 7: clear_user_overlay single_event then course_series '
-        'fallback', () async {
+    // Scenario 7: clear_user_overlay(single_event) removes a single-event
+    // overlay field through the real registry. The course-series-layer fallback
+    // (clearing a single_event layer letting the course_series layer show
+    // through) and the course_series scope are covered by overlay_service
+    // tests; this test asserts the single_event field is cleared by the
+    // registry commit path.
+    test('scenario 7: clear_user_overlay single_event clears the field '
+        '(course_series fallback via overlay_service tests)', () async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       final built = await writeRegistry(db, 'acc-1');
@@ -5686,53 +5710,270 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       expect(evRow.status, 'active');
     });
 
-    // Scenario 12: multi-object partial success + 13th normal-call budget edge.
-    // (Budget edge unit-covered in agent_tool_budget_test; this exercises the
-    // real registry executing 12 delete calls then a 13th that the budget
-    // blocks at the session-service level — asserted via the budget class.)
-    test('scenario 12: 12 normal delete calls succeed; budget blocks the 13th',
-        () async {
-      final db = AppDatabase(NativeDatabase.memory());
-      addTearDown(db.close);
-      final built = await writeRegistry(db, 'acc-1');
-      addTearDown(built.composition.dispose);
-      await allow(db, 'acc-1', 'event_delete', 'event');
-      // Seed 12 personal events.
-      for (var i = 0; i < 12; i++) {
-        await seedPersonalEvent(db, 'acc-1',
-            id: 'ev-12-$i', title: '批量事件$i');
-      }
-      final context = ctxOf(db, 'acc-1', 'r-s12');
-      // Bind and delete each of the 12 via the real registry.
-      for (var i = 0; i < 12; i++) {
-        final q = await built.registry.execute(
-          toolName: 'get_schedule',
-          arguments: {'query': '批量事件$i'},
-          context: context,
+    // Scenario 12a: multi-object partial success through the REAL
+    // session-service + MutationLedger aggregation (NOT a detached budget).
+    // The model issues several update_event delete calls in one turn; some
+    // succeed (personal events) and one fails (a course/source event refuses
+    // deletion). The run settles via the mutation-ledger settlement path with
+    // a `mutation_partial` terminal code and an aggregated 成功/失败 count.
+    test(
+      'scenario 12a: multi-object partial success aggregates via the real '
+      'session-service MutationLedger (success + failure counts)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        const protector = _NoopProtector();
+        await _seedAccount(db, 'acc-1');
+        final secretStore = ProtectedAgentSecretStore(
+          database: db,
+          protector: protector,
         );
-        final ref = _eventRefFromResults([q.payload]);
-        expect(ref, isNotNull, reason: 'event $i must bind a ref');
-        final del = await built.registry.execute(
-          toolName: 'update_event',
-          arguments: {'ref_event': ref, 'action': 'delete'},
-          context: context,
+        await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+        // Always-allow event_delete so each delete auto-executes through the
+        // real atomic commit path without pausing for confirmation.
+        await allow(db, 'acc-1', 'event_delete', 'event');
+        // Three personal events (deletable) + one course event (refuses delete).
+        await seedPersonalEvent(db, 'acc-1', id: 'ev-12a-0', title: '删除目标A');
+        await seedPersonalEvent(db, 'acc-1', id: 'ev-12a-1', title: '删除目标B');
+        await seedPersonalEvent(db, 'acc-1', id: 'ev-12a-2', title: '删除目标C');
+        await _insertCourseSeries(
+          db,
+          'series-12a',
+          'acc-1',
+          externalId: 'lesson-12a',
+          title: '量子力学12a',
         );
-        expect(del.status, AgentToolStatus.success, reason: 'delete $i succeeds');
-      }
-      final remaining = (await db.select(db.calendarEvents).get())
-          .where((e) => e.deletedAt == null);
-      expect(remaining, isEmpty,
-          reason: 'all 12 personal events soft-deleted through the registry');
-      // The shared budget caps normal calls at 12; the 13th cannot be consumed.
-      final budget = AgentRunToolBudget();
-      for (var i = 0; i < 12; i++) {
-        expect(budget.tryConsumeNormalCall(), isTrue);
-      }
-      expect(budget.tryConsumeNormalCall(), isFalse,
-          reason: 'the 13th normal call is blocked by the budget');
-      expect(budget.createTaskBurstUsed, isFalse,
-          reason: 'delete tools never consume the create_task burst');
-    });
+        await _insertCourseOccurrence(
+          db,
+          'ev-12a-course',
+          'acc-1',
+          '量子力学12a',
+          seriesExternalId: 'lesson-12a',
+          location: '三教101',
+          start: DateTime(2026, 8, 6, 8, 0),
+          end: DateTime(2026, 8, 6, 9, 45),
+        );
+
+        final provider = _ScriptedProvider([
+          // Call 1: get_schedule(query) locates the personal events by a shared
+          // keyword and binds run-local refs. (The course event is located by a
+          // separate title query in the same call sequence is not needed; the
+          // model issues one query whose result refs the deletion turn echoes.)
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-12a-q',
+                  name: 'get_schedule',
+                  input: {'query': '删除目标'},
+                ),
+                const CompletedEvent(),
+              ]),
+          // Call 2: a single turn of FOUR update_event(delete) calls. The first
+          // three target the personal-event refs (succeed); the fourth targets
+          // the course event — its ref must also be bound this run. So issue a
+          // second get_schedule for the course, then the delete turn.
+          _ScriptedCall(() => [
+                const ToolUseCompletedEvent(
+                  id: 'tu-12a-qc',
+                  name: 'get_schedule',
+                  input: {'query': '量子力学12a'},
+                ),
+                const CompletedEvent(),
+              ]),
+          // Call 3: the deletion turn — four update_event(delete) calls in one
+          // turn, each echoing a distinct ref bound by an earlier tool_result.
+          // Uses requestAware so each tool_use gets a distinct ref.
+          _ScriptedCall.requestAware((prior) {
+            // Collect every ref bound across the run so far, in order.
+            final refs = <String>[];
+            for (final req in prior) {
+              for (final msg in req.messages) {
+                if (msg.role != 'user') continue;
+                for (final block in msg.content) {
+                  if (block is! LlmToolResultBlock) continue;
+                  final c = block.content;
+                  if (c is! String) continue;
+                  for (final m in RegExp(r'ref_[A-Za-z0-9_-]+').allMatches(c)) {
+                    refs.add(m.group(0)!);
+                  }
+                }
+              }
+            }
+            // 3 personal-event refs (from the first query) + 1 course ref (the
+            // fourth ref overall, from the second query).
+            expect(refs.length, greaterThanOrEqualTo(4),
+                reason: 'four event refs must be bound before the delete turn');
+            return [
+              ToolUseCompletedEvent(
+                id: 'tu-12a-d0',
+                name: 'update_event',
+                input: {'ref_event': refs[0], 'action': 'delete'},
+              ),
+              ToolUseCompletedEvent(
+                id: 'tu-12a-d1',
+                name: 'update_event',
+                input: {'ref_event': refs[1], 'action': 'delete'},
+              ),
+              ToolUseCompletedEvent(
+                id: 'tu-12a-d2',
+                name: 'update_event',
+                input: {'ref_event': refs[2], 'action': 'delete'},
+              ),
+              ToolUseCompletedEvent(
+                id: 'tu-12a-d3',
+                name: 'update_event',
+                input: {'ref_event': refs[3], 'action': 'delete'},
+              ),
+              const CompletedEvent(),
+            ];
+          }),
+          // Call 4: final text (the session-service overrides the terminal
+          // text with the aggregated mutation-ledger message, so this is only
+          // reached if the ledger produced no override — which it will not).
+          _ScriptedCall(() => [
+                const TextDeltaEvent('已处理删除请求。'),
+                const CompletedEvent(),
+              ]),
+        ]);
+        final composition = await _buildTestComposition(
+          db,
+          'acc-1',
+          provider: provider,
+          gateway: _CountingResumableYoungGateway(),
+          protector: protector,
+        );
+        addTearDown(composition.dispose);
+
+        final states = <AgentRunViewState>[];
+        final done = Completer<void>();
+        composition.sessionService
+            .send(
+                accountId: 'acc-1',
+                userText: '把删除目标A、删除目标B、删除目标C和量子力学12a这节课都删掉')
+            .listen((s) => states.add(s), onDone: done.complete);
+        await done.future;
+
+        // The run settles via the mutation-ledger settlement path: 3 succeeds,
+        // 1 fails (course event refuses delete) -> the session-service maps a
+        // partial mutation ledger to a `failed` terminal state carrying
+        // `mutation_partial` (the deterministic 成功/失败 count replaces the
+        // model's possibly-false success text).
+        final run = states.last;
+        expect(run.state, AgentRunState.failed,
+            reason: 'a partial-success mutation run settles as failed with the '
+                'mutation_partial code (the ledger count is the terminal truth)');
+        expect(run.errorCode, 'mutation_partial',
+            reason: 'the MutationLedger aggregates 3 success + 1 failure into '
+                'mutation_partial via the real session-service path');
+        // The aggregated terminal message carries accurate counts and a safe
+        // failure reason, never titles/refs/ids.
+        final message = run.text;
+        expect(message, contains('成功 3 个'),
+            reason: 'aggregated message reports 3 successes');
+        expect(message, contains('失败 1 个'),
+            reason: 'aggregated message reports 1 failure');
+        expect(message, isNot(contains('ref_')),
+            reason: 'no run-local ref leaks into the terminal message');
+        expect(message, isNot(contains('ev-12a')),
+            reason: 'no raw DB id leaks into the terminal message');
+        // DB truth: the three personal events are soft-deleted; the course
+        // event is untouched.
+        final events = await db.select(db.calendarEvents).get();
+        final personalDeleted = events
+            .where((e) => e.id.startsWith('ev-12a-') && e.deletedAt != null);
+        expect(personalDeleted, hasLength(3),
+            reason: 'the 3 personal events were soft-deleted');
+        final course = events.firstWhere((e) => e.id == 'ev-12a-course');
+        expect(course.deletedAt, isNull,
+            reason: 'the course event refuses delete (never deleted)');
+      },
+    );
+
+    // Scenario 12b: the 13th normal-call budget edge through the REAL
+    // session-service. The model issues 13 distinct read calls (get_schedule
+    // with distinct query keywords, all distinct fingerprints); the
+    // session-service's shared AgentRunToolBudget allows the first 12 and
+    // blocks the 13th with `tool_call_budget_exceeded`, terminating the run.
+    test(
+      'scenario 12b: the 13th normal call is blocked by the real '
+      'session-service budget (tool_call_budget_exceeded)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        const protector = _NoopProtector();
+        await _seedAccount(db, 'acc-1');
+        final secretStore = ProtectedAgentSecretStore(
+          database: db,
+          protector: protector,
+        );
+        await _seedAgentConfig(db, 'acc-1', secrets: secretStore, apiKey: 'test-key');
+        // Seed 13 personal events with distinct titles so 13 distinct
+        // get_schedule(query=...) calls each return a distinct result and never
+        // trip the fingerprint dedup guard.
+        for (var i = 0; i < 13; i++) {
+          await seedPersonalEvent(db, 'acc-1',
+              id: 'ev-12b-$i', title: '预算事件$i');
+        }
+
+        final provider = _ScriptedProvider([
+          // A single turn of 13 distinct get_schedule(query=...) read calls.
+          // Each call has a distinct query -> distinct fingerprint -> each
+          // consumes one normal budget slot through the real session-service.
+          _ScriptedCall(() => [
+                for (var i = 0; i < 13; i++)
+                  ToolUseCompletedEvent(
+                    id: 'tu-12b-$i',
+                    name: 'get_schedule',
+                    input: {'query': '预算事件$i'},
+                  ),
+                const CompletedEvent(),
+              ]),
+          // Final text (only reached if the budget did not block).
+          _ScriptedCall(() => [
+                const TextDeltaEvent('已查询全部。'),
+                const CompletedEvent(),
+              ]),
+        ]);
+        final composition = await _buildTestComposition(
+          db,
+          'acc-1',
+          provider: provider,
+          gateway: _CountingResumableYoungGateway(),
+          protector: protector,
+        );
+        addTearDown(composition.dispose);
+
+        final states = <AgentRunViewState>[];
+        final done = Completer<void>();
+        composition.sessionService
+            .send(
+                accountId: 'acc-1',
+                userText: '分别查一下预算事件0到预算事件12这 13 个日程')
+            .listen((s) => states.add(s), onDone: done.complete);
+        await done.future;
+
+        // The 13th call is blocked by the exhausted normal budget; the run
+        // terminates failed with tool_call_budget_exceeded.
+        final run = states.last;
+        expect(run.state, AgentRunState.failed,
+            reason: 'the 13th normal call exhausts the budget and fails the run');
+        expect(run.errorCode, 'tool_call_budget_exceeded',
+            reason: 'the real session-service budget blocks the 13th call');
+        // Exactly 12 tool invocations completed successfully (the 13th was
+        // recorded as an error invocation with the budget code).
+        final invocations = await composition.chatRepository.toolInvocationsForRuns(
+          accountId: 'acc-1',
+          runIds: {run.runId},
+        );
+        expect(invocations.length, 13,
+            reason: 'all 13 attempted calls have a persisted invocation row');
+        final budgetErrors = invocations.where(
+            (i) => i.errorCode == 'tool_call_budget_exceeded');
+        expect(budgetErrors, hasLength(1),
+            reason: 'exactly the 13th call is marked with the budget error');
+        // No create_task burst was involved (read-only calls).
+        expect(invocations.every((i) => i.toolName == 'get_schedule'), isTrue);
+      },
+    );
 
     // Scenario 13: account isolation, stale target, ref expiry/privacy.
     test('scenario 13: cross-account ref resolves null; stale target rejected; '
