@@ -2,6 +2,10 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
@@ -86,4 +90,71 @@ void main() {
       expect(await database.select(database.reminders).get(), isEmpty);
     },
   );
+
+  group('recurring occurrence reminder override', () {
+    test('setting offsets on an occurrence creates/reuses one anchor and '
+        'schedules triggers from the effective start', () async {
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => 100,
+      );
+      final seriesId = await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日站会',
+          startAt: DateTime(2026, 8, 1, 9, 0),
+          endAt: DateTime(2026, 8, 1, 9, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 1, 9, 0)),
+      );
+      final occ = (await service.occurrences(
+        seriesId,
+        from: DateTime(2026, 8, 1, 9),
+        through: DateTime(2026, 8, 1, 9),
+      )).single;
+      final locator = encodeCalendarEventLocator(
+        RecurringOccurrenceLocator(
+          seriesId: seriesId,
+          occurrenceKey: occ.occurrenceKey,
+        ),
+      );
+
+      final override = ReminderOverrideService(
+        database: database,
+        accountId: accountId,
+        undoRecorder: NullUndoRecorder(),
+        now: () => 100,
+      );
+      await override.setEventOffsets(locator, [30, 5]);
+      await override.setEventOffsets(locator, [30, 5]);
+
+      final rows = await database.select(database.reminders).get();
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      // A single reused no-op anchor for the occurrence.
+      expect(anchors, hasLength(1));
+      expect(anchors.single.kind, 'override');
+      expect(anchors.single.overriddenFieldsJson, '[]');
+      // Exactly two distinct triggers (offsets 30 and 5), no duplicates, all
+      // occurrence-exception backed (never the stored event FK).
+      expect(rows, hasLength(2));
+      expect(rows.every((r) => r.occurrenceExceptionId == anchors.single.id), isTrue);
+      expect(rows.every((r) => r.eventId == null), isTrue);
+      expect(rows.every((r) => r.targetId == locator), isTrue);
+      final start = DateTime(2026, 8, 1, 9, 0).millisecondsSinceEpoch;
+      expect(
+        rows.map((r) => r.triggerAt).toSet(),
+        {
+          start - const Duration(minutes: 30).inMilliseconds,
+          start - const Duration(minutes: 5).inMilliseconds,
+        },
+      );
+    });
+  });
+}
+
+/// A no-op UndoRecorder for tests that exercise persistence without undo.
+class NullUndoRecorder implements UndoRecorder {
+  @override
+  Future<void> record(UndoCommand command) async {}
 }

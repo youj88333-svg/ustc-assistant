@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../../tasks/application/undo_recorder.dart';
 
 class ReminderOverrideService {
@@ -16,27 +18,36 @@ class ReminderOverrideService {
   final UndoRecorder undoRecorder;
   final int Function() now;
 
+  /// Sets the reminder offsets for an event target. [eventId] is either a plain
+  /// stored event id (an event-backed reminder) or an encoded recurring
+  /// occurrence locator. For a recurring occurrence the service resolves the
+  /// backing no-op exception anchor via [RecurrenceService.ensureOccurrenceAnchor]
+  /// and computes triggers from the occurrence's effective (override-aware)
+  /// start time.
   Future<void> setEventOffsets(String eventId, List<int> offsets) async {
     if (offsets.any((value) => value < 0) ||
         offsets.toSet().length != offsets.length) {
       throw ArgumentError.value(offsets, 'offsets');
     }
     await database.transaction(() async {
-      final event =
-          await (database.select(database.calendarEvents)..where(
-                (row) =>
-                    row.id.equals(eventId) & row.accountId.equals(accountId),
-              ))
-              .getSingle();
-      if (event.allDay || event.startAt == null) {
+      final resolved = await _resolveEventTarget(eventId);
+      final startAt = resolved.startAt;
+      if (startAt == null) {
         throw StateError('timed event required');
       }
-      final before = await (database.select(
-        database.reminders,
-      )..where((row) => row.eventId.equals(eventId))).get();
-      await (database.delete(
-        database.reminders,
-      )..where((row) => row.eventId.equals(eventId))).go();
+      final before =
+          await (database.select(database.reminders)..where(
+                (row) =>
+                    row.accountId.equals(accountId) &
+                    row.targetType.equals('event') &
+                    row.targetId.equals(eventId),
+              )).get();
+      await (database.delete(database.reminders)..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.targetType.equals('event') &
+                row.targetId.equals(eventId),
+          )).go();
       final timestamp = now();
       if (offsets.isEmpty) {
         await database
@@ -47,8 +58,9 @@ class ReminderOverrideService {
                 accountId: accountId,
                 targetType: 'event',
                 targetId: eventId,
-                eventId: Value(eventId),
-                triggerAt: event.startAt!,
+                eventId: Value(resolved.eventId),
+                occurrenceExceptionId: Value(resolved.occurrenceExceptionId),
+                triggerAt: startAt,
                 state: 'cancelled',
                 createdAt: timestamp,
                 updatedAt: timestamp,
@@ -56,8 +68,7 @@ class ReminderOverrideService {
             );
       } else {
         for (final offset in offsets) {
-          final trigger =
-              event.startAt! - Duration(minutes: offset).inMilliseconds;
+          final trigger = startAt - Duration(minutes: offset).inMilliseconds;
           await database
               .into(database.reminders)
               .insert(
@@ -66,7 +77,8 @@ class ReminderOverrideService {
                   accountId: accountId,
                   targetType: 'event',
                   targetId: eventId,
-                  eventId: Value(eventId),
+                  eventId: Value(resolved.eventId),
+                  occurrenceExceptionId: Value(resolved.occurrenceExceptionId),
                   offsetMinutes: Value(offset),
                   triggerAt: trigger,
                   state: trigger <= timestamp ? 'missed' : 'desired',
@@ -89,6 +101,56 @@ class ReminderOverrideService {
         ),
       );
     });
+  }
+
+  /// Resolves an event target to its backing FK columns and effective start
+  /// time (epoch-ms). A recurring occurrence locator maps to the occurrence
+  /// exception anchor (created/reused) and uses the composed occurrence's
+  /// effective start; a plain stored event id maps to the event FK and its
+  /// stored startAt. Rejects non-timed (all-day / missing start) targets.
+  Future<({String? eventId, String? occurrenceExceptionId, int? startAt})>
+      _resolveEventTarget(String targetId) async {
+    final recurrence =
+        RecurrenceService(database: database, accountId: accountId, now: now);
+    if (targetId.startsWith('occ_v1.')) {
+      final decoded = decodeCalendarEventLocator(targetId);
+      if (decoded is! RecurringOccurrenceLocator) {
+        throw StateError('unsupported event locator');
+      }
+      if (await recurrence.seriesRowOrNull(decoded.seriesId) == null) {
+        throw StateError('recurring occurrence not found');
+      }
+      final occurrence =
+          await recurrence.occurrence(decoded.seriesId, decoded.occurrenceKey);
+      if (occurrence.allDay || occurrence.startAt == null) {
+        throw StateError('timed event required');
+      }
+      final anchor = await recurrence.ensureOccurrenceAnchor(
+        decoded.seriesId,
+        decoded.occurrenceKey,
+      );
+      return (
+        eventId: null,
+        occurrenceExceptionId: anchor.id,
+        startAt: occurrence.startAt!.millisecondsSinceEpoch,
+      );
+    }
+    if (targetId.startsWith('event_v1.') ||
+        targetId.startsWith('series_v1.')) {
+      throw StateError('unsupported event locator');
+    }
+    final event = await (database.select(database.calendarEvents)..where(
+          (row) =>
+              row.id.equals(targetId) & row.accountId.equals(accountId),
+        )).getSingle();
+    if (event.allDay || event.startAt == null) {
+      throw StateError('timed event required');
+    }
+    return (
+      eventId: targetId,
+      occurrenceExceptionId: null,
+      startAt: event.startAt,
+    );
   }
 
   /// Loads the target's future desired offsets, whether an explicit-disable

@@ -126,6 +126,21 @@ class ConflictService {
 
   Future<bool> _participantExists(ScheduleConflictParticipant p) async {
     if (p.kind == 'event') {
+      final decoded = _tryDecodeLocator(p.id);
+      if (decoded is RecurringOccurrenceLocator) {
+        final recurrence =
+            RecurrenceService(database: database, accountId: accountId);
+        if (await recurrence.seriesRowOrNull(decoded.seriesId) == null) {
+          return false;
+        }
+        try {
+          await recurrence.occurrence(decoded.seriesId, decoded.occurrenceKey);
+          return true;
+        } on OccurrenceNotFoundError {
+          return false;
+        }
+      }
+      if (decoded is RecurringSeriesLocator) return false;
       final event = await (database.select(database.calendarEvents)..where(
             (row) =>
                 row.id.equals(p.id) & row.accountId.equals(accountId),
@@ -442,6 +457,15 @@ class ConflictService {
       // Re-validate both targets inside the same unit of work (TOCTOU-safe):
       // a participant deleted between build and commit must not be referenced.
       await _validateOccurrenceTargets(pair.$1, pair.$2);
+      // Resolve the backing FK for each event participant: a stored event id
+      // populates left/rightEventId; a recurring occurrence locator calls
+      // ensureOccurrenceAnchor (inside this approved write transaction) and
+      // populates the occurrence-exception FK. A plan_block participant always
+      // populates left/rightPlanBlockId.
+      final (leftEventId, leftOccurrenceExceptionId) =
+          await _eventBacking(pair.$1);
+      final (rightEventId, rightOccurrenceExceptionId) =
+          await _eventBacking(pair.$2);
       final existing =
           await (database.select(database.scheduleRelations)..where(
                 (row) =>
@@ -474,20 +498,18 @@ class ConflictService {
                 accountId: accountId,
                 leftKind: Value(pair.$1.kind),
                 leftId: Value(pair.$1.id),
-                leftEventId: Value(
-                  pair.$1.kind == 'event' ? pair.$1.id : null,
-                ),
+                leftEventId: Value(leftEventId),
                 leftPlanBlockId: Value(
                   pair.$1.kind == 'plan_block' ? pair.$1.id : null,
                 ),
+                leftOccurrenceExceptionId: Value(leftOccurrenceExceptionId),
                 rightKind: Value(pair.$2.kind),
                 rightId: Value(pair.$2.id),
-                rightEventId: Value(
-                  pair.$2.kind == 'event' ? pair.$2.id : null,
-                ),
+                rightEventId: Value(rightEventId),
                 rightPlanBlockId: Value(
                   pair.$2.kind == 'plan_block' ? pair.$2.id : null,
                 ),
+                rightOccurrenceExceptionId: Value(rightOccurrenceExceptionId),
                 conflictState: Value(_stateStorage(state)),
                 reason: Value(reason),
                 createdAt: existing?.createdAt ?? timestamp,
@@ -508,6 +530,28 @@ class ConflictService {
         ),
       );
     });
+  }
+
+  /// Resolves an event-kind participant's backing FK columns. A plain stored
+  /// event id maps to `leftEventId`/`rightEventId`; a recurring occurrence
+  /// locator maps to the occurrence exception anchor (created/reused via
+  /// [RecurrenceService.ensureOccurrenceAnchor]) on the occurrence-exception FK.
+  /// Plan-block kinds return nulls for both event columns.
+  Future<(String?, String?)> _eventBacking(
+    ScheduleConflictParticipant participant,
+  ) async {
+    if (participant.kind != 'event') return (null, null);
+    final decoded = _tryDecodeLocator(participant.id);
+    if (decoded is RecurringOccurrenceLocator) {
+      final recurrence =
+          RecurrenceService(database: database, accountId: accountId);
+      final anchor = await recurrence.ensureOccurrenceAnchor(
+        decoded.seriesId,
+        decoded.occurrenceKey,
+      );
+      return (null, anchor.id);
+    }
+    return (participant.id, null);
   }
 
   Future<void> _classifyCurrentAndFuture(

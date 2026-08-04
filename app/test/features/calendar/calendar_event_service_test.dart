@@ -3,7 +3,10 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_recorder.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 
@@ -505,6 +508,109 @@ void main() {
       expect(
         logs.map((log) => log.actionType),
         contains('calendar_event_complete'),
+      );
+    });
+  });
+
+  group('recurring occurrence task links', () {
+    test('linking a task to a recurring occurrence creates one no-op anchor '
+        'and a single occurrence-backed link row; repeated link is idempotent',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final recurrence = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 1,
+      );
+      final seriesId = await recurrence.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每周例会',
+          startAt: DateTime(2026, 7, 27, 15),
+          endAt: DateTime(2026, 7, 27, 16),
+        ),
+        rule: RecurrenceRule.weekly(
+          anchor: DateTime(2026, 7, 27, 15),
+          weekdays: {DateTime.monday},
+        ),
+      );
+      final occ = (await recurrence.occurrences(
+        seriesId,
+        from: DateTime(2026, 7, 27, 15),
+        through: DateTime(2026, 7, 27, 15),
+      )).single;
+      final locator = encodeCalendarEventLocator(
+        RecurringOccurrenceLocator(
+          seriesId: seriesId,
+          occurrenceKey: occ.occurrenceKey,
+        ),
+      );
+      await database.into(database.tasks).insert(
+            TasksCompanion.insert(
+              id: 'task-1',
+              accountId: 'a',
+              title: '准备材料',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final service = CalendarEventService(database: database, accountId: 'a');
+
+      await service.linkTaskToEvent('task-1', locator);
+      await service.linkTaskToEvent('task-1', locator);
+
+      final links = await database.select(database.taskEventLinks).get();
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      // Exactly one reusable no-op anchor and one canonical link row.
+      expect(anchors, hasLength(1));
+      expect(anchors.single.kind, 'override');
+      expect(anchors.single.overriddenFieldsJson, '[]');
+      expect(links, hasLength(1));
+      final link = links.single;
+      expect(link.taskId, 'task-1');
+      expect(link.targetId, locator);
+      expect(link.eventId, isNull);
+      expect(link.occurrenceExceptionId, anchors.single.id);
+      expect(link.relationType, 'related');
+    });
+
+    test('linking a task to a stored event keeps event-backed link and no '
+        'anchor is created', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.tasks).insert(
+            TasksCompanion.insert(
+              id: 'task-1',
+              accountId: 'a',
+              title: '准备材料',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final service = CalendarEventService(database: database, accountId: 'a');
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: '一对一',
+          startAt: instant(14),
+          endAt: instant(15),
+        ),
+      );
+      await service.linkTaskToEvent('task-1', id);
+
+      final link = (await database.select(database.taskEventLinks).get()).single;
+      expect(link.targetId, id);
+      expect(link.eventId, id);
+      expect(link.occurrenceExceptionId, isNull);
+      expect(
+        await database.select(database.calendarEventOccurrenceExceptions).get(),
+        isEmpty,
       );
     });
   });

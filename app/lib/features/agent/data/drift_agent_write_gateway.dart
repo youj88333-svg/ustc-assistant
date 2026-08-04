@@ -190,6 +190,14 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     // Canonicalize by `kind:id` so a reverse insertion lands on the same row.
     final (lKind, lId, rKind, rId) =
         _canonicalRelationPair(leftKind, leftId, rightKind, rightId);
+    // Resolve the backing event FK for each event-kind endpoint: a recurring
+    // occurrence locator routes through ensureOccurrenceAnchor (creating or
+    // reusing one no-op exception anchor) to the occurrence-exception FK; a
+    // plain stored event id populates the event FK. Plan-block endpoints keep
+    // their plan block FK. Generated anchors only ever appear inside this
+    // approved Agent write (the outer unit-of-work transaction).
+    final (leftEventId, leftOccurrenceExceptionId) = await _eventBacking(lKind, lId);
+    final (rightEventId, rightOccurrenceExceptionId) = await _eventBacking(rKind, rId);
     final timestamp = now();
     final existing = await (database.select(database.scheduleRelations)
           ..where(
@@ -211,10 +219,12 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
         leftId: Value(lId),
         rightKind: Value(rKind),
         rightId: Value(rId),
-        leftEventId: Value(lKind == 'event' ? lId : null),
+        leftEventId: Value(leftEventId),
         leftPlanBlockId: Value(lKind == 'plan_block' ? lId : null),
-        rightEventId: Value(rKind == 'event' ? rId : null),
+        leftOccurrenceExceptionId: Value(leftOccurrenceExceptionId),
+        rightEventId: Value(rightEventId),
         rightPlanBlockId: Value(rKind == 'plan_block' ? rId : null),
+        rightOccurrenceExceptionId: Value(rightOccurrenceExceptionId),
         conflictState: Value(conflictState),
         reason: Value(reason),
         createdAt: existing?.createdAt ?? timestamp,
@@ -223,6 +233,23 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     );
     // 不在此写 ActionLog：`AgentWriteTool` 基类在写成功后统一写
     // source='agent' 的日志（见类注释），这里不再重复。
+  }
+
+  /// Resolves an event-kind endpoint's backing FK columns. A recurring
+  /// occurrence locator maps to its no-op occurrence-exception anchor (created
+  /// or reused inside this approved write); a plain stored event id maps to the
+  /// event FK. Plan-block / null endpoints keep both event columns null.
+  Future<(String?, String?)> _eventBacking(String kind, String id) async {
+    if (kind != 'event') return (null, null);
+    final decoded = _tryDecodeLocator(id);
+    if (decoded is RecurringOccurrenceLocator) {
+      final anchor = await _recurrence.ensureOccurrenceAnchor(
+        decoded.seriesId,
+        decoded.occurrenceKey,
+      );
+      return (null, anchor.id);
+    }
+    return (id, null);
   }
 
   (String, String, String, String) _canonicalRelationPair(

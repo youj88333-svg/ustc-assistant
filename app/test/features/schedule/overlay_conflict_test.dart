@@ -5,6 +5,10 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
@@ -1473,6 +1477,312 @@ void main() {
       expect(weekGrid.isConflict('event', 'cur'), isFalse);
       expect(weekGrid.isConflict('event', 'hist'), isFalse);
       expect(EffectiveEventRepository.resolvedConflictIdsForCalls, 0);
+    });
+  });
+
+  group('recurring occurrence relation anchors', () {
+    Future<(String, String)> seedTwoOverlappingSeries(AppDatabase database) async {
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => DateTime(2026, 8, 10, 9).millisecondsSinceEpoch,
+      );
+      // Two daily timed series overlapping at 09:00-10:00 and 09:30-10:30.
+      final a = await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '晨会A',
+          startAt: DateTime(2026, 8, 10, 9, 0),
+          endAt: DateTime(2026, 8, 10, 10, 0),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 10, 9, 0)),
+      );
+      final b = await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '晨会B',
+          startAt: DateTime(2026, 8, 10, 9, 30),
+          endAt: DateTime(2026, 8, 10, 10, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 10, 9, 30)),
+      );
+      return (a, b);
+    }
+
+    Future<ScheduleConflictParticipant> occurrenceParticipant(
+      RecurrenceService service,
+      String seriesId,
+      DateTime at,
+    ) async {
+      final occ =
+          (await service.occurrences(seriesId, from: at, through: at)).single;
+      final locator = encodeCalendarEventLocator(
+        RecurringOccurrenceLocator(
+          seriesId: seriesId,
+          occurrenceKey: occ.occurrenceKey,
+        ),
+      );
+      return ScheduleConflictParticipant(
+        kind: 'event',
+        id: locator,
+        title: occ.title,
+        occurrenceDate: DateTime(2026, 8, 10),
+        seriesType: 'calendar_event_series',
+        seriesId: seriesId,
+      );
+    }
+
+    test('classifying two recurring occurrences writes one no-op anchor per '
+        'participant and locator ids', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final (aId, bId) = await seedTwoOverlappingSeries(database);
+      final service =
+          RecurrenceService(database: database, accountId: 'a', now: () => 1);
+      final a = await occurrenceParticipant(
+        service,
+        aId,
+        DateTime(2026, 8, 10, 9, 0),
+      );
+      final b = await occurrenceParticipant(
+        service,
+        bId,
+        DateTime(2026, 8, 10, 9, 30),
+      );
+      final conflict = ConflictService(
+        database: database,
+        accountId: 'a',
+        now: () => 1,
+      );
+
+      expect(await conflict.stateForPair(a, b), ConflictState.conflict);
+      await conflict.classifyPair(a, b, ConflictState.nonConflict);
+      expect(await conflict.stateForPair(a, b), ConflictState.nonConflict);
+
+      // Exactly one relation row, canonicalized to logical locator ids.
+      final relation =
+          (await database.select(database.scheduleRelations).get()).single;
+      // Canonical ordering is by the encoded locator string, so compare the
+      // left/right ids as a set against the two participant locators.
+      expect({relation.leftId, relation.rightId}, {a.id, b.id});
+      expect(relation.leftKind, 'event');
+      expect(relation.rightKind, 'event');
+      final leftIsA = relation.leftId == a.id;
+
+      // One no-op occurrence-exception anchor per recurring participant.
+      final anchors = await database
+          .select(database.calendarEventOccurrenceExceptions)
+          .get();
+      expect(anchors, hasLength(2));
+      final bySeries = {
+        for (final anchor in anchors) anchor.seriesId: anchor,
+      };
+      // Both anchors point at the two participants' backing FKs.
+      expect(relation.leftOccurrenceExceptionId,
+          bySeries[leftIsA ? aId : bId]!.id);
+      expect(relation.rightOccurrenceExceptionId,
+          bySeries[leftIsA ? bId : aId]!.id);
+      expect(relation.leftEventId, isNull);
+      expect(relation.rightEventId, isNull);
+      expect(relation.leftPlanBlockId, isNull);
+      expect(relation.rightPlanBlockId, isNull);
+      // Anchors are the sparse no-op kind.
+      for (final anchor in anchors) {
+        expect(anchor.kind, 'override');
+        expect(anchor.overriddenFieldsJson, '[]');
+        expect(anchor.orphaned, isFalse);
+      }
+      // Projection resolves the explicit state on the next read.
+      expect(await conflict.stateForPair(a, b), ConflictState.nonConflict);
+    });
+
+    test('recurring occurrence paired with a stored event uses occurrence '
+        'anchor on one side and event FK on the other', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final (aId, _) = await seedTwoOverlappingSeries(database);
+      final service =
+          RecurrenceService(database: database, accountId: 'a', now: () => 1);
+      final occA = await occurrenceParticipant(
+        service,
+        aId,
+        DateTime(2026, 8, 10, 9, 0),
+      );
+      // A stored one-off event at 09:00-10:00 overlapping the occurrence.
+      await database.into(database.calendarEvents).insert(
+            CalendarEventsCompanion.insert(
+              id: 'stored-1',
+              accountId: 'a',
+              source: 'user',
+              title: '一对一',
+              type: 'personal',
+              startAt: Value(DateTime(2026, 8, 10, 9, 0).millisecondsSinceEpoch),
+              endAt: Value(DateTime(2026, 8, 10, 10, 0).millisecondsSinceEpoch),
+              allDay: false,
+              timezone: 'Asia/Shanghai',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final stored = ScheduleConflictParticipant(
+        kind: 'event',
+        id: 'stored-1',
+        title: '一对一',
+        occurrenceDate: DateTime(2026, 8, 10),
+      );
+      final conflict = ConflictService(database: database, accountId: 'a');
+      await conflict.classifyPair(occA, stored, ConflictState.conflict);
+
+      final relation =
+          (await database.select(database.scheduleRelations).get()).single;
+      // Canonicalization orders by `kind:id` (string compare of locator vs id).
+      final occIsLeft = relation.leftId == occA.id;
+      // The occurrence side carries the occurrence-exception anchor.
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      expect(anchors, hasLength(1));
+      expect(
+        occIsLeft
+            ? relation.leftOccurrenceExceptionId
+            : relation.rightOccurrenceExceptionId,
+        anchors.single.id,
+      );
+      // The stored side carries the event FK.
+      expect(
+        occIsLeft ? relation.rightEventId : relation.leftEventId,
+        'stored-1',
+      );
+      expect(
+        occIsLeft ? relation.rightOccurrenceExceptionId
+            : relation.leftOccurrenceExceptionId,
+        isNull,
+      );
+    });
+
+    test('recurring occurrence paired with a plan block writes a mixed row',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final (aId, _) = await seedTwoOverlappingSeries(database);
+      final service =
+          RecurrenceService(database: database, accountId: 'a', now: () => 1);
+      final occA = await occurrenceParticipant(
+        service,
+        aId,
+        DateTime(2026, 8, 10, 9, 0),
+      );
+      await database.into(database.tasks).insert(
+            TasksCompanion.insert(
+              id: 'task-1',
+              accountId: 'a',
+              title: '任务一',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database.into(database.planBlocks).insert(
+            PlanBlocksCompanion.insert(
+              id: 'pb-1',
+              accountId: 'a',
+              taskId: 'task-1',
+              startAt: DateTime(2026, 8, 10, 9, 30).millisecondsSinceEpoch,
+              endAt: DateTime(2026, 8, 10, 11, 0).millisecondsSinceEpoch,
+              status: 'accepted',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final conflict = ConflictService(database: database, accountId: 'a');
+      await conflict.classifyPair(
+        occA,
+        planBlockParticipant('pb-1'),
+        ConflictState.conflict,
+      );
+
+      final relation =
+          (await database.select(database.scheduleRelations).get()).single;
+      final occIsLeft = relation.leftId == occA.id;
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      expect(anchors, hasLength(1));
+      expect(
+        occIsLeft
+            ? relation.leftOccurrenceExceptionId
+            : relation.rightOccurrenceExceptionId,
+        anchors.single.id,
+      );
+      expect(
+        occIsLeft ? relation.leftEventId : relation.rightEventId,
+        isNull,
+      );
+      expect(
+        occIsLeft ? relation.rightPlanBlockId : relation.leftPlanBlockId,
+        'pb-1',
+      );
+      expect(
+        occIsLeft ? relation.rightEventId : relation.leftEventId,
+        isNull,
+      );
+      expect(
+        occIsLeft ? relation.rightOccurrenceExceptionId
+            : relation.leftOccurrenceExceptionId,
+        isNull,
+      );
+    });
+
+    test('cross-account recurring pair is rejected atomically', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      await database.into(database.localAccounts).insert(
+            LocalAccountsCompanion.insert(
+              id: 'other',
+              maskedHint: 'PB****0000',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      final otherService = RecurrenceService(
+        database: database,
+        accountId: 'other',
+        now: () => 1,
+      );
+      final otherSeries = await otherService.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '他人系列',
+          startAt: DateTime(2026, 8, 10, 9, 0),
+          endAt: DateTime(2026, 8, 10, 10, 0),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 10, 9, 0)),
+      );
+      final otherOcc = await occurrenceParticipant(
+        otherService,
+        otherSeries,
+        DateTime(2026, 8, 10, 9, 0),
+      );
+      // Account 'a' tries to classify against a foreign occurrence.
+      final conflict = ConflictService(database: database, accountId: 'a');
+      await expectLater(
+        conflict.classifyPair(
+          otherOcc,
+          eventParticipant('event-a'),
+          ConflictState.conflict,
+        ),
+        throwsA(isA<ConflictValidationError>()),
+      );
+      // Nothing is written: no relation row and no anchor under account 'a'.
+      expect(
+        await (database.select(database.scheduleRelations)
+              ..where((r) => r.accountId.equals('a')))
+            .get(),
+        isEmpty,
+      );
+      expect(
+        await (database.select(database.calendarEventOccurrenceExceptions)
+              ..where((r) => r.accountId.equals('a')))
+            .get(),
+        isEmpty,
+      );
     });
   });
 }

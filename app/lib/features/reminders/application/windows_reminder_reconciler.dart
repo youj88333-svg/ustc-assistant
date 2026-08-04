@@ -58,6 +58,17 @@ class WindowsReminderReconciler implements ReminderReconciler {
             ..where((row) => row.accountId.equals(accountId)))
           .watch()
           .listen((_) => unawaited(_domainChanged(accountId))),
+      // Recurring-series reminder defaults and their occurrence-exception
+      // anchors also drive reminder reconciliation; watch both so a recurring
+      // create / anchor write re-reconciles series reminders.
+      (database.select(database.calendarEventSeries)
+            ..where((row) => row.accountId.equals(accountId)))
+          .watch()
+          .listen((_) => unawaited(_domainChanged(accountId))),
+      (database.select(database.calendarEventOccurrenceExceptions)
+            ..where((row) => row.accountId.equals(accountId)))
+          .watch()
+          .listen((_) => unawaited(_domainChanged(accountId))),
       (database.select(database.tasks)
             ..where((row) => row.accountId.equals(accountId)))
           .watch()

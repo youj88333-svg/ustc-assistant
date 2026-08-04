@@ -5,7 +5,9 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../tasks/application/undo_recorder.dart';
+import '../domain/calendar_event_locator.dart';
 import '../domain/personal_event.dart';
+import 'recurrence_service.dart';
 
 class SourceOwnedEventError implements Exception {
   const SourceOwnedEventError();
@@ -101,6 +103,82 @@ class CalendarEventService {
       await _recordUndo('calendar_event_create', id, null);
     });
     return id;
+  }
+
+  /// Links an account-owned Task to an event target. [eventId] is either a
+  /// plain stored event id (an event-backed link) or an encoded recurring
+  /// occurrence locator (an occurrence-backing link whose FK points to a
+  /// single reusable no-op exception anchor created via
+  /// [RecurrenceService.ensureOccurrenceAnchor]). The whole link insert,
+  /// anchor insert, and ActionLog share one transaction. Repeated writes for
+  /// the same (task, target) pair collapse onto the single canonical link row.
+  Future<void> linkTaskToEvent(
+    String taskId,
+    String eventId, {
+    DateTime? createdAt,
+  }) async {
+    await database.transaction(() async {
+      final timestamp = createdAt?.millisecondsSinceEpoch ?? now();
+      final task = await (database.select(database.tasks)..where(
+            (row) =>
+                row.id.equals(taskId) &
+                row.accountId.equals(accountId) &
+                row.deletedAt.isNull(),
+          )).getSingleOrNull();
+      if (task == null) throw StateError('task not found');
+      final eventIdValue = eventId.startsWith('occ_v1.')
+          ? null
+          : (eventId.startsWith('event_v1.')
+              ? _storedEventIdFromLocator(eventId)
+              : eventId);
+      String? occurrenceExceptionId;
+      if (eventIdValue == null) {
+        final decoded = decodeCalendarEventLocator(eventId);
+        if (decoded is! RecurringOccurrenceLocator) {
+          throw StateError('unsupported event locator');
+        }
+        final recurrence =
+            RecurrenceService(database: database, accountId: accountId, now: now);
+        if (await recurrence.seriesRowOrNull(decoded.seriesId) == null) {
+          throw StateError('recurring occurrence not found');
+        }
+        await recurrence.occurrence(decoded.seriesId, decoded.occurrenceKey);
+        final anchor = await recurrence.ensureOccurrenceAnchor(
+          decoded.seriesId,
+          decoded.occurrenceKey,
+        );
+        occurrenceExceptionId = anchor.id;
+      } else {
+        final event =
+            await (database.select(database.calendarEvents)..where(
+                  (row) =>
+                      row.id.equals(eventIdValue) &
+                      row.accountId.equals(accountId) &
+                      row.deletedAt.isNull(),
+                )).getSingleOrNull();
+        if (event == null) throw StateError('linked event not found');
+      }
+      await database.into(database.taskEventLinks).insertOnConflictUpdate(
+        TaskEventLinksCompanion.insert(
+          accountId: accountId,
+          taskId: taskId,
+          targetId: eventId,
+          eventId: Value(eventIdValue),
+          occurrenceExceptionId: Value(occurrenceExceptionId),
+          relationType: 'related',
+          createdAt: timestamp,
+        ),
+      );
+      await _log('calendar_event_link', 'Linked a task to an event.');
+    });
+  }
+
+  String _storedEventIdFromLocator(String locator) {
+    final decoded = decodeCalendarEventLocator(locator);
+    if (decoded is! StoredEventLocator) {
+      throw const FormatException('invalid_event_locator');
+    }
+    return decoded.eventId;
   }
 
   Future<PersonalEvent> byId(String id, {bool includeDeleted = false}) async {

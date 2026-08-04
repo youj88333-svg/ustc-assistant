@@ -1,6 +1,8 @@
 import 'package:drift/drift.dart';
 
 import '../../../core/database/app_database.dart';
+import '../../calendar/application/recurrence_service.dart';
+import '../../calendar/domain/calendar_event_locator.dart';
 import '../domain/reminder_rule.dart';
 
 class ReminderService {
@@ -49,8 +51,116 @@ class ReminderService {
       for (final block in blocks) {
         await _reconcilePlanBlock(block);
       }
+      await _reconcileSeries(accountId);
     });
   }
+
+  /// Reconciles recurring-series reminder defaults in a bounded lookahead.
+  ///
+  /// Projects from the current Beijing date through 31 days ahead. For each
+  /// effective timed occurrence with a non-empty inherited offset list, a
+  /// future desired reminder trigger is persisted with a single reused no-op
+  /// occurrence-exception anchor (created via
+  /// [RecurrenceService.ensureOccurrenceAnchor] — which is an approved write
+  /// transaction). All-day series with an empty offset list create no reminder
+  /// rows. Anchors/occurrences that are cancelled, deleted, or fallen out of
+  /// the window have their future desired reminders cancelled; delivered /
+  /// missed / failed history is preserved. The projection never expands beyond
+  /// 31 days in one run.
+  Future<void> _reconcileSeries(String accountId) async {
+    final recurrence =
+        RecurrenceService(database: database, accountId: accountId, now: now);
+    final seriesRows = await recurrence.allSeries();
+    if (seriesRows.isEmpty) return;
+    final timestamp = now();
+    final beijing = DateTime.fromMillisecondsSinceEpoch(
+      timestamp,
+      isUtc: true,
+    ).add(const Duration(hours: 8));
+    final today = DateTime(beijing.year, beijing.month, beijing.day);
+    // The 31-day reconciliation horizon: occurrences on [today, today+30],
+    // i.e. 31 days inclusive, never expanding beyond in one run.
+    final through = DateTime(
+      today.year,
+      today.month,
+      today.day + 30,
+      23,
+      59,
+      59,
+    );
+    for (final series in seriesRows) {
+      final occurrences = await recurrence.occurrences(
+        series.id,
+        from: today,
+        through: through,
+      );
+      final projectedKeys = <String>{
+        for (final occurrence in occurrences) occurrence.occurrenceKey,
+      };
+      for (final occurrence in occurrences) {
+        final offsets = occurrence.reminderOffsetsMinutes;
+        if (occurrence.allDay || offsets.isEmpty || occurrence.startAt == null) {
+          continue;
+        }
+        final startAtMs = occurrence.startAt!.millisecondsSinceEpoch;
+        final locator = encodeCalendarEventLocator(
+          RecurringOccurrenceLocator(
+            seriesId: series.id,
+            occurrenceKey: occurrence.occurrenceKey,
+          ),
+        );
+        for (final offset in offsets) {
+          final trigger = startAtMs - Duration(minutes: offset).inMilliseconds;
+          if (trigger <= timestamp) continue;
+          final anchor = await recurrence.ensureOccurrenceAnchor(
+            series.id,
+            occurrence.occurrenceKey,
+          );
+          await database
+              .into(database.reminders)
+              .insertOnConflictUpdate(
+                RemindersCompanion.insert(
+                  id: 'reminder:event:$locator:$trigger',
+                  accountId: accountId,
+                  targetType: 'event',
+                  targetId: locator,
+                  occurrenceExceptionId: Value(anchor.id),
+                  offsetMinutes: Value(offset),
+                  triggerAt: trigger,
+                  state: 'desired',
+                  failureCode: const Value(null),
+                  deliveredAt: const Value(null),
+                  createdAt: timestamp,
+                  updatedAt: timestamp,
+                ),
+              );
+        }
+      }
+      // Cancel future desired reminders whose owning occurrence is no longer
+      // projectable (cancelled, deleted, or out of the bounded window). The
+      // anchor rows may include sparse anchors from prior writes.
+      final anchors = await recurrence.exceptionRows(series.id);
+      for (final anchor in anchors) {
+        if (anchor.orphaned == true ||
+            anchor.deletedAt != null ||
+            !projectedKeys.contains(anchor.occurrenceKey)) {
+          await _cancelOccurrenceReminders(anchor.id, timestamp);
+        }
+      }
+    }
+  }
+
+  Future<void> _cancelOccurrenceReminders(String occurrenceExceptionId, int timestamp) =>
+      (database.update(database.reminders)..where(
+            (row) =>
+                row.occurrenceExceptionId.equals(occurrenceExceptionId) &
+                row.state.equals('desired'),
+          )).write(
+        RemindersCompanion(
+          state: const Value('cancelled'),
+          updatedAt: Value(timestamp),
+        ),
+      );
 
   Future<void> _reconcileEvent(CalendarEvent event) async {
     final hiddenOverlay =

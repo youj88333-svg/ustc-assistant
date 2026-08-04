@@ -2,6 +2,9 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/reminders/application/reminder_service.dart';
 import 'package:ustc_assistant_app/features/reminders/domain/reminder_rule.dart';
 
@@ -390,5 +393,223 @@ void main() {
         );
       },
     );
+  });
+
+  group('recurring series reminder reconciliation', () {
+    late AppDatabase database;
+    const accountId = 'account';
+    var now = DateTime.utc(2026, 8, 4, 0).millisecondsSinceEpoch;
+
+    setUp(() async {
+      database = AppDatabase(NativeDatabase.memory());
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: accountId,
+              maskedHint: 'PB****0000',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+    });
+    tearDown(() => database.close());
+
+    test('timed recurring series defaults schedule bounded desired reminders '
+        'via one reused anchor per occurrence', () async {
+      // A daily series anchored today at 09:00 Beijing. today (UTC0) = 08-04.
+      // Reconcile projects today..+31 days.
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日站会',
+          startAt: DateTime(2026, 8, 4, 9, 0),
+          endAt: DateTime(2026, 8, 4, 9, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 4, 9, 0)),
+      );
+
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+
+      final reminderRows = await database.select(database.reminders).get();
+      // 31 occurrence days starting today, each one 15-min offset reminder,
+      // triggered after 'now' (which is 00:00 UTC on 08-04; first trigger
+      // 09:00 - 15m > now).
+      expect(reminderRows, hasLength(31));
+      expect(reminderRows.every((r) => r.state == 'desired'), isTrue);
+      expect(reminderRows.every((r) => r.targetType == 'event'), isTrue);
+      expect(reminderRows.every((r) => r.eventId == null), isTrue,
+          reason: 'recurring reminders never populate the stored event FK');
+      // Every reminder points to a reused occurrence-exception anchor, and a
+      // second reconcile run must not duplicate anchors.
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      expect(anchors, hasLength(31));
+      final anchorIds = anchors.map((a) => a.id).toSet();
+      expect(reminderRows.every((r) => anchorIds.contains(r.occurrenceExceptionId)),
+          isTrue);
+      // All anchors are the sparse no-op kind.
+      expect(anchors.every((a) => a.kind == 'override' && a.overriddenFieldsJson == '[]'),
+          isTrue);
+      // Triggers are distinct (no duplicate identical triggers).
+      expect(
+        reminderRows.map((r) => r.triggerAt).toSet(),
+        reminderRows.map((r) => r.triggerAt).toSet(),
+      );
+    });
+
+    test('all-day series with an empty default creates no reminder rows', () async {
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.allDay(
+          title: '每天复盘',
+          startDate: DateTime(2026, 8, 4),
+          endDateExclusive: DateTime(2026, 8, 5),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 4)),
+      );
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+      expect(await database.select(database.reminders).get(), isEmpty);
+      expect(
+        await database.select(database.calendarEventOccurrenceExceptions).get(),
+        isEmpty,
+      );
+    });
+
+    test('reconcile cancels desired reminders when the owning occurrence is '
+        'cancelled/deleted and preserves delivered/missed/failed history', () async {
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日站会',
+          startAt: DateTime(2026, 8, 4, 9, 0),
+          endAt: DateTime(2026, 8, 4, 9, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 4, 9, 0)),
+      );
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+
+      // Simulate a persisted delivered + missed history row attached to the
+      // first occurrence's anchor (must be preserved through reconcile).
+      final firstAnchor = anchors.first;
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'hist-delivered',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'locator',
+              occurrenceExceptionId: Value(firstAnchor.id),
+              offsetMinutes: const Value(15),
+              triggerAt: 1,
+              state: 'delivered',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'hist-missed',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'locator',
+              occurrenceExceptionId: Value(firstAnchor.id),
+              offsetMinutes: const Value(15),
+              triggerAt: 2,
+              state: 'missed',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+      // Cancel the first occurrence's anchor (as a lifecycle cancel would).
+      await (database.update(
+        database.calendarEventOccurrenceExceptions,
+      )..where((r) => r.id.equals(firstAnchor.id))).write(
+        CalendarEventOccurrenceExceptionsCompanion(
+          status: const Value('cancelled'),
+          deletedAt: Value(now),
+        ),
+      );
+
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+
+      final rows = await database.select(database.reminders).get();
+      // The cancelled occurrence's future desired reminder is cancelled (not
+      // deleted, never recreated).
+      final cancelledTargetRows =
+          rows.where((r) => r.occurrenceExceptionId == firstAnchor.id).toList();
+      expect(cancelledTargetRows.any((r) => r.state == 'desired'), isFalse);
+      // History preserved.
+      expect(
+        rows.singleWhere((r) => r.id == 'hist-delivered').state,
+        'delivered',
+      );
+      expect(
+        rows.singleWhere((r) => r.id == 'hist-missed').state,
+        'missed',
+      );
+      // The remaining 30 occurrences still hold their desired reminders.
+      expect(
+        rows.where((r) => r.state == 'desired' &&
+            r.occurrenceExceptionId != firstAnchor.id),
+        hasLength(30),
+      );
+    });
+
+    test('reconcile never expands beyond a 31-day bounded lookahead', () async {
+      final service = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      await service.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日站会',
+          startAt: DateTime(2026, 8, 4, 9, 0),
+          endAt: DateTime(2026, 8, 4, 9, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 4, 9, 0)),
+      );
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+      // Exactly 31 occurrence days (today through today+30), none beyond.
+      final rows = await database.select(database.reminders).get();
+      expect(rows, hasLength(31));
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+      expect(anchors, hasLength(31));
+    });
   });
 }

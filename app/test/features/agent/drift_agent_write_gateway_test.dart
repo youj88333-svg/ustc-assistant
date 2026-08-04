@@ -643,4 +643,111 @@ void main() {
     expect(snapshot.personalSeriesId, seriesId);
     expect(snapshot.occurrenceKey, isNull);
   });
+
+  test('createConflictRelation resolves a recurring occurrence locator to its '
+      'no-op anchor and keeps event kind + locator ids', () async {
+    final anchor = DateTime(2026, 8, 3, 9, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final occ = (await service.occurrences(
+      seriesId,
+      from: anchor,
+      through: anchor,
+    )).single;
+    final locator = encodeCalendarEventLocator(
+      RecurringOccurrenceLocator(
+        seriesId: seriesId,
+        occurrenceKey: occ.occurrenceKey,
+      ),
+    );
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: locator,
+      rightKind: 'event',
+      rightId: 'ev-1',
+      conflictState: 'no_conflict',
+    );
+    final relation = await db.select(db.scheduleRelations).getSingle();
+    // The occurrence endpoint keeps kind event + locator id and points to a
+    // created no-op anchor; the stored event carries the event FK.
+    final occIsLeft = relation.leftId == locator;
+    final anchors =
+        await db.select(db.calendarEventOccurrenceExceptions).get();
+    expect(anchors, hasLength(1));
+    expect(anchors.single.kind, 'override');
+    expect(
+      occIsLeft ? relation.leftOccurrenceExceptionId
+          : relation.rightOccurrenceExceptionId,
+      anchors.single.id,
+    );
+    expect(
+      occIsLeft ? relation.leftEventId : relation.rightEventId,
+      isNull,
+    );
+    expect(
+      occIsLeft ? relation.rightEventId : relation.leftEventId,
+      'ev-1',
+    );
+  });
+
+  test('setReminder on a recurring occurrence creates one anchor and '
+      'occurrence-backed reminders', () async {
+    final anchor = DateTime(2026, 8, 3, 9, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+      ),
+    );
+    final occ = (await service.occurrences(
+      seriesId,
+      from: anchor,
+      through: anchor,
+    )).single;
+    final locator = encodeCalendarEventLocator(
+      RecurringOccurrenceLocator(
+        seriesId: seriesId,
+        occurrenceKey: occ.occurrenceKey,
+      ),
+    );
+    await gateway.setReminder(locator, const [15]);
+
+    final anchors =
+        await db.select(db.calendarEventOccurrenceExceptions).get();
+    expect(anchors, hasLength(1));
+    final reminders = await db.select(db.reminders).get();
+    expect(reminders, hasLength(1));
+    expect(reminders.single.targetType, 'event');
+    expect(reminders.single.targetId, locator);
+    expect(reminders.single.eventId, isNull);
+    expect(reminders.single.occurrenceExceptionId, anchors.single.id);
+    expect(
+      reminders.single.triggerAt,
+      anchor.subtract(const Duration(minutes: 15)).millisecondsSinceEpoch,
+    );
+  });
 }
