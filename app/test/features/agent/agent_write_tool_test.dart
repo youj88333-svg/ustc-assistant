@@ -432,4 +432,51 @@ void main() {
     expect(await policy.resolve(accountId: 'a1', actionType: 'create_event',
         targetType: 'event', riskLevel: RiskLevel.medium), PermissionDecision.confirm);
   });
+
+  // Fail-closed allowance: an unregistered actionType must throw at construction
+  // time. In release `assert` is stripped, so the previous form fell OPEN to a
+  // null target (matches any target) + medium risk — a silent permission
+  // widening. The throw guarantees an unknown key can never produce an
+  // allowance.
+  group('AgentWriteAllowance.fromRegistry — fail closed on unknown key', () {
+    test('fromRegistry throws ArgumentError for an unregistered actionType', () {
+      expect(
+        () => AgentWriteAllowance.fromRegistry('definitely_not_in_registry'),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test('fromRegistryAnyTarget throws ArgumentError for an unregistered key',
+        () {
+      expect(
+        () => AgentWriteAllowance.fromRegistryAnyTarget(
+          'definitely_not_in_registry',
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+    });
+
+    test(
+      'fromRegistry still resolves a registered key to its registry target '
+      'and risk',
+      () {
+        final allowance = AgentWriteAllowance.fromRegistry('event_delete');
+        expect(allowance.actionType, 'event_delete');
+        expect(allowance.targetType, 'event');
+        expect(allowance.maxRisk, RiskLevel.high);
+      },
+    );
+
+    test(
+      'fromRegistryAnyTarget keeps null target for a registered critical key',
+      () {
+        final allowance =
+            AgentWriteAllowance.fromRegistryAnyTarget('reset_permission_policy');
+        expect(allowance.actionType, 'reset_permission_policy');
+        // `isNull` is ambiguous between drift and matcher here; compare directly.
+        expect(allowance.targetType, null);
+        expect(allowance.maxRisk, RiskLevel.critical);
+      },
+    );
+  });
 }

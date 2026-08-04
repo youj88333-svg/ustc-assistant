@@ -668,5 +668,54 @@ void main() {
       expect(msg, isNot(contains('ref_42')));
       expect(msg, isNot(contains('rel-999')));
     });
+
+    // Guards against _safeErrorCodes drift: every error code the lifecycle
+    // write tools actually emit (mapLifecycleError + UpdateEventTool/
+    // MoveJwCourseDayTool/CreateUserOverlayTool guards +
+    // WriteConfirmationStore.resolve + commitAgentWriteAtomically) must fold
+    // to ITSELF, not collapse to tool_error. If a new lifecycle code is added
+    // to the tools but not the ledger set, this test fails.
+    test('MutationLedger folds each known lifecycle code to itself', () {
+      const knownLifecycleCodes = <String>{
+        // mapLifecycleError codes.
+        'relation_not_deletable',
+        'relation_not_found',
+        'link_not_found',
+        'no_undo_available',
+        'already_active',
+        'already_deleted',
+        'stale_target',
+        'invalid_lifecycle_transition',
+        // UpdateEventTool commit/propose guards.
+        'scope_required',
+        'source_event_not_editable',
+        'whole_series_time_change_not_supported',
+        // CreateUserOverlayTool commit guard.
+        'no_course_series',
+        // MoveJwCourseDayTool commit/propose guards.
+        'no_eligible_jw_courses',
+        // WriteConfirmationStore.resolve + commitAgentWriteAtomically.
+        'confirmation_not_found',
+        'write_commit_failed',
+        // Registry fallback.
+        'tool_execution_failed',
+      };
+      for (final code in knownLifecycleCodes) {
+        final ledger = MutationLedger();
+        ledger.record(
+          'update_task',
+          AgentToolResult(
+            status: AgentToolStatus.error,
+            errorCode: code,
+          ),
+        );
+        expect(
+          ledger.safeErrorCounts,
+          {code: 1},
+          reason:
+              'lifecycle code "$code" must fold to itself, not tool_error',
+        );
+      }
+    });
   });
 }

@@ -51,11 +51,19 @@ class AgentWriteAllowance {
     String? targetType,
   }) {
     final entry = AgentPermissionPolicyService.kPermissionActions[actionType];
-    assert(entry != null, 'allowance actionType not in registry: $actionType');
+    if (entry == null) {
+      // Fail closed: an unregistered actionType must never produce an
+      // allowance. In release `assert` is stripped, so the previous form fell
+      // OPEN to a null target (matches any target) + medium risk — a silent
+      // permission widening. Throw so the tool fails to construct instead.
+      throw ArgumentError(
+        'allowance actionType not in registry: $actionType',
+      );
+    }
     return AgentWriteAllowance(
       actionType,
-      targetType ?? entry?.targetType,
-      maxRisk ?? entry?.defaultRisk ?? RiskLevel.medium,
+      targetType ?? entry.targetType,
+      maxRisk ?? entry.defaultRisk,
     );
   }
 
@@ -65,11 +73,16 @@ class AgentWriteAllowance {
     RiskLevel? maxRisk,
   }) {
     final entry = AgentPermissionPolicyService.kPermissionActions[actionType];
-    assert(entry != null, 'allowance actionType not in registry: $actionType');
+    if (entry == null) {
+      // Fail closed — see fromRegistry for rationale.
+      throw ArgumentError(
+        'allowance actionType not in registry: $actionType',
+      );
+    }
     return AgentWriteAllowance(
       actionType,
       null,
-      maxRisk ?? entry?.defaultRisk ?? RiskLevel.medium,
+      maxRisk ?? entry.defaultRisk,
     );
   }
 

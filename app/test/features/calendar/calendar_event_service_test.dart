@@ -422,6 +422,45 @@ void main() {
       expect(service.reopen(id), throwsA(isA<AlreadyDeletedError>()));
     });
 
+    test('edit on a deleted event returns already_deleted and does not mutate',
+        () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = CalendarEventService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final id = await service.create(
+        PersonalEvent.timed(
+          title: 'Original',
+          startAt: instant(9),
+          endAt: instant(10),
+        ),
+      );
+      await service.softDelete(id);
+
+      // Editing a soft-deleted event must surface as a deterministic
+      // AlreadyDeletedError (Spec §20 `already_deleted`), matching the
+      // lifecycle actions — never a bare `calendar event not found`
+      // StateError that the agent guard would collapse to write_commit_failed.
+      expect(
+        service.edit(
+          id,
+          PersonalEvent.timed(
+            title: 'Changed',
+            startAt: instant(11),
+            endAt: instant(12),
+          ),
+        ),
+        throwsA(isA<AlreadyDeletedError>()),
+      );
+      // The soft-deleted row is unchanged: the guard runs before any write.
+      final row = await service.byId(id, includeDeleted: true);
+      expect(row.title, 'Original');
+      expect(row.deletedAt, isNotNull);
+    });
+
     test('cancel only cancels future desired reminders and preserves history',
         () async {
       final database = await fixtureDatabase();

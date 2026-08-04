@@ -195,10 +195,14 @@ class _ManagementEventRow extends StatelessWidget {
         return ('已取消', const Color(0xFF8E1C00));
       case EventStatus.hidden:
         return ('已隐藏', const Color(0xFF33415C));
+      // completed/skipped are unreachable here: `_matchesFilter` returns false
+      // for them, so this page never lists rows in those states. The
+      // completed/skipped management state is surfaced via the Agent
+      // `get_schedule(view=management)` read (which keeps the shared
+      // `managementEvents()` query broad), NOT via this UI page. They are
+      // listed only to keep the switch exhaustive over [EventStatus].
       case EventStatus.completed:
-        return ('已完成', const Color(0xFF1B5E20));
       case EventStatus.skipped:
-        return ('已跳过', const Color(0xFF33415C));
       case EventStatus.active:
       case EventStatus.tentative:
         return ('进行中', const Color(0xFF1B5E20));

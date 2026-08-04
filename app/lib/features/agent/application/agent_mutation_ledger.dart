@@ -168,11 +168,21 @@ class MutationLedger {
 /// deliberately NOT here — they are distinct "declined" / "unhandled" buckets,
 /// not technical errors.
 ///
-/// This is the union of the write-tool safe codes (from `agent_tool_budget`
-/// `_safeErrorCodes`) and the Task 9 lifecycle error codes (`already_active`,
-/// `already_deleted`, `stale_target`, `invalid_lifecycle_transition`,
-/// `scope_required`, `source_event_not_editable`, `tool_execution_failed`).
+/// This MUST stay a superset of every error code the lifecycle write tools
+/// actually emit. The tools' error codes are produced in:
+/// * `agent_lifecycle_tools.dart` `mapLifecycleError` (Task/PlanBlock/Event/
+///   recurring/relation/link/undo lifecycle failures),
+/// * `agent_write_tools.dart` `UpdateEventTool`/`MoveJwCourseDayTool`/
+///   `CreateUserOverlayTool` commit + propose guards,
+/// * `agent_write_tool.dart` `WriteConfirmationStore.resolve`
+///   (`confirmation_not_found`) and `commitAgentWriteAtomically`
+///   (`write_commit_failed`).
+///
+/// Keep this list in sync with those emit sites; the
+/// `MutationLedger folds each known lifecycle code to itself` test in
+/// `agent_tool_budget_test.dart` guards the union against drift.
 const Set<String> _safeErrorCodes = {
+  // Write-tool safe codes (mirror `agent_tool_budget` `_safeErrorCodes`).
   'permission_denied',
   'invalid_arguments',
   'invalid_write_arguments',
@@ -181,12 +191,26 @@ const Set<String> _safeErrorCodes = {
   'tool_not_allowed',
   'repeated_tool_call',
   'write_failed',
-  // Task 9 lifecycle error codes.
+  // Lifecycle error codes from mapLifecycleError.
   'already_active',
   'already_deleted',
   'stale_target',
   'invalid_lifecycle_transition',
+  'relation_not_deletable',
+  'relation_not_found',
+  'link_not_found',
+  'no_undo_available',
+  // UpdateEventTool commit/propose guards.
   'scope_required',
   'source_event_not_editable',
+  'whole_series_time_change_not_supported',
+  // CreateUserOverlayTool commit guard.
+  'no_course_series',
+  // MoveJwCourseDayTool commit/propose guards.
+  'no_eligible_jw_courses',
+  // WriteConfirmationStore.resolve + commitAgentWriteAtomically.
+  'confirmation_not_found',
+  'write_commit_failed',
+  // Registry fallback (agent_tool_registry) for any uncaught throw.
   'tool_execution_failed',
 };

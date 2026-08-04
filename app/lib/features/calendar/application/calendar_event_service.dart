@@ -234,7 +234,13 @@ class CalendarEventService {
     List<String>? taskIds,
   }) async {
     await database.transaction(() async {
-      final current = await _ownedRow(id);
+      // Read with allowDeleted so a soft-deleted row surfaces as a
+      // deterministic AlreadyDeletedError (Spec §20 `already_deleted`) —
+      // matching cancel/softDelete/restore — instead of a bare
+      // `calendar event not found` StateError. The guard runs before any
+      // write so a deleted event is never mutated.
+      final current = await _ownedRow(id, allowDeleted: true);
+      if (current.deletedAt != null) throw const AlreadyDeletedError();
       final timestamp = now();
       await (database.update(database.calendarEvents)
             ..where((row) => row.id.equals(id)))
@@ -266,9 +272,6 @@ class CalendarEventService {
       }
       await _log('calendar_event_edit', 'Updated a personal event.');
       await _recordUndo('calendar_event_edit', id, _eventSnapshot(current));
-      if (current.deletedAt != null) {
-        throw StateError('deleted event must be restored before editing');
-      }
     });
   }
 
