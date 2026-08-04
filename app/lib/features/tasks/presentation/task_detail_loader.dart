@@ -32,6 +32,7 @@ class _TaskDetailData {
   const _TaskDetailData({
     required this.task,
     required this.blocks,
+    required this.deletedBlocks,
     required this.projection,
     required this.impact,
     required this.undoAvailable,
@@ -42,6 +43,7 @@ class _TaskDetailData {
 
   final TaskItem task;
   final List<PlanBlockItem> blocks;
+  final List<PlanBlockItem> deletedBlocks;
   final TaskProjection projection;
   final PlanBlockImpact impact;
   final bool undoAvailable;
@@ -91,9 +93,27 @@ class _TaskDetailLoaderState extends State<TaskDetailLoader> {
               .get();
       final blocks = rows.map(PlanBlockItem.fromRow).toList(growable: false)
         ..sort((a, b) => a.startAt.compareTo(b.startAt));
+      // Soft-deleted blocks for the collapsed recovery section. Loaded
+      // separately so the active week-timetable projection (which filters
+      // deletedAt != null) is unaffected — a parent Task delete suppresses
+      // child blocks from the week view by their own deletedAt; restoring a
+      // block re-shows it by its original status.
+      final deletedRows =
+          await (widget.database.select(widget.database.planBlocks)..where(
+                (row) =>
+                    row.accountId.equals(account.id) &
+                    row.taskId.equals(widget.taskId) &
+                    row.deletedAt.isNotNull(),
+              ))
+              .get();
+      final deletedBlocks = deletedRows
+          .map(PlanBlockItem.fromRow)
+          .toList(growable: false)
+        ..sort((a, b) => a.startAt.compareTo(b.startAt));
       return _TaskDetailData(
         task: task,
         blocks: blocks,
+        deletedBlocks: deletedBlocks,
         projection: projectTask(
           task,
           now,
@@ -142,6 +162,7 @@ class _TaskDetailLoaderState extends State<TaskDetailLoader> {
         return TaskDetailPage(
           task: value.task,
           blocks: value.blocks,
+          deletedBlocks: value.deletedBlocks,
           projection: value.projection,
           planImpact: value.impact,
           undoAvailable: value.undoAvailable,
@@ -199,6 +220,12 @@ class _TaskDetailLoaderState extends State<TaskDetailLoader> {
           ),
           onRescheduleBlock: (block) =>
               _openPlanEditor(value, block: block, reschedule: true),
+          onRestoreBlock: (block) => _mutate(
+            () => value.planBlocks.restore(
+              block.id,
+              expectedUpdatedAt: block.updatedAt,
+            ),
+          ),
         );
       },
     );

@@ -13,6 +13,7 @@ class TaskDetailPage extends StatelessWidget {
     required this.onComplete,
     required this.onSchedule,
     this.blocks = const [],
+    this.deletedBlocks = const [],
     this.undoAvailable = false,
     this.onUndo,
     this.onCancelTask,
@@ -23,6 +24,7 @@ class TaskDetailPage extends StatelessWidget {
     this.onMarkBlockDone,
     this.onMarkBlockSkipped,
     this.onRescheduleBlock,
+    this.onRestoreBlock,
     this.now,
     super.key,
   });
@@ -31,6 +33,11 @@ class TaskDetailPage extends StatelessWidget {
   final TaskProjection projection;
   final PlanBlockImpact planImpact;
   final List<PlanBlockItem> blocks;
+
+  /// Soft-deleted plan blocks for this task, surfaced in a collapsed recovery
+  /// section. Each carries a single-target restore control. Restoring never
+  /// cascades — the parent Task and any reschedule chain are untouched.
+  final List<PlanBlockItem> deletedBlocks;
   final Future<void> Function(bool cancelFutureBlocks) onComplete;
   final VoidCallback onSchedule;
   final bool undoAvailable;
@@ -43,6 +50,7 @@ class TaskDetailPage extends StatelessWidget {
   final Future<void> Function(PlanBlockItem)? onMarkBlockDone;
   final Future<void> Function(PlanBlockItem)? onMarkBlockSkipped;
   final ValueChanged<PlanBlockItem>? onRescheduleBlock;
+  final Future<void> Function(PlanBlockItem)? onRestoreBlock;
   final DateTime? now;
 
   @override
@@ -133,6 +141,13 @@ class TaskDetailPage extends StatelessWidget {
               onSkipped: onMarkBlockSkipped,
               onReschedule: onRescheduleBlock,
             ),
+          if (deletedBlocks.isNotEmpty && onRestoreBlock != null) ...[
+            const SizedBox(height: 16),
+            _DeletedBlocksSection(
+              blocks: deletedBlocks,
+              onRestore: onRestoreBlock!,
+            ),
+          ],
         ],
       ),
     );
@@ -298,4 +313,93 @@ class _PlanBlockRow extends StatelessWidget {
       '${value.day.toString().padLeft(2, '0')} '
       '${value.hour.toString().padLeft(2, '0')}:'
       '${value.minute.toString().padLeft(2, '0')}';
+}
+
+/// A collapsed recovery section for soft-deleted plan blocks. Collapsed by
+/// default (the deleted blocks are not listed until expanded); each row offers
+/// a single-target restore button. Restoring returns the block to its original
+/// pre-delete status — the parent Task and any reschedule chain are untouched.
+class _DeletedBlocksSection extends StatefulWidget {
+  const _DeletedBlocksSection({
+    required this.blocks,
+    required this.onRestore,
+  });
+
+  final List<PlanBlockItem> blocks;
+  final Future<void> Function(PlanBlockItem) onRestore;
+
+  @override
+  State<_DeletedBlocksSection> createState() => _DeletedBlocksSectionState();
+}
+
+class _DeletedBlocksSectionState extends State<_DeletedBlocksSection> {
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          key: const Key('deleted-plan-blocks-header'),
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(
+                  _expanded ? Icons.expand_less : Icons.expand_more,
+                  size: 20,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  '已删除计划时段（${widget.blocks.length}）',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_expanded)
+          for (final block in widget.blocks)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          block.title ?? '计划时段',
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        Text(
+                          '原状态：${block.status.name}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    key: Key('restore-plan-block-${block.id}'),
+                    tooltip: '恢复',
+                    icon: const Icon(Icons.restore),
+                    onPressed: () => widget.onRestore(block),
+                  ),
+                ],
+              ),
+            ),
+      ],
+    );
+  }
 }

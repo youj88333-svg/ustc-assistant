@@ -206,4 +206,64 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('状态：进行中'), findsOneWidget);
   });
+
+  testWidgets('deleted plan blocks surface in a collapsed recovery section '
+      'and restore re-shows them by original status', (tester) async {
+    final database = await _database();
+    addTearDown(database.close);
+    var clock = DateTime(2026, 7, 27, 12).millisecondsSinceEpoch;
+    final tasks = TaskLifecycleService(
+      database: database,
+      accountId: 'account',
+      now: () => ++clock,
+    );
+    final taskId = await tasks.create(title: '恢复计划块');
+    final blocks = PlanBlockService(
+      database: database,
+      accountId: 'account',
+      now: () => ++clock,
+    );
+    final doneId = await blocks.create(
+      taskId: taskId,
+      title: '已完成块',
+      startAt: DateTime(2026, 7, 27, 8),
+      endAt: DateTime(2026, 7, 27, 9),
+    );
+    // Mark the block done, then soft-delete it. The recovery section must
+    // surface it collapsed; restore returns it to its pre-delete (done) status.
+    final doneBlock = await blocks.byId(doneId);
+    await blocks.markDone(doneId, expectedUpdatedAt: doneBlock.updatedAt);
+    final doneBlock2 = await blocks.byId(doneId);
+    await blocks.softDelete(doneId, expectedUpdatedAt: doneBlock2.updatedAt);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: TaskDetailLoader(
+          database: database,
+          taskId: taskId,
+          initialNow: DateTime(2026, 7, 27, 12),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // The recovery section header renders collapsed by default.
+    expect(find.byKey(const Key('deleted-plan-blocks-header')), findsOneWidget);
+    // The deleted block is NOT shown expanded yet.
+    expect(find.byKey(Key('restore-plan-block-$doneId')), findsNothing);
+
+    // Expand the recovery section.
+    await tester.tap(find.byKey(const Key('deleted-plan-blocks-header')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(Key('restore-plan-block-$doneId')), findsOneWidget);
+
+    // Restore the block: it leaves the recovery section and re-appears in the
+    // active plan-block list by its original (done) status.
+    await tester.tap(find.byKey(Key('restore-plan-block-$doneId')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(Key('restore-plan-block-$doneId')), findsNothing);
+    final restored = await blocks.byId(doneId);
+    expect(restored.deletedAt, isNull);
+    expect(restored.status, PlanBlockStatus.done);
+  });
 }
