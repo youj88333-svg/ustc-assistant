@@ -103,9 +103,9 @@ void main() {
 
         // 1. The versioned system rule is present as the system prompt.
         expect(request.system, isNotNull);
+        expect(request.system, contains(AgentSystemPrompt.version8));
+        // version8 preserves version7 verbatim, so the whole v1-v7 body is sent.
         expect(request.system, contains(AgentSystemPrompt.version7));
-        // version7 preserves version6 verbatim, so the whole v1-v6 body is sent.
-        expect(request.system, contains(AgentSystemPrompt.version6));
 
         // 2. The summary text is present as an assistant context message,
         //    framed as a prior summary (data), NOT as a local business fact.
@@ -576,8 +576,49 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 7', () {
-      expect(AgentSystemPrompt.version, 7);
+    test('version is 8', () {
+      expect(AgentSystemPrompt.version, 8);
+    });
+
+    test('version8 preserves every v1-v7 rule and adds lifecycle mutation '
+        'rules', () {
+      const v8 = AgentSystemPrompt.version8;
+      // Every v7 rule (hence v1-v6) is preserved verbatim.
+      expect(v8, contains(AgentSystemPrompt.version7),
+          reason: 'version8 must preserve every v7 rule');
+      // v8 lifecycle mutation rules:
+      // Query before write; one call one target.
+      expect(v8, contains('先查询再写'),
+          reason: '查询后再写终端工具');
+      expect(v8, contains('一个调用一个目标'),
+          reason: '一个调用只针对一个目标');
+      // List candidates first; multi-object handled one by one.
+      expect(v8, contains('先列出候选'),
+          reason: '多对象先列出候选并询问');
+      // No retry of the same delete.
+      expect(v8, contains('不能重试同一删除'),
+          reason: '不能重试同一删除');
+      // No success claim without a terminal success.
+      expect(v8, contains('没有终端 success 不得声称完成'),
+          reason: '没有终端 success 不得声称完成');
+      // Source events (course/exam/二课) can only be locally hidden after an
+      // explicit user selection — never a raw update_event delete, never
+      // auto-hidden.
+      expect(v8, contains('课程/考试/二课'),
+          reason: '来源事件保护');
+      expect(v8, contains('明确选择后本地隐藏'),
+          reason: '来源事件只能经用户明确选择后本地隐藏');
+      // Undo must preview first.
+      expect(v8, contains('Undo 必须先预览'),
+          reason: 'Undo 必须先预览');
+      // Current-run refs only.
+      expect(v8, contains('当前 run refs'),
+          reason: 'ref 必须来自当前 run');
+      // No semester / id literals.
+      expect(v8, isNot(contains('2026spring')));
+      expect(v8, isNot(contains('2026fall')));
+      expect(v8, isNot(contains('421')));
+      expect(v8, isNot(contains('461')));
     });
 
     test('version7 preserves every v1-v6 rule and adds multi-Task burst rules', () {

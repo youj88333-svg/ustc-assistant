@@ -1,12 +1,12 @@
 /// The fixed, versioned application system prompt for the campus Agent.
 ///
-/// This is **version 7**. The prompt is fixed application text: it contains
+/// This is **version 8**. The prompt is fixed application text: it contains
 /// the safety/behavior sections verbatim and nothing user-configurable is
 /// concatenated above or inside it. The current time is appended dynamically
 /// by `AgentContextBuilder` (to the second, Asia/Shanghai) so the model can
 /// resolve relative dates; this constant itself holds no date.
 ///
-/// The Agent runtime passes [version7] (plus the dynamic time suffix) as the
+/// The Agent runtime passes [version8] (plus the dynamic time suffix) as the
 /// `system` field of the outbound [LlmRequest]. The privacy filter and context
 /// builder treat this string as immutable.
 ///
@@ -40,13 +40,38 @@
 /// detail, ask explicit permission before splitting a burst over 32 (never
 /// auto-resume across runs), and report the exact success/cancel/failure counts
 /// only after ALL tool_results arrive. No semester literal and no id literal.
+///
+/// v7 -> v8: added the lifecycle mutation rules for the delete/clear/unlink/
+/// reset/undo write-tool family — query before write, current-run refs only,
+/// one call one target, list candidates first, multi-object handled one by
+/// one, never retry the same delete, no success claim without a terminal
+/// success, source events (course/exam/二课) can only be locally hidden after
+/// an explicit user selection, and Undo must preview first. All v7 Burst rules
+/// are preserved verbatim.
 class AgentSystemPrompt {
   const AgentSystemPrompt._();
 
   /// The prompt version. Bumped only when the fixed text changes; stored on
   /// `agent_settings.system_prompt_version` so old conversations can be
   /// re-summarized under a new version if needed.
-  static const int version = 7;
+  static const int version = 8;
+
+  /// The fixed application system prompt, version 8.
+  ///
+  /// Built by taking [version7] verbatim (so every v1-v7 rule is preserved) and
+  /// appending the v8 sections. The sections below are the authoritative
+  /// safety/behavior rules and MUST NOT be edited without bumping [version].
+  /// There is intentionally no user-configurable preamble: the role section is
+  /// the first thing the model reads.
+  static const String version8 = '$version7' '''
+
+## 生命周期写工具（取消/删除/恢复/清除/解除/撤回）
+- 先查询再写：取消、删除、恢复、清除、解除关联、撤回都必须先用对应查询工具拿到当前 run refs（ref_task/ref_event/ref_relation 等），再调用终端写工具；ref_* 只能来自当前 run，不能跨 run 复用，也不能凭空编造。
+- 一个调用一个目标：每个终端写工具调用只针对一个目标；多对象时先列出候选（安全标题/时间）并询问，逐项处理，不在一个调用里批量删除多个目标。
+- 不能重试同一删除：一个删除/清除/解除调用被拒绝、stale、取消或技术错误后，不自动重试同一目标的同一删除；说明原因并给替代方案。
+- 没有终端 success 不得声称完成：只有终端写工具返回 success 后才能声称已删除/已清除/已解除/已撤回；只查询过或被拒绝不等于完成。
+- 课程/考试/二课等来源事件不可直接用 update_event 删除，也不能自动隐藏；只有用户明确选择后本地隐藏（用 create_user_overlay 对其本地隐藏），且不修改来源数据。
+- Undo 必须先预览：撤回最近一步前先用 get_last_undoable_action 预览将要撤回的内容，经用户确认后再调用 undo_last_action。''';
 
   /// The fixed application system prompt, version 7.
   ///
