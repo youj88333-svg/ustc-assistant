@@ -1317,6 +1317,60 @@ void main() {
       expect(retry.single.errorCode, 'paused_run_not_found');
     });
   });
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 12 regression: the read-only campus sources (catalog search, course
+  // detail, second-class activities, icourse search) stay reachable after the
+  // lifecycle/delete tool family was added. This guards against an accidental
+  // registry/wiring regression that would drop a read-only source while wiring
+  // the new write tools.
+  // ─────────────────────────────────────────────────────────────────────────
+  group('Task 12 read-only source regression', () {
+    test('catalog search + second-class read-only sources still execute '
+        'after lifecycle tool family added', () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      const account = 'a';
+      await _seedAccount(database, account);
+      final provider = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-ro1',
+                name: 'search_campus_catalog',
+                input: {'query': '量子力学'},
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已找到量子力学的课程目录条目。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final service = _buildService(
+        database: database,
+        provider: provider,
+        gateway: FakeQueryGateway(),
+        clock: _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0)),
+      );
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      final sub = service
+          .send(accountId: account, userText: '查一下量子力学的课程目录')
+          .listen(states.add, onDone: done.complete);
+      await done.future;
+      await sub.cancel();
+      expect(states.last.state, AgentRunState.completed,
+          reason: 'the catalog read-only source completes end-to-end');
+      final executed = states
+          .expand((s) => s.toolSummaries.map((t) => t.toolName))
+          .toSet();
+      expect(executed, contains('search_campus_catalog'),
+          reason: 'the catalog tool actually executed through the real registry');
+      // No raw exception text or account id leaked into the run surface.
+      expect(states.map((s) => s.toString()).join('\n'),
+          isNot(contains('PB12345678')));
+    });
+  });
 }
 
 /// Variant of [_buildService] accepting an arbitrary [QuerySourceGateway]
