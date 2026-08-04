@@ -153,6 +153,39 @@ set_reminder/update_permission_policy/move_jw_course_day）。全部只作用于
 - 手动界面整日调课对话框同样提供清除与"一步撤回"（UndoService 记录
   `jw_day_move` 撤销槽）。
 
+### 重复日程生产可达性（Task 6A 硬门）
+
+重复个人日程的生产读取/写路径已端到端固化（组合级硬门测试）。核心事实：
+
+- **范围展开的 occurrence 是有效查询对象，不是 `calendar_events` 行。**
+  `RecurringEventProjector` 在给定有界 Beijing 范围内把
+  `CalendarEventSeries` 投影为有效 occurrence；生产 `create_event` 建重复系列
+  只写一条 `CalendarEventSeries`，查询与写入都不向 `calendar_events` 物化
+  occurrence 行。
+- **编码 locator 是本地实现身份，绝不对模型可见。** `event_v1` / `occ_v1` /
+  `series_v1` locator（`calendar_event_locator.dart`）是本地实现身份，ref 绑定与
+  依赖行使用之；经 `decodeCalendarEventLocator` 可证明内部 seriesId +
+  occurrenceKey，但工具响应 payload 只含安全字段（标题/时间/状态/scope/ref），
+  任何序列化都不得外泄 locator 文本、seriesId、occurrenceKey、exception FK id 或
+  DB id。
+- **空 occurrence 例外是稀疏 FK 锚点。** 依赖行（Reminder、
+  `ScheduleRelation` 参与方、`TaskEventLink`）需要引用某 occurrence 时，
+  `ensureOccurrenceAnchor(seriesId, occurrenceKey)` 幂等创建/复用 `kind='override'`
+  且空覆盖的 no-op 例外作为 FK 锚点；锚点只在已批准的 Agent 写事务内产生，无展示
+  效果。
+- **账号隔离**：系列、锚点、依赖行全部按 accountId 分区，另一账号查询得到空结果；
+  关系/提醒写入对跨账号目标做原子拒绝。
+- **重启后身份稳定**：seriesId + occurrenceKey 由系列与锚点时间确定性派生，组合
+  进程重启后再次查询同一周仍得到相同 occurrence 身份与仍存续的依赖行。
+- **查询式重复检索**：`get_schedule(query=...)` 纯查询返回受限到
+  `['whole_series']` 的系列目标（只做整系列预检），带日期范围的 `view=management`
+  才返回具体 occurrence（三个 scope）。
+- **UI `RecurrenceEditor` 是独立接线任务**：若本计划结束后周期选择 UI 仍未接入，
+  它保持为单独的任务，不代表本硬门已覆盖。
+
+自动测试（包括上面的组合级硬门）只证明本地生产组合的代码行为，**不**构成真实
+校园网络/学校 API 的人工验收；学校网络手工验收始终是唯一的最终接受依据。
+
 ### Python Bridge Query Protocol 1.0
 
 只读 Agent 的按需来源查询复用扩展后的 Windows 临时 Python Bridge，与既有采集作业

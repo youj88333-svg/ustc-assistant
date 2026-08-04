@@ -42,6 +42,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
 import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
+import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/jw_day_move_service.dart';
@@ -4628,6 +4629,380 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       };
       expect(survivingDays, hasLength(12),
           reason: 'the 12 surviving Tasks have distinct Beijing deadlines');
+    },
+  );
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Task 9 HARD GATE: Production Recurring Reachability.
+  //
+  // End-to-end proof that a recurring personal schedule created by the PRODUCTION
+  // `create_event` write tool (weekly Mon/Wed/Fri, 2026-08-03..2026-08-31):
+  //
+  //   1. commits exactly ONE `calendar_event_series` row and ZERO
+  //      `calendar_events` occurrence rows (no occurrence materialization);
+  //   2. appears in a PRODUCTION `get_schedule(view=management)` week read, whose
+  //      bound `ref_*` resolves (via the run reference store) to an occ_v1
+  //      locator that decodes back to (seriesId, occurrenceKey);
+  //   3. is targeted by the PRODUCTION `set_reminder` and
+  //      `create_schedule_relation` write tools, which persist a sparse no-op
+  //      occurrence-exception anchor + the dependent reminder / relation rows
+  //      bound to that anchor (never to a materialized calendar_events row);
+  //   4. after a composition RESTART over the same database, `get_schedule`
+  //      yields the SAME occurrence identity (same seriesId+occurrenceKey) and
+  //      the dependent rows are still present — proving stable, DB-persisted
+  //      identity;
+  //   5. is account-isolated: a get_schedule week read for a DIFFERENT account
+  //      returns no occurrence of this series.
+  //
+  // No raw seriesId / occurrenceKey / locator text / DB id ever appears in a
+  // tool-response payload (the DTO allowlist strips them; identity is proven by
+  // decoding the opaque run-local ref).
+  // ─────────────────────────────────────────────────────────────────────────
+  test(
+    'Task 9 hard gate: recurring occurrence from production create_event is '
+    'reachable, ref-bound, sparsely anchored, stable across restart, isolated',
+    () async {
+      // ──────────────────────────────────────────────────────────────────
+      // Fixture: production composition over a real in-memory Drift DB.
+      // ──────────────────────────────────────────────────────────────────
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      const protector = _NoopProtector();
+      await _seedAccount(db, 'acc-1');
+      await _seedAccount(db, 'acc-2');
+      await _seedAgentConfig(
+        db,
+        'acc-1',
+        secrets: ProtectedAgentSecretStore(database: db, protector: protector),
+        apiKey: 'test-key',
+      );
+      await _seedAgentConfig(
+        db,
+        'acc-2',
+        secrets: ProtectedAgentSecretStore(database: db, protector: protector),
+        apiKey: 'test-key-2',
+      );
+
+      // Always-allow the three write actions so the production registry routes
+      // them through the shared atomic commit path (business -> audit ->
+      // permissions in one unit-of-work transaction) with deterministic,
+      // non-pausing direct writes — matching the Task 3 composition regression.
+      Future<void> allow(String id, String action, String target) => db
+          .into(db.agentPermissionPolicies)
+          .insert(
+            AgentPermissionPoliciesCompanion.insert(
+              id: id,
+              accountId: 'acc-1',
+              actionType: action,
+              targetType: Value(target),
+              confirmationMode: 'always_allow',
+              riskLevel: const Value('medium'),
+              enabled: const Value(true),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      // --- Step 1: production create_event with weekly recurrence. ----------
+      final provider1 = _ScriptedProvider([
+        _ScriptedCall(() => [
+              const ToolUseCompletedEvent(
+                id: 'tu-ce1',
+                name: 'create_event',
+                input: {
+                  'title': '每周例会',
+                  'start_at': '2026-08-03T10:00:00+08:00',
+                  'end_at': '2026-08-03T11:00:00+08:00',
+                  'recurrence': {
+                    'frequency': 'weekly',
+                    'interval': 1,
+                    'weekdays': [1, 3, 5], // Mon/Wed/Fri
+                    'until_date': '2026-08-31',
+                  },
+                },
+              ),
+              const CompletedEvent(),
+            ]),
+        _ScriptedCall(() => [
+              const TextDeltaEvent('已创建每周例会。'),
+              const CompletedEvent(),
+            ]),
+      ]);
+      final composition = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider1,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(composition.dispose);
+
+      // Drive create_event through the REAL confirmation store + approve path.
+      final states = <AgentRunViewState>[];
+      final done = Completer<void>();
+      late String runId;
+      composition.sessionService
+          .send(accountId: 'acc-1', userText: '建一个每周一三五重复的例会')
+          .listen((s) {
+        states.add(s);
+        if (s.state == AgentRunState.waitingForUser) runId = s.runId;
+      }, onDone: done.complete);
+      for (var i = 0; i < 30; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(
+        states.any(
+            (s) => s.userAction?.type == AgentUserActionType.writeConfirmation),
+        isTrue,
+        reason: 'production create_event(recurrence) must pause for approval',
+      );
+      await composition.sessionService
+          .confirmWriteProposal(
+              accountId: 'acc-1', runId: runId, approve: true, remember: false)
+          .drain<void>();
+      await done.future;
+      expect(states.last.state, AgentRunState.completed);
+
+      // --- Step 2: exactly one series row, zero calendar_events rows. --------
+      final seriesRows = await db.select(db.calendarEventSeries).get();
+      expect(seriesRows, hasLength(1),
+          reason: 'production create_event(recurrence) commits exactly one series');
+      final seriesId = seriesRows.single.id;
+      expect(await db.select(db.calendarEvents).get(), isEmpty,
+          reason: 'no calendar_events occurrence row is materialized on the '
+              'production recurring path');
+      // The series reminder default is the timed [15].
+      expect(
+        (jsonDecode(seriesRows.single.reminderOffsetsJson) as List).cast<int>(),
+        [15],
+        reason: 'timed series default reminder is [15]',
+      );
+
+      // Allow the two write tools that persist against the sparse anchor.
+      await allow('pp-reminder', 'set_reminder', 'event');
+      await allow('pp-relation', 'create_schedule_relation', 'relation');
+
+      // A single run-level context: one RunReferenceStore so the refs bound by
+      // get_schedule resolve in set_reminder / create_schedule_relation.
+      final ctx = integrationCtx('acc-1', 'r-hardgate');
+      final registry = composition.registry;
+
+      // --- Step 3: get_schedule management for the week with one occurrence. -
+      // The recurring target is an EFFECTIVE query object — retrievable through
+      // the projection with zero calendar_events materialization.
+      final week = await registry.execute(
+        toolName: 'get_schedule',
+        arguments: {
+          'view': 'management',
+          'from': '2026-08-03',
+          'through': '2026-08-09',
+        },
+        context: ctx,
+      );
+      expect(week.status, AgentToolStatus.success);
+      final managementEvents = week.payload['managementEvents']! as List;
+      expect(managementEvents, hasLength(3),
+          reason: 'Mon/Wed/Fri within 2026-08-03..2026-08-09 = 3 occurrences');
+      final first = managementEvents.first! as Map<String, Object?>;
+      expect(first['isRecurring'], isTrue);
+      expect(first['startDate'], isNull,
+          reason: 'a timed occurrence surfaces startAt, never startDate');
+      // The management DTO serializes the occurrence's UTC instant (Beijing
+      // 10:00 == UTC 02:00), matching `_fmtDateTime(toIso8601String)`.
+      expect(first['startAt'], '2026-08-03T02:00:00');
+      final occurrences = managementEvents.cast<Map<String, Object?>>();
+      final refs = <String>[
+        for (final e in occurrences) e['ref']! as String,
+      ];
+      expect(refs, hasLength(3));
+
+      // --- Step 4: resolve the returned ref_event and prove seriesId + occurrenceKey.
+      final locatorText = ctx.references.resolve(ref: refs.first, kind: 'event');
+      expect(locatorText, isNotNull,
+          reason: 'the management ref must resolve to an encoded locator');
+      expect(locatorText, startsWith('occ_v1.'));
+      final decoded = decodeCalendarEventLocator(locatorText!);
+      expect(decoded, isA<RecurringOccurrenceLocator>());
+      final occ = decoded as RecurringOccurrenceLocator;
+      expect(occ.seriesId, seriesId,
+          reason: 'ref must decode to THIS production-created series id');
+      expect(occ.occurrenceKey, '$seriesId@2026-08-03T02:00:00',
+          reason: 'occurrenceKey is the series anchor-time discriminator '
+              '(UTC wall clock for the Beijing 10:00 anchor)');
+      // No raw identity ever leaks into the model-facing payload.
+      final weekEncoded = jsonEncode(week.payload);
+      expect(weekEncoded, isNot(contains(seriesId)));
+      expect(weekEncoded, isNot(contains('@2026-')));
+      expect(weekEncoded, isNot(contains('occ_v1.')));
+
+      // --- Step 5: set_reminder + create_schedule_relation against that ref. --
+      final reminder = await registry.execute(
+        toolName: 'set_reminder',
+        arguments: {'ref_event': refs.first, 'offsets_minutes': [30]},
+        context: ctx,
+      );
+      expect(reminder.status, AgentToolStatus.success);
+      expect(reminder.payload['result'], 'reminder_set');
+
+      // Relation between the first and second occurrences of the same week.
+      final relation = await registry.execute(
+        toolName: 'create_schedule_relation',
+        arguments: {
+          'ref_left': refs[0],
+          'ref_right': refs[1],
+          'conflict_state': 'no_conflict',
+          'reason': '同系列两场例会',
+        },
+        context: ctx,
+      );
+      expect(relation.status, AgentToolStatus.success);
+      expect(relation.payload['result'], 'created_schedule_relation');
+
+      // --- Step 6: verify sparse anchors + dependent rows. --------------------
+      // ensureOccurrenceAnchor created a no-op kind='override' anchor per distinct
+      // occurrence touched: occ Aug-03 (set_reminder + relation left) and
+      // occ Aug-05 (relation right) = exactly 2 anchors.
+      final anchors = await db.select(db.calendarEventOccurrenceExceptions).get();
+      expect(anchors, hasLength(2),
+          reason: 'one no-op anchor for each distinct anchored occurrence');
+      final anchorKeys = <String>{
+        for (final a in anchors) a.occurrenceKey,
+      };
+      expect(anchorKeys,
+          containsAll([
+            '$seriesId@2026-08-03T02:00:00',
+            '$seriesId@2026-08-05T02:00:00',
+          ]));
+      for (final a in anchors) {
+        expect(a.seriesId, seriesId);
+        expect(a.kind, 'override',
+            reason: 'a sparse anchor is a no-op kind=override, no display effect');
+        expect(a.overriddenFieldsJson, '[]');
+        expect(a.orphaned, isFalse);
+        expect(a.deletedAt, isNull);
+      }
+
+      // Reminder row bound to the occurrence anchor (targetId = encoded locator).
+      final reminders = await db.select(db.reminders).get();
+      expect(reminders, hasLength(1),
+          reason: 'one reminder row for the set_reminder write');
+      final rem = reminders.single;
+      expect(rem.accountId, 'acc-1');
+      expect(rem.targetType, 'event');
+      expect(rem.occurrenceExceptionId, isNotNull,
+          reason: 'reminder persists through the occurrence-exception FK anchor');
+      final remTarget = decodeCalendarEventLocator(rem.targetId);
+      expect(remTarget, isA<RecurringOccurrenceLocator>());
+      expect((remTarget as RecurringOccurrenceLocator).seriesId, seriesId);
+
+      // Relation rows bound to the occurrence anchors (left/right occurrence FK).
+      final relations = await db.select(db.scheduleRelations).get();
+      expect(relations, hasLength(1));
+      final rel = relations.single;
+      expect(rel.leftOccurrenceExceptionId, isNotNull);
+      expect(rel.rightOccurrenceExceptionId, isNotNull);
+      expect(rel.leftEventId, isNull,
+          reason: 'recurring participants use the occurrence-exception FK, '
+              'never a materialized calendar_events id');
+      expect(rel.rightEventId, isNull);
+
+      // The seeded dependent rows reference the SAME anchors get_schedule's ref
+      // decoded to: locator text equals the encoded occurrence locator.
+      final remKey = decodeCalendarEventLocator(rem.targetId) as RecurringOccurrenceLocator;
+      expect(remKey.seriesId, seriesId);
+      expect(remKey.occurrenceKey, '$seriesId@2026-08-03T02:00:00');
+
+      // Tool payloads never leak the anchor / locator / series internals.
+      final payloadText = jsonEncode([reminder.payload, relation.payload]);
+      expect(payloadText, isNot(contains(seriesId)));
+      expect(payloadText, isNot(contains('occ_v1.')));
+
+      // No fake gateway: the recurring scenario touched only local/production
+      // tools via the composition's real registry + Drift write gateway. Assert
+      // the query gateway (the only non-local seam) received NO source query.
+      // (The gateway used here is the shared counting Young gateway.)
+      final gateway = composition.queryGateway;
+      expect(gateway, isA<_CountingResumableYoungGateway>());
+      expect((gateway as _CountingResumableYoungGateway).requests, isEmpty,
+          reason: 'the recurring reachability scenario must not touch the '
+              'external Young/Bridge source gateway at all');
+
+      // --------------------------------------------------------------------
+      // Step 7-8: restart the composition over the SAME database and re-prove
+      // stable occurrence identity + persisted dependencies.
+      // --------------------------------------------------------------------
+      // Tear down the running composition (its session/registry/context are
+      // run-scoped), then build a FRESH production composition over the SAME
+      // db. The series/anchors/reminder/relation rows persist in the DB.
+      await composition.dispose();
+
+      final provider2 = _ScriptedProvider(const []);
+      final restarted = await _buildTestComposition(
+        db,
+        'acc-1',
+        provider: provider2,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(restarted.dispose);
+
+      final ctx2 = integrationCtx('acc-1', 'r-restart');
+      final week2 = await restarted.registry.execute(
+        toolName: 'get_schedule',
+        arguments: {
+          'view': 'management',
+          'from': '2026-08-03',
+          'through': '2026-08-09',
+        },
+        context: ctx2,
+      );
+      expect(week2.status, AgentToolStatus.success);
+      final events2 = week2.payload['managementEvents']! as List;
+      expect(events2, hasLength(3),
+          reason: 'same week still yields 3 occurrences after restart');
+      final refs2 = <String>[
+        for (final e in events2.cast<Map<String, Object?>>()) e['ref']! as String,
+      ];
+      final locator2 = ctx2.references.resolve(ref: refs2.first, kind: 'event');
+      final decoded2 = decodeCalendarEventLocator(locator2!) as RecurringOccurrenceLocator;
+      expect(decoded2.seriesId, seriesId,
+          reason: 'occurrence series identity is STABLE across restart');
+      expect(decoded2.occurrenceKey, '$seriesId@2026-08-03T02:00:00',
+          reason: 'occurrence key is STABLE across restart');
+      // A fresh get_schedule does not materialize any calendar_events row.
+      expect(await db.select(db.calendarEvents).get(), isEmpty,
+          reason: 'restarted read still never materializes occurrences');
+      // Dependencies persisted through the sparse anchors survive the restart.
+      expect((await db.select(db.reminders).get()), hasLength(1));
+      expect((await db.select(db.scheduleRelations).get()), hasLength(1));
+      expect((await db.select(db.calendarEventOccurrenceExceptions).get()),
+          hasLength(2));
+
+      // --- Step 9: account isolation. ----------------------------------------
+      final provider3 = _ScriptedProvider(const []);
+      final other = await _buildTestComposition(
+        db,
+        'acc-2',
+        provider: provider3,
+        gateway: _CountingResumableYoungGateway(),
+        protector: protector,
+      );
+      addTearDown(other.dispose);
+      final ctx3 = integrationCtx('acc-2', 'r-other');
+      final week3 = await other.registry.execute(
+        toolName: 'get_schedule',
+        arguments: {
+          'view': 'management',
+          'from': '2026-08-03',
+          'through': '2026-08-09',
+        },
+        context: ctx3,
+      );
+      expect(week3.status, AgentToolStatus.success);
+      expect(week3.payload['managementEvents']! as List, isEmpty,
+          reason: 'account acc-2 must see no occurrence of acc-1\'s series');
+      expect(await db.select(db.calendarEvents).get(), isEmpty,
+          reason: 'isolation check leaves no materialized occurrence either');
     },
   );
 }

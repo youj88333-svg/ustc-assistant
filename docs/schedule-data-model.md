@@ -326,6 +326,29 @@ whole_series    更新整个系列模板或规则
 有效日程。详细行为见
 `docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md`。
 
+#### 3.9.1 生产可达性与稀疏锚点（Task 6A 硬门）
+
+以下约束由生产可达性硬门（组合测试）端到端固化，任何回归都不得破坏：
+
+- **范围展开的 occurrence 是有效查询对象，而不是 `calendar_events` 行。**
+  查询只在一个有界 Beijing 时间范围内把投影的 occurrence 作为有效对象返回；
+  生产 `create_event` 建重复系列不向 `calendar_events` 物化任何 occurrence 行
+  （仅写一条 `CalendarEventSeries`）。读取路径同样不物化。
+- **编码 locator 是本地实现身份，绝不对模型可见。** `event_v1` / `occ_v1` /
+  `series_v1` 编码字符串、`seriesId`、`occurrenceKey`、exception FK id、DB 主键
+  都只能存在于内部（ref 绑定目标、依赖行 FK）；工具响应 payload 只允许安全字段
+  （标题/时间/状态/scope/ref 令牌）。ref 由运行引用库解码后即可证明内部的
+  seriesId + occurrenceKey，但序列化不得外泄任何一个。
+- **空 occurrence 例外是稀疏 FK 锚点，无展示效果。** 依赖行（Reminder、
+  `ScheduleRelation` 参与方、`TaskEventLink`）需要引用某次 occurrence 时，由
+  `ensureOccurrenceAnchor(seriesId, occurrenceKey)` 幂等地创建/复用一条
+  `kind='override'`、`overriddenFieldsJson='[]'`、无实际覆盖的 no-op 例外作为 FK
+  锚点。锚点只在已批准的 Agent 写事务内产生，不被投影成展示对象，也不改变系列
+  语义。
+
+更完整的生产读写实现在 `read-only-agent-handoff.md` 与
+`architecture.md` 的对应段落中固化。
+
 ## 4. Task
 
 `Task` 表示需要完成的事项，但它本身不一定占用一个固定时间段。
@@ -1017,7 +1040,22 @@ PlanBlock            开始前 10 分钟
 
 第一版不为“今日截止 Task”或“逾期 Task”生成每天固定时间的通知。它们只在截止事项带中显示黄色或红色警告；未来由 LLM 每日简报统一提醒。通知权限被拒绝时，App 内提醒仍然保留。
 
-## 10. ActionLog
+### 9.4 Schema 7 依赖目标规则与 31 天提醒对账地平线
+
+重复系列的依赖目标遵循 Schema 7（`calendar_event_occurrence_exceptions` 稀疏
+锚点）规则：
+
+- **Reminder / 关系 / Task 链接 对重复 occurrence 的引用走 occurrence-exception
+  FK**，而不是（不存在的）materialized `calendar_events` 行。Reminder 行
+  `occurrenceExceptionId`、`ScheduleRelation` 的 `left/rightOccurrenceExceptionId`、
+  `TaskEventLink.occurrenceExceptionId` 都引用同一幂等 no-op 锚点。
+- **提醒对账只在 31 天界限内展开**：一次对账从当前北京日期推进至其后 30 天（共
+  31 天，含两端），绝不无界展开。对每次有效 timed occurrence 的可继承 offsets，
+  用一个复用的 no-op 锚点持久化未来 desired 提醒；被取消/删除/落出窗口的
+  occurrence 的未来 desired 提醒被取消，已投递/错过/失败的历史保留。all-day 系列
+  默认空 offsets，不产生提醒行。
+- 锚点创建仅在已批准 Agent 写事务内进行（嵌套在同一原子单元中）；锚点自身
+  `kind='override'` 且空覆盖，任何时刻都不应产生展示效果。
 
 `ActionLog` 是 Agent 可靠性的关键。凡是 Agent 或用户对日程、任务、外部系统做了重要操作，都应记录。
 
@@ -1359,6 +1397,14 @@ get_free_time(range, constraints)
 search_knowledge(query)
 get_source_records(source, range)
 ```
+
+#### 15.1.1 查询式重复检索只返回受限到 `whole_series` 的系列目标
+
+`get_schedule(query=...)` 的纯查询重复检索（无日期、无 view）经过有界搜索返回
+**系列目标**，其 `availableScopes` 只允许 `['whole_series']`——只做整系列预检，
+绝不伪造单个 occurrence 时间。带日期范围的 `view=management` 才返回具体
+occurrence 目标（三个 scope：`only_this`/`this_and_future`/`whole_series`），
+且绝不在 payload 中外泄 locator / seriesId / occurrenceKey / DB id。
 
 ### 15.2 写入工具
 

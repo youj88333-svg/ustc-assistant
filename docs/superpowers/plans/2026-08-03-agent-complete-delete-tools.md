@@ -291,12 +291,12 @@ git commit -m "feat(schedule): complete local lifecycle transitions"
 
 ## Task 6：重复个人日程三种 scope
 
-> **前置阻塞（2026-08-04）：** 当前生产查询不会展开
-> `CalendarEventSeries`，现有重复 occurrence 仅在 fake gateway 测试中可达。
-> 必须先完整执行并验证
-> `docs/superpowers/plans/2026-08-04-recurring-occurrence-production-reachability.md`。
-> 该前置计划负责 Schema 7、范围投影、稳定 ref、稀疏 exception 锚点及生产创建入口；
-> 在其 Task 9 硬门通过前，不得继续本 Task 的生命周期实现，也不得用手工插入
+> **前置阻塞（2026-08-04，已由 Task 6A 前置计划满足）：** 生产查询现在会展开
+> `CalendarEventSeries`，重复 occurrence 已能通过生产组合路径可达。必须完整执行并验证
+> `docs/superpowers/plans/2026-08-04-recurring-occurrence-production-reachability.md`
+> （Schema 7、范围投影、稳定 ref、稀疏 exception 锚点及生产创建入口）；
+> **在本 Task 的生命周期实现前必须通过该前置计划的 Task 9 硬门组合测试**，否则
+> 不得继续本 Task 的实现，也不得用手工插入
 > `calendar_events.personalSeriesId/occurrenceKey` 的测试冒充生产可达性。
 
 **文件：**
@@ -308,9 +308,15 @@ git commit -m "feat(schedule): complete local lifecycle transitions"
 - 修改：`app/test/features/agent/local_agent_tools_test.dart`
 - 修改：`app/test/features/schedule/schedule_projection_test.dart`
 
-- [ ] **步骤 1：验证 Task 6A 生产可达性硬门**
+- [ ] **步骤 1：要求 Task 6A 生产可达性硬门测试后继续**
 
-确认 `2026-08-04-recurring-occurrence-production-reachability.md` 的 Task 9 组合测试已经通过：一个由生产 `create_event` 创建的 `CalendarEventSeries` occurrence 能出现在生产日程/管理查询中并绑定 `ref_event`，ref 能解析出 seriesId + occurrenceKey，关系/Reminder/TaskEventLink 能通过稀疏 exception 锚点持久引用，且未向 `calendar_events` 物化 occurrence。若任一断言失败，立即停止并回报主人，不得继续步骤 2。
+执行并确认 `2026-08-04-recurring-occurrence-production-reachability.md` 的 Task 9
+硬门组合测试已经通过，然后继续本 Task（不再无谓停止）：一个由生产 `create_event`
+创建的 `CalendarEventSeries` occurrence 能出现在生产日程/管理查询中并绑定
+`ref_event`，ref 能解析出 seriesId + occurrenceKey，关系/Reminder/TaskEventLink 能
+通过稀疏 exception 锚点持久引用，且未向 `calendar_events` 物化 occurrence。若任一
+断言失败，立即停止并回报主人，不得继续步骤 2。本 Task 不标记为完成——Task 6A 的
+硬门属于前置计划 Task 9 的验收，本 Task 仍需实现剩余生命周期。
 
 - [ ] **步骤 2：实现 366 天影响预览**
 

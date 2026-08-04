@@ -677,6 +677,33 @@ Task 8 新增组合级回归：
 用户文件，未修改、未暂存、未提交；`docs/agent-relation-closure-retest-2026-08-02.md`
 为本里程碑新建的未执行复测清单。
 
+## 7.5 重复日程生产可达性硬门验证（2026-08-04）
+
+`feature/delete-tools` 分支执行了
+`docs/superpowers/plans/2026-08-04-recurring-occurrence-production-reachability.md`
+（Task 6A 前置计划：可逆 locator、Schema 7 稀疏锚点、范围投影、周课表接入、Agent
+查询绑定、重复 create_event、关系/提醒/Task 链接持久化）。**Task 9 硬门**（组合级
+端到端）在 `app/test/integration/agent_composition_flow_test.dart` 中新增并通过：
+
+- 生产 `create_event`（每周一三五）批准后提交**恰好一条** `CalendarEventSeries`，
+  `calendar_events` 零物化；
+- 同周 `get_schedule(view=management)` 返回该系列的 3 个 occurrence（有效查询对象），
+  ref 解码证明内部 seriesId + occurrenceKey，payload 不泄漏任何 locator/seriesId/
+  occurrenceKey/DB id；
+- 对 ref 调用 `set_reminder` 与 `create_schedule_relation`，经 `ensureOccurrenceAnchor`
+  幂等持久化 `kind='override'` 空锚点与绑定该锚点的 Reminder / 关系行；
+- 同一数据库上重启组合后再次查询，seriesId + occurrenceKey 与依赖行**稳定**；
+- 另一账号查询得到空结果（**账号隔离**）；整个场景不触达外部 Young/Bridge 来源网关。
+
+固化到文档的事实（见 `docs/schedule-data-model.md` 3.9.1/9.4/15.1.1 与
+`docs/architecture.md`）：范围展开的 occurrence 是有效查询对象而非 `calendar_events`
+行；编码 locator 是本地实现身份、绝不对模型可见；空 occurrence 例外是稀疏 FK 锚点、
+无展示效果；Schema 7 依赖目标规则与 31 天提醒对账地平线；查询式重复检索只返回受限
+到 `whole_series` 的系列目标；UI `RecurrenceEditor` 仍是独立接线任务。
+
+**该硬门测试只证明本地生产组合的代码行为，不构成真实校园网络/学校 API 的人工
+验收。**
+
 ## 8. 已知文档边界
 
 - `docs/acceptance/windows-first-milestone.md` 是第一轮人工结果归档，不是修复后
