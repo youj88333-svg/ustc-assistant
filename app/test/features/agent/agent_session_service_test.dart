@@ -1240,6 +1240,52 @@ void main() {
         expect(terminal.sourceReferences, isEmpty);
       },
     );
+
+    // Task 11 step 4: a successful object-mutating lifecycle tool emits a
+    // navigation chip for its domain (查看日程/查看任务), so the user can jump
+    // to the affected page. Config-clear tools (clear_reminder,
+    // clear_user_overlay, reset_permission_policy, unlink_task_event) and
+    // undo_last_action touch no schedule/task object the user would navigate
+    // to, so they produce NO chip.
+    test('mutation tools map to a local action; config clears and undo do not',
+        () {
+      // Object-mutating tools: schedule domain.
+      expect(
+        AgentSessionService.localActionForTool('update_event'),
+        AgentLocalAction.schedule,
+      );
+      expect(
+        AgentSessionService.localActionForTool('delete_schedule_relation'),
+        AgentLocalAction.schedule,
+      );
+      // Object-mutating tools: task domain.
+      expect(
+        AgentSessionService.localActionForTool('update_task'),
+        AgentLocalAction.tasks,
+      );
+      expect(
+        AgentSessionService.localActionForTool('update_plan_block'),
+        AgentLocalAction.tasks,
+      );
+      // Config-clear tools and undo: no navigation chip.
+      expect(AgentSessionService.localActionForTool('clear_reminder'), isNull);
+      expect(
+        AgentSessionService.localActionForTool('clear_user_overlay'),
+        isNull,
+      );
+      expect(
+        AgentSessionService.localActionForTool('reset_permission_policy'),
+        isNull,
+      );
+      expect(
+        AgentSessionService.localActionForTool('unlink_task_event'),
+        isNull,
+      );
+      expect(
+        AgentSessionService.localActionForTool('undo_last_action'),
+        isNull,
+      );
+    });
   });
 
   group('first model request shape', () {

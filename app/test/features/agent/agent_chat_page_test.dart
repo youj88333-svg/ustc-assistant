@@ -641,6 +641,89 @@ void main() {
       expect(find.byIcon(Icons.copy), findsOneWidget);
     });
 
+    // Task 11 step 4: a successful run that handled a schedule object emits a
+    // 查看日程 navigation chip; the chip is a clickable ActionChip wired to
+    // the chat page's router callback. Config-clear tools emit no chip (the
+    // session service maps them to null — see agent_session_service_test).
+    testWidgets(
+      'completed run with a schedule local action renders a 查看日程 chip',
+      (tester) async {
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '帮我取消明天的事');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        script.addState(
+          const AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.completed,
+            text: '已为你取消该日程。',
+            localActions: [AgentLocalAction.schedule],
+          ),
+        );
+        script.closeStream();
+        await _pump(tester);
+
+        // The navigation chip renders as a clickable ActionChip with the
+        // 查看日程 label. (Not tapped here: tapping would invoke the GoRouter
+        // push, which a bare MaterialApp does not provide.)
+        expect(find.byType(ActionChip), findsOneWidget);
+        expect(find.text('查看日程'), findsOneWidget);
+      },
+    );
+
+    // Config-clear tools produce NO navigation chip: a run that only cleared a
+    // reminder surfaces no 查看日程/查看任务 chip (nothing to navigate to).
+    testWidgets(
+      'completed run with no local actions renders no navigation chip',
+      (tester) async {
+        config.setConfigured();
+        final script = _ScriptedSessionService(database, chatRepository);
+
+        await tester.pumpWidget(
+          _buildPage(
+            config: config,
+            secrets: secrets,
+            sessionService: script,
+            chatRepository: chatRepository,
+          ),
+        );
+        await _pump(tester);
+
+        await tester.enterText(find.byType(TextField), '清除提醒');
+        await tester.testTextInput.receiveAction(TextInputAction.send);
+        await _pump(tester);
+
+        script.addState(
+          const AgentRunViewState(
+            runId: 'r1',
+            state: AgentRunState.completed,
+            text: '已清除提醒。',
+            // clear_reminder maps to no local action.
+            localActions: [],
+          ),
+        );
+        script.closeStream();
+        await _pump(tester);
+
+        expect(find.byType(ActionChip), findsNothing);
+        expect(find.text('查看日程'), findsNothing);
+        expect(find.text('查看任务'), findsNothing);
+      },
+    );
+
     testWidgets('failed state shows retry button', (tester) async {
       config.setConfigured();
       final script = _ScriptedSessionService(database, chatRepository);

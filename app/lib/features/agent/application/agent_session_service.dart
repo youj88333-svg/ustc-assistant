@@ -1428,7 +1428,7 @@ class AgentSessionService {
           // within the same run (the model calls get_event_details by ref),
           // so the tool keeps binding them; we just do not forward local ones
           // to the UI as citations.
-          final localAction = _localActionForTool(tu.name);
+          final localAction = localActionForTool(tu.name);
           if (result.status == AgentToolStatus.success && localAction != null) {
             newLocalActions.add(localAction);
           } else if (_forwardsToSourceReferences(tu.name)) {
@@ -1869,7 +1869,15 @@ class AgentSessionService {
   /// one `AgentLocalAction.schedule`; a successful task-domain tool emits one
   /// `AgentLocalAction.tasks`. The mapping is by TOOL NAME (not ref kind) so
   /// the decision is independent of what the tool chose to bind.
-  static AgentLocalAction? _localActionForTool(String toolName) {
+  ///
+  /// Object-mutating lifecycle tools (update_event, update_task,
+  /// update_plan_block, delete_schedule_relation) also map to their domain so
+  /// a successful write surfaces a navigation chip — the user can jump to the
+  /// affected page. Config-clear tools (clear_reminder, clear_user_overlay,
+  /// reset_permission_policy, unlink_task_event) and undo_last_action touch no
+  /// schedule/task object the user would navigate to, so they return null and
+  /// produce NO chip.
+  static AgentLocalAction? localActionForTool(String toolName) {
     if (_scheduleDomainTools.contains(toolName)) {
       return AgentLocalAction.schedule;
     }
@@ -1887,22 +1895,30 @@ class AgentSessionService {
       _catalogTools.contains(toolName);
 
   /// Schedule-domain local tools: a successful call emits one
-  /// `AgentLocalAction.schedule`.
+  /// `AgentLocalAction.schedule`. Includes the object-mutating lifecycle tool
+  /// `update_event` and the relation tool `delete_schedule_relation` so a
+  /// successful write surfaces a 查看日程 navigation chip.
   static const _scheduleDomainTools = <String>{
     'get_schedule',
     'get_event_details',
     'get_free_time',
     'get_conflicts',
     'get_pending_event_reviews',
+    'update_event',
+    'delete_schedule_relation',
   };
 
   /// Task-domain local tools: a successful call emits one
-  /// `AgentLocalAction.tasks`.
+  /// `AgentLocalAction.tasks`. Includes the object-mutating lifecycle tools
+  /// `update_task` and `update_plan_block` so a successful write surfaces a
+  /// 查看任务 navigation chip.
   static const _taskDomainTools = <String>{
     'get_tasks',
     'get_task_details',
     'get_plan_blocks',
     'get_pending_planblock_reviews',
+    'update_task',
+    'update_plan_block',
   };
 
   /// External catalog tools whose `campus_entry` refs ARE forwarded to
