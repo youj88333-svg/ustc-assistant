@@ -1101,6 +1101,53 @@ final reopenedSeriesId = cancelledNew.id;
       );
     });
 
+    // C3 exception-version half: this_and_future splits the series and
+    // migrates the target occurrence's exception row onto the new segment
+    // (or orphans it). A concurrent edit to that exception row between propose
+    // and commit must be rejected, so the pre-split exception anchor version
+    // is re-checked before the split runs.
+    test(
+        'this_and_future delete with stale expectedExceptionUpdatedAt rejects '
+        'before the split', () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = RecurrenceService(
+        database: database,
+        accountId: 'a',
+        now: () => 100,
+      );
+      final seriesId = await weeklySeries(
+        service,
+        anchor: at(2026, 7, 6),
+        through: DateTime(2026, 7, 27),
+      );
+      final key = occurrenceKey(seriesId, at(2026, 7, 13));
+      // Seed an exception override anchor on the split-boundary occurrence.
+      await service.editOnlyThis(
+        seriesId,
+        key,
+        const OccurrenceOverride(title: OverrideValue.set('边界例外')),
+      );
+      final exception = await service.existingOccurrenceAnchor(seriesId, key);
+      expect(exception, isNotNull);
+      final series = await service.seriesRow(seriesId);
+
+      await expectLater(
+        lifecycle(database).delete(
+          seriesId: seriesId,
+          occurrenceKey: key,
+          scope: RecurringActionScope.thisAndFuture,
+          expectedSeriesUpdatedAt: series.updatedAt,
+          expectedExceptionUpdatedAt: exception!.updatedAt - 1,
+        ),
+        throwsA(isA<StaleRecurringTarget>()),
+      );
+      // The split must NOT have run: the original series is untouched.
+      final after = await service.seriesRow(seriesId);
+      expect(after.effectiveThrough, series.effectiveThrough);
+      expect(await service.allSeries(), hasLength(1));
+    });
+
     test('lifecycle action records an Undo snapshot in the same transaction',
         () async {
       final database = await fixtureDatabase();

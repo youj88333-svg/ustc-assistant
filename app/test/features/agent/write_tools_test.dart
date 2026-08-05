@@ -3223,6 +3223,77 @@ void main() {
       expect(gw.lifecycleCall!.expectedSeriesUpdatedAt, isNot(isNull));
     });
 
+    // C3 exception-version half: only_this recurring lifecycle must also
+    // re-check the occurrence's exception override row, not just the series.
+    test(
+        'update_event recurring only_this cancel forwards '
+        'expectedExceptionUpdatedAt from the snapshot', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00',
+          updatedAt: 100,
+          exceptionUpdatedAt: 555);
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'cancel', 'scope': 'only_this'},
+          h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, isNull);
+      expect(gw.lifecycleCall, isNot(isNull));
+      expect(gw.lifecycleCall!.expectedSeriesUpdatedAt, 100);
+      // The exception override version captured at propose must be forwarded
+      // so the service can TOCTOU re-check the specific occurrence.
+      expect(gw.lifecycleCall!.expectedExceptionUpdatedAt, 555);
+    });
+
+    test(
+        'update_event recurring only_this cancel stale exception maps to '
+        'stale_target', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00',
+          updatedAt: 100,
+          exceptionUpdatedAt: 555);
+      // The service rejects because the exception row drifted between propose
+      // and commit (StaleRecurringTarget surfaces the expectedExceptionUpdatedAt
+      // re-check).
+      gw.recurringLifecycleThrows = const StaleRecurringTarget();
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'action': 'cancel', 'scope': 'only_this'},
+          h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'stale_target');
+      expect(gw.lifecycleCall!.expectedExceptionUpdatedAt, 555);
+    });
+
     test('update_event recurring restore InvalidRecurringTransition maps to invalid_lifecycle_transition',
         () async {
       final gw = _UpdateGateway();

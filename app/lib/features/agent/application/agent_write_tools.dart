@@ -890,7 +890,7 @@ class UpdateEventTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'action': action, 'snapshot': snapshot, 'expectedUpdatedAt': snapshot.updatedAt},
+      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'action': action, 'snapshot': snapshot, 'expectedUpdatedAt': snapshot.updatedAt, 'expectedExceptionUpdatedAt': snapshot.exceptionUpdatedAt},
       safeLogSummary: action == 'edit'
           ? '修改日程 ${_eventSummary(snapshot)}'
           : '${_actionZh(action)}日程 ${_eventSummary(snapshot)}',
@@ -910,6 +910,12 @@ class UpdateEventTool extends AgentWriteTool {
     // Null (e.g. a recurring occurrence snapshot with no series version) skips
     // the check, preserving back-compat with no-version callers.
     final expectedUpdatedAt = p['expectedUpdatedAt'] as int?;
+    // Propose-time version of the occurrence's exception override row, for
+    // recurring only_this/this_and_future lifecycle commits. Null for a stored
+    // event or a recurring occurrence with no existing exception anchor; the
+    // service skips the exception re-check when null.
+    final expectedExceptionUpdatedAt =
+        p['expectedExceptionUpdatedAt'] as int?;
 
     final identity = await gateway.eventSnapshot(eventId);
     if (!identity.isPersonal) {
@@ -933,6 +939,7 @@ class UpdateEventTool extends AgentWriteTool {
             scope: _actionScope(scope),
             action: _lifecycleAction(action),
             expectedSeriesUpdatedAt: expectedUpdatedAt,
+            expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
           );
         } catch (error) {
           final mapped = _mapRecurringLifecycleError(error);

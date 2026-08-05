@@ -738,6 +738,18 @@ class RecurringLifecycleService {
       // cancel/delete split the series at the occurrence into a truncated old
       // segment and a new future segment, then apply to the new segment.
       _requireNotDeleted(series);
+      // TOCTOU re-check the split-boundary occurrence's exception override row
+      // (Spec §25.1): editThisAndFuture migrates this exact row (re-keying it
+      // onto the new segment or orphaning it), so a concurrent edit to that
+      // override between propose and commit would otherwise be silently
+      // overwritten. reopen/restore don't touch the exception row, so the
+      // check is scoped to the split branch only. Null skips the check (no
+      // anchor yet, or a back-compat no-version caller).
+      final boundaryException = await _recurrence.existingOccurrenceAnchor(
+        seriesId,
+        occurrenceKey,
+      );
+      _checkVersion(boundaryException?.updatedAt, expectedExceptionUpdatedAt);
       final oldRule = RecurrenceRule.decode(series.recurrenceJson);
       final newAnchor = _occurrenceAsAnchor(series, occurrence);
       final ruleAnchor = occurrence.allDay

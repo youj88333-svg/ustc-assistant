@@ -28,6 +28,7 @@ final class EventWriteSnapshot {
     this.occurrenceKey,
     this.courseSeriesId,
     this.updatedAt,
+    this.exceptionUpdatedAt,
   });
 
   final String id;
@@ -51,6 +52,17 @@ final class EventWriteSnapshot {
   /// recurringLifecycle path carries `expectedSeriesUpdatedAt` instead), so
   /// this is null on occurrence/series snapshots.
   final int? updatedAt;
+
+  /// The occurrence-exception row's `updatedAt` at propose time, for a
+  /// recurring occurrence that already has an exception override anchor.
+  /// `only_this`/`this_and_future` lifecycle commits plumb this through as
+  /// `expectedExceptionUpdatedAt` so the service can TOCTOU re-check the
+  /// specific occurrence's override row between propose and confirm (Spec
+  /// §25.1) — a concurrent edit to that one occurrence would otherwise be
+  /// silently overwritten. Null for a stored-event snapshot (no exception
+  /// row) and for a recurring occurrence/series with no existing exception
+  /// anchor.
+  final int? exceptionUpdatedAt;
 
   bool get isPersonal => source == 'user';
   bool get isRecurring => personalSeriesId != null && occurrenceKey != null;

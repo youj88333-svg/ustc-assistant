@@ -360,7 +360,19 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
           seriesId,
           occurrenceKey,
         );
-        return _snapshotFromOccurrence(occurrence, seriesUpdatedAt: series.updatedAt);
+        // Carry the occurrence's exception override row version (distinct
+        // from the series version) so only_this/this_and_future lifecycle
+        // commits can TOCTOU re-check the specific occurrence. Null when no
+        // exception anchor exists yet.
+        final exception = await _recurrence.existingOccurrenceAnchor(
+          seriesId,
+          occurrenceKey,
+        );
+        return _snapshotFromOccurrence(
+          occurrence,
+          seriesUpdatedAt: series.updatedAt,
+          exceptionUpdatedAt: exception?.updatedAt,
+        );
       case RecurringSeriesLocator(:final seriesId):
         final series = await _recurrence.seriesRow(seriesId);
         return _snapshotFromSeries(series);
@@ -390,11 +402,14 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   /// Builds an [EventWriteSnapshot] from a composed recurring occurrence. Only
   /// safe display fields are forwarded; the series id / occurrence key live
   /// behind the id (the encoded occurrence locator). [seriesUpdatedAt] is the
-  /// owning series row's `updatedAt`, plumbed through as the propose-time
-  /// version for the recurringLifecycle TOCTOU re-check.
+  /// owning series row's `updatedAt`; [exceptionUpdatedAt] is the occurrence's
+  /// exception override row `updatedAt` (null when no anchor exists). Both are
+  /// plumbed through as the propose-time versions for the recurringLifecycle
+  /// TOCTOU re-check (Spec §25.1).
   EventWriteSnapshot _snapshotFromOccurrence(
     RecurringOccurrence occurrence, {
     int? seriesUpdatedAt,
+    int? exceptionUpdatedAt,
   }) {
     final id = encodeCalendarEventLocator(
       RecurringOccurrenceLocator(
@@ -416,6 +431,7 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       personalSeriesId: occurrence.seriesId,
       occurrenceKey: occurrence.occurrenceKey,
       updatedAt: seriesUpdatedAt,
+      exceptionUpdatedAt: exceptionUpdatedAt,
     );
   }
 

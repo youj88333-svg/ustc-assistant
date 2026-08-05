@@ -1186,6 +1186,178 @@ void main() {
     expect(snapshot.updatedAt, row.updatedAt);
   });
 
+  // C3 exception-version half: an occurrence snapshot must carry the
+  // exception override row's `updatedAt` (distinct from the series
+  // `updatedAt`) so only_this/this_and_future lifecycle commits can TOCTOU
+  // re-check the specific occurrence.
+  test('eventSnapshotByLocator occurrence carries exceptionUpdatedAt when an exception anchor exists',
+      () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    int nowMs() => anchor.millisecondsSinceEpoch;
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: nowMs,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final occ = (await service.occurrences(seriesId,
+        from: anchor, through: anchor)).single;
+    // Create an exception override anchor on this occurrence.
+    await service.editOnlyThis(
+      seriesId,
+      occ.occurrenceKey,
+      const OccurrenceOverride(title: OverrideValue.set('改名')),
+    );
+    final exception =
+        await service.existingOccurrenceAnchor(seriesId, occ.occurrenceKey);
+    expect(exception, isNotNull);
+
+    final locator = encodeCalendarEventLocator(RecurringOccurrenceLocator(
+      seriesId: seriesId,
+      occurrenceKey: occ.occurrenceKey,
+    ));
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    // The series version is carried on `updatedAt`.
+    final series = await service.seriesRow(seriesId);
+    expect(snapshot.updatedAt, series.updatedAt);
+    // The exception override version is carried distinctly.
+    expect(snapshot.exceptionUpdatedAt, exception!.updatedAt);
+  });
+
+  test('eventSnapshotByLocator occurrence has null exceptionUpdatedAt when no exception anchor exists',
+      () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final occ = (await service.occurrences(seriesId,
+        from: anchor, through: anchor)).single;
+    final locator = encodeCalendarEventLocator(RecurringOccurrenceLocator(
+      seriesId: seriesId,
+      occurrenceKey: occ.occurrenceKey,
+    ));
+    final snapshot = await gateway.eventSnapshotByLocator(locator);
+    expect(snapshot.exceptionUpdatedAt, isNull);
+  });
+
+  test(
+      'recurringLifecycle only_this delete with stale expectedExceptionUpdatedAt '
+      'throws StaleRecurringTarget', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    int nowMs() => anchor.millisecondsSinceEpoch;
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: nowMs,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final occ = (await service.occurrences(seriesId,
+        from: DateTime(2026, 8, 10), through: DateTime(2026, 8, 10, 23))).single;
+    // Seed an exception override anchor so there is a row whose version can
+    // drift between propose and commit.
+    await service.editOnlyThis(
+      seriesId,
+      occ.occurrenceKey,
+      const OccurrenceOverride(title: OverrideValue.set('改名')),
+    );
+    final exception =
+        await service.existingOccurrenceAnchor(seriesId, occ.occurrenceKey);
+    final series = await service.seriesRow(seriesId);
+    expect(
+      () => gateway.recurringLifecycle(
+        seriesId,
+        occurrenceKey: occ.occurrenceKey,
+        scope: RecurringActionScope.onlyThis,
+        action: RecurringLifecycleAction.delete,
+        expectedSeriesUpdatedAt: series.updatedAt,
+        // Propose-time version is stale relative to the current row.
+        expectedExceptionUpdatedAt: exception!.updatedAt - 1,
+      ),
+      throwsA(isA<StaleRecurringTarget>()),
+    );
+  });
+
+  test(
+      'recurringLifecycle only_this delete with current '
+      'expectedExceptionUpdatedAt succeeds', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    int nowMs() => anchor.millisecondsSinceEpoch;
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: nowMs,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final occ = (await service.occurrences(seriesId,
+        from: DateTime(2026, 8, 10), through: DateTime(2026, 8, 10, 23))).single;
+    await service.editOnlyThis(
+      seriesId,
+      occ.occurrenceKey,
+      const OccurrenceOverride(title: OverrideValue.set('改名')),
+    );
+    final exception =
+        await service.existingOccurrenceAnchor(seriesId, occ.occurrenceKey);
+    final series = await service.seriesRow(seriesId);
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: occ.occurrenceKey,
+      scope: RecurringActionScope.onlyThis,
+      action: RecurringLifecycleAction.delete,
+      expectedSeriesUpdatedAt: series.updatedAt,
+      expectedExceptionUpdatedAt: exception!.updatedAt,
+    );
+    final after =
+        await service.existingOccurrenceAnchor(seriesId, occ.occurrenceKey);
+    expect(after!.deletedAt, isNotNull);
+  });
+
   // =========================================================================
   // I2: TOCTOU content/version snapshot re-check on unlink/reminder/overlay
   // commits. The 3 commit paths must re-read and compare a propose-time
