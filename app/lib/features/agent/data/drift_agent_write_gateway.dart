@@ -577,7 +577,16 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   Future<TaskItem> taskById(String taskId) => _tasks.byId(taskId);
 
   @override
-  Future<PlanBlockItem> planBlockById(String planBlockId) => _planBlocks.byId(planBlockId);
+  Future<TaskItem> taskByIdIncludeDeleted(String taskId) =>
+      _tasks.byId(taskId, includeDeleted: true);
+
+  @override
+  Future<PlanBlockItem> planBlockById(String planBlockId) =>
+      _planBlocks.byId(planBlockId);
+
+  @override
+  Future<PlanBlockItem> planBlockByIdIncludeDeleted(String planBlockId) =>
+      _planBlocks.byId(planBlockId, includeDeleted: true);
 
   @override
   Future<void> updatePermissionPolicy({

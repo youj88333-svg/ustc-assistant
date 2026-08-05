@@ -135,7 +135,23 @@ abstract interface class AgentWriteGateway {
 
   Future<String?> courseSeriesIdForEvent(String eventId);
   Future<TaskItem> taskById(String taskId);
+
+  /// Deleted-inclusive task lookup for restore proposes. `taskById` filters
+  /// soft-deleted rows (so a restore propose on a soft-deleted target would
+  /// die with `TaskNotFoundError` before the proposal could form); this
+  /// variant reads the soft-deleted row so `UpdateTaskTool.propose` can form a
+  /// restore proposal. The commit still re-checks `expectedUpdatedAt` +
+  /// not-deleted state via `TaskLifecycleService.restore`. Account-scoped;
+  /// a foreign/missing id throws `TaskNotFoundError` like `taskById`.
+  Future<TaskItem> taskByIdIncludeDeleted(String taskId);
+
   Future<PlanBlockItem> planBlockById(String planBlockId);
+
+  /// Deleted-inclusive plan-block lookup for restore proposes — the
+  /// `planBlockById` analogue. See [taskByIdIncludeDeleted]. Account-scoped;
+  /// a foreign/missing id throws `PlanBlockNotFoundError`.
+  Future<PlanBlockItem> planBlockByIdIncludeDeleted(String planBlockId);
+
   Future<void> updatePermissionPolicy({required String actionType, required String targetType, required ConfirmationMode mode, required RiskLevel riskLevel, required bool enabled, required String updatedBy});
 
   // ---- Task lifecycle (complete/cancel exist above; reopen/restore added) ----

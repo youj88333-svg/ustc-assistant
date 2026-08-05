@@ -19,7 +19,9 @@ import 'package:ustc_assistant_app/features/schedule/application/effective_event
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
 import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 
@@ -969,6 +971,81 @@ void main() {
           ..where((r) => r.id.equals('ev-1')))
         .getSingle();
     expect(row.deletedAt, isNull);
+  });
+
+  // =========================================================================
+  // I4: deleted-inclusive lookups for restore proposes. `taskById` /
+  // `planBlockById` filter soft-deleted rows (so a restore propose on a
+  // soft-deleted target used to die with TaskNotFoundError/PlanBlockNotFoundError
+  // before the proposal could even form). The *IncludeDeleted variants read
+  // the soft-deleted row so UpdateTaskTool/UpdatePlanBlockTool can form a
+  // restore proposal; the commit still re-checks expectedUpdatedAt + state.
+  // =========================================================================
+
+  test('taskById throws TaskNotFoundError for a soft-deleted task', () async {
+    await seedTask('t1');
+    await db.customStatement(
+        "UPDATE tasks SET deleted_at = 1 WHERE id = 't1'");
+    await expectLater(gateway.taskById('t1'), throwsA(isA<TaskNotFoundError>()));
+  });
+
+  test('taskByIdIncludeDeleted returns a soft-deleted task', () async {
+    await seedTask('t1');
+    await db.customStatement(
+        "UPDATE tasks SET deleted_at = 1, updated_at = 5 WHERE id = 't1'");
+    final task = await gateway.taskByIdIncludeDeleted('t1');
+    expect(task.id, 't1');
+    expect(task.title, 'Task t1');
+    expect(task.updatedAt, 5);
+    // The deletedAt timestamp is visible through the inclusive lookup so the
+    // restore preview can surface "当前状态：已删除".
+    final row = await (db.select(db.tasks)..where((r) => r.id.equals('t1')))
+        .getSingle();
+    expect(row.deletedAt, isNotNull);
+  });
+
+  test('taskByIdIncludeDeleted throws TaskNotFoundError for a foreign account',
+      () async {
+    await seedTask('t1');
+    final foreign = DriftAgentWriteGateway(
+      database: db,
+      accountId: 'acc-other',
+      policy: policy,
+      now: () => 1_700_000_000_000,
+    );
+    await expectLater(
+        foreign.taskByIdIncludeDeleted('t1'), throwsA(isA<TaskNotFoundError>()));
+  });
+
+  test('planBlockById throws PlanBlockNotFoundError for a soft-deleted block',
+      () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1', deletedAt: 5);
+    await expectLater(
+        gateway.planBlockById('pb1'), throwsA(isA<PlanBlockNotFoundError>()));
+  });
+
+  test('planBlockByIdIncludeDeleted returns a soft-deleted block', () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1', deletedAt: 5);
+    final block = await gateway.planBlockByIdIncludeDeleted('pb1');
+    expect(block.id, 'pb1');
+    expect(block.taskId, 't1');
+    expect(block.updatedAt, 1);
+  });
+
+  test('planBlockByIdIncludeDeleted throws PlanBlockNotFoundError for a foreign account',
+      () async {
+    await seedTask('t1');
+    await seedPlanBlock('pb1', 't1', deletedAt: 5);
+    final foreign = DriftAgentWriteGateway(
+      database: db,
+      accountId: 'acc-other',
+      policy: policy,
+      now: () => 1_700_000_000_000,
+    );
+    await expectLater(foreign.planBlockByIdIncludeDeleted('pb1'),
+        throwsA(isA<PlanBlockNotFoundError>()));
   });
 
   // =========================================================================

@@ -259,13 +259,11 @@ DB id 不泄漏给模型。本轮未改动该路径。
 ### 9.6 残余限制
 
 - Agent `update_task(action=restore)` / `update_plan_block(action=restore)` 的 propose
-  经 `taskById`/`planBlockById`（默认过滤已删除行），因此对已删除目标的 Agent-tool
-  restore 在 propose 阶段不可读。生产恢复路径由管理 UI 的授权
-  `TaskLifecycleService.restore`/`PlanBlockService.restore`（`includeDeleted: true`）承担，
-  本轮组合测试按此生产路径断言。这是 Task 9 写工具实现的一个既有特性边界，不是本轮
-  新增回归；如需 Agent 工具可直接 restore 已删除目标，需后续在
-  `DriftAgentWriteGateway.taskById/planBlockById` 为 restore action 启用
-  `includeDeleted`（属新功能，超出 Task 12 范围）。
+  现经 `taskByIdIncludeDeleted`/`planBlockByIdIncludeDeleted`（含软删行）可达，commit
+  仍由 `TaskLifecycleService.restore`/`PlanBlockService.restore` 重检
+  `expectedUpdatedAt` + 未删状态（`already_active`/`stale_target`）；非 restore 动作
+  （complete/cancel/reopen/delete 与 done/skip/cancel/delete）保持过滤查找，已删目标
+  仍 `target_not_found`。I4 修复后 Agent 工具与管理 UI 两条恢复路径均可达。
 - Agent 写入使用 `NoopUndoRecorder`，故 `undo_last_action` 只撤回用户最近一次可撤回操作，
   不撤回 Agent 写入（设计意图，非缺陷）。
 - 既有 13 项 `flutter analyze` info/warning 未在本轮清理（位于未改动文件，避免无关扩散）。

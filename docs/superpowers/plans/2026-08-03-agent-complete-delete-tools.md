@@ -652,8 +652,10 @@ Tasks 1–11 在 `feature/delete-tools` 分支逐 Task 提交并各自独立审�
   `app/build/windows/x64/runner/Release/ustc_assistant_app.exe`。
 - **人工验收**：新建 `docs/agent-complete-delete-tools-retest-2026-08-03.md`，每个
   `完成：` 均留空，未代填。自动测试通过 ≠ 人工验收通过；真实人工验收尚未执行。
-- **残余限制**：Agent `update_task(restore)`/`update_plan_block(restore)` propose 经
-  `taskById/planBlockById`（默认过滤已删除行），生产恢复由管理 UI 授权路径承担；
+- **残余限制**：Agent `update_task(restore)`/`update_plan_block(restore)` propose 现经
+  `taskByIdIncludeDeleted/planBlockByIdIncludeDeleted`（含软删行）可达，commit 仍由
+  `TaskLifecycleService.restore`/`PlanBlockService.restore` 重检 `expectedUpdatedAt` +
+  未删状态（`already_active`/`stale_target`），非 restore 动作保持过滤查找；
   Agent 写入用 `NoopUndoRecorder`，`undo_last_action` 只撤回用户最近一次可撤回操作；
   既有 13 项 analyze info/warning 未清理（位于未改动文件）。
 - **最终工作树**：`git status --short` 见

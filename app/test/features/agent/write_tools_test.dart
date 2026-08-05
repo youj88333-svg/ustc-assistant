@@ -23,7 +23,8 @@ import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
-import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart' show NotDeletedError;
+import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart'
+    show NotDeletedError, PlanBlockNotFoundError, StalePlanBlockCommand;
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
 import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
@@ -455,18 +456,75 @@ class _LifecycleGateway implements AgentWriteGateway {
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 
+  /// I4: simulate the soft-delete filter on the real gateway. `taskById`
+  /// filters deleted rows (throws TaskNotFoundError); `taskByIdIncludeDeleted`
+  /// returns the row regardless. Tests mark a task as soft-deleted via
+  /// [softDeleteTask]; `restoreTask` clears the flag and re-checks the
+  /// propose-time version + not-deleted state, mirroring
+  /// TaskLifecycleService.restore.
+  final Set<String> deletedTaskIds = {};
+  final Map<String, int> taskUpdatedAt = {};
+  int taskByIdUpdatedAt = 1;
+  Object? restoreTaskThrows;
+
+  void markTaskDeleted(String taskId, {int? updatedAt}) {
+    deletedTaskIds.add(taskId);
+    if (updatedAt != null) taskUpdatedAt[taskId] = updatedAt;
+  }
+
   @override
-  Future<TaskItem> taskById(String taskId) async => TaskItem(
+  Future<TaskItem> taskById(String taskId) async {
+    if (deletedTaskIds.contains(taskId)) throw TaskNotFoundError();
+    return TaskItem(
+      id: taskId,
+      title: '准备考试',
+      state: TaskState.active,
+      importance: TaskImportance.normal,
+      createdAt: 1,
+      updatedAt: taskUpdatedAt[taskId] ?? taskByIdUpdatedAt,
+    );
+  }
+
+  @override
+  Future<TaskItem> taskByIdIncludeDeleted(String taskId) async => TaskItem(
         id: taskId,
         title: '准备考试',
         state: TaskState.active,
         importance: TaskImportance.normal,
         createdAt: 1,
-        updatedAt: 1,
+        updatedAt: taskUpdatedAt[taskId] ?? taskByIdUpdatedAt,
       );
 
+  final Set<String> deletedPlanBlockIds = {};
+  final Map<String, int> planBlockUpdatedAt = {};
+  int planBlockByIdUpdatedAt = 1;
+  Object? restorePlanBlockThrows;
+
+  void markPlanBlockDeleted(String blockId, {int? updatedAt}) {
+    deletedPlanBlockIds.add(blockId);
+    if (updatedAt != null) planBlockUpdatedAt[blockId] = updatedAt;
+  }
+
   @override
-  Future<PlanBlockItem> planBlockById(String planBlockId) async => PlanBlockItem(
+  Future<PlanBlockItem> planBlockById(String planBlockId) async {
+    if (deletedPlanBlockIds.contains(planBlockId)) {
+      throw PlanBlockNotFoundError();
+    }
+    return PlanBlockItem(
+      id: planBlockId,
+      taskId: 't1',
+      startAt: DateTime(2026, 8, 4, 9),
+      endAt: DateTime(2026, 8, 4, 10),
+      status: PlanBlockStatus.accepted,
+      locked: false,
+      createdAt: 1,
+      updatedAt: planBlockUpdatedAt[planBlockId] ?? planBlockByIdUpdatedAt,
+    );
+  }
+
+  @override
+  Future<PlanBlockItem> planBlockByIdIncludeDeleted(String planBlockId) async =>
+      PlanBlockItem(
         id: planBlockId,
         taskId: 't1',
         startAt: DateTime(2026, 8, 4, 9),
@@ -474,7 +532,7 @@ class _LifecycleGateway implements AgentWriteGateway {
         status: PlanBlockStatus.accepted,
         locked: false,
         createdAt: 1,
-        updatedAt: 1,
+        updatedAt: planBlockUpdatedAt[planBlockId] ?? planBlockByIdUpdatedAt,
       );
 
   /// Propose-phase event version read (reuses C3's EventWriteSnapshot.updatedAt).
@@ -536,8 +594,20 @@ class _LifecycleGateway implements AgentWriteGateway {
       reopenedTaskId = id;
 
   @override
-  Future<void> restoreTask(String id, {required int expectedUpdatedAt}) async =>
-      restoredTaskId = id;
+  Future<void> restoreTask(String id, {required int expectedUpdatedAt}) async {
+    final e = restoreTaskThrows;
+    if (e != null) throw e;
+    // Commit-time re-check mirroring TaskLifecycleService.restore: a version
+    // mismatch -> StaleTaskCommand; a non-deleted task -> IllegalTaskTransition
+    // (which _mapTransition maps to already_active).
+    final current = taskUpdatedAt[id] ?? taskByIdUpdatedAt;
+    if (current != expectedUpdatedAt) throw StaleTaskCommand();
+    if (!deletedTaskIds.contains(id)) {
+      throw const IllegalTaskTransition('task is not deleted');
+    }
+    deletedTaskIds.remove(id);
+    restoredTaskId = id;
+  }
 
   @override
   Future<void> markPlanBlockDone(String id,
@@ -558,13 +628,17 @@ class _LifecycleGateway implements AgentWriteGateway {
           {required int expectedUpdatedAt}) async =>
       softDeletedBlockId = id;
 
-  Object? restorePlanBlockThrows;
-
   @override
   Future<void> restorePlanBlock(String id,
           {required int expectedUpdatedAt}) async {
     final e = restorePlanBlockThrows;
     if (e != null) throw e;
+    // Commit-time re-check mirroring PlanBlockService.restore: a version
+    // mismatch -> StalePlanBlockCommand; a non-deleted block -> NotDeletedError.
+    final current = planBlockUpdatedAt[id] ?? planBlockByIdUpdatedAt;
+    if (current != expectedUpdatedAt) throw StalePlanBlockCommand();
+    if (!deletedPlanBlockIds.contains(id)) throw const NotDeletedError();
+    deletedPlanBlockIds.remove(id);
     restoredBlockId = id;
   }
 
@@ -2855,6 +2929,140 @@ void main() {
       final commitResult = await result.pendingInvocation!.result;
       expect(commitResult.status, AgentToolStatus.error);
       expect(commitResult.errorCode, 'already_active');
+    });
+
+    // =========================================================================
+    // I4: Agent update_task/update_plan_block (restore) must be reachable on
+    // soft-deleted targets. The propose phase uses the deleted-inclusive lookup
+    // for restore actions; non-restore actions keep the filtered lookup. The
+    // commit re-checks expectedUpdatedAt + not-deleted state.
+    // =========================================================================
+
+    test(
+        'I4: update_task restore on a soft-deleted task proposes and commits',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      gw.markTaskDeleted('t1'); // filtered out of taskById
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'restore'}, h.ctx());
+      // Propose must succeed (not tool_execution_failed) — the inclusive lookup
+      // resolves the soft-deleted target.
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.success);
+      expect(commitResult.payload['action'], 'restore');
+      expect(gw.restoredTaskId, 't1');
+      expect(gw.deletedTaskIds.contains('t1'), isFalse);
+    });
+
+    test(
+        'I4: update_plan_block restore on a soft-deleted block proposes and commits',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_plan_block') as UpdatePlanBlockTool;
+      final gw = _LifecycleGateway();
+      gw.markPlanBlockDeleted('pb1'); // filtered out of planBlockById
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'planblock', localId: 'pb1');
+      final result = await tool.execute(
+          {'ref_plan_block': ref, 'action': 'restore'}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.success);
+      expect(commitResult.payload['action'], 'restore');
+      expect(gw.restoredBlockId, 'pb1');
+      expect(gw.deletedPlanBlockIds.contains('pb1'), isFalse);
+    });
+
+    test('I4: update_task restore on a non-deleted task maps to already_active',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      // t1 is NOT marked deleted -> taskById returns it (inclusive lookup also
+      // returns it), but the commit-time not-deleted check throws
+      // IllegalTaskTransition -> already_active.
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'restore'}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'already_active');
+    });
+
+    test(
+        'I4: update_task complete on a soft-deleted task stays filtered (not restored)',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      gw.markTaskDeleted('t1'); // filtered; complete keeps taskById (filtered)
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      // Non-restore actions keep the filtered lookup: propose throws
+      // TaskNotFoundError (uncaught by execute -> the registry would map it to
+      // tool_execution_failed). The restore path is the only one that uses the
+      // inclusive lookup, so complete must NOT reach commit.
+      await expectLater(
+        tool.execute({'ref_task': ref, 'action': 'complete'}, h.ctx()),
+        throwsA(isA<TaskNotFoundError>()),
+      );
+      expect(gw.completedTaskId, isNull);
+    });
+
+    test(
+        'I4: update_task restore TOCTOU (updatedAt bumped before commit) -> stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_task') as UpdateTaskTool;
+      final gw = _LifecycleGateway();
+      // Soft-deleted with propose-time updatedAt = 1.
+      gw.markTaskDeleted('t1');
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'task', localId: 't1');
+      final result = await tool.execute(
+          {'ref_task': ref, 'action': 'restore'}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      // Bump the row version between propose and commit.
+      gw.taskUpdatedAt['t1'] = 99;
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'stale_target');
+      expect(gw.restoredTaskId, isNull);
+    });
+
+    test(
+        'I4: update_plan_block restore TOCTOU (updatedAt bumped before commit) -> stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('update_plan_block') as UpdatePlanBlockTool;
+      final gw = _LifecycleGateway();
+      gw.markPlanBlockDeleted('pb1');
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'planblock', localId: 'pb1');
+      final result = await tool.execute(
+          {'ref_plan_block': ref, 'action': 'restore'}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      gw.planBlockUpdatedAt['pb1'] = 99;
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'stale_target');
+      expect(gw.restoredBlockId, isNull);
     });
 
     // P1-2: recurring lifecycle commit errors map deterministically.

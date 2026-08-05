@@ -237,7 +237,16 @@ class UpdateTaskTool extends AgentWriteTool {
     final action = r.requiredEnum('action',
         const {'complete', 'cancel', 'reopen', 'delete', 'restore'});
 
-    final task = await gateway.taskById(taskId);
+    // I4: a restore targets a soft-deleted row, which `taskById` filters out.
+    // Use the deleted-inclusive lookup for restore so the proposal can form;
+    // the commit still re-checks expectedUpdatedAt + not-deleted state via
+    // TaskLifecycleService.restore (IllegalTaskTransition -> already_active,
+    // StaleTaskCommand -> stale_target). Non-restore actions keep the filtered
+    // lookup so complete/cancel/reopen/delete on a deleted row stays
+    // target_not_found.
+    final task = action == 'restore'
+        ? await gateway.taskByIdIncludeDeleted(taskId)
+        : await gateway.taskById(taskId);
     final (actionType, risk, label) = _actionPolicy(action);
     final actionZh = _actionZh(action);
     return AgentWriteProposal(
@@ -392,7 +401,16 @@ class UpdatePlanBlockTool extends AgentWriteTool {
       throw const FormatException('note is only allowed with done/skip');
     }
 
-    final block = await gateway.planBlockById(blockId);
+    // I4: a restore targets a soft-deleted block, which `planBlockById`
+    // filters out. Use the deleted-inclusive lookup for restore so the
+    // proposal can form; the commit still re-checks expectedUpdatedAt +
+    // not-deleted state via PlanBlockService.restore (NotDeletedError ->
+    // already_active, StalePlanBlockCommand -> stale_target). Non-restore
+    // actions keep the filtered lookup so done/skip/cancel/delete on a deleted
+    // block stays target_not_found.
+    final block = action == 'restore'
+        ? await gateway.planBlockByIdIncludeDeleted(blockId)
+        : await gateway.planBlockById(blockId);
     final (actionType, risk) = _actionPolicy(action);
     final actionZh = _actionZh(action);
     final title = (block.title != null && block.title!.isNotEmpty)
