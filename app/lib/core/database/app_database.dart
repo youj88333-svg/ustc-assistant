@@ -139,7 +139,21 @@ class AppDatabase extends _$AppDatabase {
       // task_event_links.target_id takes the old event_id, series default
       // offsets are [15] for timed and [] for all-day, and every new
       // occurrence-exception column is left NULL.
-      if (from >= 6 && from < 7) {
+      //
+      // Drift's onUpgrade is invoked once with `from` set to the database's
+      // stored schema version, so this branch must cover EVERY pre-v7 database
+      // (v1 through v6), not only v6. The calendar_event_series,
+      // task_event_links, schedule_relations and reminders tables have existed
+      // since the schedule/task schema commit (pre-v2), so every upgrading
+      // database already has them; addColumn and the three TableMigration
+      // rebuilds are idempotent on a v6 database -- addColumn is a no-op
+      // against the already-present reminder_offsets_json, the UPDATE
+      // rewrites the same v6 default ([15] timed / [] all-day), and each
+      // TableMigration re-creates the table with the v7 definition that a v6
+      // row already satisfies (event backing left_event_id=left_id with a NULL
+      // occurrence_exception_id). The `from >= 3 && from < 6` tool_invocations
+      // guard above is intentionally left untouched.
+      if (from < 7) {
         await migrator.addColumn(
           calendarEventSeries,
           calendarEventSeries.reminderOffsetsJson,
