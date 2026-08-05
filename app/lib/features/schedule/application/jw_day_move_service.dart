@@ -25,6 +25,7 @@ class JwDayMoveService {
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -32,6 +33,12 @@ class JwDayMoveService {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`. Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   /// The eligible course titles for [sourceDate] plus the existing move target
@@ -68,16 +75,7 @@ class JwDayMoveService {
               updatedAt: timestamp,
             ),
           );
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: existing == null ? 'jw_day_move' : 'jw_day_move_retarget',
-        result: 'success',
-        safeSummary: existing == null
-            ? 'Moved the whole day of JW courses.'
-            : 'Retargeted a whole-day JW course move.',
-        occurredAt: timestamp,
-      );
+      await _logMove(existing == null, timestamp);
       await undoRecorder.record(
         UndoCommand(
           kind: 'jw_day_move',
@@ -104,14 +102,7 @@ class JwDayMoveService {
         ))
         .go();
       final timestamp = now();
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: 'jw_day_move_clear',
-        result: 'success',
-        safeSummary: 'Cleared a whole-day JW course move.',
-        occurredAt: timestamp,
-      );
+      await _logClear(timestamp);
       await undoRecorder.record(
         UndoCommand(
           kind: 'jw_day_move',
@@ -124,6 +115,32 @@ class JwDayMoveService {
         ),
       );
     });
+  }
+
+  Future<void> _logMove(bool isNew, int timestamp) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: isNew ? 'jw_day_move' : 'jw_day_move_retarget',
+      result: 'success',
+      safeSummary: isNew
+          ? 'Moved the whole day of JW courses.'
+          : 'Retargeted a whole-day JW course move.',
+      occurredAt: timestamp,
+    );
+  }
+
+  Future<void> _logClear(int timestamp) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: 'jw_day_move_clear',
+      result: 'success',
+      safeSummary: 'Cleared a whole-day JW course move.',
+      occurredAt: timestamp,
+    );
   }
 
   /// The eligible courses of [sourceDate]: `source == ustc_jw`, timed

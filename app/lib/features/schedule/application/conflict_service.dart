@@ -111,6 +111,7 @@ class ConflictService {
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -118,6 +119,12 @@ class ConflictService {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`. Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   Future<void> classifyPair(
@@ -665,8 +672,9 @@ class ConflictService {
     return ScheduleConflictProjection.resolvePair(a, b, filtered);
   }
 
-  Future<void> _logRelationRemoval(String kind, String? state) =>
-      database.actionLogsRepository.append(
+  Future<void> _logRelationRemoval(String kind, String? state) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
         accountId: accountId,
         source: 'user',
         actionType: kind == 'rule'
@@ -678,6 +686,7 @@ class ConflictService {
             : 'Deleted an event-pair conflict relation.',
         occurredAt: now(),
       );
+  }
 
   Future<void> _classifyOccurrence(
     ScheduleConflictParticipant a,
@@ -867,8 +876,9 @@ class ConflictService {
     });
   }
 
-  Future<void> _logClassification(ConflictState state) =>
-      database.actionLogsRepository.append(
+  Future<void> _logClassification(ConflictState state) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
         accountId: accountId,
         source: 'user',
         actionType: 'conflict_classification',
@@ -876,6 +886,7 @@ class ConflictService {
         safeSummary: 'Updated an event-pair classification to ${state.name}.',
         occurredAt: now(),
       );
+  }
 
   (ScheduleConflictParticipant, ScheduleConflictParticipant)
       _canonicalParticipants(

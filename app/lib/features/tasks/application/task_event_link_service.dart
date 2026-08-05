@@ -37,6 +37,7 @@ class TaskEventLinkService {
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -44,6 +45,12 @@ class TaskEventLinkService {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`. Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
 
   /// Removes the `(taskId, eventId)` `related` link for the account.
   ///
@@ -83,14 +90,7 @@ class TaskEventLinkService {
                 row.eventId.equals(eventId),
           ))
           .go();
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: 'unlink_task_event',
-        result: 'success',
-        safeSummary: 'Unlinked a task from an event.',
-        occurredAt: now(),
-      );
+      await _logUnlink();
       await undoRecorder.record(
         UndoCommand(
           kind: 'unlink_task_event',
@@ -110,6 +110,18 @@ class TaskEventLinkService {
         ),
       );
     });
+  }
+
+  Future<void> _logUnlink() {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: 'unlink_task_event',
+      result: 'success',
+      safeSummary: 'Unlinked a task from an event.',
+      occurredAt: now(),
+    );
   }
 
   Future<CalendarEvent?> _eventRow(String eventId) =>

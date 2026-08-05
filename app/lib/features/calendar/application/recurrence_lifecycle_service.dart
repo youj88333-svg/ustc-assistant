@@ -134,6 +134,7 @@ class RecurringLifecycleService {
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -141,10 +142,20 @@ class RecurringLifecycleService {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`. Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
-  RecurrenceService get _recurrence =>
-      RecurrenceService(database: database, accountId: accountId, now: now);
+  RecurrenceService get _recurrence => RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: now,
+        logToActionLog: logToActionLog,
+      );
 
   static const int _horizonDays = 366;
 
@@ -958,7 +969,9 @@ class RecurringLifecycleService {
   Future<void> _log(
     RecurringLifecycleAction action,
     RecurringActionScope scope,
-  ) => database.actionLogsRepository.append(
+  ) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
         accountId: accountId,
         source: 'user',
         actionType: 'calendar_recurring_${action.name}',
@@ -966,6 +979,7 @@ class RecurringLifecycleService {
         safeSummary: _safeSummary(action, scope.label),
         occurredAt: now(),
       );
+  }
 
   Future<void> _recordUndo(
     RecurringLifecycleAction action,

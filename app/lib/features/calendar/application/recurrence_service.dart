@@ -214,11 +214,18 @@ class RecurrenceService {
     required this.database,
     required this.accountId,
     int Function()? now,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final AppDatabase database;
   final String accountId;
   final int Function() now;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   Future<String> createSeries({
@@ -847,8 +854,9 @@ void _validateAnchor(PersonalEvent anchor, RecurrenceRule rule) {
     }
   }
 
-  Future<void> _log(String actionType, String summary) =>
-      database.actionLogsRepository.append(
+  Future<void> _log(String actionType, String summary) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
         accountId: accountId,
         source: 'user',
         actionType: actionType,
@@ -856,4 +864,5 @@ void _validateAnchor(PersonalEvent anchor, RecurrenceRule rule) {
         safeSummary: summary,
         occurredAt: now(),
       );
+  }
 }

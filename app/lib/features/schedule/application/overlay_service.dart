@@ -105,6 +105,7 @@ class OverlayService {
     required this.accountId,
     int Function()? now,
     UndoRecorder? undoRecorder,
+    this.logToActionLog = true,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch),
        undoRecorder = undoRecorder ?? const NoopUndoRecorder();
 
@@ -112,6 +113,12 @@ class OverlayService {
   final String accountId;
   final int Function() now;
   final UndoRecorder undoRecorder;
+
+  /// When false, the service-internal `source=user` ActionLog is suppressed so
+  /// an Agent Gateway call can own the single `source=agent` business log
+  /// (written by the outer atomic commit). UI user operations keep the default
+  /// `true`. Undo snapshots are ALWAYS recorded regardless of this flag.
+  final bool logToActionLog;
   static const _uuid = Uuid();
 
   Future<void> setEventAttendance(String eventId, AttendancePolicy policy) =>
@@ -196,16 +203,7 @@ class OverlayService {
       // No overlay row means the target is already at pure defaults — there is
       // nothing to clear. A successful no-op (absent == default).
       if (existing == null) {
-        await database.actionLogsRepository.append(
-          accountId: accountId,
-          source: 'user',
-          actionType: 'user_overlay_update',
-          result: 'success',
-          safeSummary: eventId == null
-              ? 'Updated course preferences.'
-              : 'Updated event preferences.',
-          occurredAt: timestamp,
-        );
+        await _logOverlay(eventId == null, timestamp);
         return;
       }
 
@@ -225,16 +223,7 @@ class OverlayService {
         await _updateOverlayRow(existing, after, timestamp);
       }
 
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: 'user_overlay_update',
-        result: 'success',
-        safeSummary: eventId == null
-            ? 'Updated course preferences.'
-            : 'Updated event preferences.',
-        occurredAt: timestamp,
-      );
+      await _logOverlay(eventId == null, timestamp);
       // Undo captures the complete before row; restoring it reproduces the
       // pre-clear state even when the row was physically deleted.
       await undoRecorder.record(
@@ -348,16 +337,7 @@ class OverlayService {
               updatedAt: timestamp,
             ),
           );
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: 'user',
-        actionType: 'user_overlay_update',
-        result: 'success',
-        safeSummary: eventId == null
-            ? 'Updated course preferences.'
-            : 'Updated event preferences.',
-        occurredAt: timestamp,
-      );
+      await _logOverlay(eventId == null, timestamp);
       await undoRecorder.record(
         UndoCommand(
           kind: 'user_overlay_update',
@@ -370,6 +350,20 @@ class OverlayService {
         ),
       );
     });
+  }
+
+  Future<void> _logOverlay(bool isSeriesTarget, int timestamp) {
+    if (!logToActionLog) return Future<void>.value();
+    return database.actionLogsRepository.append(
+      accountId: accountId,
+      source: 'user',
+      actionType: 'user_overlay_update',
+      result: 'success',
+      safeSummary: isSeriesTarget
+          ? 'Updated course preferences.'
+          : 'Updated event preferences.',
+      occurredAt: timestamp,
+    );
   }
 
   Future<void> _requireOwnedTarget({

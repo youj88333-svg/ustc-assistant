@@ -45,33 +45,35 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   static const _uuid = Uuid();
 
   CalendarEventService get _events =>
-      CalendarEventService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      CalendarEventService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
   TaskLifecycleService get _tasks =>
-      TaskLifecycleService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      TaskLifecycleService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
   PlanBlockService get _planBlocks =>
-      PlanBlockService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      PlanBlockService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
   OverlayService get _overlays =>
-      OverlayService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      OverlayService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
   RecurrenceService get _recurrence =>
-      RecurrenceService(database: database, accountId: accountId, now: now);
+      RecurrenceService(database: database, accountId: accountId, now: now, logToActionLog: false);
   RecurringLifecycleService get _lifecycle => RecurringLifecycleService(
         database: database,
         accountId: accountId,
         now: now,
+        logToActionLog: false,
       );
   ReminderOverrideService get _reminders =>
       ReminderOverrideService(database: database, accountId: accountId, undoRecorder: _noopUndo, now: now);
   ConflictService get _conflicts =>
-      ConflictService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      ConflictService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
   TaskEventLinkService get _links => TaskEventLinkService(
         database: database,
         accountId: accountId,
         now: now,
         undoRecorder: _noopUndo,
+        logToActionLog: false,
       );
   UndoService get _undo => UndoService(database: database, accountId: accountId, now: now);
   JwDayMoveService get _dayMoves =>
-      JwDayMoveService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo);
+      JwDayMoveService(database: database, accountId: accountId, now: now, undoRecorder: _noopUndo, logToActionLog: false);
 
   @override
   Future<String> createEvent(PersonalEvent event, {List<int>? reminderOffsetsMinutes}) =>

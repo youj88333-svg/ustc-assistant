@@ -1371,4 +1371,359 @@ void main() {
     expect(preview.summary, '删除日程 健身');
     expect(preview.kind, 'calendar_event_delete');
   });
+
+  // =========================================================================
+  // C4: Agent lifecycle/clear/unlink writes must NOT produce a duplicate
+  // `source='user'` ActionLog from the inner service. The outer
+  // `commitAgentWriteAtomically` owns the single authoritative
+  // `source='agent'` business log. The gateway constructs its services with
+  // `logToActionLog: false`; UI-direct services keep the default `true`.
+  // =========================================================================
+
+  /// Counts ActionLog rows for the account matching [source] and (optionally)
+  /// [actionType].
+  Future<int> countLogs(String source, {String? actionType}) async {
+    final q = db.select(db.actionLogs)
+      ..where((r) =>
+          r.accountId.equals('acc-1') & r.source.equals(source));
+    if (actionType != null) {
+      q.where((r) => r.actionType.equals(actionType));
+    }
+    return (await q.get()).length;
+  }
+
+  /// The authoritative outer Agent commit log (mirrors what
+  /// `commitAgentWriteAtomically` writes via `policy.logAgentWrite`).
+  Future<void> writeAgentCommitLog(String actionType) => policy.logAgentWrite(
+        accountId: 'acc-1',
+        actionType: actionType,
+        riskLevel: 'medium',
+        result: 'success',
+        safeSummary: 'Agent write',
+      );
+
+  Future<String> seedEvent(String id) async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: id,
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    // createEvent itself goes through the gateway; clear its inner
+    // `calendar_event_create` user log so it does not pollute the assertions
+    // about the lifecycle action that follows.
+    await db.customStatement(
+        "DELETE FROM action_logs WHERE source='user' AND action_type='calendar_event_create'");
+    return id;
+  }
+
+  test(
+      'C4: gateway.cancelEvent suppresses the inner source=user '
+      'calendar_event_cancel log', () async {
+    await seedEvent('ev-1');
+    await gateway.cancelEvent('ev-1');
+    expect(await countLogs('user', actionType: 'calendar_event_cancel'), 0);
+  });
+
+  test(
+      'C4: gateway.softDeleteEvent suppresses the inner source=user '
+      'calendar_event_delete log', () async {
+    await seedEvent('ev-1');
+    await gateway.softDeleteEvent('ev-1');
+    expect(await countLogs('user', actionType: 'calendar_event_delete'), 0);
+  });
+
+  test(
+      'C4: gateway.restoreEvent suppresses the inner source=user '
+      'calendar_event_restore log', () async {
+    await seedEvent('ev-1');
+    await gateway.softDeleteEvent('ev-1');
+    await gateway.restoreEvent('ev-1');
+    expect(await countLogs('user', actionType: 'calendar_event_restore'), 0);
+  });
+
+  test(
+      'C4: a full Agent lifecycle commit produces exactly one source=agent '
+      'row and zero inner source=user business rows', () async {
+    await seedEvent('ev-1');
+    await gateway.cancelEvent('ev-1');
+    await writeAgentCommitLog('event_cancel');
+    expect(await countLogs('user', actionType: 'calendar_event_cancel'), 0);
+    expect(await countLogs('agent', actionType: 'event_cancel'), 1);
+  });
+
+  test(
+      'C4: UI-direct CalendarEventService.cancel (default logToActionLog=true) '
+      'still writes the source=user calendar_event_cancel row', () async {
+    final id = await seedEvent('ev-ui');
+    final service = CalendarEventService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => 1_700_000_000_000,
+    );
+    await service.cancel(id);
+    expect(await countLogs('user', actionType: 'calendar_event_cancel'), 1);
+  });
+
+  test(
+      'C4: gateway recurringLifecycle cancel whole_series suppresses the inner '
+      'source=user calendar_recurring_cancel log', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    await db.customStatement(
+        "DELETE FROM action_logs WHERE source='user' AND action_type='calendar_series_create'");
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: null,
+      scope: RecurringActionScope.wholeSeries,
+      action: RecurringLifecycleAction.cancel,
+    );
+    expect(await countLogs('user', actionType: 'calendar_recurring_cancel'), 0);
+  });
+
+  test(
+      'C4: gateway recurringLifecycle delete only_this suppresses the inner '
+      'source=user calendar_recurring_delete log', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    await db.customStatement(
+        "DELETE FROM action_logs WHERE source='user' AND action_type='calendar_series_create'");
+    final occurrence = (await service.occurrences(
+      seriesId,
+      from: DateTime(2026, 8, 10),
+      through: DateTime(2026, 8, 10, 23),
+    )).single;
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: occurrence.occurrenceKey,
+      scope: RecurringActionScope.onlyThis,
+      action: RecurringLifecycleAction.delete,
+    );
+    expect(await countLogs('user', actionType: 'calendar_recurring_delete'), 0);
+  });
+
+  test(
+      'C4: gateway recurringLifecycle restore whole_series suppresses the inner '
+      'source=user calendar_recurring_restore log + one source=agent', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    await db.customStatement(
+        "DELETE FROM action_logs WHERE source='user' AND action_type='calendar_series_create'");
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: null,
+      scope: RecurringActionScope.wholeSeries,
+      action: RecurringLifecycleAction.delete,
+    );
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: null,
+      scope: RecurringActionScope.wholeSeries,
+      action: RecurringLifecycleAction.restore,
+    );
+    await writeAgentCommitLog('recurring_restore');
+    expect(await countLogs('user', actionType: 'calendar_recurring_restore'), 0);
+    expect(await countLogs('agent', actionType: 'recurring_restore'), 1);
+  });
+
+  test(
+      'C4: UI-direct RecurringLifecycleService cancel (default logToActionLog) '
+      'still writes the source=user calendar_recurring_cancel row', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final createService = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await createService.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    await db.customStatement(
+        "DELETE FROM action_logs WHERE source='user' AND action_type='calendar_series_create'");
+    final lifecycle = RecurringLifecycleService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    await lifecycle.cancelSeries(seriesId);
+    expect(await countLogs('user', actionType: 'calendar_recurring_cancel'), 1);
+  });
+
+  test(
+      'C4: gateway.clearReminders suppresses no inner source=user log '
+      '(ReminderOverrideService writes none) + one source=agent', () async {
+    await seedEvent('ev-1');
+    await gateway.setReminder('ev-1', const [15, 30]);
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.clearReminders(
+        targetType: 'event', targetId: 'ev-1', scope: 'all');
+    await writeAgentCommitLog('clear_reminders');
+    expect(await countLogs('user'), 0);
+    expect(await countLogs('agent', actionType: 'clear_reminders'), 1);
+  });
+
+  test(
+      'C4: gateway.clearOverlayFields suppresses the inner source=user '
+      'user_overlay_update log + one source=agent', () async {
+    await seedEvent('ev-1');
+    await gateway.setEventOverlay(
+      'ev-1',
+      const OverlayMutation(displayTitle: '健身改', importance: 'high'),
+    );
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.clearOverlayFields(
+        eventId: 'ev-1', fields: const ['display_title']);
+    await writeAgentCommitLog('clear_overlay_fields');
+    expect(await countLogs('user', actionType: 'user_overlay_update'), 0);
+    expect(await countLogs('agent', actionType: 'clear_overlay_fields'), 1);
+  });
+
+  test(
+      'C4: gateway.deleteConflictRelation suppresses the inner source=user '
+      'delete_schedule_relation log', () async {
+    await seedEvent('ev-1');
+    await seedEvent('ev-2');
+    await gateway.createConflictRelation(
+      leftKind: 'event',
+      leftId: 'ev-1',
+      rightKind: 'event',
+      rightId: 'ev-2',
+      conflictState: 'conflict',
+    );
+    await db.customStatement("DELETE FROM action_logs");
+    final rel = (await db.select(db.scheduleRelations).get()).single;
+    await gateway.deleteConflictRelation(rel.id);
+    await writeAgentCommitLog('delete_conflict_relation');
+    expect(await countLogs('user', actionType: 'delete_schedule_relation'), 0);
+    expect(await countLogs('agent', actionType: 'delete_conflict_relation'), 1);
+  });
+
+  test(
+      'C4: gateway.deleteConflictRule suppresses the inner source=user '
+      'delete_schedule_relation_rule log', () async {
+    await db.into(db.scheduleRelationRules).insert(
+          ScheduleRelationRulesCompanion.insert(
+            id: 'rule-1',
+            accountId: 'acc-1',
+            leftSeriesType: 'calendar_event_series',
+            leftSeriesId: 'ser-1',
+            rightSeriesType: 'calendar_event_series',
+            rightSeriesId: 'ser-2',
+            conflictState: 'conflict',
+            effectiveFrom: '2026-08-01',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.deleteConflictRule('rule-1');
+    await writeAgentCommitLog('delete_conflict_rule');
+    expect(
+        await countLogs('user', actionType: 'delete_schedule_relation_rule'), 0);
+    expect(await countLogs('agent', actionType: 'delete_conflict_rule'), 1);
+  });
+
+  test(
+      'C4: gateway.unlinkTaskEvent suppresses the inner source=user '
+      'unlink_task_event log', () async {
+    await seedTask('t1');
+    await seedEvent('ev-1');
+    await db.into(db.taskEventLinks).insert(TaskEventLinksCompanion.insert(
+          accountId: 'acc-1',
+          taskId: 't1',
+          targetId: 'ev-1',
+          eventId: const Value('ev-1'),
+          relationType: 'related',
+          createdAt: 1,
+        ));
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.unlinkTaskEvent(taskId: 't1', eventId: 'ev-1');
+    await writeAgentCommitLog('unlink_task_event');
+    expect(await countLogs('user', actionType: 'unlink_task_event'), 0);
+    expect(await countLogs('agent', actionType: 'unlink_task_event'), 1);
+  });
+
+  test(
+      'C4: gateway.jwDayMove suppresses the inner source=user jw_day_move log '
+      '+ one source=agent', () async {
+    await _seedJwCourse(db, 'acc-1', 'course-1',
+        startAt: _beijingEpoch(2026, 8, 3, 9),
+        endAt: _beijingEpoch(2026, 8, 3, 10));
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.jwDayMove('2026-08-03', '2026-08-09');
+    await writeAgentCommitLog('jw_day_move');
+    expect(await countLogs('user', actionType: 'jw_day_move'), 0);
+    expect(await countLogs('agent', actionType: 'jw_day_move'), 1);
+  });
+
+  test(
+      'C4: gateway.jwDayMoveClear suppresses the inner source=user '
+      'jw_day_move_clear log', () async {
+    await _seedJwCourse(db, 'acc-1', 'course-1',
+        startAt: _beijingEpoch(2026, 8, 3, 9),
+        endAt: _beijingEpoch(2026, 8, 3, 10));
+    await gateway.jwDayMove('2026-08-03', '2026-08-09');
+    await db.customStatement("DELETE FROM action_logs");
+    await gateway.jwDayMoveClear('2026-08-03');
+    await writeAgentCommitLog('jw_day_move_clear');
+    expect(await countLogs('user', actionType: 'jw_day_move_clear'), 0);
+    expect(await countLogs('agent', actionType: 'jw_day_move_clear'), 1);
+  });
 }
