@@ -1,7 +1,8 @@
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
@@ -579,7 +580,8 @@ void main() {
     });
 
     test('reconcile cancels desired reminders when the owning occurrence is '
-        'cancelled/deleted and preserves delivered/missed/failed history', () async {
+        'soft-deleted (deletedAt only) and preserves delivered/missed/failed '
+        'history', () async {
       final service = RecurrenceService(
         database: database,
         accountId: accountId,
@@ -632,12 +634,12 @@ void main() {
             ),
           );
 
-      // Cancel the first occurrence's anchor (as a lifecycle cancel would).
+      // Soft-delete the first occurrence's anchor only (deletedAt set, status
+      // left null) — the pure delete path.
       await (database.update(
         database.calendarEventOccurrenceExceptions,
       )..where((r) => r.id.equals(firstAnchor.id))).write(
         CalendarEventOccurrenceExceptionsCompanion(
-          status: const Value('cancelled'),
           deletedAt: Value(now),
         ),
       );
@@ -648,11 +650,116 @@ void main() {
       ).reconcileAll(accountId);
 
       final rows = await database.select(database.reminders).get();
-      // The cancelled occurrence's future desired reminder is cancelled (not
+      // The deleted occurrence's future desired reminder is cancelled (not
       // deleted, never recreated).
+      final deletedTargetRows =
+          rows.where((r) => r.occurrenceExceptionId == firstAnchor.id).toList();
+      expect(deletedTargetRows.any((r) => r.state == 'desired'), isFalse);
+      // History preserved.
+      expect(
+        rows.singleWhere((r) => r.id == 'hist-delivered').state,
+        'delivered',
+      );
+      expect(
+        rows.singleWhere((r) => r.id == 'hist-missed').state,
+        'missed',
+      );
+      // The remaining 30 occurrences still hold their desired reminders.
+      expect(
+        rows.where((r) => r.state == 'desired' &&
+            r.occurrenceExceptionId != firstAnchor.id),
+        hasLength(30),
+      );
+    });
+
+    test('reconcile cancels desired reminders when the owning occurrence is '
+        'cancelled via RecurringLifecycleService (status=cancelled, deletedAt '
+        'NULL) and preserves delivered/missed/failed history', () async {
+      final recurrence = RecurrenceService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      final seriesId = await recurrence.createSeries(
+        anchor: PersonalEvent.timed(
+          title: '每日站会',
+          startAt: DateTime(2026, 8, 4, 9, 0),
+          endAt: DateTime(2026, 8, 4, 9, 30),
+        ),
+        rule: RecurrenceRule.daily(anchor: DateTime(2026, 8, 4, 9, 0)),
+      );
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+      final anchors =
+          await database.select(database.calendarEventOccurrenceExceptions).get();
+
+      // Simulate persisted delivered + missed history rows attached to the
+      // first occurrence's anchor (must survive reconcile).
+      final firstAnchor = anchors.first;
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'hist-delivered',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'locator',
+              occurrenceExceptionId: Value(firstAnchor.id),
+              offsetMinutes: const Value(15),
+              triggerAt: 1,
+              state: 'delivered',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+      await database.into(database.reminders).insert(
+            RemindersCompanion.insert(
+              id: 'hist-missed',
+              accountId: accountId,
+              targetType: 'event',
+              targetId: 'locator',
+              occurrenceExceptionId: Value(firstAnchor.id),
+              offsetMinutes: const Value(15),
+              triggerAt: 2,
+              state: 'missed',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+      // Drive the genuine only_this cancel path: writes status='cancelled'
+      // and leaves deletedAt NULL (the defect's premise).
+      final lifecycle = RecurringLifecycleService(
+        database: database,
+        accountId: accountId,
+        now: () => now,
+      );
+      await lifecycle.cancel(
+        seriesId: seriesId,
+        occurrenceKey: firstAnchor.occurrenceKey,
+        scope: RecurringActionScope.onlyThis,
+      );
+      // Sanity: the cancel path genuinely produced a cancelled-but-not-deleted
+      // exception (the exact state the defect regenerates desired rows for).
+      final cancelledAnchor = await (database.select(
+        database.calendarEventOccurrenceExceptions,
+      )..where((r) => r.id.equals(firstAnchor.id))).getSingle();
+      expect(cancelledAnchor.status, 'cancelled');
+      expect(cancelledAnchor.deletedAt, isNull);
+
+      await ReminderService(
+        database: database,
+        now: () => now,
+      ).reconcileAll(accountId);
+
+      final rows = await database.select(database.reminders).get();
+      // The cancelled occurrence's anchor has NO desired reminders (all
+      // desired cancelled); a notification must not fire for it.
       final cancelledTargetRows =
           rows.where((r) => r.occurrenceExceptionId == firstAnchor.id).toList();
-      expect(cancelledTargetRows.any((r) => r.state == 'desired'), isFalse);
+      expect(cancelledTargetRows.any((r) => r.state == 'desired'), isFalse,
+          reason: 'cancelled-but-not-deleted occurrence must have no desired '
+              'reminder rows after reconcile');
       // History preserved.
       expect(
         rows.singleWhere((r) => r.id == 'hist-delivered').state,

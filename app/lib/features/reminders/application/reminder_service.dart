@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import '../../../core/database/app_database.dart';
 import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/calendar_event_locator.dart';
+import '../../calendar/domain/personal_event.dart';
 import '../domain/reminder_rule.dart';
 
 class ReminderService {
@@ -98,6 +99,13 @@ class ReminderService {
         for (final occurrence in occurrences) occurrence.occurrenceKey,
       };
       for (final occurrence in occurrences) {
+        // A cancelled-but-not-deleted occurrence (e.g. an only_this cancel via
+        // RecurringLifecycleService writes status='cancelled' and leaves
+        // deletedAt NULL) must not regenerate desired reminders. `occurrences`
+        // still returns it (the schedule projection and management mode need
+        // to surface cancelled targets), so the state filter lives here in the
+        // reminder reconcile, not in RecurrenceService.occurrences().
+        if (occurrence.status == EventStatus.cancelled) continue;
         final offsets = occurrence.reminderOffsetsMinutes;
         if (occurrence.allDay || offsets.isEmpty || occurrence.startAt == null) {
           continue;
@@ -138,11 +146,15 @@ class ReminderService {
       }
       // Cancel future desired reminders whose owning occurrence is no longer
       // projectable (cancelled, deleted, or out of the bounded window). The
-      // anchor rows may include sparse anchors from prior writes.
+      // anchor rows may include sparse anchors from prior writes. A cancelled
+      // status (only_this cancel) must also cancel desired reminders — the
+      // upsert loop above skipped building them, but anchors from a prior
+      // reconcile may still hold desired rows that need to be retired.
       final anchors = await recurrence.exceptionRows(series.id);
       for (final anchor in anchors) {
         if (anchor.orphaned == true ||
             anchor.deletedAt != null ||
+            anchor.status == 'cancelled' ||
             !projectedKeys.contains(anchor.occurrenceKey)) {
           await _cancelOccurrenceReminders(anchor.id, timestamp);
         }
