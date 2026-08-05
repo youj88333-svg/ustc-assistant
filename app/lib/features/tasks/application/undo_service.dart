@@ -163,6 +163,8 @@ class UndoService implements UndoRecorder {
         await _restoreReminderOverride(payload);
       case 'jw_day_move':
         await _restoreJwDayMove(payload);
+      case 'recurring_lifecycle':
+        await _restoreRecurringLifecycle(payload);
       case 'composite':
         await _restoreComposite(payload);
       default:
@@ -292,6 +294,187 @@ class UndoService implements UndoRecorder {
             accountId: accountId,
             sourceDate: row['sourceDate'] as String,
             targetDate: row['targetDate'] as String,
+            createdAt: row['createdAt'] as int,
+            updatedAt: row['updatedAt'] as int,
+          ),
+        );
+  }
+
+  /// Reverses a recurring lifecycle action (cancel/delete/reopen/restore across
+  /// only_this / this_and_future / whole_series). The sub-path is selected from
+  /// `payload['scope']` and `payload['action']`:
+  ///
+  /// - `this_and_future` cancel/delete: a split created a new segment. Delete
+  ///   that segment row, restore the old segment's `effectiveThrough` /
+  ///   `effectiveFrom` / `updatedAt` from `before['series']`, and migrate each
+  ///   captured exception back to its original `seriesId` / `occurrenceKey`
+  ///   (reversing `editThisAndFuture`'s re-keying and orphaning).
+  /// - `this_and_future` reopen/restore (no split): restore the segment's
+  ///   `status` / `deletedAt` from `before['series']`.
+  /// - `only_this`: restore the captured exception row from `before['exception']`
+  ///   (reverse status / deletedAt / overrides). When the action created an
+  ///   exception row that did not exist before (`before['exception'] == null`),
+  ///   delete that row.
+  /// - `whole_series`: restore the series `status` / `deletedAt` from
+  ///   `before['series']`.
+  ///
+  /// The slot is consumed only if the whole restore succeeds (see [undo]); a
+  /// partial failure rolls back the transaction and preserves the slot.
+  Future<void> _restoreRecurringLifecycle(Map<String, dynamic> payload) async {
+    final scope = payload['scope'] as String?;
+    final action = payload['action'] as String?;
+    final before = payload['before'];
+    if (before is! Map<String, dynamic>) throw const InvalidUndoCommand();
+    switch (scope) {
+      case 'this_and_future':
+        final newSeriesId = payload['newSeriesId'] as String?;
+        if (newSeriesId != null) {
+          // cancel/delete split: migrate exceptions back to their original
+          // series/key FIRST (the new segment's FK cascades on delete, so the
+          // migrated rows must be moved before the new segment is removed),
+          // then delete the new segment, then restore the old segment's
+          // truncated effectiveThrough/updatedAt boundary.
+          final migrated = payload['migratedExceptions'];
+          if (migrated is List) {
+            for (final raw in migrated) {
+              if (raw is! Map<String, dynamic>) {
+                throw const InvalidUndoCommand();
+              }
+              await _restoreMigratedException(raw);
+            }
+          }
+          await (database.delete(database.calendarEventSeries)..where(
+                (row) =>
+                    row.id.equals(newSeriesId) &
+                    row.accountId.equals(accountId),
+              ))
+              .go();
+          await _restoreSeriesFromSnapshot(before['series']);
+        } else {
+          // reopen/restore acted on the segment directly (no split): restore
+          // the segment status/deletedAt from the series snapshot.
+          await _restoreSeriesFromSnapshot(before['series']);
+        }
+      case 'only_this':
+        await _restoreOnlyThisException(
+          payload['seriesId'] as String,
+          payload['occurrenceKey'] as String,
+          before['exception'],
+        );
+      case 'whole_series':
+        await _restoreSeriesFromSnapshot(before['series']);
+      default:
+        throw const InvalidUndoCommand();
+    }
+    // `action` is intentionally not branched on here: the scope + presence of
+    // newSeriesId fully determine the restore path, and the snapshots already
+    // capture the pre-action state for each.
+    if (action == null) throw const InvalidUndoCommand();
+  }
+
+  /// Restores the lifecycle-relevant columns of a `calendar_event_series`
+  /// row from a JSON snapshot via a targeted UPDATE. Only the columns a
+  /// recurring lifecycle action can mutate (`status`, `deletedAt`,
+  /// `effectiveFrom`, `effectiveThrough`, `updatedAt`) are rewritten, so the
+  /// segment's title/recurrence/anchor/etc. are preserved. A targeted update
+  /// (rather than insertOnConflictUpdate) avoids re-validating the series'
+  /// all-day/timed CHECK constraints with a partial row.
+  Future<void> _restoreSeriesFromSnapshot(Object? seriesSnapshot) async {
+    if (seriesSnapshot is! Map<String, dynamic>) {
+      throw const InvalidUndoCommand();
+    }
+    final id = seriesSnapshot['id'] as String;
+    await (database.update(database.calendarEventSeries)
+          ..where(
+            (row) => row.id.equals(id) & row.accountId.equals(accountId),
+          ))
+        .write(
+          CalendarEventSeriesCompanion(
+            status: Value(seriesSnapshot['status'] as String),
+            effectiveFrom: Value(seriesSnapshot['effectiveFrom'] as String?),
+            effectiveThrough: Value(
+              seriesSnapshot['effectiveThrough'] as String?,
+            ),
+            deletedAt: Value(seriesSnapshot['deletedAt'] as int?),
+            updatedAt: Value(seriesSnapshot['updatedAt'] as int),
+          ),
+        );
+  }
+
+  /// Moves a single exception row back to its original `seriesId` /
+  /// `occurrenceKey` and clears any orphaning that `editThisAndFuture`
+  /// applied, restoring the full prior row state from the snapshot. Uses an
+  /// explicit UPDATE by primary key (rather than insertOnConflictUpdate) so
+  /// the row is relocated across series without re-validating the
+  /// `{accountId, seriesId, occurrenceKey}` unique key on an INSERT.
+  Future<void> _restoreMigratedException(Map<String, dynamic> migrated) async {
+    final before = migrated['before'];
+    if (before is! Map<String, dynamic>) throw const InvalidUndoCommand();
+    final id = before['id'] as String;
+    final originalSeriesId = migrated['originalSeriesId'] as String;
+    final originalOccurrenceKey = migrated['originalOccurrenceKey'] as String;
+    await (database.update(database.calendarEventOccurrenceExceptions)
+          ..where((row) => row.id.equals(id) & row.accountId.equals(accountId)))
+        .write(
+          CalendarEventOccurrenceExceptionsCompanion(
+            seriesId: Value(originalSeriesId),
+            occurrenceKey: Value(originalOccurrenceKey),
+            originalStartAt: Value(before['originalStartAt'] as int?),
+            originalStartDate: Value(before['originalStartDate'] as String?),
+            overriddenFieldsJson: Value(
+              before['overriddenFieldsJson'] as String? ?? '[]',
+            ),
+            overrideJson: Value(before['overrideJson'] as String),
+            status: Value(before['status'] as String?),
+            orphaned: Value(before['orphaned'] as bool? ?? false),
+            deletedAt: Value(before['deletedAt'] as int?),
+            updatedAt: Value(before['updatedAt'] as int),
+          ),
+        );
+  }
+
+  /// Restores a single occurrence exception for an `only_this` lifecycle
+  /// action. When [exceptionSnapshot] is null, the action created an exception
+  /// row that did not exist before (e.g. a cancel/delete tombstone), so the
+  /// row is deleted. Otherwise the row is restored to its prior state.
+  Future<void> _restoreOnlyThisException(
+    String seriesId,
+    String occurrenceKey,
+    Object? exceptionSnapshot,
+  ) async {
+    if (exceptionSnapshot == null) {
+      await (database.delete(database.calendarEventOccurrenceExceptions)
+            ..where(
+              (row) =>
+                  row.accountId.equals(accountId) &
+                  row.seriesId.equals(seriesId) &
+                  row.occurrenceKey.equals(occurrenceKey),
+            ))
+          .go();
+      return;
+    }
+    if (exceptionSnapshot is! Map<String, dynamic>) {
+      throw const InvalidUndoCommand();
+    }
+    final row = exceptionSnapshot;
+    await database
+        .into(database.calendarEventOccurrenceExceptions)
+        .insertOnConflictUpdate(
+          CalendarEventOccurrenceExceptionsCompanion.insert(
+            id: row['id'] as String,
+            accountId: accountId,
+            seriesId: row['seriesId'] as String,
+            occurrenceKey: row['occurrenceKey'] as String,
+            originalStartAt: Value(row['originalStartAt'] as int?),
+            originalStartDate: Value(row['originalStartDate'] as String?),
+            kind: row['kind'] as String,
+            overriddenFieldsJson: Value(
+              row['overriddenFieldsJson'] as String? ?? '[]',
+            ),
+            overrideJson: row['overrideJson'] as String,
+            status: Value(row['status'] as String?),
+            orphaned: Value(row['orphaned'] as bool? ?? false),
+            deletedAt: Value(row['deletedAt'] as int?),
             createdAt: row['createdAt'] as int,
             updatedAt: row['updatedAt'] as int,
           ),

@@ -1136,6 +1136,26 @@ final reopenedSeriesId = cancelledNew.id;
       final slot = await database.select(database.undoSlot).getSingle();
       expect(slot.payload, contains('recurring_cancel'));
       expect(slot.payload, isNot(contains('RawException')));
+
+      // Promoted (I1): actually undoing must restore the cancelled occurrence.
+      // Before undo: a status override marks the occurrence cancelled.
+      final cancelled =
+          await service.existingOccurrenceAnchor(seriesId, key);
+      expect(cancelled, isNotNull);
+      expect(cancelled!.status, 'cancelled');
+
+      await undo.undo();
+
+      // The undo slot is consumed and the occurrence is no longer cancelled.
+      expect(
+        await database.select(database.undoSlot).getSingleOrNull(),
+        isNull,
+      );
+      final restored =
+          await service.existingOccurrenceAnchor(seriesId, key);
+      // With no prior override, cancel's only-status override row is fully
+      // dropped on undo (status was the sole overridden field).
+      expect(restored, isNull);
     });
 
     test('a wrong account cannot act on another account series', () async {

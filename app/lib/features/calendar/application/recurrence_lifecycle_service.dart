@@ -378,7 +378,7 @@ class RecurringLifecycleService {
     await database.transaction(() async {
       final series = await _requireSeries(seriesId);
       _checkVersion(series.updatedAt, expectedUpdatedAt);
-      final before = _seriesSnapshot(series);
+      final before = {'series': _seriesSnapshot(series)};
       final timestamp = now();
       switch (action) {
         case RecurringLifecycleAction.cancel:
@@ -403,7 +403,13 @@ class RecurringLifecycleService {
           await _writeSeriesDeletedAtNull(seriesId, timestamp);
       }
       await _log(action, RecurringActionScope.wholeSeries);
-      await _recordUndo(action, seriesId, occurrenceKey: null, before: before);
+      await _recordUndo(
+        action,
+        seriesId,
+        scope: RecurringActionScope.wholeSeries,
+        occurrenceKey: null,
+        before: before,
+      );
     });
   }
 
@@ -463,7 +469,13 @@ class RecurringLifecycleService {
           await _restoreOnlyThis(series, exception, timestamp);
       }
       await _log(action, RecurringActionScope.onlyThis);
-      await _recordUndo(action, seriesId, occurrenceKey: occurrenceKey, before: before);
+      await _recordUndo(
+        action,
+        seriesId,
+        scope: RecurringActionScope.onlyThis,
+        occurrenceKey: occurrenceKey,
+        before: before,
+      );
     });
   }
 
@@ -702,7 +714,13 @@ class RecurringLifecycleService {
           await _writeSeriesDeletedAtNull(seriesId, timestamp);
         }
         await _log(action, RecurringActionScope.thisAndFuture);
-        await _recordUndo(action, seriesId, occurrenceKey: occurrenceKey, before: before);
+        await _recordUndo(
+          action,
+          seriesId,
+          scope: RecurringActionScope.thisAndFuture,
+          occurrenceKey: occurrenceKey,
+          before: before,
+        );
         return;
       }
 
@@ -714,12 +732,24 @@ class RecurringLifecycleService {
       final ruleAnchor = occurrence.allDay
           ? occurrence.startDate!
           : (occurrence.startAt ?? occurrence.originalStart);
+      // Capture the exception rows BEFORE the split so the undo snapshot can
+      // reverse editThisAndFuture's migration (re-keying + orphaning). Each
+      // row that editThisAndFuture moves to the new segment (or orphans) is
+      // recorded with its original seriesId/occurrenceKey and full prior
+      // state, so _restoreRecurringLifecycle can write it back exactly.
+      final exceptionsBeforeSplit = await _recurrence.exceptionRows(seriesId);
       final newSeriesId = await _recurrence.editThisAndFuture(
         seriesId,
         occurrenceKey,
         anchor: newAnchor,
         rule: _futureRule(oldRule, ruleAnchor),
       );
+      final migratedExceptions = await _migratedExceptions(
+        exceptionsBeforeSplit,
+        newSeriesId,
+      );
+      before['newSeriesId'] = newSeriesId;
+      before['migratedExceptions'] = migratedExceptions;
       if (action == RecurringLifecycleAction.cancel) {
         await _writeSeriesStatus(newSeriesId, 'cancelled', timestamp);
       } else {
@@ -727,8 +757,56 @@ class RecurringLifecycleService {
         await _writeSeriesDeletedAt(newSeriesId, timestamp);
       }
       await _log(action, RecurringActionScope.thisAndFuture);
-      await _recordUndo(action, seriesId, occurrenceKey: occurrenceKey, before: before);
+      await _recordUndo(
+        action,
+        seriesId,
+        scope: RecurringActionScope.thisAndFuture,
+        occurrenceKey: occurrenceKey,
+        before: before,
+        newSeriesId: newSeriesId,
+        migratedExceptions: migratedExceptions,
+      );
     });
+  }
+
+  /// Diffs the pre-split exception rows against their post-split state and
+  /// returns the migration records needed to reverse `editThisAndFuture`.
+  ///
+  /// `editThisAndFuture` either re-keys a row onto [newSeriesId] (compatible
+  /// future exception) or orphans it in place on the old series (incompatible
+  /// future exception). For each row whose `seriesId`, `occurrenceKey`, or
+  /// `orphaned` flag changed, we capture the ORIGINAL pre-split values plus
+  /// the full prior row state so the undo can restore the row verbatim. Rows
+  /// that did not move (history before the split boundary) are not recorded.
+  Future<List<Map<String, Object?>>> _migratedExceptions(
+    List<CalendarEventOccurrenceException> beforeRows,
+    String newSeriesId,
+  ) async {
+    if (beforeRows.isEmpty) return const [];
+    final ids = beforeRows.map((row) => row.id).toList();
+    final afterRows = await (database.select(
+      database.calendarEventOccurrenceExceptions,
+    )..where((row) => row.id.isIn(ids)))
+        .get();
+    final afterById = {for (final row in afterRows) row.id: row};
+    final migrated = <Map<String, Object?>>[];
+    for (final before in beforeRows) {
+      final after = afterById[before.id];
+      if (after == null) continue;
+      final moved = after.seriesId != before.seriesId ||
+          after.occurrenceKey != before.occurrenceKey ||
+          after.orphaned != before.orphaned;
+      if (!moved) continue;
+      migrated.add({
+        'id': before.id,
+        'originalSeriesId': before.seriesId,
+        'originalOccurrenceKey': before.occurrenceKey,
+        'newSeriesId': after.seriesId,
+        'newOccurrenceKey': after.occurrenceKey,
+        'before': _exceptionSnapshot(before),
+      });
+    }
+    return migrated;
   }
 
   PersonalEvent _occurrenceAsAnchor(
@@ -857,12 +935,15 @@ class RecurringLifecycleService {
         'id': exception.id,
         'seriesId': exception.seriesId,
         'occurrenceKey': exception.occurrenceKey,
+        'originalStartAt': exception.originalStartAt,
+        'originalStartDate': exception.originalStartDate,
         'kind': exception.kind,
         'overriddenFieldsJson': exception.overriddenFieldsJson,
         'overrideJson': exception.overrideJson,
         'status': exception.status,
         'orphaned': exception.orphaned,
         'deletedAt': exception.deletedAt,
+        'createdAt': exception.createdAt,
         'updatedAt': exception.updatedAt,
       };
 
@@ -889,8 +970,11 @@ class RecurringLifecycleService {
   Future<void> _recordUndo(
     RecurringLifecycleAction action,
     String seriesId, {
+    required RecurringActionScope scope,
     required String? occurrenceKey,
     required Map<String, Object?> before,
+    String? newSeriesId,
+    List<Map<String, Object?>>? migratedExceptions,
   }) => undoRecorder.record(
         UndoCommand(
           kind: 'recurring_${action.name}',
@@ -898,9 +982,13 @@ class RecurringLifecycleService {
           payload: {
             'entity': 'recurring_lifecycle',
             'action': action.name,
+            'scope': scope.label,
             'seriesId': seriesId,
             'occurrenceKey': occurrenceKey,
             'before': before,
+            if (newSeriesId != null) 'newSeriesId': newSeriesId,
+            if (migratedExceptions != null)
+              'migratedExceptions': migratedExceptions,
           },
           safeSummary: _safeSummary(action, ''),
         ),
