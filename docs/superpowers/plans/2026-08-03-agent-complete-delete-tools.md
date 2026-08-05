@@ -635,15 +635,16 @@ Tasks 1–11 在 `feature/delete-tools` 分支逐 Task 提交并各自独立审�
 `git log --oneline feature/delete-tools`）。Task 12 为收尾任务，最终验证如下
 （worktree `E:/107/.worktrees/delete-tools-plan`，2026-08-05）：
 
-- **最终 HEAD**：`78f10db fix(agent): restore deleted tasks and plan blocks through the agent gateway`
-  （Task 12 及其后一次全量综合审查修复批收尾；完整提交序列见
+- **最终 HEAD**：`0c6c7ec fix(agent): version-check only_this recurring edits against the exception`
+  （Task 12 及其后一次全量综合审查修复批 + 两轮最终复审的循环修复收尾；完整提交序列见
   `git log --oneline feature/delete-tools`）。
 - **Task 12 commit**：`9bc81cf test(agent): close complete deletion workflows`
   （组合回归 13 场景 + 只读来源回归；首个 commit `685cb86` 为其前驱）。
-- **收尾修复批（2026-08-05 全量审查，C1–C4 / I1–I4 / M1）**：`84d28e8`(C1 迁移守卫)、
+- **收尾修复批（2026-08-05 全量审查，C1–C4 / I1–I4 / M1 + 循环修复）**：`84d28e8`(C1 迁移守卫)、
   `38963b5`(C2 提醒过滤)、`26415e3`(C3 TOCTOU)、`ef0a42a`(I1 重复生命周期 Undo)、
-  `8c42198`(C4 双重日志)、`3bf54a3`(I2 快照重检)、`719627f`(I3 影响预览)、`78f10db`(I4 restore 可达)。
-  以上逐项经 TDD 循环并独立复核；最终 HEAD 为 `78f10db`。
+  `8c42198`(C4 双重日志)、`3bf54a3`(I2 快照重检)、`719627f`(I3 影响预览)、`78f10db`(I4 restore 可达)、
+  `72554ba`(M1 文档整饰)、`0c6c7ec`(循环修复：C3 exception 版本缺口)。
+  以上逐项经 TDD 循环并独立复核 + 两轮最终复审；最终 HEAD 为 `0c6c7ec`。
 - **组合测试**：`agent_composition_flow_test.dart` 的 `Task 12 lifecycle composite
   regression` 组覆盖 brief 13 场景（真实 composition registry + Drift + unit-of-work）；
   `read_only_agent_flow_test.dart` 的 `Task 12 read-only source regression` 组确认
