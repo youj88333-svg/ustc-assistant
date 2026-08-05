@@ -1,4 +1,4 @@
-import 'package:drift/drift.dart' hide isNull;
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
@@ -136,8 +136,18 @@ class _UpdateGateway implements AgentWriteGateway {
   ({String seriesId, String? key, RecurringActionScope scope, RecurringLifecycleAction action,
     int? expectedSeriesUpdatedAt, int? expectedExceptionUpdatedAt})?
       lifecycleCall;
-  ({String seriesId, String? key, RecurringLifecycleAction? action})? impactPreviewCall;
+  ({String seriesId, String? key, RecurringActionScope? scope, RecurringLifecycleAction? action})?
+      impactPreviewCall;
   bool impactRequiresScope = false;
+  // Customizable impact-preview fields for the I3 recurring-impact-preview tests.
+  // When null, sensible defaults derived from [impactRequiresScope] are used.
+  int? previewAffectedOccurrences;
+  bool? previewOver366Days;
+  bool? previewInfinite;
+  int? previewAffectedReminders;
+  int? previewAffectedExceptions;
+  int? previewAffectedRelations;
+  DateTime? previewOccurrenceStart;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
@@ -225,17 +235,18 @@ class _UpdateGateway implements AgentWriteGateway {
     impactPreviewCall = (
       seriesId: seriesId,
       key: occurrenceKey,
+      scope: scope,
       action: action,
     );
     return RecurringImpactPreview(
       title: '例会',
-      occurrenceStart: null,
-      affectedOccurrences: 1,
-      over366Days: impactRequiresScope,
-      infinite: false,
-      affectedReminders: 0,
-      affectedExceptions: 0,
-      affectedRelations: 0,
+      occurrenceStart: previewOccurrenceStart,
+      affectedOccurrences: previewAffectedOccurrences ?? 1,
+      over366Days: previewOver366Days ?? impactRequiresScope,
+      infinite: previewInfinite ?? false,
+      affectedReminders: previewAffectedReminders ?? 0,
+      affectedExceptions: previewAffectedExceptions ?? 0,
+      affectedRelations: previewAffectedRelations ?? 0,
       availableScopes: const ['only_this', 'this_and_future', 'whole_series'],
       scopeRequired: impactRequiresScope,
     );
@@ -1055,6 +1066,165 @@ void main() {
     await store.resolve(result.userAction!.opaqueHandle, approve: true, remember: false);
     expect(gw.lifecycleCall!.scope, RecurringActionScope.onlyThis);
     expect(gw.lifecycleCall!.action, RecurringLifecycleAction.delete);
+  });
+
+  // ---- I3: recurring impact preview on lifecycle confirmations ----
+  // The confirmation card for a recurring delete/cancel/restore must show the
+  // scope meaning, the current occurrence, the 366-day impact count, the
+  // series horizon (infinite / over-366 / within), and affected reminder /
+  // exception / relation counts — even when the model already supplied a scope.
+
+  EventWriteSnapshot recurringSnapshot() => EventWriteSnapshot(
+        id: 'ev-1', source: 'user', type: 'personal', title: '例会', allDay: false,
+        startAt: DateTime(2026, 8, 5, 15), endAt: DateTime(2026, 8, 5, 16),
+        personalSeriesId: 'ser-1', occurrenceKey: 'ser-1@2026-08-05T15:00:00');
+
+  test('update_event recurring delete scope=only_this shows impact preview lines', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    gw.previewOccurrenceStart = DateTime(2026, 8, 5, 15);
+    gw.previewAffectedOccurrences = 1;
+    gw.previewOver366Days = false;
+    gw.previewInfinite = false;
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete', 'scope': 'only_this'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final lines = result.userAction!.writeProposal!.previewLines;
+    expect(lines, contains('范围：仅本次'));
+    expect(lines.any((l) => l.startsWith('当前发生：')), isTrue);
+    expect(lines, contains('未来 366 天预计影响：1 次'));
+    expect(lines, contains('系列：366 天内'));
+    // The impact preview must be computed even though a scope was supplied.
+    expect(gw.impactPreviewCall, isNotNull);
+    expect(gw.impactPreviewCall!.scope, RecurringActionScope.onlyThis);
+  });
+
+  test('update_event recurring delete this_and_future on a 2-year weekly series shows over-366 + N>1', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    gw.previewOccurrenceStart = DateTime(2026, 8, 5, 15);
+    gw.previewAffectedOccurrences = 104; // ~2 years of weekly occurrences
+    gw.previewOver366Days = true;
+    gw.previewInfinite = false;
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete', 'scope': 'this_and_future'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final lines = result.userAction!.writeProposal!.previewLines;
+    expect(lines, contains('范围：本次及以后'));
+    expect(lines, contains('系列：超出 366 天'));
+    expect(lines.any((l) => l.startsWith('未来 366 天预计影响：') && !l.contains('：0 次')), isTrue);
+    // N > 1
+    final impactLine = lines.firstWhere((l) => l.startsWith('未来 366 天预计影响：'));
+    final n = int.parse(impactLine.replaceAll(RegExp(r'[^0-9]'), ''));
+    expect(n, greaterThan(1));
+  });
+
+  test('update_event recurring delete whole_series on an infinite series shows infinite + whole scope', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    gw.previewOccurrenceStart = DateTime(2026, 8, 5, 15);
+    gw.previewAffectedOccurrences = 53;
+    gw.previewOver366Days = true;
+    gw.previewInfinite = true;
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete', 'scope': 'whole_series'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final lines = result.userAction!.writeProposal!.previewLines;
+    expect(lines, contains('范围：整个系列'));
+    expect(lines, contains('系列：无限延续'));
+    expect(gw.impactPreviewCall!.scope, RecurringActionScope.wholeSeries);
+  });
+
+  test('update_event recurring delete without scope on an infinite series still throws scope_required', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    gw.impactRequiresScope = true;
+    gw.previewInfinite = true;
+    gw.previewOver366Days = true;
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete'}, h.ctx());
+    expect(result.status, AgentToolStatus.error);
+    expect(result.errorCode, 'scope_required');
+    expect(result.userAction, isNull);
+  });
+
+  test('update_event recurring delete with reminders/exceptions/relations shows affected counts', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    gw.previewOccurrenceStart = DateTime(2026, 8, 5, 15);
+    gw.previewAffectedOccurrences = 5;
+    gw.previewAffectedReminders = 3;
+    gw.previewAffectedExceptions = 2;
+    gw.previewAffectedRelations = 1;
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete', 'scope': 'whole_series'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final lines = result.userAction!.writeProposal!.previewLines;
+    expect(lines, contains('受影响提醒：3 条'));
+    expect(lines, contains('受影响例外：2 条'));
+    expect(lines, contains('受影响关系：1 条'));
+  });
+
+  test('update_event non-recurring single-event delete has no recurring impact preview lines', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = EventWriteSnapshot(
+      id: 'ev-1', source: 'user', type: 'personal', title: '健身', allDay: false,
+      startAt: DateTime(2026, 8, 1, 15), endAt: DateTime(2026, 8, 1, 16));
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final lines = result.userAction!.writeProposal!.previewLines;
+    expect(lines.any((l) => l.startsWith('范围：')), isFalse);
+    expect(lines.any((l) => l.startsWith('未来 366 天预计影响：')), isFalse);
+    expect(lines.any((l) => l.startsWith('系列：')), isFalse);
+    expect(lines.any((l) => l.startsWith('受影响')), isFalse);
+    expect(lines.any((l) => l.startsWith('当前发生：')), isFalse);
+    // No impact-preview call for a non-recurring target.
+    expect(gw.impactPreviewCall, isNull);
+  });
+
+  test('update_event recurring delete previewLines contain no seriesId/occurrenceKey/id', () async {
+    final h = _Harness(tools());
+    final update = h.tool('update_event') as UpdateEventTool;
+    final gw = _UpdateGateway();
+    update.attachGateway(gw);
+    final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+    gw.snapshots['ev-1'] = recurringSnapshot();
+    gw.previewOccurrenceStart = DateTime(2026, 8, 5, 15);
+    gw.previewAffectedOccurrences = 1;
+    gw.previewAffectedReminders = 1;
+    final result = await update.execute(
+      {'ref_event': ref, 'action': 'delete', 'scope': 'only_this'}, h.ctx());
+    expect(result.status, AgentToolStatus.needsUserAction);
+    final preview = result.userAction!.writeProposal!.previewLines.join('\n');
+    expect(preview, isNot(contains('ser-1')));
+    expect(preview, isNot(contains('occurrenceKey')));
+    expect(preview, isNot(contains('seriesId')));
+    expect(preview, isNot(contains('ev-1')));
   });
 
   test('update_event cancel on a non-recurring event only calls cancelEvent', () async {

@@ -89,6 +89,55 @@ String _eventSummary(EventWriteSnapshot snapshot) {
   return '${snapshot.title} / ${_fmtTimeRange(snapshot.startAt!, snapshot.endAt!)}';
 }
 
+/// I3: 重复生命周期（cancel/delete/restore）确认卡的影响预览行。
+///
+/// 展示范围含义、当前发生、未来 366 天预计影响数、系列是否超出 366 天或无限
+/// 延续、受影响提醒/例外/关系计数（>0 才显示）。**隐私**：仅含面向用户的展示
+/// 词与计数，绝不返回 seriesId / occurrenceKey / 数据库 id（Spec §8.1）。
+List<String> _recurringImpactLines(
+  String scope,
+  EventWriteSnapshot snapshot,
+  RecurringImpactPreview preview,
+) {
+  final scopeZh = switch (scope) {
+    'whole_series' => '整个系列',
+    'this_and_future' => '本次及以后',
+    _ => '仅本次',
+  };
+  final seriesZh = preview.infinite
+      ? '无限延续'
+      : preview.over366Days
+          ? '超出 366 天'
+          : '366 天内';
+  final lines = <String>[
+    '范围：$scopeZh',
+    if (snapshot.occurrenceKey != null && preview.occurrenceStart != null)
+      '当前发生：${_fmtOccurrenceStart(preview.occurrenceStart!)}',
+    '未来 366 天预计影响：${preview.affectedOccurrences} 次',
+    '系列：$seriesZh',
+  ];
+  if (preview.affectedReminders > 0) {
+    lines.add('受影响提醒：${preview.affectedReminders} 条');
+  }
+  if (preview.affectedExceptions > 0) {
+    lines.add('受影响例外：${preview.affectedExceptions} 条');
+  }
+  if (preview.affectedRelations > 0) {
+    lines.add('受影响关系：${preview.affectedRelations} 条');
+  }
+  return lines;
+}
+
+/// 格式化单次发生开始时间（仅展示，不含 id）。全天发生用 YYYY-MM-DD，
+/// 定时发生用 `YYYY-MM-DD HH:MM`。
+String _fmtOccurrenceStart(DateTime start) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final d = '${start.year}-${two(start.month)}-${two(start.day)}';
+  // 全天发生的 occurrenceStart 落在 00:00（见 RecurrenceLifecycleService）。
+  if (start.hour == 0 && start.minute == 0) return d;
+  return '$d ${two(start.hour)}:${two(start.minute)}';
+}
+
 /// 关系参与方类型的展示词（仅用于确认预览/安全日志，不暴露 id/ref）。
 String _kindZh(String kind) => switch (kind) {
   'event' => '日程',
@@ -786,20 +835,28 @@ class UpdateEventTool extends AgentWriteTool {
       throw const FormatException('source event cannot be edited with update_event');
     }
 
-    // P1: 对重复日程的 delete/cancel/restore 若模型未显式给 scope 且目标
-    // ambiguous（无限 / 超 366 天），必须在 preflight 拒绝并返回 scope_required，
-    // 而不是静默默认 only_this 生成可提交提案。schema 给 scope 一个
-    // default=only_this 仅用于文档提示，这里用 `r.contains('scope')` 精确区分
-    // 「显式 only_this」与「未给」——只有未给且 requiresScope 才需要处理澄清。
-    if (const {'delete', 'cancel', 'restore'}.contains(action) &&
-        snapshot.personalSeriesId != null &&
-        !r.contains('scope')) {
-      final preview = await gateway.recurringLifecycleImpactPreview(
+    // P1 + I3: 对重复日程的 delete/cancel/restore 恒算影响预览：
+    //  - 若模型未显式给 scope 且目标 ambiguous（无限 / 超 366 天），在 preflight
+    //    拒绝并返回 scope_required，而不是静默默认 only_this 生成可提交提案。
+    //  - 否则用解析后的 scope（未给则默认 only_this）计算预览，并把范围含义 /
+    //    当前发生 / 未来 366 天影响数 / 系列是否超 366 天或无限 / 受影响提醒/
+    //    例外/关系数追加到确认卡（Spec §8.1 / Plan Task 6 Step 2）。
+    // schema 给 scope 一个 default=only_this 仅用于文档提示；这里用
+    // `r.contains('scope')` 精确区分「显式 only_this」与「未给」——只有未给且
+    // requiresScope 才需要处理澄清。
+    RecurringImpactPreview? recurringPreview;
+    final isRecurringLifecycle =
+        const {'delete', 'cancel', 'restore'}.contains(action) &&
+            snapshot.personalSeriesId != null;
+    if (isRecurringLifecycle) {
+      final scopeGiven = r.contains('scope');
+      recurringPreview = await gateway.recurringLifecycleImpactPreview(
         snapshot.personalSeriesId!,
         occurrenceKey: snapshot.occurrenceKey,
+        scope: scopeGiven ? _actionScope(scope) : null,
         action: _lifecycleAction(action),
       );
-      if (preview.requiresScope) {
+      if (!scopeGiven && recurringPreview.requiresScope) {
         throw const ScopeRequiredError();
       }
     }
@@ -814,6 +871,11 @@ class UpdateEventTool extends AgentWriteTool {
     } else {
       lines.add('变更：${_actionZh(action)}'
           '${action == 'delete' ? '（软删除，可从管理页恢复）' : ''}');
+      // I3: 重复生命周期确认卡追加影响预览（隐私：仅展示含义/计数，绝不含
+      // seriesId/occurrenceKey/DB id）。
+      if (recurringPreview != null) {
+        lines.addAll(_recurringImpactLines(scope, snapshot, recurringPreview));
+      }
     }
 
     // 同一 update_event 工具对不同生命周期动作采用不同审批策略键（proposal 是
