@@ -552,13 +552,17 @@ void main() {
       final service = TaskEventLinkService(database: database, accountId: 'a');
       final (_, taskId, eventId) = await seedLinkedPair(database);
 
+      // I2: a version mismatch (target exists but updatedAt differs) throws
+      // StaleTaskEventLinkCommand (maps to stale_target), distinct from a
+      // foreign/missing target (TaskEventLinkTargetNotFoundError ->
+      // target_not_found).
       await expectLater(
         service.unlink(
           taskId: taskId,
           eventId: eventId,
           expectedTaskUpdatedAt: 999999,
         ),
-        throwsA(isA<TaskEventLinkTargetNotFoundError>()),
+        throwsA(isA<StaleTaskEventLinkCommand>()),
       );
       expect(
         await database.select(database.taskEventLinks).get(),
@@ -570,7 +574,7 @@ void main() {
           eventId: eventId,
           expectedEventUpdatedAt: 999999,
         ),
-        throwsA(isA<TaskEventLinkTargetNotFoundError>()),
+        throwsA(isA<StaleTaskEventLinkCommand>()),
       );
       expect(
         await database.select(database.taskEventLinks).get(),

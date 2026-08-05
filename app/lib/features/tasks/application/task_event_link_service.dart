@@ -20,6 +20,17 @@ class TaskEventLinkNotFoundError implements Exception {
   String toString() => 'TaskEventLinkNotFoundError';
 }
 
+/// Deterministic error returned when an unlink target's `updatedAt` changed
+/// between propose and commit (Spec §20 TOCTOU re-check). Distinct from
+/// [TaskEventLinkTargetNotFoundError] (foreign/missing) so the caller can map
+/// it to `stale_target` rather than `target_not_found`.
+class StaleTaskEventLinkCommand implements Exception {
+  const StaleTaskEventLinkCommand();
+
+  @override
+  String toString() => 'StaleTaskEventLinkCommand';
+}
+
 /// Builds and removes Task<->Event links.
 ///
 /// [unlink] removes the single `(taskId, eventId)` link under the bound
@@ -55,10 +66,12 @@ class TaskEventLinkService {
   /// Removes the `(taskId, eventId)` `related` link for the account.
   ///
   /// Optional [expectedTaskUpdatedAt] / [expectedEventUpdatedAt] snapshots
-  /// force a TOCTOU re-check: when supplied and mismatched, a
-  /// [TaskEventLinkTargetNotFoundError] (foreign/missing/deleted target) or
-  /// stale-state error is raised. The deletion is idempotent per the standard
-  /// — a missing link yields [TaskEventLinkNotFoundError] with no write.
+  /// force a TOCTOU re-check (Spec §20): when supplied and the target exists
+  /// but its `updatedAt` differs, a [StaleTaskEventLinkCommand] is raised
+  /// (maps to `stale_target`); a foreign/missing/deleted target still raises
+  /// [TaskEventLinkTargetNotFoundError] (maps to `target_not_found`). The
+  /// deletion is idempotent per the standard — a missing link yields
+  /// [TaskEventLinkNotFoundError] with no write.
   Future<void> unlink({
     required String taskId,
     required String eventId,
@@ -70,14 +83,14 @@ class TaskEventLinkService {
       if (task == null) throw const TaskEventLinkTargetNotFoundError();
       if (expectedTaskUpdatedAt != null &&
           task.updatedAt != expectedTaskUpdatedAt) {
-        throw const TaskEventLinkTargetNotFoundError();
+        throw const StaleTaskEventLinkCommand();
       }
 
       final event = await _eventRow(eventId);
       if (event == null) throw const TaskEventLinkTargetNotFoundError();
       if (expectedEventUpdatedAt != null &&
           event.updatedAt != expectedEventUpdatedAt) {
-        throw const TaskEventLinkTargetNotFoundError();
+        throw const StaleTaskEventLinkCommand();
       }
 
       final link = await _linkRow(taskId, eventId);

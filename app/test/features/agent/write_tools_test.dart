@@ -21,10 +21,12 @@ import 'package:ustc_assistant_app/features/calendar/application/recurrence_serv
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_lifecycle_service.dart';
+import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/plan_block_service.dart' show NotDeletedError;
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/task.dart';
+import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
@@ -418,12 +420,18 @@ class _LifecycleGateway implements AgentWriteGateway {
   String? restoredTaskId;
   String? reopenedEventId;
   String? restoredEventId;
-  ({String targetType, String targetId, String scope, List<int>? offsets})?
+  ({String targetType, String targetId, String scope, List<int>? offsets,
+    int? expectedTargetUpdatedAt, List<int>? expectedOffsetsSnapshot})?
       clearedReminders;
-  ({String? eventId, String? courseSeriesId, List<String> fields})?
+  Object? clearRemindersThrows;
+  ({String? eventId, String? courseSeriesId, List<String> fields,
+    int? expectedOverlayUpdatedAt})?
       clearedOverlayFields;
+  Object? clearOverlayFieldsThrows;
   String? courseSeriesIdForEventResult;
-  ({String taskId, String eventId})? unlinked;
+  ({String taskId, String eventId, int? expectedTaskUpdatedAt,
+    int? expectedEventUpdatedAt})? unlinked;
+  Object? unlinkThrows;
   bool resetPolicyRemoved = true;
   String? deletedRelationId;
   String? deletedRuleId;
@@ -457,6 +465,53 @@ class _LifecycleGateway implements AgentWriteGateway {
         createdAt: 1,
         updatedAt: 1,
       );
+
+  /// Propose-phase event version read (reuses C3's EventWriteSnapshot.updatedAt).
+  /// Defaults to updatedAt=1; tests override [eventSnapshotUpdatedAt].
+  int eventSnapshotUpdatedAt = 1;
+
+  @override
+  Future<EventWriteSnapshot> eventSnapshot(String eventId) async =>
+      EventWriteSnapshot(
+        id: eventId,
+        source: 'user',
+        type: 'personal',
+        title: '日程',
+        allDay: false,
+        startAt: DateTime(2026, 8, 4, 9),
+        endAt: DateTime(2026, 8, 4, 10),
+        updatedAt: eventSnapshotUpdatedAt,
+      );
+
+  /// Propose-phase reminder offsets snapshot (default two desired offsets).
+  List<int> reminderDesiredOffsets = const [15, 30];
+
+  @override
+  Future<ReminderConfiguration> reminderConfiguration({
+    required String targetType,
+    required String targetId,
+  }) async =>
+      ReminderConfiguration(
+        futureDesiredOffsets: reminderDesiredOffsets,
+        hasExplicitDisable: false,
+        deliveredCount: 0,
+        missedCount: 0,
+        failedCount: 0,
+      );
+
+  /// Propose-phase overlay row snapshot. [overlayRowUpdatedAt] is the row's
+  /// updatedAt at propose time; [overlayFieldValues] maps the currently-set
+  /// field keys to their values.
+  int? overlayRowUpdatedAt;
+  Map<String, Object?> overlayFieldValues = const {};
+
+  @override
+  Future<({int? updatedAt, Map<String, Object?> fieldValues})>
+      overlayRowSnapshot({
+    String? eventId,
+    String? courseSeriesId,
+  }) async =>
+          (updatedAt: overlayRowUpdatedAt, fieldValues: overlayFieldValues);
 
   @override
   Future<void> completeTask(String id, {required int expectedUpdatedAt}) async {
@@ -508,8 +563,19 @@ class _LifecycleGateway implements AgentWriteGateway {
     required String targetId,
     required String scope,
     List<int>? offsets,
+    int? expectedTargetUpdatedAt,
+    List<int>? expectedOffsetsSnapshot,
   }) async {
-    clearedReminders = (targetType: targetType, targetId: targetId, scope: scope, offsets: offsets);
+    clearedReminders = (
+      targetType: targetType,
+      targetId: targetId,
+      scope: scope,
+      offsets: offsets,
+      expectedTargetUpdatedAt: expectedTargetUpdatedAt,
+      expectedOffsetsSnapshot: expectedOffsetsSnapshot,
+    );
+    final e = clearRemindersThrows;
+    if (e != null) throw e;
   }
 
   @override
@@ -517,8 +583,16 @@ class _LifecycleGateway implements AgentWriteGateway {
     String? eventId,
     String? courseSeriesId,
     required List<String> fields,
+    int? expectedOverlayUpdatedAt,
   }) async {
-    clearedOverlayFields = (eventId: eventId, courseSeriesId: courseSeriesId, fields: fields);
+    clearedOverlayFields = (
+      eventId: eventId,
+      courseSeriesId: courseSeriesId,
+      fields: fields,
+      expectedOverlayUpdatedAt: expectedOverlayUpdatedAt,
+    );
+    final e = clearOverlayFieldsThrows;
+    if (e != null) throw e;
   }
 
   @override
@@ -532,7 +606,14 @@ class _LifecycleGateway implements AgentWriteGateway {
     int? expectedTaskUpdatedAt,
     int? expectedEventUpdatedAt,
   }) async {
-    unlinked = (taskId: taskId, eventId: eventId);
+    unlinked = (
+      taskId: taskId,
+      eventId: eventId,
+      expectedTaskUpdatedAt: expectedTaskUpdatedAt,
+      expectedEventUpdatedAt: expectedEventUpdatedAt,
+    );
+    final e = unlinkThrows;
+    if (e != null) throw e;
   }
 
   @override
@@ -2324,7 +2405,97 @@ void main() {
           {'ref_task': taskRef, 'ref_event': eventRef}, h.ctx());
       await store.resolve(result.userAction!.opaqueHandle,
           approve: true, remember: false);
-      expect(gw.unlinked, (taskId: 't1', eventId: 'ev1'));
+      expect(gw.unlinked, isA<({String taskId, String eventId, int? expectedTaskUpdatedAt, int? expectedEventUpdatedAt})>());
+      expect(gw.unlinked!.taskId, 't1');
+      expect(gw.unlinked!.eventId, 'ev1');
+      // I2: propose captures the task + event version snapshot.
+      expect(gw.unlinked!.expectedTaskUpdatedAt, 1);
+      expect(gw.unlinked!.expectedEventUpdatedAt, 1);
+    });
+
+    // I2: unlink commit maps a Stale* exception to stale_target (propose
+    // captured the version snapshot; commit re-checks it).
+    test('unlink_task_event commit maps StaleTaskEventLinkCommand to stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('unlink_task_event') as UnlinkTaskEventTool;
+      final gw = _LifecycleGateway();
+      gw.unlinkThrows = const StaleTaskEventLinkCommand();
+      tool.attachGateway(gw);
+      final taskRef = h.refs.bind(kind: 'task', localId: 't1');
+      final eventRef = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute(
+          {'ref_task': taskRef, 'ref_event': eventRef}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'stale_target');
+    });
+
+    // I2: reminder `all` commit maps StaleReminderTargetCommand to stale_target.
+    test('clear_reminder all commit maps StaleReminderTargetCommand to stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_reminder') as ClearReminderTool;
+      final gw = _LifecycleGateway();
+      gw.clearRemindersThrows = const StaleReminderTargetCommand();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_target': ref,
+        'scope': 'all',
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'stale_target');
+    });
+
+    // I2: reminder selected_offsets propose captures the desired-offset
+    // snapshot and target version; commit passes them through.
+    test('clear_reminder selected_offsets captures offsets snapshot in commitParams',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_reminder') as ClearReminderTool;
+      final gw = _LifecycleGateway();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_target': ref,
+        'scope': 'selected_offsets',
+        'offsets_minutes': [15, 30],
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      expect(gw.clearedReminders, isA<({String targetType, String targetId, String scope, List<int>? offsets, int? expectedTargetUpdatedAt, List<int>? expectedOffsetsSnapshot})>());
+      expect(gw.clearedReminders!.scope, 'selected_offsets');
+      expect(gw.clearedReminders!.offsets, [15, 30]);
+      // I2: target version + offset snapshot plumbed through.
+      expect(gw.clearedReminders!.expectedTargetUpdatedAt, isNot(isNull));
+      expect(gw.clearedReminders!.expectedOffsetsSnapshot, isNot(isNull));
+    });
+
+    // I2: overlay commit maps StaleOverlayCommand to stale_target.
+    test('clear_user_overlay commit maps StaleOverlayCommand to stale_target',
+        () async {
+      final h = _Harness(tools());
+      final tool = h.tool('clear_user_overlay') as ClearUserOverlayTool;
+      final gw = _LifecycleGateway();
+      gw.clearOverlayFieldsThrows = const StaleOverlayCommand();
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev1');
+      final result = await tool.execute({
+        'ref_event': ref,
+        'scope': 'single_event',
+        'fields': ['display_title'],
+      }, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.status, AgentToolStatus.error);
+      expect(commitResult.errorCode, 'stale_target');
     });
 
     test('reset_permission_policy returns already_default when no override',

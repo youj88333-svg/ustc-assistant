@@ -1,5 +1,6 @@
 import '../../calendar/application/calendar_event_service.dart';
 import '../../calendar/application/recurrence_lifecycle_service.dart';
+import '../../reminders/application/reminder_override_service.dart';
 import '../../schedule/application/conflict_service.dart';
 import '../../schedule/application/overlay_service.dart';
 import '../../tasks/application/plan_block_service.dart' hide AlreadyDeletedError;
@@ -117,6 +118,16 @@ AgentToolResult? mapLifecycleError(Object error) {
     return const AgentToolResult(
       status: AgentToolStatus.error,
       errorCode: 'target_not_found',
+    );
+  }
+  // I2: unlink/reminder/overlay version+content mismatch -> stale_target
+  // (distinct from foreign/missing -> target_not_found above).
+  if (error is StaleTaskEventLinkCommand ||
+      error is StaleReminderTargetCommand ||
+      error is StaleOverlayCommand) {
+    return const AgentToolResult(
+      status: AgentToolStatus.error,
+      errorCode: 'stale_target',
     );
   }
   if (error is InvalidUndoCommand) {
@@ -686,6 +697,27 @@ class ClearReminderTool extends AgentWriteTool {
     final (actionType, risk) = isAll
         ? ('clear_all_reminders', RiskLevel.high)
         : ('clear_reminder_offsets', RiskLevel.medium);
+
+    // I2: capture the target's version + the current future desired offsets
+    // at propose time for the commit TOCTOU re-check (Spec §20). For `all`
+    // scope the offset snapshot prevents silently wiping offsets added between
+    // propose and commit; for `selected_offsets` it catches a shifted set.
+    final config = await gateway.reminderConfiguration(
+        targetType: storageTargetType, targetId: resolved.localId);
+    final int? expectedTargetUpdatedAt;
+    switch (storageTargetType) {
+      case 'event':
+        final snapshot = await gateway.eventSnapshot(resolved.localId);
+        expectedTargetUpdatedAt = snapshot.updatedAt;
+      case 'task':
+        final task = await gateway.taskById(resolved.localId);
+        expectedTargetUpdatedAt = task.updatedAt;
+      case 'plan_block':
+        final block = await gateway.planBlockById(resolved.localId);
+        expectedTargetUpdatedAt = block.updatedAt;
+      default:
+        expectedTargetUpdatedAt = null;
+    }
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -700,6 +732,8 @@ class ClearReminderTool extends AgentWriteTool {
         'targetId': resolved.localId,
         'scope': scope,
         'offsets': offsets,
+        'expectedTargetUpdatedAt': expectedTargetUpdatedAt,
+        'expectedOffsetsSnapshot': config.futureDesiredOffsets,
       },
       safeLogSummary: isAll ? '清除全部提醒' : '清除提醒偏移 $offsets 分钟',
     );
@@ -715,12 +749,17 @@ class ClearReminderTool extends AgentWriteTool {
     final targetId = p['targetId'] as String;
     final scope = p['scope'] as String;
     final offsets = (p['offsets'] as List).cast<int>();
+    final expectedTargetUpdatedAt = p['expectedTargetUpdatedAt'] as int?;
+    final expectedOffsetsSnapshot =
+        (p['expectedOffsetsSnapshot'] as List?)?.cast<int>();
     return guardCommit(() async {
       await gateway.clearReminders(
         targetType: targetType,
         targetId: targetId,
         scope: scope,
         offsets: scope == 'all' ? null : offsets,
+        expectedTargetUpdatedAt: expectedTargetUpdatedAt,
+        expectedOffsetsSnapshot: expectedOffsetsSnapshot,
       );
       return AgentToolResult(payload: {
         'result': scope == 'all' ? 'cleared_all_reminders' : 'cleared_reminder_offsets',
@@ -811,6 +850,19 @@ class ClearUserOverlayTool extends AgentWriteTool {
     final isAll = fields.contains('all');
     final isCourseSeries = scope == 'course_series';
     final (actionType, risk) = _actionPolicy(isCourseSeries, isAll);
+
+    // I2: capture the overlay row's updatedAt at propose time for the commit
+    // TOCTOU re-check (Spec §20). For course_series scope, resolve the event's
+    // series id first so the snapshot reads the series-layer row. A null
+    // updatedAt (no overlay row yet) is plumbed through and skips the check.
+    String? seriesIdForSnapshot;
+    if (isCourseSeries) {
+      seriesIdForSnapshot = await gateway.courseSeriesIdForEvent(eventId);
+    }
+    final overlaySnapshot = await gateway.overlayRowSnapshot(
+      eventId: isCourseSeries ? null : eventId,
+      courseSeriesId: isCourseSeries ? seriesIdForSnapshot : null,
+    );
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -824,6 +876,7 @@ class ClearUserOverlayTool extends AgentWriteTool {
         'eventId': eventId,
         'scope': scope,
         'fields': fields,
+        'expectedOverlayUpdatedAt': overlaySnapshot.updatedAt,
       },
       safeLogSummary: '清除日程标注字段 $fields',
     );
@@ -838,6 +891,7 @@ class ClearUserOverlayTool extends AgentWriteTool {
     final eventId = p['eventId'] as String;
     final scope = p['scope'] as String;
     final fields = (p['fields'] as List).cast<String>();
+    final expectedOverlayUpdatedAt = p['expectedOverlayUpdatedAt'] as int?;
     return guardCommit(() async {
       if (scope == 'course_series') {
         final seriesId = await gateway.courseSeriesIdForEvent(eventId);
@@ -851,9 +905,14 @@ class ClearUserOverlayTool extends AgentWriteTool {
         await gateway.clearOverlayFields(
           courseSeriesId: seriesId,
           fields: fields,
+          expectedOverlayUpdatedAt: expectedOverlayUpdatedAt,
         );
       } else {
-        await gateway.clearOverlayFields(eventId: eventId, fields: fields);
+        await gateway.clearOverlayFields(
+          eventId: eventId,
+          fields: fields,
+          expectedOverlayUpdatedAt: expectedOverlayUpdatedAt,
+        );
       }
       return AgentToolResult(payload: {
         'result': 'cleared_user_overlay',
@@ -929,6 +988,11 @@ class UnlinkTaskEventTool extends AgentWriteTool {
     final eventId = ctx.references.resolve(ref: eventRef, kind: 'event');
     if (eventId == null) throw const FormatException('unknown event ref');
 
+    // I2: capture the task + event version snapshot at propose time for the
+    // commit TOCTOU re-check (Spec §20). Reuses C3's EventWriteSnapshot.
+    final task = await gateway.taskById(taskId);
+    final eventSnapshot = await gateway.eventSnapshot(eventId);
+
     return AgentWriteProposal(
       toolName: name,
       actionType: actionType,
@@ -936,7 +1000,12 @@ class UnlinkTaskEventTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: const ['变更：解除该任务与该日程的关联'],
-      commitParams: {'taskId': taskId, 'eventId': eventId},
+      commitParams: {
+        'taskId': taskId,
+        'eventId': eventId,
+        'expectedTaskUpdatedAt': task.updatedAt,
+        'expectedEventUpdatedAt': eventSnapshot.updatedAt,
+      },
       safeLogSummary: '解除任务-日程关联',
     );
   }
@@ -949,8 +1018,15 @@ class UnlinkTaskEventTool extends AgentWriteTool {
     final p = proposal.commitParams;
     final taskId = p['taskId'] as String;
     final eventId = p['eventId'] as String;
+    final expectedTaskUpdatedAt = p['expectedTaskUpdatedAt'] as int?;
+    final expectedEventUpdatedAt = p['expectedEventUpdatedAt'] as int?;
     return guardCommit(() async {
-      await gateway.unlinkTaskEvent(taskId: taskId, eventId: eventId);
+      await gateway.unlinkTaskEvent(
+        taskId: taskId,
+        eventId: eventId,
+        expectedTaskUpdatedAt: expectedTaskUpdatedAt,
+        expectedEventUpdatedAt: expectedEventUpdatedAt,
+      );
       return const AgentToolResult(
         payload: {'result': 'unlinked_task_event'},
       );

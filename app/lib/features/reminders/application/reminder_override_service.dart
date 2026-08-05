@@ -12,6 +12,18 @@ import '../../tasks/application/undo_recorder.dart';
 /// be a future `desired` offset — otherwise the whole call fails atomically).
 enum ReminderClearScope { all, selectedOffsets }
 
+/// Deterministic error returned when the reminder target's `updatedAt` or the
+/// set of future `desired` offsets changed between propose and commit
+/// (Spec §20 TOCTOU re-check). Distinct from a missing/non-timed target
+/// (which surfaces as a [StateError] / `reminder_not_found` upstream) so the
+/// caller can map it to `stale_target`.
+class StaleReminderTargetCommand implements Exception {
+  const StaleReminderTargetCommand();
+
+  @override
+  String toString() => 'StaleReminderTargetCommand';
+}
+
 class ReminderOverrideService {
   ReminderOverrideService({
     required this.database,
@@ -103,11 +115,21 @@ class ReminderOverrideService {
   /// When the target ends up with no remaining future `desired` offset, a
   /// no-offset cancelled sentinel is written so reconcile never rebuilds the
   /// default reminders. The complete before-row snapshot is recorded for Undo.
+  ///
+  /// Optional [expectedTargetUpdatedAt] / [expectedOffsetsSnapshot] force a
+  /// TOCTOU re-check (Spec §20): when supplied and the target's `updatedAt`
+  /// differs, or the current set of future `desired` offsets differs from the
+  /// snapshot, a [StaleReminderTargetCommand] is raised (maps to
+  /// `stale_target`) and nothing is written. This prevents an `all`-scope
+  /// clear from silently wiping offsets added between propose and commit, and
+  /// a `selected_offsets` clear from acting on a shifted offset set.
   Future<void> clearReminders({
     required String targetType,
     required String targetId,
     required ReminderClearScope scope,
     List<int>? offsets,
+    int? expectedTargetUpdatedAt,
+    List<int>? expectedOffsetsSnapshot,
   }) async {
     if (scope == ReminderClearScope.all && offsets != null) {
       throw ArgumentError.value(offsets, 'offsets',
@@ -129,6 +151,13 @@ class ReminderOverrideService {
       if (startAt == null) {
         throw StateError('timed target required');
       }
+      // I2: TOCTOU version re-check — target row changed between propose and
+      // commit.
+      if (expectedTargetUpdatedAt != null &&
+          resolved.targetUpdatedAt != null &&
+          resolved.targetUpdatedAt != expectedTargetUpdatedAt) {
+        throw const StaleReminderTargetCommand();
+      }
       final token = _tokenOf(targetType, targetId, resolved);
       final before = await _loadReminders(targetType, targetId);
       final timestamp = now();
@@ -139,6 +168,18 @@ class ReminderOverrideService {
             row.id: row.offsetMinutes!,
       };
       final existingOffsets = futureDesired.values.toSet();
+      // I2: TOCTOU content re-check — the future desired offset set must match
+      // the propose-time snapshot. For `all` scope this catches offsets added
+      // between propose and commit (preventing silent wipe); for `selected`
+      // scope this catches a shifted set (e.g. the 15-row removed before
+      // commit) so the call fails atomically rather than acting on stale info.
+      if (expectedOffsetsSnapshot != null) {
+        final snapshotSet = expectedOffsetsSnapshot.toSet();
+        if (existingOffsets.length != snapshotSet.length ||
+            !existingOffsets.containsAll(snapshotSet)) {
+          throw const StaleReminderTargetCommand();
+        }
+      }
       final Set<int> toClear;
       if (scope == ReminderClearScope.all) {
         toClear = existingOffsets.toSet();
@@ -195,7 +236,9 @@ class ReminderOverrideService {
   /// [RecurrenceService.ensureOccurrenceAnchor]); `task` and `plan_block`
   /// targets resolve to their own FK columns. Rejects non-timed targets.
   /// [startAt] is null when the target is non-timed, which the caller rejects.
-  Future<({String? eventId, String? occurrenceExceptionId, String? taskId, String? planBlockId, int? startAt})>
+  /// [targetUpdatedAt] is the backing row's `updatedAt` at resolve time, used
+  /// by the TOCTOU re-check (Spec §20).
+  Future<({String? eventId, String? occurrenceExceptionId, String? taskId, String? planBlockId, int? startAt, int? targetUpdatedAt})>
       _resolveTarget(String targetType, String targetId) async {
     switch (targetType) {
       case 'event':
@@ -206,6 +249,7 @@ class ReminderOverrideService {
           taskId: null,
           planBlockId: null,
           startAt: resolved.startAt,
+          targetUpdatedAt: resolved.targetUpdatedAt,
         );
       case 'task':
         final task = await (database.select(database.tasks)
@@ -220,6 +264,7 @@ class ReminderOverrideService {
           taskId: targetId,
           planBlockId: null,
           startAt: task.deadlineAt,
+          targetUpdatedAt: task.updatedAt,
         );
       case 'plan_block':
         final block = await (database.select(database.planBlocks)
@@ -234,6 +279,7 @@ class ReminderOverrideService {
           taskId: null,
           planBlockId: targetId,
           startAt: block.startAt,
+          targetUpdatedAt: block.updatedAt,
         );
       default:
         throw StateError('unsupported target type');
@@ -245,7 +291,9 @@ class ReminderOverrideService {
   /// exception anchor (created/reused) and uses the composed occurrence's
   /// effective start; a plain stored event id maps to the event FK and its
   /// stored startAt. Rejects non-timed (all-day / missing start) targets.
-  Future<({String? eventId, String? occurrenceExceptionId, int? startAt})>
+  /// [targetUpdatedAt] is the backing row's `updatedAt` at resolve time, used
+  /// by the TOCTOU re-check (Spec §20).
+  Future<({String? eventId, String? occurrenceExceptionId, int? startAt, int? targetUpdatedAt})>
       _resolveEventTarget(String targetId) async {
     final recurrence =
         RecurrenceService(database: database, accountId: accountId, now: now);
@@ -254,7 +302,8 @@ class ReminderOverrideService {
       if (decoded is! RecurringOccurrenceLocator) {
         throw StateError('unsupported event locator');
       }
-      if (await recurrence.seriesRowOrNull(decoded.seriesId) == null) {
+      final series = await recurrence.seriesRowOrNull(decoded.seriesId);
+      if (series == null) {
         throw StateError('recurring occurrence not found');
       }
       final occurrence =
@@ -270,6 +319,7 @@ class ReminderOverrideService {
         eventId: null,
         occurrenceExceptionId: anchor.id,
         startAt: occurrence.startAt!.millisecondsSinceEpoch,
+        targetUpdatedAt: series.updatedAt,
       );
     }
     if (targetId.startsWith('event_v1.') ||
@@ -287,6 +337,7 @@ class ReminderOverrideService {
       eventId: targetId,
       occurrenceExceptionId: null,
       startAt: event.startAt,
+      targetUpdatedAt: event.updatedAt,
     );
   }
 
@@ -357,7 +408,7 @@ class ReminderOverrideService {
   _TargetToken _tokenOf(
     String targetType,
     String targetId,
-    ({String? eventId, String? occurrenceExceptionId, String? taskId, String? planBlockId, int? startAt})
+    ({String? eventId, String? occurrenceExceptionId, String? taskId, String? planBlockId, int? startAt, int? targetUpdatedAt})
         resolved,
   ) => _TargetToken(
     targetType: targetType,

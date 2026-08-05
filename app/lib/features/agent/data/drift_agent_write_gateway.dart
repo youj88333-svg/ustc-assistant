@@ -639,6 +639,8 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     required String targetId,
     required String scope,
     List<int>? offsets,
+    int? expectedTargetUpdatedAt,
+    List<int>? expectedOffsetsSnapshot,
   }) {
     final clearScope = scope == 'all'
         ? ReminderClearScope.all
@@ -648,20 +650,54 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       targetId: targetId,
       scope: clearScope,
       offsets: offsets,
+      expectedTargetUpdatedAt: expectedTargetUpdatedAt,
+      expectedOffsetsSnapshot: expectedOffsetsSnapshot,
     );
   }
+
+  @override
+  Future<ReminderConfiguration> reminderConfiguration({
+    required String targetType,
+    required String targetId,
+  }) =>
+      _reminders.configurationFor(
+          targetType: targetType, targetId: targetId);
 
   @override
   Future<void> clearOverlayFields({
     String? eventId,
     String? courseSeriesId,
     required List<String> fields,
+    int? expectedOverlayUpdatedAt,
   }) =>
       _overlays.clearOverlayFields(
         eventId: eventId,
         courseSeriesId: courseSeriesId,
         fields: fields,
+        expectedOverlayUpdatedAt: expectedOverlayUpdatedAt,
       );
+
+  @override
+  Future<({int? updatedAt, Map<String, Object?> fieldValues})>
+      overlayRowSnapshot({
+    String? eventId,
+    String? courseSeriesId,
+  }) async {
+    final row = await (database.select(database.userOverlays)..where(
+          (row) =>
+              row.accountId.equals(accountId) &
+              (eventId != null
+                  ? row.eventId.equals(eventId)
+                  : row.courseSeriesId.equals(courseSeriesId!)),
+        ))
+        .getSingleOrNull();
+    if (row == null) {
+      return (updatedAt: null, fieldValues: const <String, Object?>{});
+    }
+    // Reuse the allowlisted-field extraction so no DB id leaks.
+    final fields = EventOverlayLayers.allowlistedFields(row);
+    return (updatedAt: row.updatedAt, fieldValues: fields);
+  }
 
   @override
   Future<void> deleteConflictRelation(String relationId) =>

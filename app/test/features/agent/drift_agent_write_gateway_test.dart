@@ -18,6 +18,7 @@ import 'package:ustc_assistant_app/features/schedule/application/conflict_servic
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
 import 'package:ustc_assistant_app/features/schedule/application/overlay_service.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/jw_day_move.dart';
+import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/task_event_link_service.dart';
 import 'package:ustc_assistant_app/features/tasks/application/undo_service.dart';
 import 'package:ustc_assistant_app/features/tasks/domain/plan_block.dart';
@@ -1106,6 +1107,174 @@ void main() {
         .getSingle();
     final snapshot = await gateway.eventSnapshot('ev-1');
     expect(snapshot.updatedAt, row.updatedAt);
+  });
+
+  // =========================================================================
+  // I2: TOCTOU content/version snapshot re-check on unlink/reminder/overlay
+  // commits. The 3 commit paths must re-read and compare a propose-time
+  // snapshot (target updatedAt + content), not just check existence. A
+  // version/content mismatch throws a Stale* exception (maps to stale_target),
+  // distinct from a foreign/missing target (target_not_found).
+  // =========================================================================
+
+  test('unlinkTaskEvent with stale expectedTaskUpdatedAt throws StaleTaskEventLinkCommand',
+      () async {
+    await seedTask('t1');
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await db.into(db.taskEventLinks).insert(TaskEventLinksCompanion.insert(
+          accountId: 'acc-1',
+          taskId: 't1',
+          targetId: 'ev-1',
+          eventId: const Value('ev-1'),
+          relationType: 'related',
+          createdAt: 1,
+        ));
+    final taskRow = await (db.select(db.tasks)..where((r) => r.id.equals('t1')))
+        .getSingle();
+    // Mutate the task title between propose and commit, bumping updatedAt.
+    await db.customStatement(
+        "UPDATE tasks SET title = '改过', updated_at = ${taskRow.updatedAt + 1} "
+        "WHERE id = 't1'");
+    await expectLater(
+      gateway.unlinkTaskEvent(
+          taskId: 't1',
+          eventId: 'ev-1',
+          expectedTaskUpdatedAt: taskRow.updatedAt,
+          expectedEventUpdatedAt: 1),
+      throwsA(isA<StaleTaskEventLinkCommand>()),
+    );
+    // The link row must remain (nothing written on stale).
+    expect(await db.select(db.taskEventLinks).get(), hasLength(1));
+  });
+
+  test('unlinkTaskEvent with current expectedTaskUpdatedAt succeeds', () async {
+    await seedTask('t1');
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await db.into(db.taskEventLinks).insert(TaskEventLinksCompanion.insert(
+          accountId: 'acc-1',
+          taskId: 't1',
+          targetId: 'ev-1',
+          eventId: const Value('ev-1'),
+          relationType: 'related',
+          createdAt: 1,
+        ));
+    final taskRow = await (db.select(db.tasks)..where((r) => r.id.equals('t1')))
+        .getSingle();
+    final eventRow =
+        await (db.select(db.calendarEvents)..where((r) => r.id.equals('ev-1')))
+            .getSingle();
+    await gateway.unlinkTaskEvent(
+        taskId: 't1',
+        eventId: 'ev-1',
+        expectedTaskUpdatedAt: taskRow.updatedAt,
+        expectedEventUpdatedAt: eventRow.updatedAt);
+    expect(await db.select(db.taskEventLinks).get(), isEmpty);
+  });
+
+  test(
+      'clearReminders all with stale desired-offset snapshot throws '
+      'StaleReminderTargetCommand', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setReminder('ev-1', const [15, 30]);
+    final eventRow =
+        await (db.select(db.calendarEvents)..where((r) => r.id.equals('ev-1')))
+            .getSingle();
+    // Between propose and commit, the user adds a new desired offset 60.
+    await gateway.setReminder('ev-1', const [15, 30, 60]);
+    await expectLater(
+      gateway.clearReminders(
+          targetType: 'event',
+          targetId: 'ev-1',
+          scope: 'all',
+          expectedTargetUpdatedAt: eventRow.updatedAt,
+          expectedOffsetsSnapshot: const [15, 30]),
+      throwsA(isA<StaleReminderTargetCommand>()),
+    );
+    // The newly added 60 offset must still be a future desired row.
+    final desired = await (db.select(db.reminders)
+          ..where((r) =>
+              r.eventId.equals('ev-1') & r.state.equals('desired')))
+        .get();
+    expect(desired.map((r) => r.offsetMinutes).toSet(), contains(60));
+  });
+
+  test(
+      'clearReminders selected_offsets with stale desired-offset snapshot throws '
+      'StaleReminderTargetCommand', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setReminder('ev-1', const [15, 30]);
+    final eventRow =
+        await (db.select(db.calendarEvents)..where((r) => r.id.equals('ev-1')))
+            .getSingle();
+    // Between propose and commit, the 15-row is removed (e.g. user cleared it
+    // via another path), leaving only 30.
+    await gateway.clearReminders(
+        targetType: 'event', targetId: 'ev-1', scope: 'selected_offsets', offsets: const [15]);
+    await expectLater(
+      gateway.clearReminders(
+          targetType: 'event',
+          targetId: 'ev-1',
+          scope: 'selected_offsets',
+          offsets: const [15],
+          expectedTargetUpdatedAt: eventRow.updatedAt,
+          expectedOffsetsSnapshot: const [15, 30]),
+      throwsA(isA<StaleReminderTargetCommand>()),
+    );
+  });
+
+  test(
+      'clearOverlayFields with stale expectedOverlayUpdatedAt throws '
+      'StaleOverlayCommand', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    await gateway.setEventOverlay(
+        'ev-1',
+        const OverlayMutation(displayTitle: '健身改', importance: 'high'));
+    final overlayRow = await (db.select(db.userOverlays)
+          ..where((r) => r.eventId.equals('ev-1')))
+        .getSingle();
+    // Between propose and commit, the field being cleared is changed (bumping
+    // the overlay row's updatedAt). The gateway uses a fixed clock, so bump
+    // updated_at explicitly via raw SQL to simulate a concurrent mutation.
+    await db.customStatement(
+        "UPDATE user_overlays SET display_title = '又改了', "
+        "updated_at = ${overlayRow.updatedAt + 1} WHERE event_id = 'ev-1'");
+    await expectLater(
+      gateway.clearOverlayFields(
+          eventId: 'ev-1',
+          fields: const ['display_title'],
+          expectedOverlayUpdatedAt: overlayRow.updatedAt),
+      throwsA(isA<StaleOverlayCommand>()),
+    );
+    // The new value must survive (nothing cleared on stale).
+    final after = await (db.select(db.userOverlays)
+          ..where((r) => r.eventId.equals('ev-1')))
+        .getSingle();
+    expect(after.displayTitle, '又改了');
   });
 
   test('clearReminders all delegates to ReminderOverrideService.clearReminders',

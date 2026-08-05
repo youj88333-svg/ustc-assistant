@@ -99,6 +99,17 @@ class OverlayMutation {
   final String? tagsJson;
 }
 
+/// Deterministic error returned when the overlay row's `updatedAt` changed
+/// between propose and commit (Spec §20 TOCTOU re-check). Distinct from a
+/// missing target (`StateError` / `target_not_found` upstream) so the caller
+/// can map it to `stale_target`.
+class StaleOverlayCommand implements Exception {
+  const StaleOverlayCommand();
+
+  @override
+  String toString() => 'StaleOverlayCommand';
+}
+
 class OverlayService {
   OverlayService({
     required this.database,
@@ -159,10 +170,16 @@ class OverlayService {
   ///
   /// The write, the `user_overlay_update` ActionLog, and the one-step Undo
   /// snapshot all land in the same Drift transaction.
+  ///
+  /// Optional [expectedOverlayUpdatedAt] forces a TOCTOU re-check (Spec §20):
+  /// when supplied and the overlay row exists but its `updatedAt` differs, a
+  /// [StaleOverlayCommand] is raised (maps to `stale_target`) and nothing is
+  /// written — a field changed between propose and commit is not cleared.
   Future<void> clearOverlayFields({
     String? eventId,
     String? courseSeriesId,
     required List<String> fields,
+    int? expectedOverlayUpdatedAt,
   }) async {
     if (fields.isEmpty) {
       throw ArgumentError.value(fields, 'fields', 'at least one field required');
@@ -205,6 +222,14 @@ class OverlayService {
       if (existing == null) {
         await _logOverlay(eventId == null, timestamp);
         return;
+      }
+
+      // I2: TOCTOU version re-check — the overlay row's updatedAt must match
+      // the propose-time snapshot. A field changed between propose and commit
+      // must not be cleared along with the target.
+      if (expectedOverlayUpdatedAt != null &&
+          existing.updatedAt != expectedOverlayUpdatedAt) {
+        throw const StaleOverlayCommand();
       }
 
       final before = _snapshot(existing);
@@ -652,6 +677,14 @@ class EventOverlayLayers {
   /// Null fields in the overlay row mean "not set" and are omitted. Never
   /// includes the DB id, event id, or series id.
   static Map<String, Object?> _allowlistedFields(UserOverlay? row) {
+    return allowlistedFields(row);
+  }
+
+  /// Public entry point for the allowlisted-field extraction (reused by the
+  /// Agent write gateway's propose-time overlay snapshot). Same semantics as
+  /// the private [_allowlistedFields]: null row -> empty map; null fields
+  /// omitted; never includes DB id / event id / series id.
+  static Map<String, Object?> allowlistedFields(UserOverlay? row) {
     if (row == null) return const {};
     final out = <String, Object?>{};
     void add(String key, Object? value) {

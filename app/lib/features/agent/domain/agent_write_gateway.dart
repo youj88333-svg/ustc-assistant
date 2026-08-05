@@ -2,6 +2,7 @@ import '../../calendar/application/recurrence_lifecycle_service.dart';
 import '../../calendar/application/recurrence_service.dart';
 import '../../calendar/domain/personal_event.dart';
 import '../../calendar/domain/recurrence_rule.dart';
+import '../../reminders/application/reminder_override_service.dart';
 import '../../schedule/application/effective_event_repository.dart';
 import '../../schedule/application/overlay_service.dart';
 import '../../schedule/domain/jw_day_move.dart';
@@ -157,11 +158,26 @@ abstract interface class AgentWriteGateway {
   /// `event`/`task`/`plan_block`. `all` scope ignores [offsets];
   /// `selected_offsets` requires non-empty offsets, every one of which must
   /// already be a future desired offset (atomic fail on mismatch).
+  ///
+  /// I2: [expectedTargetUpdatedAt] / [expectedOffsetsSnapshot] carry the
+  /// propose-time target version and desired-offset set for a TOCTOU re-check
+  /// (Spec §20); a mismatch throws `StaleReminderTargetCommand` (maps to
+  /// `stale_target`). null skips the check (back-compat).
   Future<void> clearReminders({
     required String targetType,
     required String targetId,
     required String scope, // all | selected_offsets
     List<int>? offsets,
+    int? expectedTargetUpdatedAt,
+    List<int>? expectedOffsetsSnapshot,
+  });
+
+  /// Reads the target's current reminder configuration (future desired
+  /// offsets, explicit-disable flag, history counts) for the propose-time
+  /// snapshot. Account-scoped, read-only, no Reminder DB id.
+  Future<ReminderConfiguration> reminderConfiguration({
+    required String targetType,
+    required String targetId,
   });
 
   // ---- Overlay clear (Task 7 tri-state OverlayService.clearOverlayFields) ----
@@ -170,10 +186,25 @@ abstract interface class AgentWriteGateway {
   /// non-null). Exactly one target must be set. Fields may include group
   /// keys (`attendance`/`listening`/`display`/`appearance`/`all`); an
   /// unknown key aborts atomically before any write.
+  ///
+  /// I2: [expectedOverlayUpdatedAt] carries the propose-time overlay row
+  /// version for a TOCTOU re-check (Spec §20); a mismatch throws
+  /// `StaleOverlayCommand` (maps to `stale_target`). null skips the check.
   Future<void> clearOverlayFields({
     String? eventId,
     String? courseSeriesId,
     required List<String> fields,
+    int? expectedOverlayUpdatedAt,
+  });
+
+  /// Reads the overlay row's `updatedAt` and currently-set field values for
+  /// the propose-time snapshot. Exactly one of [eventId] / [courseSeriesId]
+  /// must be set. Returns `(updatedAt: null, fieldValues: {})` when no
+  /// overlay row exists (target at pure defaults). Account-scoped, read-only.
+  Future<({int? updatedAt, Map<String, Object?> fieldValues})>
+      overlayRowSnapshot({
+    String? eventId,
+    String? courseSeriesId,
   });
 
   // ---- Schedule relation / rule deletion (Task 8) ----
