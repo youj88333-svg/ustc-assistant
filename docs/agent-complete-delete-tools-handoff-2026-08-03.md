@@ -190,10 +190,10 @@ Task 12 已完成。以下为本轮最终交还事实（自动测试通过，人
 
 ### 9.1 最终 HEAD 与本轮 Task 12 commit
 
-- 最终 HEAD：`685cb86 test(agent): add lifecycle composite regression for delete tools`
-  （后续最终提交 `test(agent): close complete deletion workflows` 会改写本哈希）。
-- Task 12 首个 commit：`685cb86 test(agent): add lifecycle composite regression for delete tools`
-  （组合回归 13 场景 + 只读来源回归）。
+- 最终 HEAD：`78f10db fix(agent): restore deleted tasks and plan blocks through the agent gateway`
+  （Task 12 及其后全量综合审查修复批收尾，2026-08-05）。
+- Task 12 首个 commit：`9bc81cf test(agent): close complete deletion workflows`
+  （组合回归 13 场景 + 只读来源回归；首个 commit `685cb86` 为其前驱）。
 - Tasks 1–11 commit 见 `git log --oneline feature/delete-tools`（逐 Task 提交，各自独立审查）。
 
 ### 9.2 组合测试覆盖
