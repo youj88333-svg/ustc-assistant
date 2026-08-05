@@ -422,7 +422,8 @@ class RecurringLifecycleService {
     int? expectedExceptionUpdatedAt,
   }) async {
     if (scope == RecurringActionScope.wholeSeries) {
-      await _runWholeSeries(seriesId, action);
+      await _runWholeSeries(seriesId, action,
+          expectedUpdatedAt: expectedSeriesUpdatedAt);
       return;
     }
     if (scope == RecurringActionScope.thisAndFuture) {

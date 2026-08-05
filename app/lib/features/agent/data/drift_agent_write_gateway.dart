@@ -125,16 +125,20 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
   }
 
   @override
-  Future<void> cancelEvent(String eventId) => _events.cancel(eventId);
+  Future<void> cancelEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.cancel(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
-  Future<void> completeEvent(String eventId) => _events.complete(eventId);
+  Future<void> completeEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.complete(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
-  Future<void> skipEvent(String eventId) => _events.skip(eventId);
+  Future<void> skipEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.skip(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
-  Future<void> softDeleteEvent(String eventId) => _events.softDelete(eventId);
+  Future<void> softDeleteEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.softDelete(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
   Future<String> createTask({
@@ -324,6 +328,7 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       personalSeriesId: row.personalSeriesId,
       occurrenceKey: row.occurrenceKey,
       courseSeriesId: courseSeriesId,
+      updatedAt: row.updatedAt,
     );
   }
 
@@ -345,14 +350,15 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       case RecurringOccurrenceLocator(:final seriesId, :final occurrenceKey):
         // Deterministic `occurrence_not_found`: a missing series or a non-
         // contained occurrence both surface as OccurrenceNotFoundError.
-        if (await _recurrence.seriesRowOrNull(seriesId) == null) {
+        final series = await _recurrence.seriesRowOrNull(seriesId);
+        if (series == null) {
           throw const OccurrenceNotFoundError();
         }
         final occurrence = await _recurrence.occurrence(
           seriesId,
           occurrenceKey,
         );
-        return _snapshotFromOccurrence(occurrence);
+        return _snapshotFromOccurrence(occurrence, seriesUpdatedAt: series.updatedAt);
       case RecurringSeriesLocator(:final seriesId):
         final series = await _recurrence.seriesRow(seriesId);
         return _snapshotFromSeries(series);
@@ -381,8 +387,13 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
 
   /// Builds an [EventWriteSnapshot] from a composed recurring occurrence. Only
   /// safe display fields are forwarded; the series id / occurrence key live
-  /// behind the id (the encoded occurrence locator).
-  EventWriteSnapshot _snapshotFromOccurrence(RecurringOccurrence occurrence) {
+  /// behind the id (the encoded occurrence locator). [seriesUpdatedAt] is the
+  /// owning series row's `updatedAt`, plumbed through as the propose-time
+  /// version for the recurringLifecycle TOCTOU re-check.
+  EventWriteSnapshot _snapshotFromOccurrence(
+    RecurringOccurrence occurrence, {
+    int? seriesUpdatedAt,
+  }) {
     final id = encodeCalendarEventLocator(
       RecurringOccurrenceLocator(
         seriesId: occurrence.seriesId,
@@ -402,6 +413,7 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       location: occurrence.locationName,
       personalSeriesId: occurrence.seriesId,
       occurrenceKey: occurrence.occurrenceKey,
+      updatedAt: seriesUpdatedAt,
     );
   }
 
@@ -429,6 +441,7 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       location: series.locationName,
       personalSeriesId: series.id,
       occurrenceKey: null,
+      updatedAt: series.updatedAt,
     );
   }
 
@@ -493,17 +506,23 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
     required String? occurrenceKey,
     required RecurringActionScope scope,
     required RecurringLifecycleAction action,
+    int? expectedSeriesUpdatedAt,
+    int? expectedExceptionUpdatedAt,
   }) {
     if (occurrenceKey == null) {
       switch (action) {
         case RecurringLifecycleAction.cancel:
-          return _lifecycle.cancelSeries(seriesId);
+          return _lifecycle.cancelSeries(seriesId,
+              expectedUpdatedAt: expectedSeriesUpdatedAt);
         case RecurringLifecycleAction.delete:
-          return _lifecycle.deleteSeries(seriesId);
+          return _lifecycle.deleteSeries(seriesId,
+              expectedUpdatedAt: expectedSeriesUpdatedAt);
         case RecurringLifecycleAction.reopen:
-          return _lifecycle.reopenSeries(seriesId);
+          return _lifecycle.reopenSeries(seriesId,
+              expectedUpdatedAt: expectedSeriesUpdatedAt);
         case RecurringLifecycleAction.restore:
-          return _lifecycle.restoreSeries(seriesId);
+          return _lifecycle.restoreSeries(seriesId,
+              expectedUpdatedAt: expectedSeriesUpdatedAt);
       }
     }
     final key = occurrenceKey;
@@ -513,24 +532,32 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
           seriesId: seriesId,
           occurrenceKey: key,
           scope: scope,
+          expectedSeriesUpdatedAt: expectedSeriesUpdatedAt,
+          expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
         );
       case RecurringLifecycleAction.delete:
         return _lifecycle.delete(
           seriesId: seriesId,
           occurrenceKey: key,
           scope: scope,
+          expectedSeriesUpdatedAt: expectedSeriesUpdatedAt,
+          expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
         );
       case RecurringLifecycleAction.reopen:
         return _lifecycle.reopen(
           seriesId: seriesId,
           occurrenceKey: key,
           scope: scope,
+          expectedSeriesUpdatedAt: expectedSeriesUpdatedAt,
+          expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
         );
       case RecurringLifecycleAction.restore:
         return _lifecycle.restore(
           seriesId: seriesId,
           occurrenceKey: key,
           scope: scope,
+          expectedSeriesUpdatedAt: expectedSeriesUpdatedAt,
+          expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
         );
     }
   }
@@ -597,10 +624,12 @@ class DriftAgentWriteGateway implements AgentWriteGateway {
       _planBlocks.restore(id, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
-  Future<void> reopenEvent(String eventId) => _events.reopen(eventId);
+  Future<void> reopenEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.reopen(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
-  Future<void> restoreEvent(String eventId) => _events.restore(eventId);
+  Future<void> restoreEvent(String eventId, {int? expectedUpdatedAt}) =>
+      _events.restore(eventId, expectedUpdatedAt: expectedUpdatedAt);
 
   @override
   Future<void> clearReminders({

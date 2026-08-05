@@ -26,6 +26,7 @@ final class EventWriteSnapshot {
     this.personalSeriesId,
     this.occurrenceKey,
     this.courseSeriesId,
+    this.updatedAt,
   });
 
   final String id;
@@ -41,6 +42,14 @@ final class EventWriteSnapshot {
   final String? personalSeriesId;
   final String? occurrenceKey;
   final String? courseSeriesId;
+
+  /// The row's `updatedAt` at propose time. Single-event lifecycle commits
+  /// plumb this through as `expectedUpdatedAt` so the service can TOCTOU
+  /// re-check the version between propose and confirm (Spec §25.1). For a
+  /// recurring occurrence the single-event lifecycle isn't used (the
+  /// recurringLifecycle path carries `expectedSeriesUpdatedAt` instead), so
+  /// this is null on occurrence/series snapshots.
+  final int? updatedAt;
 
   bool get isPersonal => source == 'user';
   bool get isRecurring => personalSeriesId != null && occurrenceKey != null;
@@ -61,10 +70,10 @@ abstract interface class AgentWriteGateway {
   Future<void> editOccurrenceOnly(String seriesId, String occurrenceKey, OccurrenceOverride override);
   Future<SeriesEditImpact> editWholeSeries(String seriesId, {required PersonalEvent anchor});
   Future<PersonalEvent> seriesAnchor(String seriesId);
-  Future<void> cancelEvent(String eventId);
-  Future<void> completeEvent(String eventId);
-  Future<void> skipEvent(String eventId);
-  Future<void> softDeleteEvent(String eventId);
+  Future<void> cancelEvent(String eventId, {int? expectedUpdatedAt});
+  Future<void> completeEvent(String eventId, {int? expectedUpdatedAt});
+  Future<void> skipEvent(String eventId, {int? expectedUpdatedAt});
+  Future<void> softDeleteEvent(String eventId, {int? expectedUpdatedAt});
   Future<String> createTask({required String title, String? description, String? userNotes, DateTime? deadlineAt, int? estimatedMinutes, List<String> tags, TaskImportance importance});
   Future<void> renameTask(String id, String title, {required int expectedUpdatedAt});
   Future<void> completeTask(String id, {required int expectedUpdatedAt});
@@ -110,11 +119,17 @@ abstract interface class AgentWriteGateway {
   /// series ([RecurringActionScope.wholeSeries] when [occurrenceKey] is null).
   /// Agent writes suppress the per-action Undo slot (the outer unit-of-work
   /// owns the undo slot), so the implementation uses a Noop undo recorder.
+  ///
+  /// [expectedSeriesUpdatedAt]/[expectedExceptionUpdatedAt] carry the
+  /// propose-time versions for a TOCTOU re-check (Spec §25.1); null skips the
+  /// check (back-compat with no-arg callers).
   Future<void> recurringLifecycle(
     String seriesId, {
     required String? occurrenceKey,
     required RecurringActionScope scope,
     required RecurringLifecycleAction action,
+    int? expectedSeriesUpdatedAt,
+    int? expectedExceptionUpdatedAt,
   });
 
   Future<String?> courseSeriesIdForEvent(String eventId);
@@ -134,8 +149,8 @@ abstract interface class AgentWriteGateway {
   Future<void> restorePlanBlock(String id, {required int expectedUpdatedAt});
 
   // ---- Event lifecycle (complete/skip/cancel/softDelete exist; reopen/restore) ----
-  Future<void> reopenEvent(String eventId);
-  Future<void> restoreEvent(String eventId);
+  Future<void> reopenEvent(String eventId, {int? expectedUpdatedAt});
+  Future<void> restoreEvent(String eventId, {int? expectedUpdatedAt});
 
   // ---- Reminder clear (Task 7 generalized ReminderOverrideService) ----
   /// Clears future `desired` reminders for the target. [targetType] is

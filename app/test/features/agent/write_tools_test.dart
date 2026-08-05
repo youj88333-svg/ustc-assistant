@@ -15,6 +15,7 @@ import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_unit_of_work.dart';
+import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
@@ -115,16 +116,23 @@ class _UpdateGateway implements AgentWriteGateway {
   final Map<String, EventWriteSnapshot> snapshots = {};
   final Map<String, PersonalEvent> events = {};
   String? softDeletedId;
+  int? softDeleteExpectedUpdatedAt;
   String? cancelledId;
+  int? cancelExpectedUpdatedAt;
   String? completedId;
+  int? completeExpectedUpdatedAt;
   String? skippedId;
+  int? skipExpectedUpdatedAt;
   String? reopenedId;
+  int? reopenExpectedUpdatedAt;
   String? restoredId;
+  int? restoreExpectedUpdatedAt;
   String? editedId;
   PersonalEvent? editedReplacement;
   ({String seriesId, String key, OccurrenceOverride override})? occurrenceEdit;
   ({String seriesId, PersonalEvent anchor})? wholeSeriesEdit;
-  ({String seriesId, String? key, RecurringActionScope scope, RecurringLifecycleAction action})?
+  ({String seriesId, String? key, RecurringActionScope scope, RecurringLifecycleAction action,
+    int? expectedSeriesUpdatedAt, int? expectedExceptionUpdatedAt})?
       lifecycleCall;
   ({String seriesId, String? key, RecurringLifecycleAction? action})? impactPreviewCall;
   bool impactRequiresScope = false;
@@ -145,22 +153,48 @@ class _UpdateGateway implements AgentWriteGateway {
       events['anchor:$seriesId']!;
 
   @override
-  Future<void> softDeleteEvent(String eventId) async => softDeletedId = eventId;
+  Future<void> softDeleteEvent(String eventId, {int? expectedUpdatedAt}) async {
+    softDeleteExpectedUpdatedAt = expectedUpdatedAt;
+    if (expectedUpdatedAt != null &&
+        expectedUpdatedAt != snapshots[eventId]?.updatedAt) {
+      throw const StaleEventCommand();
+    }
+    softDeletedId = eventId;
+  }
 
   @override
-  Future<void> cancelEvent(String eventId) async => cancelledId = eventId;
+  Future<void> cancelEvent(String eventId, {int? expectedUpdatedAt}) async {
+    cancelExpectedUpdatedAt = expectedUpdatedAt;
+    if (expectedUpdatedAt != null &&
+        expectedUpdatedAt != snapshots[eventId]?.updatedAt) {
+      throw const StaleEventCommand();
+    }
+    cancelledId = eventId;
+  }
 
   @override
-  Future<void> completeEvent(String eventId) async => completedId = eventId;
+  Future<void> completeEvent(String eventId, {int? expectedUpdatedAt}) async {
+    completedId = eventId;
+    completeExpectedUpdatedAt = expectedUpdatedAt;
+  }
 
   @override
-  Future<void> skipEvent(String eventId) async => skippedId = eventId;
+  Future<void> skipEvent(String eventId, {int? expectedUpdatedAt}) async {
+    skippedId = eventId;
+    skipExpectedUpdatedAt = expectedUpdatedAt;
+  }
 
   @override
-  Future<void> reopenEvent(String eventId) async => reopenedId = eventId;
+  Future<void> reopenEvent(String eventId, {int? expectedUpdatedAt}) async {
+    reopenedId = eventId;
+    reopenExpectedUpdatedAt = expectedUpdatedAt;
+  }
 
   @override
-  Future<void> restoreEvent(String eventId) async => restoredId = eventId;
+  Future<void> restoreEvent(String eventId, {int? expectedUpdatedAt}) async {
+    restoredId = eventId;
+    restoreExpectedUpdatedAt = expectedUpdatedAt;
+  }
 
   @override
   Future<void> editPersonalEvent(String eventId, PersonalEvent replacement, {List<int>? reminderOffsetsMinutes}) async {
@@ -214,15 +248,22 @@ class _UpdateGateway implements AgentWriteGateway {
     required String? occurrenceKey,
     required RecurringActionScope scope,
     required RecurringLifecycleAction action,
+    int? expectedSeriesUpdatedAt,
+    int? expectedExceptionUpdatedAt,
   }) async {
-    final e = recurringLifecycleThrows;
-    if (e != null) throw e;
+    // Record the call (including the version args) before throwing so tests
+    // can assert the TOCTOU params were forwarded even when the service
+    // rejects a stale target.
     lifecycleCall = (
       seriesId: seriesId,
       key: occurrenceKey,
       scope: scope,
       action: action,
+      expectedSeriesUpdatedAt: expectedSeriesUpdatedAt,
+      expectedExceptionUpdatedAt: expectedExceptionUpdatedAt,
     );
+    final e = recurringLifecycleThrows;
+    if (e != null) throw e;
   }
 }
 
@@ -2529,6 +2570,108 @@ void main() {
           approve: true, remember: false);
       final commitResult = await result.pendingInvocation!.result;
       expect(commitResult.errorCode, 'stale_target');
+    });
+
+    test(
+        'update_event single delete TOCTOU: stale updatedAt at commit returns '
+        'stale_target', () async {
+      final gw = _UpdateGateway();
+      // Propose-time snapshot carries updatedAt=T1.
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16),
+          updatedAt: 100);
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'delete': true}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      // Between propose and commit a concurrent UI edit bumped updatedAt T1→T2.
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16),
+          updatedAt: 200);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'stale_target');
+      // The gateway was called with the propose-time expectedUpdatedAt (T1).
+      expect(gw.softDeleteExpectedUpdatedAt, 100);
+      expect(gw.softDeletedId, isNull);
+    });
+
+    test(
+        'update_event single delete with matching updatedAt commits '
+        'successfully', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '健身',
+          allDay: false,
+          startAt: DateTime(2026, 8, 1, 15),
+          endAt: DateTime(2026, 8, 1, 16),
+          updatedAt: 100);
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result =
+          await tool.execute({'ref_event': ref, 'delete': true}, h.ctx());
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, isNull);
+      expect(gw.softDeletedId, 'ev-1');
+      expect(gw.softDeleteExpectedUpdatedAt, 100);
+    });
+
+    test(
+        'update_event recurring delete TOCTOU: stale series updatedAt at commit '
+        'returns stale_target via expectedSeriesUpdatedAt', () async {
+      final gw = _UpdateGateway();
+      gw.snapshots['ev-1'] = EventWriteSnapshot(
+          id: 'ev-1',
+          source: 'user',
+          type: 'personal',
+          title: '例会',
+          allDay: false,
+          startAt: DateTime(2026, 8, 5, 15),
+          endAt: DateTime(2026, 8, 5, 16),
+          personalSeriesId: 'ser-1',
+          occurrenceKey: 'ser-1@2026-08-05T15:00:00',
+          updatedAt: 100);
+      // The recurring commit throws StaleRecurringTarget because the series
+      // updatedAt drifted between propose and commit; the gateway surfaces the
+      // expectedSeriesUpdatedAt captured at propose so the service can recheck.
+      gw.recurringLifecycleThrows = const StaleRecurringTarget();
+      final h = _Harness(tools());
+      final tool = h.tool('update_event') as UpdateEventTool;
+      tool.attachGateway(gw);
+      final ref = h.refs.bind(kind: 'event', localId: 'ev-1');
+      final result = await tool.execute(
+          {'ref_event': ref, 'scope': 'whole_series', 'delete': true}, h.ctx());
+      expect(result.status, AgentToolStatus.needsUserAction);
+      await store.resolve(result.userAction!.opaqueHandle,
+          approve: true, remember: false);
+      final commitResult = await result.pendingInvocation!.result;
+      expect(commitResult.errorCode, 'stale_target');
+      // The recurring commit forwarded the propose-time series version.
+      expect(gw.lifecycleCall, isNot(isNull));
+      expect(gw.lifecycleCall!.expectedSeriesUpdatedAt, isNot(isNull));
     });
 
     test('update_event recurring restore InvalidRecurringTransition maps to invalid_lifecycle_transition',

@@ -8,6 +8,7 @@ import 'package:ustc_assistant_app/core/time/beijing_clock.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_permission_policy_service.dart';
 import 'package:ustc_assistant_app/features/agent/data/drift_agent_write_gateway.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
+import 'package:ustc_assistant_app/features/calendar/application/calendar_event_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_lifecycle_service.dart';
 import 'package:ustc_assistant_app/features/calendar/application/recurrence_service.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
@@ -967,6 +968,144 @@ void main() {
           ..where((r) => r.id.equals('ev-1')))
         .getSingle();
     expect(row.deletedAt, isNull);
+  });
+
+  // =========================================================================
+  // C3: TOCTOU version re-check on single-event lifecycle commits. The 6
+  // lifecycle methods take an optional `expectedUpdatedAt` that must match the
+  // row's current `updatedAt`; a stale value throws StaleEventCommand.
+  // =========================================================================
+
+  test('cancelEvent with stale expectedUpdatedAt throws StaleEventCommand',
+      () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    final current = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    expect(
+      () => gateway.cancelEvent('ev-1', expectedUpdatedAt: current.updatedAt - 1),
+      throwsA(isA<StaleEventCommand>()),
+    );
+  });
+
+  test('cancelEvent with current expectedUpdatedAt succeeds', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    final current = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    await gateway.cancelEvent('ev-1', expectedUpdatedAt: current.updatedAt);
+    final row = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    expect(row.status, 'cancelled');
+  });
+
+  test('softDeleteEvent with stale expectedUpdatedAt throws StaleEventCommand',
+      () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    final current = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    expect(
+      () => gateway.softDeleteEvent('ev-1',
+          expectedUpdatedAt: current.updatedAt - 1),
+      throwsA(isA<StaleEventCommand>()),
+    );
+  });
+
+  test(
+      'recurringLifecycle whole_series delete with stale expectedSeriesUpdatedAt '
+      'throws StaleRecurringTarget', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final series = await service.seriesRow(seriesId);
+    expect(
+      () => gateway.recurringLifecycle(
+        seriesId,
+        occurrenceKey: null,
+        scope: RecurringActionScope.wholeSeries,
+        action: RecurringLifecycleAction.delete,
+        expectedSeriesUpdatedAt: series.updatedAt - 1,
+      ),
+      throwsA(isA<StaleRecurringTarget>()),
+    );
+  });
+
+  test(
+      'recurringLifecycle whole_series delete with current '
+      'expectedSeriesUpdatedAt succeeds', () async {
+    final anchor = DateTime(2026, 8, 3, 10, 0);
+    final service = RecurrenceService(
+      database: db,
+      accountId: 'acc-1',
+      now: () => anchor.millisecondsSinceEpoch,
+    );
+    final seriesId = await service.createSeries(
+      anchor: PersonalEvent.timed(
+        title: '每周例会',
+        startAt: anchor,
+        endAt: anchor.add(const Duration(hours: 1)),
+      ),
+      rule: RecurrenceRule.weekly(
+        anchor: anchor,
+        weekdays: {DateTime.monday},
+        untilDate: DateTime(2026, 8, 31),
+      ),
+    );
+    final series = await service.seriesRow(seriesId);
+    await gateway.recurringLifecycle(
+      seriesId,
+      occurrenceKey: null,
+      scope: RecurringActionScope.wholeSeries,
+      action: RecurringLifecycleAction.delete,
+      expectedSeriesUpdatedAt: series.updatedAt,
+    );
+    expect((await service.seriesRow(seriesId)).deletedAt, isNotNull);
+  });
+
+  test('eventSnapshot exposes the stored row updatedAt', () async {
+    await gateway.createEvent(PersonalEvent.timed(
+      id: 'ev-1',
+      title: '健身',
+      startAt: DateTime(2026, 8, 1, 15),
+      endAt: DateTime(2026, 8, 1, 16),
+    ));
+    final row = await (db.select(db.calendarEvents)
+          ..where((r) => r.id.equals('ev-1')))
+        .getSingle();
+    final snapshot = await gateway.eventSnapshot('ev-1');
+    expect(snapshot.updatedAt, row.updatedAt);
   });
 
   test('clearReminders all delegates to ReminderOverrideService.clearReminders',

@@ -828,7 +828,7 @@ class UpdateEventTool extends AgentWriteTool {
       targetType: targetType,
       operationLabel: operationLabel,
       previewLines: lines,
-      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'action': action, 'snapshot': snapshot},
+      commitParams: {'eventId': eventId, 'scope': scope, 'fields': fields, 'action': action, 'snapshot': snapshot, 'expectedUpdatedAt': snapshot.updatedAt},
       safeLogSummary: action == 'edit'
           ? '修改日程 ${_eventSummary(snapshot)}'
           : '${_actionZh(action)}日程 ${_eventSummary(snapshot)}',
@@ -842,6 +842,12 @@ class UpdateEventTool extends AgentWriteTool {
     final scope = p['scope'] as String;
     final fields = p['fields'] as Map<String, Object?>;
     final action = p['action'] as String;
+    // Propose-time version for the TOCTOU re-check (Spec §25.1). For a single
+    // event this is the row's `updatedAt`; for a recurring target it is the
+    // series `updatedAt` (the recurringLifecycle path rechecks the series).
+    // Null (e.g. a recurring occurrence snapshot with no series version) skips
+    // the check, preserving back-compat with no-version callers.
+    final expectedUpdatedAt = p['expectedUpdatedAt'] as int?;
 
     final identity = await gateway.eventSnapshot(eventId);
     if (!identity.isPersonal) {
@@ -864,6 +870,7 @@ class UpdateEventTool extends AgentWriteTool {
             occurrenceKey: identity.occurrenceKey,
             scope: _actionScope(scope),
             action: _lifecycleAction(action),
+            expectedSeriesUpdatedAt: expectedUpdatedAt,
           );
         } catch (error) {
           final mapped = _mapRecurringLifecycleError(error);
@@ -882,17 +889,17 @@ class UpdateEventTool extends AgentWriteTool {
       try {
         switch (action) {
           case 'delete':
-            await gateway.softDeleteEvent(eventId);
+            await gateway.softDeleteEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
           case 'cancel':
-            await gateway.cancelEvent(eventId);
+            await gateway.cancelEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
           case 'complete':
-            await gateway.completeEvent(eventId);
+            await gateway.completeEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
           case 'skip':
-            await gateway.skipEvent(eventId);
+            await gateway.skipEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
           case 'reopen':
-            await gateway.reopenEvent(eventId);
+            await gateway.reopenEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
           case 'restore':
-            await gateway.restoreEvent(eventId);
+            await gateway.restoreEvent(eventId, expectedUpdatedAt: expectedUpdatedAt);
         }
       } catch (error) {
         final mapped = _mapEventLifecycleError(error);
