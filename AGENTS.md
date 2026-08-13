@@ -324,7 +324,7 @@ Pop-Location
 | 层 | 敲定内容 | 产出物 | gate（完成标准） |
 |---|---|---|---|
 | 0 原则与决策 | 不可变红线；决策按单向门/双向门分类，只提前敲死不可逆项 | `07-constitution.md` + ADR 日志 | 红线清单与待决策项全部归类 |
-| 1 容器切分 | 系统边界、容器级块（原生采集引擎/同步编排/导入存储/Agent/UI）、依赖方向、技术选型 | `08-target-architecture.md` | 三条链路能用容器名走通，职责无重叠无缺口 |
+| 1 容器切分 | 系统边界、容器级块（来源作业仲裁/采集引擎/导入存储/Agent/UI）、依赖方向、技术选型 | `08-target-architecture.md` | 全部链路（三条主 E2E + 两条账号生命周期子链路）能用容器名走通，职责无重叠无缺口 |
 | 2 全局契约 | 跨容器接口签名：SourceBundle/QueryResult 去留、DB schema、各 Gateway、作业暂停-恢复模型 | `09-contracts.md` | 每个接口有生产者和消费者，无孤儿字段 |
 | 3 链路走查 | 三条 E2E 链路 + 每条数据链路的 fetch→normalize→validate→import 管道 | `10-runtime.md` | 序列图走通，无死胡同 |
 | 4 组件设计 | 逐容器内部：采集引擎导航就绪状态机、作业状态机等 | `11-component-designs.md` | 每个状态机有完整转移表（状态全集+转移+失败态） |
@@ -358,7 +358,7 @@ tasks→implement）、arc42 结构、C4 分层纪律、ADR 决策记录、单�
 | M2 采集引擎 + JW | 引擎（会话/导航状态机/事件顺序/可观测）+ 首个适配器 | fixture 全流程 + 逐字段对比 Python oracle + 真实教务人工验收 |
 | M3 二课双链路 | young-schedule（Bundle）+ young-enrolment（查询侧，含登录恢复） | 同上标准 |
 | M4 icourse + campus | 纯 HTTP 型 | 同上标准 |
-| M5 壳层 + 日程 UI + 账号 | UI 重建回新骨架（受影响最小，代码可移植） | 现有 Flutter 测试全部迁移并过 |
+| M5 壳层 + 日程 UI + 账号 | UI 重建回新骨架（受影响最小，代码可移植） | 所有保留能力对应的 Flutter 测试迁移并通过；file-origin 测试按 ADR-021 明确排除，M1 以正式 Bundle fixture 契约测试替代 |
 | M6 harness 迁移 + 完善 | 推理循环/工具/审批门原样重建；`WindowsPythonQueryGateway` 换原生实现；harness 完善项落地 | Agent 组合级集成测试 + 真实 Key 人工验收 |
 | M7 Bridge/Python 退役 | 删 Bridge、PythonLocator，CLI 决策落地 | 全链路真实验收，无 Python 依赖 |
 | M8 发布硬化 | 性能、稳定性、backlog 决策项 | 验证阶段全项通过 |
