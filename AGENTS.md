@@ -2,9 +2,11 @@
 
 ## 目标
 
-开发一个面向中国科学技术大学的本地优先校园学习生活助手。当前阶段已经完成
-Windows Flutter 首版及五条 Python 只读数据链路；下一阶段在保留本地业务核心的
-前提下继续人工验收、接入真实 LLM，并为 Android/iOS 来源适配做准备。
+开发一个面向中国科学技术大学的本地优先校园学习生活助手。已完成 Windows Flutter
+首版（含只读 Agent）及五条 Python 只读数据链路。当前阶段从"修补 main"转为
+**整体重构**：先把全部架构细节按六层阶梯分层敲定，再从零重写为纯 Flutter 原生
+实现（Python/Bridge 退役），同时完善 Agent harness；重构期间旧版 main 保持可运行、
+可回退。路线与规则见下文"整体重构与正式版路线"。
 
 ## 当前能力
 
@@ -202,6 +204,9 @@ source service
 - 接手当前项目：先读 `docs/read-only-agent-handoff.md`，再读本文件和
   `README.md`。历史
   plan 中未勾选的复选框不代表代码未实现，以代码、测试和当前状态文档为准。
+- 整体重构相关工作：先读 `docs/refactor-docs/00-index.md` 与 01–06 模块文档，
+  再按"整体重构与正式版路线"一节的六层阶梯顺序产出 07–13 号设计文档；重构代码
+  一律进 `rewrite/flutter-native` 分支（main 冻结期只接受致命 bug 修复）。
 - Flutter 日程和 App 修改：先读
   `docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`
   掌握首版总边界，再读 `schedule-data-model.md` 和 App Shell、Auth/Sync、Task、
@@ -240,6 +245,10 @@ source service
 - 网站契约变化时明确失败，不返回部分数据冒充完整结果。
 - 修改来源行为时先增加回归测试；真实故障场景不得因整理测试文件而删除。
 - 各来源保留独立 DOM、接口和解析规则，只共享浏览器生命周期、存储和 CLI 编排。
+- 重构期间（到 M7 为止）：main 冻结为旧版 release 基线，只接受致命 bug 修复；
+  新功能与重写代码一律进 `rewrite/flutter-native` 分支；设计文档
+  （`docs/refactor-docs/`）可随时进 main。同一来源同一时刻只允许一个通道在跑、
+  在写库（原生或 Python Bridge 二选一）。
 - 手工编辑使用 `apply_patch`，不要改写无关文件，不覆盖用户未提交修改。
 
 ## 验证
@@ -320,3 +329,74 @@ Pop-Location
   和校园公开信息继续使用独立版本化查询结果，不得混入 ImportService。
 - SourceBundle 不携带数据库主键、远端个人身份、用户覆盖或自动冲突判断；一个
   Bundle 只对应一个账号、一个逻辑来源、一个完整范围和一个数据库事务。
+
+## 整体重构与正式版路线（2026-08 商定）
+
+### 背景与决定
+
+- 离正式版的两大核心任务：① Python 逻辑全部迁移到 Flutter 原生；② 完善 Agent
+  harness。迁移在 `feature/flutter-native-jw-v2` 分支试做时出现 debug 困难：
+  最后一批提交全部在补"导航就绪归属、URL/事件顺序、ready 握手"等横切问题，
+  病根是缺少**一次设计、五条链路共用的"原生采集引擎"层**，共享基础设施被当作
+  单链路附属品硬做。
+- 已决定：**从零重写代码，但设计先行、分层敲定**，强化整体性。旧版 main 冻结为
+  可回退基线；重写按里程碑推进，每步应用可运行、可验收、可回退。
+- 准备工作已完成：`docs/refactor-docs/00-index.md` + 01–06 六份模块技术文档
+  （以 main 代码为准，含四契约锚点、三条端到端链路、各模块开放决策与存疑清单）。
+
+### 设计阶段：六层阶梯（写代码前，自上而下，每层有 gate）
+
+| 层 | 敲定内容 | 产出物 | gate（完成标准） |
+|---|---|---|---|
+| 0 原则与决策 | 不可变红线；决策按单向门/双向门分类，只提前敲死不可逆项 | `07-constitution.md` + ADR 日志 | 红线清单与待决策项全部归类 |
+| 1 容器切分 | 系统边界、容器级块（原生采集引擎/同步编排/导入存储/Agent/UI）、依赖方向、技术选型 | `08-target-architecture.md` | 三条链路能用容器名走通，职责无重叠无缺口 |
+| 2 全局契约 | 跨容器接口签名：SourceBundle/QueryResult 去留、DB schema、各 Gateway、作业暂停-恢复模型 | `09-contracts.md` | 每个接口有生产者和消费者，无孤儿字段 |
+| 3 链路走查 | 三条 E2E 链路 + 每条数据链路的 fetch→normalize→validate→import 管道 | `10-runtime.md` | 序列图走通，无死胡同 |
+| 4 组件设计 | 逐容器内部：采集引擎导航就绪状态机、作业状态机等 | `11-component-designs.md` | 每个状态机有完整转移表（状态全集+转移+失败态） |
+| 5 横切关注 | 时区、隐私、账号隔离、事务、审计、可观测性（一等设计目标） | `12-cross-cutting.md` | 每项有单一归属 |
+| 6 风险验收 | 各模块文档 §10 存疑收敛成风险登记册，每条配验证方式 | `13-risks-and-acceptance.md` | 每条风险有关闭标准 |
+
+规则：上一层 gate 未过不得进入下一层；第 4 层不必一次做完，M1 后可"每做一块组件、
+先补一块设计"。方法依据：文档先行开发、Spec Kit（constitution→specify→plan→
+tasks→implement）、arc42 结构、C4 分层纪律、ADR 决策记录、单向门/双向门分类。
+
+### 并存方案（旧房/新房）
+
+- **代码层**：main 冻结为 release 基线（只修致命 bug，不加功能）；重写在
+  `rewrite/flutter-native` 长分支 + 专属 worktree，M7 验收前不合并回 main。
+  设计文档（`docs/refactor-docs/` 新产出）随时进 main；代码只在 M7 整体回流。
+- **运行时层**：每个来源一个通道接口（第 2 层定死），`NativeXxxGateway` 与
+  `PythonXxxGateway`（Bridge 客户端）并存，按来源配置选择；**同一来源同一时刻
+  只有一个通道在跑、在写库**；M7 删除全部 PythonXxxGateway + Bridge。
+- **数据层**：schema 以 v7 为界——旧房止步 v7，新房 v8+ 只走正式迁移；升级即
+  单向搬家（Drift 版本检查拦旧房）；发布前用真实备份库演练；保留旧房安装包与
+  数据备份作为回退通道。
+- **四铁律**：契约是唯一共同语言；一库一主、一源一通道；旧房永远可住；
+  新房每里程碑 analyze/test/build 全绿才算盖完。
+
+### 里程碑（每步 App 可用、可验收、可回退）
+
+| 里程碑 | 内容 | gate |
+|---|---|---|
+| M0 骨架 | 按 0–2 层建分层空工程、CI | analyze/test/build 跑通 |
+| M1 存储核心 | 27 表（schema v8 决策落地）+ 导入流水线 + 派生链路 + v7→v8 迁移器 | oracle bundle fixture 全导入通过；迁移测试通过 |
+| M2 采集引擎 + JW | 引擎（会话/导航状态机/事件顺序/可观测）+ 首个适配器 | fixture 全流程 + 逐字段对比 Python oracle + 真实教务人工验收 |
+| M3 二课双链路 | young-schedule（Bundle）+ young-enrolment（查询侧，含登录恢复） | 同上标准 |
+| M4 icourse + campus | 纯 HTTP 型 | 同上标准 |
+| M5 壳层 + 日程 UI + 账号 | UI 重建回新骨架（受影响最小，代码可移植） | 现有 Flutter 测试全部迁移并过 |
+| M6 harness 迁移 + 完善 | 推理循环/工具/审批门原样重建；`WindowsPythonQueryGateway` 换原生实现；harness 完善项落地 | Agent 组合级集成测试 + 真实 Key 人工验收 |
+| M7 Bridge/Python 退役 | 删 Bridge、PythonLocator，CLI 决策落地 | 全链路真实验收，无 Python 依赖 |
+| M8 发布硬化 | 性能、稳定性、backlog 决策项 | 验证阶段全项通过 |
+
+- 两条主线在 M6 汇合；M2–M6 期间未完工来源经 PythonXxxGateway 临时兜底（到 M7 删除）。
+- 抢救资产：v2 分支的 loopback fixture 服务器、python-oracle 对比工具
+  （`compare_jw_bundles.dart`）、fixture 数据在 M2 直接复用，不当作返工对象。
+- 学校页面里程碑的真实人工验收当场做、不攒到最后；自动测试不得访问学校网站。
+
+### 上线前流程
+
+实施计划（任务单：依赖+测试要求+验收人）→ 里程碑实施（契约测试先行、oracle 对比
+贯穿、每日三件套）→ 多级验证（自动测试全集 / 五链路与 Agent 真实验收 / 可靠性专项
+（清空各文档 §10 并发存疑）/ 真实备份库迁移演练 / 性能 / 同学内测）→ 发布准备
+（Release 构建、MSIX 决策、文档、go/no-go 清单、保留旧版回滚）→ 上线 → 运营
+（反馈渠道、P0 hotfix、backlog 聚批）。
