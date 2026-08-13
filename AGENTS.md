@@ -6,7 +6,8 @@
 首版（含只读 Agent）及五条 Python 只读数据链路。当前阶段从"修补 main"转为
 **整体重构**：先把全部架构细节按六层阶梯分层敲定，再从零重写为纯 Flutter 原生
 实现（Python/Bridge 退役），同时完善 Agent harness；重构期间旧版 main 保持可运行、
-可回退。路线与规则见下文"整体重构与正式版路线"。
+可回退。最终产品目标为 Windows/Android/iOS 三端运行：先完成 Windows 实现与正式版，
+移动端采集适配在 Windows 正式版之后再迁移。路线与规则见下文"整体重构与正式版路线"。
 
 ## 当前能力
 
@@ -325,6 +326,10 @@ Pop-Location
   导入来源 service；不得启动采集 CLI 后解析终端文本。
 - Android/iOS 后续使用移动端 `SourceGateway` 重新实现采集，但必须复用相同的
   版本化 `SourceBundle`、Flutter `ImportService` 和本地业务模型。
+- 最终产品运行目标为 Windows/Android/iOS 三端；重构先完成 Windows 原生实现与
+  正式版，Android/iOS 采集适配在 Windows 正式版之后实现。三端共享平台无关核心
+  （domain/application 层、SourceBundle 1.0、ImportService、本地业务模型），
+  平台差异（采集容器、凭据保护、通知）仅经适配器边界替换。
 - SourceBundle 只用于 JW 与已报名二课日程的完整可导入快照；报名中活动、评课
   和校园公开信息继续使用独立版本化查询结果，不得混入 ImportService。
 - SourceBundle 不携带数据库主键、远端个人身份、用户覆盖或自动冲突判断；一个
