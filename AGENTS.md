@@ -234,7 +234,7 @@ source service
   “2026 秋季学期”；不得根据年份推算教务内部学期 ID。Flutter 侧学期默认值由
   `config/source-defaults.json` 生成（写工具里程碑 Task 6），当前生成值仍为
   `461 / 2026fall / 2026 秋季学期`（此为旧房现状；新房默认学期改为月份规则
-  （2–6 春季 / 7 夏季 / 其余秋季）从抓取列表选取，见
+  （2–6 春季 / 7 夏季 / 8–12 秋季 / 1 月=上一年秋季）从抓取列表选取，见
   `docs/refactor-docs/07-constitution.md` D30/ADR-009）。
 - 网站契约变化时明确失败，不返回部分数据冒充完整结果。
 - 修改来源行为时先增加回归测试。
@@ -354,7 +354,7 @@ tasks→implement）、arc42 结构、C4 分层纪律、ADR 决策记录、单�
 | 里程碑 | 内容 | gate |
 |---|---|---|
 | M0 骨架 | 按 0–2 层建分层空工程、CI | analyze/test/build 跑通 |
-| M1 存储核心 | 27 表（schema v8 决策落地）+ 导入流水线 + 派生链路 + v7→v8 迁移器 | oracle bundle fixture 全导入通过；迁移测试通过 |
+| M1 存储核心 | v7 基线 27 表 + v8 变更集（schema 决策落地）+ 导入流水线 + 派生链路 + v7→v8 迁移器 | oracle bundle fixture 全导入通过；迁移测试通过 |
 | M2 采集引擎 + JW | 引擎（会话/导航状态机/事件顺序/可观测）+ 首个适配器 | fixture 全流程 + 逐字段对比 Python oracle + 真实教务人工验收 |
 | M3 二课双链路 | young-schedule（Bundle）+ young-enrolment（查询侧，含登录恢复） | 同上标准 |
 | M4 icourse + campus | 纯 HTTP 型 | 同上标准 |
