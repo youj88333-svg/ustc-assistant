@@ -1,6 +1,6 @@
 # 07 宪法与决策日志（六层阶梯 · 第 0 层）
 
-> 产出日期：2026-08-12 ｜ 状态：**草案待拍板** ｜ 依据：AGENTS.md「整体重构与正式版路线」、
+> 产出日期：2026-08-12 ｜ 状态：**第 0 层已关闭（2026-08-12）** ｜ 依据：AGENTS.md「整体重构与正式版路线」、
 > `docs/refactor-docs/00–06`（以 main 代码为准）
 
 ## 1. 本层目标与 gate
@@ -123,19 +123,19 @@
 
 | ID | 决策 | 出处 | 推荐倾向 | 状态 |
 |---|---|---|---|---|
-| D12 | freshness/backoff 常量合并与归属（两套 12h：`automaticSyncInterval` 无消费方）；自动同步是否成真开关 | 04§8-1、04§10-1 | 合并为同步模块单一常量；真开关转双向门 backlog | 待拍板 |
-| D13 | CLI 去留：M7 删除 vs 降级为调试工具 | 02§8-1 | M7 删除；调试能力由新房 fixture/oracle 测试基建承担 | 待拍板 |
-| D14 | 时区模型：epoch ms + Asia/Shanghai 显式语义保留 vs 引入时区库 | 05§8-5 | 保留现状并显式化（唯一业务时区）；跨时区需求出现前不引入 | 待拍板 |
+| D12 | freshness/backoff 常量合并与归属（两套 12h：`automaticSyncInterval` 无消费方）；自动同步是否成真开关 | 04§8-1、04§10-1 | 合并为同步模块单一常量；真开关转双向门 backlog | ✅ ADR-013 |
+| D13 | CLI 去留：M7 删除 vs 降级为调试工具 | 02§8-1 | M7 删除；调试能力由新房 fixture/oracle 测试基建承担 | ✅ ADR-014 |
+| D14 | 时区模型：epoch ms + Asia/Shanghai 显式语义保留 vs 引入时区库 | 05§8-5 | 保留现状并显式化（唯一业务时区）；跨时区需求出现前不引入 | ✅ ADR-015 |
 
 ### D 组：harness（单向门，M6 与查询网关缝合的前置）
 
 | ID | 决策 | 出处 | 推荐倾向 | 状态 |
 |---|---|---|---|---|
-| D15 | QuerySourceGateway 消费侧形态：进程内直接方法调用/流式 vs 保留作业-事件轮询模型；Query Result 1.0 envelope 去留 | 06§8-1 | 接口保留、实现改进程内直连；Query Result 1.0 envelope 保留（校验语义不变） | 待拍板 |
-| D16 | Agent 本地数据网关/写网关背后的数据层形态：保留现有 Drift 服务层 vs 统一仓库层 | 06§8-3 | 保留现有服务层（M1 重建后形态不变），不引入新仓库抽象 | 待拍板 |
-| D17 | Agent 六子结构是否拆包/抽共享库 | 06§8-4 | 保持 feature 内聚合；M6 后再评估拆包 | 待拍板 |
+| D15 | QuerySourceGateway 消费侧形态：旧房 HTTP 双轮询通道 bug 多、接近不可用，需重设计（参考 MCP Tasks/elicitation + OpenHands 事件流）；Query Result 1.0 envelope 去留 | 06§8-1、用户实测反馈 | 重设计：进程内 QueryJob 对象 + 事件流 + MCP 式取消/elicitation 暂停恢复；envelope 保留作安全载体 | ✅ ADR-016 |
+| D16 | Agent 本地数据网关/写网关背后的数据层形态：保留现有 Drift 服务层 vs 统一仓库层 | 06§8-3 | 保留现有服务层（M1 重建后形态不变），不引入新仓库抽象 | ✅ ADR-017 |
+| D17 | Agent 六子结构是否拆包/抽共享库 | 06§8-4 | 保持 feature 内聚合；M6 后再评估拆包 | ✅ ADR-018 |
 
-### E 组：双向门（延期，实施期按里程碑拍板，不阻塞第 1–2 层）
+### E 组：双向门（延期，实施期按里程碑拍板，不阻塞第 1–2 层；延期安排 2026-08-12 已确认）
 
 | ID | 决策 | 出处 | 建议拍板时机 |
 |---|---|---|---|
@@ -151,6 +151,7 @@
 | D27 | MCP 等外部工具协议 | 06§8-5 | 远期 |
 | D28 | MSIX 打包与关 App 后提醒可靠性 | 产品约束、04§10 | M8 |
 | D29 | 移动端（Android/iOS）采集适配实现排期 | 红线 2.2-8、AGENTS.md 目标 | Windows 正式版后（M8 之后） |
+| D31 | 自动同步真开关（设置页当前为纯展示文本，无真开关） | 04§8-3、04§10-1、ADR-013 | M5 评估 |
 
 ## 4. ADR 日志
 
@@ -332,10 +333,92 @@
 - 后果：正面——事实来源不被调试产物污染，迁移入口唯一；负面——无（重建成本=一次
   网络请求）。
 
+### ADR-013：freshness/backoff 合并为同步模块单一常量，自动同步真开关转 backlog
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：两套 12h 常量并存——`SettingsService.automaticSyncInterval` 全库无消费方，
+  `SyncCoordinator.freshness` 实际生效，设置页文案对应后者（04§10-1）；自动同步在
+  设置页为纯展示文本。
+- 选项：A 合并为同步模块单一常量、删除死常量；B 双常量 + 注释；C 顺带做真开关。
+- 决策：A。freshness/backoff 归同步配置单点，设置页文案从该单点读取；自动同步真开关
+  记 E 组 D31（backlog，M5 评估）。
+- 后果：正面——改同步策略只动一处；负面——无。
+
+### ADR-014：CLI 随 M7 一并删除，调试能力由新房 Dart 工具/测试基建承接
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：`python -m ustc_assistant` 是旧房离线调试入口；M7 gate 要求新房无 Python
+  依赖，保留 CLI = Python 环境永驻，与 gate 直接矛盾。
+- 选项：A M7 随 Python 一并删除，调试能力由新房测试基建承接；B 保留降级为调试工具；
+  C 保留但重写为 Dart。
+- 决策：A。M7 前 CLI 照常可用（过程红线 2.3-3）；新房调试由 v2 抢救的 fixture 服务器、
+  python-oracle 对比工具（Dart）与 `app/tool/` 目录承接；将来无 UI 数据修复需求用
+  Dart 工具实现，不复活 Python。
+- 后果：正面——M7 gate 可关闭、无 Python 环境残留；负面——极小的调试习惯迁移成本；
+  CLI 承载的真实验收历史保留在文档，代码删记录不删。
+
+### ADR-015：时间语义铁律——存储 epoch ms，业务时区唯一 Asia/Shanghai
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：现状 DateTime 本地语义与显式北京时格式化并存（05§10-5），机器系统时区
+  不同可能解释出不同"星期几"；用户群体在中国，跨时区为伪需求。
+- 选项：A epoch ms 存储 + Asia/Shanghai 唯一业务时区显式化；B 引入时区库跟随系统；
+  C 存北京时间文本。
+- 决策：A。铁律一：存储/传输一律 epoch 毫秒（UTC 语义）；铁律二："今天/明天/星期几/
+  第几周/几点"的一切解释只按 Asia/Shanghai。`core/time` 收敛为唯一时间工具箱，各模块
+  不得自行拼装时区语义（M1 落地）；不引入时区库、不做跟随系统时区。
+- 后果：正面——与现状数据兼容（无需迁移），消灭并存混用的隐患；负面——无（跨时区
+  需求真出现时再开新决策）。
+
+### ADR-016：外部查询消费侧重设计——进程内 QueryJob + 事件流（参考 MCP/OpenHands）
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：旧房 QuerySourceGateway 为跨进程 HTTP 双轮询 + 独立恢复端点，状态散落三处、
+  时序 bug 高发，用户实测接近不可用；参考 MCP Tasks（ProgressToken / CancelledNotification /
+  Elicitation，[modelcontextprotocol.io](https://modelcontextprotocol.io/extensions/tasks/overview)）
+  与 OpenHands 事件流架构（[docs.openhands.dev](https://docs.openhands.dev/sdk/arch/events)）。
+- 选项：A 重设计——进程内 QueryJob 对象 + D05 事件流，取消/登录恢复模型化为作业暂停态；
+  B 接口冻结换实现（已被实测否定）；C 引入完整 MCP 协议栈（过度设计）。
+- 决策：A。submit 返回 QueryHandle{events, cancel, resumeLogin}；needs_user_login = 暂停态
+  等用户输入（elicitation 模型），同对象恢复；无轮询、无独立恢复端点；QueryResult 1.0
+  envelope 保留为出站安全校验载体（references 白名单/敏感键拒绝语义照搬）。重设计范围：
+  domain/query_source.dart 契约 + 4 个外部只读工具适配（M6）；AgentSessionService 推理循环不动。
+- 后果：正面——根除轮询时序 bug 面，状态机可单元测试（fixture 注入替代 HTTP 时序模拟）；
+  负面——契约重写 + 4 个工具适配，工作量计入 M6。
+
+### ADR-017：Agent 数据面保持"聚合根级服务 + 应用层门面"，不引入统一仓库层
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：M03 服务层与 AgentLocalDataGateway 现状已合 DDD/六边形模式（聚合根级服务 +
+  应用层跨聚合门面，参考 [clean_architecture_linter 指南](https://github.com/ittae/clean_architecture_linter/blob/main/doc/CLEAN_ARCHITECTURE_GUIDE.md)
+  与 [StackOverflow 六边形仓库层次讨论](https://stackoverflow.com/questions/77726069/on-which-layer-is-the-data-warehousing-interface-placed-in-the-hexagonal-archite/77729401#77729401)）；
+  数据层形态与是否原生化无关。
+- 选项：A 保留服务层形态（M1 原样重建、借单账号模型删多账号分支），Agent 门面定位为
+  应用层跨聚合编排；B 统一仓库层（违反"仓库按聚合根分"共识）；C 服务搬进 Agent。
+- 决策：A。AgentLocalDataGateway/AgentWriteGateway 属应用层编排与端口适配，不是仓库；
+  不引入新抽象层。
+- 后果：正面——符合 DDD 共识、避免纯增层；负面——无；重建纪律：形态不变≠代码复制，
+  接口语义与旧房一致，旧房测试迁移作回归基线。
+
+### ADR-018：Agent 保持 feature 内聚合，用 subpackage lint 机械守护平台无关边界
+
+- 状态：**已采纳**（2026-08-12，用户拍板）
+- 上下文：拆包收益场景为"多消费者共享同一核心"，本项目单 App 三端共用一个 Flutter
+  工程、不满足（参考 [AppFlowy 项目结构](https://deepwiki.com/AppFlowy-IO/AppFlowy/1.2-project-structure-and-technology-stack)
+  与 [Melos 多包适用讨论](https://github.com/invertase/melos/discussions/299)）；Dart
+  官方默认单 package 内目录分层（[dart-lang 模块结构](https://github.com/dart-lang/language/blob/46411cb4a9ec4cf3d2f0c9f756c51171ccac7e94/resources/bazel/module-structure.md)）。
+- 选项：A 保持聚合 + subpackage_lint 机械守边界 + 拆包触发器=出现第二个真实消费者；
+  B 现在就拆独立包；C 合并。
+- 决策：A。M6 重建时 domain/application 保持零平台依赖（forbid dart:io/DPAPI/Win32），
+  用 [subpackage_lint](https://pub.dev/documentation/subpackage_lint/1.1.0+2/index.html)
+  禁止跨边界 import；将来拆包走 Melos/workspace，纯 Dart 边界即切割线。
+- 后果：正面——约 1% 成本取得拆包 90% 收益（边界机械守护）；负面——无。
+
 ## 5. 第 0 层 gate 检查表
 
 - [x] 红线清单编制（§2：安全五原则 / 产品不变量 / 过程 / 旧房专属 + 移交登记）——§2.1–§2.5 全部已确认（2026-08-12）
-- [x] 决策登记表覆盖 01–06 §8 全部开放决策与 §10 架构级存疑（D01–D29，含出处）
-- [ ] 单向门 D01–D17 逐项拍板并落 ADR——A 组完成（ADR-001~005）+ D30（ADR-009）；B 组完成（ADR-006~008、010~012）；C 组（D12–D14）与 D 组（D15–D17）待拍板
-- [ ] 双向门 D18–D29 延期合理性确认（**待用户确认**）
-- [ ] ADR-000 已固化（已随 AGENTS.md 提交）
+- [x] 决策登记表覆盖 01–06 §8 全部开放决策与 §10 架构级存疑（D01–D31，含出处）
+- [x] 单向门 D01–D17 逐项拍板并落 ADR——A 组（ADR-001~005）+ D30（ADR-009）；B 组（ADR-006~008、010~012）；C 组（ADR-013~015）；D 组（ADR-016~018）全部完成
+- [x] 双向门 D18–D31 延期合理性确认——已确认（2026-08-12）；D18 已取消（ADR-004 单账号模型）
+- [x] ADR-000 已固化（已随 AGENTS.md 提交）
+- [x] **第 0 层 gate 关闭**（2026-08-12）：红线全确认 + 决策全归类 + 单向门 17 项与 D30 全部落 ADR（ADR-001~018）+ 双向门延期确认 → 进入第 1 层容器切分（`08-target-architecture.md`）
