@@ -1,6 +1,6 @@
 # 07 宪法与决策日志（六层阶梯 · 第 0 层）
 
-> 产出日期：2026-08-12 ｜ 状态：**第 0 层已关闭（2026-08-12，第三轮整改后重认）** ｜ 依据：AGENTS.md「整体重构与正式版路线」、
+> 产出日期：2026-08-12 ｜ 状态：**第 0 层已关闭（2026-08-14，第四轮复审收口后重认）** ｜ 依据：AGENTS.md「整体重构与正式版路线」、
 > `docs/refactor-docs/00–06`（以 main 代码为准）
 
 ## 1. 本层目标与 gate
@@ -172,7 +172,7 @@
 | D31 | 自动同步真开关（设置页当前为纯展示文本，无真开关） | 04§8-3、04§10-1、ADR-013 | M5 评估 |
 | D32 | 批量删除/清理工具形态：`create_task` 可 32 突发批量建，但 Agent 无删任务工具且禁止 batch/delete-all——"用户明确要求的批量删除"缺口。第 2 层冻结批量删除的确认/额度/审计/撤销契约（单对象工具 + 现有 8×12 为基线；禁止无预览 delete-all；可预告"用户批准的复合操作 + 每对象 mutation ledger"，不在第 1 层拍具体数量上限）；M6 定工具暴露形态 | 用户反馈 2026-08-12；第三轮整改 | 第 2 层定契约面，M6 定工具形态 |
 | D33 | 提醒默认偏移参数：第 2 层 09-contracts 冻结（定时事件默认提前 15 分钟、全天事件默认不提醒）；M5 只做 UI 不再拍默认值 | 原 2.2-5、§2.5；第三轮整改 | 第 2 层冻结默认值 |
-| D34 | `agent_permission_policies.expires_at` 语义：第 2 层冻结字段语义——v8 保留该列，可空北京时间 epoch ms，null=不自动过期；now≥expiresAt 时 remembered policy 不再授权、退回 ask/fail-closed；正确性不依赖后台物理清理过期行。M6 实现解析/UI/测试，不决定字段含义 | 03§10-3；第三轮整改 | 第 2 层冻结字段语义 |
+| D34 | `agent_permission_policies.expires_at` 语义：第 2 层冻结字段语义——v8 保留该列，可空 Unix epoch ms（由统一 `BeijingClock` 提供当前时刻），null=不自动过期；now≥expiresAt 时 remembered policy 不再授权、退回 ask/fail-closed；正确性不依赖后台物理清理过期行。M6 实现解析/UI/测试，不决定字段含义 | 03§10-3；第三轮整改 | 第 2 层冻结字段语义 |
 | D35 | 单账号模型下 `sourceConfigs` 主键形态（`'$accountId:$source'` 是否简化） | 04§8.3 | 第 2 层随 09 契约定 |
 | D36 | `account_mismatch` 后的 UI 恢复引导（旧房统一显示"重新登录失败"） | 01§9 建议4、01§10-9 | M5 |
 | D37 | `sync_runs.trigger` 枚举与 retry 契约（ADR-008 移交给 D12，ADR-013 未定细节） | ADR-008/013 | 第 2 层随 09 契约定 |
@@ -256,12 +256,14 @@
   活动账号与作业一致；来源级互斥（原生/Python 物理二选一）**权威位置在 C2 通道注册表
   （Native/Python 共同闸门，审查 C-3 修订 2026-08-12），C1 JobGate 卡槽租约仅管
   Native 侧会话资源互斥**。
-- **第三轮整改修订（2026-08-12）**：C2 为**全部来源作业唯一仲裁者**（JobArbiter），
+- **第三/四轮整改修订（2026-08-12/14）**：C2 为**全部来源作业唯一仲裁者**（JobArbiter），
   C4 不再直连 C1；所有作业携带租约戳 {jobId, accountId, source, channelKind,
   sourceGeneration, resetEpoch}；sourceGeneration 在 Native/Python 切换、取消或重置时
   递增，C3 导入/写入前校验租约戳仍属当前账号与当前 generation/resetEpoch，迟到结果返回
-  稳定错误、不得写库。参考 Kubernetes Lease + resourceVersion 的单一协调者/holder/
-  generation/迟到拒绝模式（不引入依赖）。
+  稳定错误、不得写库。并存期 Python 进程与认证回环传输只经 P 提供的
+  `PythonProcessPort`/`LoopbackBridgeTransportPort` 注入 C2；C2 核心不直接持有 `dart:io`
+  或 HTTP 客户端，M7 随 Python 租户删除两端口。参考 Kubernetes Lease + resourceVersion
+  的单一协调者/holder/generation/迟到拒绝模式（不引入依赖）。
 - 后果：正面——消灭多账号并行整类问题（D18 取消）、消除旧房并发雷与串号雷；负面——
   同步进行时 Agent 查二课被拒（bridge_busy 语义延续），确定性优先于并行度；
   宪法 2.2-6 由"账号隔离"修订为"单账号模型"。
@@ -466,14 +468,18 @@
   B 维持一刀切原文；C 放弃持久化 WebView profile。
 - 决策：A。§2.1-1 按三类资产修订；浏览器会话资产约束并入 ADR-002 的卡槽语义；零化
   承诺改为"尽力零化 + 永不落日志"。
-- **第三轮整改修订（2026-08-12）**：浏览器会话资产范围扩大为"浏览器运行时维护的全部
+- **第三/四轮整改修订（2026-08-12/14）**：浏览器会话资产范围扩大为"浏览器运行时维护的全部
   认证状态"（Cookie/LocalStorage/SessionStorage/IndexedDB/缓存/Service Worker/认证
   header/WebAuthn 引用）；会话端口拆分为 **BrowserAutomationPort**（navigate/wait/click/
   fill/受控提取脚本）与 **BrowserSessionAdminPort**（open/probe/close/clearPartition →
-  不透明 SessionPartitionRef），**不公开 cookies/storage/认证 header 或任何敏感明文取值**；
+  不透明 SessionPartitionRef，另提供持久 quarantine 标记，清理成功前跨重启禁止复用），
+  **不公开 cookies/storage/认证 header 或任何敏感明文取值**；
   evaluate 仅允许登记提取脚本、返回值经 schema 与敏感键检查，禁止读 document.cookie/
-  各 Storage/IndexedDB/认证 header；Native 与 Python 通道满足同一会话资产契约。
-- 后果：正面——红线与实现事实一致、可机械验收；负面——放弃"绝对零化"表述（诚实化）。
+  各 Storage/IndexedDB/认证 header；Native 与 Python 通道满足同一会话资产契约。用户执行
+  "清会话"或 completeReset 时，必须清除该账号在**全部已注册 Native/Python 通道**中的
+  会话分区，而非只清当前选中通道；身份核验失败后，受影响分区必须隔离并清除，不能继续复用。
+- 后果：正面——红线与实现事实一致、可机械验收；负面——放弃"绝对零化"表述（诚实化）；
+  清会话需遍历全部已注册通道，任一分区清理失败都必须保留隔离状态并增加恢复成本。
 
 ### ADR-020：凭据经 C2 一次性租约注入 C1，C1 不依赖 C3
 
@@ -516,32 +522,46 @@
 - 后果：正面——消灭悬挂态雷区、状态机大幅简化；负面——关 App 前挂起的确认卡失效、
   用户需重新发起；UI 需提示"上次待确认操作已失效"。
 
-### ADR-023：账号生命周期一致性——首次登录单事务提交 + 重新认证身份不变 + completeReset 可恢复终结
+### ADR-023：账号生命周期一致性——首次登录单事务提交 + 重新认证身份不变 + 维护操作隔离/可恢复终结
 
-- 状态：**已采纳**（2026-08-12，用户拍板；第三轮整改新增）
-- 上下文：旧房首登"导入→确认账号"存在跨事务窗口（导入失败留暂存、确认失败留数据）；
-  重新认证曾表述为"更新 identityDigest"（身份可变）；completeReset 伪原子回滚无法覆盖
-  跨数据库/浏览器分区的失败。参考 SQLite 单库原子事务、Kubernetes Finalizer
+- 状态：**已采纳**（2026-08-12 用户拍板，2026-08-14 用户授权第四轮复审收口）
+- 上下文：旧房首登实际顺序是"确认并激活账号→导入"（01§3 流程 A），导入失败会留下
+  已激活账号/凭据但没有完整业务快照的跨事务窗口；第二轮目标稿又曾误写成"导入→确认"，
+  与活动账号导入守卫冲突。重新认证曾表述为"更新 identityDigest"（身份可变）；
+  completeReset 伪原子回滚无法覆盖跨数据库/浏览器分区的失败；普通清业务数据/清会话若
+  不先隔离进行中作业，也会被迟到写入或未清通道破坏。参考 SQLite 单库原子事务、Kubernetes Finalizer
   （terminating→禁新工作→清理依赖→完成删除）、Temporal Saga（集中协调 + 幂等步骤 +
   可重试前向恢复，不宣称全部回滚）。
-- 选项：A 三合一收口（commitFirstLogin 单事务 / identityDigest 重新认证不可变 /
-  completeReset durable finalization）；B 维持旧房顺序 + 文档化窗口；C 每次操作自研状态机。
+- 选项：A 账号生命周期统一收口（commitFirstLogin 单事务 / identityDigest 重新认证不可变 /
+  completeReset durable finalization / 其他破坏性维护统一隔离门）；B 维持旧房顺序 + 文档化
+  窗口；C 每次操作各自编排且不共享隔离语义。
 - 决策：A。
   ① 首次登录：C3 `commitFirstLogin` 单事务完成"绑定/创建账号 + 导入 SourceBundle +
   凭据密文 + identityDigest + 置活动 + 审计"，任一失败整体回滚；ImportService 双模式守卫
   （正常同步：activeAccountId==租约 accountId；首登提交：provisional/verifiedUsername/
-  jobId/generation 一致）。
+  jobId/generation 一致）。首登 provisional 上下文只存在进程内存，以不透明句柄引用，
+  不得写数据库/文件/日志；凭据仅经一次性租约交给当前作业，使用后尽力零化，
+  作业失败或进程退出即丢弃。
   ② 重新认证：identityDigest **不可变**——仅首次建立或显式 schema 迁移可写；重新认证
   前后校验 digest 一致，只更新凭据密文与元数据；不匹配返回 account_mismatch/
-  identity_mismatch。
+  identity_mismatch。若不匹配发生在浏览器认证之后，数据库身份/凭据/业务数据保持不变，
+  但受影响会话分区必须先写入持久 quarantine 标记，再由 C2 清除；清除失败时标记跨重启
+  保留并向 UI 报告，禁止复用。
   ③ completeReset：CompleteResetCoordinator（C5）编排 durable finalization——beginReset
   （持久 reset_pending + resetEpoch++ + 写屏障）→ C2 拒新作业/取消并等待全部 Native/
   Python 作业终态 → C4 拒新 run/工具/审批并等待 → C2 按通道幂等清会话 → C3 finalizeReset
   单事务删除 + 清 reset_pending + 广播空账号 → C5 回首登；所有完成事件/导入/Agent 写入
-  携带 resetEpoch，过期即拒；启动检测 reset_pending 优先恢复。
-- 后果：正面——三处账号生命周期雷区一次性闭合，用户主权（重置可完成）与隐私（会话真清）
+  携带 resetEpoch，过期即拒；启动检测 reset_pending 是**强制启动门**，恢复失败时保持写屏障
+  并进入专用恢复界面，禁止正常路由/自动同步/Agent，不得按 best-effort 忽略。
+  ④ 其他账号维护：删除凭据先由 C2 撤销未消费凭据租约并终止可能消费凭据的作业；清会话
+  清除全部已注册 Native/Python 通道分区；clearBusinessData 由 C5 维护协调器先调用 C3
+  `beginBusinessDataClear` 建立写屏障并等待已进入的本地写事务终态，再持有 C2/C4
+  维护独占权，拒绝新作业/新写、取消并等待旧作业，递增相关 sourceGeneration 后由 C3
+  单事务清理；提交或回滚后才解除屏障和维护门，防止本地并发写或迟到结果重建数据。
+- 后果：正面——账号生命周期的提交、认证、重置与清理竞态统一闭合，用户主权（重置可完成）与隐私（会话真清）
   有机械保障；负面——① C3 事务接口比旧房复杂；② ImportService 需支持外部事务上下文或
-  拆出事务内核心；③ completeReset 需少量持久维护状态；④ 组合级故障注入测试成本增加。
+  拆出事务内核心；③ completeReset 需少量持久维护状态；④ C2/C4 需维护独占门，P 需承载
+  并存期进程/回环适配；⑤ 组合级故障注入测试成本增加。
   缓解：全部负面计入 M1/M5 工作量与测试清单，不推迟到第 2 层之外。
 
 ## 5. 第 0 层 gate 检查表
@@ -551,4 +571,4 @@
 - [x] 单向门 D01–D17 逐项拍板并落 ADR——A 组（ADR-001~005）+ D30（ADR-009）；B 组（ADR-006~008、010~012）；C 组（ADR-013~015）；D 组（ADR-016~018）全部完成
 - [x] 双向门 D18–D38 延期合理性确认——已确认（2026-08-12）；D18 已取消（ADR-004 单账号模型）；D32 为 2026-08-12 后补；D33–D38 为审查补漏（2026-08-12）
 - [x] ADR-000 已固化（已随 AGENTS.md 提交）
-- [x] **第 0 层 gate 关闭（第三轮整改后重认，2026-08-12）**：红线自洽（元规则迁出 4 项入 §2.5，共 20 项）+ ADR-000~023 一致 + D01–D38 归类闭合 + 第三轮修订（ADR-004/016/019/020/022 修订 + ADR-023 新增）→ 进入第 1 层
+- [x] **第 0 层 gate 关闭（第四轮复审收口后重认，2026-08-14）**：红线自洽（元规则迁出 4 项入 §2.5，共 20 项）+ ADR-000~023 一致 + D01–D38 归类闭合 + 第三轮修订（ADR-004/016/019/020/022 修订 + ADR-023 新增）+ 第四轮收口（旧房首登上下文纠正、身份不匹配会话隔离、全通道清会话、账号维护独占、Python 并存适配边界）→ 进入第 1 层

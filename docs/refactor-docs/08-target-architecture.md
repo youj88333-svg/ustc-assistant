@@ -1,6 +1,6 @@
 # 08 目标架构：容器切分（六层阶梯 · 第 1 层）
 
-> 产出日期：2026-08-12 ｜ 状态：**第 1 层已确认（2026-08-12，第三轮整改后重认）** ｜ 依据：`07-constitution.md`（ADR-000~023）、
+> 产出日期：2026-08-12 ｜ 状态：**第 1 层已确认（2026-08-14，第四轮复审收口后重认）** ｜ 依据：`07-constitution.md`（ADR-000~023）、
 > `00-index.md` 端到端链路、01–06 模块文档
 
 ## 1. 本层目标与 gate
@@ -31,11 +31,14 @@
   └─ 云服务：远期可选（双向门 D26），当前不在边界内
 ```
 
-出站边界铁律（红线 2.1 原则 2 的容器级落点）——**三类出站，各归其位**：
-① 应用自有 HTTP 出站：仅 C1（学校/公开网站抓取）与 C4（LLM 网关）持有；
+出站边界铁律（红线 2.1 原则 2 的容器级落点）——**三类外部出站，各归其位**：
+① 应用自有外部 HTTP 出站：仅 C1（学校/公开网站抓取）与 C4（LLM 网关）持有；
 ② 嵌入浏览器导航：C1 经 P(WebView) 的页面导航，网络发生在平台 WebView 运行时；
 ③ 用户导航委派：P(URL launcher) 交系统浏览器打开白名单 URL。
-其余容器不持有任何网络能力（纯 Dart 层无 `dart:io`，ADR-018）。
+并存期例外：C2 仅经 P 注入的 `PythonProcessPort`/`LoopbackBridgeTransportPort` 管理
+Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联网出站，必须只允许回环地址，
+且 M7 随 Python 租户删除。其余容器不持有外部网络能力；C2 核心及其他平台无关纯 Dart 层
+不直接引用 `dart:io`（ADR-018）。
 
 ## 3. 容器总览（C4 模型 Container 层）
 
@@ -52,6 +55,7 @@
 │        │                 ③ 租约戳 {jobId,accountId,source,channelKind,       │
 │        │                    sourceGeneration,resetEpoch} + 迟到结果拒绝       │
 │        │                 ④ 凭据一次性租约（ADR-020）＋清会话独占权            │
+│        │                 ⑤ Python 租户经 P 进程/回环端口注入（M7 删除）        │
 │        │                        │ 启动作业（Native 卡槽租约，ADR-004）       │
 │        │                        ▼                                           │
 │        │                 C1 采集引擎 SourceEngine                            │
@@ -83,7 +87,7 @@
 │    CredentialProtector 端口、纯 Dart 工具 —— 全容器共用、零依赖              │
 │                                                                              │
 │  P 平台适配边界（实现注入，三端替换点，红线 2.2-8）                           │
-│    WebView2（Windows）| DPAPI/Keychain/Keystore | 通知 | launcher | 文件存储  │
+│    WebView | 安全存储 | 通知 | launcher | 文件/decoder | 并存期进程/回环传输  │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -96,24 +100,25 @@
 | C2 SourceOrchestration | **全部来源作业唯一仲裁**：SourceJobGateway、租约戳、通道注册表、凭据租约、并存期 Python 进程 | `features/sync`（Bridge 相关部分删除） | ADR-004、008、013、016 修订、020、023 |
 | C3 ImportAndStorage | 导入流水线（双模式守卫）+ commitFirstLogin + reset 持久状态 + v7 基线 27 表 + 全部业务服务 | `features/import` + `core/database` + 各 feature 的 domain/application | ADR-006~012、017、023 |
 | C4 AgentHarness | 推理循环 + 工具 + 审批门 + 查询/写网关（外部查询经 C2） | `features/agent`（Windows 适配替换） | ADR-016~018 |
-| C5 AppShell | 路由/页面/装配/CompleteResetCoordinator/设置 | `app/` + 各 presentation + `features/settings` | ADR-013、023 |
-| P PlatformAdapters | WebView2/安全存储/通知/launcher/文件存储 实现 | 现状 Windows 实现 | 红线 2.2-8 |
+| C5 AppShell | 路由/页面/装配/账号维护与 CompleteReset 跨容器协调/设置 | `app/` + 各 presentation + `features/settings` | ADR-013、023 |
+| P PlatformAdapters | WebView/安全存储/通知/launcher/文件与 decoder 实现；并存期 Python 进程/回环传输 | 现状 Windows 实现 | 红线 2.2-8、ADR-004 修订 |
 
-## 4. 依赖方向（铁律，第三轮整改修订）
+## 4. 依赖方向（铁律，第三/四轮整改修订）
 
 ```
 允许的依赖（运行时调用方向；C4 不得直连 C1，全部来源作业经 C2）：
   C5 AppShell      → C2 / C3 / C4 / C0 / P（组合根装配）
-  C2 SourceOrch.   → C1 / C3 / C0
+  C2 SourceOrch.   → C1 / C3 / C0 / P 端口
   C4 AgentHarness  → C2 / C3 / C0
-  C1 SourceEngine  → C0
+  C1 SourceEngine  → C0 / P 端口
   C3 ImportStorage → C0
   C0 SharedCore    → （无）
 
 源码依赖要点（区分"调用方向"与"编译依赖"）：
   端口接口（CredentialProtector / BrowserAutomationPort / BrowserSessionAdminPort /
-  通知 / launcher / 文件存储）定义在 C0/C1；P 提供实现 → 编译依赖为 P → C0/C1 端口 +
-  平台 SDK；P 不含业务逻辑。
+  通知 / launcher / 文件存储 / 平台 decoder）定义在 C0/C1；并存期
+  PythonProcessPort / LoopbackBridgeTransportPort 定义在 C2。P 提供实现 → 编译依赖为
+  P → C0/C1/C2 端口 + 平台 SDK；P 不含业务逻辑。
 
 禁止：
   C1/C2/C3/C4/C0 引用 Flutter Widget（UI 只在 C5）
@@ -123,7 +128,8 @@
   C1 不依赖 C3（deliver 产物与凭据均经 C2 交接，ADR-020）
   C1 不知道 Python 通道（不负责跨通道互斥）
   C4 不直接碰表（必须经 C3 服务或网关，ADR-017）
-  平台无关核心（C0/C1 纯 Dart 部分/C2/C3 服务/C4 核心）无 dart:io（ADR-018 lint 守护）
+  平台无关核心（C0/C1 纯 Dart 部分/C2 核心/C3 服务/C4 核心）无 dart:io；并存期进程与
+  回环 HTTP 只存在于 P 适配器（ADR-018 lint 守护，M7 删除）
 ```
 
 ## 5. 容器职责与边界
@@ -135,13 +141,15 @@
 - **包含**：
   - **会话端口拆分（第三轮整改，ADR-019 修订）**：
     `BrowserAutomationPort`（navigate/wait/click/fill/受控 DOM 提取与登记脚本执行）；
-    `BrowserSessionAdminPort`（open/probe/close/clearPartition → 不透明
-    SessionPartitionRef，**不公开 cookies/storage/认证 header/任何敏感明文取值**）。
+    `BrowserSessionAdminPort`（open/probe/close/quarantine/clearPartition → 不透明
+    SessionPartitionRef；quarantine 标记持久到清理成功，跨重启禁止复用；**不公开
+    cookies/storage/认证 header/任何敏感明文取值**）。
     自动化语义层（就绪判定、事件顺序、导航状态机）为共享 Dart，写一次、三端共用
     （v2 教训的架构化兑现）；evaluate 仅允许登记提取脚本、返回值经 schema 与敏感键
     检查，禁止读 document.cookie/各 Storage/IndexedDB/认证 header；
   - `WebSessionEngine`：卡槽生命周期（按账号独立数据分区，引擎独占，ADR-002）、
-    收集前健康探测、真清理、CAS 交互登录（白名单填表/三层核验/验证码交人工，ADR-003）；
+    收集前健康探测、持久 quarantine/脏状态恢复、真清理、CAS 交互登录（白名单填表/三层
+    核验/验证码交人工，ADR-003）；
   - `JobGate`：**仅管理 Native 会话卡槽与资源占用**（同卡槽采集×查询互斥）；
     不含系统级全局权威、**不知道 Python 通道**（ADR-004 第三轮修订）；
   - `JobEventStream`：进程内事件流（八相位 + safeCount + 热流重放，ADR-005）；
@@ -161,7 +169,7 @@
 
 ### 5.2 C2 来源作业仲裁 SourceOrchestration
 
-- **职责**：**全部来源作业的唯一仲裁者**（第三轮整改）。触发判定、全局来源作业租约、
+- **职责**：**全部外部来源作业的唯一仲裁者**（第三轮整改）。触发判定、全局来源作业租约、
   通道注册与选择、租约戳、结果交接、凭据一次性租约、清会话独占权、并存期 Python 进程
   生命周期。
 - **包含**：
@@ -173,7 +181,8 @@
   - **来源通道注册表**：`SourceChannel` 接口（Native 实现 / Python 租户实现）；一源一
     通道；通道切换需旧作业终态释放；
   - **租约戳**：{jobId, accountId, source, channelKind, sourceGeneration, resetEpoch}；
-    sourceGeneration 在通道切换/取消/reset 时递增；resetEpoch 由 C3 beginReset 递增；
+    sourceGeneration 在通道切换/取消/reset/clearBusinessData 维护时递增；resetEpoch 由 C3
+    beginReset 递增；
     C3 导入/写入前校验租约戳，迟到结果返回稳定错误、不得写库；
   - `SyncCoordinator`（freshness/backoff 单常量，ADR-013）、`syncRuns/sourceConfigs`
     状态读写（经 C3 同步状态服务）、busy 预检（轻量 in-flight 标志）、
@@ -182,10 +191,15 @@
     密码仅在 needs_user_login 恢复时按需附带）；恢复路径闭合——C4/C5 请求恢复 → C2 验证
     作业处于 needs_user_login → 用户确认后 C2 向 C3 申请 → 注入同一 C1/Python 作业 →
     一次读取即失效；同步与查询不得各自实现凭据旁路；
-  - **清会话独占权**（第三轮整改）：C5 确认 → C2 取得账号会话独占权并停止该账号来源
-    作业 → 按当前通道清理（Native 经 C1/P；Python 经 C2 管理的 Python 通道）→ 幂等 →
-    完成后释放；
-  - **Python 进程生命周期**（并存期启动/关闭/句柄持有，M7 随租户删除）。
+  - **账号维护独占权**（第三轮整改补漏）：
+    - 删除凭据：撤销未消费凭据租约，取消并等待可能消费凭据的来源作业后才交 C3 删除；
+    - 清会话：停止该账号来源作业，清除该账号在**全部已注册 Native/Python 通道**中的
+      会话分区（Native 经 C1/P；Python 经 P 注入的租户适配器），全部幂等完成后释放；
+    - clearBusinessData：保持维护门关闭，拒绝新来源作业，取消并等待旧作业，递增全部相关
+      sourceGeneration，并与 C4/C3 写屏障共同防止迟到重建；
+  - **Python 进程生命周期**：C2 核心只编排 P 注入的 `PythonProcessPort` 与
+    `LoopbackBridgeTransportPort`；进程启动/关闭、句柄和本机认证回环传输实现在 P，M7
+    随租户及两端口删除。
 - **不包含**：作业执行（C1/Python 通道）；导入落库（C3）；凭据仓库（C3 账号服务 +
   C0 保护端口）。
 - **对外接口预告**：`submitSourceJob(...)`、`sync(source, trigger)`、`syncAll`、
@@ -207,7 +221,11 @@
   - **reset 持久状态**（ADR-023）：`beginReset`（持久 reset_pending + resetEpoch++ +
     写屏障，拒绝新业务写入）→ 等待 C2/C4 全部作业终态与会话清理 → `finalizeReset`
     （单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据 + 清 reset_pending + 广播空账号，
-    幂等）；启动时检测 reset_pending，在路由与自动同步之前恢复重置；
+    幂等）；启动时检测 reset_pending，在正常路由、自动同步与 Agent 之前恢复重置；
+  - **账号维护写屏障**（ADR-023）：`beginBusinessDataClear` 在 C2/C4 取消等待之前
+    先拒绝新业务写，并等待已进入的本地写事务终态；随后配合 C2/C4 维护独占门，
+    只允许清理事务写入，事务提交或回滚后才解除。该操作只涉及单库事务，不新增
+    reset_pending；崩溃前未提交则回滚，已提交则数据已清除；
   - v7 基线 27 表 + schema v8 变更集（campus 目录表族、删 undo_slot.expires_at、action_logs
     索引、prompt 版本统一、agent_permission_policies.expires_at 保留语义 D34；
     migration-only + 迁移测试，ADR-011）+ `v7→v8 迁移器`
@@ -230,7 +248,7 @@
 | 2 | `undo_slot.expires_at` 删除 | ADR-010 | 删列 |
 | 3 | `action_logs` 加 `(account_id, occurred_at)` 索引 | D10 / 03§9 建议2 | 索引 |
 | 4 | Agent prompt 版本三处统一（表默认 2 / 常量 3 / 实际 v8） | D10 / 06§10-2 | 数据修复 |
-| 5 | `agent_permission_policies.expires_at` 保留 + 语义冻结（可空北京时 epoch ms；null=不自动过期；过期即降级 ask/fail-closed；不依赖物理清理） | D34 | 语义冻结 |
+| 5 | `agent_permission_policies.expires_at` 保留 + 语义冻结（可空 Unix epoch ms，由统一 BeijingClock 提供 now；null=不自动过期；过期即降级 ask/fail-closed；不依赖物理清理） | D34 | 语义冻结 |
 | 6 | reset 持久状态（reset_pending/resetEpoch）落库形态 | ADR-023 | 加列/行 |
 
 - **对外接口预告**：服务级读接口（EffectiveEventRepository/ConflictService/…）、
@@ -258,28 +276,32 @@
   `ProtectedAgentSecretStore`（DPAPI 经 C0 保护端口）。
 - **不包含**：学校数据采集与来源作业仲裁（C1/C2）；业务服务本体（C3）；页面（C5）。
 - **边界纪律**：domain/application 零平台依赖（ADR-018）；feature 内聚合不拆包；
-  确认卡跨重启作废（ADR-022）；reset 期间 C4 拒绝新 run/工具/审批并等待终态（ADR-023）。
+  确认卡跨重启作废（ADR-022）；reset 或 clearBusinessData 维护期间 C4 拒绝新 run/工具/
+  审批，取消并等待所有可能写库的执行终态（ADR-023）。
 
 ### 5.5 C5 应用壳层 AppShell
 
 - **职责**：组合根。路由（GoRouter 双分支 + 顶层路由）、页面（周课表/任务/日程/历史/
-  设置/聊天）、Loaders 装配、启动后台编排（提醒启动 + 自动同步 + **reset_pending 检测
-  恢复，先于路由与自动同步**）、`CompleteResetCoordinator`（UI 只双确认，不持有重置
-  状态机）、官方网页白名单。
+  设置/聊天）、Loaders 装配、启动后台编排（提醒启动 + 自动同步 + **reset_pending 强制
+  恢复门**）、`CompleteResetCoordinator` 与 `AccountMaintenanceCoordinator`（UI 只负责
+  确认；协调器调用 C2/C3/C4，不持领域规则）、官方网页白名单。
 - **壳层契约**：分支栈语义 = `StatefulShellRoute.indexedStack` 保活
   （`AutomaticKeepAliveClientMixin`），禁止改为丢栈行为（规避 go_router
   [issue #190914](https://github.com/flutter/flutter/issues/190914) 的姿势固化）；
-  启动后台编排为 best-effort（失败不阻塞启动）。
-- **不包含**：任何业务逻辑（页面纯回调，服务在 C3/C4）。
+  普通提醒启动/自动同步为 best-effort；**reset_pending 检测与恢复不是 best-effort**，必须
+  先于正常路由、自动同步和 Agent。恢复失败时进入专用恢复/错误界面并保持写屏障。
+- **不包含**：领域规则或数据处理（页面纯回调；C5 只做跨容器应用编排，领域服务在 C3/C4）。
 - **双向门预览**：状态管理框架（D20）、DI（D21）、深色模式（D22）、路由持久化（D23）
   均在此容器 M5 时评估；本层不预拍。
 
 ### 5.6 P 平台适配边界
 
 - Windows 实现：WebView2（`UserDataFolder` 卡槽）、DPAPI（`CryptProtectData`）、
-  前台通知适配、URL launcher、本地文件存储（附件缓存/迁移备份目录）。
+  前台通知适配、URL launcher、本地文件存储（附件缓存/迁移备份目录）、附件 decoder；
+  `BrowserSessionAdminPort.quarantine` 的持久标记由平台会话适配器保存在受控分区旁，不进
+  C3 业务库；并存期另含 Python 进程与带认证本机回环 Bridge 传输适配（M7 删除）。
 - 移动端实现（D29，Windows 正式版后）：平台 WebView（Android WebView / iOS WKWebView）
-  + JS 驱动，实现同一 `BrowserSessionPort`；**风险：学校网站/CAS 对嵌入 WebView 的
+  + JS 驱动，实现同一 `BrowserAutomationPort` 与 `BrowserSessionAdminPort`；**风险：学校网站/CAS 对嵌入 WebView 的
   兼容性（UA 识别、防嵌入、cookie 容器差异）未在旧房验证，D29 阶段专项验证**；
   安全存储（Android Keystore / iOS Keychain）与平台通知为移动端对应能力，经同接口注入。
 - 三端替换点：以同接口换实现（红线 2.2-8；跨平台契约如 ADR-002 的
@@ -350,12 +372,13 @@ C1 一次读取即失效（ADR-020）。
 1. C3 beginReset：持久 reset_pending + resetEpoch++ + 写屏障（除 finalization 外拒绝新写入）
 2. C2：拒绝新来源作业；取消全部 Native/Python 作业；等待全部终态
 3. C4：拒绝新 run/工具/审批；取消当前模型流/工具调用/等待确认；等待可能写库的执行终态
-4. C2 按通道幂等清会话：Native WebView 分区（经 C1/P）；并存期 Python profile/session（经 C2）
+4. C2 按通道幂等清会话：Native WebView 分区（经 C1/P）；并存期 Python profile/session（经 P 租户适配器）
 5. C3 finalizeReset：单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据；清 reset_pending；
    广播空账号状态（幂等）
 6. C5 回 /sync 首登态；C2/C4 在空账号状态重新开放
 所有作业完成事件/导入/Agent 写入携带 resetEpoch，过期即拒（防迟到重建数据）。
-启动恢复：检测 reset_pending → 先于路由与自动同步恢复重置流程。
+启动恢复：检测 reset_pending → 作为强制启动门先于正常路由、自动同步和 Agent 恢复重置；
+恢复失败时保持写屏障并进入专用恢复/错误界面，不得按 best-effort 忽略。
 ```
 失败语义表：
 
@@ -365,7 +388,7 @@ C1 一次读取即失效（ADR-020）。
 | C2/C4 取消失败 | 数据未删除，保持 reset_pending 与写屏障，允许重试 |
 | 会话清理失败 | 数据未删除，保持 reset_pending；不得绕过后继续删库 |
 | 清会话后删库失败 | 事务回滚，但登录会话不可恢复；状态 reset_incomplete_session_cleared，下次启动继续 finalization，UI 提示可能需重新登录 |
-| App 崩溃 | 下次启动检测 reset_pending，恢复正常流程后再开放 |
+| App 崩溃 | 下次启动检测 reset_pending；重置恢复成功后才开放正常流程，恢复失败保持屏障并停留专用恢复界面 |
 | finalizeReset 重复执行 | 幂等 |
 
 注意：reset_pending 不属于 ADR-022 的普通作业作废范围（它是用户已确认的删除意图，
@@ -376,8 +399,8 @@ C1 一次读取即失效（ADR-020）。
 
 ```
 C5 首登表单 → C2 firstLoginSync
-  → C3 stageFirstLogin（provisional binding：暂存 username/password/savePassword；
-    不创建活动账号、不提前落业务数据）
+  → C3 stageFirstLogin（provisional binding：仅进程内存不透明句柄，不得落数据库/
+    文件/日志；不创建活动账号、不提前落业务数据）
   → C2 SourceJobGateway 启动作业（含 expectedUsername；CAS 交互登录 D03）
       ├─ needs_user_login → C5 确认 → C2 一次性凭据租约（ADR-020）
       └─ 成功 → SourceBundle 1.0 → 解码/schema/digest/来源/verifiedUsername 校验
@@ -385,7 +408,7 @@ C5 首登表单 → C2 firstLoginSync
     identityDigest + 置活动 + 审计；任一失败整体回滚）
   → 提交后广播 activeAccountChanged → C5 进入主界面
 失败路径：作业失败/校验失败/事务回滚 → 无活动账号、无凭据行、无来源业务数据；
-provisional 明文清理。
+provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃并尽力零化。
 ```
 
 ### 7.5 账号维护链路（重新认证/删凭据/清会话/清业务数据）
@@ -393,13 +416,21 @@ provisional 明文清理。
 ```
 重新认证：C5 → C2 reauthenticate(accountId) → C3 stageReauthentication（启动作业前校验
   输入 username 的 digest == 现有 identityDigest）→ C2 统一来源作业 → 成功返回
-  verifiedUsername → C3 再次校验 digest == 原 identityDigest → **仅更新凭据密文与元数据，
-  identityDigest 保持不变**；任一不匹配 → account_mismatch/identity_mismatch，凭据/会话/
-  业务数据不变
-删除凭据：C5 确认 → C3 deleteCredentials（删密文；保留账号与浏览器会话）
-清会话：C5 确认 → C2 取得账号会话独占权并停止该账号来源作业 → 按当前通道 clearSession
-  （Native 经 C1/P；Python 经 C2 管理的通道）→ 幂等 → 释放独占权
-清业务数据：C5 确认 → C3 事务按表清业务数据（保留账号/凭据/设置，clearBusinessData 语义照搬）
+  verifiedUsername → C3 再次校验 digest == 原 identityDigest：
+  ├─ 匹配 → **仅更新凭据密文与元数据，identityDigest 保持不变**
+  └─ 不匹配 → account_mismatch/identity_mismatch；数据库 identityDigest/凭据/业务数据不变；
+       C2 先持久 quarantine 再清除本次作业使用的会话分区，清除失败则标记跨重启保留、
+       禁止复用并向 UI 报告
+删除凭据：C5 确认 → AccountMaintenanceCoordinator → C2 撤销未消费凭据租约、取消并等待
+  可能消费凭据的作业 → C3 deleteCredentials（删密文；保留账号与浏览器会话）→ 释放维护门
+清会话：C5 确认 → AccountMaintenanceCoordinator → C2 取得账号会话独占权并停止该账号
+  来源作业 → 清除该账号在**全部已注册 Native/Python 通道**中的会话分区（Native 经 C1/P；
+  Python 经 P 租户适配器）→ 全部幂等完成 → 释放独占权
+清业务数据：C5 确认 → AccountMaintenanceCoordinator 先调 C3 `beginBusinessDataClear`
+  拒新业务写并等待已进入的本地写事务终态 → 持有 C2/C4 维护独占门 → C2
+  拒新来源作业、取消并等待旧作业、递增该账号全部来源的 sourceGeneration → C4
+  拒新 run/工具/审批并等待所有可写执行终态 → C3 单事务清业务数据（保留账号/凭据/
+  设置）→ 提交或回滚后解除屏障与维护门；任何取消/等待失败均不得开始清理事务
 ```
 
 ## 8. 并存期视图（M2–M6，临时租户）
@@ -413,9 +444,10 @@ provisional 明文清理。
 
 并存期铁律（ADR-000 四铁律 + ADR-004 修订）：**C2 为全部来源作业唯一仲裁**——同一来源
 同一时刻单通道（Native 与 Python 共同经过 SourceJobGateway）；租户只读不写库（写库唯一
-入口仍为 C3 ImportService）；Python 进程生命周期由 C2 统一管理；sourceGeneration 在通道
-切换时递增，旧通道迟到结果被 C2/C3 拒绝；Python 通道的浏览器 profile/session 同样满足
-会话资产契约（ADR-019）并在清会话/重置时由 C2 按通道清理。
+入口仍为 C3 ImportService）；Python 进程生命周期由 C2 核心编排、由 P 的
+`PythonProcessPort`/`LoopbackBridgeTransportPort` 执行；sourceGeneration 在通道切换时递增，
+旧通道迟到结果被 C2/C3 拒绝；Python 通道的浏览器 profile/session 同样满足会话资产契约
+（ADR-019），并在用户清会话/重置时与 Native 分区一起全部清理。
 
 ## 9. 移交登记消化映射（§2.5 全部移交项（20 项）→ 本层结论或后续层归属）
 
@@ -442,20 +474,23 @@ provisional 明文清理。
 ## 10. 本层 gate 检查表
 
 - [x] 链路容器名走通（§7.1–7.5：三条主要 E2E + 两条账号生命周期子链路）
-- [x] 容器职责无重叠无缺口（§5 五容器 + 平台边界；网络三类出站各归其位（§2）、写库唯一入口 C3、全部来源作业唯一仲裁 C2）
+- [x] 容器职责无重叠无缺口（§5 六容器 + P 平台边界；三类外部出站与并存期本机回环各归其位（§2）、写库唯一入口 C3、全部来源作业唯一仲裁 C2）
 - [x] ADR-000~023 全部溯源到容器（§3 表"关键 ADR"列 + §9）
-- [x] 容器逐项确认：C1 ✅（端口拆分/不持全局权威）｜ C2 ✅（唯一仲裁/租约戳）｜ C3 ✅（commitFirstLogin/reset 持久状态/六子域）｜ C4 ✅（外部查询经 C2）｜ C5 ✅（CompleteResetCoordinator）｜ P ✅（条件导入+能力矩阵）
+- [x] 容器逐项确认：C1 ✅（端口拆分/不持全局权威）｜ C2 ✅（唯一仲裁/租约戳/维护独占）｜ C3 ✅（commitFirstLogin/reset 持久状态/维护写屏障/六子域）｜ C4 ✅（外部查询经 C2/维护时停写）｜ C5 ✅（CompleteResetCoordinator + AccountMaintenanceCoordinator）｜ P ✅（条件导入+能力矩阵+并存期进程/回环适配）
 - [x] 开放问题移交（判据=每条有明确承接层，非已解决）：WebView2 具体包选型与自动化原语自研（就绪判定/事件顺序状态机写一次、引擎独占）→ M2 第 4 层；HTTP 客户端选型 → M4 第 4 层；移动端 WebView×学校网站兼容性 → D29 阶段专项验证；作业级错误 transient/fatal 分类与有限重试 → 第 4 层；syncAll 遇 needs_user_login 的恢复语义形态 → 第 4 层；工具集审计与重规划 → M6 前置任务；M2 前 feasibility spike：Windows WebView2 的 profile 隔离/导航顺序/可见登录/JS 原语/真清理；接口签名 → 第 2 层
-- [x] **纸面走查（8 场景，第三轮整改验收）**：
+- [x] **纸面走查（11 场景，第三轮整改 + 第四轮复审收口验收）**：
   1. 同步进行时 Agent 查二课 → Agent 查询到达 C2、因全局来源作业租约占用明确 busy，不直连 C1、不启 Python 第二通道 ✅；
   2. 查询作业 needs_user_login → 原作业与租约保持，C2 用户确认后向 C3 取一次性凭据、恢复同一作业，C4 不读凭据、C1 不依赖 C3 ✅；
   3. Native/Python 切换旧作业迟到完成 → sourceGeneration 已变，C2/C3 拒绝，不导入/不更新目录/不进对话 ✅；
   4. 首次登录导入失败 → commitFirstLogin 事务回滚，无活动账号/凭据行/来源业务数据，provisional 明文清理 ✅；
-  5. 重新认证登录成另一账号 → digest 不匹配 → account_mismatch，原 identityDigest/凭据/业务数据不变 ✅；
+  5. 重新认证登录成另一账号 → digest 不匹配 → account_mismatch；数据库 identityDigest/凭据/业务数据不变，受影响会话分区先持久 quarantine 再清除，清除失败跨重启禁止复用 ✅；
   6. reset 期间 Agent 写工具迟到提交 → resetEpoch/写屏障拒绝，不在删除后重建数据 ✅；
-  7. reset 清会话后数据库失败 → 事务回滚、状态 reset_incomplete_session_cleared、下次启动继续 finalization、不谎称恢复登录 ✅；
-  8. 并存期 Python 查询运行时重置 → C2 定位/取消/等待 Python 作业，Python profile/session 由当前通道清理，不只清 Native 分区 ✅。
-- [x] **第 1 层 gate 关闭（第三轮整改后重认，2026-08-12）**：统一仲裁（C2 唯一 JobArbiter）+ 账号原子提交（commitFirstLogin/identityDigest 不可变/durable reset，ADR-023）+ 会话资产不透明（二端口拆分，ADR-019 修订）+ 附件转换归 C1/P → 进入第 2 层全局契约（`09-contracts.md`）
+  7. reset 清会话后数据库失败 → 事务回滚、状态 reset_incomplete_session_cleared；下次启动以强制门继续 finalization，失败保持屏障/恢复界面，不谎称恢复登录 ✅；
+  8. 并存期 Python 查询运行时重置 → C2 定位/取消/等待 Python 作业，Python profile/session 与 Native 分区一并清理 ✅；
+  9. 同步或本地写运行时 clearBusinessData → C3 先建立屏障并等待已进入的本地写，C2/C4 维护门拒新工作并取消等待旧工作，generation 递增；清理后不会被并发或迟到写重建 ✅；
+  10. 删除凭据时存在待消费租约 → C2 先撤销租约并终止相关作业，再由 C3 删密文，不留下可继续消费的凭据租约 ✅；
+  11. 并存期用户清会话 → C2 清除账号在全部 Native/Python 注册通道中的分区，不因以后切换通道复活旧登录态 ✅。
+- [x] **第 1 层 gate 关闭（第四轮复审收口后重认，2026-08-14）**：统一仲裁（C2 唯一 JobArbiter）+ 账号原子提交（commitFirstLogin/identityDigest 不可变/durable reset，ADR-023）+ reset 强制启动门 + 账号维护独占与全通道会话清理 + Python 并存适配归 P + 会话资产不透明（二端口拆分，ADR-019 修订）+ 附件转换归 C1/P → 进入第 2 层全局契约（`09-contracts.md`）
 
 ## 11. 本层拍板记录（L1 决策）
 
@@ -470,8 +505,9 @@ provisional 明文清理。
 | L1-07 | 提醒三段切分 | 协调逻辑 C3 / 通知投递适配 P / 启动编排 C5（Flutter 生态标准三段式） |
 | L1-09 | 工具系统框架 | 能力域组织六域；域内工具清单 M6 审计定稿；8×12 为基线（D32 经第 2 层回写）；每轮作用域收窄延续 grounding |
 | L1-08 | 恢复语义从简 | 跨重启一律中断作废（普通作业）；reset_pending 除外（ADR-022 修订 + ADR-023） |
-| L1-10 | 壳层契约 | 分支栈=indexedStack 保活（禁止丢栈）；手工装配维持现状（D20/D21 M5 评估）；启动后台编排 best-effort |
-| L1-11 | 平台适配方式 | 单 App 内部目录 + 平台接口 + 条件导入/平台通道实现；能力矩阵声明平台不对齐；不引入 federated plugin 结构（LocalSend 式） |
+| L1-10 | 壳层契约 | 分支栈=indexedStack 保活（禁止丢栈）；手工装配维持现状（D20/D21 M5 评估）；普通提醒/自动同步启动 best-effort，reset_pending 恢复为强制启动门 |
+| L1-11 | 平台适配方式 | 单 App 内部目录 + 平台接口 + 条件导入/平台通道实现；能力矩阵声明平台不对齐；并存期 Python 进程/本机回环由 P 实现 C2 端口、M7 删除；不引入 federated plugin 结构（LocalSend 式） |
 | L1-12 | 审查整改（批次 1） | 机械修订：出站三分法、completeReset 顺序、八相位、v7 基线 27 表、源码依赖方向（P→C0/C1）、campus 链路、孤儿规则归位、五链路补齐、ADR 负面诚实化 |
 | L1-13 | 审查整改（批次 2） | 决策修订：凭据三类资产（ADR-019）、一月学期年份（ADR-009 修订）、互斥上移 C2（ADR-004 修订）、凭据一次性租约（ADR-020）、元规则放宽（C-8）、L1-02/08 补 ADR（ADR-021/022） |
 | L1-14 | 第三轮定向整改 | C2 唯一 JobArbiter（C4 不直连 C1、租约戳、迟到拒绝）；commitFirstLogin 单事务 + identityDigest 不可变 + durable reset（ADR-023）；会话资产不透明（二端口拆分）；附件转换归 C1/P；元规则迁出 4 项；D32/D33/D34 契约面归第 2 层 |
+| L1-15 | 第四轮复审收口 | reset_pending 恢复改强制启动门；身份不匹配会话隔离清除；删除凭据/清会话/clearBusinessData 统一维护独占；用户清会话覆盖全部 Native/Python 分区；并存期 Python 进程/回环传输归 P 端口；旧房首登上下文与残留术语修正 |
