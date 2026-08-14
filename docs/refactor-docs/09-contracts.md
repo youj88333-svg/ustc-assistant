@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~14 已拍板/落档 + 独立审查整改 14A/9B/2C 落地）**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~16：逐项拍板 + 两轮独立审查整改 + 第 3 层审查回写 L2-15/16）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -85,6 +85,7 @@ class LeaseStamp {
 | `catalog_unavailable` | campus 目录缺失且无法刷新 | 明确失败，不带部分数据 |
 | `stale_lease` | 租约戳过期/迟到结果 | 稳定拒绝，不写库（ADR-004） |
 | `busy` | 全局来源作业租约被占 | 旧房 `bridge_busy`/`bridge_query_busy` 废止，进程内统一 `busy` |
+| `maintenance_in_progress` | 维护独占门关闭期间的新作业/新写被拒 | 稳定拒绝（A-8 整改补码；UI 提示"维护进行中"） |
 | `no_account` | 无活动账号 | 同步前置 |
 | `fresh_or_backoff` | freshness/退避窗口内跳过 | 非错误（skip） |
 | `reauthentication_required` | 凭据缺失需重新认证 | 旧房 `credentials_not_found` 的归一 |
@@ -161,10 +162,17 @@ sealed class JobTerminalPayload {}        // 终态联合体：生产者/消费�
 class CollectionCompleted extends JobTerminalPayload {
   final Uint8List bundleBytes;            // SourceBundle 1.0 字节
   final String? verifiedUsername;         // CAS 三层核验产物（首登/重认证携带）
+  final SemesterTriple? selectedSemester; // 仅 jw 采集且无持久选择（首登）时：
+                                          // C1 登录后抓列表+月份规则实际选中的完整
+                                          // 三元组（A-6 整改：displayName 不入 Bundle）
 }
 class QueryCompleted extends JobTerminalPayload {
   final QueryResultEnvelope result;       // 经安全校验的 1.0 信封
   final String? verifiedUsername;         // 仅 young_enrolment 可能携带
+  final List<AttachmentCacheRegistration>? attachmentRegistrations;
+                                          // 仅 campus_detail 作业：C1 内部登记载荷
+                                          // （A-2 整改：正式载体=C1→C2→C4 内部传递，
+                                          // 永不进 Agent 上下文）
 }
 ```
 
@@ -346,12 +354,11 @@ class CampusDetailQueryRequest extends JobRequest {
 - **目标态收紧（隐私）**：young 的 `imagePath`；icourse 的完整 `reviews`；campus_detail
   的 `id/itemId/contentHash/localPath/sha256/cache_key` 均不得进入 QueryResult；缓存路径
   只存在于 C3 索引（`campus_attachment_cache.cache_key`），不进 Agent 上下文。
-- **附件索引登记载荷（主 agent 审查修订 2026-08-14）**：C1 在作业终态之外附
-  **内部 `AttachmentCacheRegistration` 列表**（`attachmentId/url/mediaType/
-  sizeBytes/cacheKey/fetchedAt/expiresAt`——C1 持 P 文件端口、唯一知道磁盘落点），
-  随结果经 C2→C4 交 C3 `commitCatalogSource`；该载荷**不是** QueryResult 的一部分，
-  永不进 Agent 上下文。canonical 信封（无 cache_key）与内部登记载荷（有 cache_key）
-  由此分离，DB 表 NOT NULL 列均可填充。
+- **附件索引登记载荷（A-2 整改：正式载体）**：`AttachmentCacheRegistration`
+  列表的传输载体 = **`QueryCompleted.attachmentRegistrations`**（C1 终态内附，
+  C2 校验 stamp 后随结果交 C4，C4 原样透传 C3 `commitCatalogSource`）；该载荷
+  **不是** QueryResult 信封的一部分，永不进 Agent 上下文。canonical 信封
+  （无 cache_key）与内部登记载荷（有 cache_key）由此分离，DB 表 NOT NULL 列均可填充。
 
 ### 5.5 附件转换管道（ADR-007/红线降级细则）
 
@@ -372,6 +379,10 @@ class CampusDetailQueryRequest extends JobRequest {
 ```dart
 abstract interface class SourceJobGateway {
   Future<SourceJobHandle> submitSourceJob(SourceJobSpec spec); // busy → 抛 busy
+  Future<SourceJobHandle> submitQuery(QueryRequest request);   // **C4 唯一查询入口**
+                                                               // （A-1 整改）：C4 不组装
+                                                               // spec/租约戳，C2 接收后
+                                                               // 组装并走 submitSourceJob
   Future<SyncOutcome> sync(SyncSource source, {required SyncTrigger trigger});
   Future<void> syncAll();
   Future<FirstLoginOutcome> firstLoginSync(FirstLoginRequest req);
@@ -381,7 +392,7 @@ abstract interface class SourceJobGateway {
                                                   // 租约 → 注入同一作业（ADR-020 修订）
   Future<void> clearSession();                    // 全注册通道幂等清会话（ADR-019 修订）
   Future<void> cancelAll();
-  bool isBusy();
+  bool isBusy();                                  // 提示性预检，不是正确性守卫
   FreshnessInfo freshnessFor(SyncSource source);
 }
 class FirstLoginRequest {                // 仅存在于 C5→C2→C3 staged 调用栈
@@ -406,7 +417,9 @@ class SourceJobHandle {
 
 - **仲裁规则**【冻结】：
   ① 全局来源作业租约——同一时刻至多一个学校来源采集/查询作业活跃
-  （Kubernetes Lease 式单一协调者 + holder，不引入依赖）；
+  （Kubernetes Lease 式单一协调者 + holder，不引入依赖）；**取得是同步原子动作**
+  （A-3 整改：C2 单线程 check-and-hold，检查与持有之间无 await；`isBusy()` 仅为
+  提示性预检，正确性靠原子取得，取得失败抛 `busy`）；
   ② 通道注册表——一源一通道（§6.2），通道切换需旧作业终态释放，切换时
   sourceGeneration 递增；
   ③ 租约戳组装 + 迟到拒绝（§2.3）；
@@ -494,7 +507,8 @@ Future<CredentialLease> requestCredentialLease(
 - **CT-C2-04**【冻结】：`beginMaintenance(MaintenanceKind)` /
   `endMaintenance(MaintenanceKind)`；
   `MaintenanceKind ∈ {deleteCredentials, clearSession, clearBusinessData}`——
-  门关闭期间拒绝新来源作业、取消并等待旧作业终态；reset 不依赖内存门
+  门关闭期间拒绝新来源作业、取消并等待旧作业终态；拒绝出口 = 稳定错误码
+  `maintenance_in_progress`（A-8 整改补码）；reset 不依赖内存门
   （走 C3 持久 reset_pending + 写屏障，§7.4）。
 - 生产者：C2。消费者：C5 AccountMaintenanceCoordinator（编排）、C3（屏障配合）、
   C4（拒新 run/工具/审批）。
@@ -620,12 +634,22 @@ Future<ProvisionalAuthContext> stageFirstLogin({
 // ProvisionalHandle 不透明、不得落库/文件/日志；凭据仅经一次性租约交当前作业。
 Future<CommitFirstLoginResult> commitFirstLogin({
   required ProvisionalHandle handle, required Uint8List bundleBytes,
-  required String verifiedUsername, required String identityDigest,
+  required String verifiedUsername,
+  required SemesterTriple selectedSemester,          // A-6 整改：来自
+                                                     // CollectionCompleted.selectedSemester
+                                                     // （首登无持久选择，C1 实际选中项）
   required LeaseStamp stamp});
 // bundleBytes 来自作业终态 JobTerminalPayload.CollectionCompleted.bundleBytes，
 // 由 C2 交接；A-6 整改：本方法是首登"解码+导入+账号绑定"的唯一事务所有者
-Future<void> cancelFirstLogin(ProvisionalHandle handle);
+Future<void> cancelFirstLogin(ProvisionalHandle handle);  // 幂等销毁（busy/失败/取消/
+                                                          // 进程退出调用，尽力零化）
 ```
+
+- **identityDigest 唯一生产者**【冻结，A-6 整改】：C3 账号服务，
+  算法 = `sha256(utf8(username.trim()))` 十六进制字符串（照搬旧房
+  `account_service.dart:512-513` 的 `_identityDigest`）；输入 = verifiedUsername，
+  **在 commitFirstLogin/commitReauthentication 事务内由 C3 计算（调用方不传，
+  避免外部供值）**；除 commitFirstLogin 首建与显式 schema 迁移外不得写入。
 
 `commitFirstLogin` 先以 handle 取回 staged 权威并校验 `stamp.accountId ==
 prospectiveAccountId`、jobId/source/initialSourceGeneration/initialResetEpoch 与
@@ -649,6 +673,10 @@ generation + 导入 Bundle（§7.3 私有事务内核心）+ 凭据密文（save
   identityDigest 保持不变**（重新认证不可变，仅首建或显式 schema 迁移可写）；
   不匹配 → `identity_mismatch`，数据库身份/凭据/业务数据不变，受影响会话分区
   由 C2 先持久 quarantine 再清除（清除失败跨重启禁复用并报 UI）。
+  **`discardProvisionalAuth(ProvisionalHandle handle)`**（A-7 整改）：重新认证
+  provisional 上下文的幂等销毁接口——busy、作业失败、用户取消、`account_mismatch`、
+  `identity_mismatch`、进程退出时调用，临时明文尽力零化；与首登的
+  `cancelFirstLogin` 同语义、不同入口。
 
 - **CT-C3-05**【冻结】reset（durable finalization）：
 
@@ -670,6 +698,10 @@ reset_pending 与写屏障、可重试；会话清理失败=不得绕过后删�
 finalizeReset 重复执行=幂等；reset_pending **不属于** ADR-022 普通作业作废范围，
 启动时作为**强制启动门**（C5）先于正常路由/自动同步/Agent 恢复，恢复失败保持
 写屏障并进入专用恢复界面。
+- **completeReset 撤销链顺序**【冻结，A-7 整改】：C2 先 `revoke` 全部未消费凭据
+  租约（CT-C2-03）→ 终止可能消费凭据的作业 → cancelAll 并等待全部终态 → 经
+  SourceStateService 以 reset 原因逐来源 bumpGeneration（CT-C3-21）→ 全通道
+  清会话 → finalizeReset。
 
 - **CT-C3-06**【冻结】清业务数据（维护写屏障）：
 
@@ -713,10 +745,10 @@ C2/C4 维护门配合（08 §7.5）：任何取消/等待失败均不得开始�
   ② 事务——业务写 + ActionLog（safeSummary）+ Undo 快照（`undoRecorder.record`）
   同事务，任一失败整体回滚；③ 稳定错误码——§2.4 本地写级全集；
   ④ **Agent 写入不占撤回槽**（C4 网关注入 NoopUndoRecorder，ADR-010）。
-- **Catalog 来源写入口**【冻结】：`commitCatalogSource({required LeaseStamp stamp,
-  required QueryResultEnvelope result,
-  required List<AttachmentCacheRegistration> attachmentRegistrations})` 只接受已通过
-  CT-C1-04 校验的 campus 结果；C3 在同一事务内复验 accountId/source/
+- **CT-C3-22** Catalog 来源写入口【冻结】（A-8 整改补号）：
+  `commitCatalogSource({required LeaseStamp stamp, required QueryResultEnvelope
+  result, required List<AttachmentCacheRegistration> attachmentRegistrations})`
+  只接受已通过 CT-C1-04 校验的 campus 结果；C3 在同一事务内复验 accountId/source/
   sourceGeneration/resetEpoch 后，才更新 entries/state/attachment_cache。
   attachment_cache 行的 cache_key/size_bytes/fetched_at/expires_at 来自 C1 内部登记
   载荷（§5.4；canonical 信封不含 cache_key）。C2 在把终态交给 C4 前先校验同一
@@ -797,8 +829,12 @@ abstract interface class SourceStateService {
 }
 ```
 
-  generation 递增原因全集严格为上述四值；reset/clearBusinessData 对账号全部来源逐项
-  调用。start/finish 校验 run 与 stamp.jobId/accountId/source 的绑定；finish 只允许写
+  generation 递增原因全集严格为上述四值；**计数规则（A-4 整改）**：同一维护操作
+  对同一来源只递增一次、取根操作 reason（reset/clearBusinessData 内部触发的作业
+  取消不再以 cancel 重复递增）；仅用户直接取消作业（或 C2 通用取消路径）才以
+  cancel 递增。用户取消的时机 = 取消请求被接受的时刻（先递增、后协作式终止），
+  迟到结果随之 stale_lease。reset/clearBusinessData 对账号全部来源逐项调用。
+  start/finish 校验 run 与 stamp.jobId/accountId/source 的绑定；finish 只允许写
   作业账本终态，不赋予任何业务数据写权限。首登在账号行存在前不写 sync_runs，
   `commitFirstLogin` 事务内由该服务的私有事务实现按 stamp.jobId 记 first_login 终态；
   账号提交后其余 run 一律走公开 start/finish。
@@ -963,7 +999,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | CT-C1-03 | SourceBundle 1.0 | C1 / Python 通道 | C3（经 C2 交接） |
 | CT-C1-04 | QueryResult 1.0 封闭字段集 + PythonChannel 显式转换 | C1 / Python 通道 | C4（经 C2 校验）、C3 CatalogService（campus upsert） |
 | CT-C1-05 | AttachmentContentConverter | C1 | C4（经 QueryResult）、C3（登记索引） |
-| CT-C2-01 | SourceJobGateway | C2 | C5、C4 |
+| CT-C2-01 | SourceJobGateway（submitSourceJob + submitQuery 入口） | C2 | C5、C4 |
 | CT-C2-02 | SourceChannel + 注册表（已安装全集/来源路由） | C2（接口）→ C1 / P 实现 | C2 |
 | CT-C2-03 | CredentialSubject + CredentialLease（takePassword 原子） | C3（签发）→ C2（流转） | C1 / Python 通道 |
 | CT-C2-04 | 维护独占门 | C2 | C5、C3、C4 |
@@ -974,7 +1010,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | CT-C3-01 | 数据库 + 迁移线（v8=30 表） | C3 | 全部（经服务） |
 | CT-C3-02 | importBundle（normal-only，返回 importBatchId） | C3 | C2（唯一调用方） |
 | CT-C3-03 | stageFirstLogin/commitFirstLogin/cancelFirstLogin | C3 | C2、C5 |
-| CT-C3-04 | stageReauthentication/commitReauthentication | C3 | C2、C5 |
+| CT-C3-04 | stageReauthentication/commitReauthentication/discardProvisionalAuth | C3 | C2、C5 |
 | CT-C3-05 | beginReset/finalizeReset/resetState/currentResetEpoch | C3 | C5（启动门）、C2、C4 |
 | CT-C3-06 | begin/commit/abortBusinessDataClear | C3 | C5、C2、C4 |
 | CT-C3-07 | 六子域服务 + 写服务统一契约 | C3 | C5、C4、C2 |
@@ -992,6 +1028,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | CT-C3-19 | sourceConfigs 复合主键形态 | C3 | C2、C5 |
 | CT-C3-20 | clearCache | C3（+P 文件） | C5 |
 | CT-C3-21 | SourceStateService（generation + sync run） | C3 | C2 |
+| CT-C3-22 | commitCatalogSource（Catalog 来源写入口） | C3 | C4（经 C2 校验后透传） |
 | CT-C4-01 | 会话服务预算（8×12、突发 32） | C4 | C4 内部 + C5 展示 |
 | CT-C4-02 | 上下文 token 预算 | C4 | C4 内部 |
 | CT-C4-03 | 维护期行为 | C4 | C5、C2、C3 |
@@ -1054,10 +1091,11 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-13 | 独立审查整改（2026-08-14，报告基线 bf00aa9） | A-1~A-14/B-1~B-9/C-1~C-2 全部关闭（其中 A-10/B-6/v8#7 经用户确认）；新增 CT-C3-19/20、v8 #7；ADR-004/011/015 修订注 | 独立审查报告 |
 | L2-14 | 整改复审收口决策（用户批准 2026-08-14） | QueryResult 保持单一 canonical 1.0 + PythonChannel 逐字段转换；CredentialSubject 支持持久/临时主体且首登只内存预分配 accountId；LeaseStamp 显式传播并在全部来源写事务复验；campus id 精确复用旧算法；entries 只用 first/last_observed_at；icourse 只暴露 selectedEvidence 映射后的 evidence | ADR-004/007/016/020/023 修订、CT-C1-04/CT-C2-03/CT-C3-21 |
 | L2-15 | 第 3 层走查回写（2026-08-14，主 agent 自审） | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认），非 null=持久选择 | 10-runtime.md L3-01 |
+| L2-16 | 第 3 层独立审查回写（2026-08-14，A-1~A-8/B-1~B-3 整改） | CT-C2-01 增 `submitQuery`（C4 唯一查询入口）+ 仲裁原子取得说明；QueryCompleted 增 attachmentRegistrations 载体、CollectionCompleted 增 selectedSemester；commitFirstLogin 增 selectedSemester 参数；identityDigest 唯一生产者冻结（sha256(utf8(username.trim()))）；discardProvisionalAuth 幂等销毁；completeReset 撤销链顺序；错误码补 maintenance_in_progress；CT-C3-21 计数规则（根操作 reason 一次）；CT-C3-22 补号；07 ADR-020/023 措辞绑定 takePassword/销毁接口 | 第 3 层独立审查报告（基线 a4c9a45） |
 
 ## 14. 第 2 层 gate 检查表
 
-- [x] ① 每个接口有生产者和消费者——§11 契约矩阵 64 行逐项双列（新增 CT-C3-21；一 CT 一行）
+- [x] ① 每个接口有生产者和消费者——§11 契约矩阵 65 行逐项双列（含 CT-C3-21/22；一 CT 一行）
 - [x] ② 无孤儿字段——§7.2 v8 变更集 7 项每字段标注写方/读方（B-9 整改：campus 三表逐字段读方）；删列 #2/#5 以"孤儿列/死列"为删除理由
 - [x] ③ v8 变更集清单冻结（ADR-011）——§7.2 七项 + 30 表核对（L2-06 拍板 + L2-13 整改增 #7）；冻结后变更须开 ADR
 - [x] ④ §2.5 移交登记消化——§12 逐项一对一 21 行：16 项本层消化、4 项移交第 5 层、1 项补充（B-4 整改）
@@ -1067,3 +1105,4 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
   provisional 凭据主体、LeaseStamp 传播、campus 身份/时间戳与 iCourse evidence 六项
   决策写成可独立实现的冻结签名
 - [x] **gate 重认关闭（2026-08-14）**：A-10（07 §2.2-2 解释注：应用自动行为 vs 用户确认维护的分工）/ B-6（七主机精确匹配，补 `www.teach.ustc.edu.cn`）/ v8 #7（`source_configs.source_generation` 加列，generation 权威归 C3）三项经用户确认；L2-14 六项复审收口决策已同步到 ADR/容器/正式签名 → 进入第 3 层 `10-runtime.md`
+- [x] **第 3 层审查回写闭环（2026-08-14，L2-16）**：第 3 层独立审查发现的 8A/3B 中属本层契约缺口的部分（A-1 查询入口/A-2 附件载荷载体/A-6 首登数据来源/A-7 provisional 销毁/A-4 计数规则/A-8 补码补号/A-3 原子取得）已回写冻结，第 3 层 gate 随 10-runtime.md 整改后重验

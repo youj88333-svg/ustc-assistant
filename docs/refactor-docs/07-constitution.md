@@ -517,14 +517,16 @@
 - 上下文：C1 交互登录需要 username/password，凭据仓库在 C3；C1 禁止依赖 C3（08 依赖
   铁律）；"凭据经 C0 端口流动"表述错误——CredentialProtector 只是加解密能力，不是凭据
   仓库（审查 C-2）。
-- 选项：A C2 一次性租约（启动作业前向 C3 申请，作为作业参数注入 C1，读取一次即失效）；
+- 选项：A C2 一次性租约（启动作业前向 C3 申请，作为作业参数注入 C1，仅经原子
+  `takePassword()` 取即失效，09 CT-C2-03）；
   B C0 级 Identity 端口（污染 C0 纯工具定位，给 C1 开常驻读凭据口）；C C1 回调 C2 取凭据
   （回调穿透作业状态机，时序复杂）。
 - 决策：A。租约含 expectedUsername；密码仅在 needs_user_login 恢复时按需附带（用户确认
-  后才申请，红线 2.1）；恢复同一作业重新申请租约；C1 读取一次即失效、用后尽力零化。
+  后才申请，红线 2.1）；恢复同一作业重新申请租约；C1 仅经原子 `takePassword()`
+  取即失效、用后尽力零化（绑定已冻结方法签名，不靠调用方纪律）。
 - **第三轮整改修订（2026-08-12）**：凭据恢复路径闭合——C4/C5 请求恢复 → C2 验证作业
   处于 needs_user_login → C2 在用户确认后向 C3 申请一次性凭据租约 → 注入同一个 C1/Python
-  作业 → 一次读取即失效；同步与查询**不得各自实现凭据旁路**。
+  作业 → 仅经原子 `takePassword()` 取即失效；同步与查询**不得各自实现凭据旁路**。
 - 后果：正面——依赖铁律不破、凭据存活面最小；负面——C2 增加租约申请/失效状态
   （签名由 09-contracts 冻结）。
 - **L2 复审收口修订（2026-08-14，用户批准）**：租约主体显式建模为
@@ -598,7 +600,9 @@
   `ProvisionalAuthContext{handle, prospectiveAccountId, expectedUsername, initialSourceGeneration,
   initialResetEpoch}`；`commitFirstLogin` 接收并事务内复验原 `LeaseStamp` 后才创建预分配
   accountId。`commitReauthentication` 同样接收 stamp 并事务内复验，identityDigest
-  不可变规则不变。
+  不可变规则不变。首登/重认证 provisional 上下文增加**幂等销毁接口**
+  `cancelFirstLogin` / `discardProvisionalAuth`（busy、作业失败、用户取消、进程退出
+  时调用，临时明文尽力零化）。
 - 后果：正面——账号生命周期的提交、认证、重置与清理竞态统一闭合，用户主权（重置可完成）与隐私（会话真清）
   有机械保障；负面——① C3 事务接口比旧房复杂；② ImportService 需拆出不对外暴露的
   事务内核心供 normal/首登两条入口复用；③ completeReset 需少量持久维护状态；④ C2/C4 需维护独占门，P 需承载
