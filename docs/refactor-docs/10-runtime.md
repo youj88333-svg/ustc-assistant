@@ -177,9 +177,12 @@ C4(工具)          C2                        C3                    C1/P
  │  刷新失败且目录缺失 → catalog_unavailable（明确报错，不带部分数据）│
  │ campus_detail 工具：同外部查询路径（C4 → C2 submitQuery          │
  │   → C1/P 详情读取 → QueryCompleted{result, attachmentRegistrations}│
- │   → C4 入对话；附件命中缓存经 C3 Catalog 服务（CT-C3-07）        │
- │   读 campus_attachment_cache 索引定位 P 文件（A-2 整改：          │
- │   不再误引 CT-C3-20——那只是 clearCache）                         │
+ │   → 14a. C4 → C3 commitCatalogSource(stamp, result,               │
+ │           attachmentRegistrations)（CT-C3-22；登记附件缓存索引——  │
+ │           否则下次读取永远 miss，自审补链）                        │
+ │   → 15a. C4 入对话；附件命中缓存经 C3 Catalog 服务（CT-C3-07）     │
+ │   读 campus_attachment_cache 索引定位 P 文件（A-2 整改：           │
+ │   不再误引 CT-C3-20——那只是 clearCache）                          │
  │                                                                  │
  │ 本地读写（C4 工具 → C3 服务）：                                   │
  │ 14. 读：AgentLocalDataGateway（CT-C4-04）→ C3 六子域服务         │
@@ -203,7 +206,7 @@ C5(协调器)      C2                        C3                    C4
  │ 2. C2：revoke 全部未消费凭据租约（CT-C2-03，A-7 整改）           │
  │     → 终止可能消费凭据的作业 → cancelAll（CT-C2-01）→ 等待终态  │
  │     （内部取消不重复 bump——根 reason=reset，09 CT-C3-21 注）    │
- │     → 拒绝新来源作业（出口 = maintenance_in_progress 或 busy）   │
+ │     → 拒绝新来源作业（稳定出口 = maintenance_in_progress）        │
  │ 3. C2 经 SourceStateService 以 reset 原因逐来源 bumpGeneration   │
  │    （CT-C3-21；SourceGenerationReason.reset）                    │
  │ 4. C4 拒新 run/工具/审批（CT-C4-03）；取消模型流/工具/确认；     │
@@ -280,7 +283,8 @@ C5(表单)        C2                     C3                     C1/P
  │                                                                  │
  │ 失败路径：任一守卫失败（stale_lease/身份错误）或事务回滚 →        │
  │   cancelFirstLogin(handle)（CT-C3-03，A-7 整改）→ 无活动账号、    │
- │   无凭据行、无来源业务数据；handle 一次性消费，临时明文尽力零化   │
+ │   无凭据行、无来源业务数据；handle 一次性消费，临时明文尽力零化； │
+ │   全局租约随终态释放（§2.2-8）                                    │
 ```
 
 死胡同核对：首登不写 sync_runs（账号行存在前无 run 行；first_login 终态在
