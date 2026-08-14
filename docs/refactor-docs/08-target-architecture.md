@@ -248,7 +248,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 | 2 | `undo_slot.expires_at` 删除 | ADR-010 | 删列 |
 | 3 | `action_logs` 加 `(account_id, occurred_at)` 索引 | D10 / 03§9 建议2 | 索引 |
 | 4 | Agent prompt 版本三处统一（表默认 2 / 常量 3 / 实际 v8） | D10 / 06§10-2 | 数据修复 |
-| 5 | `agent_permission_policies.expires_at` 保留 + 语义冻结（可空 Unix epoch ms，由统一 BeijingClock 提供 now；null=不自动过期；过期即降级 ask/fail-closed；不依赖物理清理） | D34 | 语义冻结 |
+| 5 | `agent_permission_policies.expires_at` 删除（第 2 层 L2-02 拍板：死列删除，"此类型以后不再确认"=永久） | D34 | 删列 |
 | 6 | reset 持久状态（reset_pending/resetEpoch）落库形态 | ADR-023 | 加列/行 |
 
 - **对外接口预告**：服务级读接口（EffectiveEventRepository/ConflictService/…）、
@@ -469,7 +469,7 @@ provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃�
 | Dart String 不可变致"绝对零化"不可承诺 | → `12-cross-cutting.md` §安全实现约束 |
 | `--save-raw` 落盘形式与 tmp/private 具体目录 | → `12-cross-cutting.md` §调试资产 |
 | 本地调试服务仅绑 127.0.0.1 的具体地址值 | → `12-cross-cutting.md` §调试服务边界 |
-| （补充）`agent_permission_policies.expires_at` 语义 | D34：第 2 层冻结（见 C3 v8 累积表 #5） |
+| （补充）`agent_permission_policies.expires_at` 语义 | D34：第 2 层已拍板（L2-02 修订：删列 + 记住即永久，见 C3 v8 累积表 #5） |
 
 ## 10. 本层 gate 检查表
 

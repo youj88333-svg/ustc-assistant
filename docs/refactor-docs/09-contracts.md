@@ -393,7 +393,7 @@ class CredentialLease {                  // 不可变、不可序列化进事件
 | 2 | `undo_slot.expires_at` 删除 | 删列 | 现状只写不读的孤儿列（03 §10-3）；单槽语义不受影响 | 无（删除理由） | 无 |
 | 3 | `action_logs` 加 `(account_id, occurred_at)` 索引 | 索引 | 03 §9 建议 2 | `ActionLogRepository.append`（全部写路径） | `HistoryRepository.query` / 设置页审计展示（倒序） |
 | 4 | Agent prompt 版本统一为 **8** | 数据修复 | `agent_settings.system_prompt_version` DEFAULT 改 8 + 迁移 UPDATE 现行为 8 + 代码常量统一 8（表默认 2/常量 3/实际 v8 三处不一致，06 §10-2） | C4 会话服务（新建行）、迁移器（回填） | C4 上下文构建（prompt 选择） |
-| 5 | `agent_permission_policies.expires_at` 保留 + 语义冻结 | 语义冻结 | D34，见 §7.7 | 权限策略服务（用户设置/确认时） | C4 审批门 resolve（每次写提案） |
+| 5 | `agent_permission_policies.expires_at` 删除 | 删列 | 死列（代码核实 2026-08-14：恒 NULL、`resolve` 决议从不读）；"此类型以后不再确认"=永久记住（ask_first_time + firstConfirmedAt），无过期概念（L2-02 修订） | 无（删除理由） | 无 |
 | 6 | reset 持久状态 | 加列 | `local_accounts` + `reset_pending INTEGER NOT NULL DEFAULT 0` + `reset_epoch INTEGER NOT NULL DEFAULT 0`（不新增表；finalizeReset 删账号行时同事务清标记，幂等闭环） | C3 beginReset/finalizeReset | C5 启动强制门、C2 租约戳组装（经 C3 `currentResetEpoch()`）、C4 写屏障校验 |
 
 **#1 campus 表族字段级冻结**（无孤儿字段检查内嵌）：
@@ -578,10 +578,12 @@ missed, failed}` + failure_code `notification_unavailable`；系列 31 天前瞻
   11 类实体恢复器 + 复合操作逐操作复用单实体恢复器；他账号槽绝不删除/改写；
   撤销成功删槽、失败保槽；Agent 写入不占槽（§7.5 ④），Agent 侧撤回走
   `undo_last_action` 工具（C4）。
-- **CT-C3-18** 权限策略 expires_at（D34）【冻结】：v8 保留该列；可空 epoch ms
-  （由 `BeijingClock.now()` 提供当前时刻）；`NULL`=不自动过期；
-  `now >= expires_at` 时 remembered 策略不再授权、退回 ask/fail-closed；
-  正确性不依赖后台物理清理过期行。M6 只实现解析/UI/测试，不再定字段含义。
+- **CT-C3-18** 权限策略"记住"语义（D34，L2-02 修订）【冻结】：v8 **删除**
+  `agent_permission_policies.expires_at` 死列——代码核实：恒 NULL、`resolve`
+  从不读、与 ADR-010 删 undo_slot.expires_at 同款处置；"此类型以后不再确认" =
+  **永久记住**（`ask_first_time` + `firstConfirmedAt != null` → allow），无过期
+  概念；撤销快照 `_policySnapshot` 与恢复器 `_restorePermissionPolicy` 同步去掉
+  该字段；将来如需"限时记住"作为新功能开新决策，不预埋。
 
 ## 8. C4 Agent harness 契约
 
@@ -621,7 +623,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 
 - 审批门【冻结】：propose（不碰库）→ 工具 allowlist 校验（伪造策略组合拒绝）→
   `AgentPermissionPolicyService.resolve`（ask_first_time 首次确认后放行；
-  expires_at 语义见 CT-C3-18）→ allow 直接原子提交 / deny 拒绝 / confirm 进
+  记住=永久语义见 CT-C3-18）→ allow 直接原子提交 / deny 拒绝 / confirm 进
   确认卡暂停。确认卡预览只显示模型安全信息（标题/时间等），**不含 DB id/ref**；
   权限变更（update_permission_policy）永远需要用户亲手确认（红线 2.1-5）。
 - 参数校验【冻结】：`WriteArgumentReader` 白名单键 + 严格类型，非法 →
@@ -760,14 +762,14 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | Dart String 零化限制 | → `12-cross-cutting.md` §安全实现约束（本层不展开） |
 | `--save-raw` 落盘与 tmp/private 目录 | → `12-cross-cutting.md` §调试资产（本层不展开） |
 | 本地调试服务 127.0.0.1 | → `12-cross-cutting.md` §调试服务边界（并存期桥接已在 §10 归口） |
-| （补充）permission expires_at（D34） | §7.7（CT-C3-18） |
+| （补充）permission expires_at（D34） | §7.7（CT-C3-18：删列 + 记住即永久） |
 
 ## 13. 本层拍板记录（L2 决策，待用户确认）
 
 | 编号 | 决策 | 内容 | 依据 |
 |---|---|---|---|
 | L2-01 | D33 提醒默认偏移冻结 | §7.6 CT-C3-14 全表照搬现状（exam 1440/120、second_class 120、task 1440/120、plan_block 10 特例保留）；M5 只做 UI | 03 §3.4 reminder_rule.dart |
-| L2-02 | D34 expires_at 语义冻结 | §7.7 CT-C3-18；NULL=不自动过期、过期退回 ask、不依赖物理清理 | D34 |
+| L2-02 | D34 expires_at 处置（经代码核实修订，用户拍板） | 删列（死列：恒 NULL、决议从不读）+ "此类型以后不再确认"=永久；§7.2 #5 / §7.7 CT-C3-18 | D34、代码核实 2026-08-14 |
 | L2-03 | D35 sourceConfigs 主键形态 | **保留现状** `id = '$accountId:$source'` 复合字符串 id + UNIQUE(account_id, source)（04 §5 观测现状即此形态，零迁移；单账号模型不引入 schema 变更） | D35、04 §5 |
 | L2-04 | D37 trigger/retry 契约 | trigger 扩展为 4 值（§6.5 CT-C2-05，首登/重认证各自可审计）；state 6 值冻结；retry=自动 1h 退避 + 手动绕过 + 启动 interrupted 标记 | D37、ADR-008/013 |
 | L2-05 | D32 复合写上限 | **20 对象/复合操作**（整体计 1 次工具调用；每对象 ledger；单槽整包撤销快照；禁止无预览 delete-all）§8.6 CT-C4-09 | D32、L1-09 |
