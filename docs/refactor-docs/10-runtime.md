@@ -42,7 +42,8 @@
      → 返回 runId；[首登] 不写 run（账号行尚不存在，见 §6）
   3. 通道路由（已安装全集上的当前映射，CT-C2-02）
   4. C1/Python startCollection(spec) → JobEventStream（CT-C1-02/CT-C1-01）
-  5. 事件转播（sequence 连续）
+  5. 事件转播（sequence 连续；八相位 + sequence/safeCount/终态载荷全集见
+     11 D-07 / 12 XC-06）
   6. 终态接收：C2 校验 SourceJobHandle.stamp（CT-C0-03）
      ├─ 迟到 → stale_lease（不交接 C3/C4）
      └─ 正常 → 交接（见各链路）

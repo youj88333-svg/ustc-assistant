@@ -125,7 +125,7 @@ app/lib/features/agent/
 
 - 隐私过滤：`OutboundPrivacyFilter`（`app/lib/features/agent/application/outbound_privacy_filter.dart:36-307`）——用户文本前置检查（完整账号/API Key/Bearer/Cookie/密码/验证码，:63-120），拒绝即不落库不发送（`agent_session_service.dart:515-527`）；工具 payload 按 per-tool allowlist builder 净化（:132-147），未知工具返回空 DTO（:136-141）；递归可疑键丢弃兜底（db_id/cookie/password/token/path/url 等，:230-306）；摘要落库前再净化（:156-176）。
 - 助手文本过滤：`AssistantTextFilter`（`app/lib/features/agent/application/assistant_text_filter.dart:21-204）——流式增量剥离回合开头的历史时间戳标记与 `ref_*` 令牌（拆分为安全占位符「该条目」，:23），跨 chunk 拆分令牌暂存不闪现（:147-175），流末尾不完整前缀直接丢弃（:163-168）。
-- 审计：`action_logs` 三来源——每次 run 恰好一条 `source='agent'`/`actionType='read_only_run'` 汇总（`agent_session_service.dart:1677-1704`）；写审批流 `agent_write_confirm`/`agent_write_decline`/`agent_write_cancel`/`agent_write_*`（`agent_write_tool.dart:265-337`、`agent_permission_policy_service.dart:549-583`）；用户侧策略变更（`agent_permission_policy_service.dart:472-482`）。
+- 审计：`action_logs` source 值四类（`user`/来源键/`agent`/`system`）——每次 run 恰好一条 `source='agent'`/`actionType='read_only_run'` 汇总（`agent_session_service.dart:1677-1704`）；写审批流 `agent_write_confirm`/`agent_write_decline`/`agent_write_cancel`/`agent_write_*`（`agent_write_tool.dart:265-337`、`agent_permission_policy_service.dart:549-583`）；用户侧策略变更（`agent_permission_policy_service.dart:472-482`）。
 - 聚合观测：`MutationLedger`（`app/lib/features/agent/application/agent_mutation_ledger.dart:25-162）——生命周期写结果按序聚合成功/拒绝/失败/未处理（:137-161），只含计数与白名单错误码；`CreateTaskBurstLease`（`agent_tool_budget.dart:163-291`）同构聚合突发 create_task。
 - 指纹：`ToolCallFingerprint`（见子结构 2/3）。
 

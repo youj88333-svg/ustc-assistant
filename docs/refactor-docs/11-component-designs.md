@@ -394,7 +394,7 @@
 | D-22/D-23/D-24/D-25/D-29/D-30（M2 引擎周边） | M2 开工前 | JobGate 闸、JW 管道四工位、通道注册/切换（unregister 前清会话）、SyncCoordinator（freshness/backoff/syncAll）、transient/fatal 分类与有限重试、syncAll 恢复语义（10 §10 移交项） |
 | D-12/D-13 young 双适配器（M3） | M3 开工前 | 管道四工位状态机 + needs_user_login 恢复转移 + 封闭字段映射 |
 | D-14 icourse 适配器 + 24h 缓存（M4） | M4 开工前 | 缓存状态机（fresh/stale/miss）+ 降级转移 |
-| D-15 campus 刷新/详情/附件（M4） | M4 开工前 | 节流/过期/降级状态机 + 附件登记载荷生成点 + CT-C3-22 调用 |
+| D-15 campus 刷新/详情/附件（M4） | M4 开工前 | 节流/过期/降级状态机 + 附件登记载荷生成点 + CT-C3-22 调用 + 孤儿附件回收（下一次同名附件转换或 clearCache 幂等清理，12 XC-04） |
 | D-16 提醒协调器（M5） | M5 开工前 | reminders 五态转移 + 6 表 watch 重入保护 + 哨兵语义 |
 | D-20/D-21 M1 纯函数算法 | M1 对应实现开工前 | 有效事件/冲突投影算法 + 重复系列物化/生命周期算法；先补算法设计再实现 |
 | D-26 provisional 生命周期 | M2 首登/JW 联调前 | stage/commit/cancel/discard 完整状态机 + busy 前后边界 + 进程退出尽力零化 |
@@ -411,7 +411,7 @@
 | R3 维护互斥 | D-06/D-07/D-01 | maintenance/maintenance_draining 期间 acquire 恒拒；迁移器运行期间无作业可启动（启动门） |
 | R4 暂停语义 | D-05/D-07 | needsUserLogin 期间 run 保持 running、租约保持、sequence 连续 |
 | R5 租约释放 | D-06/D-11 | 作业任何终态释放全局租约（try/finally）与凭据租约（job_terminal→revoked） |
-| R6 provisional 边界 | 09 CT-C3-03/04 + CT-P-05 + D-06 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁；stage 后任何失败出口调 cancel/discard；首登同时清 prospective debug，成功/崩溃由启动 reconcile 调和 |
+| R6 provisional 边界 | 09 CT-C3-03/04 + CT-P-05 + D-06 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁；stage 后任何失败出口调 cancel/discard 并 clearDebugAssets(prospectiveAccountId)；提交成功后立即 reconcileProvisionalDebugAssets(activeAccountId) 提升归属；崩溃后由启动门 reconcile 兜底（无正式账号认领者物理删除） |
 
 ## 8. 本层拍板记录（L4 决策）
 
@@ -420,7 +420,7 @@
 | L4-01 | 本层范围 | M1/M2 核心状态机先设计（D-01~D-11）；其余登记待补，每块开工前补设计 | ✅ 已定 |
 | L4-02 | 首轮独立审查整改（2026-08-14，10A/4B） | A-1 三闭合规则模板 / A-2 replay 过租约守卫 / A-3 reset 顺序与启动安全重放 / A-4 维护 reason 按 kind / A-5 枚举名与终态所有权 + 码子集 / A-6 unknown 保守出口 + quarantine 闭环 / A-7 三标志位图 / A-8 manual_done 进核验 / A-9 revoke 幂等 + 终态失效 / A-10 失败态双列 + `reset_incomplete` 回写 09（L2-18）；B-1 登记表补 D-22~D-30 / B-2 状态三档 / B-3 断言措辞与备份策略移交 / B-4 旧表述清零 | ✅ 已落地 |
 | L4-03 | 整改复审修订（2026-08-14） | D-02 subject/active/stamp 同事务守卫 + subject_fail；D-03 五失败态归位与启动事件闭合；D-06 非终态维护态及 `maintenance_failed` 回写 09（L2-19）；D-07 cancelled 退出 failed 子集；L2-18 限定 pending=1/2；闭合规则优先级、D-20/21/D-26 触发器与 09/10 回写记录补齐 | ✅ 已落地（2026-08-14 用户重认，gate 关闭） |
-| L4-04 | 第 5 层整改复审用户收口（2026-08-15） | D-03 在会话清理后新增 clearing_cache/clearing_debug 两态；pending=2 启动恢复必须重放两项私有资产清理而非直接 finalization；R6 增首登 prospective debug 清理/调和 | ✅ 已同步（09 L2-21 / 10 L3-06） |
+| L4-04 | 第 5 层整改复审用户收口（2026-08-15） | D-03 在会话清理后新增 clearing_cache/clearing_debug 两态；pending=2 启动恢复必须重放两项私有资产清理而非直接 finalization；R6 增首登 prospective debug 清理/调和（最终复审精确化：成功立即提升、失败/取消立即清除、崩溃启动调和）；D-15 触发器补孤儿附件回收 | ✅ 已同步（09 L2-21 / 10 L3-06） |
 
 ## 9. 第 4 层 gate 检查表
 

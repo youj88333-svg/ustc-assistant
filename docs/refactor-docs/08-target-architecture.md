@@ -527,7 +527,7 @@ App 崩溃或文件清理失败由 CT-C5-02 在正常路由前 reconcile；取�
   4. 首次登录 stage 后导入失败 → commitFirstLogin 事务回滚 + cancelFirstLogin(handle)，无活动账号/凭据行/来源业务数据，provisional 明文清理 ✅；
   5. 重新认证登录成另一账号 → digest 不匹配 → account_mismatch；先 discardProvisionalAuth(handle)，数据库 identityDigest/凭据/业务数据不变，受影响会话分区先持久 quarantine 再清除，清除失败跨重启禁止复用 ✅；
   6. reset 期间 Agent 写工具迟到提交 → resetEpoch/写屏障拒绝，不在删除后重建数据 ✅；
-  7. reset 清会话后数据库失败 → 事务回滚、状态 reset_incomplete_session_cleared；下次启动以强制门继续 finalization，失败保持屏障/恢复界面，不谎称恢复登录 ✅；
+  7. reset 清会话后数据库失败 → 事务回滚、状态 incomplete_session_cleared（reset_pending=2）；下次启动以强制门继续 finalization，失败保持屏障/恢复界面并返回 reset_incomplete，不谎称恢复登录 ✅；
   8. 并存期 Python 查询运行时重置 → C2 定位/取消/等待 Python 作业，Python profile/session 与 Native 分区一并清理 ✅；
   9. 同步或本地写运行时 clearBusinessData → C3 先建立屏障并等待已进入的本地写，C2/C4 维护门拒新工作并取消等待旧工作，generation 递增；清理后不会被并发或迟到写重建 ✅；
   10. 删除凭据时存在待消费租约 → C2 先撤销租约并终止相关作业，再由 C3 删密文，不留下可继续消费的凭据租约 ✅；
@@ -545,8 +545,8 @@ App 崩溃或文件清理失败由 CT-C5-02 在正常路由前 reconcile；取�
 | L1-05 | 并存期进程归属 | Python 通道进程生命周期归 C2 统一管理；M7 随租户删除 |
 | L1-06 | 账号服务归属 | 账号与凭据服务留 C3（随数据走）；`CredentialProtector` 端口留 C0（clean-arch 共识） |
 | L1-07 | 提醒三段切分 | 协调逻辑 C3 / 通知投递适配 P / 启动编排 C5（Flutter 生态标准三段式） |
-| L1-09 | 工具系统框架 | 能力域组织六域；域内工具清单 M6 审计定稿；8×12 为基线（D32 经第 2 层回写）；每轮作用域收窄延续 grounding |
 | L1-08 | 恢复语义从简 | 跨重启一律中断作废（普通作业）；reset_pending 除外（ADR-022 修订 + ADR-023） |
+| L1-09 | 工具系统框架 | 能力域组织六域；域内工具清单 M6 审计定稿；8×12 为基线（D32 经第 2 层回写）；每轮作用域收窄延续 grounding |
 | L1-10 | 壳层契约 | 分支栈=indexedStack 保活（禁止丢栈）；手工装配维持现状（D20/D21 M5 评估）；普通提醒/自动同步启动 best-effort，reset_pending 恢复为强制启动门 |
 | L1-11 | 平台适配方式 | 单 App 内部目录 + 平台接口 + 条件导入/平台通道实现；能力矩阵声明平台不对齐；并存期 Python 进程/本机回环由 P 实现 C2 端口、M7 删除；不引入 federated plugin 结构（LocalSend 式） |
 | L1-12 | 审查整改（批次 1） | 机械修订：出站三分法、completeReset 顺序、八相位、v7 基线 27 表、源码依赖方向（P→C0/C1）、campus 链路、孤儿规则归位、五链路补齐、ADR 负面诚实化 |
