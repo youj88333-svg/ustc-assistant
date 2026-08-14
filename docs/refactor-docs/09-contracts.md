@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~18：逐项拍板 + 两轮独立审查整改 + 第 3/4 层审查回写 L2-15~18）**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~19：逐项拍板 + 两轮独立审查整改 + 第 3/4 层审查回写 L2-15~19）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -86,7 +86,8 @@ class LeaseStamp {
 | `stale_lease` | 租约戳过期/迟到结果 | 稳定拒绝，不写库（ADR-004） |
 | `busy` | 全局来源作业租约被占 | 旧房 `bridge_busy`/`bridge_query_busy` 废止，进程内统一 `busy` |
 | `maintenance_in_progress` | 维护独占门关闭期间的新作业/新写被拒 | 稳定拒绝（A-8 整改补码；UI 提示"维护进行中"） |
-| `reset_incomplete` | completeReset 中途失败（可重试的持久 pending 状态） | 第 4 层审查回写补码（L2-18）：UI 提示"重置未完成，可重试"；与 reset_pending 1/2 持久态配套 |
+| `reset_incomplete` | completeReset 已建立持久意图后中途失败（可重试的 pending 状态） | 第 4 层审查回写补码（L2-18）：仅配套 reset_pending 1/2；UI 提示"重置未完成，可重试"。beginReset 未提交、pending 仍为 0 时不使用本码，归 `write_commit_failed` |
+| `maintenance_failed` | 非 reset 维护操作已取得维护门，但取消/等待旧作业或维护本体失败 | 第 4 层整改复审回写补码（L2-19）：保持维护/写屏障直到重试或显式 abort；不得与“维护期间新请求被拒”的 `maintenance_in_progress` 混用 |
 | `no_account` | 无活动账号 | 同步前置 |
 | `fresh_or_backoff` | freshness/退避窗口内跳过 | 非错误（skip） |
 | `reauthentication_required` | 凭据缺失需重新认证 | 旧房 `credentials_not_found` 的归一 |
@@ -535,7 +536,8 @@ Future<CredentialLease> requestCredentialLease(
   `endMaintenance(MaintenanceKind)`；
   `MaintenanceKind ∈ {deleteCredentials, clearSession, clearBusinessData}`——
   门关闭期间拒绝新来源作业、取消并等待旧作业终态；拒绝出口 = 稳定错误码
-  `maintenance_in_progress`（A-8 整改补码）；reset 不依赖内存门
+  `maintenance_in_progress`（A-8 整改补码）；取得维护门后的排空/维护本体失败 =
+  `maintenance_failed`（L2-19），保持门/写屏障直到重试或显式 abort；reset 不依赖内存门
   （走 C3 持久 reset_pending + 写屏障，§7.4）。
 - 生产者：C2。消费者：C5 AccountMaintenanceCoordinator（编排）、C3（屏障配合）、
   C4（拒新 run/工具/审批）。
@@ -722,9 +724,11 @@ ResetState resetState();       // {none, pending, incompleteSessionCleared}
 int currentResetEpoch();       // C2 租约戳 / C4 写屏障共用
 ```
 
-失败语义（08 §7.3 表契约化）：beginReset 失败=原状；C2/C4 取消失败=保持
-reset_pending 与写屏障、可重试；会话清理失败=不得绕过后删库；清会话后删库失败=
-事务回滚 + 状态 `reset_incomplete_session_cleared`、下次启动继续 finalization；
+失败语义（08 §7.3 表契约化）：beginReset 未提交失败=原状、pending=0、
+`write_commit_failed`；C2/C4 取消失败=保持 reset_pending 与写屏障、可重试；会话清理
+失败=不得绕过后删库；清会话后删库失败=
+事务回滚 + `reset_pending=2`（`incomplete_session_cleared`）、下次启动继续 finalization；
+上述 pending=1/2 的可重试失败统一 `reset_incomplete`；
 finalizeReset 重复执行=幂等；reset_pending **不属于** ADR-022 普通作业作废范围，
 启动时作为**强制启动门**（C5）先于正常路由/自动同步/Agent 恢复，恢复失败保持
 写屏障并进入专用恢复界面。
@@ -1130,7 +1134,8 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-15 | 第 3 层走查回写（2026-08-14，主 agent 自审） | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认），非 null=持久选择 | 10-runtime.md L3-01 |
 | L2-16 | 第 3 层独立审查回写（2026-08-14，A-1~A-8/B-1~B-3 整改） | CT-C2-01 增 `submitQuery`（C4 唯一查询入口）+ 仲裁原子取得说明；QueryCompleted 增 attachmentRegistrations 载体、CollectionCompleted 增 selectedSemester；commitFirstLogin 增 selectedSemester 参数；identityDigest 唯一生产者冻结（sha256(utf8(verifiedUsername.trim()))）；discardProvisionalAuth 幂等销毁；completeReset 撤销链顺序；错误码补 maintenance_in_progress；CT-C3-21 计数规则（根操作 reason 一次）；CT-C3-22 补号；07 ADR-020/023 措辞绑定 takePassword/销毁接口 | 第 3 层独立审查报告（基线 a4c9a45） |
 | L2-17 | 第 3 层整改复审回写（2026-08-14） | `QueryRequest` 冻结为四种查询子类的联合体，原始 spec 提交降为 C2 内部助手；`AttachmentCacheRegistration` 七字段与非 null 空列表语义冻结；CT-C4-06/矩阵改用 submitQuery 与 QueryCompleted 内部载荷；provisional busy 边界、维护取消 reason 与首登载荷表述对齐 | 第 3 层整改复审报告（基线 7602c71） |
-| L2-18 | 第 4 层独立审查回写（2026-08-14，A-10） | 错误码注册表补 `reset_incomplete`（completeReset 中途失败、可重试；与 reset_pending 1/2 持久态配套） | 第 4 层独立审查报告（基线 82d0f84） |
+| L2-18 | 第 4 层独立审查回写（2026-08-14，A-10） | 错误码注册表补 `reset_incomplete`（completeReset 已建立持久意图后中途失败、可重试；仅与 reset_pending 1/2 配套；beginReset 未提交使用 `write_commit_failed`） | 第 4 层独立审查报告（基线 82d0f84）及整改复审收口 |
+| L2-19 | 第 4 层整改复审回写（2026-08-14） | 错误码注册表补 `maintenance_failed`：非 reset 维护已取得维护门后的排空/执行失败；与拒绝新请求的 `maintenance_in_progress` 严格分工 | 第 4 层整改复审报告（基线 5d1e698） |
 
 ## 14. 第 2 层 gate 检查表
 
@@ -1149,3 +1154,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
   AttachmentCacheRegistration 类型与空列表语义，统一 CT-C4-06/矩阵调用入口，明确
   stage 前 busy 无 provisional handle、两类非根维护取消使用 cancel reason；未改 schema
   v8，故不触发 ADR-011 的 schema 变更流程
+- [x] **第 4 层审查回写闭环（2026-08-14，L2-18/19）**：`reset_incomplete` 限定为
+  reset_pending 1/2 的持久可重试失败，pending=0 的 beginReset 未提交失败归
+  `write_commit_failed`；新增 `maintenance_failed` 区分维护本体失败与维护期新请求被拒。
+  两项均仅扩充/澄清错误码注册表，不改变 schema、CT 数量或容器依赖。

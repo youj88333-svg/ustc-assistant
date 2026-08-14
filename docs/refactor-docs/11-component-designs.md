@@ -1,7 +1,7 @@
 # 11 组件设计（六层阶梯 · 第 4 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**首轮独立审查整改版（10A/4B 已闭环；回写 09 L2-18）**
-> ｜ 依据：`09-contracts.md`（CT 65 条 + L2-01~18）、`10-runtime.md`（五链路走查）、
+> 产出日期：2026-08-14 ｜ 状态：**整改复审修订版（回写 09 L2-18/19，待独立复审重认 gate）**
+> ｜ 依据：`09-contracts.md`（CT 65 条 + L2-01~19）、`10-runtime.md`（五链路走查）、
 > `07-constitution.md`（ADR-000~023）、08 容器切分、01–06 模块文档
 > ｜ 纪律（AGENTS.md 阶梯规则）：第 4 层**不必一次做完**——M1 后"每做一块组件、
 > 先补一块设计"；本文件是组件设计的唯一登记处。
@@ -35,6 +35,8 @@
 ```
 
 - 三条闭合规则与显式行合并后即构成"状态全集 × 事件"的完整转移定义（gate 判据）。
+- 规则优先级【冻结】：**显式行 > R-终态 > R-重复 > R-非法**。终态不重放动作；若终态
+  请求需要返回值，只返回既有终态结果。没有终态的状态机仍须声明 R-终态不适用。
 - 失败态一律映射 §2.4 稳定错误码（`09-contracts.md`）；新码须回写第 2 层。
 - 与第 2/3 层的关系：契约（CT）定"什么能发生"，本层定"组件内部如何发生"；
   转移表不得违背 CT 冻结语义。
@@ -56,13 +58,13 @@
 | D-09 | 导航就绪状态机（三标志） | C1 | M2 | ✅ §5.4 |
 | D-10 | CAS 交互登录状态机 | C1 | M2 | ✅ §5.5 |
 | D-11 | CredentialLease 生命周期 | C2/C3 | M2 | ✅ §5.6 |
-| D-20 | 有效事件/冲突投影纯函数 | C3 | M1 | 🟡 契约已冻结（CT-C3-13/09a）；纯函数无状态机，M1 实现时补算法细节 |
-| D-21 | 重复系列投影/生命周期 | C3 | M1 | 🟡 契约已冻结（CT-C3-12）；M1 实现时补算法细节 |
+| D-20 | 有效事件/冲突投影纯函数 | C3 | M1 | 🟡 契约已冻结（CT-C3-13/09a）；触发器：M1 对应实现开工前补算法设计 |
+| D-21 | 重复系列投影/生命周期 | C3 | M1 | 🟡 契约已冻结（CT-C3-12）；触发器：M1 对应实现开工前补算法设计 |
 | D-22 | C1 JobGate（Native 卡槽资源闸） | C1 | M2 | ⬜ 待补（触发器：M2 开工前；不含全局权威，L1-04） |
 | D-23 | Native JW Adapter 管道 | C1 | M2 | ⬜ 待补（触发器：M2 开工前；含学期列表抓取 ADR-009） |
 | D-24 | SourceChannel 注册/切换 | C2 | M2 | ⬜ 待补（触发器：M2 开工前；已安装全集/来源路由，unregister 前清会话） |
 | D-25 | SyncCoordinator（freshness/backoff/syncAll） | C2 | M1/M2 | ⬜ 待补（触发器：M2 开工前；含 10 §10 两项移交） |
-| D-26 | provisional 生命周期（首登/重认证） | C3 | M1/M5 | ⬜ 待补（触发器：M5 开工前；cancelFirstLogin/discardProvisionalAuth 状态机） |
+| D-26 | provisional 生命周期（首登/重认证） | C3 | M1/M2/M5 | ⬜ 待补（触发器：M2 首登/JW 联调前；cancelFirstLogin/discardProvisionalAuth 状态机） |
 | D-27 | clearBusinessData 写屏障 | C3 | M5 | ⬜ 待补（触发器：M5 开工前） |
 | D-28 | C5 启动强制门/启动编排 | C5 | M5 | ⬜ 待补（触发器：M5 开工前；reset_pending 门 + 提醒/自动同步启动） |
 | D-29 | 作业 transient/fatal 分类与有限重试 | C1/C2 | M2 | ⬜ 待补（触发器：M2 开工前；10 §10 移交项） |
@@ -92,8 +94,8 @@
 | verifying | verify_ok | committed | schemaVersion=8；**实现/验收时必须通过四步迁移断言**（旧库建→插数据→迁移→校验） | — |
 | verifying | verify_fail | rolled_back | 同上回滚 | （rolled_back ｜ `sync_failed`） |
 
-- 闭合规则：R-非法（保持+审计）/ R-终态（committed/rolled_back/failed 忽略后续事件）/
-  R-重复（start 幂等：已 committed 则直接 committed）。
+- 闭合规则：R-非法（保持+审计）/ R-终态（committed/rolled_back/failed 忽略后续事件，
+  `committed × start` 只返回既有结果、不重放迁移动作）/R-重复（非终态重复完成信号按动作幂等）。
 - 不变量：迁移全程主库独占（启动门：迁移未完成前禁止正常路由/自动同步/Agent）；
   任何失败不得留下半迁移状态。**备份副本保留与清理策略移交第 5 层数据保留策略
   （`12-cross-cutting.md`），本机不预设"自动过期"（B-3 整改）。**
@@ -111,9 +113,10 @@
 | accepting | bytes_received | decoding | 16MB/深度 64/schema 门禁（CT-C1-03 解码段） | — |
 | decoding | decode_ok | validating | 语义校验（9 错误码） | — |
 | decoding | decode_fail | failed | 稳定错误码回传（不回显源内容） | （failed ｜ 9 个 bundle 码之一） |
-| validating | semantics_ok | checking_subject | subject.accountId == stamp.accountId **且 == 当前 activeAccountId**（无活动账号 → no_account） | — |
+| validating | semantics_ok | checking_subject | 进入 subject/active-account 守卫（本行不提前判成功） | — |
 | validating | semantics_fail | failed | 同上 | （failed ｜ 9 个 bundle 码之一） |
-| checking_subject | subject_ok | checking_idempotency | **事务内**：stamp 复验（sourceGeneration/resetEpoch 与库值）+ bundleId/digest 幂等查询（A-2 整改：replay 路径同样先过租约守卫） | （failed ｜ `subject_mismatch` / `stale_lease`） |
+| checking_subject | subject_fail | failed | 拒绝：无活动账号，或 subject.accountId 与 stamp/activeAccountId 不一致；不打开导入写事务 | （failed ｜ `no_account` / `subject_mismatch`） |
+| checking_subject | subject_ok | checking_idempotency | **同一事务内重新校验** subject.accountId == stamp.accountId == 当前 activeAccountId，复验 sourceGeneration/resetEpoch，再做 bundleId/digest 幂等查询（A-2 收口：active account 与 replay 路径均不得绕过事务守卫） | （failed ｜ `no_account` / `subject_mismatch` / `stale_lease`） |
 | checking_idempotency | replay_hit | done(replayed) | 复验已过（同一事务内完成）；直接返回 | — |
 | checking_idempotency | proceed | importing | **同一事务续写**：import_batches + localId 复用 + upsert + source_records presence 对齐 + ActionLog（复验与写入同事务，TOCTOU 闭合） | （failed ｜ `stale_lease`） |
 | importing | tx_ok | reconciling | 事务外提醒协调（失败降级 pending） | — |
@@ -122,7 +125,9 @@
 | reconciling | reconcile_fail | done(imported) | ImportResult{pending=true}（审计 retryable_failure） | 降级非失败（仅审计） |
 
 - 闭合规则：R-非法/R-终态/R-重复（幂等：同 bundleId 同 digest 重放恒 replay）。
-- 不变量：stamp 复验与业务写入**同一事务**；提醒协调失败不重试导入；
+- 不变量：subject/activeAccountId/stamp 复验、幂等查询与业务写入在**同一数据库事务、同一
+  importBundle 调用栈**内连续执行；checking_idempotency 的 replay/proceed 是事务内同步
+  决议，不跨 await 暴露事务；提醒协调失败不重试导入；
   迟到结果在任何入口（含 replay）都 `stale_lease`。
 
 ### 4.3 D-03 reset 协调状态机（CT-C3-05；A-3/A-10 整改）
@@ -131,32 +136,34 @@
 - 协调器运行态：`idle*, previewing, beginning, draining_c2, draining_c4,
   clearing_sessions, finalizing, done†, startup_recovering`
 - 事件：`user_confirm_x2, begin, begin_ok, begin_fail, c2_drained, c2_drain_fail,
-  c4_drained, c4_drain_fail, sessions_cleared, clear_fail, tx_ok, tx_fail,
-  startup_detected`
+  c4_drained, c4_drain_fail, sessions_cleared, clear_fail, retry_finalize, tx_ok, tx_fail,
+  startup_detected, startup_pending, startup_incomplete_session_cleared`
 
 | 当前态 | 事件 | 次态 | 动作（持久效果） | 失败态 |
 |---|---|---|---|---|
 | idle | user_confirm_x2 | previewing | 清单预览（CT-C5-01） | — |
 | previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | — |
-| previewing | begin_fail | idle | 重置未开始，原状（UI 可重试） | （idle ｜ `reset_incomplete`） |
+| beginning | begin_fail | idle | beginReset 未提交，重置未开始、pending=0；UI 可重试 | （idle ｜ `write_commit_failed`） |
 | beginning | begin_ok | draining_c2 | C2：revoke 租约→终止→cancelAll→等待→bump(reset) | — |
-| beginning | c2_drain_fail | beginning | 保持 pending=1 + 写屏障，可重试 | （保持 ｜ `reset_incomplete`） |
+| draining_c2 | c2_drain_fail | draining_c2 | 保持 pending=1 + 写屏障，可重试 | （保持 ｜ `reset_incomplete`） |
 | draining_c2 | c2_drained | draining_c4 | C4：拒新+取消+等待写终态 | — |
-| draining_c2 | c4_drain_fail | draining_c2 | 保持 pending=1，可重试 | （保持 ｜ `reset_incomplete`） |
+| draining_c4 | c4_drain_fail | draining_c4 | 保持 pending=1，可重试 | （保持 ｜ `reset_incomplete`） |
 | draining_c4 | c4_drained | clearing_sessions | 全通道 clearSession（幂等） | — |
-| draining_c4 | clear_fail | draining_c4 | 保持 pending=1，不得绕过后删库 | （保持 ｜ `reset_incomplete`） |
+| clearing_sessions | clear_fail | clearing_sessions | 保持 pending=1，不得绕过后删库 | （保持 ｜ `reset_incomplete`） |
 | clearing_sessions | sessions_cleared | finalizing | finalizeReset 单事务删+清标记 | — |
-| clearing_sessions | tx_fail | clearing_sessions | pending=2 持久（incomplete_session_cleared） | （保持 ｜ `reset_incomplete`） |
+| finalizing | tx_fail | finalizing | pending=2 持久（incomplete_session_cleared）；等待显式重试 | （保持 ｜ `reset_incomplete`） |
+| finalizing | retry_finalize | finalizing | 幂等再次调用 finalizeReset | — |
 | finalizing | tx_ok | done | 广播空账号；C5 回首登 | — |
 | —（创建） | startup_detected | startup_recovering | resetState()≠0 强制门：先于路由/同步/Agent | — |
-| startup_recovering | pending=1 | clearing_sessions | **重新幂等清会话（安全重放）**——A-3 整改：pending=1 时清理阶段是否完成不可知，幂等重放清会话后才允许 finalize | （保持 ｜ `reset_incomplete`） |
-| startup_recovering | pending=2 | finalizing | 会话已清（2 语义）；直接继续 finalization | （保持 ｜ `reset_incomplete`） |
+| startup_recovering | startup_pending | clearing_sessions | **重新幂等清会话（安全重放）**——pending=1 时清理阶段是否完成不可知，幂等重放清会话后才允许 finalize | （保持 ｜ `reset_incomplete`） |
+| startup_recovering | startup_incomplete_session_cleared | finalizing | pending=2：会话已清，直接幂等调用 finalizeReset | （保持 ｜ `reset_incomplete`） |
 
 - 闭合规则：R-非法（保持+审计）/ R-终态（done 忽略后续）/
-  R-重复（begin 在非 idle 态 → R-非法；finalizeReset 幂等）。
+  R-重复（begin 在非 idle 态 → R-非法；retry_finalize/finalizeReset 幂等）。
 - 不变量：pending≠0 期间正常路由/自动同步/Agent 禁止；所有写入携带 resetEpoch，
-  过期即拒；**会话清理失败不得绕过后删库**；对外稳定出口统一 `reset_incomplete`
-  （09 §2.4 L2-18）。
+  过期即拒；**会话清理失败不得绕过后删库**；pending=1/2 后续失败统一
+  `reset_incomplete`（09 §2.4 L2-18），beginReset 未提交且 pending=0 时使用
+  `write_commit_failed`，不得冒充持久 pending。
 
 ### 4.4 D-04 撤销槽（CT-C3-17；单槽 + 启动清槽）
 
@@ -166,7 +173,7 @@
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | empty | record | occupied_valid | 覆盖写单行（slot=1 CHECK）；信封 v1{version,kind,accountId,safeSummary,payload} | （occupied_invalid ｜ 仅审计：写已提交、撤销能力降级） |
-| occupied_valid | undo_req | occupied_valid | 校验 accountId 与信封（他账号槽绝不删除/改写） | 非法 → （保持 ｜ `invalid_undo_command`） |
+| occupied_valid | undo_req | occupied_valid | 校验 accountId 与信封；非法时拒绝（他账号槽绝不删除/改写） | （保持 ｜ `invalid_undo_command`） |
 | occupied_valid | undo_ok | empty | 11 类恢复器/composite 逐操作恢复 + 删槽 + 审计 | — |
 | occupied_valid | undo_fail | occupied_valid | 保槽 + 审计（undo:failure） | （保持 ｜ `invalid_undo_command`） |
 | occupied_valid | record | occupied_valid | 覆盖（新快照替换旧快照） | — |
@@ -197,7 +204,8 @@
 | running | app_crash | interrupted | 下次启动 recoverInterruptedRuns 标 interrupted/app_restarted（ADR-022） | — |
 | —（创建） | start | running | 写 running 行；trigger∈4 值（CT-C2-05）；首登在账号行存在前不写（CT-C3-21 私有实现） | — |
 
-- 闭合规则：R-非法/R-终态（五个终态 × 任何事件 → 幂等忽略——终态行不重放动作）。
+- 闭合规则：R-非法/R-终态（五个终态 × 任何事件 → 幂等忽略——终态行不重放动作）/
+  R-重复（重复 login_paused 保持 running；重复 finish 在终态由 R-终态吸收）。
 - 不变量：单一写权威 = C2 经 SourceStateService（CT-C3-21）；importBundle 不写
   sync_runs；finish 校验 runId 与 stamp 绑定。
 
@@ -205,25 +213,30 @@
 
 ### 5.1 D-06 JobArbiter 全局来源作业租约（CT-C2-01 仲裁规则①；A-4 整改）
 
-- 状态全集：`free*, held(jobId, stamp), maintenance(kind)†, maintenance_draining(kind, jobId)†`
-  （†=维护期状态，acquire 一律拒绝）
-- 事件：`acquire, release, begin_maintenance, end_maintenance, jobs_drained`
+- 状态全集：`free*, held(jobId, stamp), maintenance(kind), maintenance_draining(kind, jobId)`
+  （本机无终态；两个维护态均拒绝 acquire，但可经 jobs_drained/end_maintenance 离开）
+- 事件：`acquire, release, begin_maintenance, jobs_drained, operation_fail, end_maintenance`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| free | acquire | held | **同步原子** check-and-hold（C2 单线程，无 await） | （保持 free ｜ `busy`） |
+| free | acquire | held | **同步原子** check-and-hold（C2 单线程，无 await） | — |
 | held | acquire | held | 拒绝（保持已持有租约） | （保持 held ｜ `busy`） |
 | held | release | free | 终态/异常路径 try/finally 释放 | — |
 | free | begin_maintenance | maintenance | 维护门（CT-C2-04）；拒新 acquire | — |
-| held | begin_maintenance | maintenance_draining | 拒新 acquire；**按 MaintenanceKind 执行**（A-4 整改）：deleteCredentials/clearSession → 受影响来源 bump(cancel)；clearBusinessData → 全部来源 bump(clearBusinessData)（根 reason，内部取消不重复）；随后取消并等待旧作业终态 | （保持 maintenance_draining ｜ `maintenance_in_progress`） |
+| held | begin_maintenance | maintenance_draining | 拒新 acquire；**按 MaintenanceKind 执行**（A-4 整改）：deleteCredentials/clearSession → 受影响来源 bump(cancel)；clearBusinessData → 全部来源 bump(clearBusinessData)（根 reason，内部取消不重复）；随后取消并等待旧作业终态 | — |
+| maintenance_draining | operation_fail | maintenance_draining | 取消/等待旧作业失败；保持维护门/写屏障并允许重试或显式 abort | （保持 maintenance_draining ｜ `maintenance_failed`） |
 | maintenance_draining | jobs_drained | maintenance | 旧作业全部终态；继续维护操作本体（删凭据/清会话/清业务数据） | — |
-| maintenance | end_maintenance | free | 门释放 | — |
+| maintenance | begin_maintenance | maintenance | 同 kind 重复请求幂等保持；不同 kind 拒绝 | （保持 maintenance ｜ `maintenance_in_progress`） |
+| maintenance_draining | begin_maintenance | maintenance_draining | 同 kind 重复请求幂等保持；不同 kind 拒绝 | （保持 maintenance_draining ｜ `maintenance_in_progress`） |
+| maintenance | operation_fail | maintenance | 保持维护门/写屏障；允许重试，或先完成显式 abort 收尾 | （保持 maintenance ｜ `maintenance_failed`） |
+| maintenance | end_maintenance | free | 仅同 kind 维护成功或显式 abort 收尾完成后释放；不同 kind 拒绝 | （保持 maintenance ｜ `maintenance_in_progress`） |
 | maintenance | acquire | maintenance | 拒绝 | （保持 ｜ `maintenance_in_progress`） |
 | maintenance_draining | acquire | maintenance_draining | 拒绝 | （保持 ｜ `maintenance_in_progress`） |
 
-- 闭合规则：R-非法（free×release/end_maintenance/jobs_drained → 保持+审计；
-  maintenance×begin_maintenance/end_maintenance 的非法组合同理）/
-  R-终态（维护态对 acquire 恒拒）/R-重复（release 幂等）。
+- 闭合规则：R-非法（free×release/end_maintenance/jobs_drained、held×end_maintenance/
+  jobs_drained、maintenance_draining×end_maintenance 等未列组合保持+审计）/
+  R-终态（本机无终态，不适用）/R-重复（release 后再次 release 由 free×release 的
+  R-非法幂等保持；重复 begin_maintenance 的同/不同 kind 行为由显式行定义）。
 - 不变量：至多一个 held 或一个 maintenance_draining；`isBusy()` 仅提示性
   （正确性靠原子 acquire）；reset 不依赖本门（走持久 reset_pending，D-03）。
 
@@ -244,18 +257,21 @@
 | needsUserLogin | resume_ok | waitingForUser | 恢复同一作业同一流；注入凭据租约（resumeLogin，CT-C1-02）→ takePassword 取即失效 → CAS 交互登录（D-10） | — |
 | needsUserLogin | resume_fail | failed | 恢复失败明确终态 | （failed ｜ `collection_failed`/`query_failed` 按 mode） |
 | waitingForUser | auth_done | collecting | 三层核验齐 → verifiedUsername 入终态载荷；继续采集 | — |
-| waitingForUser | captcha_shown | waitingForUser | 验证码/短信交人工（不自动化） | — |
+| waitingForUser | captcha_shown | waitingForUser | 幂等保持人工验证码/短信等待（不自动化） | — |
 | waitingForUser | auth_fail | failed | 三层核验缺一 | （failed ｜ `account_mismatch`） |
 | collecting | collecting_done | complete | safeCount 递增；终态载荷就位；**C1 事件流随即关闭**——C2 的 stamp 校验与交接在 C1 状态机之外（A-5 整改：complete 即终态，无 deliver_ok 相位） | — |
 | （任意非终态） | cancel_received | cancelled | **接受时刻先 bump(cancel)**（C2）→ C1 协作式检查点终止；暂停态立即终态 | — |
 | （任意非终态） | error(code) | failed | 终态错误事件（code + 固定文案） | （failed ｜ 每作业码子集） |
 
 - **每作业可产生的失败码子集（A-5 整改，冻结）**：
-  - collection 作业（jw/young-schedule）：`{account_mismatch, collection_failed, cancelled}`
+  - collection 作业（jw/young-schedule）的 **failed phase**：
+    `{account_mismatch, collection_failed}`
   - query 作业（young-enrolment/icourse/campus）：`{account_mismatch, query_failed,
-    result_validation_failed, catalog_unavailable, cancelled}`
-  - 其余码（busy/no_account/stale_lease/maintenance_in_progress 等）是**作业创建前/
-    交接后**的码，不得作为 C1 作业 failed 事件发出。
+    result_validation_failed, catalog_unavailable}`
+  - `cancelled` 只由 `cancel_received → cancelled` 产生，不得放入 `error(code) → failed`
+    的码子集；
+  - 其余码（busy/no_account/stale_lease/maintenance_in_progress/maintenance_failed 等）
+    是**作业创建前/交接后**的码，不得作为 C1 作业 failed 事件发出。
 - 闭合规则：R-非法/R-终态（complete/cancelled/failed 忽略后续事件）/
   R-重复（captcha_shown 幂等；error 后的事件被终态规则吸收）。
 - 不变量：needsUserLogin 恢复同一 jobId、sequence 连续（ADR-005）；凭据只在
@@ -330,7 +346,7 @@
 | initial | fill_ok | form_filled | 白名单 origin 填表（username 来自租约 expectedUsername；密码 takePassword 后填） | — |
 | initial | fill_fail | waiting_user | 按钮异常 → 静默回退人工（人工只替代填表） | — |
 | form_filled | submit_ok | submitted | 提交登录 | — |
-| submitted | evidence_partial | verifying | 三层核验收集（DOM 属性/performance/storage） | — |
+| submitted | evidence_partial | verifying | 幂等收集三层核验证据（DOM 属性/performance/storage） | — |
 | submitted | captcha_or_sms | waiting_user | 验证码/短信交人工（不自动化） | — |
 | waiting_user | manual_done | verifying | **人工完成后进入核验，不得直接 authenticated**（A-8 整改：三层核验不可跳过） | — |
 | verifying | evidence_complete | authenticated | 三层齐 → 通过 | — |
@@ -349,7 +365,7 @@
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| active | take_password | consumed | 原子取即失效（首次返回秘密并置空） | 二次调用返回 null（幂等） |
+| active | take_password | consumed | 原子取即失效（首次返回秘密并置空） | — |
 | consumed | take_password | consumed | 返回 null（原子语义，幂等） | — |
 | revoked | take_password | revoked | 返回 null | — |
 | active | revoke_req | revoked | 幂等撤销；revoke 后 takePassword 恒 null | — |
@@ -363,7 +379,7 @@
 - 不变量：takePassword/revoke 串行化（C2 单线程持有）；删除凭据/completeReset 前
   先 revoke 全部未消费租约。
 
-## 6. 待补组件清单与里程碑触发器（M3–M8）
+## 6. 待补组件清单与里程碑触发器（M1–M8）
 
 | 组件 | 触发器 | 补设计时必须包含 |
 |---|---|---|
@@ -372,7 +388,9 @@
 | D-14 icourse 适配器 + 24h 缓存（M4） | M4 开工前 | 缓存状态机（fresh/stale/miss）+ 降级转移 |
 | D-15 campus 刷新/详情/附件（M4） | M4 开工前 | 节流/过期/降级状态机 + 附件登记载荷生成点 + CT-C3-22 调用 |
 | D-16 提醒协调器（M5） | M5 开工前 | reminders 五态转移 + 6 表 watch 重入保护 + 哨兵语义 |
-| D-17/D-26/D-27/D-28 维护与启动（M5） | M5 开工前 | 维护协调器 UI 投影 + provisional 生命周期 + clearBusinessData 写屏障 + 启动强制门 |
+| D-20/D-21 M1 纯函数算法 | M1 对应实现开工前 | 有效事件/冲突投影算法 + 重复系列物化/生命周期算法；先补算法设计再实现 |
+| D-26 provisional 生命周期 | M2 首登/JW 联调前 | stage/commit/cancel/discard 完整状态机 + busy 前后边界 + 进程退出尽力零化 |
+| D-17/D-27/D-28 维护与启动（M5） | M5 开工前 | 维护协调器 UI 投影 + clearBusinessData 写屏障 + 启动强制门 |
 | D-18 Agent 推理循环/审批门/预算（M6） | M6 开工前 | 8×12 预算转移 + 确认卡状态机 + 复合写 ledger |
 | D-19 Python 租户生命周期（M2 并存期） | 并存期联调前 | 启动/健康/停止状态机 + 事件流转换 + M7 移除路径 |
 
@@ -393,6 +411,7 @@
 |---|---|---|---|
 | L4-01 | 本层范围 | M1/M2 核心状态机先设计（D-01~D-11）；其余登记待补，每块开工前补设计 | ✅ 已定 |
 | L4-02 | 首轮独立审查整改（2026-08-14，10A/4B） | A-1 三闭合规则模板 / A-2 replay 过租约守卫 / A-3 reset 顺序与启动安全重放 / A-4 维护 reason 按 kind / A-5 枚举名与终态所有权 + 码子集 / A-6 unknown 保守出口 + quarantine 闭环 / A-7 三标志位图 / A-8 manual_done 进核验 / A-9 revoke 幂等 + 终态失效 / A-10 失败态双列 + `reset_incomplete` 回写 09（L2-18）；B-1 登记表补 D-22~D-30 / B-2 状态三档 / B-3 断言措辞与备份策略移交 / B-4 旧表述清零 | ✅ 已落地 |
+| L4-03 | 整改复审修订（2026-08-14） | D-02 subject/active/stamp 同事务守卫 + subject_fail；D-03 五失败态归位与启动事件闭合；D-06 非终态维护态及 `maintenance_failed` 回写 09（L2-19）；D-07 cancelled 退出 failed 子集；L2-18 限定 pending=1/2；闭合规则优先级、D-20/21/D-26 触发器与 09/10 回写记录补齐 | ✅ 已修改，待独立复审重认 gate |
 
 ## 9. 第 4 层 gate 检查表
 
@@ -402,5 +421,6 @@
 - [ ] ③ §7 六条横切规则在全部转移表中无违背（R1~R6 逐条过）
 - [ ] ④ 转移表与 09 冻结契约一致（CT-C1-01 八相位枚举名、CT-C2-06 run 六值、
       CT-C2-03 takePassword 原子、CT-C3-05 三值编码、CT-C3-21 四 reason）
-- [ ] ⑤ 失败态双列中的对外码全部在 09 §2.4 注册表（含 L2-18 `reset_incomplete`）
+- [ ] ⑤ 失败态双列中的对外码全部在 09 §2.4 注册表（含 L2-18
+      `reset_incomplete` / L2-19 `maintenance_failed`）
 - [ ] **gate 关闭条件**：独立复审通过 → M0/M1 按本文件施工（每做新组件先补设计）

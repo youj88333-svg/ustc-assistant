@@ -1,7 +1,7 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
 > 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14，用户重认；首轮审查 8A/3B + 复审 4A/3B 全部闭环）**
-> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~18）、
+> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~19）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
 
@@ -221,13 +221,13 @@ C5(协调器)      C2                        C3                    C4
  │    +local_accounts（其余 FK CASCADE）→ 清 reset_pending → 广播空账号│
  │ 7. C5 回 /sync 首登态；C2/C4 于空账号态重新开放                  │
  │                                                                  │
- │ 失败分支（08 §7.3 表 + reset_pending 三值编码 0/1/2；对外稳定出口        │
- │   统一为 `reset_incomplete`，09 §2.4 L2-18）：                          │
- │   beginReset 失败 → 原状（0）                                           │
+ │ 失败分支（08 §7.3 表 + reset_pending 三值编码 0/1/2；09 §2.4 L2-18）：   │
+ │   beginReset 未提交失败 → 原状（0）+ `write_commit_failed`               │
  │   C2/C4 取消失败 → 保持 pending（1）+ 写屏障，可重试                    │
  │   会话清理失败 → 保持 pending（1），不得绕过后删库                      │
  │   清会话后删库失败 → 事务回滚 + reset_pending=2（                       │
  │     incomplete_session_cleared）；下次启动继续 finalization             │
+ │   上述 pending=1/2 失败的对外稳定出口统一为 `reset_incomplete`           │
  │   finalizeReset 重复执行 → 幂等                                         │
  │                                                                         │
  │ 启动恢复（CT-C5-02 强制门）：                                           │
@@ -236,8 +236,9 @@ C5(协调器)      C2                        C3                    C4
  │   pending=2 直接 finalization；恢复失败保持写屏障 + 专用恢复界面        │
 ```
 
-死胡同核对：每个失败分支都以"可重试的持久状态 + 明确下一步"结尾；所有完成事件/
-导入/Agent 写携带 resetEpoch，过期即拒（stale_lease）——删除后不重建数据。
+死胡同核对：beginReset 未提交失败回到原状并允许重新发起；其余失败分支以“可重试的
+持久状态 + 明确下一步”结尾。所有完成事件/导入/Agent 写携带 resetEpoch，过期即拒
+（stale_lease）——删除后不重建数据。
 
 ## 6. 子链路 ④：首次登录序列图（commitFirstLogin 单事务）
 
@@ -345,6 +346,7 @@ C5 确认 → AccountMaintenanceCoordinator（CT-C5-01）
   → C3 deleteCredentials（CT-C3-07 Identity 写服务；删密文，保留账号与浏览器会话）
   → C2 endMaintenance（CT-C2-04）
   门关闭期间新请求 → maintenance_in_progress（稳定拒绝）
+  取消/等待旧作业或删除凭据失败 → maintenance_failed；保持维护门，重试或显式 abort 后才释放
 ```
 
 ### 7.3 清会话（全通道幂等）
@@ -358,6 +360,7 @@ C5 确认 → C2 beginMaintenance(clearSession)（CT-C2-04）
       ③ 任一失败 → 该通道分区保持隔离状态、重试；不因路由切换遗漏已注销通道
   → endMaintenance（CT-C2-04）
   门关闭期间新请求 → maintenance_in_progress
+  取消/等待或任一通道清理失败 → maintenance_failed；隔离标记与维护门保持到重试/abort
 ```
 
 ### 7.4 清业务数据（维护写屏障 + generation 递增）
@@ -374,6 +377,7 @@ C5 确认 → AccountMaintenanceCoordinator（CT-C5-01）
     （保留账号/凭据/设置/权限策略/Agent 历史/审计；campus 三表归 clearCache
       CT-C3-20）
   → 解除屏障与维护门（任何取消/等待失败 → abortBusinessDataClear，不开始清理）
+    取消/等待/提交失败的对外稳定出口 = maintenance_failed；abort 完成后才重新开放
 ```
 
 ## 8. 五条数据链路管道（fetch→normalize→validate→deliver）
@@ -471,7 +475,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 7 | App 崩溃残留 running | 下次启动 | `recoverInterruptedRuns` → `interrupted/app_restarted`（CT-C3-21） |
 | 8 | reset 中途崩溃 | reset_pending=1/2 | 启动强制门恢复；=1 先重新幂等清会话、=2 直接 finalization（CT-C5-02）；对外稳定出口 `reset_incomplete` |
 | 9 | 身份核验失败分区 | digest 不匹配 | 持久 quarantine → 清除；失败跨重启禁复用（CT-P-02） |
-| 10 | 维护门期间新请求 | beginMaintenance 后 | 稳定拒绝 `maintenance_in_progress`；UI 提示"维护进行中" |
+| 10 | 维护门期间新请求 / 维护本体失败 | beginMaintenance 后 | 新请求稳定拒绝 `maintenance_in_progress`；已取得门后的排空/执行失败返回 `maintenance_failed`，保持门/写屏障到重试或 abort |
 | 11 | 删除凭据时有未消费租约 | 用户点删除 | 先 revoke；对受影响来源 bump(cancel) 后终止并等待作业，再删密文（§7.2） |
 | 12 | 凭据租约二次取值 | takePassword 后 | 返回 null（原子取即失效，CT-C2-03） |
 | 13 | 提醒协调失败 | importBundle 事务外协调 | `reminderReconciliationPending` 返回给 C2 → 审计 + 后续重协调 |
@@ -497,6 +501,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | L3-01 | 走查回写 09 §5.2 | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认，ADR-009），非 null=持久选择 | ✅ 已回写 |
 | L3-02 | 首轮独立审查整改（2026-08-14，8A/3B） | A-1 submitQuery 入口 / A-2 附件载荷载体（QueryCompleted.attachmentRegistrations）/ A-3 原子取租约 / A-4 取消 bump(cancel) 与计数规则 / A-5 暂停保持 running + 提醒协调顺序 + 终态映射 / A-6 selectedSemester 返回链 + identityDigest 内部计算 / A-7 discardProvisionalAuth + completeReset revoke 顺序 / A-8 补码补号补 CT 标注；B-1 L2-01~16 / B-2 takePassword 绑定 / B-3 trigger 分支 | ✅ 已落地（回写 09 L2-16） |
 | L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17；2026-08-14 用户重认，gate 关闭） |
+| L3-04 | 第 4 层整改复审回写（2026-08-14） | reset 失败码分工：beginReset 未提交/pending=0 → write_commit_failed，pending=1/2 → reset_incomplete；非 reset 维护本体失败 → maintenance_failed，新请求拒绝仍为 maintenance_in_progress | ✅ 已同步（回写 09 L2-18/19） |
 
 ## 12. 第 3 层 gate 检查表
 
@@ -506,7 +511,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 - [x] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
       CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
       CT-T-01/02）全部在 09 §11 矩阵中存在
-- [x] ⑤ ADR-000~023 与 L2-01~18 决策在本层消息中全部可溯源（原子取租约/取消递增/
+- [x] ⑤ ADR-000~023 与 L2-01~19 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
 - [x] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
