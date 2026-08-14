@@ -561,7 +561,8 @@
 
 ### ADR-023：账号生命周期一致性——首次登录单事务提交 + 重新认证身份不变 + 维护操作隔离/可恢复终结
 
-- 状态：**已采纳**（2026-08-12 用户拍板，2026-08-14 用户授权第四轮复审收口）
+- 状态：**已采纳**（2026-08-12 用户拍板，2026-08-14 用户授权第四轮复审收口；
+  2026-08-15 第 5 层整改复审后用户批准严格文件清理终结语义）
 - 上下文：旧房首登实际顺序是"确认并激活账号→导入"（01§3 流程 A），导入失败会留下
   已激活账号/凭据但没有完整业务快照的跨事务窗口；第二轮目标稿又曾误写成"导入→确认"，
   与活动账号导入守卫冲突。重新认证曾表述为"更新 identityDigest"（身份可变）；
@@ -577,9 +578,11 @@
   凭据密文 + identityDigest + 置活动 + 审计"，任一失败整体回滚；ImportService 跨容器
   公共入口仅支持 normal，首登由 commitFirstLogin 复用 C3 私有事务内导入核心；两者分别
   校验 activeAccountId 或 provisional/verifiedUsername/jobId/generation。首登 provisional
-  上下文只存在进程内存，以不透明句柄引用，
-  不得写数据库/文件/日志；凭据仅经一次性租约交给当前作业，使用后尽力零化，
-  作业失败或进程退出即丢弃。
+  上下文只存在进程内存，以不透明句柄引用，不得写数据库/文件/日志；凭据仅经一次性
+  租约交给当前作业，使用后尽力零化，作业失败或进程退出即丢弃。这里禁止落盘的是
+  **provisional 认证上下文及凭据**；debug 构建中显式启用的安全原始调试资产不属于该
+  上下文，可按 L5-01/L5-08 写入带 `ownership=provisional` 标记的受控分区，但失败/
+  取消必须物理清除，崩溃后由启动协调按正式账号归属幂等调和，release 永不产生。
   ② 重新认证：identityDigest **不可变**——仅首次建立或显式 schema 迁移可写；重新认证
   前后校验 digest 一致，只更新凭据密文与元数据；不匹配返回 account_mismatch/
   identity_mismatch。若不匹配发生在浏览器认证之后，先幂等销毁 provisional handle；
@@ -588,8 +591,10 @@
   ③ completeReset：CompleteResetCoordinator（C5）编排 durable finalization——beginReset
   （持久 reset_pending + resetEpoch++ + 写屏障）→ C2 撤销全部未消费凭据租约、终止并
   cancelAll 等待全部 Native/Python 作业终态、以 reset 根 reason 逐来源递增 generation →
-  C4 拒新 run/工具/审批并等待 → C2 按通道幂等清会话 → C3 finalizeReset
-  单事务删除 + 清 reset_pending + 广播空账号 → C5 回首登；所有完成事件/导入/Agent 写入
+  C4 拒新 run/工具/审批并等待 → C2 按通道幂等清会话 → C3 持久标记
+  `reset_pending=2`（会话已清）→ 严格清除 cache 与 debug 私有资产 → C3 finalizeReset
+  单事务删除 + 清 reset_pending + 广播空账号 → C5 回首登；任何私有文件清理失败均
+  保持 pending=2 与写屏障、返回 `reset_incomplete`，不得先删账号伪装完成；所有完成事件/导入/Agent 写入
   携带 resetEpoch，过期即拒；启动检测 reset_pending 是**强制启动门**，恢复失败时保持写屏障
   并进入专用恢复界面，禁止正常路由/自动同步/Agent，不得按 best-effort 忽略。
   ④ 其他账号维护：删除凭据先由 C2 撤销未消费凭据租约，对受影响来源以 cancel reason

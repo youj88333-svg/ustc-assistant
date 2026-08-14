@@ -226,9 +226,11 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
     生命周期的唯一 C3 端口；generation 递增原因全集 = 通道切换/取消/completeReset/
     clearBusinessData，C2 不直接写 `source_configs`/`sync_runs`；
   - **reset 持久状态**（ADR-023）：`beginReset`（持久 reset_pending + resetEpoch++ +
-    写屏障，拒绝新业务写入）→ 等待 C2/C4 全部作业终态与会话清理 → `finalizeReset`
-    （单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据 + 清 reset_pending + 广播空账号，
-    幂等）；启动时检测 reset_pending，在正常路由、自动同步与 Agent 之前恢复重置；
+    写屏障，拒绝新业务写入）→ 等待 C2/C4 全部作业终态与会话清理 →
+    `markResetSessionsCleared`（pending=2）→ 严格清除 cache/debug 私有资产 →
+    `finalizeReset`（单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据 + 清
+    reset_pending + 广播空账号，幂等）；启动时检测 reset_pending，在正常路由、
+    自动同步与 Agent 之前恢复重置；私有文件未清完不得 finalization；
   - **账号维护写屏障**（ADR-023）：`beginBusinessDataClear` 在 C2/C4 取消等待之前
     先拒绝新业务写，并等待已进入的本地写事务终态；随后配合 C2/C4 维护独占门，
     只允许清理事务写入，事务提交或回滚后才解除。该操作只涉及单库事务，不新增
@@ -262,7 +264,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 
 - **对外接口预告**：服务级读接口（EffectiveEventRepository/ConflictService/…）、
   `ImportService.importBundle`（normal-only）、`commitFirstLogin`、
-  `SourceStateService`、`beginReset`/`finalizeReset`、
+  `SourceStateService`、`beginReset`/`markResetSessionsCleared`/`finalizeReset`、
   写服务（乐观锁 + 事务 + 审计 + Undo 快照同事务）。
 
 ### 5.4 C4 Agent harness
@@ -294,12 +296,14 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 - **职责**：组合根。路由（GoRouter 双分支 + 顶层路由）、页面（周课表/任务/日程/历史/
   设置/聊天）、Loaders 装配、启动后台编排（提醒启动 + 自动同步 + **reset_pending 强制
   恢复门**）、`CompleteResetCoordinator` 与 `AccountMaintenanceCoordinator`（UI 只负责
-  确认；协调器调用 C2/C3/C4，不持领域规则）、官方网页白名单。
+  确认；协调器调用 C2/C3/C4/P，不持领域规则）、官方网页白名单。
 - **壳层契约**：分支栈语义 = `StatefulShellRoute.indexedStack` 保活
   （`AutomaticKeepAliveClientMixin`），禁止改为丢栈行为（规避 go_router
   [issue #190914](https://github.com/flutter/flutter/issues/190914) 的姿势固化）；
   普通提醒启动/自动同步为 best-effort；**reset_pending 检测与恢复不是 best-effort**，必须
-  先于正常路由、自动同步和 Agent。恢复失败时进入专用恢复/错误界面并保持写屏障。
+  先于正常路由、自动同步和 Agent。reset gate 清零后、开放正常路由前还必须经
+  CT-P-05 调和 provisional debug 归属；任一恢复失败进入专用恢复/错误界面并保持
+  对应维护状态。
 - **不包含**：领域规则或数据处理（页面纯回调；C5 只做跨容器应用编排，领域服务在 C3/C4）。
 - **双向门预览**：状态管理框架（D20）、DI（D21）、深色模式（D22）、路由持久化（D23）
   均在此容器 M5 时评估；本层不预拍。
@@ -308,6 +312,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 
 - Windows 实现：WebView2（`UserDataFolder` 卡槽）、DPAPI（`CryptProtectData`）、
   前台通知适配、URL launcher、本地文件存储（附件缓存/迁移备份目录）、附件 decoder；
+  FileStoragePort 同时实现正式账号 debug 清理与 provisional debug 归属调和；
   `BrowserSessionAdminPort.quarantine` 的持久标记由平台会话适配器保存在受控分区旁，不进
   C3 业务库；并存期另含 Python 进程与带认证本机回环 Bridge 传输适配（M7 删除）。
 - 移动端实现（D29，Windows 正式版后）：平台 WebView（Android WebView / iOS WKWebView）
@@ -389,9 +394,11 @@ C1 仅经原子 `takePassword()` 取即失效（ADR-020）。
    sourceGeneration（内部取消不再以 cancel 重复递增）；拒绝新来源作业
 3. C4：拒绝新 run/工具/审批；取消当前模型流/工具调用/等待确认；等待可能写库的执行终态
 4. C2 按通道幂等清会话：Native WebView 分区（经 C1/P）；并存期 Python profile/session（经 P 租户适配器）
-5. C3 finalizeReset：单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据；清 reset_pending；
-   广播空账号状态（幂等）
-6. C5 回 /sync 首登态；C2/C4 在空账号状态重新开放
+5. C3 markResetSessionsCleared：持久 reset_pending=2（会话已清）；随后严格清除
+   campus/iCourse cache（CT-C3-20）与账号 debug 私有资产（CT-P-05）
+6. C3 finalizeReset：仅当前述私有资产全部清除后，单事务删除账号/凭据/业务/Agent
+   历史/审计/撤回数据；清 reset_pending；广播空账号状态（幂等）
+7. C5 回 /sync 首登态；C2/C4 在空账号状态重新开放
 所有作业完成事件/导入/Agent 写入携带 resetEpoch，过期即拒（防迟到重建数据）。
 启动恢复：检测 reset_pending → 作为强制启动门先于正常路由、自动同步和 Agent 恢复重置；
 恢复失败时保持写屏障并进入专用恢复/错误界面，不得按 best-effort 忽略。
@@ -403,8 +410,10 @@ C1 仅经原子 `takePassword()` 取即失效（ADR-020）。
 | beginReset 失败 | 重置未开始，数据与会话保持原状 |
 | C2/C4 取消失败 | 数据未删除，保持 reset_pending 与写屏障，允许重试 |
 | 会话清理失败 | 数据未删除，保持 reset_pending；不得绕过后继续删库 |
-| 清会话后删库失败 | 事务回滚，但登录会话不可恢复；状态 reset_incomplete_session_cleared，下次启动继续 finalization，UI 提示可能需重新登录 |
-| App 崩溃 | 下次启动检测 reset_pending；重置恢复成功后才开放正常流程，恢复失败保持屏障并停留专用恢复界面 |
+| markResetSessionsCleared 失败 | 会话可能已清但状态仍为 pending=1；安全重放会话清理并重试标记，不得继续删库 |
+| cache/debug 私有资产清理失败 | 数据未删除，保持 reset_pending=2 与写屏障；返回 reset_incomplete，重试清理成功前不得 finalizeReset |
+| 私有资产清完后删库失败 | 事务回滚，但登录会话不可恢复；保持 reset_pending=2，下次启动重试私有资产幂等清理后继续 finalization |
+| App 崩溃 | 下次启动检测 reset_pending；=1 重放清会话，=2 重放 cache/debug 清理；全部成功后才 finalization，失败保持屏障与专用恢复界面 |
 | finalizeReset 重复执行 | 幂等 |
 
 注意：reset_pending 不属于 ADR-022 的普通作业作废范围（它是用户已确认的删除意图，
@@ -418,8 +427,9 @@ C5 首登表单 → C2 firstLoginSync
   → C2 JobArbiter 原子取得全局来源作业租约（同步 check-and-hold；busy 时尚未 stage，
     无 provisional handle 可销毁）
   → C3 stageFirstLogin 返回 ProvisionalAuthContext（不透明句柄 + 仅内存预分配
-    prospectiveAccountId + expectedUsername + 初始 generation/resetEpoch；不得落数据库/
-    文件/日志，不创建 local_accounts/source_configs 行）
+    prospectiveAccountId + expectedUsername + 初始 generation/resetEpoch；认证上下文不得
+    落数据库/文件/日志，不创建 local_accounts/source_configs 行；debug 构建显式启用的
+    原始调试资产仅可按 prospectiveAccountId 受控落盘且不含上下文字段）
   → C2 以 ProvisionalSubject 申请一次性凭据租约，并用 prospectiveAccountId 组装
     LeaseStamp → SourceJobGateway 启动作业（CAS 交互登录 D03）
       ├─ needs_user_login → C5 确认 → C2 以同一 ProvisionalSubject 重申请含密码租约
@@ -429,10 +439,12 @@ C5 首登表单 → C2 firstLoginSync
     交 C3 commitFirstLogin（事务内复验 handle/stamp/verifiedUsername；**单事务**：创建
     预分配 accountId + 写 source_configs 完整学期三元组 + 导入 Bundle + 凭据密文 +
     以 verifiedUsername 内部计算 identityDigest + 置活动 + 审计；任一失败整体回滚）
-  → 提交后广播 activeAccountChanged → C5 进入主界面
+  → 提交后广播 activeAccountChanged → C5 调 CT-P-05 reconcile：匹配目录提升为正式
+    账号资产、其余 provisional 目录物理删除；成功后进入主界面
 失败路径：stage 成功后的作业失败/用户取消/校验失败/事务回滚 →
-cancelFirstLogin(handle)；无活动账号、无凭据行、无来源业务数据；provisional 凭据仅经
-一次性租约供当前作业消费，失败时丢弃并尽力零化。取租约前 busy 直接返回，无 handle。
+cancelFirstLogin(handle) + clearDebugAssets(prospectiveAccountId)；无活动账号、无凭据行、
+无来源业务数据；provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃并尽力零化。
+App 崩溃或文件清理失败由 CT-C5-02 在正常路由前 reconcile；取租约前 busy 直接返回，无 handle。
 ```
 
 ### 7.5 账号维护链路（重新认证/删凭据/清会话/清业务数据）

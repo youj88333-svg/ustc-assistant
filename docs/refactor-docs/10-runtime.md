@@ -1,7 +1,7 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14，用户重认；首轮审查 8A/3B + 复审 4A/3B 全部闭环）**
-> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~20）、
+> 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14 用户重认；2026-08-15 用户批准 L3-06 严格文件清理回写）**
+> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~21）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
 
@@ -217,11 +217,13 @@ C5(协调器)      C2                        C3                    C4
  │ 5. C2 按已安装通道全集幂等 clearSession（CT-C2-02 全集语义）     │
  │    ├─ Native：C1/P WebView 分区真删除（CT-P-02）                 │
  │    └─ Python：P 租户适配器 profile 清理（CT-T-02）               │
+ │ 5.1 C3 markResetSessionsCleared()（CT-C3-05）：持久              │
+ │     reset_pending=2；从此启动恢复可跳过会话重放                  │
  │ 5.5 C3 clearCache 私有实现（CT-C3-20 范围：campus 三表+附件/详情 │
- │     磁盘缓存+icourse 24h 缓存——A-2 回写）；文件删除失败不阻断删库、│
- │     审计（下次幂等重试）                                          │
+ │     磁盘缓存+icourse 24h 缓存）；文件先删、三表后删，任一失败保持 │
+ │     pending=2 + 写屏障，不得继续 finalization                    │
  │ 5.6 P FileStoragePort.clearDebugAssets(accountId)（幂等；清      │
- │     debug/raw/<accountId>/——A-4 回写）；失败不阻断删库、审计       │
+ │     debug/raw/<accountId>/）；失败同样保持 pending=2，不得删账号   │
  │ 6. C3 finalizeReset()（CT-C3-05）：单事务删 action_logs+undo_slot│
  │    +local_accounts（其余 FK CASCADE）→ 清 reset_pending → 广播空账号│
  │ 7. C5 回 /sync 首登态；C2/C4 于空账号态重新开放                  │
@@ -230,15 +232,17 @@ C5(协调器)      C2                        C3                    C4
  │   beginReset 未提交失败 → 原状（0）+ `write_commit_failed`               │
  │   C2/C4 取消失败 → 保持 pending（1）+ 写屏障，可重试                    │
  │   会话清理失败 → 保持 pending（1），不得绕过后删库                      │
- │   清会话后删库失败 → 事务回滚 + reset_pending=2（                       │
- │     incomplete_session_cleared）；下次启动继续 finalization             │
+ │   markResetSessionsCleared 失败 → 保持 pending（1），安全重放会话清理   │
+ │   会话清除后先持久 pending=2；cache/debug 清理或删库失败均保持 2，      │
+ │     下次启动重试两项私有资产清理，全部成功后才 finalization             │
  │   上述 pending=1/2 失败的对外稳定出口统一为 `reset_incomplete`           │
  │   finalizeReset 重复执行 → 幂等                                         │
  │                                                                         │
  │ 启动恢复（CT-C5-02 强制门）：                                           │
  │   C5 启动 → resetState()（三值编码映射）→ 非 0 即先于正常路由/           │
  │   自动同步/Agent 恢复重置；pending=1 先重新幂等清会话（安全重放），      │
- │   pending=2 直接 finalization；恢复失败保持写屏障 + 专用恢复界面        │
+ │   pending=2 跳过会话但重放 cache/debug 清理；全部成功后才               │
+ │   finalization；恢复失败保持写屏障 + 专用恢复界面                       │
 ```
 
 死胡同核对：beginReset 未提交失败回到原状并允许重新发起；其余失败分支以“可重试的
@@ -291,17 +295,25 @@ C5(表单)        C2                     C3                     C1/P
  │               │                       │  ⑦ 置活动 + 审计 +       │
  │               │                       │     记 first_login 终态  │
  │               │                       │     （CT-C3-21 私有实现） │
- │ 7. 广播 activeAccountChanged → C5 进主界面                        │
+ │ 7. 广播 activeAccountChanged → C5；P                             │
+ │    reconcileProvisionalDebugAssets(activeAccountId)（CT-P-05）： │
+ │    匹配 prospectiveAccountId 的目录改标正式账号，其余 provisional │
+ │    目录物理删除 → C5 进主界面                                    │
+ │    reconcile 失败 → 账号事务不回滚，但停留启动维护页并幂等重试    │
  │                                                                  │
  │ 失败路径：stage 后作业失败/用户取消、任一守卫失败                  │
  │   （stale_lease/身份错误）或事务回滚 →                            │
- │   cancelFirstLogin(handle)（CT-C3-03，A-7 整改）→ 无活动账号、    │
+ │   cancelFirstLogin(handle)（CT-C3-03）→ CT-P-05                  │
+ │   clearDebugAssets(prospectiveAccountId) → 无活动账号、           │
  │   无凭据行、无来源业务数据；handle 一次性消费，临时明文尽力零化； │
  │   全局租约随终态释放（§2.2-8）                                    │
+ │   debug 清除失败 → CT-C5-02 启动维护页调用 reconcile(null) 重试   │
 ```
 
 死胡同核对：首登不写 sync_runs（账号行存在前无 run 行；first_login 终态在
-commitFirstLogin 事务内补记，CT-C3-21）；provisional 上下文不落任何持久介质；
+commitFirstLogin 事务内补记，CT-C3-21）；provisional **认证上下文**不落任何持久
+介质；debug 构建可写的 provisional 调试资产不含 handle/凭据，失败/取消立即清理，
+崩溃后由 CT-C5-02 启动门调用 CT-P-05 reconcile（无活动账号即全部删除）；
 selectedSemester/identityDigest 两条来源链闭合（C1 返回三元组 / C3 内部计算 digest）。
 
 ## 7. 子链路 ⑤：账号维护序列图（四种操作）
@@ -478,7 +490,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 5 | 作业取消（暂停态） | cancel(jobId) | 接受时刻 bump(cancel)（CT-C3-21）→ 立即终态 `cancelled` → finishSyncRun(cancelled) |
 | 6 | 作业取消（采集中） | 协作式检查点 | 同上：bump(cancel) 先于终态；迟到结果 stale_lease |
 | 7 | App 崩溃残留 running | 下次启动 | `recoverInterruptedRuns` → `interrupted/app_restarted`（CT-C3-21） |
-| 8 | reset 中途崩溃 | reset_pending=1/2 | 启动强制门恢复；=1 先重新幂等清会话、=2 直接 finalization（CT-C5-02）；对外稳定出口 `reset_incomplete` |
+| 8 | reset 中途崩溃/私有文件清理失败 | reset_pending=1/2 | 启动强制门恢复；=1 重新幂等清会话并标记 2，=2 重放 cache/debug 清理；全部成功后才 finalization（CT-C5-02）；对外稳定出口 `reset_incomplete` |
 | 9 | 身份核验失败分区 | digest 不匹配 | 持久 quarantine → 清除；失败跨重启禁复用（CT-P-02） |
 | 10 | 维护门期间新请求 / 维护本体失败 | beginMaintenance 后 | 新请求稳定拒绝 `maintenance_in_progress`；已取得门后的排空/执行失败返回 `maintenance_failed`，保持门/写屏障到重试或 abort |
 | 11 | 删除凭据时有未消费租约 | 用户点删除 | 先 revoke；对受影响来源 bump(cancel) 后终止并等待作业，再删密文（§7.2） |
@@ -487,6 +499,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 14 | 目录刷新失败且无旧目录 | 离线首次使用 | `catalog_unavailable`，联网后重试 |
 | 15 | 学期列表抓取失败/缺失 | 新学期待发布 | **当前出口**：作业失败 `collection_failed`（明确失败，不冒充成功）；fallback 选择算法归第 4 层/M2（ADR-009） |
 | 16 | Python 通道进程退出 | 租户健康探测（CT-P-07） | 当前作业终态 `failed`（query_failed/collection_failed）+ C2 记账；重启策略细节归 M2-M6（CT-T-01） |
+| 17 | 首登 provisional 调试资产失去认领 | 首登失败/取消或 App 崩溃 | 显式失败/取消：cancelFirstLogin 后 clearDebugAssets(prospectiveAccountId)；崩溃：启动时 reconcileProvisionalDebugAssets(String? activeAccountId)，匹配正式账号则提升、其余物理删除（CT-P-05/CT-C5-02） |
 
 ## 10. 开放问题移交（本层不解决，标注承接层）
 
@@ -507,21 +520,23 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | L3-02 | 首轮独立审查整改（2026-08-14，8A/3B） | A-1 submitQuery 入口 / A-2 附件载荷载体（QueryCompleted.attachmentRegistrations）/ A-3 原子取租约 / A-4 取消 bump(cancel) 与计数规则 / A-5 暂停保持 running + 提醒协调顺序 + 终态映射 / A-6 selectedSemester 返回链 + identityDigest 内部计算 / A-7 discardProvisionalAuth + completeReset revoke 顺序 / A-8 补码补号补 CT 标注；B-1 L2-01~16 / B-2 takePassword 绑定 / B-3 trigger 分支 | ✅ 已落地（回写 09 L2-16） |
 | L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17；2026-08-14 用户重认，gate 关闭） |
 | L3-04 | 第 4 层整改复审回写（2026-08-14） | reset 失败码分工：beginReset 未提交/pending=0 → write_commit_failed，pending=1/2 → reset_incomplete；非 reset 维护本体失败 → maintenance_failed，新请求拒绝仍为 maintenance_in_progress | ✅ 已同步（回写 09 L2-18/19） |
-| L3-05 | 第 5 层独立审查回写（2026-08-14，A-2/A-4） | completeReset 补步骤 5.5（clearCache 私有实现：campus+icourse）与 5.6（clearDebugAssets 幂等清 debug/）；文件删除失败不阻断删库、审计 | ✅ 已同步（回写 09 L2-20） |
+| L3-05 | 第 5 层独立审查回写（2026-08-14，A-2/A-4） | completeReset 补步骤 5.5（clearCache 私有实现：campus+icourse）与 5.6（clearDebugAssets 幂等清 debug/）；本行当时未闭合失败恢复，现行语义以 L3-06 为准 | ✅ 已同步（回写 09 L2-20） |
+| L3-06 | 第 5 层整改复审用户收口（2026-08-15） | 修订 L3-05：会话清除后先持久 pending=2；cache/debug 任一失败阻断 finalization 并跨重启重试。首登 provisional 调试资产成功提升归属、失败/取消清除、崩溃由启动门调和 | ✅ 已同步（回写 07 ADR-023 / 09 L2-21 / 11 L4-04） |
 
 ## 12. 第 3 层 gate 检查表
 
 - [x] ① 五条链路（§3/§4/§5/§6/§7）序列图走通，每条消息标注 CT 编号、每分支有去向
 - [x] ② 五条数据管道（§8）fetch→normalize→validate→deliver 四工位闭合
-- [x] ③ §9 边界情形 16 行去向非空且为当前出口（不借"归第 4 层"逃逸）
+- [x] ③ §9 边界情形 17 行去向非空且为当前出口（不借"归第 4 层"逃逸）
 - [x] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
-      CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
+      CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/05/07、
       CT-T-01/02）全部在 09 §11 矩阵中存在
-- [x] ⑤ ADR-000~023 与 L2-01~20 决策在本层消息中全部可溯源（原子取租约/取消递增/
+- [x] ⑤ ADR-000~023 与 L2-01~21 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
 - [x] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
       写库唯一 C3、C2 核心无 dart:io）
 - [x] 开放问题移交（§10）逐项有承接层，且每项已给出"当前出口"
-- [x] **gate 关闭（2026-08-14，用户重认）**：首轮 8A/3B + 复审 4A/3B 全部闭环，
-  09 回写 L2-15/16/17 → 进入第 4 层 `11-component-designs.md`
+- [x] **gate 关闭（2026-08-14 用户重认；2026-08-15 回写重验）**：首轮 8A/3B +
+  复审 4A/3B 全部闭环，09 回写 L2-15~21；L3-06 的严格文件清理与 provisional
+  调和无死胡同 → 第 4 层 `11-component-designs.md`

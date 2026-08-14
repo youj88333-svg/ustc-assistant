@@ -1,7 +1,7 @@
 # 11 组件设计（六层阶梯 · 第 4 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 4 层已关闭（2026-08-14，用户重认；首轮 10A/4B + 复审 6A/3B/1C 全部闭环）**
-> ｜ 依据：`09-contracts.md`（CT 65 条 + L2-01~19）、`10-runtime.md`（五链路走查）、
+> 产出日期：2026-08-14 ｜ 状态：**第 4 层已关闭（2026-08-14 用户重认；2026-08-15 用户批准 L4-04 reset 状态机回写）**
+> ｜ 依据：`09-contracts.md`（CT 65 条 + L2-01~21）、`10-runtime.md`（五链路走查）、
 > `07-constitution.md`（ADR-000~023）、08 容器切分、01–06 模块文档
 > ｜ 纪律（AGENTS.md 阶梯规则）：第 4 层**不必一次做完**——M1 后"每做一块组件、
 > 先补一块设计"；本文件是组件设计的唯一登记处。
@@ -130,13 +130,15 @@
   决议，不跨 await 暴露事务；提醒协调失败不重试导入；
   迟到结果在任何入口（含 replay）都 `stale_lease`。
 
-### 4.3 D-03 reset 协调状态机（CT-C3-05；A-3/A-10 整改）
+### 4.3 D-03 reset 协调状态机（CT-C3-05；A-3/A-10 整改 + L4-04 回写）
 
 - 持久态（DB，跨重启）：`reset_pending ∈ {0=none, 1=pending, 2=incomplete_session_cleared}`
 - 协调器运行态：`idle*, previewing, beginning, draining_c2, draining_c4,
-  clearing_sessions, finalizing, done†, startup_recovering`
+  clearing_sessions, clearing_cache, clearing_debug, finalizing, done†,
+  startup_recovering`
 - 事件：`user_confirm_x2, begin, begin_ok, begin_fail, c2_drained, c2_drain_fail,
-  c4_drained, c4_drain_fail, sessions_cleared, clear_fail, retry_finalize, tx_ok, tx_fail,
+  c4_drained, c4_drain_fail, sessions_cleared, session_clear_fail, session_mark_fail, cache_cleared,
+  cache_clear_fail, debug_cleared, debug_clear_fail, retry_finalize, tx_ok, tx_fail,
   startup_detected, startup_pending, startup_incomplete_session_cleared`
 
 | 当前态 | 事件 | 次态 | 动作（持久效果） | 失败态 |
@@ -149,19 +151,25 @@
 | draining_c2 | c2_drained | draining_c4 | C4：拒新+取消+等待写终态 | — |
 | draining_c4 | c4_drain_fail | draining_c4 | 保持 pending=1，可重试 | （保持 ｜ `reset_incomplete`） |
 | draining_c4 | c4_drained | clearing_sessions | 全通道 clearSession（幂等） | — |
-| clearing_sessions | clear_fail | clearing_sessions | 保持 pending=1，不得绕过后删库 | （保持 ｜ `reset_incomplete`） |
-| clearing_sessions | sessions_cleared | finalizing | finalizeReset 单事务删+清标记 | — |
-| finalizing | tx_fail | finalizing | pending=2 持久（incomplete_session_cleared）；等待显式重试 | （保持 ｜ `reset_incomplete`） |
+| clearing_sessions | session_clear_fail | clearing_sessions | 保持 pending=1，不得绕过后删库 | （保持 ｜ `reset_incomplete`） |
+| clearing_sessions | sessions_cleared | clearing_cache | markResetSessionsCleared：持久 pending=2；调用 CT-C3-20 clearCache | — |
+| clearing_sessions | session_mark_fail | clearing_sessions | 会话虽已清但 1→2 未提交；保持 pending=1，重试/启动时安全重放清会话 | （保持 ｜ `reset_incomplete`） |
+| clearing_cache | cache_clear_fail | clearing_cache | 保持 pending=2 + 写屏障；不得开始 debug/finalization | （保持 ｜ `reset_incomplete`） |
+| clearing_cache | cache_cleared | clearing_debug | 调用 CT-P-05 clearDebugAssets(accountId) | — |
+| clearing_debug | debug_clear_fail | clearing_debug | 保持 pending=2 + 写屏障；不得 finalization | （保持 ｜ `reset_incomplete`） |
+| clearing_debug | debug_cleared | finalizing | finalizeReset 单事务删+清标记 | — |
+| finalizing | tx_fail | finalizing | 保持 pending=2；等待显式重试 | （保持 ｜ `reset_incomplete`） |
 | finalizing | retry_finalize | finalizing | 幂等再次调用 finalizeReset | — |
 | finalizing | tx_ok | done | 广播空账号；C5 回首登 | — |
 | —（创建） | startup_detected | startup_recovering | resetState()≠0 强制门：先于路由/同步/Agent | — |
 | startup_recovering | startup_pending | clearing_sessions | **重新幂等清会话（安全重放）**——pending=1 时清理阶段是否完成不可知，幂等重放清会话后才允许 finalize | （保持 ｜ `reset_incomplete`） |
-| startup_recovering | startup_incomplete_session_cleared | finalizing | pending=2：会话已清，直接幂等调用 finalizeReset | （保持 ｜ `reset_incomplete`） |
+| startup_recovering | startup_incomplete_session_cleared | clearing_cache | pending=2：会话已清，跳过会话但必须重放 cache/debug 清理 | （保持 ｜ `reset_incomplete`） |
 
 - 闭合规则：R-非法（保持+审计）/ R-终态（done 忽略后续）/
   R-重复（begin 在非 idle 态 → R-非法；retry_finalize/finalizeReset 幂等）。
 - 不变量：pending≠0 期间正常路由/自动同步/Agent 禁止；所有写入携带 resetEpoch，
-  过期即拒；**会话清理失败不得绕过后删库**；pending=1/2 后续失败统一
+  过期即拒；**会话、cache 或 debug 清理失败均不得绕过后删库**；pending=2 只证明
+  会话已清，不证明私有文件已清；pending=1/2 后续失败统一
   `reset_incomplete`（09 §2.4 L2-18），beginReset 未提交且 pending=0 时使用
   `write_commit_failed`，不得冒充持久 pending。
 
@@ -403,7 +411,7 @@
 | R3 维护互斥 | D-06/D-07/D-01 | maintenance/maintenance_draining 期间 acquire 恒拒；迁移器运行期间无作业可启动（启动门） |
 | R4 暂停语义 | D-05/D-07 | needsUserLogin 期间 run 保持 running、租约保持、sequence 连续 |
 | R5 租约释放 | D-06/D-11 | 作业任何终态释放全局租约（try/finally）与凭据租约（job_terminal→revoked） |
-| R6 provisional 边界 | 09 CT-C3-03/04 + D-06 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁；stage 后任何失败出口调 cancel/discard |
+| R6 provisional 边界 | 09 CT-C3-03/04 + CT-P-05 + D-06 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁；stage 后任何失败出口调 cancel/discard；首登同时清 prospective debug，成功/崩溃由启动 reconcile 调和 |
 
 ## 8. 本层拍板记录（L4 决策）
 
@@ -412,6 +420,7 @@
 | L4-01 | 本层范围 | M1/M2 核心状态机先设计（D-01~D-11）；其余登记待补，每块开工前补设计 | ✅ 已定 |
 | L4-02 | 首轮独立审查整改（2026-08-14，10A/4B） | A-1 三闭合规则模板 / A-2 replay 过租约守卫 / A-3 reset 顺序与启动安全重放 / A-4 维护 reason 按 kind / A-5 枚举名与终态所有权 + 码子集 / A-6 unknown 保守出口 + quarantine 闭环 / A-7 三标志位图 / A-8 manual_done 进核验 / A-9 revoke 幂等 + 终态失效 / A-10 失败态双列 + `reset_incomplete` 回写 09（L2-18）；B-1 登记表补 D-22~D-30 / B-2 状态三档 / B-3 断言措辞与备份策略移交 / B-4 旧表述清零 | ✅ 已落地 |
 | L4-03 | 整改复审修订（2026-08-14） | D-02 subject/active/stamp 同事务守卫 + subject_fail；D-03 五失败态归位与启动事件闭合；D-06 非终态维护态及 `maintenance_failed` 回写 09（L2-19）；D-07 cancelled 退出 failed 子集；L2-18 限定 pending=1/2；闭合规则优先级、D-20/21/D-26 触发器与 09/10 回写记录补齐 | ✅ 已落地（2026-08-14 用户重认，gate 关闭） |
+| L4-04 | 第 5 层整改复审用户收口（2026-08-15） | D-03 在会话清理后新增 clearing_cache/clearing_debug 两态；pending=2 启动恢复必须重放两项私有资产清理而非直接 finalization；R6 增首登 prospective debug 清理/调和 | ✅ 已同步（09 L2-21 / 10 L3-06） |
 
 ## 9. 第 4 层 gate 检查表
 
@@ -423,5 +432,6 @@
       CT-C2-03 takePassword 原子、CT-C3-05 三值编码、CT-C3-21 四 reason）
 - [x] ⑤ 失败态双列中的对外码全部在 09 §2.4 注册表（含 L2-18
       `reset_incomplete` / L2-19 `maintenance_failed`）
-- [x] **gate 关闭（2026-08-14，用户重认）**：首轮 10A/4B + 复审 6A/3B/1C 全部
-      闭环，09 回写 L2-18/19 → 进入第 5 层 `12-cross-cutting.md`
+- [x] **gate 关闭（2026-08-14 用户重认；2026-08-15 回写重验）**：首轮 10A/4B +
+      复审 6A/3B/1C 全部闭环，09 回写 L2-18/19/21；D-03 严格清理转移闭合 →
+      第 5 层 `12-cross-cutting.md`
