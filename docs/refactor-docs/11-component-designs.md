@@ -137,11 +137,16 @@
 | 当前态 | 事件 | 次态 | 动作（持久效果） | 失败态 |
 |---|---|---|---|---|
 | idle | user_confirm_x2 | previewing | 清单预览（CT-C5-01） | — |
-| previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | （保持 idle ｜ `reset_incomplete`） |
-| beginning | begin_ok | draining_c2 | C2：revoke 租约→终止→cancelAll→等待→bump(reset) | （保持 beginning ｜ `reset_incomplete`） |
-| draining_c2 | c2_drained | draining_c4 | C4：拒新+取消+等待写终态 | （保持 draining_c2 ｜ `reset_incomplete`） |
-| draining_c4 | c4_drained | clearing_sessions | 全通道 clearSession（幂等） | （保持 draining_c4 ｜ `reset_incomplete`） |
-| clearing_sessions | sessions_cleared | finalizing | finalizeReset 单事务删+清标记 | （pending=2 持久 ｜ `reset_incomplete`） |
+| previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | — |
+| previewing | begin_fail | idle | 重置未开始，原状（UI 可重试） | （idle ｜ `reset_incomplete`） |
+| beginning | begin_ok | draining_c2 | C2：revoke 租约→终止→cancelAll→等待→bump(reset) | — |
+| beginning | c2_drain_fail | beginning | 保持 pending=1 + 写屏障，可重试 | （保持 ｜ `reset_incomplete`） |
+| draining_c2 | c2_drained | draining_c4 | C4：拒新+取消+等待写终态 | — |
+| draining_c2 | c4_drain_fail | draining_c2 | 保持 pending=1，可重试 | （保持 ｜ `reset_incomplete`） |
+| draining_c4 | c4_drained | clearing_sessions | 全通道 clearSession（幂等） | — |
+| draining_c4 | clear_fail | draining_c4 | 保持 pending=1，不得绕过后删库 | （保持 ｜ `reset_incomplete`） |
+| clearing_sessions | sessions_cleared | finalizing | finalizeReset 单事务删+清标记 | — |
+| clearing_sessions | tx_fail | clearing_sessions | pending=2 持久（incomplete_session_cleared） | （保持 ｜ `reset_incomplete`） |
 | finalizing | tx_ok | done | 广播空账号；C5 回首登 | — |
 | —（创建） | startup_detected | startup_recovering | resetState()≠0 强制门：先于路由/同步/Agent | — |
 | startup_recovering | pending=1 | clearing_sessions | **重新幂等清会话（安全重放）**——A-3 整改：pending=1 时清理阶段是否完成不可知，幂等重放清会话后才允许 finalize | （保持 ｜ `reset_incomplete`） |
@@ -190,7 +195,7 @@
 | running | finish_fail | failed | finishSyncRun(failed, code)（collection_failed/9 码/stale_lease 等） | — |
 | running | user_action_required | needs_user_action | finishSyncRun(needs_user_action, code)（如 reauthentication_required） | — |
 | running | app_crash | interrupted | 下次启动 recoverInterruptedRuns 标 interrupted/app_restarted（ADR-022） | — |
-| —（创建） | startSyncRun | running | 写 running 行；trigger∈4 值（CT-C2-05）；首登在账号行存在前不写（CT-C3-21 私有实现） | — |
+| —（创建） | start | running | 写 running 行；trigger∈4 值（CT-C2-05）；首登在账号行存在前不写（CT-C3-21 私有实现） | — |
 
 - 闭合规则：R-非法/R-终态（五个终态 × 任何事件 → 幂等忽略——终态行不重放动作）。
 - 不变量：单一写权威 = C2 经 SourceStateService（CT-C3-21）；importBundle 不写

@@ -1,7 +1,7 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
 > 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14，用户重认；首轮审查 8A/3B + 复审 4A/3B 全部闭环）**
-> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~17）、
+> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~18）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
 
@@ -506,7 +506,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 - [x] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
       CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
       CT-T-01/02）全部在 09 §11 矩阵中存在
-- [x] ⑤ ADR-000~023 与 L2-01~17 决策在本层消息中全部可溯源（原子取租约/取消递增/
+- [x] ⑤ ADR-000~023 与 L2-01~18 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
 - [x] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
