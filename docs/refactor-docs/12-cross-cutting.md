@@ -54,7 +54,11 @@
   临时明文尽力零化。
 - **Dart String 不可变 → "绝对零化"不可承诺**【冻结，07 §2.5 移交项 18】：
   临时明文只声明"最短存活 + 尽力零化 + 永不落日志"（Bitwarden 式诚实措辞）；
-  实现纪律：明文只存在于 `takePassword()` 返回值与填表调用栈，用后立即出作用域。
+  实现纪律分两类：① 解密凭据只存在于 `takePassword()` 返回值与填表调用栈，
+  用后立即出作用域；② 用户新输入密码（首登/重认证 stage 链的 `String password`）
+  仅经引用传递、不得复制持久化，用后立即出作用域；并存期 Python 通道的凭据
+  载荷只在 needs_user_login 恢复时一次性经 127.0.0.1+Bearer 传输，Python 侧
+  用后清零、不落日志（CT-T-02）。
 - **DPAPI 调用点登记制**【前层冻结项登记，09 §3 C0 约束】：`unprotect` 仅允许
   ① C3 账号凭据服务（租约申请时）；② C4 `ProtectedAgentSecretStore`（Key 加载）。
   M1/M6 实现时以 grep 可核查的调用点清单验收；新增调用点必须回写 09。
@@ -100,7 +104,9 @@
 - UI 可观测：C3 drift watch 流广播 + C5 订阅自动刷新。
 ### XC-07 Agent 上下文与 LLM 出站隐私过滤（归属 C4）
 
-- 双防线：① `OutboundPrivacyFilter` 逐工具白名单构建器（主防线）；② 兜底
+- 三防线：⓪ 用户消息在落库与 LLM 发送前经 `OutboundPrivacyFilter.inspectUserText`
+  预检（完整账号/API Key/Bearer/Cookie/密码/验证码等），拒绝 → `privacy_rejected`
+  （CT-C4-06）；① `OutboundPrivacyFilter` 逐工具白名单构建器（主防线）；② 兜底
   redaction（db_id/cookie 等敏感键后手拦截）。写工具结果只含统一安全摘要白名单。
 - QueryResult 入对话前校验（封闭字段集 + references 白名单 CT-C0-05）；
   校验失败 `result_validation_failed` 不进对话。
@@ -111,15 +117,18 @@
 - C1 来源 fetch/查询请求只携带完成该查询所必需的最少字段（评课联动只发送必需
   检索词——课程名/教师名或其组合，红线 2.1-2）；禁止发送完整课表、时间、
   地点、学号、姓名、用户 ID 等可拼出个人画像的上下文。
+- **评课联动首次联网前告知并授权**：icourse 工具首次执行前检查
+  `agent_settings.icourse_consent==true`，未授权 → `consent_required`
+  稳定拒绝（红线 2.1-2；CT-C4-06）。
 - 请求组装在 C2（JobRequest 封闭类型），来源执行权威在 C1：自有 HTTP 由
   `HttpSourceClient` 执行，嵌入浏览器导航仅经 P WebView 适配器执行；C1 为出站
   内容权威，P 不组装来源请求。
 
 ### XC-09 launcher 白名单委派（归属 C5）
 
-- C5 在委派前按 CT-C0-05 七主机精确匹配校验，通过后经 CT-P-04 交系统浏览器；
-  白名单常量权威在 C0（单一维护点）。
-- 任何不在清单内的 URL 一律不委派（fail-closed）。
+- C5 在委派前按 CT-C0-05 七主机精确匹配校验，**且 scheme 必须为 https**，
+  通过后经 CT-P-04 交系统浏览器；白名单常量权威在 C0（单一维护点）。
+- 任何不在清单内的 URL 或非 https URL 一律不委派（fail-closed）。
 
 ### XC-10 调试资产边界（归属 P；A-4 整改补生命周期）
 
@@ -130,8 +139,10 @@
 - **生命周期【冻结，L5-06/L5-08】**：① 已绑定正式账号的资产默认**无限保留、
   不自动删除**；provisional 资产不享受无限保留——`meta.json` 标
   `ownership=provisional`，不得含 handle/凭据/认证上下文字段；meta 必须先以原子
-  写入成功才允许落原始文件，缺失/损坏/未知 ownership 的目录在启动调和时按未认领
-  资产物理删除（debug 资产可牺牲，隐私优先）；
+  写入成功才允许落原始文件。启动调和规则：目录名 == activeAccountId 但 meta
+  缺失/损坏的目录**保守保留并提示用户手动清理**（尊重正式资产无限保留）；
+  目录名无正式账号认领或 meta 标 unknown/provisional 的目录按未认领资产
+  物理删除（debug 资产可牺牲，隐私优先）；
   ② 手动清理入口 = C5 设置页（M5，与清缓存同区）；③ **completeReset 步骤 5.6
   `clearDebugAssets(accountId)`**（CT-P-05，幂等）清除该账号全部调试资产，
   失败保持 reset_pending=2 + 写屏障并返回 `reset_incomplete`，不得 finalizeReset；
@@ -142,11 +153,19 @@
 ### XC-11 数据保留与备份（归属 C3 迁移器；A-3 整改谓词唯一化）
 
 - 迁移前备份：v7 库副本 → `backups/ustc_assistant_v7_<epochMs>.db`；备份成功
-  才允许迁移（11 D-01 转移表 `backup_ok → migrating`）。
+  才允许迁移（11 D-01 转移表 `backup_ok → migrating`）。**备份机制与元数据
+  【总体审查回写】**：先 `PRAGMA wal_checkpoint(FULL)` 再 SQLite 在线备份
+  （备份 API / VACUUM INTO），禁止直接复制含未 checkpoint WAL 的库；每份备份
+  伴随元数据（文件名 + SHA-256 + 主库 schemaVersion + 关键表行数摘要）。
 - **备份删除谓词【冻结，L5-03，唯一可执行】**：
   `manualDeleteAllowed = userConfirmed && age >= 30d && notAmongNewest3`
-  ——同时满足"用户已确认"、"距迁移成功至少 30 天"、"不属于最近 3 份"才允许
-  手动删除；**30 天后仍不自动删除**（无自动过期）。
+  ——"每次删除动作前单独确认"；`age` 以备份文件名中的创建时间（epochMs）为锚
+  （迁移失败产生的备份同样按创建时间参与排序）；`notAmongNewest3` = 按创建时间
+  降序，N≥4 且该备份不在前 3 份；**30 天后仍不自动删除**（无自动过期）。
+- **completeReset 严格清理范围【总体审查回写】**：completeReset 在 finalizeReset
+  前除 cache/debug 外，还必须严格清理本设备 `backups/` 下全部 v7 迁移备份
+  （失败保持 reset_pending=2、返回 `reset_incomplete`，与 cache/debug 同等
+  待遇），保证"完全清除本地数据"语义（红线 2.1-5）。
 - 缓存 TTL 汇总：icourse 24h（磁盘，P）；campus 目录 30min 节流/6h 过期；
   campus 详情/附件 30 天。**清理路径（A-2 整改）**：手动入口 = `clearCache()`
   （CT-C3-20，范围含 campus 三表+磁盘文件+icourse 缓存）；completeReset 在
@@ -185,7 +204,8 @@
 - 每适配器维护"平台 × 能力"声明矩阵；不对齐为声明性、可验收状态（08 §5.6）。
 - **延期横切项指针（C-1 整改，防误读为遗漏；编号命名空间：`Dnn`=07 §3 决策表，
   `D-nn`=11 §3 组件登记表）**：深色模式 → 07 D22/M8；
-  状态管理与 DI → 07 D20/D21/M5；关 App 后提醒可靠性 → 07 D28/M8；
+  路由/分支状态持久化 → 07 D23/M8；状态管理与 DI → 07 D20/D21/M5；
+  关 App 后提醒可靠性 → 07 D28/M8；
   提醒协调器内部设计 → 11 D-16/M5。前三类为 07 双向门，本层不重开；
   D-16 是 11 待补组件设计项。
 

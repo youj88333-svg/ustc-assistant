@@ -1,6 +1,8 @@
 # 重构探索导航索引
 
-> 产出日期：2026-08-12 ｜ 覆盖分支：main（HEAD e9d64dd）｜ 编制：主 agent（三阶段汇总）
+> 产出日期：2026-08-12 ｜ 覆盖分支：main（HEAD e9d64dd，旧房现状快照；当前
+> 设计审查基线以 `docs/refactor-docs/13-risks-and-acceptance.md` 与总体审查报告
+> 为准）｜ 编制：主 agent（三阶段汇总）
 
 本索引是 6 份模块技术文档的导航入口：模块清单、四契约锚点全局定义、三条端到端链路图、
 目标态迁移总览。模块文档全部以 main 分支实际代码为准；`docs/architecture.md` 与

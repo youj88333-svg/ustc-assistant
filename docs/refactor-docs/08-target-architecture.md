@@ -19,7 +19,8 @@
 外部系统
   ├─ 学校网站：jw.ustc.edu.cn / young.ustc.edu.cn / id.ustc.edu.cn（CAS）
   │           登录态 + 页面交互型，不可信数据（红线 2.1 原则 4）
-  ├─ 公开网站：icourse.club / teach.ustc.edu.cn / finance.ustc.edu.cn
+  ├─ 公开网站：icourse.club / teach.ustc.edu.cn / www.teach.ustc.edu.cn /
+  │           finance.ustc.edu.cn
   │           公开 HTTP 型，同样视为不可信数据
   ├─ USTC LLM 网关：api.llm.ustc.edu.cn（Anthropic 兼容，SSE + tool_use/tool_result）
   └─ 平台：Windows（当前）/ Android / iOS（正式版后，红线 2.2-8）

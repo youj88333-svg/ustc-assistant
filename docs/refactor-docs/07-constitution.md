@@ -52,7 +52,8 @@
 
 1. **本地优先**：业务数据与核心能力在本地运行；云同步为远期可选项，不默认上传。
 2. **学校数据承诺**：学校来源的记录不因滚动窗口变化而丢失；应用不物理删除学校
-   课程/考试/二课数据，仅在用户明确同意后本地隐藏。
+   课程/考试/二课数据，仅在用户明确同意后本地隐藏（**用户亲手确认的
+   clearBusinessData / completeReset 除外，见下注**）。
    > 解释注（2026-08-14，用户拍板，L2 审查整改 A-10）：本条约束**应用自动行为**
    > （同步、滚动窗口、导入流水线）；用户亲手确认的破坏性维护
    > （clearBusinessData / completeReset）属于 2.1 原则 5 用户主权的"可随时
@@ -171,7 +172,7 @@
 | D25 | 任务带/全天带"最多 3 条 +N"折叠策略 | 05§8-6 | M5 |
 | D26 | 冲突/重复规则数据云端同步 | 05§8-4 | 远期 |
 | D27 | MCP 等外部工具协议 | 06§8-5 | 远期 |
-| D28 | MSIX 打包与关 App 后提醒可靠性 | 产品约束、04§10 | M8 |
+| D28 | MSIX 打包与关 App 后提醒可靠性 | AGENTS.md M8（364/376）、07 §2.4 | M8 |
 | D29 | 移动端（Android/iOS）采集适配实现排期 | 红线 2.2-8、AGENTS.md 目标 | Windows 正式版后（M8 之后） |
 | D31 | 自动同步真开关（设置页当前为纯展示文本，无真开关） | 04§8-3、04§10-1、ADR-013 | M5 评估 |
 | D32 | 批量删除/清理工具形态：`create_task` 可 32 突发批量建，但 Agent 无删任务工具且禁止 batch/delete-all——"用户明确要求的批量删除"缺口。第 2 层冻结批量删除的确认/额度/审计/撤销契约（单对象工具 + 现有 8×12 为基线；禁止无预览 delete-all；可预告"用户批准的复合操作 + 每对象 mutation ledger"，不在第 1 层拍具体数量上限）；M6 定工具暴露形态 | 用户反馈 2026-08-12；第三轮整改 | ✅ 契约面已拍板（2026-08-14 L2-05：上限 32【基线】+ 预览确认 + 每对象 ledger + 单槽整包撤销；上限与防死循环职责分离）；工具暴露形态 M6 定 |
@@ -290,7 +291,8 @@
 - 选项：A 进程内 `Stream<JobEvent>`（sequence/phase/safeCount + terminal result/error）；
   B 回调；C Future 一次性返回。
 - 决策：A。**八相位**全集照搬（starting→checking_session→waiting_for_user→collecting→
-  needs_user_login|complete|cancelled|failed，共 8 个）；safeCount 仅安全计数；needs_user_login
+  needs_user_login|complete|cancelled|failed，共 8 个；枚举拼写以 09 CT-C1-01 /
+  11 D-07 冻结的 camelCase 为准）；safeCount 仅安全计数；needs_user_login
   恢复同一作业同一流、序号连续；取消协作式；热流支持重放最近事件。
 - 后果：正面——UI/Agent 多订阅方同流，隐私边界由"流内只含安全计数"机械保证；负面——
   热流语义需处理迟到订阅（重放最近事件），v2 分支事件顺序类 bug 一半源于此，列入引擎测试清单。
@@ -609,7 +611,8 @@
   accountId。`commitReauthentication` 同样接收 stamp 并事务内复验，identityDigest
   不可变规则不变。首登/重认证 provisional 上下文增加**幂等销毁接口**
   `cancelFirstLogin` / `discardProvisionalAuth`（仅在 stage 成功、handle 已存在后，遇
-  作业失败、用户取消、身份/提交校验失败或进程退出时调用，临时明文尽力零化）；
+  作业失败、用户取消、身份/提交校验失败时调用，临时明文尽力零化；进程退出时
+  仅内存上下文直接丢弃，崩溃后由启动门 reconcile 兜底）；
   JobArbiter 在 stage 前原子取得，取得失败的 busy 路径没有 provisional handle，因而
   不调用销毁接口（L2-17 收口）。
 - 后果：正面——账号生命周期的提交、认证、重置与清理竞态统一闭合，用户主权（重置可完成）与隐私（会话真清）

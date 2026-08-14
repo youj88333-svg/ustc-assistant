@@ -86,13 +86,13 @@
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| idle | start | backing_up | 备份 v7 库副本到 P 私有目录（迁移前自动备份，红线 2.2-7） | （保持 idle ｜ `sync_failed`） |
-| backing_up | backup_ok | migrating | 打开备份完整性校验（大小+可打开） | — |
-| backing_up | backup_fail | failed | 不触碰主库；审计 `migration_backup_failed` | （failed ｜ `sync_failed`） |
-| migrating | migrate_ok | verifying | Drift 迁移器执行（v8 七项变更，单事务语义） | — |
-| migrating | migrate_fail | rolled_back | 主库保持 v7（事务回滚）；审计 | （rolled_back ｜ `sync_failed`） |
+| idle | start | backing_up | 备份 v7 库副本到 P 私有目录（迁移前自动备份，红线 2.2-7）；先 `PRAGMA wal_checkpoint(FULL)` 再 SQLite 在线备份（备份 API / VACUUM INTO），禁止直接文件复制 | （保持 idle ｜ `migration_failed`） |
+| backing_up | backup_ok | migrating | 备份校验：`PRAGMA integrity_check` + 关键表行数对比 + 可打开 | — |
+| backing_up | backup_fail | failed | 不触碰主库；审计 `migration_backup_failed` | （failed ｜ `migration_failed`） |
+| migrating | migrate_ok | verifying | Drift 迁移器执行（v8 七项变更，单事务语义）；schema/行数断言在迁移事务提交前同事务完成 | — |
+| migrating | migrate_fail | rolled_back | 主库保持 v7（事务回滚）；审计 | （rolled_back ｜ `migration_failed`） |
 | verifying | verify_ok | committed | schemaVersion=8；**实现/验收时必须通过四步迁移断言**（旧库建→插数据→迁移→校验） | — |
-| verifying | verify_fail | rolled_back | 同上回滚 | （rolled_back ｜ `sync_failed`） |
+| verifying | verify_fail | rolled_back | 提交前校验失败 → 事务回滚主库保持 v7；若已提交后失败 → **从备份恢复主库 + 审计 + 专用恢复界面**（两条路径都记审计） | （rolled_back ｜ `migration_failed`） |
 
 - 闭合规则：R-非法（保持+审计）/ R-终态（committed/rolled_back/failed 忽略后续事件，
   `committed × start` 只返回既有结果、不重放迁移动作）/R-重复（非终态重复完成信号按动作幂等）。
@@ -105,8 +105,8 @@
 - 状态全集：`accepting*, decoding, validating, checking_subject, checking_idempotency,
   importing, reconciling, done†(imported|replayed), failed†`
 - 事件：`bytes_received, decode_ok, decode_fail, semantics_ok, semantics_fail,
-  subject_ok, subject_fail, replay_hit, proceed, tx_ok, tx_fail, reconcile_ok,
-  reconcile_fail`
+  subject_ok, subject_fail, replay_hit, idempotency_fail, proceed, tx_ok, tx_fail,
+  reconcile_ok, reconcile_fail`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
@@ -118,6 +118,7 @@
 | checking_subject | subject_fail | failed | 拒绝：无活动账号，或 subject.accountId 与 stamp/activeAccountId 不一致；不打开导入写事务 | （failed ｜ `no_account` / `subject_mismatch`） |
 | checking_subject | subject_ok | checking_idempotency | **同一事务内重新校验** subject.accountId == stamp.accountId == 当前 activeAccountId，复验 sourceGeneration/resetEpoch，再做 bundleId/digest 幂等查询（A-2 收口：active account 与 replay 路径均不得绕过事务守卫） | （failed ｜ `no_account` / `subject_mismatch` / `stale_lease`） |
 | checking_idempotency | replay_hit | done(replayed) | 复验已过（同一事务内完成）；直接返回 | — |
+| checking_idempotency | idempotency_fail | failed | 同 bundleId 异 digest 等幂等冲突或幂等查询 DB 异常 → 明确失败 | （failed ｜ `duplicate_identity` / `sync_failed`） |
 | checking_idempotency | proceed | importing | **同一事务续写**：import_batches + localId 复用 + upsert + source_records presence 对齐 + ActionLog（复验与写入同事务，TOCTOU 闭合） | （failed ｜ `stale_lease`） |
 | importing | tx_ok | reconciling | 事务外提醒协调（失败降级 pending） | — |
 | importing | tx_fail | failed | 整体回滚 | （failed ｜ `sync_failed`） |
@@ -144,6 +145,7 @@
 | 当前态 | 事件 | 次态 | 动作（持久效果） | 失败态 |
 |---|---|---|---|---|
 | idle | user_confirm_x2 | previewing | 清单预览（CT-C5-01） | — |
+| previewing | user_cancel | idle | 用户取消预览：无持久效果，可重新发起 | — |
 | previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | — |
 | beginning | begin_fail | idle | beginReset 未提交，重置未开始、pending=0；UI 可重试 | （idle ｜ `write_commit_failed`） |
 | beginning | begin_ok | draining_c2 | C2：revoke 租约→终止→cancelAll→等待→bump(reset) | — |
@@ -167,9 +169,13 @@
 
 - 闭合规则：R-非法（保持+审计）/ R-终态（done 忽略后续）/
   R-重复（begin 在非 idle 态 → R-非法；retry_finalize/finalizeReset 幂等）。
+  **重试语义**：各失败态的"可重试"=外部重发原操作（drain/clear），结果以既有
+  结果事件（c2_drained/c4_drained/sessions_cleared/cache_cleared/debug_cleared）
+  入机，不新增独立重试事件。
 - 不变量：pending≠0 期间正常路由/自动同步/Agent 禁止；所有写入携带 resetEpoch，
-  过期即拒；**会话、cache 或 debug 清理失败均不得绕过后删库**；pending=2 只证明
-  会话已清，不证明私有文件已清；pending=1/2 后续失败统一
+  过期即拒；**会话、cache、debug 或 v7 备份清理失败均不得绕过后删库**；
+  pending=2 只证明会话已清，不证明私有文件已清（cache/debug/备份，09 CT-C3-05/
+  12 XC-11）；pending=1/2 后续失败统一
   `reset_incomplete`（09 §2.4 L2-18），beginReset 未提交且 pending=0 时使用
   `write_commit_failed`，不得冒充持久 pending。
 
@@ -180,10 +186,10 @@
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| empty | record | occupied_valid | 覆盖写单行（slot=1 CHECK）；信封 v1{version,kind,accountId,safeSummary,payload} | （occupied_invalid ｜ 仅审计：写已提交、撤销能力降级） |
+| empty | record | occupied_valid | 覆盖写单行（slot=1 CHECK）；信封 v1{version,kind,accountId,safeSummary,payload}；与业务写同事务（CT-C3-07），任一失败整体回滚 | （保持 empty ｜ `write_commit_failed`） |
 | occupied_valid | undo_req | occupied_valid | 校验 accountId 与信封；非法时拒绝（他账号槽绝不删除/改写） | （保持 ｜ `invalid_undo_command`） |
 | occupied_valid | undo_ok | empty | 11 类恢复器/composite 逐操作恢复 + 删槽 + 审计 | — |
-| occupied_valid | undo_fail | occupied_valid | 保槽 + 审计（undo:failure） | （保持 ｜ `invalid_undo_command`） |
+| occupied_valid | undo_fail | occupied_valid | 保槽 + 审计（undo:failure） | （保持 ｜ `write_commit_failed`） |
 | occupied_valid | record | occupied_valid | 覆盖（新快照替换旧快照） | — |
 | occupied_invalid | record | occupied_valid | 覆盖修复 | — |
 | occupied_invalid | undo_req | occupied_invalid | 拒绝 + 审计（槽非法不可撤） | （保持 ｜ `invalid_undo_command`） |
@@ -234,6 +240,7 @@
 | held | begin_maintenance | maintenance_draining | 拒新 acquire；**按 MaintenanceKind 执行**（A-4 整改）：deleteCredentials/clearSession → 受影响来源 bump(cancel)；clearBusinessData → 全部来源 bump(clearBusinessData)（根 reason，内部取消不重复）；随后取消并等待旧作业终态 | — |
 | maintenance_draining | operation_fail | maintenance_draining | 取消/等待旧作业失败；保持维护门/写屏障并允许重试或显式 abort | （保持 maintenance_draining ｜ `maintenance_failed`） |
 | maintenance_draining | jobs_drained | maintenance | 旧作业全部终态；继续维护操作本体（删凭据/清会话/清业务数据） | — |
+| maintenance_draining | end_maintenance | maintenance | 显式 abort：审计 abort 原因，保持维护门至收尾完成后经 maintenance×end_maintenance 释放 | （保持 maintenance_draining ｜ 仅审计） |
 | maintenance | begin_maintenance | maintenance | 同 kind 重复请求幂等保持；不同 kind 拒绝 | （保持 maintenance ｜ `maintenance_in_progress`） |
 | maintenance_draining | begin_maintenance | maintenance_draining | 同 kind 重复请求幂等保持；不同 kind 拒绝 | （保持 maintenance_draining ｜ `maintenance_in_progress`） |
 | maintenance | operation_fail | maintenance | 保持维护门/写屏障；允许重试，或先完成显式 abort 收尾 | （保持 maintenance ｜ `maintenance_failed`） |
@@ -242,7 +249,7 @@
 | maintenance_draining | acquire | maintenance_draining | 拒绝 | （保持 ｜ `maintenance_in_progress`） |
 
 - 闭合规则：R-非法（free×release/end_maintenance/jobs_drained、held×end_maintenance/
-  jobs_drained、maintenance_draining×end_maintenance 等未列组合保持+审计）/
+  jobs_drained 等未列组合保持+审计）/
   R-终态（本机无终态，不适用）/R-重复（release 后再次 release 由 free×release 的
   R-非法幂等保持；重复 begin_maintenance 的同/不同 kind 行为由显式行定义）。
 - 不变量：至多一个 held 或一个 maintenance_draining；`isBusy()` 仅提示性
@@ -280,6 +287,9 @@
     的码子集；
   - 其余码（busy/no_account/stale_lease/maintenance_in_progress/maintenance_failed 等）
     是**作业创建前/交接后**的码，不得作为 C1 作业 failed 事件发出。
+  - **bundle 9 错误码归属**：C1 validate 工位校验失败 → 作业
+    `collection_failed`；9 个 bundle 码只在 C3 ImportService 解码/语义校验
+    阶段产生（10 §8.1 措辞以此为准）。
 - 闭合规则：R-非法/R-终态（complete/cancelled/failed 忽略后续事件）/
   R-重复（captcha_shown 幂等；error 后的事件被终态规则吸收）。
 - 不变量：needsUserLogin 恢复同一 jobId、sequence 连续（ADR-005）；凭据只在
@@ -289,8 +299,8 @@
 
 - 状态全集：`absent*, opening, ready, needs_login, quarantined, closing`
 - 事件：`open, open_ok, open_fail, probe_healthy, probe_needs_login, probe_unknown,
-  auth_ok, auth_fail, close_req, close_ok, quarantine_mark, clear_ok, clear_fail,
-  residue_found`
+  auth_ok, auth_fail, close_req, close_ok, close_fail, quarantine_mark, clear_ok,
+  clear_fail, residue_found`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
@@ -304,6 +314,7 @@
 | needs_login | auth_fail | quarantined | **显式隔离转移**（A-6 整改）：持久 quarantine 标记 + 关闭占用句柄 + 待 clearPartition | （quarantined ｜ `account_mismatch`） |
 | absent/opening/ready/needs_login/closing | close_req | closing | 作业终态/维护释放卡槽（A-6 整改：quarantined 不适用本行） | — |
 | closing | close_ok | absent | 关闭完成 | — |
+| closing | close_fail | quarantined | 关闭失败（锁/目录占用）：持久 quarantine 标记 + 审计 + UI 报告，待 clearPartition | （quarantined ｜ 仅审计 + UI 报告） |
 | （任意非 quarantined） | quarantine_mark | quarantined | 持久标记（清理成功前跨重启禁复用）；顺序=标记→关闭句柄→clearPartition | — |
 | quarantined | close_req | quarantined | 拒绝：隔离分区不因关闭句柄而解除隔离（R-非法，保持+审计） | （保持 ｜ 仅审计） |
 | quarantined | clear_ok | absent | 真删除分区（物理删除语义）；**唯一离开 quarantined 的路径** | — |
@@ -327,9 +338,9 @@
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | init | navigate_start | init | P 导航（CT-P-01）；三标志清零 | （failed ｜ `collection_failed`） |
-| （任一非终态标志态） | url_matched | 置 u 位 | 幂等置位；三齐 → target_ready | — |
-| （任一非终态标志态） | dom_ready | 置 d 位 | 幂等置位；三齐 → target_ready | — |
-| （任一非终态标志态） | ready_handshake | 置 h 位 | 幂等置位；三齐 → target_ready | — |
+| （init 或任一非终态标志态） | url_matched | 置 u 位 | 幂等置位；三齐 → target_ready | — |
+| （init 或任一非终态标志态） | dom_ready | 置 d 位 | 幂等置位；三齐 → target_ready | — |
+| （init 或任一非终态标志态） | ready_handshake | 置 h 位 | 幂等置位；三齐 → target_ready | — |
 | （任一非终态） | timeout | timed_out | 超时挂起 | — |
 | timed_out | retry | init | navigate_start 清零重来（有限重试次数归 M2 参数，D-29 移交） | — |
 | timed_out | user_wait | timed_out | 转人工等待（人工完成后 retry） | — |
@@ -346,8 +357,9 @@
 
 - 状态全集：`initial*, form_filled, submitted, verifying, waiting_user,
   authenticated†, mismatched†`
-- 事件：`fill_ok, fill_fail, submit_ok, evidence_partial, evidence_complete,
-  evidence_conflict, captcha_or_sms, manual_done`
+- 事件：`fill_ok, fill_fail, submit_ok, submit_rejected, evidence_partial,
+  evidence_complete, evidence_conflict, captcha_or_sms, risk_control_page,
+  manual_done`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
@@ -355,7 +367,10 @@
 | initial | fill_fail | waiting_user | 按钮异常 → 静默回退人工（人工只替代填表） | — |
 | form_filled | submit_ok | submitted | 提交登录 | — |
 | submitted | evidence_partial | verifying | 幂等收集三层核验证据（DOM 属性/performance/storage） | — |
+| submitted | evidence_complete | verifying | 三层证据同步一次齐备：幂等收集后直接核验（不要求先发 partial） | — |
+| submitted | submit_rejected | verifying | 密码错误/登录被拒页 → 仍进入三层核验（不自动重试密码、不回显敏感信息） | — |
 | submitted | captcha_or_sms | waiting_user | 验证码/短信交人工（不自动化） | — |
+| submitted | risk_control_page | waiting_user | 风控页交人工（不自动化） | — |
 | waiting_user | manual_done | verifying | **人工完成后进入核验，不得直接 authenticated**（A-8 整改：三层核验不可跳过） | — |
 | verifying | evidence_complete | authenticated | 三层齐 → 通过 | — |
 | verifying | evidence_conflict | mismatched | 任一缺/冲突 → 明确失败 | （mismatched ｜ `account_mismatch`） |

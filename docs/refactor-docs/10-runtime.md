@@ -405,7 +405,7 @@ C5 确认 → AccountMaintenanceCoordinator（CT-C5-01）
 ### 8.1 jw（WebView 交互 + SourceBundle）
 
 ```
-fetch:   probeSession（CT-P-02）→（过期）CAS 可见登录（白名单填表/三层核验/
+fetch:   probeSession（CT-C1-02；底层经 CT-P-02 probe）→（过期）CAS 可见登录（白名单填表/三层核验/
          验证码交人工）→ 登录后抓学期列表（ADR-009）→ 选中学期 → 课程页 + 考试页
 normalize: DOM/接口解析 → 规范化 datum（course_series / calendar_events /
          schedule_relations 外部身份）
@@ -420,7 +420,7 @@ deliver:  CollectionCompleted{bundleBytes, verifiedUsername?, selectedSemester?}
 ### 8.2 young-schedule（WebView 登录态 + SourceBundle）
 
 ```
-fetch:   probeSession（CT-P-02）→（过期）needs_user_login 暂停-恢复
+fetch:   probeSession（CT-C1-02；底层经 CT-P-02 probe）→（过期）needs_user_login 暂停-恢复
          → 北京时间滚动窗口逐日切片查询（窗口由 C2 按 BeijingClock 计算，
          YoungScheduleCollectionRequest.queryDates，CT-C1-02）
 normalize: 已报名日程记录 → calendar_events（second_class 外部身份）
@@ -498,7 +498,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 12 | 凭据租约二次取值 | takePassword 后 | 返回 null（原子取即失效，CT-C2-03） |
 | 13 | 提醒协调失败 | importBundle 事务外协调 | `reminderReconciliationPending` 返回给 C2 → 审计 + 后续重协调 |
 | 14 | 目录刷新失败且无旧目录 | 离线首次使用 | `catalog_unavailable`，联网后重试 |
-| 15 | 学期列表抓取失败/缺失 | 新学期待发布 | **当前出口**：作业失败 `collection_failed`（明确失败，不冒充成功）；fallback 选择算法归第 4 层/M2（ADR-009） |
+| 15 | 学期列表抓取失败/缺失 | 新学期待发布 | **fallback 未实现前**：作业失败 `collection_failed`（明确失败，不冒充成功）；M2 D-23 必须实现 ADR-009 回退策略（最近可用学期/上次持久化选择） |
 | 16 | Python 通道进程退出 | 租户健康探测（CT-P-07） | 当前作业终态 `failed`（query_failed/collection_failed）+ C2 记账；重启策略细节归 M2-M6（CT-T-01） |
 | 17 | 首登 provisional 调试资产失去认领 | 首登失败/取消或 App 崩溃 | 显式失败/取消：cancelFirstLogin 后 clearDebugAssets(prospectiveAccountId)；崩溃：启动时 reconcileProvisionalDebugAssets(String? activeAccountId)，匹配正式账号则提升、其余物理删除（CT-P-05/CT-C5-02） |
 
@@ -512,6 +512,9 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 学期 fallback 选择算法（当前出口已定=collection_failed） | ADR-009 | M2 |
 | PythonChannel 转换映射的完备性验证（legacy 键全量覆盖） | 09 §5.4 | M2–M4 oracle 对拍 |
 | Python 租户重启策略（当前出口已定=作业 failed） | 09 CT-T-01 | M2–M6 |
+
+> 走查指针（总体审查 S7）：v7→v8 迁移与备份回退不属于五链路序列图范围，
+> 承接见 09 CT-C3-01 + 11 D-01（M1 迁移状态机），本层不重复绘制。
 
 ## 11. 本层拍板记录（L3 决策）
 

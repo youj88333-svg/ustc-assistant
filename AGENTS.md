@@ -270,7 +270,8 @@ Pop-Location
 移动/清除/撤回、本地 chip 分区路由、账号隔离）。
 
 - 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；清单见
-  `docs/acceptance/read-only-agent.md` 第 10、11 节。自动测试不代替人工验收：学校
+  `docs/acceptance/read-only-agent.md` 第 1–11 节（§1–9 只读 Agent 主体、§10 写
+  工具、§11 修复复测）。自动测试不代替人工验收：学校
   API 与学校网站从不进入自动测试。Python 校园（campus）与 iCourse 体验未改变，
   `agent-testing.md` 第 13-15 项等待 Flutter 来源迁移。
 
