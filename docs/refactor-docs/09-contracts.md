@@ -656,13 +656,14 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
   冗余合并 + 声明成本），不携带旧房"39 工具"数字进入新架构；每轮作用域收窄
   延续 grounding `initialAllowedTools`；8×12 为基线（D32 经 §8.6 回写）。
 
-### 8.6 D32 复合写（批量删除）契约面【冻结，L2 拍板项】
+### 8.6 D32 复合写（批量删除）契约面【L2 拍板项】
 
-- **CT-C4-09**【冻结】填补"用户明确要求的批量删除"缺口（07 D32）：
+- **CT-C4-09**【基线】填补"用户明确要求的批量删除"缺口（07 D32）：
   ① **确认**：复合操作必须携带完整目标清单预览（模型安全字段，无 DB id/ref），
   用户批准后执行；禁止无预览 delete-all；
   ② **额度**：复合操作整体计 **1 次工具调用**（8×12 基线内）；单次复合操作
-  上限 **20 个对象**；每对象一条 mutation ledger 记录 + 一条复合审计
+  上限 **32 个对象**【基线——与 create_task 突发对齐，用户拍板"暂定 32"，
+  M6 审计可调但须修订本文档】；每对象一条 mutation ledger 记录 + 一条复合审计
   （action_logs safeSummary 只含计数与类型）；
   ③ **审计**：每对象执行结果按序进 MutationLedger（成功/拒绝/失败/未处理 +
   白名单错误码）；
@@ -670,8 +671,10 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
   UndoCommand——逐操作单实体恢复器），一次 undo_last_action 整包恢复；
   ⑤ 多对象逐项执行、无 batch/delete-all；删除仍只软删除个人数据
   （deletedAt），学校课程/考试/二课不可删（仅用户明确同意后本地隐藏）。
-- 工具暴露形态（是否新增工具/参数化合并）M6 定（L1-09）；数量上限 20 为本层
-  冻结值，修订须开 ADR 修正。
+- **职责分离（用户拍板意图）**：复合上限只管"单次批准操作的爆炸半径"，**不管
+  工具调用次数**——防死循环由 `ToolCallFingerprint`（完全重复阻断）+ 8×12 预算
+  （12 次/run 硬顶）+ M6 迭代告警负责，两道闸各自独立。
+- 工具暴露形态（是否新增工具/参数化合并）M6 定（L1-09）。
 
 ## 9. C5 壳层契约
 
@@ -772,7 +775,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-02 | D34 expires_at 处置（经代码核实修订，用户拍板） | 删列（死列：恒 NULL、决议从不读）+ "此类型以后不再确认"=永久；§7.2 #5 / §7.7 CT-C3-18 | D34、代码核实 2026-08-14 |
 | L2-03 | D35 sourceConfigs 主键形态 | **保留现状** `id = '$accountId:$source'` 复合字符串 id + UNIQUE(account_id, source)（04 §5 观测现状即此形态，零迁移；单账号模型不引入 schema 变更） | D35、04 §5 |
 | L2-04 | D37 trigger/retry 契约 | trigger 扩展为 4 值（§6.5 CT-C2-05，首登/重认证各自可审计）；state 6 值冻结；retry=自动 1h 退避 + 手动绕过 + 启动 interrupted 标记 | D37、ADR-008/013 |
-| L2-05 | D32 复合写上限 | **20 对象/复合操作**（整体计 1 次工具调用；每对象 ledger；单槽整包撤销快照；禁止无预览 delete-all）§8.6 CT-C4-09 | D32、L1-09 |
+| L2-05 | D32 复合写上限（用户拍板：暂定 32） | **32 对象/复合操作**【基线】（与 create_task 突发对齐；整体计 1 次工具调用；每对象 ledger；单槽整包撤销快照；禁止无预览 delete-all；上限与防死循环职责分离）§8.6 CT-C4-09 | D32、L1-09、用户拍板 2026-08-14 |
 | L2-06 | v8 变更集 6 项冻结 | §7.2：campus 三表字段级冻结、undo_slot.expires_at 删除、action_logs 索引、prompt 版本统一 8、permission expires_at 语义、reset 列落 local_accounts；v8 = 30 表 | ADR-007/010/011/023、D10/D34 |
 | L2-07 | SourceBundle 错误码计数修正 | **9 个**（02/03 文档"10 个"为笔误，以 Dart/Python 两侧代码为准，两侧一致） | 代码核实 |
 | L2-08 | 作业错误码全集 | §2.4：bridge_busy/bridge_query_busy 废止统一 `busy`；新增 `stale_lease`；fail-closed 归一规则 | ADR-004/016 |
