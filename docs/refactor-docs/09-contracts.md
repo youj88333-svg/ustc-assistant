@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~17：逐项拍板 + 两轮独立审查整改 + 第 3 层审查回写 L2-15/16/17）**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~18：逐项拍板 + 两轮独立审查整改 + 第 3/4 层审查回写 L2-15~18）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -86,6 +86,7 @@ class LeaseStamp {
 | `stale_lease` | 租约戳过期/迟到结果 | 稳定拒绝，不写库（ADR-004） |
 | `busy` | 全局来源作业租约被占 | 旧房 `bridge_busy`/`bridge_query_busy` 废止，进程内统一 `busy` |
 | `maintenance_in_progress` | 维护独占门关闭期间的新作业/新写被拒 | 稳定拒绝（A-8 整改补码；UI 提示"维护进行中"） |
+| `reset_incomplete` | completeReset 中途失败（可重试的持久 pending 状态） | 第 4 层审查回写补码（L2-18）：UI 提示"重置未完成，可重试"；与 reset_pending 1/2 持久态配套 |
 | `no_account` | 无活动账号 | 同步前置 |
 | `fresh_or_backoff` | freshness/退避窗口内跳过 | 非错误（skip） |
 | `reauthentication_required` | 凭据缺失需重新认证 | 旧房 `credentials_not_found` 的归一 |
@@ -1129,6 +1130,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-15 | 第 3 层走查回写（2026-08-14，主 agent 自审） | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认），非 null=持久选择 | 10-runtime.md L3-01 |
 | L2-16 | 第 3 层独立审查回写（2026-08-14，A-1~A-8/B-1~B-3 整改） | CT-C2-01 增 `submitQuery`（C4 唯一查询入口）+ 仲裁原子取得说明；QueryCompleted 增 attachmentRegistrations 载体、CollectionCompleted 增 selectedSemester；commitFirstLogin 增 selectedSemester 参数；identityDigest 唯一生产者冻结（sha256(utf8(verifiedUsername.trim()))）；discardProvisionalAuth 幂等销毁；completeReset 撤销链顺序；错误码补 maintenance_in_progress；CT-C3-21 计数规则（根操作 reason 一次）；CT-C3-22 补号；07 ADR-020/023 措辞绑定 takePassword/销毁接口 | 第 3 层独立审查报告（基线 a4c9a45） |
 | L2-17 | 第 3 层整改复审回写（2026-08-14） | `QueryRequest` 冻结为四种查询子类的联合体，原始 spec 提交降为 C2 内部助手；`AttachmentCacheRegistration` 七字段与非 null 空列表语义冻结；CT-C4-06/矩阵改用 submitQuery 与 QueryCompleted 内部载荷；provisional busy 边界、维护取消 reason 与首登载荷表述对齐 | 第 3 层整改复审报告（基线 7602c71） |
+| L2-18 | 第 4 层独立审查回写（2026-08-14，A-10） | 错误码注册表补 `reset_incomplete`（completeReset 中途失败、可重试；与 reset_pending 1/2 持久态配套） | 第 4 层独立审查报告（基线 82d0f84） |
 
 ## 14. 第 2 层 gate 检查表
 

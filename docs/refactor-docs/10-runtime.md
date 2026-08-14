@@ -221,17 +221,19 @@ C5(协调器)      C2                        C3                    C4
  │    +local_accounts（其余 FK CASCADE）→ 清 reset_pending → 广播空账号│
  │ 7. C5 回 /sync 首登态；C2/C4 于空账号态重新开放                  │
  │                                                                  │
- │ 失败分支（08 §7.3 表 + reset_pending 三值编码 0/1/2）：           │
- │   beginReset 失败 → 原状（0）                                    │
- │   C2/C4 取消失败 → 保持 pending（1）+ 写屏障，可重试             │
- │   会话清理失败 → 保持 pending（1），不得绕过后删库               │
- │   清会话后删库失败 → 事务回滚 + reset_pending=2（                │
- │     incomplete_session_cleared）；下次启动继续 finalization      │
- │   finalizeReset 重复执行 → 幂等                                  │
- │                                                                  │
- │ 启动恢复（CT-C5-02 强制门）：                                    │
- │   C5 启动 → resetState()（三值编码映射）→ 非 0 即先于正常路由/    │
- │   自动同步/Agent 恢复重置；恢复失败保持写屏障 + 专用恢复界面      │
+ │ 失败分支（08 §7.3 表 + reset_pending 三值编码 0/1/2；对外稳定出口        │
+ │   统一为 `reset_incomplete`，09 §2.4 L2-18）：                          │
+ │   beginReset 失败 → 原状（0）                                           │
+ │   C2/C4 取消失败 → 保持 pending（1）+ 写屏障，可重试                    │
+ │   会话清理失败 → 保持 pending（1），不得绕过后删库                      │
+ │   清会话后删库失败 → 事务回滚 + reset_pending=2（                       │
+ │     incomplete_session_cleared）；下次启动继续 finalization             │
+ │   finalizeReset 重复执行 → 幂等                                         │
+ │                                                                         │
+ │ 启动恢复（CT-C5-02 强制门）：                                           │
+ │   C5 启动 → resetState()（三值编码映射）→ 非 0 即先于正常路由/           │
+ │   自动同步/Agent 恢复重置；pending=1 先重新幂等清会话（安全重放），      │
+ │   pending=2 直接 finalization；恢复失败保持写屏障 + 专用恢复界面        │
 ```
 
 死胡同核对：每个失败分支都以"可重试的持久状态 + 明确下一步"结尾；所有完成事件/
@@ -467,7 +469,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | 5 | 作业取消（暂停态） | cancel(jobId) | 接受时刻 bump(cancel)（CT-C3-21）→ 立即终态 `cancelled` → finishSyncRun(cancelled) |
 | 6 | 作业取消（采集中） | 协作式检查点 | 同上：bump(cancel) 先于终态；迟到结果 stale_lease |
 | 7 | App 崩溃残留 running | 下次启动 | `recoverInterruptedRuns` → `interrupted/app_restarted`（CT-C3-21） |
-| 8 | reset 中途崩溃 | reset_pending=1/2 | 启动强制门恢复；=2 继续 finalization（CT-C5-02） |
+| 8 | reset 中途崩溃 | reset_pending=1/2 | 启动强制门恢复；=1 先重新幂等清会话、=2 直接 finalization（CT-C5-02）；对外稳定出口 `reset_incomplete` |
 | 9 | 身份核验失败分区 | digest 不匹配 | 持久 quarantine → 清除；失败跨重启禁复用（CT-P-02） |
 | 10 | 维护门期间新请求 | beginMaintenance 后 | 稳定拒绝 `maintenance_in_progress`；UI 提示"维护进行中" |
 | 11 | 删除凭据时有未消费租约 | 用户点删除 | 先 revoke；对受影响来源 bump(cancel) 后终止并等待作业，再删密文（§7.2） |
