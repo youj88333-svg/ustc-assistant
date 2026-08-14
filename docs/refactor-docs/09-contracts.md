@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**草稿（§13 L2 拍板待用户确认，确认后关闭 gate）**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14，L2-01~12 经用户逐项拍板）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -771,7 +771,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | 本地调试服务 127.0.0.1 | → `12-cross-cutting.md` §调试服务边界（并存期桥接已在 §10 归口） |
 | （补充）permission expires_at（D34） | §7.7（CT-C3-18：删列 + 记住即永久） |
 
-## 13. 本层拍板记录（L2 决策，待用户确认）
+## 13. 本层拍板记录（L2 决策，已全部拍板 2026-08-14——其中 L2-02 经代码核实修订为删列、L2-05 修订为上限 32【基线】、L2-10 增加同事务清槽）
 
 | 编号 | 决策 | 内容 | 依据 |
 |---|---|---|---|
@@ -780,7 +780,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-03 | D35 sourceConfigs 主键形态 | **保留现状** `id = '$accountId:$source'` 复合字符串 id + UNIQUE(account_id, source)（04 §5 观测现状即此形态，零迁移；单账号模型不引入 schema 变更） | D35、04 §5 |
 | L2-04 | D37 trigger/retry 契约 | trigger 扩展为 4 值（§6.5 CT-C2-05，首登/重认证各自可审计）；state 6 值冻结；retry=自动 1h 退避 + 手动绕过 + 启动 interrupted 标记 | D37、ADR-008/013 |
 | L2-05 | D32 复合写上限（用户拍板：暂定 32） | **32 对象/复合操作**【基线】（与 create_task 突发对齐；整体计 1 次工具调用；每对象 ledger；单槽整包撤销快照；禁止无预览 delete-all；上限与防死循环职责分离）§8.6 CT-C4-09 | D32、L1-09、用户拍板 2026-08-14 |
-| L2-06 | v8 变更集 6 项冻结 | §7.2：campus 三表字段级冻结、undo_slot.expires_at 删除、action_logs 索引、prompt 版本统一 8、permission expires_at 语义、reset 列落 local_accounts；v8 = 30 表 | ADR-007/010/011/023、D10/D34 |
+| L2-06 | v8 变更集 6 项冻结 | §7.2：campus 三表字段级冻结、undo_slot.expires_at 删除、action_logs 索引、prompt 版本统一 8、permission expires_at 删除、reset 列落 local_accounts；v8 = 30 表 | ADR-007/010/011/023、D10/D34 |
 | L2-07 | SourceBundle 错误码计数修正 | **9 个**（02/03 文档"10 个"为笔误，以 Dart/Python 两侧代码为准，两侧一致） | 代码核实 |
 | L2-08 | 作业错误码全集 | §2.4：bridge_busy/bridge_query_busy 废止统一 `busy`；新增 `stale_lease`；fail-closed 归一规则 | ADR-004/016 |
 | L2-09 | 官方站点白名单 | CT-C0-05 六主机清单；launcher 与 QueryResult references 共用同一清单 | 红线 2.1-2、02 §4.2 |
@@ -790,10 +790,10 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 
 ## 14. 第 2 层 gate 检查表
 
-- [ ] ① 每个接口有生产者和消费者——§11 契约矩阵 34 行逐项双列（待用户确认 L2 后勾选）
-- [ ] ② 无孤儿字段——§7.2 v8 变更集 6 项每字段标注写方/读方；删列 #2 以"孤儿列"为删除理由
-- [ ] ③ v8 变更集清单冻结（ADR-011）——§7.2 六项 + 30 表核对；冻结后变更须开 ADR
-- [ ] ④ §2.5 移交登记 16 项消化——§12 对照表（另 4 项明确移交第 5 层）
-- [ ] ⑤ D32/D33/D34/D35/D37 契约面落地——§6.5/§7.2/§7.7/§8.6/§13（L2-01~05）
-- [ ] ⑥ 依赖铁律复核——§5.2 C1 不依赖 C3、§8.4 C4 不直连 C1、§10 C2 核心无 dart:io
-- [ ] **gate 关闭条件**：用户确认 §13 L2 拍板（尤其 L2-04/05/06 三个增量决策）→ 机械验证（错误码/表数/接口 ID 全文一致）→ 进入第 3 层 `10-runtime.md`
+- [x] ① 每个接口有生产者和消费者——§11 契约矩阵 34 行逐项双列
+- [x] ② 无孤儿字段——§7.2 v8 变更集 6 项每字段标注写方/读方；删列 #2/#5 以"孤儿列/死列"为删除理由
+- [x] ③ v8 变更集清单冻结（ADR-011）——§7.2 六项 + 30 表核对（L2-06 拍板）；冻结后变更须开 ADR
+- [x] ④ §2.5 移交登记 16 项消化——§12 对照表（另 4 项明确移交第 5 层）
+- [x] ⑤ D32/D33/D34/D35/D37 契约面落地——§6.5/§7.2/§7.7/§8.6/§13（L2-01~05 全部拍板）
+- [x] ⑥ 依赖铁律复核——§5.2 C1 不依赖 C3、§8.4 C4 不直连 C1、§10 C2 核心无 dart:io
+- [x] **第 2 层 gate 关闭（2026-08-14）**：L2-01~12 经用户逐项拍板（增量决策：L2-04 trigger 扩 4 值 / L2-05 上限 32【基线】/ L2-06 v8=30 表；修订：L2-02 删死列、L2-10 加清槽）→ 进入第 3 层 `10-runtime.md`

@@ -171,11 +171,11 @@
 | D29 | 移动端（Android/iOS）采集适配实现排期 | 红线 2.2-8、AGENTS.md 目标 | Windows 正式版后（M8 之后） |
 | D31 | 自动同步真开关（设置页当前为纯展示文本，无真开关） | 04§8-3、04§10-1、ADR-013 | M5 评估 |
 | D32 | 批量删除/清理工具形态：`create_task` 可 32 突发批量建，但 Agent 无删任务工具且禁止 batch/delete-all——"用户明确要求的批量删除"缺口。第 2 层冻结批量删除的确认/额度/审计/撤销契约（单对象工具 + 现有 8×12 为基线；禁止无预览 delete-all；可预告"用户批准的复合操作 + 每对象 mutation ledger"，不在第 1 层拍具体数量上限）；M6 定工具暴露形态 | 用户反馈 2026-08-12；第三轮整改 | ✅ 契约面已拍板（2026-08-14 L2-05：上限 32【基线】+ 预览确认 + 每对象 ledger + 单槽整包撤销；上限与防死循环职责分离）；工具暴露形态 M6 定 |
-| D33 | 提醒默认偏移参数：第 2 层 09-contracts 冻结（定时事件默认提前 15 分钟、全天事件默认不提醒）；M5 只做 UI 不再拍默认值 | 原 2.2-5、§2.5；第三轮整改 | 第 2 层冻结默认值 |
+| D33 | 提醒默认偏移参数：第 2 层 09-contracts 冻结（定时事件默认提前 15 分钟、全天事件默认不提醒）；M5 只做 UI 不再拍默认值 | 原 2.2-5、§2.5；第三轮整改 | ✅ 已拍板（2026-08-14 L2-01：09-contracts CT-C3-14 全表冻结，含 exam/second_class/task/plan_block 特例） |
 | D34 | `agent_permission_policies.expires_at` 处置：**✅ 已拍板（2026-08-14，第 2 层 L2-02）——v8 删除该列**（代码核实为死列：恒 NULL、决议 `resolve` 从不读）；"此类型以后不再确认"=永久记住（ask_first_time + firstConfirmedAt），无过期概念；将来如需"限时记住"作新功能开新决策 | 03§10-3；第三轮整改；用户拍板 | 已拍板（`09-contracts.md` §7.7 CT-C3-18） |
-| D35 | 单账号模型下 `sourceConfigs` 主键形态（`'$accountId:$source'` 是否简化） | 04§8.3 | 第 2 层随 09 契约定 |
+| D35 | 单账号模型下 `sourceConfigs` 主键形态（`'$accountId:$source'` 是否简化） | 04§8.3 | ✅ 已拍板（2026-08-14 L2-03：保留复合字符串 id + UNIQUE(account_id, source)，零迁移） |
 | D36 | `account_mismatch` 后的 UI 恢复引导（旧房统一显示"重新登录失败"） | 01§9 建议4、01§10-9 | M5 |
-| D37 | `sync_runs.trigger` 枚举与 retry 契约（ADR-008 移交给 D12，ADR-013 未定细节） | ADR-008/013 | 第 2 层随 09 契约定 |
+| D37 | `sync_runs.trigger` 枚举与 retry 契约（ADR-008 移交给 D12，ADR-013 未定细节） | ADR-008/013 | ✅ 已拍板（2026-08-14 L2-04：trigger 扩 4 值 + state 6 值 + retry 契约，09-contracts CT-C2-05~07） |
 | D38 | completeReset 数据代价缓解：备份/导出入口或清单预览（单账号模型下重置销毁个人日程/Task/Agent 历史） | 审查 D-1 | M5/M8 |
 
 ## 4. ADR 日志
