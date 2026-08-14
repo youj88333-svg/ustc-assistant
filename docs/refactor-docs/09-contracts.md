@@ -494,14 +494,18 @@ Future<void> commitBusinessDataClear();    // 单事务清除；提交后解除�
 Future<void> abortBusinessDataClear();     // 回滚解除
 ```
 
-清除范围【冻结，旧房逐行核实为 **15 张**业务表——03 §7.1 所记"16 张"为计数
-误差，以 `settings_service.dart:118-168` 为准】：reminders / user_overlays /
+清除范围【冻结，L2-10 拍板——旧房逐行核实为 **15 张**业务表（03 §7.1 所记
+"16 张"为计数误差，疑为把 undo_slot 数入而旧房代码未删；以
+`settings_service.dart:118-168` 为准）+ **目标态同事务清 undo_slot**（修掉旧房
+残留槽指向已清数据的隐患，与 ADR-010 启动清槽一致）】：reminders / user_overlays /
 schedule_relations / schedule_relation_rules / task_event_links / plan_blocks /
 tasks / calendar_event_occurrence_exceptions / calendar_events /
 calendar_event_series / course_series / source_records / sync_runs /
-import_batches / jw_day_moves。**保留**：local_accounts / credential_accounts /
-source_configs / agent_settings / agent_secrets / agent_permission_policies /
-Agent 历史与 action_logs（审计不清）。
+import_batches / jw_day_moves + undo_slot。**保留**：local_accounts /
+credential_accounts / source_configs / agent_settings / agent_secrets /
+agent_permission_policies / Agent 历史与 action_logs（审计不清）。
+**campus 三表（v8 #1）不随 clearBusinessData 清除**——公开信息缓存非个人业务
+数据，归 clearCache 与 completeReset（级联）管。
 C2/C4 维护门配合（08 §7.5）：任何取消/等待失败均不得开始清理事务。
 
 ### 7.5 服务层六子域与写服务统一契约（ADR-017）
@@ -780,7 +784,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-07 | SourceBundle 错误码计数修正 | **9 个**（02/03 文档"10 个"为笔误，以 Dart/Python 两侧代码为准，两侧一致） | 代码核实 |
 | L2-08 | 作业错误码全集 | §2.4：bridge_busy/bridge_query_busy 废止统一 `busy`；新增 `stale_lease`；fail-closed 归一规则 | ADR-004/016 |
 | L2-09 | 官方站点白名单 | CT-C0-05 六主机清单；launcher 与 QueryResult references 共用同一清单 | 红线 2.1-2、02 §4.2 |
-| L2-10 | clearBusinessData 清除范围 | §7.4 冻结 15 张业务表显式清单（旧文档"16 张"为计数误差）+ 保留项清单 | settings_service.dart:118-168 逐行核实 |
+| L2-10 | clearBusinessData 清除范围（用户拍板） | §7.4 冻结：15 张业务表 + 目标态同事务清 undo_slot；campus 三表归 clearCache/completeReset；保留项清单 | settings_service.dart:118-168 逐行核实、2026-08-14 拍板 |
 | L2-11 | campus 表族字段级冻结 | §7.2 #1 三表（entries/state/attachment_cache）列清单 + 写读方 | ADR-007 |
 | L2-12 | Agent 基线参数 | 8×12、突发 32、token 28000/18000/1024、默认模型 deepseek-v4-flash 标【基线】，可调但须修订本文档 | 06 模块文档 |
 
