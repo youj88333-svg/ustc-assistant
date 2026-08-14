@@ -104,7 +104,8 @@ class LeaseStamp {
 `stale_target` / `target_not_found` / `already_active` / `already_deleted` /
 `invalid_lifecycle_transition` / `relation_not_found` / `relation_state_mismatch` /
 `relation_lookup_requires_bound` / `no_undo_available` / `invalid_undo_command` /
-`repeated_tool_call` / `tool_not_allowed` / `tool_execution_failed`。
+`repeated_tool_call` / `tool_not_allowed` / `tool_execution_failed` /
+`notification_unavailable`（提醒投递失败，reminders.failure_code 领域状态码）。
 
 **Agent 运行级**【冻结】：`privacy_rejected`（用户文本/出站内容未过隐私预检，
 拒绝即不落库、不发送）/ `consent_required`（icourse 首次联网未获授权，稳定拒绝；
@@ -164,7 +165,7 @@ class LeaseStamp {
 | CT-P-02 | `BrowserSessionAdminPort`（C1 定义，P 实现）：`open(accountId) → SessionPartitionRef`（不透明） / `probe(ref) → SessionHealth{healthy, needsLogin, unknown}` / `close(ref)` / `clearPartition(ref) → bool`（真删除）/ `markQuarantine(ref, reason)` / `isQuarantined(accountId) → bool`（持久标记，清理成功前跨重启禁复用；**标记存储于 P 私有数据目录（受控分区旁），不进 C3 业务库**） | P 实现 | C1 WebSessionEngine（日常）、C2 维护流（经 C1 门面清会话） |
 | CT-P-03 | `NotificationPort`：`show(title, body, {scheduleAt})` / `cancelAll()` | P 实现 | C3 提醒协调 |
 | CT-P-04 | `LauncherPort`：`launchExternal(Uri)`——**白名单校验在 C5**，P 只执行 | P 实现 | C5 官方网页 |
-| CT-P-05 | `FileStoragePort`：`privateDir()` / 附件缓存目录 / 迁移备份目录句柄 / `clearDebugAssets(String subjectId)` / `reconcileProvisionalDebugAssets(String? activeAccountId)`（均幂等，L2-20/21）；debug 资产写入接口由 P 提供（debug-only 编译守卫；`meta.json` 原子先写成功才允许落原始文件，12 XC-10） | P 实现 | C1 附件转换、C3 迁移器/clearCache、C5 首登/启动/维护流、调试基建 |
+| CT-P-05 | `FileStoragePort`：`privateDir()` / 附件缓存目录 / 迁移备份目录句柄 / `clearDebugAssets(String subjectId)` / `reconcileProvisionalDebugAssets(String? activeAccountId)`（均幂等，L2-20/21；`subjectId` 首登用 prospectiveAccountId、reset/启动用 activeAccountId）；debug 资产写入接口由 P 提供（debug-only 编译守卫；`meta.json` 原子先写成功才允许落原始文件，12 XC-10） | P 实现 | C1 附件转换、C3 迁移器/clearCache、C5 首登/启动/维护流、调试基建 |
 | CT-P-06 | `PlatformDecoderPort`：`decode(bytes, mediaType) → StructuredContent` | P 实现 | C1 AttachmentContentConverter |
 | CT-P-07 | `PythonProcessPort`【并存期】：`start()` / `stop()` / `health()` | P 实现 | C2 核心（编排 Python 租户） |
 | CT-P-08 | `LoopbackBridgeTransportPort`【并存期】：`request(endpoint, payload) → response`（仅 127.0.0.1 + Bearer 握手） | P 实现 | C2 核心 |
@@ -1174,7 +1175,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | CT-T-03 | 通道切换 generation 递增 | C2/C3 | C2（M7 删） |
 | CT-T-04 | M7 移除清单 | 第 2 层契约 / ADR-014 | M7 实施与 gate |
 
-## 12. §2.5 移交登记消化对照（20 项 + 1 补充，逐项一对一；16 项本层消化、4 项移交第 5 层）
+## 12. §2.5 移交登记消化对照（20 项 + 1 补充：15 项本层完全消化、3 项移交第 5 层（#18/19/20）、2 项本层消化 + 细节移交（#4/#16））
 
 | # | 移交项 | 本层消化 |
 |---|---|---|
