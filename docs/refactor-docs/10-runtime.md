@@ -67,9 +67,11 @@ C5                 C2                      C3                     C1/P
  │  1. freshness/retryAfter 预检（CT-C2-07/08）                    │
  │     新鲜或退避窗口内 → fresh_or_backoff（skip，非错误）          │
  │  2. isBusy() 预检 → 占用则 busy（CT-C2-01）                     │
- │  3. startSyncRun(stamp, trigger)（CT-C3-21）                    │
+ │  3. startSyncRun(stamp, trigger)（CT-C3-21）→ 返回 runId（供 15c） │
  │                  ├──────────────────────►│ 写 sync_runs(running)│
- │  4. 通道路由 + 组装 spec（Jw/YoungSchedule CollectionRequest）   │
+ │  4. 通道路由 + 组装 spec（含无密码凭据租约：StoredAccountSubject → │
+ │     expectedUsername；Jw/YoungSchedule CollectionRequest；         │
+ │     spec.credentialLease 启动时只带 expectedUsername，09 §5.2）    │
  │                  ├── startCollection(spec)（CT-C1-02）──►        │
  │                  │◄── JobEvent 流（CT-C1-01）──┤                 │
  │  5. 转播事件（starting→checking_session→…）                      │
@@ -135,6 +137,9 @@ C4(工具)          C2                        C3                    C1/P
  │       12. C3 事务内复验 stamp → upsert entries/state/attachment_cache│
  │       13. C3 本地搜索 → 入对话                                    │
  │  刷新失败且目录缺失 → catalog_unavailable（明确报错，不带部分数据）│
+ │ campus_detail 工具：同外部查询路径（C4 → C2 → C1/P 详情读取 →       │
+ │   封闭信封 → C4 入对话）；附件命中缓存经 C3 索引（CT-C3-20 缓存读方）│
+ │   定位 P 文件；详情刷新亦经 commitCatalogSource 登记（含附件登记载荷）│
  │                                                                  │
  │ 本地读写（C4 工具 → C3 服务）：                                   │
  │ 14. 读：AgentLocalDataGateway（CT-C4-04）→ C3 六子域服务         │
@@ -193,9 +198,11 @@ C5(表单)        C2                     C3                     C1/P
  │               │  ProvisionalAuthContext{handle, prospectiveAccountId,│
  │               │  expectedUsername, initialSourceGeneration=0,    │
  │               │  initialResetEpoch=0}；不插任何行、不落盘不落日志 │
- │ 2. C2 以 ProvisionalSubject 申请租约（includePassword:false）     │
- │    （CT-C2-03）→ 组装 LeaseStamp（prospectiveAccountId, gen=0）   │
- │ 3. startCollection(spec)（CAS 交互登录 D03，CT-C1-02）           │
+ │ 2. C2 busy 预检（全局来源作业租约，CT-C2-01）→ 以 ProvisionalSubject│
+ │    申请租约（includePassword:false，CT-C2-03）→ 组装 LeaseStamp    │
+ │    （prospectiveAccountId, gen=0, epoch=0）                        │
+ │ 3. startCollection(spec)（CAS 交互登录 D03，CT-C1-02；spec.semester=null │
+ │    ——首登无持久选择：登录后抓学期列表 + 月份规则默认，ADR-009）         │
  │  ┌─ needs_user_login → C5 确认 → 同一 ProvisionalSubject 重申请  │
  │  │   含密码租约 → resumeLogin → C1 takePassword() 取即失效       │
  │  └─ 成功：CollectionCompleted{bundleBytes, verifiedUsername}     │
@@ -236,6 +243,8 @@ C5 → C2 reauthenticate(ReauthRequest{accountId,username,password,savePassword}
       ② 返回 ProvisionalAuthContext（prospectiveAccountId=既有 accountId，
          initialGeneration/ResetEpoch=当前库值快照）
   → C2 以 ProvisionalSubject 申请租约 → 启动统一来源作业（CAS）
+    （同步账本按 trigger=reauthentication 走 §2.2 通用生命周期：
+     startSyncRun/finishSyncRun，CT-C3-21）
   → 完成返回 verifiedUsername + 原 LeaseStamp
   → C3 commitReauthentication(accountId, verifiedUsername, handle, stamp)（CT-C3-04）
       ① 事务内复验 stamp 的 accountId/jobId/sourceGeneration/resetEpoch 与当前库值
@@ -388,15 +397,16 @@ deliver:  campus_search → C4 → C3 commitCatalogSource（stamp + 登记载荷
 
 | 编号 | 决策 | 内容 | 状态 |
 |---|---|---|---|
-| （暂空） | — | — | — |
+| L3-01 | 走查回写 09 §5.2 | `JwCollectionRequest.semester` 由非空改 **nullable**：null=首登无持久选择（登录后抓列表+月份规则默认，ADR-009），非 null=持久选择（自审发现首登组装不出 spec） | ✅ 已回写 |
 
 ## 12. 第 3 层 gate 检查表
 
 - [ ] ① 五条链路（§3/§4/§5/§6/§7）序列图走通，每条消息标注 CT 编号、每分支有去向
 - [ ] ② 五条数据管道（§8）fetch→normalize→validate→deliver 四工位闭合
 - [ ] ③ §9 边界情形 16 行去向非空；无死胡同
-- [ ] ④ 本层引用的 CT 编号（CT-C0-01/03、CT-C1-01~05、CT-C2-01~08、CT-C3-02~06/21、
-      CT-C4-04/05、CT-C5-01/02、CT-P-02/07、CT-T-02）全部在 09 §11 矩阵中存在
+- [ ] ④ 本层引用的 CT 编号（CT-C0-01/03、CT-C1-01~05、CT-C2-01~08、CT-C3-02~06/
+      18/20/21、CT-C4-04/05、CT-C5-01/02、CT-P-02/07、CT-T-02）全部在 09 §11
+      矩阵中存在
 - [ ] ⑤ ADR-000~023 与 L2-14 决策在本层消息中全部可溯源（租约戳传播/原子取凭据/
       single-transaction 首登/三值 reset/全通道清会话/封闭 QueryResult）
 - [ ] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、

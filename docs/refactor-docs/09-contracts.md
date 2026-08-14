@@ -196,7 +196,10 @@ class SourceJobSpec {                            // 与 LeaseStamp 同构 + 类�
 sealed class JobRequest {}                       // 由 C2 组装：C2 从 C3 读配置
                                                  // （学期三元组等），C1 不依赖 C3
 class JwCollectionRequest extends JobRequest {
-  final SemesterTriple semester;                 // sourceConfigs.configJson（CT-C3-15）
+  final SemesterTriple? semester;                // sourceConfigs.configJson（CT-C3-15）；
+                                                 // null = 无持久选择（首登，source_configs
+                                                 // 行尚不存在）：登录后抓学期列表 + 月份
+                                                 // 规则默认（ADR-009）；非 null 用持久选择
 }
 class YoungScheduleCollectionRequest extends JobRequest {
   // 日期窗口由 C2 按 BeijingClock 计算后传入（北京时间滚动窗口语义照搬）
@@ -1050,6 +1053,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-12 | Agent 基线参数 | 8×12、突发 32、token 28000/18000/1024、默认模型 deepseek-v4-flash 标【基线】，可调但须修订本文档 | 06 模块文档 |
 | L2-13 | 独立审查整改（2026-08-14，报告基线 bf00aa9） | A-1~A-14/B-1~B-9/C-1~C-2 全部关闭（其中 A-10/B-6/v8#7 经用户确认）；新增 CT-C3-19/20、v8 #7；ADR-004/011/015 修订注 | 独立审查报告 |
 | L2-14 | 整改复审收口决策（用户批准 2026-08-14） | QueryResult 保持单一 canonical 1.0 + PythonChannel 逐字段转换；CredentialSubject 支持持久/临时主体且首登只内存预分配 accountId；LeaseStamp 显式传播并在全部来源写事务复验；campus id 精确复用旧算法；entries 只用 first/last_observed_at；icourse 只暴露 selectedEvidence 映射后的 evidence | ADR-004/007/016/020/023 修订、CT-C1-04/CT-C2-03/CT-C3-21 |
+| L2-15 | 第 3 层走查回写（2026-08-14，主 agent 自审） | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认），非 null=持久选择 | 10-runtime.md L3-01 |
 
 ## 14. 第 2 层 gate 检查表
 
