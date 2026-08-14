@@ -64,7 +64,7 @@
 ### 4.1 D-01 v7→v8 迁移器（ADR-011/012；唯一搬家路径）
 
 - 状态全集：`idle, backing_up, migrating, verifying, committed, rolled_back, failed`
-- 事件：`start, backup_ok, backup_fail, migrate_ok, migrate_fail, verify_ok, verify_fail, commit_ok, rollback_ok`
+- 事件：`start, backup_ok, backup_fail, migrate_ok, migrate_fail, verify_ok, verify_fail`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
@@ -112,18 +112,21 @@
 
 - 持久态（DB，跨重启）：`reset_pending ∈ {0=none, 1=pending, 2=incomplete_session_cleared}`
 - 协调器运行态：`idle, previewing, beginning, draining_c2, draining_c4, clearing_sessions, finalizing, done, startup_recovering`
+- 事件：`user_confirm_x2, begin, begin_ok, begin_fail, c2_drained, c2_drain_fail,
+  c4_drained, c4_drain_fail, sessions_cleared, clear_fail, finalize, tx_ok,
+  tx_fail, startup_detected`
 
 | 当前态 | 事件 | 次态 | 动作（持久效果） | 失败态 |
 |---|---|---|---|---|
-| idle | user_confirm×2 | previewing | 清单预览（CT-C5-01） | — |
-| previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | beginReset 失败 → idle（原状） |
-| beginning | c2_drained | draining_c2 | revoke 租约→终止→cancelAll→等待→bump(reset) | 失败 → 保持 pending=1（可重试） |
-| draining_c2 | c4_drained | draining_c4 | C4 拒新+取消+等待写终态 | 同上 |
-| draining_c4 | sessions_cleared | clearing_sessions | 全通道 clearSession 幂等 | 失败 → 保持 pending=1，不得绕过后删库 |
-| clearing_sessions | finalize | finalizing | finalizeReset 单事务删+清标记 | 删库失败 → pending=2 |
+| idle | user_confirm_x2 | previewing | 清单预览（CT-C5-01） | — |
+| previewing | begin | beginning | beginReset：pending=1、resetEpoch++、写屏障 | begin_fail → idle（原状） |
+| beginning | c2_drained | draining_c2 | revoke 租约→终止→cancelAll→等待→bump(reset) | c2_drain_fail → 保持 pending=1（可重试） |
+| draining_c2 | c4_drained | draining_c4 | C4 拒新+取消+等待写终态 | c4_drain_fail → 保持 pending=1 |
+| draining_c4 | sessions_cleared | clearing_sessions | 开始全通道 clearSession（幂等） | clear_fail → 保持 pending=1，不得绕过后删库 |
+| clearing_sessions | finalize | finalizing | finalizeReset 单事务删+清标记 | tx_fail → pending=2 |
 | finalizing | tx_ok | done | 广播空账号；C5 回首登 | — |
 | done | — | 终态 | pending=0（随账号行删除） | — |
-| （启动） | resetState()≠0 | startup_recovering | 强制门：先于路由/同步/Agent | 恢复失败 → 保持屏障 + 专用恢复界面 |
+| （启动） | startup_detected | startup_recovering | resetState()≠0 强制门：先于路由/同步/Agent | 恢复失败 → 保持屏障 + 专用恢复界面 |
 | startup_recovering | finalize | finalizing | =1 或 =2 均继续 finalization（=2 提示"可能需重新登录"） | — |
 
 - 不变量：pending≠0 期间正常路由/自动同步/Agent 禁止；所有写入携带 resetEpoch，
@@ -141,6 +144,7 @@
 | occupied_valid | undo_fail | occupied_valid | 保槽 + 审计（undo:failure） | `invalid_undo_command` |
 | occupied_valid | record | occupied_valid | 覆盖（新快照替换旧快照） | — |
 | occupied_invalid | record | occupied_valid | 覆盖修复 | — |
+| occupied_invalid | undo | occupied_invalid | 拒绝 + 审计（槽非法不可撤） | `invalid_undo_command` |
 | （任意） | clear_at_startup | empty | 启动清槽（ADR-010 语义显式化） | — |
 
 - 不变量：他账号槽绝不删除/改写（accountId 校验失败 → occupied_invalid 保留）；
@@ -149,17 +153,18 @@
 ### 4.5 D-05 sync run 账本状态机（CT-C2-05/06/07 + CT-C3-21）
 
 - 状态全集（run 六值）：`running, success, failed, cancelled, interrupted, needs_user_action`
-- 事件：`start, finish_ok, finish_fail, cancelled, crash_recovered, needs_user`
+- 事件：`start, finish_ok, finish_fail, job_cancelled, user_action_required,
+  app_crash, login_paused`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| （无） | startSyncRun(stamp, trigger) | running | 写 running 行；trigger∈4 值（CT-C2-05） | 首登在账号行存在前不写（CT-C3-21 私有实现） |
-| running | needs_user_login 暂停 | **running** | 保持 running（CT-C2-06；确认后同一 run 继续） | — |
+| （无） | start | running | startSyncRun(stamp, trigger) 写 running 行；trigger∈4 值（CT-C2-05） | 首登在账号行存在前不写（CT-C3-21 私有实现） |
+| running | login_paused | **running** | needs_user_login 暂停：保持 running（CT-C2-06；确认后同一 run 继续） | — |
 | running | finish_ok | success | finishSyncRun(success, result_code∈{imported,replayed,reauthenticated}) | — |
-| running | cancelled | cancelled | bump(cancel) 已先行（§5.1/CT-C3-21）；finishSyncRun(cancelled) | — |
+| running | job_cancelled | cancelled | bump(cancel) 已先行（§5.1/CT-C3-21）；finishSyncRun(cancelled) | — |
 | running | finish_fail | failed | finishSyncRun(failed, code)（collection_failed/9 码/stale_lease 等） | — |
-| running | 需用户动作（如 reauthentication_required） | needs_user_action | finishSyncRun(needs_user_action, code) | — |
-| running | App 崩溃 | interrupted | 下次启动 recoverInterruptedRuns 标 interrupted/app_restarted（ADR-022：跨重启作废） | — |
+| running | user_action_required | needs_user_action | finishSyncRun(needs_user_action, code)（如 reauthentication_required） | — |
+| running | app_crash | interrupted | 下次启动 recoverInterruptedRuns 标 interrupted/app_restarted（ADR-022：跨重启作废） | — |
 
 - 不变量：单一写权威 = C2 经 SourceStateService（CT-C3-21）；importBundle 不写
   sync_runs；finish 校验 runId 与 stamp 绑定。
@@ -168,34 +173,40 @@
 
 ### 5.1 D-06 JobArbiter 全局来源作业租约（CT-C2-01 仲裁规则①）
 
-- 状态全集：`free, held(jobId, stamp), maintenance(kind)`
-- 事件：`acquire, release, begin_maintenance, end_maintenance`
+- 状态全集：`free, held(jobId, stamp), maintenance(kind), maintenance_draining(kind, jobId)`
+- 事件：`acquire, release, begin_maintenance, end_maintenance, jobs_drained`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | free | acquire | held | **同步原子** check-and-hold（C2 单线程，无 await） | 占用 → 抛 `busy` |
 | held | release | free | 终态/异常路径 try/finally 释放 | — |
-| free | begin_maintenance | maintenance | 维护门（CT-C2-04）；拒新作业 | 维护中再 acquire → `maintenance_in_progress` |
+| free | begin_maintenance | maintenance | 维护门（CT-C2-04）；拒新 acquire | 维护中 acquire → `maintenance_in_progress` |
+| held | begin_maintenance | maintenance_draining | 拒新 acquire；内部先 bump(cancel)（受影响来源）→ 取消并等待旧作业终态（10 §7.2~7.4 流程） | 取消/等待失败 → 保持 draining、不开始清理 |
+| maintenance_draining | jobs_drained | maintenance | 旧作业全部终态；继续维护操作本体（删凭据/清会话/清业务数据） | — |
 | maintenance | end_maintenance | free | 门释放 | — |
 | maintenance | acquire | maintenance | 拒绝 | `maintenance_in_progress` |
+| maintenance_draining | acquire | maintenance_draining | 拒绝 | `maintenance_in_progress` |
 
-- 不变量：至多一个 held；`isBusy()` 仅提示性（正确性靠原子 acquire）；
-  reset 不依赖本门（走持久 reset_pending）。
+- 不变量：至多一个 held 或一个 maintenance_draining；维护期（两 maintenance 态）
+  无新 acquire；`isBusy()` 仅提示性（正确性靠原子 acquire）；reset 不依赖本门
+  （走持久 reset_pending）。
 
 ### 5.2 D-07 作业八相位状态机（CT-C1-01/CT-C1-02；引擎核心，v2 教训）
 
 - 状态全集（相位八值）：`starting, checking_session, waiting_for_user, collecting,
   needs_user_login, complete, cancelled, failed`
-- 事件：`job_start, session_healthy, session_needs_login, user_confirmed, resume_ok,
-  collecting_done, payload_ready, deliver_ok, cancel_received, error(code)`
+- 事件：`job_start, session_healthy, session_needs_login, resume_ok, auth_done,
+  auth_fail, captcha_shown, collecting_done, deliver_ok, cancel_received, error(code)`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | starting | job_start | checking_session | 发 starting 事件（seq=1）；safeCount 复位 | error → failed(code) |
-| checking_session | session_healthy | waiting_for_user | probeSession（CT-P-02）通过；发事件 | error → failed(code) |
+| checking_session | session_healthy | collecting | probeSession（CT-P-02）通过；跳过交互登录（会话已登录） | error → failed(code) |
 | checking_session | session_needs_login | needs_user_login | 暂停态：流不断、租约保持、sequence 连续 | — |
-| waiting_for_user | user_confirmed | collecting | 凭据租约注入（resumeLogin，CT-C1-02） | 取消 → cancelled |
-| needs_user_login | resume_ok | （原相位） | 恢复同一作业同一流；takePassword 取即失效 | resume 失败 → failed |
+| needs_user_login | resume_ok | waiting_for_user | 恢复同一作业同一流；注入凭据租约（resumeLogin，CT-C1-02）→ takePassword 取即失效 → CAS 交互登录（D-10） | resume 失败 → failed |
+| waiting_for_user | auth_done | collecting | 三层核验齐 → verifiedUsername 入终态载荷；继续采集 | — |
+| waiting_for_user | captcha_shown | waiting_for_user | 验证码/短信交人工（不自动化） | — |
+| waiting_for_user | auth_fail | failed | 三层核验缺一 | `account_mismatch` |
 | collecting | collecting_done | complete | safeCount 递增；构造 CollectionCompleted/QueryCompleted | error → failed(code) |
 | complete | deliver_ok | 终态 | C2 校验 stamp → 交接（迟到 → stale_lease） | — |
 | （任意非终态） | cancel_received | cancelled | **接受时刻先 bump(cancel)**（C2）→ C1 协作式检查点终止；暂停态立即终态 | — |
@@ -207,20 +218,22 @@
 ### 5.3 D-08 WebSessionEngine 卡槽状态机（CT-P-01/02；ADR-002/019）
 
 - 状态全集：`absent, opening, ready, needs_login, quarantined, closing`
-- 事件：`open, open_ok, open_fail, probe_healthy, probe_needs_login, quarantine_mark,
-  clear_ok, clear_fail, close_ok`
+- 事件：`open, open_ok, open_fail, probe_healthy, probe_needs_login, auth_ok,
+  auth_fail, close_req, close_ok, quarantine_mark, clear_ok, clear_fail, residue_found`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | absent | open | opening | P 打开账号独立数据分区（不透明 SessionPartitionRef） | open_fail → absent + `collection_failed` |
 | opening | open_ok | ready | 收集前健康探测（ADR-002） | — |
+| opening | open_fail | absent | 分区打开失败；审计 | `collection_failed` |
 | ready | probe_needs_login | needs_login | 触发 CAS 登录（D-10） | — |
 | ready | probe_healthy | ready | 可采集 | — |
-| needs_login | （D-10 成功） | ready | CAS 登录状态机完成后回写 | D-10 失败 → `account_mismatch`/failed |
+| needs_login | auth_ok | ready | CAS 登录状态机完成后回写 | auth_fail → `account_mismatch`/failed |
+| （任意） | close_req | closing | 作业终态/维护释放卡槽 | — |
+| closing | close_ok | absent | 关闭完成 | — |
 | （任意） | quarantine_mark | quarantined | 持久标记（清理成功前跨重启禁复用） | — |
 | quarantined | clear_ok | absent | 真删除分区（物理删除语义） | — |
 | quarantined | clear_fail | quarantined | 标记保留、跨重启禁复用、报 UI | — |
-| （任意） | close_ok | closing→absent | 作业终态释放卡槽 | — |
 | （启动） | 残留分区 | quarantined | 崩溃脏状态恢复：先隔离后清理 | — |
 
 - 不变量：卡槽生命周期引擎独占（适配器不得私自 open/close）；清会话/重置遍历
@@ -238,7 +251,10 @@
 | navigating | url_matched | navigating | 记录 URL 匹配（就绪三条件之一） | — |
 | navigating | dom_ready | dom_loaded | 记录 DOM 就绪（条件之二） | — |
 | dom_loaded | ready_handshake | target_ready | 三条件齐（URL 匹配 + DOM 就绪 + 脚本握手）→ 可提取 | — |
-| （任意非终态） | timeout | timed_out | 超时 → 转人工等待或重试 | timed_out → failed(`collection_failed`) 或等待用户 |
+| （任意非终态） | timeout | timed_out | 超时挂起 | — |
+| timed_out | retry | navigating | 重新导航（有限重试，次数归 M2 参数） | — |
+| timed_out | user_wait | timed_out | 转人工等待（人工完成后 retry） | — |
+| timed_out | give_up | failed | 放弃：明确失败 | `collection_failed` |
 | （任意非终态） | error | failed | 明确失败 | `collection_failed` |
 
 - 不变量：**事件顺序乱序容忍**——晚到的 dom_ready/url 事件在已 target_ready 后
@@ -247,12 +263,13 @@
 ### 5.5 D-10 CAS 交互登录状态机（ADR-003）
 
 - 状态全集：`initial, form_filled, submitted, verifying, waiting_user, authenticated, mismatched`
-- 事件：`fill_ok, submit_ok, evidence_partial, evidence_complete, evidence_conflict,
-  captcha_or_sms, manual_done, verified_ok, verified_fail`
+- 事件：`fill_ok, fill_fail, submit_ok, evidence_partial, evidence_complete,
+  evidence_conflict, captcha_or_sms, manual_done`
 
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
-| initial | fill_ok | form_filled | 白名单 origin 填表（username 来自租约 expectedUsername；密码 takePassword 后填） | 按钮异常 → 静默回退人工（waiting_user） |
+| initial | fill_ok | form_filled | 白名单 origin 填表（username 来自租约 expectedUsername；密码 takePassword 后填） | — |
+| initial | fill_fail | waiting_user | 按钮异常 → 静默回退人工 | — |
 | form_filled | submit_ok | submitted | 提交登录 | — |
 | submitted | evidence_partial | verifying | 三层核验收集（DOM 属性/performance/storage） | — |
 | verifying | evidence_complete | authenticated | 三层齐 → 通过 | — |
@@ -271,8 +288,10 @@
 | 当前态 | 事件 | 次态 | 动作 | 失败态 |
 |---|---|---|---|---|
 | active | take_password | consumed | 原子取即失效（首次返回秘密并置空） | 二次调用 → 返回 null |
+| consumed | take_password | consumed | 返回 null（原子语义，幂等） | — |
 | active | revoke_req | revoked | 幂等撤销；revoke 后 takePassword 恒 null | — |
 | consumed | revoke_req | revoked | 幂等 | — |
+| revoked | take_password | revoked | 返回 null | — |
 
 - 不变量：takePassword/revoke 串行化（C2 单线程持有）；作业终态自动失效；
   删除凭据/completeReset 前先 revoke 全部未消费租约。
@@ -298,7 +317,7 @@
 | R3 维护互斥 | D-06/D-07/D-01 | maintenance 期间 free→held 禁止；迁移器运行期间无作业可启动（启动门） |
 | R4 暂停语义 | D-05/D-07 | needs_user_login 期间 run 保持 running、租约保持、sequence 连续 |
 | R5 租约释放 | D-06/D-11 | 作业任何终态释放全局租约与凭据租约（try/finally） |
-| R6 provisional 边界 | D-06/D-10 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁 |
+| R6 provisional 边界 | 09 CT-C3-03/04 + D-06 | 先 acquire 后 stage；acquire 失败无 handle、不调销毁；stage 后任何失败出口调 cancel/discard |
 
 ## 8. 本层拍板记录（L4 决策）
 
