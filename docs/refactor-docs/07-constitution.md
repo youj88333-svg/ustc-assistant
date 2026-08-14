@@ -89,7 +89,7 @@
 
 | 移交项 | 原位置 | 新宿主 |
 |---|---|---|
-| SourceBundle 1.0 envelope/manifest/digest 幂等/10 错误码语义；canonical schema 与 Draft-7 副本双方言同步 | 原 2.3-1 | `09-contracts.md` §SourceBundle（第 2 层）+ D06 的 ADR |
+| SourceBundle 1.0 envelope/manifest/digest 幂等/9 错误码语义（L2-07 修正）；canonical schema 与 Draft-7 副本双方言同步 | 原 2.3-1 | `09-contracts.md` §SourceBundle（第 2 层）+ D06 的 ADR |
 | v7 基线 27 表数据字典与 schemaVersion 迁移线（v7 为起点、v8+ 仅正式迁移；v8 后表数为基线 27 + 变更净增减，不再混称"27 表"） | 原 2.3-2 | `09-contracts.md` §schema 迁移线 + D10 的 ADR（"数据资产连续性"不变量留在 2.2-7） |
 | 账号隔离实现机制（accountId 分区、凭据级联删除） | 原 2.3-3 | `09-contracts.md` §账号隔离机制（"账号隔离"不变量留在 2.2-6） |
 | 北京时间 Asia/Shanghai 为唯一业务时区 | 原 2.3-4 | D14 的 ADR + `12-cross-cutting.md`（第 5 层） |
@@ -265,8 +265,12 @@
   或 HTTP 客户端，M7 随 Python 租户删除两端口。参考 Kubernetes Lease + resourceVersion
   的单一协调者/holder/generation/迟到拒绝模式（不引入依赖）。
 - 后果：正面——消灭多账号并行整类问题（D18 取消）、消除旧房并发雷与串号雷；负面——
-  同步进行时 Agent 查二课被拒（bridge_busy 语义延续），确定性优先于并行度；
+  同步进行时 Agent 查二课被拒（busy 语义延续；旧房码 bridge_busy/bridge_query_busy
+  随 Bridge 废止，L2-08），确定性优先于并行度；
   宪法 2.2-6 由"账号隔离"修订为"单账号模型"。
+- **L2 审查整改修订（2026-08-14）**：sourceGeneration 权威归 **C3 同步状态服务**
+  （落 `source_configs.source_generation`，09 v8 #7），C2 经 C3 递增后组装入租约戳，
+  C3 导入/写入事务内与库内值比对——消灭"预检-提交"之间的 TOCTOU（09 §2.3/§7.3）。
 
 ### ADR-005：作业进度采用进程内事件流（safeCount + 八相位照搬 + 热流可重放）
 
@@ -357,6 +361,9 @@
   最终清单在 `09-contracts.md` 冻结，冻结后新增变更须开 ADR 修正。
 - 后果：正面——数据资产连续性有机械保障；负面——琐碎变更（索引、版本常量）也要走
   全套迁移测试，纪律成本换确定性。
+- **L2 审查整改修订（2026-08-14）**：清单在 09 §7.2 冻结六项后，审查整改增补
+  **#7 `source_configs.source_generation`（加列）** 并修订 #6（reset_pending 三值
+  编码 0/1/2，见 09 §7.4）——按本 ADR 修正流程记录，冻结后一切新增变更均照此办理。
 
 ### ADR-012：Python tmp/ 产物不迁移，唯一数据资产为 Flutter v7 库
 
@@ -408,6 +415,11 @@
 - 后果：正面——与现状数据兼容（无需迁移），消灭并存混用的隐患；负面——Dart 无命名
   时区库，Asia/Shanghai 以**固定 UTC+8 偏移**实现（不处理历史夏令时语义）；跨时区
   需求真出现时再开新决策。
+- **L2 审查整改修订（2026-08-14）**：铁律一增加**线协议兼容例外**——已发布的
+  SourceBundle 1.0 / QueryResult 1.0 信封内时间字段（collectedAt/generatedAt 及
+  bundle 数据时间字段）维持发布时的 +08:00 ISO-8601 线格式（改线格式等于改已发布
+  契约、破坏 Python oracle 对拍）；C1 产出/C3 解码边界完成换算，进程内存与数据库
+  一律 epoch ms（09 §2.1）。
 
 ### ADR-016：外部查询消费侧重设计——进程内 QueryJob + 事件流（参考 MCP/OpenHands）
 

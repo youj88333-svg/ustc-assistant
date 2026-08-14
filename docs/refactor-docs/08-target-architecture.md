@@ -111,7 +111,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
   C2 SourceOrch.   → C1 / C3 / C0 / P 端口
   C4 AgentHarness  → C2 / C3 / C0
   C1 SourceEngine  → C0 / P 端口
-  C3 ImportStorage → C0
+  C3 ImportStorage → C0 / P 端口（通知、文件存储：源码仅依赖 C0 端口定义，运行时经组合根注入 P 实现；L2 审查 B-7 补充）
   C0 SharedCore    → （无）
 
 源码依赖要点（区分"调用方向"与"编译依赖"）：
@@ -227,7 +227,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
     只允许清理事务写入，事务提交或回滚后才解除。该操作只涉及单库事务，不新增
     reset_pending；崩溃前未提交则回滚，已提交则数据已清除；
   - v7 基线 27 表 + schema v8 变更集（campus 目录表族、删 undo_slot.expires_at、action_logs
-    索引、prompt 版本统一、agent_permission_policies.expires_at 保留语义 D34；
+    索引、prompt 版本统一、agent_permission_policies.expires_at 删除 D34；
     migration-only + 迁移测试，ADR-011）+ `v7→v8 迁移器`
     （唯一搬家路径，ADR-012；**迁移前自动备份 v7 库副本、失败可回滚**——红线 2.2-7 承接）；
   - 聚合根级服务（六子域）：Identity（账号/凭据/identityDigest——**重新认证不可变，
@@ -240,7 +240,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
   - 学期三元组持久化（`sourceConfigs.configJson`，ADR-009）。
 - **不包含**：任何采集/网络（C1 专属）；附件下载与内容转换（C1/P）；UI（C5）；
   Agent 推理（C4）。
-- **v8 候选变更累积表**（第 2 层冻结前持续记账；冻结依据 ADR-011）：
+- **v8 候选变更累积表**（历史记账；已由第 2 层 `09-contracts.md` §7.2 冻结六项 + 整改增 #7，2026-08-14）：
 
 | # | 变更 | 来源决策 | 类型 |
 |---|---|---|---|

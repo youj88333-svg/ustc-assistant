@@ -49,7 +49,9 @@
 │ 唯一性与一致性                                                         │
 │   UNIQUE(account_id, source, external_id)          ← 学校稳定身份      │
 │   UNIQUE(account_id, personal_series_id, occurrence_key)               │
-│   CHECK：timed 与 all-day 表示互斥；type/status 枚举                    │
+│   CHECK：timed 需 end_at > start_at；all-day 需                          │
+│           end_date_exclusive > start_date；timed/all-day 表示互斥；      │
+│           type/status 枚举（B-5 整改补全）                              │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -62,7 +64,10 @@
 │ 状态机四态（唯一持久化事实；派生投影不落库）                            │
 │   state ∈ {active, blocked, completed, cancelled}                      │
 │   blocked_reason    TEXT NULL —— blocked 时说明                        │
-│   completed_at / cancelled_at —— 终态时间戳，CHECK 恰好一个非空        │
+│   completed_at / cancelled_at —— 终态时间戳（CHECK 精确对应）：        │
+│      state=completed ⇔ completed_at 非空 且 cancelled_at 空             │
+│      state=cancelled ⇔ cancelled_at 非空 且 completed_at 空             │
+│      state=active/blocked ⇔ 两者皆空（B-5 整改补全）                    │
 │   deleted_at        INTEGER NULL —— 软删除（不改 state）               │
 │ 计划                                                                   │
 │   deadline_at       epoch ms NULL                                      │

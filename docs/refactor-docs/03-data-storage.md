@@ -60,7 +60,7 @@ app/lib/features/import/
 └── domain/
     ├── import_result.dart         # ImportOrigin / ImportStatus / ImportResult
     ├── source_bundle.dart         # SourceBundle 模型 + digest（sha256 canonical JSON）
-    └── source_bundle_error.dart   # SourceBundleError + 10 个错误码
+    └── source_bundle_error.dart   # SourceBundleError + 9 个错误码（L2-07 修正：旧记"10 个"为计数笔误）
 
 app/lib/features/schedule/
 ├── application/
@@ -386,7 +386,7 @@ WindowsReminderReconciler.start (windows_reminder_reconciler.dart:53-85)
 
 | 链路 | 本模块环节 | 上下游 |
 |---|---|---|
-| completeReset | `SettingsService.completeReset` 事务内：删 action_logs（本账户）→ 清 undo_slot → 删 local_accounts 行，业务表靠 FK CASCADE 连带清理（`settings_service.dart:170-190`）；`clearBusinessData` 则显式按 16 张表逐删（L118-168） | 上游：settings 模块（模块 06？）；下游：accounts（凭证/会话清理） |
+| completeReset | `SettingsService.completeReset` 事务内：删 action_logs（本账户）→ 清 undo_slot → 删 local_accounts 行，业务表靠 FK CASCADE 连带清理（`settings_service.dart:170-190`）；`clearBusinessData` 则显式按 15 张表逐删（L118-168，旧记"16 张"为计数笔误；目标态另同事务清 undo_slot，见 09 §7.4 CT-C3-06） | 上游：settings 模块（模块 06？）；下游：accounts（凭证/会话清理） |
 | 同步链路 | `ImportService.importBytes` 作为 `SyncCoordinator.importBundle` 回调消费 Bridge 采集结果（`sync_page.dart:56,132`）；`sync_runs`/`import_batches`/`source_records` 状态写入；`recoverInterruptedRuns` 读取 `sync_runs` | 上游：sync 模块（Bridge/采集，模块 04/05 待确认）；下游：reminders（协调）、schedule（有效事件流） |
 | Agent 查询 | `DriftAgentLocalDataGateway` 聚合本模块读服务（`agent_local_data_gateway.dart:333`）：有效事件/冲突/覆盖/撤销预览/提醒配置/历史/递归投影；`HistoryRepository.query` 上限 50 条（`history_repository.dart:25`）；Agent 生命周期写经本模块各写服务并以 `source='agent'` 审计（`agent_session_service.dart:1696`） | 上游：agent 模块（模块 02 待确认）；本模块提供全部本地数据读取 |
 
@@ -399,7 +399,7 @@ WindowsReminderReconciler.start (windows_reminder_reconciler.dart:53-85)
 1. **职责是否保留**【目标态推断】：保留。数据存储模块与"数据从哪来"完全解耦——本模块只消费 SourceBundle 字节流，从不直接接触采集端。在"全部数据链路 Flutter 原生化、Bridge 消失"的最终形态中，采集逻辑（原 Python 侧）与传输层（Bridge）消失，但本模块的数据库、表族、服务层是采集结果的落点，必然整体保留；原 Python 数据层中"生成 SourceBundle"的部分职责需要寻找新宿主（原生采集器或迁移到 Dart），而"消费 SourceBundle"的本模块职责原样保留。settings 模块的 `pythonPath` 配置与 `PythonLocator` 随之消亡，但 `source_configs` 表本体（开关、JW 学期配置）继续存在。
 
 2. **哪些契约会被保留**【目标态推断】：
-   - SourceBundle 1.0 契约大概率保留（探索规格提示）：信封结构、digest 幂等语义、10 个错误码、16MB 上限、`assets/schemas/source-bundle-1.0.draft7.schema.json` 都独立于采集实现；即便采集端重写，只要仍有"外部采集→本地导入"边界，该契约就是稳定的模块间接口。
+   - SourceBundle 1.0 契约大概率保留（探索规格提示）：信封结构、digest 幂等语义、9 个错误码（L2-07 修正）、16MB 上限、`assets/schemas/source-bundle-1.0.draft7.schema.json` 都独立于采集实现；即便采集端重写，只要仍有"外部采集→本地导入"边界，该契约就是稳定的模块间接口。
    - 27 张表结构与 `schemaVersion` 迁移线：本地数据是长期资产，不可因 Bridge 消失而失效。
    - 审计契约（action_logs 字段语义、safe_summary 约定）、撤销契约（undo_slot v1 信封）、提醒协调契约（reminders 状态机与哨兵语义）。
    - 服务级读接口（EffectiveEventRepository/ConflictService/OverlayService/UndoService/HistoryRepository 等）作为 presentation 与 Agent 的本地数据门面。
