@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~19：逐项拍板 + 两轮独立审查整改 + 第 3/4 层审查回写 L2-15~19）**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~20：逐项拍板 + 两轮独立审查整改 + 第 3/4/5 层审查回写 L2-15~20）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -134,7 +134,7 @@ class LeaseStamp {
 | CT-P-02 | `BrowserSessionAdminPort`（C1 定义，P 实现）：`open(accountId) → SessionPartitionRef`（不透明） / `probe(ref) → SessionHealth{healthy, needsLogin, unknown}` / `close(ref)` / `clearPartition(ref) → bool`（真删除）/ `markQuarantine(ref, reason)` / `isQuarantined(accountId) → bool`（持久标记，清理成功前跨重启禁复用） | P 实现 | C1 WebSessionEngine（日常）、C2 维护流（经 C1 门面清会话） |
 | CT-P-03 | `NotificationPort`：`show(title, body, {scheduleAt})` / `cancelAll()` | P 实现 | C3 提醒协调 |
 | CT-P-04 | `LauncherPort`：`launchExternal(Uri)`——**白名单校验在 C5**，P 只执行 | P 实现 | C5 官方网页 |
-| CT-P-05 | `FileStoragePort`：`privateDir()` / 附件缓存目录 / 迁移备份目录句柄（具体路径归 `12-cross-cutting.md` §调试资产） | P 实现 | C1 附件转换、C3 迁移器 |
+| CT-P-05 | `FileStoragePort`：`privateDir()` / 附件缓存目录 / 迁移备份目录句柄 / `clearDebugAssets(accountId)`（幂等，L2-20） | P 实现 | C1 附件转换、C3 迁移器/clearCache、C5 维护流 |
 | CT-P-06 | `PlatformDecoderPort`：`decode(bytes, mediaType) → StructuredContent` | P 实现 | C1 AttachmentContentConverter |
 | CT-P-07 | `PythonProcessPort`【并存期】：`start()` / `stop()` / `health()` | P 实现 | C2 核心（编排 Python 租户） |
 | CT-P-08 | `LoopbackBridgeTransportPort`【并存期】：`request(endpoint, payload) → response`（仅 127.0.0.1 + Bearer 握手） | P 实现 | C2 核心 |
@@ -790,10 +790,14 @@ C2/C4 维护门配合（08 §7.5）：任何取消/等待失败均不得开始�
   attachment_cache 行的 cache_key/size_bytes/fetched_at/expires_at 来自 C1 内部登记
   载荷（§5.4；canonical 信封不含 cache_key）。C2 在把终态交给 C4 前先校验同一
   stamp，C4 只负责编排交接，不得自行补造 stamp；过期一律 `stale_lease`、三表零写入。
-- **CT-C3-20**【冻结】`clearCache()`（B-9 整改：补正式契约）：清除非业务缓存——
-  campus 三表（entries/state/attachment_cache）事务内删行 + P 文件存储中附件/
-  详情缓存文件事务外删除（文件删除失败不阻塞、记审计）；不触碰任何业务表；
-  接口提供者 C3（+P 文件实现），调用者 C5 设置页；completeReset 级联亦清。
+- **CT-C3-20**【冻结】`clearCache()`（B-9 整改 + 第 5 层审查 A-2 回写）：清除非
+  业务缓存，范围三部分——① campus 三表（entries/state/attachment_cache）事务内
+  删行；② campus 附件/详情磁盘缓存文件（P）；③ **icourse 24h 磁盘缓存（P）**
+  （A-2 回写：范围闭合，不再遗漏）。磁盘文件删除事务外执行、失败不阻塞数据库
+  删除、记审计（重试承接 = 下次 clearCache/completeReset 幂等）。
+  调用者两处：C5 设置页（手动"清缓存"）；**finalizeReset 事务前内部触发**
+  （completeReset 的缓存清理路径 = 调用本契约的私有实现，而非另行实现；
+  文件删除失败不阻断删库、审计）。不触碰任何业务表。
 - 生产者：C3 各服务。消费者：C5 页面（drift 流自动刷新）、C4 网关
   （AgentLocalDataGateway/AgentWriteGateway）、C2（同步状态读写）。
 
@@ -1136,6 +1140,7 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 | L2-17 | 第 3 层整改复审回写（2026-08-14） | `QueryRequest` 冻结为四种查询子类的联合体，原始 spec 提交降为 C2 内部助手；`AttachmentCacheRegistration` 七字段与非 null 空列表语义冻结；CT-C4-06/矩阵改用 submitQuery 与 QueryCompleted 内部载荷；provisional busy 边界、维护取消 reason 与首登载荷表述对齐 | 第 3 层整改复审报告（基线 7602c71） |
 | L2-18 | 第 4 层独立审查回写（2026-08-14，A-10） | 错误码注册表补 `reset_incomplete`（completeReset 已建立持久意图后中途失败、可重试；仅与 reset_pending 1/2 配套；beginReset 未提交使用 `write_commit_failed`） | 第 4 层独立审查报告（基线 82d0f84）及整改复审收口 |
 | L2-19 | 第 4 层整改复审回写（2026-08-14） | 错误码注册表补 `maintenance_failed`：非 reset 维护已取得维护门后的排空/执行失败；与拒绝新请求的 `maintenance_in_progress` 严格分工 | 第 4 层整改复审报告（基线 5d1e698） |
+| L2-20 | 第 5 层独立审查回写（2026-08-14，A-2/A-4） | CT-C3-20 范围闭合：明确含 icourse 24h 磁盘缓存；completeReset 的缓存清理 = finalizeReset 事务前内部触发同一契约私有实现；CT-P-05 增 `clearDebugAssets(accountId)`（幂等清调试资产，completeReset 步骤 5.6 + C5 手动入口，失败不阻断删库、审计） | 第 5 层独立审查报告（基线 0947af9） |
 
 ## 14. 第 2 层 gate 检查表
 

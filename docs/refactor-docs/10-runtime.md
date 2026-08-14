@@ -1,7 +1,7 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
 > 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14，用户重认；首轮审查 8A/3B + 复审 4A/3B 全部闭环）**
-> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~19）、
+> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~20）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
 
@@ -217,6 +217,11 @@ C5(协调器)      C2                        C3                    C4
  │ 5. C2 按已安装通道全集幂等 clearSession（CT-C2-02 全集语义）     │
  │    ├─ Native：C1/P WebView 分区真删除（CT-P-02）                 │
  │    └─ Python：P 租户适配器 profile 清理（CT-T-02）               │
+ │ 5.5 C3 clearCache 私有实现（CT-C3-20 范围：campus 三表+附件/详情 │
+ │     磁盘缓存+icourse 24h 缓存——A-2 回写）；文件删除失败不阻断删库、│
+ │     审计（下次幂等重试）                                          │
+ │ 5.6 P FileStoragePort.clearDebugAssets(accountId)（幂等；清      │
+ │     debug/raw/<accountId>/——A-4 回写）；失败不阻断删库、审计       │
  │ 6. C3 finalizeReset()（CT-C3-05）：单事务删 action_logs+undo_slot│
  │    +local_accounts（其余 FK CASCADE）→ 清 reset_pending → 广播空账号│
  │ 7. C5 回 /sync 首登态；C2/C4 于空账号态重新开放                  │
@@ -502,6 +507,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 | L3-02 | 首轮独立审查整改（2026-08-14，8A/3B） | A-1 submitQuery 入口 / A-2 附件载荷载体（QueryCompleted.attachmentRegistrations）/ A-3 原子取租约 / A-4 取消 bump(cancel) 与计数规则 / A-5 暂停保持 running + 提醒协调顺序 + 终态映射 / A-6 selectedSemester 返回链 + identityDigest 内部计算 / A-7 discardProvisionalAuth + completeReset revoke 顺序 / A-8 补码补号补 CT 标注；B-1 L2-01~16 / B-2 takePassword 绑定 / B-3 trigger 分支 | ✅ 已落地（回写 09 L2-16） |
 | L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17；2026-08-14 用户重认，gate 关闭） |
 | L3-04 | 第 4 层整改复审回写（2026-08-14） | reset 失败码分工：beginReset 未提交/pending=0 → write_commit_failed，pending=1/2 → reset_incomplete；非 reset 维护本体失败 → maintenance_failed，新请求拒绝仍为 maintenance_in_progress | ✅ 已同步（回写 09 L2-18/19） |
+| L3-05 | 第 5 层独立审查回写（2026-08-14，A-2/A-4） | completeReset 补步骤 5.5（clearCache 私有实现：campus+icourse）与 5.6（clearDebugAssets 幂等清 debug/）；文件删除失败不阻断删库、审计 | ✅ 已同步（回写 09 L2-20） |
 
 ## 12. 第 3 层 gate 检查表
 
@@ -511,7 +517,7 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 - [x] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
       CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
       CT-T-01/02）全部在 09 §11 矩阵中存在
-- [x] ⑤ ADR-000~023 与 L2-01~19 决策在本层消息中全部可溯源（原子取租约/取消递增/
+- [x] ⑤ ADR-000~023 与 L2-01~20 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
 - [x] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
