@@ -1,7 +1,7 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**首轮独立审查整改版（8A/3B 已闭环，回写 09 L2-16）**
-> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~16）、
+> 产出日期：2026-08-14 ｜ 状态：**整改复审修订版（回写 09 L2-17，待独立复审重认 gate）**
+> ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~17）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
 
@@ -14,7 +14,7 @@
   每个分支出口标注终态 / 稳定错误码 / 暂停态**。
 - 与第 1 层的区别：08 §7 是"容器名能否走通"；本层是"CT 签名能否走通"——消息必须
   引用 09 中真实存在的契约，不得发明新接口（发现缺口即回写第 2 层，本层首轮审查
-  已回写 L2-15/L2-16）。
+  已回写 L2-15/L2-16/L2-17）。
 - **gate：① 五条链路 + 五条管道全部走通无死胡同（每个 await/事件/错误都有去向）；
   ② 每条数据链路 fetch→normalize→validate→deliver 四工位闭合；③ 并发/迟到/取消/
   崩溃四类边界情形逐条有去向（§9 扫描表）；④ 本层引用的每个 CT 编号在 09 §11
@@ -51,11 +51,12 @@
   8. 终态释放全局租约（任何终态/异常路径都必须释放——try/finally 语义）
 ```
 
-**取消与 generation（A-4 整改）**：用户/系统取消 → 取消请求被接受的时刻先
+**取消与 generation（A-4/L2-17 整改）**：用户直接取消或 C2 通用取消 → 取消请求被接受的时刻先
 `bumpSourceGeneration(source, cancel)`（CT-C3-21）→ C1 协作式终止（CT-C1-02）→
 `cancelled` 终态 → finishSyncRun(cancelled)。**计数规则**：同一维护操作对同一来源
 只递增一次、取根操作 reason；reset/clearBusinessData 内部触发的取消不再以 cancel
-重复递增；仅用户直接取消才以 cancel 递增（09 CT-C3-21 注）。
+重复递增；deleteCredentials/clearSession 对活跃作业的取消没有独立根 reason，按 C2
+通用取消以 cancel 对每个受影响来源递增一次（09 CT-C3-21 注）。
 
 **sync_runs 终态映射（A-5 整改）**：
 
@@ -160,18 +161,20 @@ C4(工具)          C2                        C3                    C1/P
  │  │     （仅 young_enrolment 可接受凭据；icourse/campus 从不） │    │
  │  └───────────────────────────────────────────────────────────┘   │
  │ 4b. QueryCompleted{result, verifiedUsername?,                   │
- │     attachmentRegistrations?}（CT-C1-01；campus_detail 附载荷）  │
+ │     attachmentRegistrations}（CT-C1-01；始终非 null；仅          │
+ │     campus_detail 可非空，其余查询为空列表）                     │
  │ 5b. C2 校验 handle.stamp → 迟到 stale_lease（不进对话）          │
  │ 6b. C2 → C4 交接经安全校验的 QueryResult（CT-C1-04 封闭字段集）  │
  │ 7b. C4：信封校验 → OutboundPrivacyFilter 净化 → 入对话           │
  │                                                                  │
  │ campus 目录分支（campus_search 工具）：                           │
- │ 8. C4 → C3 目录服务判 freshness（CT-C2-08：30min/6h）            │
- │  ├─ 无需刷新 → C3 本地搜索 → 入对话                              │
+ │ 8. C4 → C3 目录服务判 freshness（CT-C3-07；语义 CT-C2-08：       │
+ │    30min/6h）                                                    │
+ │  ├─ 无需刷新 → C3 本地搜索（CT-C3-07）→ 入对话                   │
  │  └─ 需刷新 → 9. C4 → C2 submitQuery(CampusSearchQueryRequest)    │
  │       10. C1/P 抓取规范化 → C2 按 stamp 校验交还 C4               │
  │       11. C4 → C3 commitCatalogSource(stamp, result,             │
- │           attachmentRegistrations)（CT-C3-22）                    │
+ │           attachmentRegistrations=[])（CT-C3-22）                 │
  │       12. C3 事务内复验 stamp → upsert entries/state/            │
  │           attachment_cache → 13. C3 本地搜索 → 入对话            │
  │  刷新失败且目录缺失 → catalog_unavailable（明确报错，不带部分数据）│
@@ -274,14 +277,16 @@ C5(表单)        C2                     C3                     C1/P
  │               │                       │  ⑤ 私有事务内导入核心    │
  │               │                       │  ⑥ 凭据密文 + 内部计算    │
  │               │                       │     identityDigest（sha256│
- │               │                       │     (utf8(trim(username)))│
+ │               │                       │     (utf8(verifiedUsername.│
+ │               │                       │     trim()))               │
  │               │                       │     09 §7.4 唯一生产者）  │
  │               │                       │  ⑦ 置活动 + 审计 +       │
  │               │                       │     记 first_login 终态  │
  │               │                       │     （CT-C3-21 私有实现） │
  │ 7. 广播 activeAccountChanged → C5 进主界面                        │
  │                                                                  │
- │ 失败路径：任一守卫失败（stale_lease/身份错误）或事务回滚 →        │
+ │ 失败路径：stage 后作业失败/用户取消、任一守卫失败                  │
+ │   （stale_lease/身份错误）或事务回滚 →                            │
  │   cancelFirstLogin(handle)（CT-C3-03，A-7 整改）→ 无活动账号、    │
  │   无凭据行、无来源业务数据；handle 一次性消费，临时明文尽力零化； │
  │   全局租约随终态释放（§2.2-8）                                    │
@@ -303,7 +308,8 @@ C5 → C2 reauthenticate(ReauthRequest{accountId,username,password,savePassword}
       ① 校验输入 username 的 digest == 现有 identityDigest（不符即拒绝）
       ② 返回 ProvisionalAuthContext（prospectiveAccountId=既有 accountId，
          initialGeneration/ResetEpoch=当前库值快照）
-  → 3. startSyncRun(stamp, reauthentication)（CT-C3-21）→ runId
+  → 3. startSyncRun(stamp, reauthentication)（trigger 语义 CT-C2-05；
+      持久状态端口 CT-C3-21）→ runId
   → 4. C2 以 ProvisionalSubject 申请租约 → 启动统一来源作业（CAS）
   → 5. 完成返回 verifiedUsername + 原 LeaseStamp
   → 6. C3 commitReauthentication(accountId, verifiedUsername, handle, stamp)
@@ -312,8 +318,9 @@ C5 → C2 reauthenticate(ReauthRequest{accountId,username,password,savePassword}
       ② 再次校验 digest == 原 identityDigest（内部计算，09 §7.4）
       匹配 → 仅更新凭据密文与元数据；identityDigest 保持不变
              → finishSyncRun(runId, stamp, success, 'reauthenticated')
-      不匹配 → identity_mismatch；库内身份/凭据/业务数据不变
-              C2 持久 quarantine 本次会话分区 → 清除（CT-P-02）
+      不匹配 → identity_mismatch；先 discardProvisionalAuth(handle)（CT-C3-04）；
+              库内身份/凭据/业务数据不变；C2 持久 quarantine 本次会话分区
+              → 清除（CT-P-02）
               清除失败 → 标记跨重启保留、禁复用、报 UI
              → finishSyncRun(failed, 'identity_mismatch')
   ── 失败/取消出口（A-7 整改）：
@@ -331,7 +338,8 @@ C5 → C2 reauthenticate(ReauthRequest{accountId,username,password,savePassword}
 C5 确认 → AccountMaintenanceCoordinator（CT-C5-01）
   → C2 beginMaintenance(deleteCredentials)（CT-C2-04）
       ① revoke 全部未消费凭据租约（CT-C2-03）
-      ② 取消并等待可能消费凭据的作业终态
+      ② 对每个受影响来源在接受取消时先 bumpSourceGeneration(source, cancel)
+         （CT-C3-21）→ 取消并等待可能消费凭据的作业终态
   → C3 deleteCredentials（CT-C3-07 Identity 写服务；删密文，保留账号与浏览器会话）
   → C2 endMaintenance（CT-C2-04）
   门关闭期间新请求 → maintenance_in_progress（稳定拒绝）
@@ -341,7 +349,8 @@ C5 确认 → AccountMaintenanceCoordinator（CT-C5-01）
 
 ```
 C5 确认 → C2 beginMaintenance(clearSession)（CT-C2-04）
-      ① 停止该账号全部来源作业
+      ① 对每个活跃来源在接受取消时先 bumpSourceGeneration(source, cancel)
+         （CT-C3-21）→ 停止并等待该账号全部来源作业终态
       ② 遍历【已安装通道全集】（CT-C2-02）：每通道 clearSession(accountId) 幂等
          Native 经 C1/P；Python 经 P 租户适配器（CT-T-02）
       ③ 任一失败 → 该通道分区保持隔离状态、重试；不因路由切换遗漏已注销通道
@@ -406,7 +415,8 @@ normalize: NORMALIZED_FIELDS → YoungActivity 封闭字段集（CT-C1-04）
          descriptionText/requirementsText 有界纯文本转换；imagePath/私有字段丢弃
 validate: QueryResult 1.0 canonical 校验（封闭集 fail-closed；references 白名单
          CT-C0-05）
-deliver:  QueryCompleted{result}（CT-C1-01）→ C2 → C4 工具（不入库、不落 C3）
+deliver:  QueryCompleted{result, attachmentRegistrations=[]}（CT-C1-01）→ C2 →
+         C4 工具（不入库、不落 C3）
 异常出口: needs_user_login（唯一可接受凭据的查询类型）| query_failed
          | result_validation_failed | stale_lease
 ```
@@ -419,8 +429,8 @@ fetch:    HttpSourceClient 搜索公开页（课程/教师关键词，24h 磁盘
 normalize: 排名 + 关系强度（relationStrength）+ 代表性证据
          selectedEvidence→evidence；**reviews 不进 canonical**（CT-C1-04，L2-14）
 validate: canonical 校验（封闭集；siteAiSummary 只留 text；teacherLinks 只留 label）
-deliver:  QueryCompleted（CT-C1-01）→ C4 工具（评课联动只发送必需检索词，
-         红线 2.1-2）
+deliver:  QueryCompleted{result, attachmentRegistrations=[]}（CT-C1-01）→ C2 →
+         C4 工具（评课联动只发送必需检索词，红线 2.1-2）
 异常出口: query_failed | result_validation_failed | stale_lease | stale 缓存降级
 ```
 
@@ -435,11 +445,13 @@ normalize: CatalogEntry 封闭字段集（id 精确算法 = 'campus_'+sha256 前
           附件登记载荷（cache_key/sizeBytes/…，不进信封）
 validate: canonical 校验（CT-C1-04；URL ∈ references；raw HTML 拒绝；
          无 localPath/sha256）
-deliver:  campus_search → QueryCompleted{result} → C4 → C3 commitCatalogSource
-          （stamp + attachmentRegistrations，CT-C3-22）→ upsert → 本地搜索入对话
+deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} → C2
+          校验 stamp → C4 → C3 commitCatalogSource（原 stamp + result + 空列表，
+          CT-C3-22）→ upsert → 本地搜索入对话
           campus_detail → QueryCompleted{result, attachmentRegistrations}
-          （CT-C1-01 载荷载体）→ C4 入对话（附件命中缓存经 C3 Catalog 服务
-          CT-C3-07 定位 P 文件）
+          （CT-C1-01 载荷载体）→ C2 校验 stamp → C4 → C3
+          commitCatalogSource（原 stamp + result + 原登记列表，CT-C3-22）→ C4 入对话
+          （附件命中缓存经 C3 Catalog 服务 CT-C3-07 定位 P 文件）
 异常出口: catalog_unavailable（目录缺失且刷新失败）| result_validation_failed
          | stale_lease | 降级旧目录（合法）
 ```
@@ -458,7 +470,7 @@ deliver:  campus_search → QueryCompleted{result} → C4 → C3 commitCatalogSo
 | 8 | reset 中途崩溃 | reset_pending=1/2 | 启动强制门恢复；=2 继续 finalization（CT-C5-02） |
 | 9 | 身份核验失败分区 | digest 不匹配 | 持久 quarantine → 清除；失败跨重启禁复用（CT-P-02） |
 | 10 | 维护门期间新请求 | beginMaintenance 后 | 稳定拒绝 `maintenance_in_progress`；UI 提示"维护进行中" |
-| 11 | 删除凭据时有未消费租约 | 用户点删除 | 先 revoke + 终止作业，再删密文（§7.2） |
+| 11 | 删除凭据时有未消费租约 | 用户点删除 | 先 revoke；对受影响来源 bump(cancel) 后终止并等待作业，再删密文（§7.2） |
 | 12 | 凭据租约二次取值 | takePassword 后 | 返回 null（原子取即失效，CT-C2-03） |
 | 13 | 提醒协调失败 | importBundle 事务外协调 | `reminderReconciliationPending` 返回给 C2 → 审计 + 后续重协调 |
 | 14 | 目录刷新失败且无旧目录 | 离线首次使用 | `catalog_unavailable`，联网后重试 |
@@ -482,16 +494,18 @@ deliver:  campus_search → QueryCompleted{result} → C4 → C3 commitCatalogSo
 |---|---|---|---|
 | L3-01 | 走查回写 09 §5.2 | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认，ADR-009），非 null=持久选择 | ✅ 已回写 |
 | L3-02 | 首轮独立审查整改（2026-08-14，8A/3B） | A-1 submitQuery 入口 / A-2 附件载荷载体（QueryCompleted.attachmentRegistrations）/ A-3 原子取租约 / A-4 取消 bump(cancel) 与计数规则 / A-5 暂停保持 running + 提醒协调顺序 + 终态映射 / A-6 selectedSemester 返回链 + identityDigest 内部计算 / A-7 discardProvisionalAuth + completeReset revoke 顺序 / A-8 补码补号补 CT 标注；B-1 L2-01~16 / B-2 takePassword 绑定 / B-3 trigger 分支 | ✅ 已落地（回写 09 L2-16） |
+| L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17，待独立复审） |
 
 ## 12. 第 3 层 gate 检查表
 
 - [ ] ① 五条链路（§3/§4/§5/§6/§7）序列图走通，每条消息标注 CT 编号、每分支有去向
 - [ ] ② 五条数据管道（§8）fetch→normalize→validate→deliver 四工位闭合
 - [ ] ③ §9 边界情形 16 行去向非空且为当前出口（不借"归第 4 层"逃逸）
-- [ ] ④ 本层引用的 CT 编号（CT-C0-01/03、CT-C1-01~05、CT-C2-01~08、CT-C3-02~07/
-      18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、CT-T-01/02）全部在
+- [ ] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
+      CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
+      CT-T-01/02）全部在
       09 §11 矩阵中存在
-- [ ] ⑤ ADR-000~023 与 L2-01~16 决策在本层消息中全部可溯源（原子取租约/取消递增/
+- [ ] ⑤ ADR-000~023 与 L2-01~17 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
 - [ ] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、

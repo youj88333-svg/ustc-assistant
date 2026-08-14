@@ -192,8 +192,10 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
     作业处于 needs_user_login → 用户确认后 C2 向 C3 申请 → 注入同一 C1/Python 作业 →
     仅经原子 `takePassword()` 取即失效；同步与查询不得各自实现凭据旁路；
   - **账号维护独占权**（第三轮整改补漏）：
-    - 删除凭据：撤销未消费凭据租约，取消并等待可能消费凭据的来源作业后才交 C3 删除；
-    - 清会话：停止该账号来源作业，清除该账号在**全部已注册 Native/Python 通道**中的
+    - 删除凭据：撤销未消费凭据租约；对每个将取消的活跃来源先以 cancel 原因递增
+      sourceGeneration，再取消并等待可能消费凭据的来源作业，最后交 C3 删除；
+    - 清会话：对每个活跃来源先以 cancel 原因递增 sourceGeneration，再停止该账号来源
+      作业；清除该账号在**已安装 Native/Python 通道全集**中的
       会话分区（Native 经 C1/P；Python 经 P 注入的租户适配器），全部幂等完成后释放；
     - clearBusinessData：保持维护门关闭，拒绝新来源作业，取消并等待旧作业，递增全部相关
       sourceGeneration，并与 C4/C3 写屏障共同防止迟到重建；
@@ -202,9 +204,10 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
     随租户及两端口删除。
 - **不包含**：作业执行（C1/Python 通道）；导入落库（C3）；凭据仓库（C3 账号服务 +
   C0 保护端口）。
-- **对外接口预告**：`submitSourceJob(...)`、`sync(source, trigger)`、`syncAll`、
+- **对外接口预告**：`submitQuery(QueryRequest)`、`sync(source, trigger)`、`syncAll`、
   `firstLoginSync`、`reauthenticate`、`resumeInteractive`、`clearSession`（语义来源
-  02§3.2 的 SyncCoordinator 契约 + 第三轮仲裁语义）。
+  02§3.2 的 SyncCoordinator 契约 + 第三轮仲裁语义）；原始
+  `_submitSourceJob(SourceJobSpec)` 仅为 C2 内部助手，不是跨容器接口（09 L2-17）。
 
 ### 5.3 C3 导入与存储 ImportAndStorage
 
@@ -358,7 +361,8 @@ C1 仅经原子 `takePassword()` 取即失效（ADR-020）。
 
 ```
 外部（查二课/评课/校园）：
-  C4 外部工具 → C2 SourceJobGateway（取全局租约 + 租约戳，选择 Native/Python 通道）
+  C4 外部工具 → C2 SourceJobGateway.submitQuery(QueryRequest)（取全局租约 + 租约戳，
+    C2 组装 SourceJobSpec 并选择 Native/Python 通道）
     → C1 Native QueryJob 或 Python 租户 → 事件流（进度/needs_user_login/终态，ADR-005/016）
     → C2 接收终态并校验 SourceJobHandle.stamp（迟到结果拒绝）
     → C4 获得经安全校验的 QueryResult（信封校验 → 工具结果净化 → 入对话）
@@ -380,8 +384,9 @@ C1 仅经原子 `takePassword()` 取即失效（ADR-020）。
 ```
 0. C5 展示清单预览 + 双确认（CompleteResetCoordinator；UI 不持有状态机）
 1. C3 beginReset：持久 reset_pending + resetEpoch++ + 写屏障（除 finalization 外拒绝新写入）
-2. C2：拒绝新来源作业；取消全部 Native/Python 作业；等待全部终态；经 C3
-   SourceStateService 以 reset 原因递增该账号全部来源的 sourceGeneration
+2. C2：先 revoke 全部未消费凭据租约；终止可能消费凭据的作业，再 cancelAll 并等待
+   全部终态；经 C3 SourceStateService 以 reset 原因递增该账号全部来源的
+   sourceGeneration（内部取消不再以 cancel 重复递增）；拒绝新来源作业
 3. C4：拒绝新 run/工具/审批；取消当前模型流/工具调用/等待确认；等待可能写库的执行终态
 4. C2 按通道幂等清会话：Native WebView 分区（经 C1/P）；并存期 Python profile/session（经 P 租户适配器）
 5. C3 finalizeReset：单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据；清 reset_pending；
@@ -410,38 +415,47 @@ C1 仅经原子 `takePassword()` 取即失效（ADR-020）。
 
 ```
 C5 首登表单 → C2 firstLoginSync
+  → C2 JobArbiter 原子取得全局来源作业租约（同步 check-and-hold；busy 时尚未 stage，
+    无 provisional handle 可销毁）
   → C3 stageFirstLogin 返回 ProvisionalAuthContext（不透明句柄 + 仅内存预分配
     prospectiveAccountId + expectedUsername + 初始 generation/resetEpoch；不得落数据库/
     文件/日志，不创建 local_accounts/source_configs 行）
   → C2 以 ProvisionalSubject 申请一次性凭据租约，并用 prospectiveAccountId 组装
     LeaseStamp → SourceJobGateway 启动作业（CAS 交互登录 D03）
       ├─ needs_user_login → C5 确认 → C2 以同一 ProvisionalSubject 重申请含密码租约
-      └─ 成功 → SourceBundle 1.0 → 解码/schema/digest/来源/verifiedUsername 校验
-  → C2 把终态 bundleBytes + 原 LeaseStamp 交 C3 commitFirstLogin
-    （事务内复验 handle/stamp/verifiedUsername；**单事务**：创建预分配 accountId +
-    导入 Bundle + 凭据密文 + identityDigest + 置活动 + 审计；任一失败整体回滚）
+      └─ 成功 → CollectionCompleted{bundleBytes, verifiedUsername, selectedSemester}
+        （selectedSemester 为 C1 登录后按月份规则实际选中的完整三元组）
+  → C2 把 handle + 终态 bundleBytes/verifiedUsername/selectedSemester + 原 LeaseStamp
+    交 C3 commitFirstLogin（事务内复验 handle/stamp/verifiedUsername；**单事务**：创建
+    预分配 accountId + 写 source_configs 完整学期三元组 + 导入 Bundle + 凭据密文 +
+    以 verifiedUsername 内部计算 identityDigest + 置活动 + 审计；任一失败整体回滚）
   → 提交后广播 activeAccountChanged → C5 进入主界面
-失败路径：作业失败/校验失败/事务回滚 → 无活动账号、无凭据行、无来源业务数据；
-provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃并尽力零化。
+失败路径：stage 成功后的作业失败/用户取消/校验失败/事务回滚 →
+cancelFirstLogin(handle)；无活动账号、无凭据行、无来源业务数据；provisional 凭据仅经
+一次性租约供当前作业消费，失败时丢弃并尽力零化。取租约前 busy 直接返回，无 handle。
 ```
 
 ### 7.5 账号维护链路（重新认证/删凭据/清会话/清业务数据）
 
 ```
-重新认证：C5 → C2 reauthenticate(ReauthRequest) → C3 stageReauthentication 返回
+重新认证：C5 → C2 reauthenticate(ReauthRequest) → C2 JobArbiter 原子取得全局来源作业
+  租约（busy 时未 stage、无 handle）→ C3 stageReauthentication 返回
   ProvisionalAuthContext（prospectiveAccountId=既有 accountId；启动作业前校验输入
   username 的 digest == 现有 identityDigest）→ C2 以 ProvisionalSubject 申请租约并
   启动统一来源作业 → 成功返回 verifiedUsername + 原 LeaseStamp → C3 在事务内复验
   stamp 后再次校验 digest == 原 identityDigest：
   ├─ 匹配 → **仅更新凭据密文与元数据，identityDigest 保持不变**
-  └─ 不匹配 → account_mismatch/identity_mismatch；数据库 identityDigest/凭据/业务数据不变；
-       C2 先持久 quarantine 再清除本次作业使用的会话分区，清除失败则标记跨重启保留、
-       禁止复用并向 UI 报告
-删除凭据：C5 确认 → AccountMaintenanceCoordinator → C2 撤销未消费凭据租约、取消并等待
-  可能消费凭据的作业 → C3 deleteCredentials（删密文；保留账号与浏览器会话）→ 释放维护门
-清会话：C5 确认 → AccountMaintenanceCoordinator → C2 取得账号会话独占权并停止该账号
-  来源作业 → 清除该账号在**全部已注册 Native/Python 通道**中的会话分区（Native 经 C1/P；
-  Python 经 P 租户适配器）→ 全部幂等完成 → 释放独占权
+  └─ 不匹配 → account_mismatch/identity_mismatch；先
+       discardProvisionalAuth(handle)，数据库 identityDigest/凭据/业务数据不变；C2 再持久
+       quarantine 并清除本次作业使用的会话分区，清除失败则标记跨重启保留、禁止复用并
+       向 UI 报告
+删除凭据：C5 确认 → AccountMaintenanceCoordinator → C2 撤销未消费凭据租约；对受影响
+  来源先 bump(cancel)，再取消并等待可能消费凭据的作业 → C3 deleteCredentials
+  （删密文；保留账号与浏览器会话）→ 释放维护门
+清会话：C5 确认 → AccountMaintenanceCoordinator → C2 取得账号会话独占权；对活跃来源
+  先 bump(cancel)，再停止并等待该账号来源作业 → 清除该账号在**已安装 Native/Python
+  通道全集**中的会话分区（Native 经 C1/P；Python 经 P 租户适配器）→ 全部幂等完成 →
+  释放独占权
 清业务数据：C5 确认 → AccountMaintenanceCoordinator 先调 C3 `beginBusinessDataClear`
   拒新业务写并等待已进入的本地写事务终态 → 持有 C2/C4 维护独占门 → C2
   拒新来源作业、取消并等待旧作业、递增该账号全部来源的 sourceGeneration → C4
@@ -498,8 +512,8 @@ provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃�
   1. 同步进行时 Agent 查二课 → Agent 查询到达 C2、因全局来源作业租约占用明确 busy，不直连 C1、不启 Python 第二通道 ✅；
   2. 查询作业 needs_user_login → 原作业与租约保持，C2 用户确认后向 C3 取一次性凭据、恢复同一作业，C4 不读凭据、C1 不依赖 C3 ✅；
   3. Native/Python 切换旧作业迟到完成 → sourceGeneration 已变，C2/C3 拒绝，不导入/不更新目录/不进对话 ✅；
-  4. 首次登录导入失败 → commitFirstLogin 事务回滚，无活动账号/凭据行/来源业务数据，provisional 明文清理 ✅；
-  5. 重新认证登录成另一账号 → digest 不匹配 → account_mismatch；数据库 identityDigest/凭据/业务数据不变，受影响会话分区先持久 quarantine 再清除，清除失败跨重启禁止复用 ✅；
+  4. 首次登录 stage 后导入失败 → commitFirstLogin 事务回滚 + cancelFirstLogin(handle)，无活动账号/凭据行/来源业务数据，provisional 明文清理 ✅；
+  5. 重新认证登录成另一账号 → digest 不匹配 → account_mismatch；先 discardProvisionalAuth(handle)，数据库 identityDigest/凭据/业务数据不变，受影响会话分区先持久 quarantine 再清除，清除失败跨重启禁止复用 ✅；
   6. reset 期间 Agent 写工具迟到提交 → resetEpoch/写屏障拒绝，不在删除后重建数据 ✅；
   7. reset 清会话后数据库失败 → 事务回滚、状态 reset_incomplete_session_cleared；下次启动以强制门继续 finalization，失败保持屏障/恢复界面，不谎称恢复登录 ✅；
   8. 并存期 Python 查询运行时重置 → C2 定位/取消/等待 Python 作业，Python profile/session 与 Native 分区一并清理 ✅；

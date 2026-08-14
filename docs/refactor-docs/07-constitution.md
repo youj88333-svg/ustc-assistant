@@ -582,17 +582,19 @@
   作业失败或进程退出即丢弃。
   ② 重新认证：identityDigest **不可变**——仅首次建立或显式 schema 迁移可写；重新认证
   前后校验 digest 一致，只更新凭据密文与元数据；不匹配返回 account_mismatch/
-  identity_mismatch。若不匹配发生在浏览器认证之后，数据库身份/凭据/业务数据保持不变，
-  但受影响会话分区必须先写入持久 quarantine 标记，再由 C2 清除；清除失败时标记跨重启
-  保留并向 UI 报告，禁止复用。
+  identity_mismatch。若不匹配发生在浏览器认证之后，先幂等销毁 provisional handle；
+  数据库身份/凭据/业务数据保持不变，但受影响会话分区必须先写入持久 quarantine 标记，
+  再由 C2 清除；清除失败时标记跨重启保留并向 UI 报告，禁止复用。
   ③ completeReset：CompleteResetCoordinator（C5）编排 durable finalization——beginReset
-  （持久 reset_pending + resetEpoch++ + 写屏障）→ C2 拒新作业/取消并等待全部 Native/
-  Python 作业终态 → C4 拒新 run/工具/审批并等待 → C2 按通道幂等清会话 → C3 finalizeReset
+  （持久 reset_pending + resetEpoch++ + 写屏障）→ C2 撤销全部未消费凭据租约、终止并
+  cancelAll 等待全部 Native/Python 作业终态、以 reset 根 reason 逐来源递增 generation →
+  C4 拒新 run/工具/审批并等待 → C2 按通道幂等清会话 → C3 finalizeReset
   单事务删除 + 清 reset_pending + 广播空账号 → C5 回首登；所有完成事件/导入/Agent 写入
   携带 resetEpoch，过期即拒；启动检测 reset_pending 是**强制启动门**，恢复失败时保持写屏障
   并进入专用恢复界面，禁止正常路由/自动同步/Agent，不得按 best-effort 忽略。
-  ④ 其他账号维护：删除凭据先由 C2 撤销未消费凭据租约并终止可能消费凭据的作业；清会话
-  清除全部已注册 Native/Python 通道分区；clearBusinessData 由 C5 维护协调器先调用 C3
+  ④ 其他账号维护：删除凭据先由 C2 撤销未消费凭据租约，对受影响来源以 cancel reason
+  递增后终止可能消费凭据的作业；清会话同样先对活跃来源以 cancel reason 递增并等待作业
+  终态，再清除已安装 Native/Python 通道全集中的分区；clearBusinessData 由 C5 维护协调器先调用 C3
   `beginBusinessDataClear` 建立写屏障并等待已进入的本地写事务终态，再持有 C2/C4
   维护独占权，拒绝新作业/新写、取消并等待旧作业，递增相关 sourceGeneration 后由 C3
   单事务清理；提交或回滚后才解除屏障和维护门，防止本地并发写或迟到结果重建数据。
@@ -601,8 +603,10 @@
   initialResetEpoch}`；`commitFirstLogin` 接收并事务内复验原 `LeaseStamp` 后才创建预分配
   accountId。`commitReauthentication` 同样接收 stamp 并事务内复验，identityDigest
   不可变规则不变。首登/重认证 provisional 上下文增加**幂等销毁接口**
-  `cancelFirstLogin` / `discardProvisionalAuth`（busy、作业失败、用户取消、进程退出
-  时调用，临时明文尽力零化）。
+  `cancelFirstLogin` / `discardProvisionalAuth`（仅在 stage 成功、handle 已存在后，遇
+  作业失败、用户取消、身份/提交校验失败或进程退出时调用，临时明文尽力零化）；
+  JobArbiter 在 stage 前原子取得，取得失败的 busy 路径没有 provisional handle，因而
+  不调用销毁接口（L2-17 收口）。
 - 后果：正面——账号生命周期的提交、认证、重置与清理竞态统一闭合，用户主权（重置可完成）与隐私（会话真清）
   有机械保障；负面——① C3 事务接口比旧房复杂；② ImportService 需拆出不对外暴露的
   事务内核心供 normal/首登两条入口复用；③ completeReset 需少量持久维护状态；④ C2/C4 需维护独占门，P 需承载
