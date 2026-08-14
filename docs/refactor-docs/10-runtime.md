@@ -1,6 +1,6 @@
 # 10 运行时链路走查（六层阶梯 · 第 3 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**整改复审修订版（回写 09 L2-17，待独立复审重认 gate）**
+> 产出日期：2026-08-14 ｜ 状态：**第 3 层已关闭（2026-08-14，用户重认；首轮审查 8A/3B + 复审 4A/3B 全部闭环）**
 > ｜ 依据：`09-contracts.md`（CT-C0-01~CT-T-04 共 65 条冻结签名，L2-01~17）、
 > `08-target-architecture.md` §7 五链路容器级走查、`07-constitution.md`
 > （ADR-000~023 + 修订注）、01–06 模块文档（main 代码为准）
@@ -494,21 +494,21 @@ deliver:  campus_search → QueryCompleted{result, attachmentRegistrations=[]} �
 |---|---|---|---|
 | L3-01 | 走查回写 09 §5.2 | `JwCollectionRequest.semester` 改 nullable：null=首登无持久选择（登录后抓列表+月份规则默认，ADR-009），非 null=持久选择 | ✅ 已回写 |
 | L3-02 | 首轮独立审查整改（2026-08-14，8A/3B） | A-1 submitQuery 入口 / A-2 附件载荷载体（QueryCompleted.attachmentRegistrations）/ A-3 原子取租约 / A-4 取消 bump(cancel) 与计数规则 / A-5 暂停保持 running + 提醒协调顺序 + 终态映射 / A-6 selectedSemester 返回链 + identityDigest 内部计算 / A-7 discardProvisionalAuth + completeReset revoke 顺序 / A-8 补码补号补 CT 标注；B-1 L2-01~16 / B-2 takePassword 绑定 / B-3 trigger 分支 | ✅ 已落地（回写 09 L2-16） |
-| L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17，待独立复审） |
+| L3-03 | 整改后复审修订（2026-08-14，4A/3B） | QueryRequest/AttachmentCacheRegistration 类型闭合；C4 唯一 submitQuery；附件列表非 null、campus 两分支均 CT-C3-22；stage 前 busy 无 handle；identity_mismatch 销毁；08 首登/reset 顺序；维护取消 reason；digest 操作数与 gate CT 清单对齐 | ✅ 已落地（回写 09 L2-17；2026-08-14 用户重认，gate 关闭） |
 
 ## 12. 第 3 层 gate 检查表
 
-- [ ] ① 五条链路（§3/§4/§5/§6/§7）序列图走通，每条消息标注 CT 编号、每分支有去向
-- [ ] ② 五条数据管道（§8）fetch→normalize→validate→deliver 四工位闭合
-- [ ] ③ §9 边界情形 16 行去向非空且为当前出口（不借"归第 4 层"逃逸）
-- [ ] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
+- [x] ① 五条链路（§3/§4/§5/§6/§7）序列图走通，每条消息标注 CT 编号、每分支有去向
+- [x] ② 五条数据管道（§8）fetch→normalize→validate→deliver 四工位闭合
+- [x] ③ §9 边界情形 16 行去向非空且为当前出口（不借"归第 4 层"逃逸）
+- [x] ④ 本层引用的 CT 编号（CT-C0-01/03/05、CT-C1-01~05、CT-C2-01~08、
       CT-C3-02~07/15/18/20/21/22、CT-C4-03/04/05、CT-C5-01/02、CT-P-02/07、
-      CT-T-01/02）全部在
-      09 §11 矩阵中存在
-- [ ] ⑤ ADR-000~023 与 L2-01~17 决策在本层消息中全部可溯源（原子取租约/取消递增/
+      CT-T-01/02）全部在 09 §11 矩阵中存在
+- [x] ⑤ ADR-000~023 与 L2-01~17 决策在本层消息中全部可溯源（原子取租约/取消递增/
       takePassword/selectedSemester 返回链/discardProvisionalAuth/全通道清会话/
       封闭 QueryResult）
-- [ ] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
+- [x] ⑥ 与 08 §7 容器级走查一致（无容器越权调用：C4 不直连 C1、C1 不依赖 C3、
       写库唯一 C3、C2 核心无 dart:io）
-- [ ] 开放问题移交（§10）逐项有承接层，且每项已给出"当前出口"
-- [ ] **gate 关闭条件**：独立复审通过 → 进入第 4 层 `11-component-designs.md`
+- [x] 开放问题移交（§10）逐项有承接层，且每项已给出"当前出口"
+- [x] **gate 关闭（2026-08-14，用户重认）**：首轮 8A/3B + 复审 4A/3B 全部闭环，
+  09 回写 L2-15/16/17 → 进入第 4 层 `11-component-designs.md`
