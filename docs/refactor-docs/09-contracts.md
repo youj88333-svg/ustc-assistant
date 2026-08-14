@@ -1,6 +1,6 @@
 # 09 全局契约（六层阶梯 · 第 2 层）
 
-> 产出日期：2026-08-14 ｜ 状态：**整改中——独立审查（基线 bf00aa9）14A/9B/2C 已全部整改落地，待用户确认 A-10/B-6/v8#7 后重认 gate**
+> 产出日期：2026-08-14 ｜ 状态：**第 2 层已关闭（2026-08-14；L2-01~12 逐项拍板 + 独立审查整改 14A/9B/2C 落地 + A-10/B-6/v8#7 用户确认）**
 > ｜ 依据：`07-constitution.md`（§2.5 移交登记、ADR-000~023、D32–D37）、
 > `08-target-architecture.md`（§5 各容器对外接口预告、§7 五链路、§9 移交映射）、
 > 01–06 模块文档与 main 代码（签名与字段以代码为准，已逐项核实）
@@ -599,6 +599,8 @@ credential_accounts / source_configs / agent_settings / agent_secrets /
 agent_permission_policies / Agent 历史与 action_logs（审计不清）。
 **campus 三表（v8 #1）不随 clearBusinessData 清除**——公开信息缓存非个人业务
 数据，归 clearCache 与 completeReset（级联）管。
+（与红线 2.2-2 的关系：见 07 §2.2-2 解释注——用户确认的破坏性维护属 2.1-5
+完全清除，A-10 拍板 2026-08-14。）
 C2/C4 维护门配合（08 §7.5）：任何取消/等待失败均不得开始清理事务。
 
 ### 7.5 服务层六子域与写服务统一契约（ADR-017）
@@ -936,4 +938,4 @@ Future<WriteOutcome> resolveAndCommit(WriteProposalId id, ConfirmationDecision d
 - [x] ⑤ D32/D33/D34/D35/D37 契约面落地——§6.5/§7.2/§7.7/§8.6/§13（L2-01~05 全部拍板；D35 已落 CT-C3-19，A-13 整改）
 - [x] ⑥ 依赖铁律复核——§5.2 C1 不依赖 C3、§8.4 C4 不直连 C1、§10 C2 核心无 dart:io、C3→P 运行时边已登记（08 §4，B-7 整改）
 - [x] ⑦ 独立审查整改闭环——14A/9B/2C 全部落地（A-1 时间例外 / A-2 类型化作业载荷 / A-3 数据形状 / A-4 takePassword / A-5 重认证签名 / A-6 单一事务所有者 / A-7 generation 权威归 C3 / A-8 sync_runs 单权威 / A-9 reset 三值 / A-11 通道全集 / A-12 L2-02 残留清零 / A-13 D35 落契 / A-14 六子域恢复 / B-1~B-9 / C-1~C-2）
-- [ ] **gate 重认条件（待用户确认）**：A-10 红线解释（clearBusinessData 的用户主权例外）、B-6 白名单增 `www.teach.ustc.edu.cn`、v8 #7（`source_configs.source_generation` 加列）→ 确认后重认关闭，进入第 3 层 `10-runtime.md`
+- [x] **gate 重认关闭（2026-08-14）**：A-10（07 §2.2-2 解释注：应用自动行为 vs 用户确认维护的分工）/ B-6（七主机精确匹配，补 `www.teach.ustc.edu.cn`）/ v8 #7（`source_configs.source_generation` 加列，generation 权威归 C3）三项经用户确认 → 进入第 3 层 `10-runtime.md`
