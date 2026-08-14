@@ -262,8 +262,9 @@
   Native 侧会话资源互斥**。
 - **第三/四轮整改修订（2026-08-12/14）**：C2 为**全部来源作业唯一仲裁者**（JobArbiter），
   C4 不再直连 C1；所有作业携带租约戳 {jobId, accountId, source, channelKind,
-  sourceGeneration, resetEpoch}；sourceGeneration 在 Native/Python 切换、取消或重置时
-  递增，C3 导入/写入前校验租约戳仍属当前账号与当前 generation/resetEpoch，迟到结果返回
+  sourceGeneration, resetEpoch}；sourceGeneration 递增原因全集 = **通道切换、取消、
+  completeReset、clearBusinessData** 四类，C3 导入/写入前校验租约戳仍属当前账号与
+  当前 generation/resetEpoch，迟到结果返回
   稳定错误、不得写库。并存期 Python 进程与认证回环传输只经 P 提供的
   `PythonProcessPort`/`LoopbackBridgeTransportPort` 注入 C2；C2 核心不直接持有 `dart:io`
   或 HTTP 客户端，M7 随 Python 租户删除两端口。参考 Kubernetes Lease + resourceVersion
@@ -275,6 +276,11 @@
 - **L2 审查整改修订（2026-08-14）**：sourceGeneration 权威归 **C3 同步状态服务**
   （落 `source_configs.source_generation`，09 v8 #7），C2 经 C3 递增后组装入租约戳，
   C3 导入/写入事务内与库内值比对——消灭"预检-提交"之间的 TOCTOU（09 §2.3/§7.3）。
+- **L2 复审收口修订（2026-08-14，用户批准）**：租约戳须由 C2 经
+  `SourceJobHandle.stamp` 显式交接，不得靠 jobId 或调用方上下文猜测；C2 在终态交接前
+  校验，C3 对 normal 导入、首登提交、重新认证提交、campus 目录提交四类来源派生写
+  均在事务内复验。C3 以 `SourceStateService` 暴露 generation 原子递增与 sync run
+  账本，C2 不直接写 `source_configs`/`sync_runs`（09 CT-C3-21）。
 
 ### ADR-005：作业进度采用进程内事件流（safeCount + 八相位照搬 + 热流可重放）
 
@@ -310,7 +316,10 @@
   资产连续性）要求单数据家。
 - 选项：A 目录条目并入 SQLite（节流/过期/降级语义原样保留；附件缓存仍留磁盘）；B 保留
   库外 JSON 文件。
-- 决策：A。schema v8 变更集新增目录相关表（与 D10 联动，迁移线测试覆盖）。
+- 决策：A。schema v8 变更集新增目录相关表（与 D10 联动，迁移线测试覆盖）。目录条目
+  身份精确复用旧房算法：`'campus_' + sha256(utf8('$source\0$canonicalUrl'))` 的小写
+  十六进制前 24 位（URL 先 canonicalize）；观察时间只用 `first_observed_at` /
+  `last_observed_at`，不增设语义重叠的 `updated_at`。
 - 后果：正面——备份/迁移/completeReset 一体不遗漏，Agent 访问路径统一；负面——v8
   新增表的迁移线测试责任增大（D10 承接）。
 
@@ -365,7 +374,7 @@
   最终清单在 `09-contracts.md` 冻结，冻结后新增变更须开 ADR 修正。
 - 后果：正面——数据资产连续性有机械保障；负面——琐碎变更（索引、版本常量）也要走
   全套迁移测试，纪律成本换确定性。
-- **L2 审查整改修订（2026-08-14）**：清单在 09 §7.2 冻结六项后，审查整改增补
+- **L2 审查整改修订（2026-08-14）**：清单在 09 §7.2 最终冻结为七项，其中审查整改增补
   **#7 `source_configs.source_generation`（加列）** 并修订 #6（reset_pending 三值
   编码 0/1/2，见 09 §7.4）——按本 ADR 修正流程记录，冻结后一切新增变更均照此办理。
 
@@ -443,6 +452,11 @@
 - **第三轮整改修订（2026-08-12）**：QueryJob 不再由 C4 直连 C1 创建，改由 **C2 统一
   仲裁网关（SourceJobGateway）**创建/持有/收尾；C4 经 C2 提交查询、获得经安全校验的
   QueryResult。ADR-004 的租约戳与迟到拒绝语义适用于查询作业。
+- **L2 复审收口修订（2026-08-14，用户批准）**：目标态只保留一个 canonical
+  QueryResult 1.0，不设 Python/Native 双版本；M2–M6 PythonChannel 在 C2 边界逐字段
+  转换 legacy 结果，转换后仍按封闭字段集 fail-closed。iCourse 只暴露确定性
+  `selectedEvidence→evidence`，完整 `reviews` 不进入 canonical 信封；其余逐类型字段与
+  legacy 映射见 09 CT-C1-04。
 
 ### ADR-017：Agent 数据面保持"聚合根级服务 + 应用层门面"，不引入统一仓库层
 
@@ -513,6 +527,11 @@
   作业 → 一次读取即失效；同步与查询**不得各自实现凭据旁路**。
 - 后果：正面——依赖铁律不破、凭据存活面最小；负面——C2 增加租约申请/失效状态
   （签名由 09-contracts 冻结）。
+- **L2 复审收口修订（2026-08-14，用户批准）**：租约主体显式建模为
+  `CredentialSubject = StoredAccountSubject | ProvisionalSubject`。首登/重认证 staged
+  凭据以不透明 `ProvisionalHandle` 申请租约；首登只在 C3 内存预分配 accountId，不提前
+  写 local_accounts/source_configs。两类主体共用 `takePassword()` 取即失效与 revoke
+  语义（09 §6.3）。
 
 ### ADR-021：目标态移除文件导入路径（L1-02 补记，审查 D-2 要求补 ADR 四要素）
 
@@ -553,9 +572,10 @@
   窗口；C 每次操作各自编排且不共享隔离语义。
 - 决策：A。
   ① 首次登录：C3 `commitFirstLogin` 单事务完成"绑定/创建账号 + 导入 SourceBundle +
-  凭据密文 + identityDigest + 置活动 + 审计"，任一失败整体回滚；ImportService 双模式守卫
-  （正常同步：activeAccountId==租约 accountId；首登提交：provisional/verifiedUsername/
-  jobId/generation 一致）。首登 provisional 上下文只存在进程内存，以不透明句柄引用，
+  凭据密文 + identityDigest + 置活动 + 审计"，任一失败整体回滚；ImportService 跨容器
+  公共入口仅支持 normal，首登由 commitFirstLogin 复用 C3 私有事务内导入核心；两者分别
+  校验 activeAccountId 或 provisional/verifiedUsername/jobId/generation。首登 provisional
+  上下文只存在进程内存，以不透明句柄引用，
   不得写数据库/文件/日志；凭据仅经一次性租约交给当前作业，使用后尽力零化，
   作业失败或进程退出即丢弃。
   ② 重新认证：identityDigest **不可变**——仅首次建立或显式 schema 迁移可写；重新认证
@@ -574,9 +594,14 @@
   `beginBusinessDataClear` 建立写屏障并等待已进入的本地写事务终态，再持有 C2/C4
   维护独占权，拒绝新作业/新写、取消并等待旧作业，递增相关 sourceGeneration 后由 C3
   单事务清理；提交或回滚后才解除屏障和维护门，防止本地并发写或迟到结果重建数据。
+- **L2 复审收口修订（2026-08-14，用户批准）**：`stageFirstLogin` 返回仅内存的
+  `ProvisionalAuthContext{handle, prospectiveAccountId, expectedUsername, initialSourceGeneration,
+  initialResetEpoch}`；`commitFirstLogin` 接收并事务内复验原 `LeaseStamp` 后才创建预分配
+  accountId。`commitReauthentication` 同样接收 stamp 并事务内复验，identityDigest
+  不可变规则不变。
 - 后果：正面——账号生命周期的提交、认证、重置与清理竞态统一闭合，用户主权（重置可完成）与隐私（会话真清）
-  有机械保障；负面——① C3 事务接口比旧房复杂；② ImportService 需支持外部事务上下文或
-  拆出事务内核心；③ completeReset 需少量持久维护状态；④ C2/C4 需维护独占门，P 需承载
+  有机械保障；负面——① C3 事务接口比旧房复杂；② ImportService 需拆出不对外暴露的
+  事务内核心供 normal/首登两条入口复用；③ completeReset 需少量持久维护状态；④ C2/C4 需维护独占门，P 需承载
   并存期进程/回环适配；⑤ 组合级故障注入测试成本增加。
   缓解：全部负面计入 M1/M5 工作量与测试清单，不推迟到第 2 层之外。
 

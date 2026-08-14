@@ -11,7 +11,8 @@
 - ASCII 图任何 Markdown 查看器可读；`mermaid` 代码块在 VS Code（Markdown Preview
   Mermaid Support 插件）/ GitHub / Typora 渲染。
 - v7 与 v8 下这两张表形状**完全相同**（v8 只动 campus 三表/undo_slot/action_logs/
-  agent_settings/local_accounts，见 09 §7.2），故本图对 M1（v8）同样有效。
+  agent_settings/agent_permission_policies/local_accounts/source_configs，见 09 §7.2），
+  故本图对 M1（v8）同样有效。
 
 ## 2. calendar_events 字段卡（按职责分组）
 
@@ -224,7 +225,7 @@ SourceBundle（完整快照，非增量）→ import_batches（幂等：bundleId
     user_overlays.hidden 本地隐藏
 ```
 
-## 12. Mermaid ER 总图（供支持渲染的查看器）
+## 12. 日程与任务 ER 子图（供支持 Mermaid 渲染的查看器）
 
 ```mermaid
 erDiagram

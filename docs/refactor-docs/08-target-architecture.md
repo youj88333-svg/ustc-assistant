@@ -69,7 +69,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 │        │                        │ deliver 产物（经 C2 交接，不直连 C3）      │
 │        │                        ▼                                           │
 │        └──────────────► C3 导入与存储 ImportAndStorage                       │
-│                           ImportService（双模式守卫/幂等/事务/提醒协调）       │
+│                           ImportService（公共 normal-only/幂等/事务/提醒）   │
 │                           commitFirstLogin（单事务）/ beginReset·finalizeReset│
 │                           v7 基线 27 表 + v8 变更集（ADR-011）+ 迁移器         │
 │                           聚合根级服务（六子域：Identity/Schedule/Task/       │
@@ -98,7 +98,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 | C0 SharedCore | 时间/安全端口/工具，纯 Dart | `core/` | ADR-015 |
 | C1 SourceEngine | 采集/查询执行：会话卡槽、事件流、五适配器、附件转换（不持全局作业权威） | Python `common/`+`sources/`+`bridge/jobs` 语义 | ADR-001~005、009 |
 | C2 SourceOrchestration | **全部来源作业唯一仲裁**：SourceJobGateway、租约戳、通道注册表、凭据租约、并存期 Python 进程 | `features/sync`（Bridge 相关部分删除） | ADR-004、008、013、016 修订、020、023 |
-| C3 ImportAndStorage | 导入流水线（双模式守卫）+ commitFirstLogin + reset 持久状态 + v7 基线 27 表 + 全部业务服务 | `features/import` + `core/database` + 各 feature 的 domain/application | ADR-006~012、017、023 |
+| C3 ImportAndStorage | 导入流水线（公共 normal-only + 私有事务内核心）+ commitFirstLogin + reset 持久状态 + v7 基线 27 表 + 全部业务服务 | `features/import` + `core/database` + 各 feature 的 domain/application | ADR-006~012、017、023 |
 | C4 AgentHarness | 推理循环 + 工具 + 审批门 + 查询/写网关（外部查询经 C2） | `features/agent`（Windows 适配替换） | ADR-016~018 |
 | C5 AppShell | 路由/页面/装配/账号维护与 CompleteReset 跨容器协调/设置 | `app/` + 各 presentation + `features/settings` | ADR-013、023 |
 | P PlatformAdapters | WebView/安全存储/通知/launcher/文件与 decoder 实现；并存期 Python 进程/回环传输 | 现状 Windows 实现 | 红线 2.2-8、ADR-004 修订 |
@@ -212,12 +212,16 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
   事务（commitFirstLogin / beginReset / finalizeReset）
   （QueryResult 除 campus 目录经目录服务 upsert 外不落库）。
 - **包含**：
-  - `ImportService`（解码→语义校验→幂等→单事务→提醒协调；**双模式守卫**（ADR-023）：
-    正常同步 = activeAccountId==租约 accountId；首次登录提交 = provisional/verifiedUsername/
-    jobId/generation 一致——写前校验租约戳，迟到结果稳定拒绝）；
+  - `ImportService`（解码→语义校验→幂等→单事务→提醒协调）：跨容器公共入口
+    **normal-only**（activeAccountId==租约 accountId）；首登不暴露第二个公共 mode，
+    `commitFirstLogin` 只复用 C3 私有事务内导入核心。两条入口均写前校验原 LeaseStamp，
+    迟到结果稳定拒绝；
   - **`commitFirstLogin`**（ADR-023，单事务）：绑定/创建账号 + 导入 SourceBundle +
     凭据密文 + identityDigest + 置活动 + 审计，任一失败整体回滚；事务提交后才广播
     activeAccountChanged；
+  - **`SourceStateService`**（09 CT-C3-21）：C2 读写 sourceGeneration 与 sync run
+    生命周期的唯一 C3 端口；generation 递增原因全集 = 通道切换/取消/completeReset/
+    clearBusinessData，C2 不直接写 `source_configs`/`sync_runs`；
   - **reset 持久状态**（ADR-023）：`beginReset`（持久 reset_pending + resetEpoch++ +
     写屏障，拒绝新业务写入）→ 等待 C2/C4 全部作业终态与会话清理 → `finalizeReset`
     （单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据 + 清 reset_pending + 广播空账号，
@@ -227,7 +231,8 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
     只允许清理事务写入，事务提交或回滚后才解除。该操作只涉及单库事务，不新增
     reset_pending；崩溃前未提交则回滚，已提交则数据已清除；
   - v7 基线 27 表 + schema v8 变更集（campus 目录表族、删 undo_slot.expires_at、action_logs
-    索引、prompt 版本统一、agent_permission_policies.expires_at 删除 D34；
+    索引、prompt 版本统一、agent_permission_policies.expires_at 删除 D34、
+    local_accounts reset 持久列、source_configs.source_generation；
     migration-only + 迁移测试，ADR-011）+ `v7→v8 迁移器`
     （唯一搬家路径，ADR-012；**迁移前自动备份 v7 库副本、失败可回滚**——红线 2.2-7 承接）；
   - 聚合根级服务（六子域）：Identity（账号/凭据/identityDigest——**重新认证不可变，
@@ -240,7 +245,7 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
   - 学期三元组持久化（`sourceConfigs.configJson`，ADR-009）。
 - **不包含**：任何采集/网络（C1 专属）；附件下载与内容转换（C1/P）；UI（C5）；
   Agent 推理（C4）。
-- **v8 候选变更累积表**（历史记账；已由第 2 层 `09-contracts.md` §7.2 冻结六项 + 整改增 #7，2026-08-14）：
+- **v8 候选变更累积表**（历史记账；已由第 2 层 `09-contracts.md` §7.2 冻结七项，2026-08-14）：
 
 | # | 变更 | 来源决策 | 类型 |
 |---|---|---|---|
@@ -250,9 +255,11 @@ Python 租户及带认证的本机回环 Bridge 通信；它不是学校/互联�
 | 4 | Agent prompt 版本三处统一（表默认 2 / 常量 3 / 实际 v8） | D10 / 06§10-2 | 数据修复 |
 | 5 | `agent_permission_policies.expires_at` 删除（第 2 层 L2-02 拍板：死列删除，"此类型以后不再确认"=永久） | D34 | 删列 |
 | 6 | reset 持久状态（reset_pending/resetEpoch）落库形态 | ADR-023 | 加列/行 |
+| 7 | `source_configs.source_generation` 持久化 | ADR-004/011 | 加列 |
 
 - **对外接口预告**：服务级读接口（EffectiveEventRepository/ConflictService/…）、
-  `ImportService.importBytes`、`commitFirstLogin`、`beginReset`/`finalizeReset`、
+  `ImportService.importBundle`（normal-only）、`commitFirstLogin`、
+  `SourceStateService`、`beginReset`/`finalizeReset`、
   写服务（乐观锁 + 事务 + 审计 + Undo 快照同事务）。
 
 ### 5.4 C4 Agent harness
@@ -340,8 +347,9 @@ C5 触发（启动自动/同步页）
       ├─ 会话过期 → needs_user_login（事件流）→ C5 弹确认 → C2 凭据一次性租约
       │            → 恢复同一作业（ADR-003/020）
       └─ 成功 → normalize → validate → deliver SourceBundle 1.0（经 C2 交接）
-  → C3 ImportService（租约戳校验→解码→幂等→单事务落库→提醒协调）
-  → C2 状态落库（syncRuns/sourceConfigs）→ C5 页面 drift 流自动刷新
+  → C3 ImportService.importBundle（normal-only；租约戳事务内复验→解码→幂等→
+    单事务落库→提醒协调）
+  → C2 经 C3 SourceStateService 收尾（syncRuns/sourceConfigs）→ C5 页面 drift 流自动刷新
 ```
 无重叠无缺口：仲裁归 C2、执行归 C1、落库归 C3、展示归 C5；凭据只在 C2 租约内流动，
 C1 一次读取即失效（ADR-020）。
@@ -352,12 +360,14 @@ C1 一次读取即失效（ADR-020）。
 外部（查二课/评课/校园）：
   C4 外部工具 → C2 SourceJobGateway（取全局租约 + 租约戳，选择 Native/Python 通道）
     → C1 Native QueryJob 或 Python 租户 → 事件流（进度/needs_user_login/终态，ADR-005/016）
-    → C2 接收终态并校验租约戳（迟到结果拒绝）
+    → C2 接收终态并校验 SourceJobHandle.stamp（迟到结果拒绝）
     → C4 获得经安全校验的 QueryResult（信封校验 → 工具结果净化 → 入对话）
   campus 目录刷新：C4 工具 → C3 目录服务判 freshness（30min 节流/6h 过期，ADR-007）
     ├─ 无需刷新 → C3 本地搜索 → 信封校验 → 入对话
-    └─ 需刷新 → C4 → C2 → C1/Python 抓取规范化 → 结果经 C2 交还 C4 → C4 → C3 目录服务
-        upsert → C3 本地搜索 → 入对话（刷新失败且目录缺失 → catalog_unavailable 明确报错）
+    └─ 需刷新 → C4 → C2 → C1/Python 抓取规范化 → 结果经 C2 按 handle.stamp 校验并
+        交还 C4 → C4 将原 stamp + canonical 结果 + C1 附件登记载荷交 C3
+        `commitCatalogSource` → C3 事务内复验后 upsert → 本地搜索 → 入对话（刷新
+        失败且目录缺失 → catalog_unavailable 明确报错）
 本地（读课表/任务、写日程）：
   C4 工具 → AgentLocalDataGateway（应用层门面）→ C3 各聚合根服务
   写路径 → AgentWriteGateway → C3 写服务（业务+审计+确认日志同事务；resetEpoch 校验）
@@ -370,7 +380,8 @@ C1 一次读取即失效（ADR-020）。
 ```
 0. C5 展示清单预览 + 双确认（CompleteResetCoordinator；UI 不持有状态机）
 1. C3 beginReset：持久 reset_pending + resetEpoch++ + 写屏障（除 finalization 外拒绝新写入）
-2. C2：拒绝新来源作业；取消全部 Native/Python 作业；等待全部终态
+2. C2：拒绝新来源作业；取消全部 Native/Python 作业；等待全部终态；经 C3
+   SourceStateService 以 reset 原因递增该账号全部来源的 sourceGeneration
 3. C4：拒绝新 run/工具/审批；取消当前模型流/工具调用/等待确认；等待可能写库的执行终态
 4. C2 按通道幂等清会话：Native WebView 分区（经 C1/P）；并存期 Python profile/session（经 P 租户适配器）
 5. C3 finalizeReset：单事务删除账号/凭据/业务/Agent 历史/审计/撤回数据；清 reset_pending；
@@ -399,13 +410,16 @@ C1 一次读取即失效（ADR-020）。
 
 ```
 C5 首登表单 → C2 firstLoginSync
-  → C3 stageFirstLogin（provisional binding：仅进程内存不透明句柄，不得落数据库/
-    文件/日志；不创建活动账号、不提前落业务数据）
-  → C2 SourceJobGateway 启动作业（含 expectedUsername；CAS 交互登录 D03）
-      ├─ needs_user_login → C5 确认 → C2 一次性凭据租约（ADR-020）
+  → C3 stageFirstLogin 返回 ProvisionalAuthContext（不透明句柄 + 仅内存预分配
+    prospectiveAccountId + expectedUsername + 初始 generation/resetEpoch；不得落数据库/
+    文件/日志，不创建 local_accounts/source_configs 行）
+  → C2 以 ProvisionalSubject 申请一次性凭据租约，并用 prospectiveAccountId 组装
+    LeaseStamp → SourceJobGateway 启动作业（CAS 交互登录 D03）
+      ├─ needs_user_login → C5 确认 → C2 以同一 ProvisionalSubject 重申请含密码租约
       └─ 成功 → SourceBundle 1.0 → 解码/schema/digest/来源/verifiedUsername 校验
-  → C3 commitFirstLogin（**单事务**：绑定/创建 accountId + 导入 Bundle + 凭据密文 +
-    identityDigest + 置活动 + 审计；任一失败整体回滚）
+  → C2 把终态 bundleBytes + 原 LeaseStamp 交 C3 commitFirstLogin
+    （事务内复验 handle/stamp/verifiedUsername；**单事务**：创建预分配 accountId +
+    导入 Bundle + 凭据密文 + identityDigest + 置活动 + 审计；任一失败整体回滚）
   → 提交后广播 activeAccountChanged → C5 进入主界面
 失败路径：作业失败/校验失败/事务回滚 → 无活动账号、无凭据行、无来源业务数据；
 provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃并尽力零化。
@@ -414,9 +428,11 @@ provisional 凭据仅经一次性租约供当前作业消费，失败时丢弃�
 ### 7.5 账号维护链路（重新认证/删凭据/清会话/清业务数据）
 
 ```
-重新认证：C5 → C2 reauthenticate(accountId) → C3 stageReauthentication（启动作业前校验
-  输入 username 的 digest == 现有 identityDigest）→ C2 统一来源作业 → 成功返回
-  verifiedUsername → C3 再次校验 digest == 原 identityDigest：
+重新认证：C5 → C2 reauthenticate(ReauthRequest) → C3 stageReauthentication 返回
+  ProvisionalAuthContext（prospectiveAccountId=既有 accountId；启动作业前校验输入
+  username 的 digest == 现有 identityDigest）→ C2 以 ProvisionalSubject 申请租约并
+  启动统一来源作业 → 成功返回 verifiedUsername + 原 LeaseStamp → C3 在事务内复验
+  stamp 后再次校验 digest == 原 identityDigest：
   ├─ 匹配 → **仅更新凭据密文与元数据，identityDigest 保持不变**
   └─ 不匹配 → account_mismatch/identity_mismatch；数据库 identityDigest/凭据/业务数据不变；
        C2 先持久 quarantine 再清除本次作业使用的会话分区，清除失败则标记跨重启保留、
