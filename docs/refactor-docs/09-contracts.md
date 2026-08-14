@@ -532,6 +532,9 @@ C2/C4 维护门配合（08 §7.5）：任何取消/等待失败均不得开始�
 
 ### 7.6 数据模型契约（07 §2.5 移交项汇总）
 
+> 配套可视化（calendar_events × tasks 字段与交叉逻辑）：`09a-data-model-visual.md`
+> （派生图；权威仍为本节 + 03 §4.2）。
+
 - **CT-C3-08** 学校来源稳定外部身份 upsert【冻结】：
   `UNIQUE(account_id, source, external_id)`；course_series/calendar_events 同规则；
   本地 id 复导时复用（03 §3.1 预分配语义）。
