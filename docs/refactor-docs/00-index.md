@@ -8,6 +8,20 @@
 目标态迁移总览。模块文档全部以 main 分支实际代码为准；`docs/architecture.md` 与
 `docs/schedule-data-model.md` 仅作待验证线索，未采纳其结论。
 
+## 0. 设计阶梯与施工文档入口（07–15）
+
+| 编号 | 文档 | 一句话摘要 |
+|------|------|-----------|
+| 07 | [07-constitution.md](07-constitution.md) | 红线/产品不变量/过程红线 + ADR 日志（Layer 0） |
+| 08 | [08-target-architecture.md](08-target-architecture.md) | 容器切分、依赖方向、技术选型（Layer 1） |
+| 09 | [09-contracts.md](09-contracts.md) | 跨容器接口契约矩阵 + 错误码/类型词汇表（Layer 2） |
+| 10 | [10-runtime.md](10-runtime.md) | 三条 E2E 链路 + 各来源管道走查（Layer 3） |
+| 11 | [11-component-designs.md](11-component-designs.md) | 容器内组件状态机全集（Layer 4） |
+| 12 | [12-cross-cutting.md](12-cross-cutting.md) | 时区/隐私/账号隔离/事务/审计/可观测（Layer 5） |
+| 13 | [13-risks-and-acceptance.md](13-risks-and-acceptance.md) | 风险登记册 R-01~R-20 + 验收（Layer 6） |
+| 14 | [14-overall-review.md](14-overall-review.md) | 总体审查报告与设计冻结 go/no-go 裁决 |
+| 15 | [15-construction-methodology.md](15-construction-methodology.md) | 施工方法论：Walking Skeleton/竖切/契约先行/绞杀榕开关/每切 DoD |
+
 ## 1. 模块文档清单
 
 | 编号 | 文档 | 一句话摘要 |

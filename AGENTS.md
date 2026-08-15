@@ -204,8 +204,9 @@ source service
   `README.md`。历史
   plan 中未勾选的复选框不代表代码未实现，以代码、测试和当前状态文档为准。
 - 整体重构相关工作：先读 `docs/refactor-docs/00-index.md` 与 01–06 模块文档，
-  再按"整体重构与正式版路线"一节的六层阶梯顺序产出 07–13 号设计文档；重构代码
-  一律进 `rewrite/flutter-native` 分支（main 冻结期只接受致命 bug 修复）。
+  再按"整体重构与正式版路线"一节的六层阶梯顺序产出 07–13 号设计文档；14 为总体
+  审查报告、15 为施工方法论（M0 起施工前必读）；重构代码一律进
+  `rewrite/flutter-native` 分支（main 冻结期只接受致命 bug 修复）。
 - Flutter 日程和 App 修改：先读
   `docs/superpowers/specs/2026-07-26-first-windows-milestone-closure-design.md`
   掌握首版总边界，再读 `schedule-data-model.md` 和 App Shell、Auth/Sync、Task、
@@ -354,7 +355,7 @@ tasks→implement）、arc42 结构、C4 分层纪律、ADR 决策记录、单�
 
 | 里程碑 | 内容 | gate |
 |---|---|---|
-| M0 骨架 | 按 0–2 层建分层空工程、CI | analyze/test/build 跑通 |
+| M0 骨架 | 按 0–2 层建分层工程 + fake source 打穿全链路的 Walking Skeleton + ChannelRegistry 开关 + CI（施工纪律见 `docs/refactor-docs/15-construction-methodology.md`） | analyze/test/build 全绿 + fake 源 E2E smoke 契约测试通过 |
 | M1 存储核心 | v7 基线 27 表 + v8 变更集（schema 决策落地）+ 导入流水线 + 派生链路 + v7→v8 迁移器 | oracle bundle fixture 全导入通过；迁移测试通过 |
 | M2 采集引擎 + JW | 引擎（会话/导航状态机/事件顺序/可观测）+ 首个适配器 | fixture 全流程 + 逐字段对比 Python oracle + 真实教务人工验收 |
 | M3 二课双链路 | young-schedule（Bundle）+ young-enrolment（查询侧，含登录恢复） | 同上标准 |
