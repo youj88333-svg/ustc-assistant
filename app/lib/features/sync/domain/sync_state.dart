@@ -1,6 +1,5 @@
 enum SyncSource {
-  jw('ustc_jw'),
-  youngSchedule('ustc_young_schedule');
+  jw('ustc_jw');
 
   const SyncSource(this.storage);
 

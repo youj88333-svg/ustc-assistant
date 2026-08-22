@@ -55,7 +55,7 @@ class AgentToolResult {
 /// The status of a tool execution outcome.
 enum AgentToolStatus { success, error, needsUserAction }
 
-enum AgentUserActionType { youngLogin, writeConfirmation }
+enum AgentUserActionType { writeConfirmation }
 
 class AgentUserAction {
   const AgentUserAction({
