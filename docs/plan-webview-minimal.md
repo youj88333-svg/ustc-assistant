@@ -1,100 +1,164 @@
-# Plan：极简 WebView 原生重构（本环境执行口径）
+# Plan：极简 WebView 原生重构（本环境执行口径，2026-08-19 修订版）
 
 > 分支：`refactor/webview-minimal`（head == main，后续工作均在本分支）
-> 状态说明：本文件面向当前环境。AGENTS.md 中"六层阶梯/M0-M8/ rewrite/flutter-native"
-> 是旧目标环境的路线，本环境不采用其阶段编号。
+> 说明：本文是 `refactor/webview-minimal` 分支的执行口径；AGENTS.md 的
+> “六层阶梯 / M0–M8 / rewrite-flutter-native”是旧目标环境路线，本分支不采用。
 
-## 1. 环境事实（已实测）
+## 0. 已拍板的原则
 
-- Flutter 3.44.5 / Dart 3.12.2 已解压到 `/home/ubuntu/flutter`（匹配项目 sdk ^3.12.2）。
-- `flutter analyze`：无 error（仅 15 个 info/warning，均为既有代码风格问题）。
-- `flutter pub get`：可用（曾 502，换 `PUB_HOSTED_URL=https://pub.dev` 成功后锁定 144 依赖）。
-- 离线单元测试已打通：本项目 `flutter test` 首次因 sqlite3 原生 hook 从
-  `github.com/simolus3/sqlite3.dart` 下载 `.so` 失败（本 VM 无法访问 github）。
-  通过 pubspec `hooks.user_defines.sqlite3.source=system` + `name_linux=绝对路径`
-  改用系统 `/lib/x86_64-linux-gnu/libsqlite3.so.0`，DB/Drift 测试 7/7 通过。
-- Python oracle：conda env `ustc_assistant`（3.10.20）已建，`tests.jw.test_source_bundle`
-  17/17 通过（教务 SourceBundle 金标准）。
-- 平台矩阵（本 VM）：
-  - Windows / iOS / Android 二进制：**不可构建**（无 Windows+Xcode+Android SDK/JDK）。
-  - 纯 Dart 的 analyze / unittest / widget / flow：**可跑**。
-  - 真实学校登录与采集：不可自动验证。
+1. **Bridge 不提前删**：M1 删除 young/icourse/campus 功能时，保留 JW 的
+   `bridge_client.dart`、`python_locator.dart`、Python Bridge。待 Dart WebView
+   采集与 SourceBundle 对齐金标准后，再做退役。
+2. **SourceBundle 1.0 与 schema 保持不变**：功能关闭，契约不关闭；young 的
+   SourceBundle fixture 仅作为 schema 兼容性测试输入保留。
+3. **教务学期暂时写死 `461 / 2026fall / 2026 秋季学期`**：沿用
+   `config/source-defaults.json` 与 `generated_source_defaults.dart`。月份规则、
+   学期列表抓取和相关设置以后作为 addition 添加。
+4. **不引入 C2/C3 容器与 sourceGeneration/resetEpoch 等复杂并发模型**：只做
+   单活跃采集作业闸门和最小 `SourceCollectionGateway` 接口。
+5. `agent_settings.icourse_consent` 字段用于其他功能；删除 iCourse UI/工具时不改
+   schema、不删列，只标记为退役入口（若将来清理需走正式 migration）。
+6. **Agent 删除/生命周期工具当前分支已实现**：本分支只做外部工具删除与本地
+   删除/生命周期工具的回归固化，不“新增删除工具”。
 
-## 2. 目标（简化到"教务 + 基础 Agent"）
+## 1. 环境事实（已实测，同基线）
 
-1. 删除二课（young）、评课社区（icourse）、教务/财务公开目录（campus）全部功能。
-2. 教务采集从 Python（Playwright/Bridge/CLI）改为 Flutter 原生 WebView 采集，
-   保留 SourceBundle 1.0 契约。
-3. Agent 工具瘦身 + 完善删除/生命周期工具。
-4. 尝试三端（Windows/Android/iOS）代码达成可编译；本机只保证 Dart 层可测试。
+- Flutter 3.44.5 / Dart 3.12.2：`/home/ubuntu/flutter`；匹配项目 sdk ^3.12.2。
+- `flutter analyze`：基线无 error（15 个 info/warning）。`flutter pub get` 已可用。
+- sqlite3 离线测试：pubspec hooks 用系统 `/lib/x86_64-linux-gnu/libsqlite3.so.0`。
+- Python oracle：conda `ustc_assistant`（3.10.20）可用，教务 SourceBundle 17 项通过。
+- 本 VM 不能构建 Windows/iOS/Android 二进制，也不访问真实学校网站。
 
-## 3. 不动的红线
+## 2. 目标（简化到“教务 + 基础 Agent”）
 
-- main 不动；所有改动只提交到 `refactor/webview-minimal`。
-- SourceBundle 1.0 与 source-bundle schema 保持不变（若源头纯 JW，仍保留唯一来源协议）。
-- 自动测试不得访问学校网站；所有 WebView 采集以 fixture + python oracle 对比。
+1. 删除二课（young）、评课社区（icourse）、教务/财务公开目录（campus）的全部
+   用户功能、CLI/Bridge 查询命令、Agent 外部工具。
+2. 教务采集新增强路径：Flutter 原生 WebView 采集，产出 `SourceBundle 1.0`；
+   Python Playwright 保留为金标准 oracle 和 M3 完成前的运行通道。
+3. Agent 工具收敛到“本地只读 + 本地受控写/删除/生命周期”，删除一切外部按需来源。
+4. 排查并落地三端可编译的静态接口；实际构建交给外部有 SDK 的机器。
 
-## 4. 方案拆解
+## 3. 新里程碑
 
-### 4.1 删除非保留功能（第一阶段，先行可做）
-
-Python 侧：
-- 删除 `src/ustc_assistant/sources/{young,icourse,campus}/`
-- 删除 `tests/{young,icourse,campus}/`
-- `cli.py` / `__main__.py` 中只保留 `collect jw`；`config.py` 保留学期三元组；
-  删除 `icourse`、`campus`、`young` 相关命令。
-
-Flutter 侧：
-- 删除 `lib/features/sync/data/{bridge_client,python_locator}.dart`；
-- 删除 `lib/features/agent/data/windows_python_query_gateway.dart`；
-- 删除 Agent 外部工具 `search_current_second_class_activities` / `search_icourse` /
-  `search_campus_catalog` / `read_campus_detail`（含 schema/description/测试 fixture）；
-- 删除 `app/test/fixtures/query_results/{young_enrolment,icourse,campus_*}.json` 等。
-
-### 4.2 教务 WebView 原生采集（核心重构）
-
-新增 `lib/features/sync/native/`：
-- `JwWebViewCollector`：用 `webview_flutter`（Win WebView2 / Android WebView / iOS
-  WKWebView）承载教务 CAS 登录会话，注入 JS 拦截 `get-data` 与 `datum` 响应，
-  还原 `course_datum` 与 `exam_html`（与 Python `collect_sources` 等价）。
-- 产物仍是 `SourceBundle 1.0`（`build_jw_source_bundle` 的 Dart 对应实现，
-  用 conda oracle 17 项测试作为金标准逐字段对比）。
-- Windows 插件不引入 Dart 侧 bridge；替代 `bridge_client.dart` 的数据流为
-  纯 Flutter `Channel`。移动端复用同一 collector 抽象，平台仅替换凭据/WebView 注入。
-
-### 4.3 Agent 工具收敛
-
-- 只读本地工具保留：schedule/tasks/planblocks/reviews/conflicts/sync/action-history。
-- 删除一切外部按需来源工具（见 4.1）。
-- 写 + 删除工具：补齐/保留
-  `create/update/cancel/reopen/delete/restore event`、`create/update/delete task`、
-  `plan_block` 生命周期、`clear_reminder`、`clear_user_overlay`、
-  `unlink_task_event`、`undo_last_action`、`reset` 类管理操作，遵守"学校课程/考试
-  只本地隐藏不物理删除、事务性审计、用户确认门"既有安全规则。
-
-### 4.4 三端可编译（尝试）
-
-- 抽象 `CredentialProtector`：已有接口；新增 Android Keystore / iOS Keychain
-  实现，Windows 保留 DPAPI（`impl_io.dart` 条件导入）。
-- `webview_flutter` 已存在于 pub 缓存，三端插件齐备。
-- Android 构建需外部 JDK17 + Android SDK；iOS 需 macOS/Xcode。本机交付
-  `analyze/test` 通过 + 平台适配器代码，实际产物由用户在有 SDK 的机器构建。
-
-## 5. 里程碑（本分支）
-
-| 序号 | 内容 | 出口 |
+| 编号 | 内容 | 出口 |
 |---|---|---|
-| M0 | 分支基线：analyze 绿 + DB/agent 关键测试绿（已完成环境准备） | ✓ DB 测试 7/7 |
-| M1 | 删除 young/icourse/campus（Python+Flutter+测试） | analyze/test 全绿，删后无残留引用 |
-| M2 | JW Dart 规范化源 + Skill：把 python oracle 转译为 Dart，fixture 对比一致 | Dart unittest 17/17 对齐（或显式登记差异） |
-| M3 | WebView 采集引擎 + CAS 会话（Win/移动接口） | 平台无关 collector 单测通过 |
-| M4 | Agent 工具删除瘦身 + 生命周期/删除工具单测 | agent flow 测试绿 |
-| M5 | 三端适配器编译层（凭据/WebView/通知） | flutter analyze 各 target 无 error |
-| M6 | 外部机器打点：windows/apk/ios | 交给有工具链的机器 |
+| M0 | 基线：analyze 绿；DB/agent 关键测试绿 | 已完成 |
+| M1 | 删除 young/icourse/campus；保留 JW Bridge；删除外部 Agent 工具与 UI；清理 sync 双来源 | Python unittest / flutter analyze+test 全绿 |
+| M2 | Dart JW 规范化 + SourceBundle 构造等价，Python oracle 对比 | Dart fixture 与 Python bundle 逐字段/digest 对齐 |
+| M3 | `SourceCollectionGateway` 接口；WebView 采集器 + CAS 会话；Python 通道兜底 | 平台无关 collector 单测通过 |
+| M4 | Agent 外部工具清空后的本地删除/生命周期工具回归 | agent delete/lifecycle flow 测试绿 |
+| M5 | 跨平台凭据/通知/WebView 权限适配；静态分析 | 本机 analyze/test 绿；三端 build 错误清单落档 |
+| M6 | 外部机器 windows/apk/ios 构建与真实人工验收 | 交给有 SDK 机器 |
 
-## 6. 已落成本分支的环境改动（首个 commit 候选）
+## 4. M1 具体拆解
+
+### 4.1 Python 删除（保留 JW + config + contracts）
+
+删除：
+
+- `src/ustc_assistant/sources/{young,icourse,campus}/`
+- `tests/{young,icourse,campus}/`
+- `tests/fixtures/{young,icourse,campus}/` 查询/网页 fixture（SourceBundle 的 young
+  fixture 仅保留，供契约测试）
+
+修改：
+
+- `cli.py`/`__main__.py`：仅保留 `collect jw` 与 `config generate-flutter-defaults`。
+- `bridge/query_contracts.py`、`bridge/query_jobs.py`：删除。
+- `bridge/server.py`：删除 `/queries`、`/query-jobs/*`、`queryProtocolVersion`、
+  `queryTypes` 和相关 query 导入；只保留 `/health`、`/capabilities`、`/collect/jw`、
+  `/login/resume`、`/jobs/{id}/events`、`/shutdown`。
+- `bridge/jobs.py`：删除 `YoungCollectionRequest`/`start_young_schedule`。
+- `pyproject.toml`：去除不再需要的 `requests`/`beautifulsoup4`（jw 只依赖
+  `playwright`/`jsonschema`）。
+
+保留：
+
+- `config/source-defaults.json` 与 `config.py` 的 JW 三元组。
+- `contracts/` 全部。
+
+### 4.2 Flutter 删除（保留 JW 同步主链路）
+
+删除文件：
+
+- `lib/features/agent/data/windows_python_query_gateway.dart`
+- `lib/features/agent/domain/query_source.dart`（外部查询 envelope 全删；本地
+  Agent 不再需要）
+- `test/features/agent/external_agent_tools_test.dart`
+- `test/features/agent/windows_python_query_gateway_test.dart`
+- `test/fixtures/query_results/`
+
+修改：
+
+- `router.dart`：Agent 组合改为无 `QueryGatewayFactory`；`buildRouter` 与
+  `_buildWindowsAgentComposition` 移除 Python query gateway 启动。
+- `agent_composition.dart`：删除 `LazyQuerySourceGateway`、externals、young login
+  resume、`SourceQueryGateway` 相关注入。
+- `agent_tools.dart`：删除 `SearchCurrentSecondClassActivitiesTool`、
+  `SearchIcourseTool`、`SearchCampusCatalogTool`、`ReadCampusDetailTool`、
+  `externalAgentTools()`、相关 allowless 常量与 `_YoungQueryInvocation`/
+  `_collectQueryEvents`/`_map*` 帮助函数。
+- `agent_system_prompt.dart`：重写为 v8/minimal（仅教务课程/考试 + 本地日程/Task/
+  PlanBlock/冲突/同步/历史 + 本地写/删除工具规则）。
+- `agent_grounding_policy.dart`：删除二课/评课/campus 规则；外部工具 pipeline 移除。
+- `agent_configuration_service.dart` 与 `agent_settings_page.dart`：删除 iCourse
+  user-visible consent；保留 DB 列与 service 状态读取（退役不迁移）。
+- `sync_state.dart`：`SyncSource` 仅 `jw`。
+- `sync_coordinator.dart`/`sync_page.dart`/`settings_page.dart`/`accounts_*.dart`
+  全部改为单 JW 来源。
+- `domain/agent_models.dart` 及其他仍引用 QuerySource 的 export 线（如有）删除。
+
+### 4.3 M1 门
+
+- Python：`python -m unittest discover -s tests -v` 绿、`compileall` 绿。
+- Flutter：`flutter analyze` 无 error、`flutter test` 全绿。
+- Grep：`young/icourse/campus`（排除 `campusName`、`campus_affair`、
+  `icourse_consent` 退役列、生成文件与注释说明）无活跃功能引用。
+- 运行 `python -m ustc_assistant collect jw --help` 和
+  `python -m ustc_assistant config generate-flutter-defaults --help` 验证 CLI。
+
+## 5. M2–M3 关键设计
+
+- 新增 `lib/features/sync/native/jw_course_normalizer.dart`、
+  `jw_exam_parser.dart`、`jw_source_bundle_builder.dart`。
+- 复用 fixture：`tests/fixtures/jw/course-datum.json`、`exam-page.html`、
+  `app/test/fixtures/source_bundle/positive/jw-*.json`。
+- 对比项：sourceRecords/calendarEvents/courseSeries/scheduleRelations 各字段、
+  snapshot.scope/manifest、canonical digest。
+- WebView 不在本机跑真实学校页面；采集器通过注入的 `JwWebPage` / fake 完成
+  状态机测试。
+- 课程/考试身份 hash 必须与 Python 完全一致：
+  - 课程 identity tail：`lesson:group:date:start:end:collision_discriminator`
+  - 考试 identity：`course_code + stable_hash([code, exam_type, start, end, room,
+    building, campus])`。
+- `SourceCollectionGateway` 签名先冻结：
+  ```dart
+  abstract interface class SourceCollectionGateway {
+    Stream<SourceCollectionEvent> startJwCollection({
+      required String accountId,
+      required JwSemesterConfig semester,
+    });
+    Future<void> resumeLogin(String jobId, {String? password});
+    Future<void> cancel(String jobId);
+  }
+  ```
+
+## 6. M4：只删外部工具 + 固化已有删除工具
+
+当前已存在：`update_event`（含 cancel/reopen/delete/restore 与重复 scope）、
+`update_task`、`update_plan_block`、`delete_schedule_relation`、`clear_reminder`、
+`clear_user_overlay`、`unlink_task_event`、`reset_permission_policy`、
+`undo_last_action`。
+
+M4 只做：
+
+- 删除外部工具及 query 生态；
+- 系统提示词、grounding policy 与工具 registry 收敛；
+- 增补 `agent_delete_tools_test.dart` 覆盖本地删除/恢复/清项目/撤回与 school
+  课程考试拒绝删除。
+
+## 7. 已落成本分支的环境改动（首个 commit 候选）
 
 - `app/pubspec.yaml`：`hooks.user_defines.sqlite3` 离线单元测试用系统 sqlite。
-- `app/pubspec.lock`：pub.dev 解析后的锁（144 deps，Flutter 3.44.5 匹配）。
-- `.gitignore`：确认 `app/test/goldens/failures/` 不进入版本库。
-
+- `app/pubspec.lock`：pub.dev 解析后的锁。
+- `.gitignore`：`app/test/goldens/failures/` 不进入版本库。
