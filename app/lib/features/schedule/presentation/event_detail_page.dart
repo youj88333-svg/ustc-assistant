@@ -124,7 +124,6 @@ class EventDetailPage extends StatelessWidget {
 
   String _sourceLabel(String source) => switch (source) {
     'ustc_jw' => '教务系统',
-    'ustc_young' => '二课平台',
     'user' => '个人日程',
     _ => source,
   };

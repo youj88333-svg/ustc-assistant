@@ -334,10 +334,10 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // The iCourse-consent switch title is rendered as a Text label (the
-    // SwitchListTile exposes its title as accessible text).
+    // The school model-service section title is rendered as accessible text
+    // (the iCourse-consent switch was retired in the v9 minimal convergence).
     expect(
-      find.text('允许 Agent 查询我的 iCourse 信息'),
+      find.text('学校模型服务'),
       findsOneWidget,
     );
     // The clear-conversation action is reachable (scroll it into view, then
