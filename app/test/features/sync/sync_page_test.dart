@@ -225,8 +225,7 @@ void main() {
           );
     }
     final bridge = _InteractiveBridge()
-      ..polls['jw'] = [_needsLogin(), _success()]
-      ..polls['youngSchedule'] = [_needsLogin(), _success()];
+      ..polls['jw'] = [_needsLogin(), _success()];
     final coordinator = SyncCoordinator(
       database: database,
       accounts: accounts,
@@ -253,21 +252,11 @@ void main() {
     expect(bridge.starts, [SyncSource.jw]);
     await tester.tap(find.byKey(const Key('continue-interactive-login')));
     await tester.pumpAndSettle();
-    expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
 
-    await tester.tap(find.byKey(const Key('cancel-interactive-login')));
-    await tester.pumpAndSettle();
     expect(bridge.resumed, ['jw']);
-    expect(bridge.cancelled, ['youngSchedule']);
     expect(
       tester.widget<Text>(find.byKey(const Key('sync-state-jw'))).data,
       contains('同步成功'),
-    );
-    expect(
-      tester
-          .widget<Text>(find.byKey(const Key('sync-state-youngSchedule')))
-          .data,
-      contains('已取消'),
     );
   });
 

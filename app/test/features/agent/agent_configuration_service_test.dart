@@ -161,14 +161,6 @@ void main() {
       },
     );
 
-    test('setIcourseConsent toggles only the consent flag', () async {
-      await service.setIcourseConsent('account-a', true);
-      final settings = await service.load('account-a');
-      expect(settings.icourseConsent, isTrue);
-      expect(settings.enabled, isFalse);
-      expect(settings.model, 'deepseek-v4-flash');
-    });
-
     test('enable toggles only the enabled flag', () async {
       await service.enable('account-a', true);
       final settings = await service.load('account-a');
@@ -299,7 +291,6 @@ END
       // Seed Agent rows for this account.
       await secretStore.saveKey(accountId, 'school-secret');
       await agentConfig.enable(accountId, true);
-      await agentConfig.setIcourseConsent(accountId, true);
       final runId = await chatRepository.startRun(
         accountId: accountId,
         model: 'deepseek-v4-flash',

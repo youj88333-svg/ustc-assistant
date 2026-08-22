@@ -169,10 +169,6 @@ void main() {
     );
     clock += const Duration(hours: 11, minutes: 59).inMilliseconds;
     expect(await service.isAutomaticDue(SyncSource.jw, accountId), isFalse);
-    expect(
-      await service.isAutomaticDue(SyncSource.youngSchedule, accountId),
-      isTrue,
-    );
     clock += const Duration(minutes: 1).inMilliseconds;
     expect(await service.isAutomaticDue(SyncSource.jw, accountId), isTrue);
   });
@@ -185,18 +181,7 @@ void main() {
         protector: protector,
       );
       addTearDown(database.close);
-      final bridge = FakeBridge()
-        ..polls['jw'] = [successPoll()]
-        ..polls['youngSchedule'] = [
-          const BridgeJobPoll(
-            events: [
-              {'sequence': 1, 'phase': 'failed'},
-            ],
-            nextSequence: 1,
-            terminal: true,
-            errorCode: 'collection_failed',
-          ),
-        ];
+      final bridge = FakeBridge()..polls['jw'] = [successPoll()];
       final service = coordinator(
         database: database,
         accounts: accounts,
@@ -210,9 +195,8 @@ void main() {
         resolveUserAction: (_) async => false,
       );
 
-      expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
-      expect(outcomes.first, isA<SyncSucceeded>());
-      expect(outcomes.last, isA<SyncFailed>());
+      expect(bridge.starts, [SyncSource.jw]);
+      expect(outcomes.single, isA<SyncSucceeded>());
     },
   );
 
@@ -226,16 +210,6 @@ void main() {
       addTearDown(database.close);
       final bridge = FakeBridge()
         ..polls['jw'] = [
-          const BridgeJobPoll(
-            events: [
-              {'sequence': 1, 'phase': 'needs_user_login'},
-            ],
-            nextSequence: 1,
-            terminal: false,
-          ),
-          successPoll(),
-        ]
-        ..polls['youngSchedule'] = [
           const BridgeJobPoll(
             events: [
               {'sequence': 1, 'phase': 'needs_user_login'},
@@ -258,22 +232,18 @@ void main() {
         accountId: accountId,
         resolveUserAction: (action) async {
           resolved.add(action.source);
-          if (action.source == SyncSource.jw) {
-            expect(bridge.starts, [SyncSource.jw]);
-          } else {
-            expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
-          }
+          expect(bridge.starts, [SyncSource.jw]);
           return true;
         },
       );
 
-      expect(resolved, [SyncSource.jw, SyncSource.youngSchedule]);
-      expect(bridge.resumedPasswords, ['saved-password', 'saved-password']);
+      expect(resolved, [SyncSource.jw]);
+      expect(bridge.resumedPasswords, ['saved-password']);
       expect(outcomes, everyElement(isA<SyncSucceeded>()));
     },
   );
 
-  test('cancelling one interactive source continues with the next', () async {
+  test('cancelling an interactive source cancels that job', () async {
     final protector = CountingProtector();
     final (database, accounts, accountId) = await fixture(protector: protector);
     addTearDown(database.close);
@@ -286,8 +256,7 @@ void main() {
           nextSequence: 1,
           terminal: false,
         ),
-      ]
-      ..polls['youngSchedule'] = [successPoll()];
+      ];
     final service = coordinator(
       database: database,
       accounts: accounts,
@@ -301,10 +270,9 @@ void main() {
       resolveUserAction: (_) async => false,
     );
 
-    expect(outcomes.first, isA<SyncCancelled>());
-    expect(outcomes.last, isA<SyncSucceeded>());
+    expect(outcomes.single, isA<SyncCancelled>());
     expect(bridge.cancelled, ['jw']);
-    expect(bridge.starts, [SyncSource.jw, SyncSource.youngSchedule]);
+    expect(bridge.starts, [SyncSource.jw]);
   });
 
   test('sync without credentials fails before bridge startup', () async {

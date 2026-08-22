@@ -585,27 +585,6 @@ void main() {
     });
   });
 
-  group('AgentSettingsPage iCourse consent', () {
-    testWidgets('consent toggle grants and revokes', (tester) async {
-      await secrets.saveKey('account-a', 'k');
-      await config.enable('account-a', true);
-      final provider = _FakeLlmProvider();
-      await tester.pumpWidget(harness(provider));
-      await tester.pumpAndSettle();
-
-      final toggle = find.byKey(const Key('agent-icourse-consent'));
-      expect(toggle, findsOneWidget);
-      expect((await config.load('account-a')).icourseConsent, isFalse);
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      expect((await config.load('account-a')).icourseConsent, isTrue);
-      // Revoke.
-      await tester.tap(toggle);
-      await tester.pumpAndSettle();
-      expect((await config.load('account-a')).icourseConsent, isFalse);
-    });
-  });
-
   group('AgentSettingsPage summary', () {
     testWidgets('current summary displays in a read-only selectable dialog', (
       tester,

@@ -576,49 +576,49 @@ void main() {
   });
 
   group('AgentSystemPrompt', () {
-    test('version is 8', () {
-      expect(AgentSystemPrompt.version, 8);
+    test('version is 9', () {
+      expect(AgentSystemPrompt.version, 9);
     });
 
-    test('version8 preserves every v1-v7 rule and adds lifecycle mutation '
-        'rules', () {
-      const v8 = AgentSystemPrompt.version8;
-      // Every v7 rule (hence v1-v6) is preserved verbatim.
-      expect(v8, contains(AgentSystemPrompt.version7),
-          reason: 'version8 must preserve every v7 rule');
+    test('version9 preserves every v1-v8 rule and adds the convergence note',
+        () {
+      const v9 = AgentSystemPrompt.version9;
+      // Every v8 rule (hence v1-v7) is preserved verbatim.
+      expect(v9, contains(AgentSystemPrompt.version8),
+          reason: 'version9 must preserve every v8 rule');
       // v8 lifecycle mutation rules:
       // Query before write; one call one target.
-      expect(v8, contains('先查询再写'),
+      expect(v9, contains('先查询再写'),
           reason: '查询后再写终端工具');
-      expect(v8, contains('一个调用一个目标'),
+      expect(v9, contains('一个调用一个目标'),
           reason: '一个调用只针对一个目标');
       // List candidates first; multi-object handled one by one.
-      expect(v8, contains('先列出候选'),
+      expect(v9, contains('先列出候选'),
           reason: '多对象先列出候选并询问');
       // No retry of the same delete.
-      expect(v8, contains('不能重试同一删除'),
+      expect(v9, contains('不能重试同一删除'),
           reason: '不能重试同一删除');
       // No success claim without a terminal success.
-      expect(v8, contains('没有终端 success 不得声称完成'),
+      expect(v9, contains('没有终端 success 不得声称完成'),
           reason: '没有终端 success 不得声称完成');
       // Source events (course/exam/二课) can only be locally hidden after an
       // explicit user selection — never a raw update_event delete, never
       // auto-hidden.
-      expect(v8, contains('课程/考试/二课'),
+      expect(v9, contains('课程/考试/二课'),
           reason: '来源事件保护');
-      expect(v8, contains('明确选择后本地隐藏'),
+      expect(v9, contains('明确选择后本地隐藏'),
           reason: '来源事件只能经用户明确选择后本地隐藏');
       // Undo must preview first.
-      expect(v8, contains('Undo 必须先预览'),
+      expect(v9, contains('Undo 必须先预览'),
           reason: 'Undo 必须先预览');
       // Current-run refs only.
-      expect(v8, contains('当前 run refs'),
+      expect(v9, contains('当前 run refs'),
           reason: 'ref 必须来自当前 run');
       // No semester / id literals.
-      expect(v8, isNot(contains('2026spring')));
-      expect(v8, isNot(contains('2026fall')));
-      expect(v8, isNot(contains('421')));
-      expect(v8, isNot(contains('461')));
+      expect(v9, isNot(contains('2026spring')));
+      expect(v9, isNot(contains('2026fall')));
+      expect(v9, isNot(contains('421')));
+      expect(v9, isNot(contains('461')));
     });
 
     test('version7 preserves every v1-v6 rule and adds multi-Task burst rules', () {
@@ -671,26 +671,23 @@ void main() {
       expect(prompt, contains('一句话'));
       expect(prompt, contains('立即调用'));
       expect(prompt, contains('不重复'));
-      // 全部 15 个工具名都应在场景映射中出现。
+      // 本地只读工具名都应在场景映射中出现（外部工具已退役）。
       const toolNames = [
         'get_schedule', 'get_event_details', 'get_free_time', 'get_conflicts',
         'get_tasks', 'get_task_details', 'get_plan_blocks',
         'get_pending_planblock_reviews', 'get_pending_event_reviews',
         'get_sync_status', 'get_safe_action_history',
-        'search_current_second_class_activities', 'search_icourse',
-        'search_campus_catalog', 'read_campus_detail',
       ];
       for (final name in toolNames) {
         expect(prompt, contains(name), reason: '场景映射应包含工具 $name');
       }
       expect(prompt, contains('course_summary'));
-      // 二课必须区分"正在报名"（外部开放列表）与"我已报名"（本地日程 second_class 事件）。
-      expect(prompt, contains('正在报名的二课'));
-      expect(prompt, contains('我已报名的二课'));
-      expect(prompt, contains('second_class'));
-      // §3 反幻觉：外部硬、本地柔。
-      expect(prompt, contains('外部数据'));
-      expect(prompt, contains('本轮必须重新调用工具'));
+      // 外部工具映射已退役，不再出现。
+      expect(prompt, isNot(contains('search_current_second_class_activities')));
+      expect(prompt, isNot(contains('search_icourse')));
+      expect(prompt, isNot(contains('search_campus_catalog')));
+      expect(prompt, isNot(contains('read_campus_detail')));
+      // §3 反幻觉：本地数据优先本轮结果。
       expect(prompt, contains('本地数据'));
       // §4 同步/登录引导：明确告知 + 操作路径 + 不重试。
       expect(prompt, contains('未同步'));
@@ -713,8 +710,7 @@ void main() {
       expect(prompt, contains('ref_event'));
       expect(prompt, contains('ref_task'));
       expect(prompt, contains('用户明确要求'));
-      // §6 能力边界：二课报名需用户在官方页面操作。
-      expect(prompt, contains('二课报名'));
+      // §6 能力边界：外部来源已退役。
       expect(prompt, isNot(contains('当前只提供查询')));
     });
 

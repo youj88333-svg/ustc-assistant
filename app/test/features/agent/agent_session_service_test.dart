@@ -245,7 +245,7 @@ class _PausingTool implements AgentTool {
       errorCode: 'needs_user_login',
       userAction: includeUserAction
           ? const AgentUserAction(
-              type: AgentUserActionType.youngLogin,
+              type: AgentUserActionType.writeConfirmation,
               opaqueHandle: 'local-job',
             )
           : null,
@@ -1116,18 +1116,10 @@ void main() {
           .toList();
 
       final terminal = states.last;
-      // As of Task 7, local-tool refs are NOT forwarded to sourceReferences
-      // (they would spam inert chips). Only the external catalog tool's ref
-      // is forwarded as a public citation. The schedule tool instead emits a
-      // deduplicated local action.
-      expect(terminal.sourceReferences, hasLength(1));
-      expect(terminal.sourceReferences.single.kind, 'catalog');
-      // Refs are opaque ref_* tokens, never raw local ids.
-      for (final ref in terminal.sourceReferences) {
-        expect(ref.ref, startsWith('ref_'));
-        expect(ref.ref, isNot(contains('schedule-')));
-        expect(ref.ref, isNot(contains('catalog-')));
-      }
+      // External source tools have been retired (v9 convergence); no tool
+      // forwards refs to sourceReferences as public citations. Local-tool
+      // refs emit a deduplicated local action instead.
+      expect(terminal.sourceReferences, isEmpty);
       // One deduplicated local schedule action (not one per event ref).
       expect(terminal.localActions, hasLength(1));
       expect(terminal.localActions.single, AgentLocalAction.schedule);
@@ -1448,8 +1440,9 @@ void main() {
       final firstStates = await service
           .send(accountId: account, userText: '明天有什么课？')
           .toList();
-      final firstRefs = firstStates.last.sourceReferences;
-      expect(firstRefs, isNotEmpty);
+      // External source refs are retired (v9); local-tool refs emit a
+      // deduplicated local action, not a sourceReference.
+      expect(firstStates.last.sourceReferences, isEmpty);
 
       // Run a second turn with a fresh provider script. The store is per-run,
       // so refs from run 1 must not resolve in run 2.

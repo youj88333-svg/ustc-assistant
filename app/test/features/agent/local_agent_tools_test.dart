@@ -289,26 +289,6 @@ Future<AppDatabase> _seedDatabase() async {
           updatedAt: 1,
         ),
       );
-  // young schedule: failed run with a desensitized code.
-  await database.into(database.syncRuns).insert(
-        SyncRunsCompanion.insert(
-          id: 'run-young-1',
-          accountId: 'a',
-          source: SyncSource.youngSchedule.storage,
-          trigger: 'manual',
-          state: 'failed',
-          resultCode: const Value('collection_failed'),
-          startedAt: DateTime(2026, 7, 29, 7, 0).millisecondsSinceEpoch,
-        ),
-      );
-  await database.into(database.sourceConfigs).insert(
-        SourceConfigsCompanion.insert(
-          id: 'cfg-young',
-          accountId: 'a',
-          source: SyncSource.youngSchedule.storage,
-          updatedAt: 1,
-        ),
-      );
 
   // --- Action logs for account 'a' ---
   await database.actionLogsRepository.append(
@@ -2121,14 +2101,10 @@ void main() {
         for (final s in sources)
           (s! as Map<String, Object?>)['source'] as String: s,
       };
-      expect(bySource.keys, containsAll([SyncSource.jw.storage, SyncSource.youngSchedule.storage]));
+      expect(bySource.keys, contains(SyncSource.jw.storage));
       final jw = bySource[SyncSource.jw.storage]! as Map<String, Object?>;
       expect(jw['phase'], 'succeeded');
       expect(jw['lastSuccessfulAt'], '2026-07-29T06:00:00');
-      final young =
-          bySource[SyncSource.youngSchedule.storage]! as Map<String, Object?>;
-      expect(young['phase'], 'failed');
-      expect(young['resultCode'], 'collection_failed');
     });
 
     test('account b sees idle/empty sync state', () async {
