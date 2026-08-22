@@ -1,0 +1,585 @@
+{
+  "schemaVersion": "1.0",
+  "bundleId": "00000000-0000-0000-0000-000000000000",
+  "source": "ustc_jw",
+  "subject": {
+    "accountId": "acct_fixture"
+  },
+  "collectedAt": "2026-08-22T12:00:00+08:00",
+  "producer": {
+    "name": "ustc_assistant_python",
+    "version": "0.1.0",
+    "platform": "windows"
+  },
+  "snapshot": {
+    "completeness": "complete",
+    "scope": {
+      "type": "semester",
+      "semesterKey": "2026fall",
+      "sourceSemesterId": 461,
+      "components": [
+        {
+          "name": "course_table",
+          "status": "complete",
+          "observedRecordCount": 10
+        },
+        {
+          "name": "exam_arrange",
+          "status": "complete",
+          "observedRecordCount": 3
+        }
+      ]
+    }
+  },
+  "manifest": {
+    "sourceRecordCount": 13,
+    "calendarEventCount": 9,
+    "courseSeriesCount": 4,
+    "scheduleRelationCount": 0
+  },
+  "data": {
+    "sourceRecords": [
+      {
+        "externalId": "ustc_jw:2026fall:record:course-series:lesson:1001",
+        "recordType": "jw_course_series",
+        "entityType": "course_series",
+        "entityExternalId": "ustc_jw:2026fall:series:lesson:1001",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-series:lesson:1002",
+        "recordType": "jw_course_series",
+        "entityType": "course_series",
+        "entityExternalId": "ustc_jw:2026fall:series:lesson:1002",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-series:lesson:1003",
+        "recordType": "jw_course_series",
+        "entityType": "course_series",
+        "entityExternalId": "ustc_jw:2026fall:series:lesson:1003",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-series:lesson:1004",
+        "recordType": "jw_course_series",
+        "entityType": "course_series",
+        "entityExternalId": "ustc_jw:2026fall:series:lesson:1004",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1001:5001:20260302:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260302:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1001:5001:20260330:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260330:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1001:5001:20260305:1930:2105:16199f700ae92bdc7e03e711",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260305:1930:2105:16199f700ae92bdc7e03e711",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1002:5002:20260318:1930:2155:50c9c8ce1a8d199083bebff9",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1002:5002:20260318:1930:2155:50c9c8ce1a8d199083bebff9",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1003:5003:20260310:1400:1730:6b81d3ccc24368d77545d38e",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1003:5003:20260310:1400:1730:6b81d3ccc24368d77545d38e",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:course-occurrence:1004:5004:20260310:1400:1730:5bc90396d9073aa7e9178a8f",
+        "recordType": "jw_course_occurrence",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:course-occurrence:1004:5004:20260310:1400:1730:5bc90396d9073aa7e9178a8f",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:exam:SAMPLE1001.01:e4b3023371d3893c96dc51c8",
+        "recordType": "jw_exam",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:exam:SAMPLE1001.01:e4b3023371d3893c96dc51c8",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:exam:SAMPLE2002.02:a9a02326a5d07d6aab1fa0c2",
+        "recordType": "jw_exam",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:exam:SAMPLE2002.02:a9a02326a5d07d6aab1fa0c2",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      },
+      {
+        "externalId": "ustc_jw:2026fall:record:exam:SAMPLE3003.03:a19a52f1a63a6495907c19b0",
+        "recordType": "jw_exam",
+        "entityType": "calendar_event",
+        "entityExternalId": "ustc_jw:2026fall:event:exam:SAMPLE3003.03:a19a52f1a63a6495907c19b0",
+        "sourceStatus": "active",
+        "sourceUpdatedAt": null
+      }
+    ],
+    "calendarEvents": [
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260302:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1001",
+        "title": "计算机原理与嵌入式系统（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-02T09:45:00+08:00",
+          "endAt": "2026-03-02T11:20:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "3C203",
+          "building": "第三教学楼",
+          "campus": "西区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "王*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1001",
+          "scheduleGroupId": "5001",
+          "courseCode": "EE2003.02",
+          "courseTypeName": "理论实验课",
+          "weekIndex": 1,
+          "periods": 2,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260330:0945:1120:3b4f6388d75c8b003f5e5f62",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1001",
+        "title": "计算机原理与嵌入式系统（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-30T09:45:00+08:00",
+          "endAt": "2026-03-30T11:20:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "3C203",
+          "building": "第三教学楼",
+          "campus": "西区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "张*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1001",
+          "scheduleGroupId": "5001",
+          "courseCode": "EE2003.02",
+          "courseTypeName": "理论实验课",
+          "weekIndex": 5,
+          "periods": 2,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1001:5001:20260305:1930:2105:16199f700ae92bdc7e03e711",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1001",
+        "title": "计算机原理与嵌入式系统（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-05T19:30:00+08:00",
+          "endAt": "2026-03-05T21:05:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "院系安排西活",
+          "building": null,
+          "campus": null
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "何*"
+          },
+          {
+            "role": "teacher",
+            "name": "周*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1001",
+          "scheduleGroupId": "5001",
+          "courseCode": "EE2003.02",
+          "courseTypeName": "理论实验课",
+          "weekIndex": 1,
+          "periods": 2,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1002:5002:20260318:1930:2155:50c9c8ce1a8d199083bebff9",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1002",
+        "title": "人工智能数学原理与算法 B（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-18T19:30:00+08:00",
+          "endAt": "2026-03-18T21:55:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "西活二楼机房",
+          "building": "西区虚拟教学楼",
+          "campus": "西区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "陈*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1002",
+          "scheduleGroupId": "5002",
+          "courseCode": "AI1001B.05",
+          "courseTypeName": "理论课",
+          "weekIndex": 3,
+          "periods": 3,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1003:5003:20260310:1400:1730:6b81d3ccc24368d77545d38e",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1003",
+        "title": "大学物理实验（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-10T14:00:00+08:00",
+          "endAt": "2026-03-10T17:30:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "物理实验中心 201",
+          "building": "物理实验楼",
+          "campus": "西区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "李*"
+          },
+          {
+            "role": "teacher",
+            "name": "周*"
+          },
+          {
+            "role": "teacher",
+            "name": "吴*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1003",
+          "scheduleGroupId": "5003",
+          "courseCode": "PHYS1001.01",
+          "courseTypeName": "实验课",
+          "weekIndex": 2,
+          "periods": 4,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:course-occurrence:1004:5004:20260310:1400:1730:5bc90396d9073aa7e9178a8f",
+        "seriesExternalId": "ustc_jw:2026fall:series:lesson:1004",
+        "title": "艺术与审美通识课（样例）",
+        "descriptionText": null,
+        "eventType": "course",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-03-10T14:00:00+08:00",
+          "endAt": "2026-03-10T17:30:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "5202",
+          "building": "第五教学楼",
+          "campus": "东区"
+        },
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "汪*"
+          }
+        ],
+        "sourceDefaults": {
+          "importance": "normal",
+          "attendancePolicy": "unknown",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_course_occurrence",
+          "semesterKey": "2026fall",
+          "lessonId": "1004",
+          "scheduleGroupId": "5004",
+          "courseCode": "GEN1001.01",
+          "courseTypeName": "理论课",
+          "weekIndex": 2,
+          "periods": 3,
+          "exerciseClass": false
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:exam:SAMPLE1001.01:e4b3023371d3893c96dc51c8",
+        "seriesExternalId": null,
+        "title": "数据结构 & 算法（示例）",
+        "descriptionText": null,
+        "eventType": "exam",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-06-22T08:30:00+08:00",
+          "endAt": "2026-06-22T10:30:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "A101",
+          "building": "示例第一教学楼",
+          "campus": "示例东区"
+        },
+        "participants": [],
+        "sourceDefaults": {
+          "importance": "critical",
+          "attendancePolicy": "must_go",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_exam",
+          "semesterKey": "2026fall",
+          "classroomNumber": "A101",
+          "examType": "期末考试",
+          "courseCode": "SAMPLE1001.01",
+          "instructions": null
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:exam:SAMPLE2002.02:a9a02326a5d07d6aab1fa0c2",
+        "seriesExternalId": null,
+        "title": "概率论（示例）",
+        "descriptionText": "允许携带一张手写资料",
+        "eventType": "exam",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-06-22T14:30:00+08:00",
+          "endAt": "2026-06-22T16:30:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "B202",
+          "building": "示例第二教学楼",
+          "campus": "示例西区"
+        },
+        "participants": [],
+        "sourceDefaults": {
+          "importance": "critical",
+          "attendancePolicy": "must_go",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_exam",
+          "semesterKey": "2026fall",
+          "classroomNumber": "B202",
+          "examType": "期末考试",
+          "courseCode": "SAMPLE2002.02",
+          "instructions": "允许携带一张手写资料"
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:event:exam:SAMPLE3003.03:a19a52f1a63a6495907c19b0",
+        "seriesExternalId": null,
+        "title": "程序设计实践（示例）",
+        "descriptionText": "上机考试",
+        "eventType": "exam",
+        "time": {
+          "kind": "timed",
+          "startAt": "2026-06-25T19:00:00+08:00",
+          "endAt": "2026-06-25T21:00:00+08:00",
+          "timezone": "Asia/Shanghai"
+        },
+        "location": {
+          "name": "机房 C303",
+          "building": "示例实验楼",
+          "campus": "示例南区"
+        },
+        "participants": [],
+        "sourceDefaults": {
+          "importance": "critical",
+          "attendancePolicy": "must_go",
+          "listeningMode": "unknown"
+        },
+        "sourceDetails": {
+          "kind": "jw_exam",
+          "semesterKey": "2026fall",
+          "classroomNumber": "机房 C303",
+          "examType": "阶段考试",
+          "courseCode": "SAMPLE3003.03",
+          "instructions": "上机考试"
+        }
+      }
+    ],
+    "courseSeries": [
+      {
+        "externalId": "ustc_jw:2026fall:series:lesson:1001",
+        "title": "计算机原理与嵌入式系统（样例）",
+        "courseCode": "EE2003.02",
+        "semesterKey": "2026fall",
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "王*"
+          },
+          {
+            "role": "teacher",
+            "name": "张*"
+          },
+          {
+            "role": "teacher",
+            "name": "何*"
+          },
+          {
+            "role": "teacher",
+            "name": "周*"
+          }
+        ],
+        "sourceDetails": {
+          "kind": "jw_course_series",
+          "lessonId": "1001"
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:series:lesson:1002",
+        "title": "人工智能数学原理与算法 B（样例）",
+        "courseCode": "AI1001B.05",
+        "semesterKey": "2026fall",
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "陈*"
+          }
+        ],
+        "sourceDetails": {
+          "kind": "jw_course_series",
+          "lessonId": "1002"
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:series:lesson:1003",
+        "title": "大学物理实验（样例）",
+        "courseCode": "PHYS1001.01",
+        "semesterKey": "2026fall",
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "李*"
+          },
+          {
+            "role": "teacher",
+            "name": "周*"
+          },
+          {
+            "role": "teacher",
+            "name": "吴*"
+          }
+        ],
+        "sourceDetails": {
+          "kind": "jw_course_series",
+          "lessonId": "1003"
+        }
+      },
+      {
+        "externalId": "ustc_jw:2026fall:series:lesson:1004",
+        "title": "艺术与审美通识课（样例）",
+        "courseCode": "GEN1001.01",
+        "semesterKey": "2026fall",
+        "participants": [
+          {
+            "role": "teacher",
+            "name": "汪*"
+          }
+        ],
+        "sourceDetails": {
+          "kind": "jw_course_series",
+          "lessonId": "1004"
+        }
+      }
+    ],
+    "scheduleRelations": []
+  }
+}
