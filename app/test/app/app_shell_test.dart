@@ -8,9 +8,7 @@ import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
-import 'package:ustc_assistant_app/features/agent/application/cancellation_signal.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
-import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 
@@ -35,27 +33,6 @@ class _NoopProtector implements CredentialProtector {
   @override
   Future<Uint8List> unprotect(ProtectedSecret protected) async =>
       Uint8List.fromList(protected.bytes);
-}
-
-class _DisposableGateway implements DisposableQuerySourceGateway {
-  bool disposed = false;
-
-  @override
-  Future<void> cancel(String jobId) async {}
-
-  @override
-  Future<void> dispose() async {
-    disposed = true;
-  }
-
-  @override
-  Stream<SourceQueryEvent> execute(
-    SourceQuery request, {
-    required CancellationSignal cancellation,
-  }) => const Stream.empty();
-
-  @override
-  Future<void> resumeLogin(String jobId, {String? password}) async {}
 }
 
 void main() {
@@ -122,13 +99,10 @@ void main() {
             );
       }
       final builtAccounts = <String>[];
-      final gateways = <String, _DisposableGateway>{};
       Future<AgentCompositionResult> buildComposition(
         AppDatabase database,
         String accountId,
       ) async {
-        final gateway = _DisposableGateway();
-        gateways[accountId] = gateway;
         final composition = await AgentComposition.build(
           database: database,
           accountId: accountId,
@@ -141,7 +115,6 @@ void main() {
             database: database,
             protector: _NoopProtector(),
           ),
-          queryGatewayFactory: (_, _) async => gateway,
         );
         builtAccounts.add(accountId);
         return composition;
@@ -173,76 +146,12 @@ void main() {
         await tester.pump(const Duration(milliseconds: 20));
       }
 
+      // The active-account switch rebuilds the composition for the new account.
       expect(builtAccounts, ['a', 'b']);
-      expect(gateways['a']!.disposed, isTrue);
-      expect(gateways['b']!.disposed, isFalse);
       await tester.pumpWidget(const SizedBox());
       await tester.pump();
     },
   );
-
-  test('lazy query gateway does not start until an external query', () async {
-    var starts = 0;
-    final underlying = _DisposableGateway();
-    final lazy = LazyQuerySourceGateway(() async {
-      starts++;
-      return underlying;
-    });
-
-    expect(starts, 0);
-    await lazy.dispose();
-    expect(starts, 0);
-    expect(underlying.disposed, isFalse);
-  });
-
-  test('lazy query gateway surfaces a bounded startup failure', () async {
-    final lazy = LazyQuerySourceGateway(
-      () async => throw StateError('sensitive bridge startup detail'),
-    );
-
-    final events = await lazy
-        .execute(
-          const CampusSearchQueryRequest(query: 'library'),
-          cancellation: CancellationSignal(),
-        )
-        .toList();
-
-    expect(events, hasLength(1));
-    expect(events.single, isA<SourceQueryFailed>());
-    expect((events.single as SourceQueryFailed).code, 'bridge_unavailable');
-  });
-
-  test('lazy query gateway retries after a failed startup', () async {
-    var starts = 0;
-    final underlying = _DisposableGateway();
-    final lazy = LazyQuerySourceGateway(() async {
-      starts++;
-      if (starts == 1) throw StateError('temporary startup failure');
-      return underlying;
-    });
-
-    final firstAttempt = await lazy
-        .execute(
-          const CampusSearchQueryRequest(query: 'library'),
-          cancellation: CancellationSignal(),
-        )
-        .toList();
-    final secondAttempt = await lazy
-        .execute(
-          const CampusSearchQueryRequest(query: 'library'),
-          cancellation: CancellationSignal(),
-        )
-        .toList();
-
-    expect(
-      (firstAttempt.single as SourceQueryFailed).code,
-      'bridge_unavailable',
-    );
-    expect(secondAttempt, isEmpty);
-    expect(starts, 2);
-    await lazy.dispose();
-    expect(underlying.disposed, isTrue);
-  });
 
   testWidgets('schedule keeps week and task choices inside one destination', (
     tester,

@@ -5,18 +5,16 @@
 // Python Bridge), this file pumps the REAL chat route through `buildRouter`
 // with an injected `agentCompositionLoader`. The loader builds a real
 // `AgentComposition` over the in-memory DB but injects a scripted `LlmProvider`
-// (request capture) and a fake query gateway — the minimal seam added to
-// `AgentComposition.build` (`providerFactory`) lets the scripted provider reach
-// the real router without touching the network, DPAPI, or Python.
+// (request capture) — the minimal seam added to `AgentComposition.build`
+// (`providerFactory`) lets the scripted provider reach the real router without
+// touching the network, DPAPI, or Python.
 //
-// This covers the brief's Step 1 flow end-to-end through the real router +
-// composition ownership:
+// This covers local write/confirmation/undo/account-switch/db-isolation flows
+// end-to-end through the real router + composition ownership:
 //
 //   account A -> configure -> local schedule -> grouped semester summary
-//   -> Young pause -> explicit resume same job -> final answer
 //   -> switch to B -> empty account-scoped chat
 //   -> switch back to A -> recovered conversation
-//   -> dispose -> query gateway shutdown exactly once
 //
 // Plus captured-request privacy: no password, job ID, raw catalog id, complete
 // account, or API key appears in any encoded `LlmRequest`.
@@ -41,7 +39,6 @@ import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_st
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
-import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locator.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
 import 'package:ustc_assistant_app/features/reminders/application/reminder_override_service.dart';
@@ -200,114 +197,6 @@ class _RecordingRegistry {
 
   List<LlmToolDeclaration> get schemas => inner.schemas;
 }
-
-// ---------------------------------------------------------------------------
-// A disposable Young query gateway that pauses for login and counts dispose.
-// ---------------------------------------------------------------------------
-
-/// A [QuerySourceGateway] that models the Young needs_user_login pause + same-job
-/// resume, AND counts `dispose()` calls so the test can assert the composition
-/// shuts the gateway down exactly once across the A->B->A->dispose sequence.
-class _CountingResumableYoungGateway implements DisposableQuerySourceGateway {
-  _CountingResumableYoungGateway();
-
-  final List<SourceQuery> requests = [];
-  final List<String> resumedJobIds = [];
-  final List<String> cancelCalls = [];
-  final Completer<void> paused = Completer<void>();
-  bool passwordWasProvided = false;
-  int startedJobs = 0;
-  int disposeCalls = 0;
-
-  StreamController<SourceQueryEvent>? _controller;
-  StreamSubscription<void>? _cancelSubscription;
-
-  @override
-  Stream<SourceQueryEvent> execute(
-    SourceQuery request, {
-    required CancellationSignal cancellation,
-  }) {
-    requests.add(request);
-    startedJobs++;
-    const jobId = 'young-1';
-    final controller = StreamController<SourceQueryEvent>(sync: true);
-    _controller = controller;
-    Future<void>? signalCancelFuture;
-    _cancelSubscription = cancellation.onCancel.listen((_) {
-      signalCancelFuture =
-          Future<void>.delayed(Duration.zero).then((_) => cancel(jobId));
-    });
-    controller.onCancel = () async {
-      await signalCancelFuture;
-      await _cancelSubscription?.cancel();
-      _cancelSubscription = null;
-    };
-    scheduleMicrotask(() {
-      if (controller.isClosed) return;
-      controller.add(
-        const SourceQueryProgress(jobId: jobId, phase: 'starting'),
-      );
-      controller.add(const SourceQueryNeedsLogin(jobId: jobId));
-      if (!paused.isCompleted) paused.complete();
-    });
-    return controller.stream;
-  }
-
-  @override
-  Future<void> resumeLogin(String jobId, {String? password}) async {
-    resumedJobIds.add(jobId);
-    passwordWasProvided = password != null;
-    final controller = _controller;
-    if (controller == null || controller.isClosed) return;
-    controller.add(
-      SourceQueryCompleted(jobId: jobId, result: _resumedYoungEnvelope()),
-    );
-    await controller.close();
-    await _cancelSubscription?.cancel();
-    _cancelSubscription = null;
-  }
-
-  @override
-  Future<void> cancel(String jobId) async {
-    cancelCalls.add(jobId);
-    final controller = _controller;
-    if (controller == null || controller.isClosed) return;
-    controller.add(SourceQueryFailed(jobId: jobId, code: 'cancelled'));
-    await controller.close();
-    await _cancelSubscription?.cancel();
-    _cancelSubscription = null;
-  }
-
-  @override
-  Future<void> dispose() async {
-    disposeCalls++;
-    final controller = _controller;
-    if (controller != null && !controller.isClosed) {
-      await controller.close();
-    }
-    await _cancelSubscription?.cancel();
-    _cancelSubscription = null;
-  }
-}
-
-QueryResultEnvelope _resumedYoungEnvelope() => QueryResultEnvelope(
-      json: {
-        'schemaVersion': '1.0',
-        'queryType': 'young_enrolment',
-        'generatedAt': '2026-07-29T09:00:00+08:00',
-        'data': <String, dynamic>{
-          'activities': <Map<String, Object?>>[
-            {'name': '志愿活动一', 'category': 'service', 'status': 'open'},
-          ],
-        },
-        'metadata': <String, dynamic>{
-          'activityCount': 1,
-          'reportedTotal': 1,
-          'pages': 1,
-        },
-        'references': <String>[],
-      },
-    );
 
 // ---------------------------------------------------------------------------
 // Fakes & seeding helpers (self-contained: Dart library-private members do not
@@ -537,20 +426,18 @@ List<String> _capturedToolResults(_ScriptedProvider provider) {
 // ---------------------------------------------------------------------------
 
 /// Builds a real `AgentComposition` for [accountId] with the test injections:
-/// noop protector, noop secret store, the shared [gateway], and the shared
-/// [provider] (so captured requests accumulate across the whole flow). Returns
-/// the composition and the gateway so the test can assert on dispose counts.
+/// noop protector, noop secret store, and the shared [provider] (so captured
+/// requests accumulate across the whole flow). Returns the composition.
 Future<AgentCompositionResult> _buildTestComposition(
   AppDatabase database,
   String accountId, {
   required _ScriptedProvider provider,
-  required _CountingResumableYoungGateway gateway,
   required CredentialProtector protector,
 }) async {
   final accounts = AccountService(database: database, protector: protector);
-  // The composition's userActionResumer calls accounts.passwordForInteractiveLogin
-  // (seeded by _seedCredentials) and gateway.resumeLogin — wiring the REAL
-  // resume path through the router.
+  // The composition's userActionResumer is a no-op (external-source login
+  // resume retired with the query gateway); local write confirmation is
+  // resumed through the UI confirmation card, not this resumer.
   return AgentComposition.build(
     database: database,
     accountId: accountId,
@@ -560,46 +447,9 @@ Future<AgentCompositionResult> _buildTestComposition(
       database: db,
       protector: protector,
     ),
-    queryGatewayFactory: (_, _) async => gateway,
     providerFactory: () => provider,
   );
 }
-
-/// The Step 1 model script: a get_schedule course_summary call, a Young
-/// search that pauses, then a final text answer after resume. The Young
-/// resume re-enters the loop with the completed tool_result, so the final
-/// text is the 3rd model call.
-List<_ScriptedCall> _step1Script() => [
-      // Call 1: get_schedule with view=course_summary -> grouped semester
-      // summary (the seeded 线性代数 series).
-      _ScriptedCall(() => [
-            const ToolUseCompletedEvent(
-              id: 'tu-1',
-              name: 'get_schedule',
-              input: {
-                'from': '2026-02-09',
-                'through': '2026-02-27',
-                'view': 'course_summary',
-              },
-            ),
-            const CompletedEvent(),
-          ]),
-      // Call 2: search_current_second_class_activities -> pauses with
-      // needs_user_login.
-      _ScriptedCall(() => [
-            const ToolUseCompletedEvent(
-              id: 'tu-2',
-              name: 'search_current_second_class_activities',
-              input: {},
-            ),
-            const CompletedEvent(),
-          ]),
-      // Call 3: final text answer after the user resumed the same job.
-      _ScriptedCall(() => [
-            const TextDeltaEvent('本周有一门线性代数，已查询到一项可报名的志愿活动。'),
-            const CompletedEvent(),
-          ]),
-    ];
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -607,260 +457,6 @@ List<_ScriptedCall> _step1Script() => [
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  testWidgets(
-    'composition flow: configure -> schedule -> Young pause/resume -> switch '
-    'accounts -> dispose gateway once',
-    (tester) async {
-      final database = AppDatabase(NativeDatabase.memory());
-      addTearDown(database.close);
-      const protector = _NoopProtector();
-
-      // Password canary: the Young resume reads this from the credential store
-      // and passes it to the gateway; it must NEVER reach the model.
-      const protectedPassword = 'protected-school-password';
-      // API key canary: read ephemerally per call; must NEVER be serialized
-      // into a request body.
-      const apiKeyCanary = 'ephemeral-test-key';
-
-      // Seed account A (active) with credentials + configured Agent + a course
-      // series with occurrences so get_schedule course_summary returns a group.
-      await _seedAccount(database, 'a');
-      await _seedCredentials(
-        database,
-        'a',
-        protector,
-        username: 'PB12345678',
-        password: protectedPassword,
-      );
-      final secretStore = ProtectedAgentSecretStore(
-        database: database,
-        protector: protector,
-        now: () => 1,
-      );
-      await _seedAgentConfig(
-        database,
-        'a',
-        secrets: secretStore,
-        apiKey: apiKeyCanary,
-      );
-      await _insertCourseSeries(
-        database,
-        'series-math',
-        'a',
-        externalId: 'lesson-math',
-        title: '线性代数',
-        semesterKey: '2026spring',
-        participantsJson:
-            '[{"role":"teacher","name":"张老师"},{"role":"teacher","name":"李老师"}]',
-      );
-      final mathDays = [9, 11, 16, 18, 23, 25];
-      for (var i = 0; i < mathDays.length; i++) {
-        final day = mathDays[i];
-        await _insertCourseOccurrence(
-          database,
-          'math-occ-$i',
-          'a',
-          '线性代数',
-          seriesExternalId: 'lesson-math',
-          location: '三教101',
-          start: DateTime(2026, 2, day, 8, 40),
-          end: DateTime(2026, 2, day, 9, 25),
-        );
-      }
-
-      // Seed account B (inactive) with its own credentials + config, so the
-      // A->B switch builds a fresh composition for B.
-      await _seedInactiveAccount(database, 'b');
-      await _seedCredentials(
-        database,
-        'b',
-        protector,
-        username: 'PB87654321',
-        password: 'protected-school-password-b',
-      );
-      final secretStoreB = ProtectedAgentSecretStore(
-        database: database,
-        protector: protector,
-        now: () => 1,
-      );
-      await _seedAgentConfig(
-        database,
-        'b',
-        secrets: secretStoreB,
-        apiKey: 'ephemeral-test-key-b',
-      );
-
-      // Shared scripted provider + counting gateway across the whole flow.
-      final provider = _ScriptedProvider(_step1Script());
-      final gateway = _CountingResumableYoungGateway();
-
-      Future<AgentCompositionResult> loadComposition(
-        AppDatabase db,
-        String accountId,
-      ) =>
-          _buildTestComposition(
-            db,
-            accountId,
-            provider: provider,
-            gateway: gateway,
-            protector: protector,
-          );
-
-      final router = buildRouter(
-        _FakeWebsiteLauncher(),
-        database,
-        const NoopReminderReconciler(),
-        loadComposition,
-      );
-      addTearDown(router.dispose);
-
-      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
-      // Let the account lookup + composition build + history load settle.
-      // Task 9 added 8 lifecycle write tools to the registry; the larger
-      // schema set needs more pumps for the composition FutureBuilder to
-      // resolve before the chat input mounts.
-      for (var i = 0; i < 40; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-
-      // --- configure: account A is configured, so the composer is enabled. ---
-      expect(find.text('Agent 未配置'), findsNothing);
-      expect(find.byKey(const Key('agent-chat-input')), findsOneWidget);
-
-      // --- local schedule -> grouped semester summary ---
-      // Send a question; the scripted call 1 emits a get_schedule course_summary
-      // tool_use over the seeded 线性代数 series.
-      await tester.enterText(
-        find.byKey(const Key('agent-chat-input')),
-        '本周有什么课？再查一下二课。',
-      );
-      await tester.pump();
-      await tester.testTextInput.receiveAction(TextInputAction.send);
-      // Pump through call 1 (get_schedule tool_use -> tool executes -> tool_result
-      // folded) and into call 2 (search_current_second_class_activities tool_use
-      // -> gateway pauses with needs_user_login).
-      for (var i = 0; i < 25; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-
-      // The get_schedule tool ran (course_summary group over the series). The
-      // run emitted a local schedule action (deduplicated) — assert via the
-      // tool summary in the persisted run state.
-      expect(provider.streamCallCount, greaterThanOrEqualTo(1));
-      expect(gateway.startedJobs, 1);
-
-      // --- Young pause -> explicit resume same job ---
-      // Wait for the gateway to have paused (needs_user_login emitted).
-      await gateway.paused.future;
-      for (var i = 0; i < 5; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      // The chat page surfaces the "打开登录窗口并继续" button.
-      expect(find.text('打开登录窗口并继续'), findsOneWidget);
-      await tester.tap(find.text('打开登录窗口并继续'));
-      // Pump through the resume -> gateway.resumeLogin -> completed tool_result
-      // -> call 3 (final text).
-      for (var i = 0; i < 30; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-
-      // --- final answer ---
-      expect(gateway.resumedJobIds, ['young-1']);
-      expect(gateway.passwordWasProvided, isTrue);
-      expect(gateway.startedJobs, 1); // same job resumed, not a new query.
-      expect(provider.streamCallCount, 3);
-      expect(find.textContaining('线性代数'), findsOneWidget);
-
-      // --- local actions vs trusted public citations (Task 7 deferred item) ---
-      // The get_schedule run emitted a deduplicated AgentLocalAction.schedule,
-      // rendered as a CLICKABLE ActionChip labelled 查看日程. Tapping it routes
-      // to /schedule through the real GoRouter (_handleLocalAction). This
-      // closes the Task 7 deferred item: _handleLocalAction's context.push
-      // ('/schedule') is now covered by a GoRouter-mounted composition test.
-      final actionChip = find.widgetWithText(ActionChip, '查看日程');
-      expect(actionChip, findsOneWidget);
-      await tester.tap(actionChip);
-      for (var i = 0; i < 15; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      // The real /schedule route rendered (its SchedulePage surfaces the week
-      // view header), proving the local-action chip routed via GoRouter.
-      expect(find.text('周视图'), findsOneWidget);
-      // Return to the chat branch so the account-switch sequence below runs
-      // against the chat route. /schedule is a sibling bottom-nav branch, so
-      // navigate the router back to /chat directly.
-      router.go('/chat');
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-
-      // --- switch to B -> empty account-scoped chat ---
-      await database.transaction(() async {
-        await (database.update(database.localAccounts)
-              ..where((row) => row.id.equals('a')))
-            .write(const LocalAccountsCompanion(isActive: Value(false)));
-        await (database.update(database.localAccounts)
-              ..where((row) => row.id.equals('b')))
-            .write(const LocalAccountsCompanion(isActive: Value(true)));
-      });
-      database.notifyActiveAccountChanged();
-      for (var i = 0; i < 15; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      // B's chat is empty: A's messages do not appear.
-      expect(find.textContaining('线性代数'), findsNothing);
-      // The composer is present for the now-active configured account B.
-      expect(find.byKey(const Key('agent-chat-input')), findsOneWidget);
-
-      // --- switch back to A -> recovered conversation ---
-      await database.transaction(() async {
-        await (database.update(database.localAccounts)
-              ..where((row) => row.id.equals('b')))
-            .write(const LocalAccountsCompanion(isActive: Value(false)));
-        await (database.update(database.localAccounts)
-              ..where((row) => row.id.equals('a')))
-            .write(const LocalAccountsCompanion(isActive: Value(true)));
-      });
-      database.notifyActiveAccountChanged();
-      for (var i = 0; i < 15; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      // A's recovered conversation re-renders the prior assistant answer.
-      expect(find.textContaining('线性代数'), findsOneWidget);
-
-      // --- dispose -> query gateway shutdown exactly once ---
-      // Tear down the widget tree; the composition's State.dispose calls
-      // AgentCompositionResult.dispose, which disposes the gateway. The
-      // _AgentChatCompositionBuilder disposes the previous composition on
-      // account switch (A->B disposed A's composition), and the final active
-      // composition (A's, rebuilt on B->A) is disposed on widget teardown.
-      // Across the A->B->A sequence the gateway instance is SHARED (the loader
-      // always returns the same gateway), so dispose() is invoked on each
-      // composition disposal, but only the FIRST dispose actually closes the
-      // controller (subsequent calls are no-ops on an already-closed
-      // controller). Assert the REAL behavior: the gateway's dispose was
-      // invoked at least once (composition ownership released it).
-      await tester.pumpWidget(const SizedBox.shrink());
-      for (var i = 0; i < 10; i++) {
-        await tester.pump(const Duration(milliseconds: 20));
-      }
-      expect(gateway.disposeCalls, greaterThanOrEqualTo(1));
-
-      // --- captured-request privacy ---
-      // Assert EVERY captured LlmRequest is free of the password canary, the
-      // job id, the raw catalog id, the complete account, and the API key.
-      expect(provider.requests, isNotEmpty);
-      final captured = jsonEncode(
-        provider.requests.map((req) => req.toJson()).toList(),
-      );
-      expect(captured, isNot(contains(protectedPassword)));
-      expect(captured, isNot(contains('young-1')));
-      expect(captured, isNot(contains('campus_1')));
-      expect(captured, isNot(contains('PB12345678')));
-      expect(captured, isNot(contains(apiKeyCanary)));
-    },
-  );
 
   test('composition wiring: confirm commits a personal event and leaks no id', () async {
     final db = AppDatabase(NativeDatabase.memory());
@@ -892,12 +488,10 @@ void main() {
         const CompletedEvent(),
       ]),
     ]);
-    final gateway = _CountingResumableYoungGateway();
     final composition = await _buildTestComposition(
       db,
       'acc-1',
       provider: provider,
-      gateway: gateway,
       protector: protector,
     );
     addTearDown(composition.dispose);
@@ -968,7 +562,7 @@ void main() {
       _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
     ]);
     final composition = await _buildTestComposition(db, 'acc-1',
-        provider: provider, gateway: _CountingResumableYoungGateway(), protector: protector);
+        provider: provider, protector: protector);
     addTearDown(composition.dispose);
     final states = <AgentRunViewState>[];
     final done = Completer<void>();
@@ -1016,7 +610,7 @@ void main() {
       _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
     ]);
     final first = await _buildTestComposition(db, 'acc-1',
-        provider: firstProvider, gateway: _CountingResumableYoungGateway(), protector: protector);
+        provider: firstProvider, protector: protector);
     addTearDown(first.dispose);
     final done1 = Completer<void>();
     late String runId1;
@@ -1048,7 +642,7 @@ void main() {
       _ScriptedCall(() => [const TextDeltaEvent('已创建。'), const CompletedEvent()]),
     ]);
     final second = await _buildTestComposition(db, 'acc-1',
-        provider: secondProvider, gateway: _CountingResumableYoungGateway(), protector: protector);
+        provider: secondProvider, protector: protector);
     addTearDown(second.dispose);
     final states2 = <AgentRunViewState>[];
     final done2 = Completer<void>();
@@ -1105,7 +699,6 @@ void main() {
       db,
       accountId,
       provider: provider,
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     return (registry: composition.registry, composition: composition);
@@ -1175,7 +768,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: provider,
-      gateway: _CountingResumableYoungGateway(),
       protector: const _NoopProtector(),
     );
     addTearDown(composition.dispose);
@@ -1413,7 +1005,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: provider,
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     addTearDown(composition.dispose);
@@ -1540,7 +1131,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: secondProvider,
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     addTearDown(second.dispose);
@@ -1567,7 +1157,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: _ScriptedProvider(const []),
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     addTearDown(third.dispose);
@@ -1916,7 +1505,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           const CompletedEvent(),
         ]),
       ]);
-      final gateway = _CountingResumableYoungGateway();
 
       Future<AgentCompositionResult> loadComposition(
         AppDatabase database,
@@ -1926,7 +1514,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
             database,
             accountId,
             provider: provider,
-            gateway: gateway,
             protector: protector,
           );
 
@@ -2163,7 +1750,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -2331,7 +1917,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: provider,
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     addTearDown(composition.dispose);
@@ -2454,7 +2039,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -2523,7 +2107,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -2589,7 +2172,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -2739,7 +2321,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: singleProvider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(singleComposition.dispose);
@@ -2806,7 +2387,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: wholeProvider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(wholeComposition.dispose);
@@ -2954,7 +2534,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: _ScriptedProvider(const []),
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(built.dispose);
@@ -3009,7 +2588,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       db,
       'acc-1',
       provider: provider,
-      gateway: _CountingResumableYoungGateway(),
       protector: protector,
     );
     addTearDown(composition.dispose);
@@ -3277,7 +2855,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       await _insertTask(database, 'task-1', 'a', '复习算法');
 
       final provider = _ScriptedProvider(_combinedRegressionScript());
-      final gateway = _CountingResumableYoungGateway();
 
       Future<AgentCompositionResult> loadComposition(
         AppDatabase db,
@@ -3287,7 +2864,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
             db,
             accountId,
             provider: provider,
-            gateway: gateway,
             protector: protector,
           );
 
@@ -3710,7 +3286,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(first.dispose);
@@ -3745,7 +3320,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: _ScriptedProvider(const []),
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(restarted.dispose);
@@ -3873,7 +3447,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         dbA,
         'acc-1',
         provider: providerA,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(compositionA.dispose);
@@ -3961,7 +3534,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         dbB,
         'acc-1',
         provider: providerB,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(compositionB.dispose);
@@ -4212,7 +3784,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -4412,7 +3983,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -4565,7 +4135,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -4751,7 +4320,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider1,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(composition.dispose);
@@ -4936,16 +4504,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
       expect(payloadText, isNot(contains(seriesId)));
       expect(payloadText, isNot(contains('occ_v1.')));
 
-      // No fake gateway: the recurring scenario touched only local/production
-      // tools via the composition's real registry + Drift write gateway. Assert
-      // the query gateway (the only non-local seam) received NO source query.
-      // (The gateway used here is the shared counting Young gateway.)
-      final gateway = composition.queryGateway;
-      expect(gateway, isA<_CountingResumableYoungGateway>());
-      expect((gateway as _CountingResumableYoungGateway).requests, isEmpty,
-          reason: 'the recurring reachability scenario must not touch the '
-              'external Young/Bridge source gateway at all');
-
       // --------------------------------------------------------------------
       // Step 7-8: restart the composition over the SAME database and re-prove
       // stable occurrence identity + persisted dependencies.
@@ -4960,7 +4518,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-1',
         provider: provider2,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(restarted.dispose);
@@ -5003,7 +4560,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
         db,
         'acc-2',
         provider: provider3,
-        gateway: _CountingResumableYoungGateway(),
         protector: protector,
       );
       addTearDown(other.dispose);
@@ -5838,7 +5394,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           db,
           'acc-1',
           provider: provider,
-          gateway: _CountingResumableYoungGateway(),
           protector: protector,
         );
         addTearDown(composition.dispose);
@@ -5937,7 +5492,6 @@ BEGIN SELECT RAISE(ABORT, 'forced agent audit failure'); END;
           db,
           'acc-1',
           provider: provider,
-          gateway: _CountingResumableYoungGateway(),
           protector: protector,
         );
         addTearDown(composition.dispose);

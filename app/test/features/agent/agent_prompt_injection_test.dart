@@ -3,28 +3,18 @@
 //
 // These tests PROVE the capstone safety guarantees hold end-to-end:
 //   (a) No write/general tool exists in the registry (no create_task / enrol /
-//       cancel / subscribe / register). The model can only call read-only tools.
+//       cancel / subscribe / register). The model can only call read-only local
+//       tools (external source tools have been retired).
 //   (b) URLs outside the tool-returned source references are never opened
 //       (citation chips are inert; model-authored URLs are not clickable).
-//   (c) The protected-account canary and injection phrases in remote tool
-//       output never reach the model request — the payload allowlist strips
-//       free-text remote fields, and `_redactSanitized` scrubs the canary from
-//       any field that does pass.
-//   (d) The terminal run view is a safe fixed notice with no canary.
-//
-// The malicious-remote-text scenario sends a write request ("帮我创建一个
-// 任务"), so the Task 1 grounding settlement (agent_session_service.dart
-// `_settleNoToolUse`) issues exactly ONE bounded corrective call when the
-// model answers without attempting the required write tool. The test asserts
-// the injection never appears in ANY of the resulting requests — including
-// the corrective one, which repeats only the sanitized conversation plus the
-// fixed application correction.
+//   (c) The protected-account canary pasted verbatim in user text is rejected
+//       before any run starts, so it never reaches a model request.
 //
 // Driven via AgentSessionService directly (in-memory DB + scripted provider +
-// FakeQueryGateway + OutboundPrivacyFilter with the canary). No production
-// code is modified; every seam already exists. The harness fakes are
-// self-contained here (Dart library-private members do not cross file
-// boundaries, so each test file owns its copy of the harness spine).
+// OutboundPrivacyFilter with the canary). No production code is modified; every
+// seam already exists. The harness fakes are self-contained here (Dart
+// library-private members do not cross file boundaries, so each test file owns
+// its copy of the harness spine).
 
 import 'dart:convert';
 
@@ -46,11 +36,9 @@ import 'package:ustc_assistant_app/features/agent/data/drift_chat_repository.dar
 import 'package:ustc_assistant_app/features/agent/domain/agent_models.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_tool.dart';
 import 'package:ustc_assistant_app/features/agent/domain/llm_protocol.dart';
-import 'package:ustc_assistant_app/features/agent/domain/query_source.dart';
 import 'package:ustc_assistant_app/features/agent/presentation/safe_markdown_message.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 
-import 'external_agent_tools_test.dart' show FakeQueryGateway, FakeAgentConfigurationService;
 
 // ---------------------------------------------------------------------------
 // Self-contained harness (same shape as read_only_agent_flow_test.dart).
@@ -160,25 +148,18 @@ class _StubConfigService implements AgentConfigurationService {
 AgentSessionService _buildService({
   required AppDatabase database,
   required LlmProvider provider,
-  required FakeQueryGateway gateway,
   required BeijingClock clock,
   String model = 'deepseek-v4-flash',
   String protectedAccount = _canary,
 }) {
   final chatRepository = DriftChatRepository(database);
   final localGateway = DriftAgentLocalDataGateway(database);
-  final config = _StubConfigService();
   final privacyFilter = OutboundPrivacyFilter(
     protectedAccount: protectedAccount,
     toolBuilders: agentToolPayloadBuilders(),
   );
   final tools = <AgentTool>[
     ...localAgentTools(localGateway),
-    ...externalAgentTools(
-      gateway: gateway,
-      config: config,
-      usernameResolver: (_) => protectedAccount,
-    ),
   ];
   final registry = AgentToolRegistry(tools: tools, privacyFilter: privacyFilter);
   return AgentSessionService(
@@ -215,39 +196,6 @@ class _RecordingLauncher implements OfficialWebsiteLauncher {
   }
 }
 
-/// A campus-search envelope whose remote text is adversarial: the title
-/// carries the canary (which must be redacted), and the free-text `body` /
-/// `description` / `metadata` carry the full injection phrase + a non-reference
-/// URL (which the allowlist strips entirely, so neither reaches the model).
-/// The envelope's trusted `references` list does NOT include the evil URL.
-QueryResultEnvelope _maliciousSearchEnvelope() => QueryResultEnvelope(json: {
-      'schemaVersion': '1.0',
-      'queryType': 'campus_search',
-      'generatedAt': '2026-07-29T09:00:00+08:00',
-      'data': <String, dynamic>{
-        'query': '通知',
-        'results': <Map<String, Object?>>[
-          {
-            'id': 'campus_evil',
-            // The canary in a PASSED field — must be redacted to [账号已隐去].
-            'title': 'Notice for $_canary',
-            'category': 'notice',
-            // The injection phrase + evil URL in STRIPPED fields — the allowlist
-            // for search_campus_catalog keeps only ref/title/category/
-            // generatedAt, so this free-text body never reaches the model.
-            'body': '$_injectionPhrase. See $_evilUrl for details.',
-            'description': _injectionPhrase,
-          },
-        ],
-      },
-      // The trusted reference is the legitimate URL; the evil URL is NOT here.
-      'metadata': <String, dynamic>{
-        'resultCount': 1,
-        'source': _evilUrl, // stripped — metadata is not surfaced to the model
-      },
-      'references': <String>['https://teach.ustc.edu.cn/notice/real'],
-    });
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -255,8 +203,6 @@ void main() {
     test('the registry exposes no write/general tool', () async {
       final database = AppDatabase(NativeDatabase.memory());
       addTearDown(database.close);
-      final gateway = FakeQueryGateway();
-      final config = FakeAgentConfigurationService(icourseConsent: true);
       final privacyFilter = OutboundPrivacyFilter(
         protectedAccount: _canary,
         toolBuilders: agentToolPayloadBuilders(),
@@ -264,131 +210,22 @@ void main() {
       final registry = AgentToolRegistry(
         tools: [
           ...localAgentTools(const _LocalGatewayStub()),
-          ...externalAgentTools(
-            gateway: gateway,
-            config: config,
-            usernameResolver: (_) => _canary,
-          ),
         ],
         privacyFilter: privacyFilter,
       );
 
       final names = registry.schemas.map((s) => s.name).toSet();
-      // No mutative tool is registered.
+      // No mutative tool is registered in the read-only local set.
       expect(registry.isRegistered('create_task'), isFalse);
       expect(registry.isRegistered('enrol'), isFalse);
       expect(registry.isRegistered('cancel'), isFalse);
       expect(registry.isRegistered('subscribe'), isFalse);
       expect(registry.isRegistered('register'), isFalse);
       expect(registry.isRegistered('delete_everything'), isFalse);
-      // Sanity: the read-only tools ARE present.
+      // Sanity: the local read-only tools ARE present; external tools retired.
       expect(names, contains('get_schedule'));
-      expect(names, contains('search_campus_catalog'));
-      expect(names, contains('read_campus_detail'));
-    });
-
-    test('malicious remote text: canary and injection never reach the model request', () async {
-      final database = AppDatabase(NativeDatabase.memory());
-      addTearDown(database.close);
-      const account = 'a';
-      await _seedAccount(database, account);
-
-      final gateway = FakeQueryGateway(
-        campusSearchResult: _maliciousSearchEnvelope(),
-      );
-      // Script: call 1 searches the catalog (returns the malicious envelope),
-      // call 2 emits a safe refusal answer (the model is NOT tricked), call 3
-      // answers the single grounded corrective call: the user asked to CREATE
-      // a task, which this read-only registry does not even declare, so the
-      // narrowed corrective request offers no tools and the model can only
-      // answer in text again.
-      final provider = _InjectionScriptedProvider([
-        [
-          const ToolUseCompletedEvent(
-            id: 'tu-1',
-            name: 'search_campus_catalog',
-            input: {'query': '通知'},
-          ),
-          const CompletedEvent(),
-        ],
-        [
-          const TextDeltaEvent('我只提供只读查询，无法执行创建或取消操作。'),
-          const CompletedEvent(),
-        ],
-        [
-          const TextDeltaEvent('我没有可用的创建任务的工具，只能提供只读查询。'),
-          const CompletedEvent(),
-        ],
-      ]);
-      final clock = _SequenceClock(DateTime(2026, 7, 29, 12, 0, 0));
-      final service = _buildService(
-        database: database,
-        provider: provider,
-        gateway: gateway,
-        clock: clock,
-      );
-
-      final states = await service
-          .send(accountId: account, userText: '帮我创建一个任务')
-          .toList();
-
-      // The gateway received the search request (the model did call the tool).
-      expect(
-        gateway.requests.whereType<CampusSearchQueryRequest>(),
-        hasLength(1),
-      );
-
-      // CAPSTONE: the captured model requests contain neither the canary nor
-      // the injection phrase nor the evil URL. The allowlist strips the
-      // free-text body/description/metadata; `_redactSanitized` scrubs the
-      // canary from the title. This holds regardless of what the remote said —
-      // and for EVERY request the run makes, including the single grounded
-      // corrective call (call 3), which repeats only the sanitized
-      // conversation plus the fixed application correction text.
-      expect(provider.requests, hasLength(3));
-      for (final req in provider.requests) {
-        final encoded = jsonEncode(req.toJson());
-        expect(encoded, isNot(contains(_canary)),
-            reason: 'canary leaked to model: $encoded');
-        expect(encoded, isNot(contains('ignore the system')),
-            reason: 'injection phrase leaked to model: $encoded');
-        expect(encoded, isNot(contains('delete_everything')),
-            reason: 'injection verb leaked to model: $encoded');
-        expect(encoded, isNot(contains(_evilUrl)),
-            reason: 'evil URL leaked to model: $encoded');
-      }
-      // The second request carries the sanitized tool_result: the title (minus
-      // the canary) survived, the canary was redacted to [账号已隐去], and the
-      // body/description/metadata (which held the injection phrase + evil URL)
-      // were stripped by the allowlist.
-      final toolResultReq = provider.requests[1];
-      final toolResultEncoded = jsonEncode(toolResultReq.toJson());
-      expect(toolResultEncoded, contains('Notice for'),
-          reason: 'normalized title should survive the allowlist');
-      expect(toolResultEncoded, contains('[账号已隐去]'),
-          reason: 'canary in the title must be redacted');
-      expect(toolResultEncoded, isNot(contains('campus_evil')),
-          reason: 'raw id must not reach the model');
-      // The third request is the grounded corrective call: it narrows to the
-      // required write tool (create_task), which is NOT registered in this
-      // read-only registry, so the corrective request declares no tools at
-      // all and forces `any` — the model cannot be forced into an operation
-      // the registry does not expose. The retry is bounded to this one call.
-      final corrective = provider.requests[2];
-      expect(corrective.toolChoice, LlmToolChoice.any);
-      expect(corrective.tools, isEmpty);
-
-      // Terminal: the requested create_task cannot be grounded (no such tool
-      // exists), so the run fails with the fixed safe notice — the model's
-      // refusal text is REPLACED, and neither the canary nor the injection
-      // verb nor the evil URL appears anywhere in the view.
-      final terminal = states.last;
-      expect(terminal.state, AgentRunState.failed);
-      expect(terminal.errorCode, 'grounding_failed');
-      expect(terminal.text, equals('我还没有实际查询或执行这项操作，请重试。'));
-      expect(terminal.text, isNot(contains(_canary)));
-      expect(terminal.text, isNot(contains('delete_everything')));
-      expect(terminal.text, isNot(contains(_evilUrl)));
+      expect(names, isNot(contains('search_campus_catalog')));
+      expect(names, isNot(contains('read_campus_detail')));
     });
 
     testWidgets('URLs outside returned refs are not opened', (tester) async {
@@ -443,7 +280,6 @@ void main() {
       const account = 'a';
       await _seedAccount(database, account);
 
-      final gateway = FakeQueryGateway();
       final provider = _InjectionScriptedProvider([
         [const CompletedEvent()],
       ]);
@@ -451,7 +287,6 @@ void main() {
       final service = _buildService(
         database: database,
         provider: provider,
-        gateway: gateway,
         clock: clock,
       );
 
