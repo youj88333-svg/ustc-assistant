@@ -113,42 +113,6 @@ class HttpBoundaryTests(unittest.TestCase):
         )
 
 
-class QueryRouteBoundaryTests(unittest.TestCase):
-    def test_unknown_query_route_is_not_found(self):
-        with RunningServer() as server:
-            response = request(server, "GET", "/query-jobs/unknown/events", token=server.token)
-            post_unknown = request(
-                server,
-                "POST",
-                "/query-jobs/unknown/cancel",
-                token=server.token,
-                body={"protocolVersion": PROTOCOL_VERSION},
-            )
-
-        self.assertEqual(404, response[0])
-        self.assertEqual(404, post_unknown[0])
-
-    def test_post_queries_rejects_arbitrary_url_path(self):
-        with RunningServer() as server:
-            url_resp = request(
-                server,
-                "POST",
-                "/queries/some/url",
-                token=server.token,
-                body={"protocolVersion": PROTOCOL_VERSION},
-            )
-            path_resp = request(
-                server,
-                "POST",
-                "/arbitrary/path",
-                token=server.token,
-                body={"protocolVersion": PROTOCOL_VERSION},
-            )
-
-        self.assertEqual(404, url_resp[0])
-        self.assertEqual(404, path_resp[0])
-
-
 class LifecycleTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows process probe regression")
     def test_windows_parent_probe_never_uses_os_kill(self):

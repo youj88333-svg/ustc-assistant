@@ -1,1 +1,0 @@
-"""Public iCourse query integration."""

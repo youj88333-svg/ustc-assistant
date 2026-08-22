@@ -1,15 +1,12 @@
 import json
 import tempfile
 import unittest
-from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from ustc_assistant import cli
 from ustc_assistant.common import browser, storage
-from ustc_assistant.sources import campus
-from ustc_assistant.sources.icourse import service as icourse_service
 
 
 class FakePage:
@@ -47,18 +44,27 @@ class FakePlaywrightManager:
 
 
 class PackageEntryTests(unittest.TestCase):
-    def test_root_parser_exposes_collect_and_query(self):
+    def test_root_parser_exposes_collect_and_config(self):
         parser = cli.build_parser()
 
         collect_args = parser.parse_args(
             ["collect", "jw", "--account-id", "acct_cli"]
         )
-        query_args = parser.parse_args(["query", "icourse", "--course", "test"])
+        config_args = parser.parse_args(["config", "generate-flutter-defaults"])
 
         self.assertEqual(collect_args.command, "collect")
         self.assertEqual(collect_args.source, "jw")
-        self.assertEqual(query_args.command, "query")
-        self.assertEqual(query_args.source, "icourse")
+        self.assertEqual(config_args.command, "config")
+        self.assertEqual(config_args.config_command, "generate-flutter-defaults")
+
+        # Retired subcommands are no longer accepted (argparse exits with 2).
+        for argv in (
+            ["collect", "young-schedule"],
+            ["query", "icourse", "--course", "x"],
+            ["collect", "campus"],
+        ):
+            with self.assertRaises(SystemExit):
+                parser.parse_args(argv)
 
     def test_collect_parsers_use_current_semester_defaults(self):
         parser = cli.build_parser()
@@ -66,22 +72,11 @@ class PackageEntryTests(unittest.TestCase):
         jw = parser.parse_args(
             ["collect", "jw", "--account-id", "acct_cli"]
         )
-        schedule = parser.parse_args(
-            [
-                "collect",
-                "young-schedule",
-                "--account-id",
-                "acct_cli",
-                "--today",
-                "2026-07-22",
-            ]
-        )
 
         self.assertEqual(jw.semester_id, 461)
         self.assertEqual(jw.semester_key, "2026fall")
         self.assertEqual(jw.display_name, "2026 秋季学期")
         self.assertEqual(jw.output, Path("tmp/ustc-jw-import.generated.json"))
-        self.assertEqual(schedule.today.isoformat(), "2026-07-22")
 
     def test_jw_semester_override_requires_complete_triple(self):
         result = cli.main(
@@ -97,83 +92,11 @@ class PackageEntryTests(unittest.TestCase):
 
         self.assertEqual(result, 1)
 
-    def test_formal_collect_commands_require_account_id_without_collecting(self):
+    def test_jw_collect_command_requires_account_id_without_collecting(self):
         with patch.object(cli.jw, "collect_jw_source_bundle") as collect_jw:
             self.assertEqual(1, cli.main(["collect", "jw"]))
-        with patch.object(
-            cli.young_source_bundle,
-            "collect_young_schedule_source_bundle",
-        ) as collect_young:
-            self.assertEqual(1, cli.main(["collect", "young-schedule"]))
 
         collect_jw.assert_not_called()
-        collect_young.assert_not_called()
-
-    def test_icourse_service_exposes_app_callable_query_runner(self):
-        self.assertTrue(callable(icourse_service.run_query))
-
-    def test_campus_parsers_expose_collect_query_and_read_defaults(self):
-        parser = cli.build_parser()
-
-        collect = parser.parse_args(["collect", "campus"])
-        query = parser.parse_args(["query", "campus", "--text", "缓考"])
-        read = parser.parse_args(
-            ["read", "campus", "--entry-id", "campus_abc"]
-        )
-
-        self.assertEqual(Path("tmp/campus-catalog.json"), collect.catalog_path)
-        self.assertEqual(
-            Path("tmp/campus-collection.generated.json"),
-            collect.output,
-        )
-        self.assertFalse(collect.force)
-        self.assertEqual([], collect.sources)
-        self.assertEqual(20, query.limit)
-        self.assertEqual(Path("tmp/campus-query.generated.json"), query.output)
-        self.assertTrue(read.allow_stale)
-        self.assertEqual([], read.follow_link_ids)
-        self.assertEqual(Path("tmp/campus-detail.generated.json"), read.output)
-
-    def test_task7_stable_query_callables_remain_importable_and_callable(self):
-        # Task 12 regression: the Task 7 stable query entry points the CLI
-        # dispatches to must stay importable and callable after the Task 8
-        # bridge wiring landed. We assert presence + callability without
-        # invoking them (they would hit the network).
-        self.assertTrue(callable(campus.search_catalog))
-        self.assertTrue(callable(campus.read_detail))
-        self.assertTrue(callable(icourse_service.run_query))
-
-    def test_cli_query_read_collect_subcommands_still_parse(self):
-        # Task 12 regression: the query / read / collect subcommands the bridge
-        # (Task 8) and CLI share must continue to parse after the bridge work.
-        parser = cli.build_parser()
-
-        query_icourse = parser.parse_args(
-            ["query", "icourse", "--course", "量子物理B"]
-        )
-        query_campus = parser.parse_args(["query", "campus", "--text", "缓考"])
-        read_campus = parser.parse_args(
-            ["read", "campus", "--entry-id", "campus_abc"]
-        )
-        collect_jw = parser.parse_args(
-            ["collect", "jw", "--account-id", "acct_cli"]
-        )
-
-        # Each subcommand parses and dispatches to the right top-level command.
-        self.assertEqual("query", query_icourse.command)
-        self.assertEqual("icourse", query_icourse.source)
-        self.assertEqual("query", query_campus.command)
-        self.assertEqual("缓考", query_campus.text)
-        self.assertEqual("read", read_campus.command)
-        self.assertEqual("campus", read_campus.source)
-        self.assertEqual("campus_abc", read_campus.entry_id)
-        self.assertEqual("collect", collect_jw.command)
-        self.assertEqual("jw", collect_jw.source)
-        # Each carries a dispatch handler (the bridge work did not remove it).
-        self.assertTrue(callable(query_icourse.handler))
-        self.assertTrue(callable(query_campus.handler))
-        self.assertTrue(callable(read_campus.handler))
-        self.assertTrue(callable(collect_jw.handler))
 
     def test_config_generate_flutter_defaults_parses(self):
         parser = cli.build_parser()
@@ -218,46 +141,6 @@ class PackageEntryTests(unittest.TestCase):
                     args.handler(args, lambda _: None)
 
             self.assertFalse(output.exists())
-
-    def test_campus_repeatable_and_safety_options_are_parsed(self):
-        parser = cli.build_parser()
-
-        collect = parser.parse_args(
-            [
-                "collect",
-                "campus",
-                "--source",
-                "teach_notice",
-                "--source",
-                "finance_notice",
-                "--force",
-                "--timeout-seconds",
-                "9",
-            ]
-        )
-        read = parser.parse_args(
-            [
-                "read",
-                "campus",
-                "--entry-id",
-                "campus_abc",
-                "--follow-link-id",
-                "link_1",
-                "--follow-link-id",
-                "link_2",
-                "--no-stale",
-                "--cache-dir",
-                "tmp/custom-cache",
-            ]
-        )
-
-        self.assertEqual(["teach_notice", "finance_notice"], collect.sources)
-        self.assertTrue(collect.force)
-        self.assertEqual(9, collect.timeout_seconds)
-        self.assertEqual(["link_1", "link_2"], read.follow_link_ids)
-        self.assertFalse(read.allow_stale)
-        self.assertEqual(Path("tmp/custom-cache"), read.cache_dir)
-
 
 class CollectorCommandTests(unittest.TestCase):
     def test_jw_command_writes_source_bundle_and_optional_raw_sources(self):
@@ -311,190 +194,6 @@ class CollectorCommandTests(unittest.TestCase):
             self.assertEqual("acct_cli", collect.call_args.kwargs["account_id"])
             self.assertEqual(421, collect.call_args.kwargs["semester"].semester_id)
             self.assertEqual("2026spring", collect.call_args.kwargs["semester"].semester_key)
-
-    def test_young_enrolment_command_defaults_to_normalized_output_only(self):
-        normalized = {
-            "activities": [{"sourceActivityId": "activity-1"}],
-            "metadata": {"pages": 1},
-        }
-        raw = SimpleNamespace(records=({"id": "activity-1", "userId": "private"},))
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = cli.build_parser().parse_args(
-                ["collect", "young-enrolment", "--output", str(root / "out.json")]
-            )
-            with patch.object(
-                cli.enrolment,
-                "collect_enrolment_snapshot",
-                return_value=(normalized, raw),
-            ):
-                self.assertEqual(0, args.handler(args, lambda _: None))
-
-            self.assertEqual(normalized, json.loads((root / "out.json").read_text(encoding="utf-8")))
-            self.assertFalse((root / "private").exists())
-
-    def test_young_schedule_command_writes_source_bundle_and_named_raw_file(self):
-        bundle = {
-            "schemaVersion": "1.0",
-            "subject": {"accountId": "acct_cli"},
-            "data": {
-                "calendarEvents": [{"externalId": "schedule-1"}],
-                "sourceRecords": [{"externalId": "record-1"}],
-                "courseSeries": [],
-                "scheduleRelations": [],
-            },
-        }
-        raw = SimpleNamespace(
-            records=({"id": "schedule-1", "userId": "private"},),
-            queried_dates=1,
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = cli.build_parser().parse_args(
-                [
-                    "collect",
-                    "young-schedule",
-                    "--account-id",
-                    "acct_cli",
-                    "--today",
-                    "2026-07-22",
-                    "--output",
-                    str(root / "out.json"),
-                    "--save-raw",
-                    "--raw-dir",
-                    str(root / "private"),
-                ]
-            )
-            with patch.object(
-                cli.young_source_bundle,
-                "collect_young_schedule_source_bundle",
-                return_value=(bundle, raw),
-            ) as collect:
-                self.assertEqual(0, args.handler(args, lambda _: None))
-
-            self.assertEqual(date(2026, 7, 22), collect.call_args.kwargs["today"])
-            self.assertEqual("acct_cli", collect.call_args.kwargs["account_id"])
-            self.assertEqual(
-                bundle,
-                json.loads((root / "out.json").read_text(encoding="utf-8")),
-            )
-            raw_path = root / "private" / "ustc-young-my-schedule.raw.json"
-            self.assertEqual("private", json.loads(raw_path.read_text(encoding="utf-8"))["records"][0]["userId"])
-
-
-class CampusCommandTests(unittest.TestCase):
-    def test_collect_writes_summary_and_returns_one_on_partial_failure(self):
-        payload = {
-            "source": "ustc_campus_catalog",
-            "sources": {
-                "teach_notice": {
-                    "status": "updated",
-                    "activeCount": 2,
-                    "error": None,
-                },
-                "finance_notice": {
-                    "status": "failed",
-                    "activeCount": 0,
-                    "error": "layout changed",
-                },
-            },
-            "metadata": {"updated": 1, "skipped": 0, "failed": 1},
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = cli.build_parser().parse_args(
-                [
-                    "collect",
-                    "campus",
-                    "--source",
-                    "teach_notice",
-                    "--output",
-                    str(root / "summary.json"),
-                    "--catalog-path",
-                    str(root / "catalog.json"),
-                ]
-            )
-            with patch.object(campus, "refresh_catalogs", return_value=payload) as refresh:
-                result = args.handler(args, lambda _: None)
-
-            written = json.loads((root / "summary.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(1, result)
-        self.assertEqual(payload, written)
-        self.assertEqual(["teach_notice"], refresh.call_args.kwargs["sources"])
-
-    def test_query_writes_empty_offline_result(self):
-        payload = {
-            "source": "ustc_campus_catalog",
-            "query": "不存在",
-            "results": [],
-            "metadata": {"resultCount": 0},
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = cli.build_parser().parse_args(
-                [
-                    "query",
-                    "campus",
-                    "--text",
-                    "不存在",
-                    "--output",
-                    str(root / "query.json"),
-                    "--catalog-path",
-                    str(root / "catalog.json"),
-                ]
-            )
-            with patch.object(campus, "search_catalog", return_value=payload) as search:
-                result = args.handler(args, lambda _: None)
-
-            written = json.loads((root / "query.json").read_text(encoding="utf-8"))
-
-        self.assertEqual(0, result)
-        self.assertEqual(payload, written)
-        self.assertNotIn("client", search.call_args.kwargs)
-
-    def test_read_forwards_stale_and_candidate_link_ids(self):
-        payload = {
-            "id": "knowledge_1",
-            "title": "公开指南",
-            "content": "正文不应出现在状态消息中",
-            "stale": False,
-        }
-        statuses: list[str] = []
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            args = cli.build_parser().parse_args(
-                [
-                    "read",
-                    "campus",
-                    "--entry-id",
-                    "campus_1",
-                    "--follow-link-id",
-                    "link_1",
-                    "--no-stale",
-                    "--output",
-                    str(root / "detail.json"),
-                ]
-            )
-            with patch.object(campus, "read_detail", return_value=payload) as read:
-                result = args.handler(args, statuses.append)
-
-        self.assertEqual(0, result)
-        self.assertFalse(read.call_args.kwargs["allow_stale"])
-        self.assertEqual(["link_1"], read.call_args.kwargs["follow_link_ids"])
-        self.assertNotIn("正文不应出现在状态消息中", " ".join(statuses))
-
-    def test_main_handles_campus_error_without_traceback(self):
-        with patch.object(
-            campus,
-            "search_catalog",
-            side_effect=campus.CampusError("catalog unavailable"),
-        ):
-            result = cli.main(["query", "campus", "--text", "缓考"])
-
-        self.assertEqual(1, result)
 
 
 class CommonStorageTests(unittest.TestCase):

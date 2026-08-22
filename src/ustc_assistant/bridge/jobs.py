@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from datetime import date
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -17,7 +16,6 @@ from ustc_assistant.common.auth import (
 from ustc_assistant.config import JwSemesterConfig
 from ustc_assistant.contracts import validate_source_bundle
 from ustc_assistant.sources.jw import service as jw_service
-from ustc_assistant.sources.young import source_bundle as young_service
 
 
 TERMINAL_PHASES = frozenset({"complete", "cancelled", "failed"})
@@ -43,18 +41,11 @@ class JwCollectionRequest:
     semester: JwSemesterConfig
 
 
-@dataclass(frozen=True)
-class YoungCollectionRequest:
-    account_id: str
-    expected_username: str
-    today: date | None = None
-
-
 class CollectionJob:
     def __init__(
         self,
         *,
-        request: JwCollectionRequest | YoungCollectionRequest,
+        request: JwCollectionRequest,
         source: str,
         collector: Callable[..., Any],
         release: Callable[["CollectionJob"], None],
@@ -105,16 +96,14 @@ class CollectionJob:
     def _collector_kwargs(
         self, *, interactive: bool, credentials: LoginCredentials
     ) -> dict[str, Any]:
-        common = {
+        return {
             "account_id": self.request.account_id,
             "allow_interactive_login": interactive,
             "credentials": credentials,
             "cancel_check": self._cancelled.is_set,
             "status": lambda message: self._status(),
+            "semester": self.request.semester,
         }
-        if isinstance(self.request, JwCollectionRequest):
-            return {**common, "semester": self.request.semester}
-        return {**common, "today": self.request.today}
 
     def _status(self) -> None:
         if self.phase != "collecting":
@@ -217,7 +206,7 @@ class JobManager:
 
     def _start(
         self,
-        request: JwCollectionRequest | YoungCollectionRequest,
+        request: JwCollectionRequest,
         *,
         source: str,
         collector: Callable[..., Any],
@@ -246,20 +235,6 @@ class JobManager:
         collector: Callable[..., Any] = jw_service.collect_jw_source_bundle,
     ) -> CollectionJob:
         return self._start(request, source="ustc_jw", collector=collector)
-
-    def start_young_schedule(
-        self,
-        request: YoungCollectionRequest,
-        *,
-        collector: Callable[..., Any] = (
-            young_service.collect_young_schedule_source_bundle
-        ),
-    ) -> CollectionJob:
-        return self._start(
-            request,
-            source="ustc_young_my_schedule",
-            collector=collector,
-        )
 
     def get(self, job_id: str) -> CollectionJob:
         with self._lock:

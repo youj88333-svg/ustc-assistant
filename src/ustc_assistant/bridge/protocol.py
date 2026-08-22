@@ -8,7 +8,6 @@ from typing import Any
 
 
 PROTOCOL_VERSION = "1.0"
-QUERY_PROTOCOL_VERSION = "1.0"
 MAX_REQUEST_BYTES = 64 * 1024
 
 

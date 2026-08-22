@@ -6,14 +6,10 @@ import unittest
 
 from ustc_assistant.bridge.jobs import JobManager
 from ustc_assistant.bridge.protocol import PROTOCOL_VERSION
-from ustc_assistant.bridge.query_jobs import ReadQueryJobManager
 from ustc_assistant.bridge.server import BridgeServer
 from ustc_assistant.common.auth import UserActionRequired
 from tests.bridge.test_jobs import JW_BUNDLE
 from tests.bridge.test_server import RunningServer, request
-
-# The query protocol version advertised alongside the collection protocol.
-QUERY_PROTOCOL_VERSION = "1.0"
 
 
 class CollectionApiTests(unittest.TestCase):
@@ -140,12 +136,10 @@ class CollectionApiTests(unittest.TestCase):
         self.assertEqual(202, resumed[0])
         self.assertEqual([None, "secret"], seen)
 
-    def test_collection_and_query_managers_coexist_on_one_server(self):
-        # Task 12 regression: a single BridgeServer with BOTH a collection
-        # job_manager and a query_job_manager still serves collection endpoints
-        # correctly, AND /capabilities advertises both protocolVersion and the
-        # query protocol surface (queryProtocolVersion + queryTypes). This guards
-        # against the query endpoints (Task 8) breaking the collection API.
+    def test_jw_job_runs_against_plain_job_manager(self):
+        # A single BridgeServer with only a collection job_manager still serves
+        # collection endpoints correctly, and /capabilities advertises only the
+        # collection protocol (no query protocol surface).
         def collector(**kwargs):
             return JW_BUNDLE, object()
 
@@ -154,7 +148,6 @@ class CollectionApiTests(unittest.TestCase):
                 parent_pid=None,
                 job_manager=JobManager(),
                 jw_collector=collector,
-                query_job_manager=ReadQueryJobManager(),
             )
         ) as server:
             # Collection endpoint still accepts and starts a JW job (202).
@@ -177,7 +170,7 @@ class CollectionApiTests(unittest.TestCase):
             self.assertEqual(202, started[0])
             self.assertIn("jobId", started[1])
 
-            # /capabilities advertises both protocols side by side.
+            # /capabilities advertises only the collection protocol.
             capabilities = request(
                 server, "GET", "/capabilities", token=server.token
             )
@@ -185,13 +178,8 @@ class CollectionApiTests(unittest.TestCase):
         self.assertEqual(200, capabilities[0])
         payload = json.loads(capabilities[1])
         self.assertEqual(PROTOCOL_VERSION, payload["protocolVersion"])
-        self.assertEqual(
-            QUERY_PROTOCOL_VERSION, payload["queryProtocolVersion"]
-        )
-        self.assertEqual(
-            ["young_enrolment", "icourse", "campus_search", "campus_detail"],
-            payload["queryTypes"],
-        )
+        self.assertNotIn("queryProtocolVersion", payload)
+        self.assertNotIn("queryTypes", payload)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,6 @@ from ustc_assistant.bridge.jobs import (
     BridgeBusy,
     JobManager,
     JwCollectionRequest,
-    YoungCollectionRequest,
 )
 from ustc_assistant.common.auth import (
     AccountMismatch,
@@ -33,10 +32,6 @@ JW_REQUEST = JwCollectionRequest(
     account_id="acct_fixture",
     expected_username="PB00000000",
     semester=JwSemesterConfig(461, "2026fall", "2026 秋季学期"),
-)
-YOUNG_REQUEST = YoungCollectionRequest(
-    account_id="acct_fixture",
-    expected_username="PB00000000",
 )
 
 
@@ -75,7 +70,7 @@ class JobStateTests(unittest.TestCase):
         manager = JobManager()
         first = manager.start_jw(JW_REQUEST, collector=blocking)
         with self.assertRaises(BridgeBusy):
-            manager.start_young_schedule(YOUNG_REQUEST, collector=blocking)
+            manager.start_jw(JW_REQUEST, collector=blocking)
         release.set()
         self.assertEqual("complete", first.wait_for_terminal_or_pause())
 
