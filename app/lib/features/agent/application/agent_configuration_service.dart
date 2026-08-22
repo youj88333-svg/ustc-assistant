@@ -63,10 +63,6 @@ class AgentConfigurationService {
   Future<void> setModel(String accountId, String model) =>
       _upsert(accountId, model: model);
 
-  /// Upserts the icourse-consent flag for exactly one account.
-  Future<void> setIcourseConsent(String accountId, bool consent) =>
-      _upsert(accountId, consent: consent);
-
   /// Upserts the enabled flag for exactly one account.
   Future<void> enable(String accountId, bool enabled) =>
       _upsert(accountId, enabled: enabled);
@@ -103,7 +99,6 @@ class AgentConfigurationService {
     String accountId, {
     String? model,
     bool? enabled,
-    bool? consent,
     int? systemPromptVersion,
   }) async {
     await _database.transaction(
@@ -111,7 +106,6 @@ class AgentConfigurationService {
         accountId,
         model: model,
         enabled: enabled,
-        consent: consent,
         systemPromptVersion: systemPromptVersion,
       ),
     );
@@ -122,7 +116,6 @@ class AgentConfigurationService {
     String accountId, {
     String? model,
     bool? enabled,
-    bool? consent,
     int? systemPromptVersion,
   }) async {
     final existing = await _row(accountId);
@@ -134,7 +127,7 @@ class AgentConfigurationService {
             model: Value(model ?? existing?.model ?? defaultModel),
             enabled: Value(enabled ?? existing?.enabled ?? defaultEnabled),
             icourseConsent: Value(
-              consent ?? existing?.icourseConsent ?? defaultIcourseConsent,
+              existing?.icourseConsent ?? defaultIcourseConsent,
             ),
             systemPromptVersion: Value(
               systemPromptVersion ??

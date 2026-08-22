@@ -102,7 +102,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
   StreamSubscription<AgentRunViewState>? _streamSubscription;
   StreamSubscription<AgentSettingsSnapshot>? _settingsSubscription;
   bool _nearBottom = true;
-  String? _lastRunId;
   String? _requestedModel;
 
   /// Resolved ONCE in [initState] and reused by the [build] FutureBuilder.
@@ -274,7 +273,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
   }
 
   void _onViewState(AgentRunViewState state) {
-    _lastRunId = state.runId;
     final visibleText = state.text.isEmpty
         ? _emptyTerminalText(state.state)
         : state.text;
@@ -422,14 +420,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
         .listen(_onViewState, onDone: _onStreamDone, onError: _onStreamError);
   }
 
-  Future<void> _resumeLogin() async {
-    final runId = _lastRunId;
-    if (runId == null || runId.isEmpty) return;
-    await widget.sessionService
-        .resumeUserAction(accountId: widget.accountId, runId: runId)
-        .drain<void>();
-  }
-
   /// Routes a local navigation action chip tap to the relevant management
   /// screen via GoRouter. `schedule` opens `/schedule?section=week` (the week
   /// view); `tasks` opens `/schedule?section=tasks` (the schedule page owns
@@ -551,12 +541,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
   }
 
   Widget _buildMessageList() {
-    final last = _messages.isEmpty ? null : _messages.last;
-    final needsLogin =
-        last is _AssistantMessage &&
-        last.state == AgentRunState.waitingForUser &&
-        last.userAction?.type == AgentUserActionType.youngLogin;
-
     if (_messages.isEmpty && !_isRunning) {
       return Center(
         child: Padding(
@@ -572,18 +556,13 @@ class _AgentChatPageState extends State<AgentChatPage> {
       );
     }
 
-    final extraItems = (needsLogin ? 1 : 0) + (_needsWriteConfirmation ? 1 : 0);
+    final extraItems = _needsWriteConfirmation ? 1 : 0;
     return ListView.builder(
       controller: _scrollController,
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       itemCount: _messages.length + extraItems,
       itemBuilder: (context, index) {
-        if (index == _messages.length && needsLogin) {
-          return _buildNeedsLogin();
-        }
-        if (index == _messages.length + (needsLogin ? 1 : 0) &&
-            _needsWriteConfirmation) {
-          // 登录横幅优先，写确认卡在其后追加。
+        if (index == _messages.length && _needsWriteConfirmation) {
           return _buildWriteConfirmationCard();
         }
 
@@ -725,39 +704,6 @@ class _AgentChatPageState extends State<AgentChatPage> {
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
           ),
       ],
-    );
-  }
-
-  Widget _buildNeedsLogin() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Card(
-        color: Theme.of(context).colorScheme.errorContainer,
-        child: Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(
-            children: [
-              Icon(
-                Icons.login,
-                color: Theme.of(context).colorScheme.onErrorContainer,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  '需要登录校园账号以继续',
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: _resumeLogin,
-                child: const Text('打开登录窗口并继续'),
-              ),
-            ],
-          ),
-        ),
-      ),
     );
   }
 

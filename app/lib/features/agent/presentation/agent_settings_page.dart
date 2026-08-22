@@ -285,11 +285,6 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
     }
   }
 
-  Future<void> _toggleConsent(bool value) async {
-    await widget.config.setIcourseConsent(widget.accountId, value);
-    await _refreshSnapshot();
-  }
-
   Future<void> _clearSummary() async {
     final confirmed = await _confirm('清除当前会话摘要？聊天消息会保留。');
     if (confirmed != true) return;
@@ -447,15 +442,6 @@ class _AgentSettingsPageState extends State<AgentSettingsPage> {
                 onChanged: _busy ? null : _changeModel,
                 isExpanded: true,
               ),
-            ),
-            // iCourse consent.
-            SwitchListTile(
-              key: const Key('agent-icourse-consent'),
-              secondary: const Icon(Icons.school),
-              title: const Text('允许 Agent 查询我的 iCourse 信息'),
-              subtitle: const Text('关闭后 Agent 不会读取你的 iCourse 数据'),
-              value: snapshot?.icourseConsent ?? false,
-              onChanged: _toggleConsent,
             ),
             const Divider(),
             // Agent 权限：每类写操作的确认模式、恢复默认与最近变更。
