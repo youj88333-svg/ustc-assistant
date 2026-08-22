@@ -68,6 +68,11 @@ dev_dependencies:
   sqlparser: 0.44.5
   path: 1.9.1
   sqlite3: 3.5.0
+  # Used only by tests that reference the `timezone` types surfaced through the
+  # `flutter_local_notifications` API surface (e.g. the notification adapter
+  # fake). Transitive via flutter_local_notifications; pinned to the resolved
+  # lockfile version so `pub get` does not churn.
+  timezone: 0.11.1
 
 
 # --- dev environment: make native hook offline-friendly ---

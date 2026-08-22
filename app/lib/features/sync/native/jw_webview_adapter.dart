@@ -15,8 +15,8 @@ import 'jw_web_page.dart';
 /// WebView-backed implementation of [JwWebPage].
 ///
 /// All members throw [UnimplementedError] until M6 wires a real WebView on the
-/// external machine. The base class [JwWebPage.close] already provides a
-/// no-op default, so it is not overridden here.
+/// external machine. [close] is re-declared as a no-op because `implements`
+/// does not inherit the base class default.
 class JwWebViewAdapter implements JwWebPage {
   @override
   Future<String> get currentUrl =>
