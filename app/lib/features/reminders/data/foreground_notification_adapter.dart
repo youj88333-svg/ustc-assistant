@@ -39,6 +39,8 @@ class ForegroundNotificationAdapter implements ForegroundNotificationPort {
             appUserModelId: 'Ustc.Assistant.Development',
             guid: '66bcb098-3b43-4f4d-aebb-22ea2c112c5d',
           ),
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+          iOS: DarwinInitializationSettings(),
         ),
       );
       if (available == false) {
@@ -60,8 +62,15 @@ class ForegroundNotificationAdapter implements ForegroundNotificationPort {
         id: notification.reminderId.hashCode & 0x7fffffff,
         title: notification.title,
         body: notification.body,
-        notificationDetails: const NotificationDetails(
-          windows: WindowsNotificationDetails(),
+        notificationDetails: NotificationDetails(
+          windows: const WindowsNotificationDetails(),
+          android: AndroidNotificationDetails(
+            'reminders',
+            '提醒',
+            channelDescription: '日程与任务提醒',
+            importance: Importance.high,
+          ),
+          iOS: const DarwinNotificationDetails(),
         ),
         payload: notification.reminderId,
       );
