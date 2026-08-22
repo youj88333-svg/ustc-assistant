@@ -74,7 +74,7 @@ flutter pub get           # 需外网拉取 pub 依赖
 
 ```bash
 cd app
-/home/flutter/bin/flutter analyze 2>&1 | tail -3
+flutter analyze 2>&1 | tail -3
 # 预期：0 error / 15 issues（12 info + 3 warning），末行 "15 issues found."
 
 flutter test 2>&1 | tail -15
