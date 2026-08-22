@@ -22,7 +22,7 @@ import 'outbound_privacy_filter.dart';
 /// Platform-injected factory for a protected [AgentSecretStore].
 ///
 /// Windows: `ProtectedAgentSecretStore(database: db, protector:
-/// WindowsDpapiProtector())`. Android/iOS: inject an in-memory or
+/// defaultCredentialProtector())` (DPAPI). Android/iOS: inject an in-memory or
 /// flutter_secure_storage-backed implementation.
 typedef SecretStoreFactory = AgentSecretStore Function(AppDatabase database);
 

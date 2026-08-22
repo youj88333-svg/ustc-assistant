@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../core/database/app_database.dart';
-import '../../../core/security/windows_dpapi_protector.dart';
+import '../../../core/security/credential_protector_factory.dart';
 import '../../accounts/application/account_service.dart';
 import '../../import/application/import_service.dart';
 import '../../import/application/reminder_reconciler.dart';
@@ -24,7 +24,7 @@ Future<void> runStartupAutomaticSync(
   try {
     final accounts = AccountService(
       database: database,
-      protector: WindowsDpapiProtector(),
+      protector: defaultCredentialProtector(),
     );
     final account = await accounts.activeAccount();
     if (account == null) return;
@@ -100,7 +100,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     );
     final accounts = AccountService(
       database: widget.database,
-      protector: WindowsDpapiProtector(),
+      protector: defaultCredentialProtector(),
     );
     final importer = ImportService(
       database: widget.database,

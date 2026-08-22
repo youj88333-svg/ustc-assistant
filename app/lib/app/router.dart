@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../core/database/app_database.dart';
-import '../core/security/windows_dpapi_protector.dart';
+import '../core/security/credential_protector_factory.dart';
 import '../core/time/beijing_clock.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/presentation/accounts_page.dart';
@@ -144,7 +144,7 @@ GoRouter buildRouter(
         builder: (context, state) => AccountsPage(
           service: AccountService(
             database: database,
-            protector: WindowsDpapiProtector(),
+            protector: defaultCredentialProtector(),
           ),
           onLoginAgain: (accountId) =>
               context.push('/accounts/$accountId/reauthenticate'),
@@ -455,7 +455,7 @@ class _SettingsLoader extends StatelessWidget {
         }
         final accounts = AccountService(
           database: database,
-          protector: WindowsDpapiProtector(),
+          protector: defaultCredentialProtector(),
         );
         return SettingsPage(
           service: SettingsService(
@@ -498,7 +498,7 @@ class _AgentSettingsLoader extends StatelessWidget {
           ),
           secrets: ProtectedAgentSecretStore(
             database: database,
-            protector: WindowsDpapiProtector(),
+            protector: defaultCredentialProtector(),
           ),
           provider: AnthropicLlmProvider(),
           chatRepository: chatRepository,
@@ -704,7 +704,7 @@ Future<AgentCompositionResult> _buildAgentComposition(
 ) async {
   final accounts = AccountService(
     database: database,
-    protector: WindowsDpapiProtector(),
+    protector: defaultCredentialProtector(),
   );
   final resolvedUsername = await _resolvedUsername(accounts, accountId);
   if (resolvedUsername.isEmpty) throw const _NoResolvedUsername();
@@ -716,7 +716,7 @@ Future<AgentCompositionResult> _buildAgentComposition(
     accounts: accounts,
     secretStoreFactory: (db) => ProtectedAgentSecretStore(
       database: db,
-      protector: WindowsDpapiProtector(),
+      protector: defaultCredentialProtector(),
     ),
   );
 }
