@@ -17,7 +17,6 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   final pythonController = TextEditingController();
   bool jwEnabled = true;
-  bool youngEnabled = true;
   bool resetting = false;
 
   @override
@@ -26,14 +25,10 @@ class _SettingsPageState extends State<SettingsPage> {
     widget.service.pythonPath().then((value) {
       if (mounted) pythonController.text = value ?? '';
     });
-    Future.wait([
-      widget.service.sourceEnabled('ustc_jw'),
-      widget.service.sourceEnabled('ustc_young_schedule'),
-    ]).then((values) {
+    widget.service.sourceEnabled('ustc_jw').then((value) {
       if (mounted) {
         setState(() {
-          jwEnabled = values[0];
-          youngEnabled = values[1];
+          jwEnabled = value;
         });
       }
     });
@@ -71,18 +66,6 @@ class _SettingsPageState extends State<SettingsPage> {
             onChanged: (value) async {
               await widget.service.setSourceEnabled('ustc_jw', value);
               if (mounted) setState(() => jwEnabled = value);
-            },
-          ),
-          SwitchListTile(
-            secondary: const Icon(Icons.event),
-            title: const Text('已报名二课'),
-            value: youngEnabled,
-            onChanged: (value) async {
-              await widget.service.setSourceEnabled(
-                'ustc_young_schedule',
-                value,
-              );
-              if (mounted) setState(() => youngEnabled = value);
             },
           ),
           Padding(

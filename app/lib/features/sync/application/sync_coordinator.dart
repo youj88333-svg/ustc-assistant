@@ -508,11 +508,6 @@ class SyncCoordinator {
       timestamp: timestamp,
       config: capabilities.jwSemester.toJson(),
     );
-    await _ensureConfig(
-      SyncSource.youngSchedule,
-      accountId,
-      timestamp: timestamp,
-    );
   }
 
   Future<void> _ensureConfig(

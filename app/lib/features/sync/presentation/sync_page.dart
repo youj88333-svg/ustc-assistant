@@ -535,10 +535,8 @@ class _SyncPageState extends State<SyncPage> {
                 const SizedBox(height: 16),
                 for (final source in SyncSource.values)
                   ListTile(
-                    leading: Icon(
-                      source == SyncSource.jw ? Icons.school : Icons.event,
-                    ),
-                    title: Text(source == SyncSource.jw ? '教务系统' : '已报名二课'),
+                    leading: const Icon(Icons.school),
+                    title: const Text('教务系统'),
                     subtitle: Text(
                       _stateLabel(states[source]),
                       key: Key('sync-state-${source.name}'),

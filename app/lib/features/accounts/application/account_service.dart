@@ -30,7 +30,6 @@ class AccountSummary {
     required this.hasCredentials,
     required this.hasSavedPassword,
     this.jwLastSuccessAt,
-    this.youngLastSuccessAt,
   });
 
   final String id;
@@ -39,7 +38,6 @@ class AccountSummary {
   final bool hasCredentials;
   final bool hasSavedPassword;
   final int? jwLastSuccessAt;
-  final int? youngLastSuccessAt;
 }
 
 class _StagedLogin {
@@ -337,9 +335,6 @@ class AccountService {
           hasCredentials: byId.containsKey(account.id),
           hasSavedPassword: byId[account.id]?.passwordCiphertext != null,
           jwLastSuccessAt: syncByAccountAndSource['${account.id}\u0000ustc_jw'],
-          youngLastSuccessAt:
-              syncByAccountAndSource['${account.id}'
-                  '\u0000ustc_young_schedule'],
         ),
     ];
   }

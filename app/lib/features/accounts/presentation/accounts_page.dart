@@ -150,7 +150,6 @@ class _AccountPanel extends StatelessWidget {
         Text(account.hasCredentials ? '凭据已保存' : '需要重新登录'),
         Text('已保存密码：${account.hasSavedPassword ? '是' : '否'}'),
         Text('教务系统：${_syncStatus(account.jwLastSuccessAt)}'),
-        Text('二课平台：${_syncStatus(account.youngLastSuccessAt)}'),
         const SizedBox(height: 8),
         Wrap(
           spacing: 8,
