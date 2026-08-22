@@ -14,7 +14,6 @@ import '../features/agent/application/agent_permission_policy_service.dart';
 import '../features/agent/data/anthropic_llm_provider.dart';
 import '../features/agent/data/drift_chat_repository.dart';
 import '../features/agent/data/protected_agent_secret_store.dart';
-import '../features/agent/data/windows_python_query_gateway.dart';
 import '../features/agent/presentation/agent_chat_page.dart';
 import '../features/agent/presentation/agent_settings_page.dart';
 import '../features/calendar/application/calendar_event_service.dart';
@@ -29,7 +28,6 @@ import '../features/schedule/presentation/conflict_management_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
-import '../features/sync/data/python_locator.dart';
 import '../features/sync/presentation/sync_page.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
@@ -50,7 +48,7 @@ GoRouter buildRouter(
   AgentCompositionLoader? agentCompositionLoader,
 ]) {
   final loadAgentComposition =
-      agentCompositionLoader ?? _buildWindowsAgentComposition;
+      agentCompositionLoader ?? _buildAgentComposition;
   return GoRouter(
     initialLocation: '/chat',
     routes: [
@@ -519,10 +517,9 @@ class _AgentSettingsLoader extends StatelessWidget {
 ///
 /// The active-account lookup is cached in [initState] so a rebuild (e.g. from
 /// an inset `setState` in a descendant) does NOT re-query the database. The
-/// expensive composition (secret store, DPAPI protector, Bridge handshake via
-/// `WindowsPythonQueryGateway.start`) is cached one level down in
-/// [_AgentChatCompositionBuilder], also in `initState`. Both happen once per
-/// route entry, not per rebuild.
+/// expensive composition (secret store, DPAPI protector) is cached one level
+/// down in [_AgentChatCompositionBuilder], also in `initState`. Both happen
+/// once per route entry, not per rebuild.
 class _AgentChatLoader extends StatefulWidget {
   const _AgentChatLoader({
     required this.database,
@@ -591,11 +588,10 @@ class _AgentChatLoaderState extends State<_AgentChatLoader> {
 /// Builds the AgentComposition for the active account and renders AgentChatPage.
 ///
 /// The composition future (username resolution + `AgentComposition.build`,
-/// which constructs the secret store/DPAPI protector and runs the Bridge
-/// handshake via `WindowsPythonQueryGateway.start`) is created ONCE in
+/// which constructs the secret store/DPAPI protector) is created ONCE in
 /// [initState] and reused across rebuilds. This is critical: creating it in
-/// `build` would re-run the full composition — including the Bridge handshake
-/// and DB queries — on every rebuild.
+/// `build` would re-run the full composition — including DB queries — on
+/// every rebuild.
 class _AgentChatCompositionBuilder extends StatefulWidget {
   const _AgentChatCompositionBuilder({
     required this.database,
@@ -702,7 +698,7 @@ class _NoResolvedUsername implements Exception {
   const _NoResolvedUsername();
 }
 
-Future<AgentCompositionResult> _buildWindowsAgentComposition(
+Future<AgentCompositionResult> _buildAgentComposition(
   AppDatabase database,
   String accountId,
 ) async {
@@ -713,24 +709,6 @@ Future<AgentCompositionResult> _buildWindowsAgentComposition(
   final resolvedUsername = await _resolvedUsername(accounts, accountId);
   if (resolvedUsername.isEmpty) throw const _NoResolvedUsername();
 
-  final queryGateway = LazyQuerySourceGateway(() async {
-    final savedPythonPath = await SettingsService(
-      database: database,
-      accounts: accounts,
-      accountId: accountId,
-    ).pythonPath();
-    final launchOptions = resolveBridgeLaunchOptions();
-    final pythonExecutable = await PythonLocator().locate(
-      savedExecutable: savedPythonPath,
-      requiredModule: 'ustc_assistant.bridge.query_jobs',
-      importEnvironment: launchOptions.environment,
-    );
-    return WindowsPythonQueryGateway.start(
-      pythonExecutable: pythonExecutable,
-      launchOptions: launchOptions,
-    );
-  });
-
   return AgentComposition.build(
     database: database,
     accountId: accountId,
@@ -740,7 +718,6 @@ Future<AgentCompositionResult> _buildWindowsAgentComposition(
       database: db,
       protector: WindowsDpapiProtector(),
     ),
-    queryGatewayFactory: (_, _) async => queryGateway,
   );
 }
 

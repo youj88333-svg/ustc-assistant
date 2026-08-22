@@ -647,25 +647,4 @@ final List<_IntentDef> _readIntents = [
     ],
     lookupTools: {'get_safe_action_history'},
   ),
-  // Second-class (二课) activities.
-  _IntentDef(
-    patterns: [
-      RegExp(r'(二课|第二课堂)'),
-    ],
-    lookupTools: {'search_current_second_class_activities'},
-  ),
-  // iCourse / course evaluation.
-  _IntentDef(
-    patterns: [
-      RegExp(r'(评课|评教|icourse|i ?course|课程评价|课程口碑)'),
-    ],
-    lookupTools: {'search_icourse'},
-  ),
-  // Campus catalog / notices.
-  _IntentDef(
-    patterns: [
-      RegExp(r'(校园|目录|通知|公告|社招)'),
-    ],
-    lookupTools: {'search_campus_catalog'},
-  ),
 ];

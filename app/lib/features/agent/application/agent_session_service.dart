@@ -1417,12 +1417,9 @@ class AgentSessionService {
           // data domain (schedule / tasks), which the chat page renders as a
           // clickable ActionChip routing to the management screen.
           //
-          // `campus_entry` refs from external catalog tools
-          // (search_campus_catalog, read_campus_detail) ARE forwarded to
-          // sourceReferences as public citations — these are the only
-          // sourceReferences, and they remain inert Chips unless they carry a
-          // trusted tool-returned HTTPS URL (URL resolution is NOT implemented
-          // now; they stay inert).
+          // External source tools (which forwarded `campus_entry` refs as
+          // public citations) have been retired; sourceReferences is no longer
+          // populated by any tool.
           //
           // `result.references` is STILL used for run-local ref resolution
           // within the same run (the model calls get_event_details by ref),
@@ -1431,12 +1428,6 @@ class AgentSessionService {
           final localAction = localActionForTool(tu.name);
           if (result.status == AgentToolStatus.success && localAction != null) {
             newLocalActions.add(localAction);
-          } else if (_forwardsToSourceReferences(tu.name)) {
-            for (final ref in result.references) {
-              newSourceRefs.add(
-                AgentSourceReference(kind: ref.kind, ref: ref.ref),
-              );
-            }
           }
           // Finish the SAME invocation row started above and surface its live
           // summary. A normal registry completion maps by result status; a
@@ -1887,13 +1878,6 @@ class AgentSessionService {
     return null;
   }
 
-  /// Whether a tool's bound references should be forwarded to
-  /// `sourceReferences` as public citations. Only the external catalog tools
-  /// (search_campus_catalog, read_campus_detail) forward their `campus_entry`
-  /// refs; local data-domain tools do NOT (they emit local actions instead).
-  static bool _forwardsToSourceReferences(String toolName) =>
-      _catalogTools.contains(toolName);
-
   /// Schedule-domain local tools: a successful call emits one
   /// `AgentLocalAction.schedule`. Includes the object-mutating lifecycle tool
   /// `update_event` and the relation tool `delete_schedule_relation` so a
@@ -1919,13 +1903,6 @@ class AgentSessionService {
     'get_pending_planblock_reviews',
     'update_task',
     'update_plan_block',
-  };
-
-  /// External catalog tools whose `campus_entry` refs ARE forwarded to
-  /// `sourceReferences` as public citations.
-  static const _catalogTools = <String>{
-    'search_campus_catalog',
-    'read_campus_detail',
   };
 
   /// Error codes whose exact-repeat tool call is also bounded without a second
