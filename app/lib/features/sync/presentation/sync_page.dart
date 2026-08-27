@@ -15,6 +15,7 @@ import '../application/sync_coordinator.dart';
 import '../data/bridge_client.dart';
 import '../data/python_locator.dart';
 import '../domain/sync_state.dart';
+import '../native/native_jw_gateway.dart';
 
 Future<void> runStartupAutomaticSync(
   AppDatabase database, {
@@ -44,6 +45,9 @@ Future<void> runStartupAutomaticSync(
       bridgeFactory: () async {
         final current = bridge;
         if (current != null) return current;
+        if (!kUsePythonBridgeFallback) {
+          return bridge = NativeJwGateway();
+        }
         final executable = await PythonLocator().locate(
           savedExecutable: await SettingsService(
             database: database,
@@ -93,6 +97,7 @@ class SyncPageLoader extends StatefulWidget {
 class _SyncPageLoaderState extends State<SyncPageLoader> {
   late final Future<_SyncDependencies> dependencies = _build();
   BridgeGateway? bridge;
+  NativeJwGateway? nativeGateway;
 
   Future<_SyncDependencies> _build() async {
     final schemaText = await rootBundle.loadString(
@@ -109,12 +114,22 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       ),
       reminderReconciler: widget.reminderReconciler,
     );
+    // M7: native WebView2 is the default channel; the Python Bridge remains
+    // reachable via the kUsePythonBridgeFallback switch (one-source-one-
+    // channel — never both at once, per red line).
+    final fallback = kUsePythonBridgeFallback;
+    final gw = NativeJwGateway();
+    nativeGateway = fallback ? null : gw;
     final coordinator = SyncCoordinator(
       database: widget.database,
       accounts: accounts,
       bridgeFactory: () async {
         final current = bridge;
         if (current != null) return current;
+        if (!fallback) {
+          bridge = gw;
+          return gw;
+        }
         final account = await accounts.activeAccount();
         final executable = await PythonLocator().locate(
           savedExecutable: account == null
@@ -132,12 +147,17 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       importBundle: importer.importBytes,
     );
     await coordinator.recoverInterruptedRuns();
-    return _SyncDependencies(accounts: accounts, coordinator: coordinator);
+    return _SyncDependencies(
+      accounts: accounts,
+      coordinator: coordinator,
+      nativeGateway: fallback ? null : gw,
+    );
   }
 
   @override
   void dispose() {
     bridge?.shutdown();
+    nativeGateway?.shutdown();
     super.dispose();
   }
 
@@ -158,6 +178,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
         return SyncPage(
           accounts: value.accounts,
           coordinator: value.coordinator,
+          nativeGateway: value.nativeGateway,
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
           onReauthenticationRequired: widget.onReauthenticationRequired,
@@ -169,16 +190,22 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
 }
 
 class _SyncDependencies {
-  const _SyncDependencies({required this.accounts, required this.coordinator});
+  const _SyncDependencies({
+    required this.accounts,
+    required this.coordinator,
+    this.nativeGateway,
+  });
 
   final AccountService accounts;
   final SyncCoordinator coordinator;
+  final NativeJwGateway? nativeGateway;
 }
 
 class SyncPage extends StatefulWidget {
   const SyncPage({
     required this.accounts,
     required this.coordinator,
+    this.nativeGateway,
     this.filePicker = const SystemImportFilePicker(),
     this.reauthenticateAccountId,
     this.onReauthenticated,
@@ -189,6 +216,7 @@ class SyncPage extends StatefulWidget {
 
   final AccountService accounts;
   final SyncCoordinator coordinator;
+  final NativeJwGateway? nativeGateway;
   final ImportFilePicker filePicker;
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
@@ -467,31 +495,35 @@ class _SyncPageState extends State<SyncPage> {
               ),
         title: const Text('同步'),
       ),
-      body: widget.reauthenticateAccountId != null
-          ? _ReauthenticationPanel(
-              maskedHint: reauthenticationHint ?? '本地账号',
-              usernameController: usernameController,
-              passwordController: passwordController,
-              savePassword: savePassword,
-              busy: busy,
-              onSavePasswordChanged: (value) {
-                setState(() => savePassword = value);
-              },
-              onSubmit: _reauthenticate,
-            )
-          : accountId == null
-          ? _FirstLoginPanel(
-              usernameController: usernameController,
-              passwordController: passwordController,
-              savePassword: savePassword,
-              busy: busy,
-              onSavePasswordChanged: (value) {
-                setState(() => savePassword = value);
-              },
-              onSubmit: _firstLogin,
-            )
-          : ListView(
-              padding: const EdgeInsets.all(16),
+      body: Column(
+        children: [
+          if (busy && _nativeSurface != null) _buildWebViewSurface(),
+          Expanded(
+            child: widget.reauthenticateAccountId != null
+                ? _ReauthenticationPanel(
+                    maskedHint: reauthenticationHint ?? '本地账号',
+                    usernameController: usernameController,
+                    passwordController: passwordController,
+                    savePassword: savePassword,
+                    busy: busy,
+                    onSavePasswordChanged: (value) {
+                      setState(() => savePassword = value);
+                    },
+                    onSubmit: _reauthenticate,
+                  )
+                : accountId == null
+                ? _FirstLoginPanel(
+                    usernameController: usernameController,
+                    passwordController: passwordController,
+                    savePassword: savePassword,
+                    busy: busy,
+                    onSavePasswordChanged: (value) {
+                      setState(() => savePassword = value);
+                    },
+                    onSubmit: _firstLogin,
+                  )
+                : ListView(
+                    padding: const EdgeInsets.all(16),
               children: [
                 if (states.values.any(
                   (state) => state.resultCode == 'reauthentication_required',
@@ -551,6 +583,53 @@ class _SyncPageState extends State<SyncPage> {
                   ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget? get _nativeSurface {
+    final gateway = widget.nativeGateway;
+    return gateway?.surface;
+  }
+
+  /// A visible WebView2 surface shown while a native collection job is active
+  /// so the user can complete CAS login / CAPTCHA in the actual page. Uses a
+  /// fixed-height area so the page layout is stable while the controller mounts.
+  Widget _buildWebViewSurface() {
+    final surface = _nativeSurface;
+    if (surface == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '登录学校网站（原生浏览器）',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          const Text(
+            '请在下方浏览器窗口中完成登录（用户名/密码/验证码）。完成登录后将自动继续同步。',
+            style: TextStyle(fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 360,
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border.all(color: Theme.of(context).dividerColor),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: surface,
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
