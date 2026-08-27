@@ -301,4 +301,62 @@ void main() {
     await tester.tap(find.byKey(const Key('sync-reauthenticate')));
     expect(requestedAccountId, accountId);
   });
+
+  testWidgets('debug diagnostics panel renders privacy-safe stage log', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final accounts = AccountService(
+      database: database,
+      protector: _TestProtector(),
+    );
+    final coordinator = SyncCoordinator(
+      database: database,
+      accounts: accounts,
+      bridgeFactory: () async => _UnusedBridge(),
+      importBundle: (bytes, {required accountId, required origin}) async =>
+          const ImportResult(
+            status: ImportStatus.imported,
+            bundleId: 'unused',
+            source: 'ustc_jw',
+            importedEntityCount: 0,
+          ),
+    );
+    final diagnostics = ValueNotifier<List<String>>([
+      'attempt:jw.portal.login',
+      'activationDispatched',
+      'urlMatched:jw.course.home',
+      'domReady:jw.course.home',
+      'ready:jw.course.home',
+      'course_context_read',
+    ]);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncPage(
+          accounts: accounts,
+          coordinator: coordinator,
+          diagnostics: diagnostics,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('调试日志'), findsOneWidget);
+    expect(find.textContaining('attempt:jw.portal.login'), findsOneWidget);
+    expect(find.textContaining('activationDispatched'), findsOneWidget);
+    expect(find.textContaining('course_context_read'), findsOneWidget);
+    expect(find.text('6 条'), findsOneWidget);
+
+    // The panel is transparent and reactive: it renders whatever the
+    // diagnostics value holds (privacy is enforced upstream by the adapter /
+    // gateway, not by this presentation layer).
+    diagnostics.value = [...diagnostics.value, 'ready:jw.exam.list'];
+    await tester.pump();
+    expect(find.textContaining('ready:jw.exam.list'), findsOneWidget);
+    expect(find.text('7 条'), findsOneWidget);
+
+    addTearDown(diagnostics.dispose);
+  });
 }

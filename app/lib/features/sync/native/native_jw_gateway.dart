@@ -69,13 +69,42 @@ class NativeJwGateway implements BridgeGateway {
     JwWebviewControllerFactory? controllerFactory,
     BridgeSemesterCapability semester = kDefaultJwSemester,
     Future<String> Function()? userDataPath,
+    void Function(String)? safeDiagnostic,
   }) : _controllerFactory = controllerFactory,
        _semester = semester,
-       _userDataPath = userDataPath;
+       _userDataPath = userDataPath,
+       _externalDiagnostic = safeDiagnostic;
 
   final JwWebviewControllerFactory? _controllerFactory;
   final BridgeSemesterCapability _semester;
   final Future<String> Function()? _userDataPath;
+
+  /// Optional caller-supplied privacy-safe diagnostic sink (stage names and
+  /// stable error codes only — never URL/account/query/DOM). Wired through to
+  /// the adapter's `safeDiagnostic`.
+  final void Function(String)? _externalDiagnostic;
+
+  /// Broadcast stream of privacy-safe stage diagnostics emitted by the active
+  /// adapter (e.g. `attempt:jw.portal.login`, `activationDispatched`,
+  /// `urlMatched:target`, `domReady:target`, …). Zero listeners is safe.
+  late final StreamController<String> _diagnosticsController =
+      StreamController<String>.broadcast();
+
+  /// Stream of privacy-safe stage diagnostics (see [_externalDiagnostic]).
+  Stream<String> get diagnostics => _diagnosticsController.stream;
+
+  /// Forwards a privacy-safe stage to the caller sink and the diagnostics
+  /// stream. Never mutates collection behavior; a throwing consumer is safe.
+  void _emitDiagnostic(String event) {
+    try {
+      _externalDiagnostic?.call(event);
+      if (!_diagnosticsController.isClosed) {
+        _diagnosticsController.add(event);
+      }
+    } on Object {
+      // Diagnostics must never break collection.
+    }
+  }
 
   /// The active page adapter's visible WebView (exposed for embedding in the
   /// sync page). One live adapter per active job.
@@ -104,6 +133,7 @@ class NativeJwGateway implements BridgeGateway {
 
   JwWebViewAdapter _makeAdapter() => JwWebViewAdapter(
         controllerFactory: _controller,
+        safeDiagnostic: _emitDiagnostic,
       );
 
   @override
@@ -250,6 +280,9 @@ class NativeJwGateway implements BridgeGateway {
     _collectorSubscriptions.clear();
     _collectors.clear();
     _eventBuffers.clear();
+    if (!_diagnosticsController.isClosed) {
+      await _diagnosticsController.close();
+    }
   }
 }
 

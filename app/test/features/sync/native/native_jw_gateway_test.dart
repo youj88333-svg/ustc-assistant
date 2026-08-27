@@ -175,6 +175,50 @@ void main() {
       );
       await gateway.shutdown();
     });
+
+    test('diagnostics stream forwards privacy-safe adapter stages', () async {
+      final collected = <String>[];
+      final controller = FakeJwWebviewController()
+        ..authenticatedSession = true
+        ..courseDatum = courseDatum
+        ..examHtml = examHtml;
+      final gateway = NativeJwGateway(
+        controllerFactory: () async => controller,
+        safeDiagnostic: collected.add,
+      );
+      final streamSubscription = gateway.diagnostics.listen((event) {
+        // Diagnostics never leak URL/account/query/DOM: stage names only.
+        expect(event.contains('//'), isFalse, reason: 'no path leakage');
+        expect(event.contains('http'), isFalse, reason: 'no URL leakage');
+        expect(event.contains('PB'), isFalse, reason: 'no account leakage');
+      });
+
+      final job = await gateway.startCollection(
+        source: SyncSource.jw,
+        accountId: 'acct_1',
+        expectedUsername: 'ustc.student',
+        jwSemester: kDefaultJwSemester,
+      );
+      await _pollUntilTerminal(gateway, job.id);
+      await streamSubscription.cancel();
+
+      await gateway.shutdown();
+      expect(collected, isNotEmpty);
+      // Reuse-session path: the entry navigation stage is not emitted (the
+      // page lands straight on /home), but the course/exam convergence and
+      // fetch stages must be observable for debug acceptance.
+      expect(
+        collected.where((e) => e.startsWith('course_') || e.contains('fetched'))
+            .toList(),
+        isNotEmpty,
+        reason: 'collection stages must be observable',
+      );
+      expect(
+        collected.where((e) => e.contains('jw.course.home')).toList(),
+        isNotEmpty,
+        reason: 'course home convergence must be observable',
+      );
+    });
   });
 }
 

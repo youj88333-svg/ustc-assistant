@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -98,6 +100,13 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   late final Future<_SyncDependencies> dependencies = _build();
   BridgeGateway? bridge;
   NativeJwGateway? nativeGateway;
+  StreamSubscription<String>? _diagnosticSub;
+
+  /// Privacy-safe stage-log buffer for the debug diagnostics panel. Only
+  /// allocated in debug/profile builds; in release it stays null so the panel
+  /// and its overhead never ship. Cap keeps the UI bounded.
+  final ValueNotifier<List<String>>? diagnostics =
+      kDebugMode ? ValueNotifier<List<String>>(const <String>[]) : null;
 
   Future<_SyncDependencies> _build() async {
     final schemaText = await rootBundle.loadString(
@@ -120,6 +129,19 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     final fallback = kUsePythonBridgeFallback;
     final gw = NativeJwGateway();
     nativeGateway = fallback ? null : gw;
+    if (!fallback && diagnostics != null) {
+      _diagnosticSub = gw.diagnostics.listen((event) {
+        debugPrint('[jw-native] $event');
+        final notifier = diagnostics;
+        if (notifier == null || !mounted) return;
+        final current = notifier.value;
+        final next = <String>[...current, event];
+        if (next.length > 80) {
+          next.removeRange(0, next.length - 80);
+        }
+        notifier.value = next;
+      });
+    }
     final coordinator = SyncCoordinator(
       database: widget.database,
       accounts: accounts,
@@ -151,11 +173,14 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       accounts: accounts,
       coordinator: coordinator,
       nativeGateway: fallback ? null : gw,
+      diagnostics: fallback ? null : diagnostics,
     );
   }
 
   @override
   void dispose() {
+    _diagnosticSub?.cancel();
+    diagnostics?.dispose();
     bridge?.shutdown();
     nativeGateway?.shutdown();
     super.dispose();
@@ -179,6 +204,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           accounts: value.accounts,
           coordinator: value.coordinator,
           nativeGateway: value.nativeGateway,
+          diagnostics: value.diagnostics,
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
           onReauthenticationRequired: widget.onReauthenticationRequired,
@@ -194,11 +220,13 @@ class _SyncDependencies {
     required this.accounts,
     required this.coordinator,
     this.nativeGateway,
+    this.diagnostics,
   });
 
   final AccountService accounts;
   final SyncCoordinator coordinator;
   final NativeJwGateway? nativeGateway;
+  final ValueNotifier<List<String>>? diagnostics;
 }
 
 class SyncPage extends StatefulWidget {
@@ -206,6 +234,7 @@ class SyncPage extends StatefulWidget {
     required this.accounts,
     required this.coordinator,
     this.nativeGateway,
+    this.diagnostics,
     this.filePicker = const SystemImportFilePicker(),
     this.reauthenticateAccountId,
     this.onReauthenticated,
@@ -217,6 +246,7 @@ class SyncPage extends StatefulWidget {
   final AccountService accounts;
   final SyncCoordinator coordinator;
   final NativeJwGateway? nativeGateway;
+  final ValueNotifier<List<String>>? diagnostics;
   final ImportFilePicker filePicker;
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
@@ -498,6 +528,14 @@ class _SyncPageState extends State<SyncPage> {
       body: Column(
         children: [
           if (busy && _nativeSurface != null) _buildWebViewSurface(),
+          if (widget.diagnostics != null)
+            ValueListenableBuilder<List<String>>(
+              valueListenable: widget.diagnostics!,
+              builder: (context, entries, _) {
+                if (entries.isEmpty) return const SizedBox.shrink();
+                return _DebugDiagnosticsPanel(entries: entries);
+              },
+            ),
           Expanded(
             child: widget.reauthenticateAccountId != null
                 ? _ReauthenticationPanel(
@@ -647,6 +685,64 @@ class _SyncPageState extends State<SyncPage> {
     return state.lastSuccessfulAt == null
         ? label
         : '$label · ${state.lastSuccessfulAt!.toLocal()}';
+  }
+}
+
+/// Debug-only visible stage-log panel. Driven by the privacy-safe diagnostics
+/// stream; shows recent stage names (never URL/account/query/DOM). Wired only
+/// in debug/profile builds via [SyncPage.diagnostics]; release keeps it null.
+class _DebugDiagnosticsPanel extends StatelessWidget {
+  const _DebugDiagnosticsPanel({required this.entries});
+
+  final List<String> entries;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Text(
+                    '调试日志',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                  const Spacer(),
+                  Text('${entries.length} 条'),
+                ],
+              ),
+              const SizedBox(height: 4),
+              SizedBox(
+                height: 140,
+                child: ListView.builder(
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  itemCount: entries.length,
+                  itemBuilder: (context, index) => Text(
+                    entries[index],
+                    key: Key('diagnostic-$index'),
+                    style: const TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      color: Color(0xFFCDCDCD),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }
 

@@ -501,3 +501,31 @@ cd app; flutter test
 
 若 `flutter test` 报 `Failed to load dynamic library 'sqlite3.dll'`（本机首次
 裸跑基线时的症状），即该环境问题，加上 PATH 后恢复基线。
+
+### 8.6 Debug 验收与阶段日志（仿全量分支可观测形式）
+
+minimal 启用 **debug 验收 + 阶段化安全日志**（对齐全量分支
+`m2-native-jw-lessons.md》§4.1 “只记录阶段，不记录秘密” 的形式）：
+
+- `NativeJwGateway` 暴露 `Stream<String> diagnostics`（broadcast）与可选
+  `safeDiagnostic` 构造参数，透传给 `JwWebViewAdapter`。adapter / session 内部
+  的阶段日志（`attempt:jw.*`、`waiting_for_cas_form`、`activationDispatched`、
+  `urlMatched:*`、`domReady:*`、`ready:*`、`course_context_read`、
+  `get_data_fetched`、`datum_fetched`、`navigation_rejected` 等）经此流出。
+- `sync_page` 在 **debug 构建**（`kDebugMode`）订阅 diagnostics：
+  `debugPrint('[jw-native] …')` 输出到控制台，并在 WebView surface 下方显示
+  **调试日志面板**（最多 80 条、monospace、只读）。release 构建不分配日志缓冲、
+  不渲染面板（零开销）。
+- 隐私不变：日志只含阶段名与稳定错误码，绝不记录 URL query / ticket / Cookie /
+  DOM / 账号原文 / 课程数据；面板是**透明的展示层**，机密性由 producer
+  （adapter/collector）契约保证（红线 §1 / M7 计划 §2.6 阶段词表）。
+- 调试入口：`flutter run -d windows --debug`（或 VS Debug 启动）→ 同步页出现
+  「调试日志」面板 + 控制台阶段流；配合 §8.4 真实验收场景可在登录/取数/失败时
+  按“最后成功阶段”定位（全量分支 §4.2 方法）。
+
+新增测试（不触网、不建二进制）：
+
+- `native_jw_gateway_test.dart` —— diagnostics 流透传隐私安全阶段；断言阶段名
+  不泄漏 URL/账号/路径。
+- `sync_page_test.dart` —— debug 面板渲染阶段日志且随 notifier 更新、计数正确。
+
