@@ -18,7 +18,7 @@
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
-| WebView 接线 | ❌ 不动 pubspec | ✅ `webview_flutter`（替换 M5 stub） |
+| WebView 接线 | ❌ M5 时不动 pubspec | ✅ minimal 分支 M7 已接入 Windows 原生 WebView2（§8）；Android/iOS 仍需外部机器 `webview_flutter` |
 
 **本手册不重复** `docs/m5-three-platform-build-analysis.md` 已记录的三端构建详细错误
 清单（Android 见其 §2.2/§2.3/§2.4，iOS 见 §3.2/§3.3/§3.4）。本手册给出执行步骤、
@@ -412,3 +412,92 @@ flutter test --update-goldens
 
 > 真实构建与人工验收是 M6 的实质门；本 VM 只交付本手册 + 静态验证快照
 > （`docs/m6-refactor-final-verification.md`），不构成 M6 完成。
+
+---
+
+## 8. M7 增补：原生 WebView2 已接入 minimal（2026-08-27 本机实测）
+
+> 本节是对本文档 §0「WebView 接线」一行的更新：M7 已在 minimal 分支接入
+> **Windows 原生 WebView2**（`webview_flutter_windows_secure` 自足插件），
+> 不再是"仅外部机器接线"。本节记录本机接入说明、构建实测与已知边界。
+
+### 8.1 接入内容
+
+- 新增插件：`app/packages/webview_flutter_windows_secure/`（自足，仅依赖
+  flutter；来自全量分支 `rewrite/flutter-native`，排除 `.dart_tool/` 与
+  `build/`），`app/pubspec.yaml` 以 path 依赖引入。
+- 新增/替换原生采集实现（`app/lib/features/sync/native/`）：
+  - `jw_webview_adapter.dart` —— `JwWebViewAdapter implements JwWebPage`（替换
+    M5 stub），驱动 `WebviewController` + 三信号收敛 + 注册脚本提取 + CAS 登录流。
+  - `jw_web_session.dart` —— 编译期 URL 白名单、注册脚本库、webMessage+requestId
+    包装器、导航收敛原语。
+  - `native_jw_gateway.dart` —— `BridgeGateway` 兼容壳，驱动 `JwCollector`
+    + `JwWebViewAdapter`；`capabilities()` 返回固定学期
+    `(461, 2026fall, 2026 秋季学期)`（来自 `generated_source_defaults.dart`，
+    不做动态学期发现）。
+- `sync_page.dart`：`SyncPageLoader`/`runStartupAutomaticSync` 默认用
+  `NativeJwGateway`；保留 `kUsePythonBridgeFallback=false` 开关可临时切回
+  Python Bridge（一源一通道，不并行）。同步页在原生作业进行中显示可见
+  WebView surface（登录/验证码交互）。
+
+### 8.2 本机构建与静态验证实测
+
+本机（Windows + VS2022 + Flutter 3.44.5）实测：
+
+```
+cd app
+flutter analyze                # 0 error / 15 issues（与 M5 基线一致）
+flutter test                   # 较 M5 基线新增：adapter 15 + gateway 7 单测，全绿
+                               # （本机 sqlite3.dll 需在 PATH，见 §8.5）
+flutter build windows --release  # 含插件 C++ 编译
+```
+
+- `flutter test` 全量在**本机**为 **1388 pass / 1 fail**（1 项为 M0 基线
+  migration 健壮性缺口，见 §6.1；6 项 golden 在 Linux VM 失败、本机字体环境
+  通过）。外部 Linux VM 复现仍应为 1360+ 基线 / 已知 7 项失败口径（golden
+  环境差异，不阻塞）。
+- 新增单测均不触网、不建二进制：驱动 fake `JwWebviewController`（与插件
+  `secure_controller_test.dart` 相同的 MethodChannel mock 思路）；
+  覆盖三信号收敛、登录激活、身份核验（布尔不回传账号原文）、get-data/datum
+  取数、错误映射（login_timeout/account_mismatch/collection_failed）、
+  URL 白名单 fail-closed、close 清会话。
+- `flutter build windows --release` 退出码 0，产物
+  `app/build/windows/x64/runner/Release/ustc_assistant_app.exe` 与
+  `webview_flutter_windows_secure_plugin.dll`（插件 C++ 编译链接）。注意：首次
+  构建会打印 `flutter.bat : Nuget is not installed.` 并把 nuget.exe 下载到
+  build 目录 —— 在 PowerShell 里 `2>&1` 会导致该 stderr 行被包装为
+  NativeCommandError 并让外层命令显示退出码 1，但这是假阳性；用 `$LASTEXITCODE`
+  实测为 0，真正失败只会以 CMake 的 `FATAL_ERROR`（下载失败/校验失败）出现。
+
+### 8.3 「重启后免登录」不受支持（已知边界）
+
+minimal **不做** C++ session snapshot/DPAPI 会话持久化（全量分支的 C++ 方案
+属于企业级，minimal 明确取舍）。因此：
+
+- 关机/重启 App 后教务 session cookie 丢失，普通同步会再次进入
+  `needs_user_login`，需要用户重新登录。
+- 这是**已知边界，不阻塞日常使用**，与 M0–M6 口径一致。
+
+### 8.4 真实人工验收待办（外置）
+
+- [ ] 校园网/iWAN + 真实账号：登录 → 同步 → 课表/考试正确导入；对照安全聚合
+      计数（不记录私人信息）。
+- [ ] 取消/失败/重新登录的终态文案与存储保持一致。
+- [ ] 重启后重新登录（已知边界 §8.3）。
+- [ ] digest 规范化后对齐 oracle（见 §4.2）。
+
+真实人工验收仍按 M6 口径外置（需校园网 + 真实账号 + 其他 SDK），不在本机执行。
+
+### 8.5 本机测试 sqlite3.dll 说明（Windows 环境）
+
+本机 `flutter test` 依赖 sqlite3 动态库（drift 打开内存库）。Linux 基线用
+`pubspec.yaml` 的 `hooks.user_defines.sqlite3.source: system` 落在系统
+`libsqlite3.so.0`；Windows 需将 sqlite3.dll 所在目录加入 PATH，例如：
+
+```powershell
+$env:PATH = "<含 sqlite3.dll 的目录>;$env:PATH"
+cd app; flutter test
+```
+
+若 `flutter test` 报 `Failed to load dynamic library 'sqlite3.dll'`（本机首次
+裸跑基线时的症状），即该环境问题，加上 PATH 后恢复基线。

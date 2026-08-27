@@ -23,9 +23,10 @@
    9 生命周期/清除/撤回 + 管理态只读），全部经审批门按风险分级确认；无任何外部按需来源
    工具。API Key 由 `CredentialProtector`（Windows DPAPI / fallback）保护；Agent 不能发起
    同步或执行任何外部写操作。系统提示词版本 9，grounding policy 只含本地规则。
-4. 原生 WebView2 采集（进行中，M7）：`app/lib/features/sync/native/` 已有 Dart
-   规范化 + `JwCollector` + `JwWebViewAdapter`（stub→接入中），产物与 Python oracle 对齐
-   （digest `f858a385…`）。
+4. 原生 WebView2 采集（已接入，M7）：`app/lib/features/sync/native/` 已有 Dart
+   规范化 + `JwCollector` + `JwWebViewAdapter`（真实实现）+ `NativeJwGateway`
+   （BridgeGateway 兼容壳），产物与 Python oracle 对齐（digest `f858a385…`）；
+   真实校网人工验收仍外置。
 
 ## 项目结构与当前阶段
 
@@ -151,11 +152,12 @@ Pop-Location
 | M4 | Agent 删除/生命周期工具回归固化 | ✅ |
 | M5 | 跨平台凭据/通知/WebView 适配（静态接口） + 三端 build 错误清单 | ✅ |
 | M6 | 外部机器三端构建 + 真实验收（本分支只交手册+快照） | 📋 交接 |
-| M7 | 原生 WebView2 接入（文档 `plan-webview-minimal-m7-webview2.md`） | 🔄 进行中 |
+| M7 | 原生 WebView2 接入（文档 `plan-webview-minimal-m7-webview2.md`） | ✅ 已完成（真实验收外置） |
 
 ## 当前边界
 
-- 原生 WebView2 采集仍在接入（M7）；`JwWebViewAdapter` 已从 stub 改为真实实现（进行中）。
+- 原生 WebView2 采集已接入（M7）：`JwWebViewAdapter` 真实实现 + `NativeJwGateway`
+  为默认通道；真实校网人工验收仍外置（见 `m6-external-machine-handoff.md` §8.4）。
 - 不做 C++ 会话持久化：重启后需重新登录（已知边界，不阻塞日常使用）。
 - Android/iOS 真实 WebView 与构建仍留外部机器（M5 静态接口 + stub）。
 - Python Bridge 未删除，保留为 fallback 开关（`kUsePythonBridgeFallback`）。
