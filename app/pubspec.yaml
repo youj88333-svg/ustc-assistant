@@ -49,6 +49,11 @@ dependencies:
   ffi: 2.2.0
   flutter_local_notifications: 22.2.0
   flutter_markdown: ^0.7.7+1
+  # M7: self-contained WebView2 plugin (copied from the full rewrite branch).
+  # Minimal uses no C++ session-snapshot persistence (restart => re-login is a
+  # known, accepted boundary).
+  webview_flutter_windows_secure:
+    path: packages/webview_flutter_windows_secure
 
 dev_dependencies:
   flutter_test:
