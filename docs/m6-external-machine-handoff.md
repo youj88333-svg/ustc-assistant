@@ -314,8 +314,12 @@ f858a3851b7c0929efe8427dd340ffe50985d5c37357d0d1c9a498b19bb91933
 主体、§10 写工具、§11 修复复测项）。每项末尾 `完成：`留空，由验收者在真实验收后
 填写脱敏的成功/失败文字。
 
+> **minimal 注记**：本分支已删除二课/评课/校园公开目录等外部按需来源工具，
+> `read-only-agent.md` 中涉及它们的段（§6/§7/§9 部分）跳过/不适用；验收以本地
+> 日程/Task/PlanBlock/同步状态只读 + 写工具 + 生命周期工具为准。
+
 验收覆盖范围：
-- **只读工具**：11 本地 + 4 按需来源工具的过程折叠/停止/重试、登录继续。
+- **只读工具**：本地只读工具（含管理态）的过程折叠/停止/重试。
 - **写工具**：11 个受控本地写工具，审批门按风险分级确认（聊天内联确认卡）。
 - **删除/生命周期工具**：9 个生命周期/清除/撤回工具 + 8 个管理态/配置态只读工具
   （M4 回归覆盖，见 `app/test/integration/agent_composition_flow_test.dart`）。
@@ -325,7 +329,7 @@ f858a3851b7c0929efe8427dd340ffe50985d5c37357d0d1c9a498b19bb91933
 ### 5.3 回退
 
 - 若工具行为异常：检查 M1 提示词/grounding 收敛（提示词版本 9，grounding policy +
-  tool_choice 受限纠错，见 `docs/read-only-agent-handoff.md` 第 7 节）。
+  tool_choice 受限纠错，见 `AGENTS.md`“当前能力”与 `app/lib/features/agent/` 实现）。
 - 若工具调用额度/确认门异常：检查 `AgentToolRegistry` 预算（12/run，create_task
   Burst 32 一次性 Lease）与 `AgentPermissionPolicy` 迁移。
 - 自动测试不代替人工验收：学校 API 与学校网站从不进入自动测试。

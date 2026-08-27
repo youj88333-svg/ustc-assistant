@@ -323,8 +323,8 @@ whole_series    更新整个系列模板或规则
 ```
 
 规则变化后无法对应到 occurrence 的旧例外标记为 `orphaned`，保留历史但不进入
-有效日程。详细行为见
-`docs/superpowers/specs/2026-07-25-flutter-personal-calendar-event-design.md`。
+有效日程。详细行为以 `app/lib/features/calendar/` 与 `app/lib/features/tasks/`
+实现及其测试为准。
 
 #### 3.9.1 生产可达性与稀疏锚点（Task 6A 硬门）
 
@@ -346,8 +346,8 @@ whole_series    更新整个系列模板或规则
   锚点。锚点只在已批准的 Agent 写事务内产生，不被投影成展示对象，也不改变系列
   语义。
 
-更完整的生产读写实现在 `read-only-agent-handoff.md` 与
-`architecture.md` 的对应段落中固化。
+更完整的生产读写实现在 `app/lib/features/agent/`（`agent_write_tools.dart` /
+`agent_lifecycle_tools.dart`）与其测试中固化。
 
 ## 4. Task
 

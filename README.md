@@ -1,14 +1,14 @@
-# USTC Assistant
+# USTC Assistant（minimal 分支）
 
-面向中国科学技术大学的本地优先校园学习生活助手。仓库包含可运行的 Windows
-Flutter 首版，以及教务课程与考试、二课报名中活动、已报名二课日程、评课社区
-公开内容和校内公开信息目录五条 Python 只读数据链路。
+面向中国科学技术大学的本地优先校园学习生活助手。本分支为整体重构的**最小实现**：
+只保留教务（JW）+ 日程表 + Agent（本地只读 / 受控写 / 生命周期）。二课（young）、
+评课（icourse）、校园公开目录（campus）的用户功能与外部 Agent 来源工具已随 M1 删除。
 
-Windows 首版已接入学校大模型公共服务平台，提供按学校账号隔离的只读校园 Agent：
-能读取本地日程、Task 和全部查询型来源，通过可见、可停止的工具调用回答问题，但不
-修改本地业务数据、发起同步或执行任何外部写操作。此外已提供账号与同步、七日周课表、
-个人日程、Task/PlanBlock、冲突与用户覆盖、提醒、操作历史和设置。当前实现与接手
-说明见 `docs/read-only-agent-handoff.md`，架构见 `docs/architecture.md`。
+- 教务采集：目标通道为 Flutter 原生 WebView2（进行中，见
+  `docs/plan-webview-minimal-m7-webview2.md`）；当前仍可通过 Python Bridge 兜底。
+- Agent：接入学校 Anthropic 兼容模型服务（`https://api.llm.ustc.edu.cn`，
+  默认模型 `deepseek-v4-flash`），只读工具 15 个（本地）+ 受控写/生命周期工具 20 个，
+  无外部按需来源工具。
 
 ## 安装
 
@@ -17,61 +17,40 @@ conda activate ustc_assistant
 python -m pip install --no-build-isolation -e .
 ```
 
-首次使用学校平台时会打开专用 Microsoft Edge 窗口。请在学校官方页面完成登录和验证码；浏览器 Profile 保存在本机，不写入项目目录。
+Python 仅用于 Bridge fallback 与 oracle；Flutter App 会按需启动它。
 
-## 命令
+## 命令（Python CLI）
 
 ```powershell
 python -m ustc_assistant collect jw --account-id <local-account-id>
-python -m ustc_assistant collect young-enrolment
-python -m ustc_assistant collect young-schedule --account-id <local-account-id>
-python -m ustc_assistant query icourse --jw-bundle tmp/ustc-jw-import.generated.json
-python -m ustc_assistant collect campus
-python -m ustc_assistant query campus --text "选课"
-python -m ustc_assistant read campus --entry-id <catalog-entry-id>
+python -m ustc_assistant config generate-flutter-defaults
 ```
 
 教务采集默认学期由 `config/source-defaults.json` 统一提供：`461 / 2026fall / 2026 秋季学期`。
 调试时必须同时提供完整三元组，例如
-`python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 461 --semester-key 2026fall --semester-name "2026 秋季学期"`；不会根据年份或名称推算教务内部学期 ID。
-`--account-id` 是 App 本地账号标识，不是教务动态上下文 ID；正式采集命令不提供默认值。
+`python -m ustc_assistant collect jw --account-id <local-account-id> --semester-id 461 --semester-key 2026fall --semester-name "2026 秋季学期"`；
+不会根据年份或名称推算教务内部学期 ID。`--account-id` 是 App 本地账号标识，
+不是教务动态上下文 ID。
 
-Flutter 端 `app/lib/core/config/generated_source_defaults.dart` 中的默认教务学期常量由同一份
-JSON 生成，切勿手改。修改了 `config/source-defaults.json` 后必须重新生成并提交生成文件：
+Flutter 端 `app/lib/core/config/generated_source_defaults.dart` 中的默认教务学期常量由
+同一份 JSON 生成，切勿手改。修改了 `config/source-defaults.json` 后必须重新生成并提交
+生成文件：
 
 ```powershell
 conda run -n ustc_assistant python -m ustc_assistant config generate-flutter-defaults
 ```
 
-生成器逐字读取 JSON 三元组，绝不根据年份或名称推断教务内部学期 ID；一致性测试会逐字节比对
-生成文件与 JSON，只有 JSON 被改而未重新生成时测试失败。
+默认输出：`tmp/ustc-jw-import.generated.json`。
 
-教务联动评课社区会把课程名称作为检索词发送给公开网站 `icourse.club`，但不会发送完整课表、时间、地点、用户 ID 或登录信息。首次使用前应确认这一隐私影响；仅需本地检查课程分组时可增加 `--group-only`，该模式不会联网。
-
-校园公开信息目录只读取教务处和财务处的公开页面，不使用登录状态。通知保留北京时间最近 7 个自然日，办事指南和公开信息每个自然月刷新一次；加 `--force` 可强制刷新全部目录。`query campus` 只搜索本地目录，不联网；`read campus` 按目录条目 ID 按需读取正文并使用 30 天详情缓存，刷新失败时默认可返回带 `stale: true` 的旧缓存。
-
-默认输出分别位于：
-
-- `tmp/ustc-jw-import.generated.json`
-- `tmp/ustc-young-enrolment.generated.json`
-- `tmp/ustc-young-my-schedule.generated.json`
-- `tmp/icourse-public-query.generated.json`
-- `tmp/campus-catalog.json`
-- `tmp/campus-query.generated.json`
-- `tmp/campus-detail.generated.json`
-- `tmp/campus-cache/`
-
-运行 `python -m ustc_assistant <command> --help` 查看学期、日期、缓存和手动查询选项。
+运行 `python -m ustc_assistant <command> --help` 查看选项。
 
 ## Windows App
 
 要求：
 
 - Flutter 3.44.5 / Dart 3.12.2；
-- Visual Studio 2022 Build Tools 或 Visual Studio 2022，并安装
-  `Desktop development with C++`；
-- Conda 环境 `ustc_assistant`；
-- Microsoft Edge。
+- Visual Studio 2022（含 `Desktop development with C++`）；
+- （使用 Python fallback 时才需要）Conda 环境 `ustc_assistant`。
 
 开发运行：
 
@@ -89,37 +68,28 @@ cd build\windows\x64\runner\Release
 .\ustc_assistant_app.exe
 ```
 
-Release 运行时依赖同目录的 `data/`、`flutter_windows.dll`、`sqlite3.dll` 和插件
-DLL，不能只复制单独的 `.exe`。
+Release 运行时依赖同目录的 `data/`、`flutter_windows.dll`、`sqlite3.dll` 和插件 DLL，
+不能只复制单独的 `.exe`。
 
-首次绑定账号或学校会话失效时，App 会在用户确认后启动专用 Edge。验证码和学校
-登录仍由用户完成。Python Bridge 由 Flutter 按需启动，直接调用来源 service，
-不会解析 CLI 终端文本。
+### Agent
 
-### 只读校园 Agent
+聊天页已接入学校 Anthropic 兼容模型服务。首次使用前在“设置 → 模型服务”输入学校
+API Key，通过最小文本与 Tool Calling 测试后启用聊天。Key 由 `CredentialProtector`
+（Windows DPAPI）保护，不写入 SQLite 明文字段、源码、日志或提交。
 
-聊天页已接入学校 Anthropic 兼容模型服务（`https://api.llm.ustc.edu.cn`，默认模型
-`deepseek-v4-flash`）。首次使用前在“设置 → 模型服务”输入学校 API Key，通过最小
-文本与 Tool Calling 测试后启用聊天。Key 由 Windows DPAPI 保护，不写入 SQLite 明文
-字段、源码、日志或提交。
-
-Agent 提供 15 个只读工具：本地日程（`get_schedule` 等 5 个）、本地任务（`get_tasks`
-等 4 个）、本地状态（`get_sync_status`、`get_safe_action_history`）、按需来源
-（二课报名中、评课、校园目录/详情 4 个，经 Python Bridge Query Protocol 1.0）。
-工具过程默认折叠，可停止和重试。单次请求最多 8 轮模型调用、12 次工具调用。Agent
-不能修改本地业务数据、发起同步或执行任何外部写操作。详见
-`docs/architecture.md`“只读 Agent 架构”一节。
+Agent 提供 15 个本地只读工具 + 20 个受控写/生命周期工具（11 写 + 9 生命周期/清除/撤回），
+全部经审批门按风险分级确认；无任何外部按需来源工具。Agent 不能发起同步或执行任何外部
+写操作。真实人工验收清单见 `docs/acceptance/read-only-agent.md`（minimal 注记版）。
 
 校内校园网直接访问学校 API；校外由用户自行启动 Panabit iWAN。App 不启动、配置或
 管理系统代理、TUN 或 iWAN。真实 Key、完整账号、私人课表和原始模型请求不得写入
-验收文档；人工验收清单见 `docs/acceptance/read-only-agent.md`。
+验收文档。
 
 ## 隐私
 
 - 默认只保存规范化结果；原始响应仅在显式使用 `--save-raw` 时写入 `tmp/private/`。
-- 不保存或输出密码、Cookie、Token、CAS ticket、教务上下文 ID 和二课加密请求参数。
+- 不保存或输出密码、Cookie、Token、CAS ticket、教务上下文 ID 等会话材料。
 - `tmp/`、`temp.md`、缓存和浏览器 Profile 不进入 Git。
-- 二课报名和取消报名始终由用户在学校官方页面执行，本项目不会自动提交。
 
 ## 开发
 
@@ -133,30 +103,16 @@ E:\flutter\flutter\bin\flutter.bat build windows --release
 Pop-Location
 ```
 
-Flutter 工程位于 `app/`，使用 Flutter 3.44.5 和 Dart 3.12.2。由于 Flutter
-3.44.5 固定的 `meta` 版本与原计划的新生成器不兼容，当前锁定
-`drift_dev 2.34.0` 与 `build_runner 2.10.5`；运行时 `drift` 保持 2.34.2。
-
-只读 Agent 修复轮的最近自动验证结果（Python / Flutter 测试计数、静态分析、Windows
-Release 构建）在最终验证时记录于 `docs/read-only-agent-handoff.md` 第 7 节；本文件不
-硬编码计数与 HEAD 哈希，因为后续提交会改写。自动验证不代替需要学校登录和真实 API Key
-的人工验收。
-
-架构和来源契约见 `docs/architecture.md` 与 `docs/data-sources/`。`collect jw`
-与 `collect young-schedule` 默认输出
-`docs/data-sources/source-bundle-v1.md` 定义的 SourceBundle 1.0，可直接作为
-Flutter 导入层的输入。报名中活动、评课和校园公开信息继续使用各自的查询结果契约。
+- Flutter 工程位于 `app/`，使用 Flutter 3.44.5 / Dart 3.12.2；锁定 `drift_dev 2.34.0`
+  与 `build_runner 2.10.5`。
+- 静态验证快照见 `docs/m6-refactor-final-verification.md`（analyze 0 error；
+  test 1360 pass / 7 fail 基线）；7 项基线失败处置见 `docs/m6-external-machine-handoff.md` §6。
+- 来源契约见 `docs/data-sources/`。
 
 ## 当前边界
 
-- 只读 Agent 已接入学校 Anthropic 模型服务，但写工具、每日简报、视觉能力
-  （`qwen3.6-chat`）、多会话/多 Agent/MCP、通用 HTTP/任意 URL/文件/Shell/SQL 工具
-  仍不在本里程碑范围。引用 chip 当前不可交互（临时引用到来源 URL 的解析为合并后
-  工作）。
-- 真实人工验收（真实 Key + 校园网/iWAN + 学校登录）尚未执行；自动测试不代替人工
-  验收。清单见 `docs/acceptance/read-only-agent.md`。
-- Android/iOS 工程脚手架已存在，但移动端登录与来源采集适配器尚未实现；共享 Agent
-  核心可复用。
-- Windows 首版不是安装包，不捆绑 Python runtime。
-- App 关闭后的可靠 Windows 通知投递与取消尚未实现。
-- 二课报名和取消报名始终由用户在学校官方页面完成。
+- 原生 WebView2 采集在接入中（M7）；`JwWebViewAdapter` 由 stub 转真实实现，本机可编译，
+  真实校园账号/校园网人工验收仍外置。
+- 不做 C++ 会话持久化：重启后重新登录（已知边界）。
+- Android/iOS 真实 WebView 与构建仍留外部机器（M5 静态接口 + stub）。
+- Python Bridge 未删除，保留为 fallback（`kUsePythonBridgeFallback`）。
