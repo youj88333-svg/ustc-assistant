@@ -48,13 +48,15 @@ void main() {
       );
     });
 
-    test('gotoRoot loads the allowlisted root and reports navigation complete',
-        () async {
-      controller.setCurrent('https://jw.ustc.edu.cn/');
-      await adapter.gotoRoot();
-      expect(controller.lastLoadedUrl, jwRootUrl);
-      expect(controller.disposed, isFalse);
-    });
+    test(
+      'gotoRoot loads the allowlisted root and reports navigation complete',
+      () async {
+        controller.setCurrent('https://jw.ustc.edu.cn/');
+        await adapter.gotoRoot();
+        expect(controller.lastLoadedUrl, jwRootUrl);
+        expect(controller.disposed, isFalse);
+      },
+    );
 
     test('isAuthenticatedHome reflects currentUrl', () async {
       controller.setCurrent(_homeUrl);
@@ -64,35 +66,41 @@ void main() {
     });
 
     group('CAS login fill', () {
-      test('fills username + password, submits, awaits home, verifies identity',
-          () async {
-        controller.setCurrent(_loginEntryUrl);
-        controller.identityAuthenticated = true;
+      test(
+        'fills username + password, submits, awaits home, verifies identity',
+        () async {
+          controller.setCurrent(_loginEntryUrl);
+          controller.identityAuthenticated = true;
 
-        await adapter.fillLogin(const LoginCredentials(
-          username: 'ustc.student',
-          password: 'pw-secret',
-        ));
+          await adapter.fillLogin(
+            const LoginCredentials(
+              username: 'ustc.student',
+              password: 'pw-secret',
+            ),
+          );
 
-        expect(controller.usernameFilled, 'ustc.student');
-        expect(controller.passwordFilled, 'pw-secret');
-        expect(controller.submitted, isTrue);
-        expect(controller.visitedCas, isTrue);
-        expect(controller.visitedHome, isTrue);
-        expect(controller.secretTouchedAsPlaintext, isFalse);
-      });
+          expect(controller.usernameFilled, 'ustc.student');
+          expect(controller.passwordFilled, 'pw-secret');
+          expect(controller.submitted, isTrue);
+          expect(controller.visitedCas, isTrue);
+          expect(controller.visitedHome, isTrue);
+          expect(controller.secretTouchedAsPlaintext, isFalse);
+        },
+      );
 
-      test('account mismatch on identity conflict maps to JwAccountMismatchException',
-          () async {
-        controller.setCurrent(_loginEntryUrl);
-        controller.identityAuthenticated = false;
-        controller.identityConflict = true;
+      test(
+        'account mismatch on identity conflict maps to JwAccountMismatchException',
+        () async {
+          controller.setCurrent(_loginEntryUrl);
+          controller.identityAuthenticated = false;
+          controller.identityConflict = true;
 
-        await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'other.user')),
-          throwsA(isA<JwAccountMismatchException>()),
-        );
-      });
+          await expectLater(
+            adapter.fillLogin(const LoginCredentials(username: 'other.user')),
+            throwsA(isA<JwAccountMismatchException>()),
+          );
+        },
+      );
 
       test('missing password fills username and submits', () async {
         controller.setCurrent(_loginEntryUrl);
@@ -108,13 +116,15 @@ void main() {
     });
 
     group('waitForAuthenticatedHome', () {
-      test('throws JwLoginTimeoutException when home never converges',
-          () async {
-        await expectLater(
-          adapter.waitForAuthenticatedHome(const Duration(milliseconds: 200)),
-          throwsA(isA<JwLoginTimeoutException>()),
-        );
-      });
+      test(
+        'throws JwLoginTimeoutException when home never converges',
+        () async {
+          await expectLater(
+            adapter.waitForAuthenticatedHome(const Duration(milliseconds: 200)),
+            throwsA(isA<JwLoginTimeoutException>()),
+          );
+        },
+      );
 
       test('succeeds when home URL + inspect handshake converge', () async {
         controller
@@ -122,6 +132,102 @@ void main() {
           ..sessionHealthy = true;
         await adapter.waitForAuthenticatedHome(const Duration(seconds: 2));
       });
+
+      test(
+        'home readiness fails when registered handshake is missing',
+        () async {
+          controller
+            ..setCurrent(_homeUrl)
+            ..suppressWebMessage = true;
+          await expectLater(
+            adapter.waitForAuthenticatedHome(const Duration(milliseconds: 150)),
+            throwsA(isA<JwLoginTimeoutException>()),
+          );
+        },
+      );
+
+      test('home readiness fails when URL signal is missing', () async {
+        controller
+          ..suppressUrl = true
+          ..setCurrent(_homeUrl);
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(milliseconds: 150)),
+          throwsA(isA<JwLoginTimeoutException>()),
+        );
+      });
+
+      test('home readiness fails when required DOM is missing', () async {
+        controller
+          ..setCurrent(_homeUrl)
+          ..selectorPresent = false;
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(milliseconds: 150)),
+          throwsA(isA<JwLoginTimeoutException>()),
+        );
+      });
+    });
+
+    group('strict identity proof', () {
+      test('missing authoritative identity fails closed', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..authoritativeMatched = false
+          ..domMatched = true
+          ..storageMatched = true;
+        await expectLater(
+          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+      });
+
+      test('authoritative identity conflict fails closed', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..authoritativeMatched = true
+          ..authoritativeConflicted = true
+          ..domMatched = true
+          ..storageMatched = true;
+        await expectLater(
+          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+      });
+
+      test('DOM identity conflict fails closed', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..authoritativeMatched = true
+          ..domMatched = true
+          ..domConflicted = true
+          ..storageMatched = true;
+        await expectLater(
+          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+      });
+
+      test('storage identity conflict fails closed', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..authoritativeMatched = true
+          ..domMatched = true
+          ..storageMatched = true
+          ..storageConflicted = true;
+        await expectLater(
+          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+      });
+    });
+
+    test('login activates exact trusted portal target once', () async {
+      controller
+        ..setCurrent(_loginEntryUrl)
+        ..authoritativeMatched = true;
+      await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+      expect(controller.primaryClicks, 1);
+      expect(controller.submitCalls, 1);
+      expect(controller.selectorProbes, contains('#login-unified-wrapper'));
     });
 
     group('course datum', () {
@@ -135,20 +241,25 @@ void main() {
         expect(id, 'data-ctx-1');
       });
 
-      test('fetchCourseDatum runs get-data + datum with the right args',
-          () async {
-        controller
-          ..setCurrent(_courseTableUrl)
-          ..datumText = '{"result":{"lesson":[{"name":"x"}]}}';
-        final datum = await adapter.fetchCourseDatum(
-          semesterId: 461,
-          dataId: 'data-ctx-1',
-          referer: _courseTableUrl,
-        );
-        expect((datum['result'] as Map<String, dynamic>)['lesson'], isNotEmpty);
-        expect(controller.lastGetDataSemester, 461);
-        expect(controller.lastDatumLessonIds, <Object?>[101, 102]);
-      });
+      test(
+        'fetchCourseDatum runs get-data + datum with the right args',
+        () async {
+          controller
+            ..setCurrent(_courseTableUrl)
+            ..datumText = '{"result":{"lesson":[{"name":"x"}]}}';
+          final datum = await adapter.fetchCourseDatum(
+            semesterId: 461,
+            dataId: 'data-ctx-1',
+            referer: _courseTableUrl,
+          );
+          expect(
+            (datum['result'] as Map<String, dynamic>)['lesson'],
+            isNotEmpty,
+          );
+          expect(controller.lastGetDataSemester, 461);
+          expect(controller.lastDatumLessonIds, <Object?>[101, 102]);
+        },
+      );
 
       test('missing lessonIds maps to JwCollectionException', () async {
         controller
@@ -223,10 +334,7 @@ void main() {
         isJwNavigationAllowed('https://jw.ustc.edu.cn/for-std/other'),
         isFalse,
       );
-      expect(
-        isJwNavigationAllowed('https://jw.ustc.edu.cn/admin'),
-        isFalse,
-      );
+      expect(isJwNavigationAllowed('https://jw.ustc.edu.cn/admin'), isFalse);
     });
   });
 }
@@ -267,17 +375,29 @@ class FakeJwWebviewController implements JwWebviewController {
 
   bool identityAuthenticated = false;
   bool identityConflict = false;
+  bool? authoritativeMatched;
+  bool? authoritativeConflicted;
+  bool? domMatched;
+  bool? domConflicted;
+  bool? storageMatched;
+  bool? storageConflicted;
   bool sessionHealthy = false;
   bool rejectUnknownNavigation = false;
+  bool suppressUrl = false;
+  bool selectorPresent = true;
+  bool suppressWebMessage = false;
+  int primaryClicks = 0;
+  int submitCalls = 0;
+  final List<String> selectorProbes = <String>[];
 
   void setCurrent(String url) {
     _currentUrl = url;
-    _urlController.add(url);
+    if (!suppressUrl) _urlController.add(url);
   }
 
   void _navigateTo(String url) {
     _currentUrl = url;
-    _urlController.add(url);
+    if (!suppressUrl) _urlController.add(url);
     _loadingController.add(JwLoadingState.loading);
     _loadingController.add(JwLoadingState.navigationCompleted);
   }
@@ -286,11 +406,10 @@ class FakeJwWebviewController implements JwWebviewController {
   Stream<String> get urlChanges => _urlController.stream;
 
   @override
-  String? get currentUrlSnapshot => _currentUrl;
+  String? get currentUrlSnapshot => suppressUrl ? null : _currentUrl;
 
   @override
-  Stream<JwLoadingState> get loadingStateChanges =>
-      _loadingController.stream;
+  Stream<JwLoadingState> get loadingStateChanges => _loadingController.stream;
 
   @override
   Stream<Object?> get webMessages => _webMessageController.stream;
@@ -303,8 +422,7 @@ class FakeJwWebviewController implements JwWebviewController {
 
   @override
   Future<void> loadUrl(String url) async {
-    if (rejectUnknownNavigation &&
-        !isJwNavigationAllowed(url)) {
+    if (rejectUnknownNavigation && !isJwNavigationAllowed(url)) {
       rejectUnknownNavigation = false;
       throw const JwCollectionException('navigation policy rejected');
     }
@@ -316,8 +434,17 @@ class FakeJwWebviewController implements JwWebviewController {
   Future<Object?> executeScript(String source) async {
     _lastSource = source;
     if (source.startsWith('Boolean(document.querySelector')) {
-      // DOM-ready presence probe: scripted as present.
-      return true;
+      final open = source.indexOf('querySelector(') + 'querySelector('.length;
+      final close = source.lastIndexOf('))');
+      if (open >= 0 && close > open) {
+        try {
+          final selector = jsonDecode(source.substring(open, close));
+          if (selector is String) selectorProbes.add(selector);
+        } on FormatException {
+          // Keep the fake permissive for malformed probe source.
+        }
+      }
+      return selectorPresent;
     }
     if (source.contains('input[name=username]') &&
         source.contains('||{value:""}).value')) {
@@ -352,9 +479,7 @@ class FakeJwWebviewController implements JwWebviewController {
     const close = '})(payload)';
     final closeStart = source.indexOf(close, openStart + open.length);
     if (closeStart < 0) return null;
-    final body = source
-        .substring(openStart + open.length, closeStart)
-        .trim();
+    final body = source.substring(openStart + open.length, closeStart).trim();
     for (final entry in jwRegisteredScripts.entries) {
       if (body == entry.value.trim()) return entry;
     }
@@ -378,7 +503,10 @@ class FakeJwWebviewController implements JwWebviewController {
     }
   }
 
-  Object? _handleScript(MapEntry<String, String> entry, Map<String, Object?> args) {
+  Object? _handleScript(
+    MapEntry<String, String> entry,
+    Map<String, Object?> args,
+  ) {
     final scriptId = entry.key;
     final reply = _replyFor(scriptId, args);
     _echoReply(reply, scriptId);
@@ -396,6 +524,7 @@ class FakeJwWebviewController implements JwWebviewController {
         passwordFilled = text;
         return {'filled': true};
       case 'jw.cas.submit':
+        submitCalls++;
         submitted = true;
         // The natural post-submit redirect lands on the JW home page.
         _navigateTo(_homeUrl);
@@ -408,12 +537,13 @@ class FakeJwWebviewController implements JwWebviewController {
         };
       case 'jw.identity.verifyExpected':
         return {
-          'authoritativeMatched': identityAuthenticated,
-          'authoritativeConflicted': identityConflict,
-          'domMatched': identityAuthenticated,
-          'domConflicted': identityConflict,
-          'storageMatched': identityAuthenticated,
-          'storageConflicted': identityConflict,
+          'authoritativeMatched': authoritativeMatched ?? identityAuthenticated,
+          'authoritativeConflicted':
+              authoritativeConflicted ?? identityConflict,
+          'domMatched': domMatched ?? identityAuthenticated,
+          'domConflicted': domConflicted ?? identityConflict,
+          'storageMatched': storageMatched ?? identityAuthenticated,
+          'storageConflicted': storageConflicted ?? identityConflict,
         };
       case 'jw.course.readContext':
         if (dataId == null) {
@@ -448,7 +578,7 @@ class FakeJwWebviewController implements JwWebviewController {
   }
 
   void _echoReply(Map<String, Object?>? result, String scriptId) {
-    if (result == null) return;
+    if (result == null || suppressWebMessage) return;
     final requestId = _capturedRequestId;
     if (requestId == null) return;
     _webMessageController.add(<String, Object?>{
@@ -459,6 +589,7 @@ class FakeJwWebviewController implements JwWebviewController {
   }
 
   void _echoError(String reason) {
+    if (suppressWebMessage) return;
     final requestId = _capturedRequestId;
     if (requestId == null) return;
     _webMessageController.add(<String, Object?>{
@@ -483,6 +614,7 @@ class FakeJwWebviewController implements JwWebviewController {
 
   @override
   Future<void> dispatchPrimaryClick(Offset position) async {
+    primaryClicks++;
     // Clicking the SSO entry navigates to the CAS login page.
     if (!visitedCas) {
       visitedCas = true;

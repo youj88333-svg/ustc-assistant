@@ -470,11 +470,40 @@ class JwReadyTarget {
     if (pattern == null || !pattern.endsWith('*')) {
       return candidate == url;
     }
-    return candidate.startsWith(
-      pattern.substring(0, pattern.length - 1),
-    );
+    return candidate.startsWith(pattern.substring(0, pattern.length - 1));
   }
 }
+
+/// Trusted portal login target. The `/login` page is the only page from which
+/// this adapter may activate the native SSO click; the CAS credential form is
+/// reached only by that one side-effecting transition.
+const JwReadyTarget portalLoginTarget = JwReadyTarget(
+  id: 'jw.portal.login',
+  url: 'https://jw.ustc.edu.cn/login',
+  urlPattern: 'https://jw.ustc.edu.cn/login*',
+  readySelector: '#login-unified-wrapper',
+  handshakeScriptId: 'jw.cas.inspect',
+);
+
+/// Trusted CAS credential-form target reached by the portal's native click.
+const JwReadyTarget casLoginTarget = JwReadyTarget(
+  id: 'jw.cas.login',
+  url: 'https://id.ustc.edu.cn/cas/login',
+  urlPattern: 'https://id.ustc.edu.cn/cas/login*',
+  readySelector:
+      'form:has(input[name="username"], #username):has(input[type="password"])',
+  handshakeScriptId: 'jw.cas.inspect',
+);
+
+/// Trusted authenticated portal target. Home readiness intentionally requires
+/// a body DOM probe in addition to the URL and registered handshake.
+const JwReadyTarget portalHomeTarget = JwReadyTarget(
+  id: 'jw.portal.home',
+  url: 'https://jw.ustc.edu.cn/home',
+  urlPattern: 'https://jw.ustc.edu.cn/home*',
+  readySelector: 'body',
+  handshakeScriptId: 'jw.cas.inspect',
+);
 
 /// Runs a registered script by posting a `window.chrome.webview.postMessage`
 /// request and awaiting the matching `webMessage` reply. Does NOT rely on
@@ -502,6 +531,15 @@ Future<ExtractionResult> executeRegisteredScript(
   final requestId = _newRequestId();
   final encodedRequestId = jsonEncode(requestId);
   final completer = Completer<ExtractionResult>();
+
+  void signal(String stage) {
+    try {
+      safeDiagnostic?.call(stage);
+    } on Object {
+      // diagnostics must never break collection.
+    }
+  }
+
   late final StreamSubscription<Object?> subscription;
   subscription = controller.webMessages.listen(
     (message) {
@@ -515,7 +553,7 @@ Future<ExtractionResult> executeRegisteredScript(
         final safeReason = reason is String
             ? _safeScriptReason(reason)
             : 'script_failed';
-        safeDiagnostic?.call('registered_script_error:$scriptId:$safeReason');
+        signal('registered_script_error:$scriptId:$safeReason');
         completer.completeError(
           JwCollectionException('collection script failed: $safeReason'),
         );
@@ -531,8 +569,7 @@ Future<ExtractionResult> executeRegisteredScript(
         return;
       }
       completer.complete(<String, Object?>{
-        for (final entry in result.entries)
-          entry.key as String: entry.value,
+        for (final entry in result.entries) entry.key as String: entry.value,
       });
     },
     onError: (Object _) {
@@ -543,7 +580,8 @@ Future<ExtractionResult> executeRegisteredScript(
       }
     },
   );
-  final wrapper = '''
+  final wrapper =
+      '''
 (function() {
   const requestId = $encodedRequestId;
   const payload = $encodedArgs;
@@ -574,12 +612,19 @@ Future<ExtractionResult> executeRegisteredScript(
 })()
 ''';
   try {
-    await controller.executeScript(wrapper);
+    signal('script_execute:$scriptId');
+    await controller
+        .executeScript(wrapper)
+        .timeout(
+          timeout,
+          onTimeout: () =>
+              throw const JwCollectionException('collection script timed out'),
+        );
+    signal('script_await:$scriptId');
     return await completer.future.timeout(
       timeout,
-      onTimeout: () => throw const JwCollectionException(
-        'collection script timed out',
-      ),
+      onTimeout: () =>
+          throw const JwCollectionException('collection script timed out'),
     );
   } finally {
     await subscription.cancel();
@@ -600,6 +645,17 @@ String _newRequestId() {
     growable: false,
   );
   return 'jw-${base64UrlEncode(bytes).replaceAll('=', '')}';
+}
+
+/// A convergence attempt token. Signals from a timed-out or completed
+/// attempt must never complete its readiness futures after the attempt has
+/// been invalidated.
+final class _JwAttemptToken {
+  bool active = true;
+
+  void invalidate() {
+    active = false;
+  }
 }
 
 /// Waits for the [JwReadyTarget] signals (URL match, DOM-ready, ready
@@ -629,6 +685,8 @@ Future<ExtractionResult> convergeTarget(
   void Function(String)? safeDiagnostic,
   Future<void> Function()? command,
 }) async {
+  final token = _JwAttemptToken();
+  final deadline = DateTime.now().add(timeout);
   final urlMatch = Completer<void>();
   final domReady = Completer<void>();
 
@@ -641,14 +699,14 @@ Future<ExtractionResult> convergeTarget(
   }
 
   void completeDom() {
-    if (!domReady.isCompleted) {
+    if (token.active && !domReady.isCompleted) {
       signal('domReady:${target.id}');
       domReady.complete();
     }
   }
 
   void completeUrl() {
-    if (!urlMatch.isCompleted) {
+    if (token.active && !urlMatch.isCompleted) {
       signal('urlMatched:${target.id}');
       urlMatch.complete();
       // No-selector target: a settled URL is a valid DOM-ready proxy. The
@@ -660,6 +718,7 @@ Future<ExtractionResult> convergeTarget(
   // Arm the readiness waits before any navigation/action.
   late final StreamSubscription<String> urlSub;
   urlSub = controller.urlChanges.listen((url) {
+    if (!token.active) return;
     if (target.urlMatches(url)) completeUrl();
   });
   if (controller.currentUrlSnapshot != null &&
@@ -669,6 +728,7 @@ Future<ExtractionResult> convergeTarget(
 
   late final StreamSubscription<JwLoadingState> loadingSub;
   loadingSub = controller.loadingStateChanges.listen((state) {
+    if (!token.active) return;
     if (state == JwLoadingState.navigationCompleted &&
         target.readySelector == null) {
       completeDom();
@@ -679,49 +739,74 @@ Future<ExtractionResult> convergeTarget(
   // navigation/action command in listen-before-navigate order.
   final selector = target.readySelector;
   if (selector != null) {
-    unawaited(_waitForSelector(controller, selector, timeout).then(
-      (_) => completeDom(),
-      onError: (Object _) {
-        // timeout/abort handled below.
-      },
-    ));
+    unawaited(
+      _waitForSelector(
+        controller,
+        selector,
+        timeout,
+        isActive: () => token.active,
+      ).then(
+        (_) {
+          if (token.active) completeDom();
+        },
+        onError: (Object _, StackTrace _) {
+          // Timeout/abort is reported by the bounded readiness wait below.
+        },
+      ),
+    );
   }
 
-  final commandFuture = command?.call();
-
   try {
-    await Future.wait<void>([urlMatch.future, domReady.future],
-        eagerError: true).timeout(timeout);
-  } on TimeoutException {
-    rethrow;
+    // Invoke the action only after both stream subscriptions and the selector
+    // poller are armed. Include its Future in the same bounded wait so command
+    // failures propagate instead of being hidden behind a later timeout.
+    final commandFuture = command?.call();
+    final waits = <Future<void>>[urlMatch.future, domReady.future];
+    if (commandFuture != null) waits.add(commandFuture);
+    final remaining = deadline.difference(DateTime.now());
+    await Future.wait<void>(
+      waits,
+      eagerError: true,
+    ).timeout(remaining.isNegative ? Duration.zero : remaining);
+
+    // The handshake is the third signal. It is credential-free and
+    // registered; a missing reply is a failed attempt, never a degraded
+    // two-signal success.
+    final handshakeId = target.handshakeScriptId;
+    if (handshakeId == null) {
+      signal('ready:${target.id}');
+      return const <String, Object?>{};
+    }
+    final handshakeRemaining = deadline.difference(DateTime.now());
+    if (handshakeRemaining.isNegative || handshakeRemaining == Duration.zero) {
+      throw TimeoutException('ready handshake timed out');
+    }
+    try {
+      final result = await executeRegisteredScript(
+        controller,
+        scriptId: handshakeId,
+        args: const <String, Object?>{},
+        timeout: handshakeRemaining,
+        safeDiagnostic: safeDiagnostic,
+      );
+      signal('readyHandshake:${target.id}');
+      signal('ready:${target.id}');
+      return result;
+    } on JwCollectionException catch (error) {
+      // executeRegisteredScript uses a collection exception for its bounded
+      // reply wait. Preserve all script/contract failures, but expose a
+      // timeout distinctly so the adapter can map home convergence to the
+      // public login-timeout contract.
+      if (error.message == 'collection script timed out') {
+        throw TimeoutException('ready handshake timed out');
+      }
+      rethrow;
+    }
   } finally {
-    await commandFuture;
+    token.invalidate();
     await urlSub.cancel();
     await loadingSub.cancel();
   }
-
-  // The handshake is the third signal. It is credential-free and registered;
-  // for targets without a handshake the first two signals (URL + DOM) suffice.
-  final handshakeId = target.handshakeScriptId;
-  if (handshakeId == null) {
-    signal('ready:${target.id}');
-    return const <String, Object?>{};
-  }
-  final result = await executeRegisteredScript(
-    controller,
-    scriptId: handshakeId,
-    args: const <String, Object?>{},
-    timeout: timeout,
-    safeDiagnostic: safeDiagnostic,
-  ).timeout(
-    timeout,
-    onTimeout: () => throw const JwCollectionException(
-      'ready handshake timed out',
-    ),
-  );
-  signal('readyHandshake:${target.id}');
-  signal('ready:${target.id}');
-  return result;
 }
 
 /// Polls for a CSS selector to be present in the live DOM until [timeout].
@@ -730,11 +815,13 @@ Future<ExtractionResult> convergeTarget(
 Future<void> _waitForSelector(
   JwWebviewController controller,
   String selector,
-  Duration timeout,
-) async {
+  Duration timeout, {
+  bool Function()? isActive,
+}) async {
   final deadline = DateTime.now().add(timeout);
   final encoded = jsonEncode(selector);
   while (true) {
+    if (isActive != null && !isActive()) return;
     Object? present;
     try {
       present = await controller.executeScript(
@@ -744,6 +831,7 @@ Future<void> _waitForSelector(
       // Document switching; keep polling within the bound.
     }
     if (present == true) return;
+    if (isActive != null && !isActive()) return;
     if (DateTime.now().isAfter(deadline)) {
       throw const JwCollectionException('DOM ready selector timed out');
     }

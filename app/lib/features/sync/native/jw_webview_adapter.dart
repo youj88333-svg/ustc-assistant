@@ -266,7 +266,14 @@ class JwWebViewAdapter implements JwWebPage {
   Future<void> gotoRoot() => _navigate(jwRootUrl);
 
   @override
-  Future<void> gotoCasEntry() => _navigate(casEntryUrl);
+  Future<void> gotoCasEntry() async {
+    final controller = await _ensureController();
+    await _converge(
+      target: portalLoginTarget,
+      timeout: _loginTimeout,
+      command: () => controller.loadUrl(portalLoginTarget.url),
+    );
+  }
 
   @override
   Future<void> gotoCourseTable() => _navigate(courseEntryUrl);
@@ -308,92 +315,41 @@ class JwWebViewAdapter implements JwWebPage {
     }
 
     final controller = await _ensureController();
-    var current = controller.currentUrlSnapshot ?? '';
+    final current = controller.currentUrlSnapshot ?? '';
 
-    // 1. Are we already on the real CAS form (id.ustc.edu.cn)? The collector's
-    //    gotoCasEntry navigates to jw.ustc.edu.cn/ucas-sso/login; after a
-    //    previous activation we may already be on CAS.
-    var onCasForm = _isCasFormHost(current);
-    if (!onCasForm) {
-      // 2. Ensure we are on the JW SSO login entry. The collector usually
-      //    already landed on `/ucas-sso/login`; only navigate (fresh) when we
-      //    are not on the jw.ustc.edu.cn login family.
-      final onJwLoginEntry = _isJwLoginEntryUrl(current);
-      if (!onJwLoginEntry) {
-        _diag('attempt:jw.portal.login');
-        await _converge(
-          target: const JwReadyTarget(
-            id: 'jw.portal.login',
-            url: casEntryUrl,
-            urlPattern: 'https://jw.ustc.edu.cn/ucas-sso*',
-            readySelector: 'button, a[href*="sso"], a[href*="cas"]',
-          ),
-          timeout: _loginTimeout,
-          command: () => controller.loadUrl(casEntryUrl),
-        );
-      } else {
-        // Already on the entry (either /ucas-sso or /login); the SSO trigger
-        // is present and we can go straight to activation.
-        _diag('attempt:jw.portal.login');
-      }
-
-      // 3+4. Arm the CAS-form readiness, then activate the SSO transition by
-      //      clicking the visible entry trigger (listen-before-navigate). The
-      //      real credential form only lives at id.ustc.edu.cn/cas/login — the
-      //      login entry page merely hosts the 统一身份认证 button.
-      _diag('waiting_for_cas_form');
+    // Prepare the exact portal login target before the one native primary
+    // click. An already prepared target is only revalidated; a different
+    // document is navigated to the trusted `/login` entry first.
+    final onPortalLogin = portalLoginTarget.urlMatches(current);
+    if (!onPortalLogin) {
+      // Navigate to the trusted `/login` entry when the current document is
+      // not already in the exact portal target family.
+      _diag('attempt:jw.portal.login');
       await _converge(
-        target: const JwReadyTarget(
-          id: 'jw.cas.login',
-          url: 'https://id.ustc.edu.cn/cas/login',
-          urlPattern: 'https://id.ustc.edu.cn/cas/login*',
-          readySelector: 'input[name="username"], input[type="password"]',
-        ),
+        target: portalLoginTarget,
         timeout: _loginTimeout,
-        command: _clickSsoEntry,
+        command: () => controller.loadUrl(portalLoginTarget.url),
       );
-      current = controller.currentUrlSnapshot ?? '';
-      onCasForm = _isCasFormHost(current);
     } else {
-      _diag('reusing_cas_form');
+      await _converge(target: portalLoginTarget, timeout: _loginTimeout);
     }
 
-    // 5. Stale-form guard (evidence only, never fail-closed — the full-branch
-    //    flow has no pre-submit rejection; fillUsername OVERWRITES whatever
-    //    the form remembers, and the real account check is the post-login
-    //    identity proof). A missing probe (null) or a non-empty stale value
-    //    both mean the current document is NOT a usable credential form
-    //    (bare /cas/login redirects to a form-less page; CAS may also
-    //    remember the last account). Recovery ALWAYS reruns the SSO entry
-    //    activation (entry page → 统一身份认证 click → CAS form with the
-    //    service param) — never a bare /cas/login reload, whose converge
-    //    would fire on stale signals of the old document.
-    final preSet = await _readPreselectedAccount(controller);
-    // Privacy-safe evidence only: presence + lengths, never the text.
-    _diag(
-      preSet == null
-          ? 'preselect_absent'
-          : 'preselect_present:${preSet.trim().length}'
-                '/expected:${username.trim().length}'
-                '/equal:${preSet.trim().isNotEmpty && _accountsEqual(preSet, username)}',
+    _diag('waiting_for_cas_form');
+    await _converge(
+      target: casLoginTarget,
+      timeout: _casFormWaitTimeout,
+      command: _clickSsoEntry,
     );
-    final staleOrBroken =
-        onCasForm &&
-        (preSet == null ||
-            (preSet.trim().isNotEmpty && !_accountsEqual(preSet, username)));
-    if (staleOrBroken) {
-      _diag('stale_cas_form_reloading');
-      await _activateSsoEntryAndAwaitForm(controller);
-    }
 
-    // 6. Fill username (always) and password (when provided).
+    // Fill username (always) and password (when provided).
     await _fillSecret(controller, 'jw.cas.fillUsername', username);
     final password = credentials.password;
     if (password != null && password.isNotEmpty) {
       await _fillSecret(controller, 'jw.cas.fillPassword', password);
     }
 
-    // 7. Submit the form (single CAS activation; never replay).
+    // Submit the form once; never replay a side-effecting authentication
+    // action in this attempt.
     _diag('activationDispatched');
     final submitResult = await executeRegisteredScript(
       controller,
@@ -406,16 +362,14 @@ class JwWebViewAdapter implements JwWebPage {
       throw const JwCollectionException('CAS submit was not acknowledged');
     }
 
-    // 8. Await the natural /home return (the browser redirects on its own;
-    //    we never re-navigate to a CAS callback ourselves).
+    // Await the natural /home return (the browser redirects on its own; we
+    // never re-navigate to a CAS callback ourselves).
     await _converge(
-      target: const JwReadyTarget(
-        id: 'jw.portal.home',
-        url: 'https://jw.ustc.edu.cn/home',
-        urlPattern: 'https://jw.ustc.edu.cn/home*',
-        handshakeScriptId: 'jw.cas.inspect',
-      ),
+      target: portalHomeTarget,
       timeout: _loginTimeout,
+      onTimeout: () => throw JwLoginTimeoutException(
+        'USTC JW login was not completed before timeout',
+      ),
     );
 
     // 9. Identity proof: scripts only return matched/conflicted booleans; any
@@ -423,29 +377,9 @@ class JwWebViewAdapter implements JwWebPage {
     await _verifyIdentity(controller, username);
   }
 
-  bool _accountsEqual(String a, String b) =>
-      a.trim().toLowerCase() == b.trim().toLowerCase();
-
-  Future<String?> _readPreselectedAccount(
-    JwWebviewController controller,
-  ) async {
-    Object? value;
-    try {
-      value = await controller.executeScript(
-        '(document.querySelector("input[name=username], #username")||{value:""}).value;',
-      );
-    } on Object {
-      return null;
-    }
-    return value is String ? value : null;
-  }
-
-  /// Fills a CAS field with [secret] bytes. A `missing_selector` /
-  /// `wrong_target` failure usually means the script raced a document switch
-  /// (the probe/converge signals fired on the OLD document) — recover by
-  /// re-running the SSO entry activation once inside the timeout budget
-  /// (full-branch lesson: ExecuteScript failures during document switches are
-  /// retried within the timeout, never treated as final).
+  /// Fills a CAS field with [secret] bytes. Selector polling may retry while
+  /// a document is being replaced, but this side-effecting credential action
+  /// itself is never replayed.
   Future<void> _fillSecret(
     JwWebviewController controller,
     String scriptId,
@@ -453,24 +387,6 @@ class JwWebViewAdapter implements JwWebPage {
   ) async {
     final bytes = Uint8List.fromList(utf8.encode(secret));
     try {
-      try {
-        await executeRegisteredScript(
-          controller,
-          scriptId: scriptId,
-          args: <String, Object?>{'secretBytes': bytes},
-          timeout: _responseTimeout,
-          safeDiagnostic: _safeDiagnostic,
-        );
-        return;
-      } on JwCollectionException catch (error) {
-        final text = error.message ?? '';
-        final recoverable =
-            text.contains('missing_selector') || text.contains('wrong_target');
-        if (!recoverable) rethrow;
-        _diag('fill_race_retry:$scriptId');
-      }
-      // One recovery attempt: fresh SSO activation → CAS form → fill again.
-      await _activateSsoEntryAndAwaitForm(controller);
       await executeRegisteredScript(
         controller,
         scriptId: scriptId,
@@ -480,68 +396,6 @@ class JwWebViewAdapter implements JwWebPage {
       );
     } finally {
       bytes.fillRange(0, bytes.length, 0);
-    }
-  }
-
-  /// Shared SSO-entry activation used by both the initial CAS-form wait and
-  /// the fill-race recovery: entry page → 统一身份认证 click → CAS form.
-  Future<void> _activateSsoEntryAndAwaitForm(
-    JwWebviewController controller,
-  ) async {
-    await _converge(
-      target: const JwReadyTarget(
-        id: 'jw.portal.login',
-        url: casEntryUrl,
-        urlPattern: 'https://jw.ustc.edu.cn/ucas-sso*',
-        readySelector: 'button, a[href*="sso"], a[href*="cas"]',
-      ),
-      timeout: _loginTimeout,
-      command: () => controller.loadUrl(casEntryUrl),
-    );
-    try {
-      await _converge(
-        target: const JwReadyTarget(
-          id: 'jw.cas.login',
-          url: 'https://id.ustc.edu.cn/cas/login',
-          urlPattern: 'https://id.ustc.edu.cn/cas/login*',
-          readySelector: 'input[name="username"], input[type="password"]',
-        ),
-        timeout: _casFormWaitTimeout,
-        command: _clickSsoEntry,
-      );
-    } on JwCollectionException {
-      // The CAS form never showed the expected inputs. Capture the real DOM
-      // shape (privacy-safe: counts/types only) so the contract mismatch is
-      // attributable, then rethrow for the caller's retry/failure path.
-      await _diagCasFormShape(controller);
-      rethrow;
-    }
-    // Privacy-safe DOM reconnaissance (once, on convergence): shapes only —
-    // element counts, input types, iframe presence. Never text/values.
-    await _diagCasFormShape(controller);
-  }
-
-  /// One-shot privacy-safe DOM shape probe. It reports only stable booleans,
-  /// never values, names, paths, text, or element metadata.
-  Future<void> _diagCasFormShape(JwWebviewController controller) async {
-    try {
-      final shape = await controller.executeScript('''
-(() => {
-  return {
-    hasUsernameField: !!document.querySelector('input[name="username"], #username'),
-    hasPasswordField: !!document.querySelector('input[type="password"]'),
-  };
-})()
-''');
-      if (shape is Map) {
-        _diag(
-          'cas_form_shape:'
-          '/user=${shape['hasUsernameField']}'
-          '/pass=${shape['hasPasswordField']}',
-        );
-      }
-    } on Object {
-      // Reconnaissance is best effort.
     }
   }
 
@@ -566,13 +420,12 @@ class JwWebViewAdapter implements JwWebPage {
         storageMatched: result['storageMatched'] == true,
         storageConflicted: result['storageConflicted'] == true,
       );
-      if (row.authoritativeConflicted ||
-          (!row.authoritativeMatched &&
-              (row.domConflicted || row.storageConflicted))) {
+      if (!row.verified) {
         // Booleans only — never account text (red line).
         _diag(
           'identity_verification_conflicted'
           ':auth=${row.authoritativeMatched}'
+          '/authConflict=${row.authoritativeConflicted}'
           '/dom=${row.domMatched}'
           '/storage=${row.storageMatched}'
           '/domConflict=${row.domConflicted}'
@@ -582,12 +435,6 @@ class JwWebViewAdapter implements JwWebPage {
           'authenticated account does not match the expected username',
         );
       }
-      if (!row.authoritativeMatched) {
-        // No authoritative evidence found — the page may still be settling.
-        // Only fail closed when it is an explicit conflict (account_mismatch),
-        // otherwise the collection proceeds and the collector re-checks home.
-        _diag('identity_verification_uncertain');
-      }
     } finally {
       expectedBytes.fillRange(0, expectedBytes.length, 0);
     }
@@ -596,12 +443,7 @@ class JwWebViewAdapter implements JwWebPage {
   @override
   Future<void> waitForAuthenticatedHome(Duration timeout) async {
     await _converge(
-      target: const JwReadyTarget(
-        id: 'jw.portal.home',
-        url: 'https://jw.ustc.edu.cn/home',
-        urlPattern: 'https://jw.ustc.edu.cn/home*',
-        handshakeScriptId: 'jw.cas.inspect',
-      ),
+      target: portalHomeTarget,
       timeout: timeout,
       onTimeout: () => throw JwLoginTimeoutException(
         'USTC JW login was not completed before timeout',
@@ -821,27 +663,6 @@ class JwWebViewAdapter implements JwWebPage {
     return Offset(dx, dy);
   }
 
-  /// True iff [url] is on the CAS host (`id.ustc.edu.cn`), where the real
-  /// credential form lives.
-  bool _isCasFormHost(String url) {
-    final parsed = Uri.tryParse(url);
-    return parsed != null &&
-        parsed.scheme == 'https' &&
-        parsed.host == 'id.ustc.edu.cn';
-  }
-
-  /// True iff [url] is a jw.ustc.edu.cn SSO login entry path (`/ucas-sso` or
-  /// `/login`).
-  bool _isJwLoginEntryUrl(String url) {
-    final parsed = Uri.tryParse(url);
-    return parsed != null &&
-        parsed.scheme == 'https' &&
-        parsed.host == jwHost &&
-        (parsed.path.startsWith('/ucas-sso') ||
-            parsed.path.startsWith('/login') ||
-            parsed.path == '/');
-  }
-
   @override
   Future<void> close() async {
     if (_disposed) return;
@@ -876,4 +697,10 @@ class JwIdentityProof {
   final bool domConflicted;
   final bool storageMatched;
   final bool storageConflicted;
+
+  bool get verified =>
+      authoritativeMatched &&
+      !authoritativeConflicted &&
+      !domConflicted &&
+      !storageConflicted;
 }
