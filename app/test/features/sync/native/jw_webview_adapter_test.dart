@@ -37,14 +37,16 @@ void main() {
   group('JwWebViewAdapter fake-controller tests', () {
     late FakeJwWebviewController controller;
     late JwWebViewAdapter adapter;
+    late List<String> diagnostics;
 
     setUp(() {
       controller = FakeJwWebviewController();
+      diagnostics = <String>[];
       adapter = JwWebViewAdapter(
         controllerFactory: () async => controller,
         loginTimeout: const Duration(seconds: 5),
         responseTimeout: const Duration(seconds: 3),
-        safeDiagnostic: (event) {},
+        safeDiagnostic: diagnostics.add,
       );
     });
 
@@ -70,7 +72,9 @@ void main() {
         'fills username + password, submits, awaits home, verifies identity',
         () async {
           controller.setCurrent(_loginEntryUrl);
-          controller.identityAuthenticated = true;
+          controller
+            ..identityAuthenticated = true
+            ..sessionHealthy = true;
 
           await adapter.fillLogin(
             const LoginCredentials(
@@ -78,6 +82,7 @@ void main() {
               password: 'pw-secret',
             ),
           );
+          await adapter.waitForAuthenticatedHome(const Duration(seconds: 2));
 
           expect(controller.usernameFilled, 'ustc.student');
           expect(controller.passwordFilled, 'pw-secret');
@@ -94,9 +99,13 @@ void main() {
           controller.setCurrent(_loginEntryUrl);
           controller.identityAuthenticated = false;
           controller.identityConflict = true;
+          controller.sessionHealthy = true;
 
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'other.user'),
+          );
           await expectLater(
-            adapter.fillLogin(const LoginCredentials(username: 'other.user')),
+            adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
             throwsA(isA<JwAccountMismatchException>()),
           );
         },
@@ -104,7 +113,6 @@ void main() {
 
       test('missing password fills username and submits', () async {
         controller.setCurrent(_loginEntryUrl);
-        controller.identityAuthenticated = true;
 
         await adapter.fillLogin(
           const LoginCredentials(username: 'ustc.student'),
@@ -128,8 +136,12 @@ void main() {
 
       test('succeeds when home URL + inspect handshake converge', () async {
         controller
-          ..setCurrent(_homeUrl)
+          ..setCurrent(_loginEntryUrl)
+          ..identityAuthenticated = true
           ..sessionHealthy = true;
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'ustc.student'),
+        );
         await adapter.waitForAuthenticatedHome(const Duration(seconds: 2));
       });
 
@@ -165,6 +177,57 @@ void main() {
           throwsA(isA<JwLoginTimeoutException>()),
         );
       });
+
+      test(
+        'home readiness rejects a stale CAS document on a home URL event',
+        () async {
+          controller
+            ..setCurrent(_casUrl)
+            ..emitUrlOnly(_homeUrl)
+            ..sessionHealthy = true;
+          await expectLater(
+            adapter.waitForAuthenticatedHome(const Duration(milliseconds: 150)),
+            throwsA(anything),
+          );
+        },
+      );
+
+      test('home readiness rejects a false authenticated handshake', () async {
+        controller
+          ..setCurrent(_homeUrl)
+          ..sessionHealthy = false;
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
+          throwsA(isA<JwCollectionException>()),
+        );
+      });
+
+      test(
+        'home readiness propagates a non-timeout handshake failure',
+        () async {
+          controller
+            ..setCurrent(_homeUrl)
+            ..sessionHealthy = true
+            ..handshakeFailureReason = 'script_failed';
+          await expectLater(
+            adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
+            throwsA(isA<JwCollectionException>()),
+          );
+        },
+      );
+
+      test('late selector signal from an old attempt is ignored', () async {
+        controller
+          ..setCurrent(_homeUrl)
+          ..sessionHealthy = true
+          ..selectorProbeDelay = const Duration(milliseconds: 100);
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(milliseconds: 25)),
+          throwsA(isA<JwLoginTimeoutException>()),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 125));
+        expect(diagnostics, isNot(contains('ready:jw.portal.home')));
+      });
     });
 
     group('strict identity proof', () {
@@ -173,9 +236,11 @@ void main() {
           ..setCurrent(_loginEntryUrl)
           ..authoritativeMatched = false
           ..domMatched = true
-          ..storageMatched = true;
+          ..storageMatched = true
+          ..sessionHealthy = true;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
         await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
         );
       });
@@ -186,9 +251,11 @@ void main() {
           ..authoritativeMatched = true
           ..authoritativeConflicted = true
           ..domMatched = true
-          ..storageMatched = true;
+          ..storageMatched = true
+          ..sessionHealthy = true;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
         await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
         );
       });
@@ -199,9 +266,11 @@ void main() {
           ..authoritativeMatched = true
           ..domMatched = true
           ..domConflicted = true
-          ..storageMatched = true;
+          ..storageMatched = true
+          ..sessionHealthy = true;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
         await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
         );
       });
@@ -212,22 +281,105 @@ void main() {
           ..authoritativeMatched = true
           ..domMatched = true
           ..storageMatched = true
-          ..storageConflicted = true;
+          ..storageConflicted = true
+          ..sessionHealthy = true;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
         await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
         );
+      });
+
+      test('final identity failure clears the pending login attempt', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..identityAuthenticated = false
+          ..identityConflict = true
+          ..sessionHealthy = true;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..identityAuthenticated = true
+          ..identityConflict = false
+          ..visitedCas = false;
+        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        expect(controller.primaryClicks, 2);
       });
     });
 
     test('login activates exact trusted portal target once', () async {
       controller
         ..setCurrent(_loginEntryUrl)
-        ..authoritativeMatched = true;
+        ..authoritativeMatched = true
+        ..portalLoginMatched = true;
       await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
       expect(controller.primaryClicks, 1);
       expect(controller.submitCalls, 1);
       expect(controller.selectorProbes, contains('#login-unified-wrapper'));
+    });
+
+    test('login does not select another login-like element', () async {
+      controller
+        ..setCurrent(_loginEntryUrl)
+        ..portalLoginMatched = true
+        ..clickProbeMatchesExactWrapper = false;
+      await expectLater(
+        adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+        throwsA(isA<JwCollectionException>()),
+      );
+      expect(controller.primaryClicks, 0);
+      expect(controller.selectorProbes, contains('#login-unified-wrapper'));
+    });
+
+    group('CAS form proof', () {
+      test('hidden password input fails CAS readiness closed', () async {
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..casFormMatched = false
+          ..passwordVisible = false;
+        await expectLater(
+          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          throwsA(isA<JwCollectionException>()),
+        );
+        expect(controller.primaryClicks, 1);
+        expect(controller.submitCalls, 0);
+      });
+
+      test(
+        'username and password in different forms fail CAS readiness',
+        () async {
+          controller
+            ..setCurrent(_loginEntryUrl)
+            ..casFormMatched = false
+            ..fieldsInSameForm = false;
+          await expectLater(
+            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            throwsA(isA<JwCollectionException>()),
+          );
+          expect(controller.primaryClicks, 1);
+          expect(controller.submitCalls, 0);
+        },
+      );
+
+      test('credential scripts remain scoped to the proven form', () {
+        expect(
+          jwRegisteredScripts['jw.cas.fillUsername'],
+          allOf(contains('querySelectorAll(\'form\')'), contains('form.')),
+        );
+        expect(
+          jwRegisteredScripts['jw.cas.fillPassword'],
+          allOf(contains('querySelectorAll(\'form\')'), contains('form.')),
+        );
+        expect(
+          jwRegisteredScripts['jw.cas.submit'],
+          allOf(contains('querySelectorAll(\'form\')'), contains('form.')),
+        );
+      });
     });
 
     group('course datum', () {
@@ -275,6 +427,17 @@ void main() {
         );
       });
 
+      test('course readiness rejects a false target handshake', () async {
+        controller
+          ..setCurrent(_courseTableUrl)
+          ..dataId = 'data-ctx-1'
+          ..courseMatched = false;
+        await expectLater(
+          adapter.resolveCourseDataId(const Duration(seconds: 2)),
+          throwsA(isA<JwCollectionException>()),
+        );
+      });
+
       test('get-data network failure maps to JwCollectionException', () async {
         controller
           ..setCurrent(_courseTableUrl)
@@ -296,6 +459,16 @@ void main() {
         ..examHtml = '<table id="exams"></table>';
       final html = await adapter.fetchExamHtml(const Duration(seconds: 2));
       expect(html, contains('table id="exams"'));
+    });
+
+    test('exam readiness rejects a false target handshake', () async {
+      controller
+        ..setCurrent(_examUrl)
+        ..examMatched = false;
+      await expectLater(
+        adapter.fetchExamHtml(const Duration(seconds: 2)),
+        throwsA(isA<JwCollectionException>()),
+      );
     });
 
     test('close disposes the controller and clears browsing data', () async {
@@ -382,6 +555,15 @@ class FakeJwWebviewController implements JwWebviewController {
   bool? storageMatched;
   bool? storageConflicted;
   bool sessionHealthy = false;
+  bool portalLoginMatched = true;
+  bool casFormMatched = true;
+  bool courseMatched = true;
+  bool examMatched = true;
+  bool passwordVisible = true;
+  bool fieldsInSameForm = true;
+  bool clickProbeMatchesExactWrapper = true;
+  String? handshakeFailureReason;
+  Duration selectorProbeDelay = Duration.zero;
   bool rejectUnknownNavigation = false;
   bool suppressUrl = false;
   bool selectorPresent = true;
@@ -389,14 +571,25 @@ class FakeJwWebviewController implements JwWebviewController {
   int primaryClicks = 0;
   int submitCalls = 0;
   final List<String> selectorProbes = <String>[];
+  String? _documentUrl;
 
   void setCurrent(String url) {
+    _currentUrl = url;
+    _documentUrl = url;
+    if (!suppressUrl) _urlController.add(url);
+  }
+
+  /// Emits a URL event without replacing the document that script probes see.
+  /// This models a stale navigation signal arriving before the WebView's
+  /// current document has switched.
+  void emitUrlOnly(String url) {
     _currentUrl = url;
     if (!suppressUrl) _urlController.add(url);
   }
 
   void _navigateTo(String url) {
     _currentUrl = url;
+    _documentUrl = url;
     if (!suppressUrl) _urlController.add(url);
     _loadingController.add(JwLoadingState.loading);
     _loadingController.add(JwLoadingState.navigationCompleted);
@@ -433,10 +626,16 @@ class FakeJwWebviewController implements JwWebviewController {
   @override
   Future<Object?> executeScript(String source) async {
     _lastSource = source;
-    if (source.startsWith('Boolean(document.querySelector')) {
-      final open = source.indexOf('querySelector(') + 'querySelector('.length;
-      final close = source.lastIndexOf('))');
-      if (open >= 0 && close > open) {
+    if (source.startsWith('Boolean(document.querySelector') ||
+        source.contains('const urlMatches =') &&
+            source.contains('document.querySelector(')) {
+      if (selectorProbeDelay > Duration.zero) {
+        await Future<void>.delayed(selectorProbeDelay);
+      }
+      final queryStart = source.indexOf('document.querySelector(');
+      final open = queryStart + 'document.querySelector('.length;
+      final close = source.indexOf(')', open);
+      if (queryStart >= 0 && close > open) {
         try {
           final selector = jsonDecode(source.substring(open, close));
           if (selector is String) selectorProbes.add(selector);
@@ -444,7 +643,22 @@ class FakeJwWebviewController implements JwWebviewController {
           // Keep the fake permissive for malformed probe source.
         }
       }
-      return selectorPresent;
+      var documentMatchesTarget = true;
+      final expectedMatch = RegExp(
+        r'const expected = ("(?:\\.|[^"])*");',
+      ).firstMatch(source);
+      if (expectedMatch != null) {
+        final expected = jsonDecode(expectedMatch.group(1)!);
+        if (expected is String) {
+          final documentUrl = _documentUrl ?? '';
+          documentMatchesTarget = expected.endsWith('*')
+              ? documentUrl.startsWith(
+                  expected.substring(0, expected.length - 1),
+                )
+              : documentUrl == expected;
+        }
+      }
+      return selectorPresent && documentMatchesTarget;
     }
     if (source.contains('input[name=username]') &&
         source.contains('||{value:""}).value')) {
@@ -452,12 +666,20 @@ class FakeJwWebviewController implements JwWebviewController {
       return '';
     }
     if (source.contains('scrollIntoView')) {
+      if (!clickProbeMatchesExactWrapper ||
+          !source.contains(
+            "document.querySelector('#login-unified-wrapper')",
+          )) {
+        return null;
+      }
       // SSO-entry geometry probe: visible + unobscured at a point.
       return <Object?, Object?>{
         'x': 300.0,
         'y': 400.0,
         'width': 100.0,
         'height': 40.0,
+        'viewportWidth': 1024.0,
+        'viewportHeight': 768.0,
         'visible': true,
         'unobscured': true,
       };
@@ -531,10 +753,33 @@ class FakeJwWebviewController implements JwWebviewController {
         visitedHome = true;
         return {'submitted': true};
       case 'jw.cas.inspect':
+        if (handshakeFailureReason != null) {
+          _echoError(handshakeFailureReason!);
+          return null;
+        }
+        final isHomeDocument = _documentUrl == _homeUrl;
         return {
-          'sessionHealthy': sessionHealthy,
-          'needsUserLogin': !sessionHealthy,
+          'sessionHealthy': sessionHealthy && isHomeDocument,
+          'needsUserLogin': !sessionHealthy || !isHomeDocument,
         };
+      case 'jw.portal.login.inspect':
+        if (handshakeFailureReason != null) {
+          _echoError(handshakeFailureReason!);
+          return null;
+        }
+        return {'matched': portalLoginMatched};
+      case 'jw.cas.form.inspect':
+        if (handshakeFailureReason != null) {
+          _echoError(handshakeFailureReason!);
+          return null;
+        }
+        return {
+          'matched': casFormMatched && passwordVisible && fieldsInSameForm,
+        };
+      case 'jw.course.inspect':
+        return {'matched': courseMatched};
+      case 'jw.exam.inspect':
+        return {'matched': examMatched};
       case 'jw.identity.verifyExpected':
         return {
           'authoritativeMatched': authoritativeMatched ?? identityAuthenticated,

@@ -201,6 +201,7 @@ class JwWebViewAdapter implements JwWebPage {
   JwWebviewController? _controller;
   bool _disposed = false;
   bool _loginConsumed = false;
+  String? _pendingExpectedUsername;
 
   /// True after [close]. A closed shared-mode adapter must not be reused.
   bool get isDisposed => _disposed;
@@ -292,11 +293,10 @@ class JwWebViewAdapter implements JwWebPage {
   // The collector drives: gotoRoot -> (not home) gotoCasEntry -> (not home)
   // emit needsUserLogin -> resumeLogin -> fillLogin -> waitForAuthenticatedHome.
   //
-  // `fillLogin` is the single place that can surface `account_mismatch` (the
-  // collector only catches `JwAccountMismatchException` around fillLogin), so
-  // it performs the complete login: activate the SSO entry, wait for the CAS
-  // form, fill username (+password), submit, await the natural /home return,
-  // then run the identity proof. Secrets are zeroed by the script wrapper.
+  // `fillLogin` performs only the side-effecting portal -> CAS transition,
+  // credential fill, and one submit. The collector deliberately calls
+  // `waitForAuthenticatedHome` afterwards; that method owns the bounded home
+  // convergence and identity proof so its timeout maps to login_timeout.
 
   @override
   Future<void> fillLogin(LoginCredentials credentials) async {
@@ -304,14 +304,14 @@ class JwWebViewAdapter implements JwWebPage {
     if (username.isEmpty) {
       throw const JwAccountMismatchException('username is required');
     }
-    // Full-branch semantics (jw_login_flow.dart): one-shot protection guards
-    // the in-flight ticket, not the login ACTION. Each collector attempt may
-    // start a fresh fill; the guard re-arms on entry and re-arms again after
-    // a completed waitForAuthenticatedHome.
+    // A pending credential attempt cannot be replayed in place: a second call
+    // would otherwise dispatch another native click or CAS submit. The guard
+    // is cleared only when waitForAuthenticatedHome settles the attempt.
     final alreadyInFlight = _loginConsumed;
     _loginConsumed = true;
     if (alreadyInFlight) {
-      _diag('login_restarted');
+      _diag('login_already_in_flight');
+      throw const JwCollectionException('login attempt is already in flight');
     }
 
     final controller = await _ensureController();
@@ -361,20 +361,10 @@ class JwWebViewAdapter implements JwWebPage {
     if (submitResult['submitted'] != true) {
       throw const JwCollectionException('CAS submit was not acknowledged');
     }
-
-    // Await the natural /home return (the browser redirects on its own; we
-    // never re-navigate to a CAS callback ourselves).
-    await _converge(
-      target: portalHomeTarget,
-      timeout: _loginTimeout,
-      onTimeout: () => throw JwLoginTimeoutException(
-        'USTC JW login was not completed before timeout',
-      ),
-    );
-
-    // 9. Identity proof: scripts only return matched/conflicted booleans; any
-    //    authoritative conflict fails closed as account_mismatch.
-    await _verifyIdentity(controller, username);
+    // The browser follows the CAS callback naturally. Do not wait for a home
+    // URL here: retaining the expected identity makes the later wait the only
+    // owner of home convergence and identity cleanup.
+    _pendingExpectedUsername = username;
   }
 
   /// Fills a CAS field with [secret] bytes. Selector polling may retry while
@@ -442,17 +432,28 @@ class JwWebViewAdapter implements JwWebPage {
 
   @override
   Future<void> waitForAuthenticatedHome(Duration timeout) async {
-    await _converge(
-      target: portalHomeTarget,
-      timeout: timeout,
-      onTimeout: () => throw JwLoginTimeoutException(
-        'USTC JW login was not completed before timeout',
-      ),
-    );
-    // The one-shot CAS ticket has been consumed and the session is on /home:
-    // allow a future job of the shared controller to log in again (replay
-    // protection only guards the in-flight login, not a completed one).
-    _loginConsumed = false;
+    final expectedUsername = _pendingExpectedUsername;
+    try {
+      await _converge(
+        target: portalHomeTarget,
+        timeout: timeout,
+        onTimeout: () => throw JwLoginTimeoutException(
+          'USTC JW login was not completed before timeout',
+        ),
+      );
+      if (expectedUsername == null || expectedUsername.isEmpty) {
+        throw const JwCollectionException('login identity is not pending');
+      }
+      // Identity proof is authoritative and boolean-only. Any missing or
+      // conflicting evidence fails closed as account_mismatch.
+      final controller = await _ensureController();
+      await _verifyIdentity(controller, expectedUsername);
+    } finally {
+      // Both successful and final failed waits consume the pending identity;
+      // callers must begin a fresh trusted portal flow before retrying.
+      _pendingExpectedUsername = null;
+      _loginConsumed = false;
+    }
   }
 
   // --- collection -------------------------------------------------------------
@@ -465,12 +466,7 @@ class JwWebViewAdapter implements JwWebPage {
     // dataId from the performance entry (mirrors Python `expect_response` +
     // `extract_data_id`).
     await _converge(
-      target: const JwReadyTarget(
-        id: 'jw.course.home',
-        url: courseEntryUrl,
-        urlPattern: 'https://jw.ustc.edu.cn/for-std/course-table*',
-        readySelector: 'body',
-      ),
+      target: courseHomeTarget,
       timeout: timeout,
       command: () => controller.loadUrl(courseEntryUrl),
     );
@@ -541,12 +537,7 @@ class JwWebViewAdapter implements JwWebPage {
   Future<String> fetchExamHtml(Duration timeout) async {
     final controller = await _ensureController();
     await _converge(
-      target: const JwReadyTarget(
-        id: 'jw.exam.list',
-        url: examEntryUrl,
-        urlPattern: 'https://jw.ustc.edu.cn/for-std/exam-arrange*',
-        readySelector: 'table#exams',
-      ),
+      target: examListTarget,
       timeout: timeout,
       command: () => controller.loadUrl(examEntryUrl),
     );
@@ -596,33 +587,32 @@ class JwWebViewAdapter implements JwWebPage {
     final controller = await _ensureController();
     final geometry = await controller.executeScript('''
 (() => {
-  const candidates = Array.from(document.querySelectorAll(
-    'a[href*="/ucas-sso"], a[href*="/cas"], button'
-  ));
-  const find = () => {
-    const visible = candidates.find((el) => {
-      if (!el || !el.isConnected) return false;
-      const style = window.getComputedStyle(el);
-      if (style.display === 'none' || style.visibility === 'hidden' ||
-          Number(style.opacity) <= 0) return false;
-      const text = (el.textContent || el.getAttribute('aria-label') || '').trim();
-      if (!/统一|登录|认证|sso|cas/i.test(text)) return false;
-      return true;
-    });
-    return visible || null;
-  };
-  const element = find();
-  if (!element) return null;
+  // The wrapper is the only trusted portal activation target. Do not select
+  // broad text/links/buttons: a different login-like element must never
+  // receive a native click.
+  const element = document.querySelector('#login-unified-wrapper');
+  if (!element || element.id !== 'login-unified-wrapper' ||
+      !element.isConnected) return null;
+  const style = window.getComputedStyle(element);
+  if (style.display === 'none' || style.visibility === 'hidden' ||
+      Number(style.opacity) <= 0) return null;
   element.scrollIntoView({block: 'center', inline: 'center'});
   const rect = element.getBoundingClientRect();
   const x = rect.left + rect.width / 2;
   const y = rect.top + rect.height / 2;
+  if (rect.width <= 0 || rect.height <= 0 ||
+      rect.left < 0 || rect.top < 0 ||
+      rect.right > window.innerWidth || rect.bottom > window.innerHeight ||
+      x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight)
+    return null;
   const hit = document.elementFromPoint(x, y);
   return {
     x,
     y,
     width: rect.width,
     height: rect.height,
+    viewportWidth: window.innerWidth,
+    viewportHeight: window.innerHeight,
     visible: true,
     unobscured: hit === element || element.contains(hit)
   };
@@ -660,6 +650,16 @@ class JwWebViewAdapter implements JwWebPage {
     if (!dx.isFinite || !dy.isFinite || dx < 0 || dy < 0) {
       throw const JwCollectionException('login entry geometry is invalid');
     }
+    final viewportWidth = value['viewportWidth'];
+    final viewportHeight = value['viewportHeight'];
+    if (viewportWidth is num &&
+        viewportHeight is num &&
+        (viewportWidth <= 0 ||
+            viewportHeight <= 0 ||
+            dx > viewportWidth.toDouble() ||
+            dy > viewportHeight.toDouble())) {
+      throw const JwCollectionException('login entry geometry is invalid');
+    }
     return Offset(dx, dy);
   }
 
@@ -667,6 +667,8 @@ class JwWebViewAdapter implements JwWebPage {
   Future<void> close() async {
     if (_disposed) return;
     _disposed = true;
+    _pendingExpectedUsername = null;
+    _loginConsumed = false;
     final controller = _controller;
     _controller = null;
     if (controller == null) return;

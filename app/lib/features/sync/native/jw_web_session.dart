@@ -122,30 +122,102 @@ const Set<String> safeScriptFailureReasons = <String>{
   'script_failed',
 };
 
+/// Home's handshake is intentionally separate from the target-specific DOM
+/// probes below. It is the final authenticated-session assertion: a home URL
+/// event plus a body from a stale CAS document cannot satisfy this result.
 const String _casInspectScript = r'''
-const deadline = Date.now() + 30000;
-return new Promise((resolve, reject) => {
-  const inspect = () => {
-    if (document.readyState === 'complete') {
-      const onCas = location.origin === 'https://id.ustc.edu.cn' &&
-        location.pathname === '/cas/login';
-      resolve({sessionHealthy: !onCas, needsUserLogin: onCas});
-      return;
-    }
-    if (Date.now() >= deadline) {
-      reject(new Error('page_contract_changed'));
-      return;
-    }
-    setTimeout(inspect, 25);
-  };
-  inspect();
+const onHome = location.origin === 'https://jw.ustc.edu.cn' &&
+  location.pathname === '/home';
+const onCas = location.origin === 'https://id.ustc.edu.cn' &&
+  location.pathname === '/cas/login';
+return {
+  sessionHealthy: document.readyState === 'complete' && onHome,
+  needsUserLogin: !onHome || onCas,
+};
+''';
+
+/// Credential-free, target-specific portal-login readiness handshake. The
+/// adapter separately waits for the exact selector; this registered script
+/// revalidates the live document after URL + DOM convergence.
+const String _portalLoginInspectScript = r'''
+const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
+  location.pathname === '/login';
+const wrappers = document.querySelectorAll('#login-unified-wrapper');
+return {
+  matched: document.readyState === 'complete' && onTarget &&
+    wrappers.length === 1,
+};
+''';
+
+/// Credential-free CAS form handshake. The username and visible password
+/// must be descendants of one and the same form. This is deliberately a
+/// closed boolean probe; credentials are never read by readiness scripts.
+const String _casFormInspectScript = r'''
+const isVisible = (node) => {
+  if (!node || !node.isConnected) return false;
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' ||
+      Number(style.opacity) <= 0) return false;
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+const onTarget = location.origin === 'https://id.ustc.edu.cn' &&
+  location.pathname === '/cas/login';
+const matchedForm = Array.from(document.querySelectorAll('form')).some((form) => {
+  const username = form.querySelector('input[name="username"], #username');
+  const password = form.querySelector('input[type="password"]');
+  return Boolean(username && username.tagName === 'INPUT' &&
+    isVisible(username) && password && isVisible(password));
 });
+return {
+  matched: document.readyState === 'complete' && onTarget && matchedForm,
+};
+''';
+
+/// Credential-free course-page readiness handshake. Data-bearing course
+/// context extraction remains a separate registered script.
+const String _courseInspectScript = r'''
+const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
+  location.pathname === '/for-std/course-table';
+const semesters = document.querySelectorAll('select#allSemesters');
+return {
+  matched: document.readyState === 'complete' && onTarget &&
+    semesters.length === 1,
+};
+''';
+
+/// Credential-free exam-page readiness handshake. The data-bearing table
+/// extraction remains a separate registered script and is never used as the
+/// readiness signal.
+const String _examInspectScript = r'''
+const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
+  location.pathname === '/for-std/exam-arrange';
+const tables = document.querySelectorAll('table#exams');
+return {
+  matched: document.readyState === 'complete' && onTarget &&
+    tables.length === 1,
+};
 ''';
 
 const String _casFillUsernameScript = r'''
 if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
   throw new Error('wrong_target');
-const field = document.querySelector('input[name="username"], #username');
+const isVisible = (node) => {
+  if (!node || !node.isConnected) return false;
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' ||
+      Number(style.opacity) <= 0) return false;
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+const form = Array.from(document.querySelectorAll('form')).find((candidate) => {
+  const username = candidate.querySelector('input[name="username"], #username');
+  const password = candidate.querySelector('input[type="password"]');
+  return username && username.tagName === 'INPUT' && isVisible(username) &&
+    password && isVisible(password);
+});
+if (!form) throw new Error('missing_selector');
+const field = form.querySelector('input[name="username"], #username');
 if (!field) throw new Error('missing_selector');
 field.value = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(args.secretBytes));
 field.dispatchEvent(new Event('input', {bubbles: true}));
@@ -156,7 +228,22 @@ return {filled: true};
 const String _casFillPasswordScript = r'''
 if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
   throw new Error('wrong_target');
-const field = document.querySelector('input[type="password"]');
+const isVisible = (node) => {
+  if (!node || !node.isConnected) return false;
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' ||
+      Number(style.opacity) <= 0) return false;
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+const form = Array.from(document.querySelectorAll('form')).find((candidate) => {
+  const username = candidate.querySelector('input[name="username"], #username');
+  const password = candidate.querySelector('input[type="password"]');
+  return username && username.tagName === 'INPUT' && isVisible(username) &&
+    password && isVisible(password);
+});
+if (!form) throw new Error('missing_selector');
+const field = form.querySelector('input[type="password"]');
 if (!field) throw new Error('missing_selector');
 field.value = new TextDecoder('utf-8', {fatal: true}).decode(Uint8Array.from(args.secretBytes));
 field.dispatchEvent(new Event('input', {bubbles: true}));
@@ -167,8 +254,24 @@ return {filled: true};
 const String _casSubmitScript = r'''
 if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
   throw new Error('wrong_target');
-const submit = document.querySelector("#submitBtn, button.login-button");
+const isVisible = (node) => {
+  if (!node || !node.isConnected) return false;
+  const style = window.getComputedStyle(node);
+  if (style.display === 'none' || style.visibility === 'hidden' ||
+      Number(style.opacity) <= 0) return false;
+  const rect = node.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
+};
+const form = Array.from(document.querySelectorAll('form')).find((candidate) => {
+  const username = candidate.querySelector('input[name="username"], #username');
+  const password = candidate.querySelector('input[type="password"]');
+  return username && username.tagName === 'INPUT' && isVisible(username) &&
+    password && isVisible(password);
+});
+if (!form) throw new Error('missing_selector');
+const submit = form.querySelector("#submitBtn, button.login-button");
 if (!submit) throw new Error('missing_selector');
+if (!isVisible(submit)) throw new Error('not_actionable');
 if (submit.disabled || submit.classList.contains('disabled'))
   throw new Error('not_actionable');
 submit.click();
@@ -376,13 +479,17 @@ return {html};
 /// rejected by [JwWebSession.executeExtraction] (fail-closed).
 const Map<String, String> jwRegisteredScripts = <String, String>{
   'jw.cas.inspect': _casInspectScript,
+  'jw.portal.login.inspect': _portalLoginInspectScript,
+  'jw.cas.form.inspect': _casFormInspectScript,
   'jw.cas.fillUsername': _casFillUsernameScript,
   'jw.cas.fillPassword': _casFillPasswordScript,
   'jw.cas.submit': _casSubmitScript,
   'jw.identity.verifyExpected': _identityProofScript,
+  'jw.course.inspect': _courseInspectScript,
   'jw.course.readContext': _courseReadContextScript,
   'jw.course.fetchGetData': _courseFetchGetDataScript,
   'jw.course.fetchDatum': _courseFetchDatumScript,
+  'jw.exam.inspect': _examInspectScript,
   'jw.exam.readTable': _examReadTableScript,
 };
 
@@ -438,15 +545,20 @@ typedef ExtractionResult = Map<String, Object?>;
 
 // --- Three-signal convergence helpers ---------------------------------------
 
+/// The closed result shape expected from each target's credential-free
+/// readiness handshake.
+enum JwReadyHandshakeExpectation { targetMatched, authenticatedHome }
+
 /// A target the adapter must become "ready" for: a URL pattern (exact or
 /// prefix), a DOM-ready CSS selector, and a registered ready handshake script.
 class JwReadyTarget {
   const JwReadyTarget({
     required this.id,
     required this.url,
+    required this.handshakeScriptId,
+    required this.handshakeExpectation,
+    required this.readySelector,
     this.urlPattern,
-    this.readySelector,
-    this.handshakeScriptId,
   });
 
   final String id;
@@ -459,11 +571,21 @@ class JwReadyTarget {
   final String? urlPattern;
 
   /// CSS selector whose presence means the DOM is ready.
-  final String? readySelector;
+  final String readySelector;
 
   /// Registered script id executed as the ready handshake once URL + DOM
-  /// converge. When null, the convergence is URL + DOM only.
-  final String? handshakeScriptId;
+  /// converge. Every target has one; URL + DOM alone is never success.
+  final String handshakeScriptId;
+
+  final JwReadyHandshakeExpectation handshakeExpectation;
+
+  bool acceptsHandshake(ExtractionResult result) {
+    return switch (handshakeExpectation) {
+      JwReadyHandshakeExpectation.targetMatched => result['matched'] == true,
+      JwReadyHandshakeExpectation.authenticatedHome =>
+        result['sessionHealthy'] == true && result['needsUserLogin'] == false,
+    };
+  }
 
   bool urlMatches(String candidate) {
     final pattern = urlPattern;
@@ -482,7 +604,8 @@ const JwReadyTarget portalLoginTarget = JwReadyTarget(
   url: 'https://jw.ustc.edu.cn/login',
   urlPattern: 'https://jw.ustc.edu.cn/login*',
   readySelector: '#login-unified-wrapper',
-  handshakeScriptId: 'jw.cas.inspect',
+  handshakeScriptId: 'jw.portal.login.inspect',
+  handshakeExpectation: JwReadyHandshakeExpectation.targetMatched,
 );
 
 /// Trusted CAS credential-form target reached by the portal's native click.
@@ -492,7 +615,8 @@ const JwReadyTarget casLoginTarget = JwReadyTarget(
   urlPattern: 'https://id.ustc.edu.cn/cas/login*',
   readySelector:
       'form:has(input[name="username"], #username):has(input[type="password"])',
-  handshakeScriptId: 'jw.cas.inspect',
+  handshakeScriptId: 'jw.cas.form.inspect',
+  handshakeExpectation: JwReadyHandshakeExpectation.targetMatched,
 );
 
 /// Trusted authenticated portal target. Home readiness intentionally requires
@@ -503,6 +627,29 @@ const JwReadyTarget portalHomeTarget = JwReadyTarget(
   urlPattern: 'https://jw.ustc.edu.cn/home*',
   readySelector: 'body',
   handshakeScriptId: 'jw.cas.inspect',
+  handshakeExpectation: JwReadyHandshakeExpectation.authenticatedHome,
+);
+
+/// Trusted course-table target. The context extraction script is data-bearing
+/// and therefore cannot act as this readiness handshake.
+const JwReadyTarget courseHomeTarget = JwReadyTarget(
+  id: 'jw.course.home',
+  url: 'https://jw.ustc.edu.cn/for-std/course-table',
+  urlPattern: 'https://jw.ustc.edu.cn/for-std/course-table*',
+  readySelector: 'select#allSemesters',
+  handshakeScriptId: 'jw.course.inspect',
+  handshakeExpectation: JwReadyHandshakeExpectation.targetMatched,
+);
+
+/// Trusted exam-list target. The table extraction script is data-bearing and
+/// therefore cannot act as this readiness handshake.
+const JwReadyTarget examListTarget = JwReadyTarget(
+  id: 'jw.exam.list',
+  url: 'https://jw.ustc.edu.cn/for-std/exam-arrange',
+  urlPattern: 'https://jw.ustc.edu.cn/for-std/exam-arrange*',
+  readySelector: 'table#exams',
+  handshakeScriptId: 'jw.exam.inspect',
+  handshakeExpectation: JwReadyHandshakeExpectation.targetMatched,
 );
 
 /// Runs a registered script by posting a `window.chrome.webview.postMessage`
@@ -518,7 +665,11 @@ Future<ExtractionResult> executeRegisteredScript(
 }) async {
   final source = jwRegisteredScripts[scriptId];
   if (source == null) {
-    safeDiagnostic?.call('registered_script_unknown:$scriptId');
+    try {
+      safeDiagnostic?.call('registered_script_unknown');
+    } on Object {
+      // Diagnostics must never break collection.
+    }
     throw const JwCollectionException('collections script is not registered');
   }
   late final String encodedArgs;
@@ -562,7 +713,7 @@ Future<ExtractionResult> executeRegisteredScript(
       if (kind != 'registeredScriptResult' ||
           result is! Map ||
           result.keys.any((key) => key is! String)) {
-        safeDiagnostic?.call('registered_script_malformed_reply');
+        signal('registered_script_malformed_reply');
         completer.completeError(
           JwCollectionException('collection script returned invalid data'),
         );
@@ -573,6 +724,7 @@ Future<ExtractionResult> executeRegisteredScript(
       });
     },
     onError: (Object _) {
+      signal('registered_script_message_stream_failed');
       if (!completer.isCompleted) {
         completer.completeError(
           const JwCollectionException('web message stream failed'),
@@ -667,17 +819,12 @@ final class _JwAttemptToken {
 /// into readiness; when null the controller is assumed to already be on the
 /// target's state and only signal observation is performed.
 ///
-/// DOM-ready semantics:
-///   - when [JwReadyTarget.readySelector] is set, the DOM signal is the
-///     selector becoming present (polled, tolerating document switches);
-///   - when no selector is set, the DOM signal is a completed navigation
-///     (loadingState == navigationCompleted) OR, if the URL has already
-///     matched (e.g. a `setCurrent`-style restore where no new navigation
-///     fires), the URL match itself counts as DOM-ready — the ready handshake
-///     (or the caller's subsequent script) revalidates the live DOM.
+/// DOM-ready semantics: the target selector is polled against the live
+/// document and the probe itself rechecks the target URL. A URL/loading signal
+/// alone is never sufficient.
 ///
-/// Returns the ready handshake result (empty when no handshake script is
-/// registered for [target]).
+/// Returns the validated ready-handshake result. Every target must register a
+/// credential-free handshake; URL + DOM alone is never success.
 Future<ExtractionResult> convergeTarget(
   JwWebviewController controller,
   JwReadyTarget target, {
@@ -709,9 +856,6 @@ Future<ExtractionResult> convergeTarget(
     if (token.active && !urlMatch.isCompleted) {
       signal('urlMatched:${target.id}');
       urlMatch.complete();
-      // No-selector target: a settled URL is a valid DOM-ready proxy. The
-      // handshake (or the caller's revalidation) still checks the live DOM.
-      if (target.readySelector == null) completeDom();
     }
   }
 
@@ -729,32 +873,28 @@ Future<ExtractionResult> convergeTarget(
   late final StreamSubscription<JwLoadingState> loadingSub;
   loadingSub = controller.loadingStateChanges.listen((state) {
     if (!token.active) return;
-    if (state == JwLoadingState.navigationCompleted &&
-        target.readySelector == null) {
-      completeDom();
-    }
+    // Selector polling owns DOM readiness. We still subscribe to loading so
+    // the attempt's navigation listener is always canceled in finally.
+    if (state == JwLoadingState.navigationCompleted) return;
   });
 
   // Arm the selector poller (if a DOM selector is required) and the
   // navigation/action command in listen-before-navigate order.
-  final selector = target.readySelector;
-  if (selector != null) {
-    unawaited(
-      _waitForSelector(
-        controller,
-        selector,
-        timeout,
-        isActive: () => token.active,
-      ).then(
-        (_) {
-          if (token.active) completeDom();
-        },
-        onError: (Object _, StackTrace _) {
-          // Timeout/abort is reported by the bounded readiness wait below.
-        },
-      ),
-    );
-  }
+  unawaited(
+    _waitForSelector(
+      controller,
+      target,
+      timeout,
+      isActive: () => token.active,
+    ).then(
+      (_) {
+        if (token.active) completeDom();
+      },
+      onError: (Object _, StackTrace _) {
+        // Timeout/abort is reported by the bounded readiness wait below.
+      },
+    ),
+  );
 
   try {
     // Invoke the action only after both stream subscriptions and the selector
@@ -770,13 +910,9 @@ Future<ExtractionResult> convergeTarget(
     ).timeout(remaining.isNegative ? Duration.zero : remaining);
 
     // The handshake is the third signal. It is credential-free and
-    // registered; a missing reply is a failed attempt, never a degraded
-    // two-signal success.
+    // registered; a missing or false result is a failed attempt, never a
+    // degraded two-signal success.
     final handshakeId = target.handshakeScriptId;
-    if (handshakeId == null) {
-      signal('ready:${target.id}');
-      return const <String, Object?>{};
-    }
     final handshakeRemaining = deadline.difference(DateTime.now());
     if (handshakeRemaining.isNegative || handshakeRemaining == Duration.zero) {
       throw TimeoutException('ready handshake timed out');
@@ -789,6 +925,10 @@ Future<ExtractionResult> convergeTarget(
         timeout: handshakeRemaining,
         safeDiagnostic: safeDiagnostic,
       );
+      if (!target.acceptsHandshake(result)) {
+        signal('readyHandshakeRejected:${target.id}');
+        throw const JwCollectionException('ready handshake was not accepted');
+      }
       signal('readyHandshake:${target.id}');
       signal('ready:${target.id}');
       return result;
@@ -814,19 +954,33 @@ Future<ExtractionResult> convergeTarget(
 /// states and are retried within the original bound.
 Future<void> _waitForSelector(
   JwWebviewController controller,
-  String selector,
+  JwReadyTarget target,
   Duration timeout, {
   bool Function()? isActive,
 }) async {
   final deadline = DateTime.now().add(timeout);
-  final encoded = jsonEncode(selector);
+  final selector = target.readySelector;
+  if (selector.isEmpty) {
+    throw const JwCollectionException('DOM ready selector is missing');
+  }
+  final encodedSelector = jsonEncode(selector);
+  final encodedPattern = jsonEncode(target.urlPattern ?? target.url);
+  final probe =
+      '''
+(() => {
+  const expected = $encodedPattern;
+  const current = String(location.href);
+  const urlMatches = expected.endsWith('*')
+    ? current.startsWith(expected.slice(0, -1))
+    : current === expected;
+  return urlMatches && Boolean(document.querySelector($encodedSelector));
+})()
+''';
   while (true) {
     if (isActive != null && !isActive()) return;
     Object? present;
     try {
-      present = await controller.executeScript(
-        'Boolean(document.querySelector($encoded))',
-      );
+      present = await controller.executeScript(probe);
     } on Object {
       // Document switching; keep polling within the bound.
     }
