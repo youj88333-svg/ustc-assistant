@@ -1,4 +1,6 @@
-import 'package:drift/drift.dart';
+import 'dart:async';
+
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -9,6 +11,8 @@ import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
 import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_web_session.dart';
+import 'package:ustc_assistant_app/features/sync/native/native_jw_gateway.dart';
 import 'package:ustc_assistant_app/features/sync/presentation/sync_page.dart';
 
 class _TestProtector implements CredentialProtector {
@@ -90,6 +94,99 @@ class _InteractiveBridge implements BridgeGateway {
   Future<void> shutdown() async {}
 }
 
+/// A keyed no-op controller lets the page test exercise the gateway's stable
+/// host without requiring a platform WebView implementation.
+class _PageSurfaceController implements JwWebviewController {
+  @override
+  Stream<String> get urlChanges => const Stream<String>.empty();
+
+  @override
+  String? get currentUrlSnapshot => null;
+
+  @override
+  Stream<JwLoadingState> get loadingStateChanges =>
+      const Stream<JwLoadingState>.empty();
+
+  @override
+  Stream<Object?> get webMessages => const Stream<Object?>.empty();
+
+  @override
+  Future<void> awaitEventStreamReady() async {}
+
+  @override
+  Widget get surface => const SizedBox(key: Key('jw-webview-page-surface'));
+
+  @override
+  Future<void> loadUrl(String url) async {}
+
+  @override
+  Future<Object?> executeScript(String source) async => null;
+
+  @override
+  Future<void> dispatchPrimaryClick(Offset position) async {}
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> clearBrowsingDataAll() async {}
+
+  @override
+  Future<void> dispose() async {}
+}
+
+class _BlockingSyncCoordinator extends SyncCoordinator {
+  _BlockingSyncCoordinator({
+    required super.database,
+    required super.accounts,
+    required this.loginResult,
+  }) : super(
+         bridgeFactory: () async => _UnusedBridge(),
+         importBundle: (bytes, {required accountId, required origin}) async =>
+             const ImportResult(
+               status: ImportStatus.imported,
+               bundleId: 'unused',
+               source: 'ustc_jw',
+               importedEntityCount: 0,
+             ),
+       );
+
+  final Future<SyncOutcome> loginResult;
+
+  @override
+  Future<SyncOutcome> firstLoginSync(
+    SyncSource source, {
+    required String username,
+    String? password,
+    bool savePassword = false,
+    BridgeSemesterCapability? semesterOverride,
+  }) => loginResult;
+}
+
+class _ShutdownTrackingGateway extends NativeJwGateway {
+  _ShutdownTrackingGateway()
+    : super(controllerFactory: () async => _PageSurfaceController());
+
+  var shutdownCalls = 0;
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+  }
+}
+
+Widget _syncPageFixture({
+  required AccountService accounts,
+  required SyncCoordinator coordinator,
+  NativeJwGateway? nativeGateway,
+}) => MaterialApp(
+  home: SyncPage(
+    accounts: accounts,
+    coordinator: coordinator,
+    nativeGateway: nativeGateway,
+  ),
+);
+
 BridgeJobPoll _needsLogin() => const BridgeJobPoll(
   events: [
     {'sequence': 1, 'phase': 'needs_user_login'},
@@ -108,6 +205,94 @@ BridgeJobPoll _success() => const BridgeJobPoll(
 );
 
 void main() {
+  testWidgets(
+    'native surface host stays mounted when busy visibility changes',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = AccountService(
+        database: database,
+        protector: _TestProtector(),
+      );
+      final loginResult = Completer<SyncOutcome>();
+      final coordinator = _BlockingSyncCoordinator(
+        database: database,
+        accounts: accounts,
+        loginResult: loginResult.future,
+      );
+      final gateway = NativeJwGateway(
+        controllerFactory: () async => _PageSurfaceController(),
+      );
+
+      await tester.pumpWidget(
+        _syncPageFixture(
+          accounts: accounts,
+          coordinator: coordinator,
+          nativeGateway: gateway,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final hostFinder = find.byKey(
+        const Key('jw-webview-surface-host'),
+        skipOffstage: false,
+      );
+      expect(hostFinder, findsOneWidget);
+      expect(
+        find.byKey(
+          const Key('jw-webview-surface-placeholder'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      final hostElement = tester.element(hostFinder);
+
+      await gateway.surfaceHost.attach(_PageSurfaceController());
+      await tester.pump();
+      expect(
+        find.byKey(const Key('jw-webview-page-surface'), skipOffstage: false),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('first-login-username')),
+        'PB00000000',
+      );
+      await tester.tap(find.byKey(const Key('first-login-submit')));
+      await tester.pump();
+
+      expect(hostFinder, findsOneWidget);
+      expect(
+        find.byKey(const Key('first-login-submit'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(identical(hostElement, tester.element(hostFinder)), isTrue);
+
+      loginResult.complete(const SyncCancelled(SyncSource.jw));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('loader shuts down its owned gateway exactly once', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final gateway = _ShutdownTrackingGateway();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: SyncPageLoader(database: database, nativeGateway: gateway),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+
+    expect(gateway.shutdownCalls, 1);
+  });
+
   testWidgets('first launch offers a school account login form', (
     tester,
   ) async {

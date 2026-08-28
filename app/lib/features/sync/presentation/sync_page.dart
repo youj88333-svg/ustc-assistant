@@ -4,6 +4,8 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/security/credential_protector_factory.dart';
@@ -19,10 +21,25 @@ import '../data/python_locator.dart';
 import '../domain/sync_state.dart';
 import '../native/native_jw_gateway.dart';
 
+String _sanitizeOpaqueAccountId(String accountId) {
+  final sanitized = accountId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  return sanitized.isEmpty ? 'account' : sanitized;
+}
+
 Future<void> runStartupAutomaticSync(
   AppDatabase database, {
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
 }) async {
+  // M7 (native channel): the startup automatic sync no longer creates its own
+  // gateway. A second NativeJwGateway would race the sync page's gateway for
+  // the same WebView2 UDF (profile lock) and drive an invisible collection
+  // (its surface is never mounted), so its result could never surface to the
+  // user. Automatic sync now belongs to the page's coordinator (the UI owns
+  // the one visible WebView). The Python Bridge fallback keeps its original
+  // headless startup behavior.
+  if (!kUsePythonBridgeFallback) {
+    return;
+  }
   BridgeGateway? bridge;
   try {
     final accounts = AccountService(
@@ -48,7 +65,16 @@ Future<void> runStartupAutomaticSync(
         final current = bridge;
         if (current != null) return current;
         if (!kUsePythonBridgeFallback) {
-          return bridge = NativeJwGateway();
+          return bridge = NativeJwGateway(
+            userDataPathForAccount: (accountId) async {
+              final support = await getApplicationSupportDirectory();
+              return p.join(
+                support.path,
+                'webview',
+                _sanitizeOpaqueAccountId(accountId),
+              );
+            },
+          );
         }
         final executable = await PythonLocator().locate(
           savedExecutable: await SettingsService(
@@ -82,6 +108,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onReauthenticated,
     this.onReauthenticationRequired,
     this.onExit,
+    this.nativeGateway,
     super.key,
   });
 
@@ -91,6 +118,10 @@ class SyncPageLoader extends StatefulWidget {
   final VoidCallback? onReauthenticated;
   final ValueChanged<String>? onReauthenticationRequired;
   final VoidCallback? onExit;
+
+  /// Optional gateway seam for tests and hosts that already own the native
+  /// gateway. The loader still owns the supplied gateway for its lifetime.
+  final NativeJwGateway? nativeGateway;
 
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
@@ -105,8 +136,9 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   /// Privacy-safe stage-log buffer for the debug diagnostics panel. Only
   /// allocated in debug/profile builds; in release it stays null so the panel
   /// and its overhead never ship. Cap keeps the UI bounded.
-  final ValueNotifier<List<String>>? diagnostics =
-      kDebugMode ? ValueNotifier<List<String>>(const <String>[]) : null;
+  final ValueNotifier<List<String>>? diagnostics = kDebugMode
+      ? ValueNotifier<List<String>>(const <String>[])
+      : null;
 
   Future<_SyncDependencies> _build() async {
     final schemaText = await rootBundle.loadString(
@@ -125,9 +157,23 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     );
     // M7: native WebView2 is the default channel; the Python Bridge remains
     // reachable via the kUsePythonBridgeFallback switch (one-source-one-
-    // channel — never both at once, per red line).
+    // channel — never both at once, per red line). The gateway owns exactly
+    // one WebView2 environment and receives an account-bound UDF resolver;
+    // multiple gateways would multiply initializeEnvironment calls — the
+    // known AppHang trigger.
     final fallback = kUsePythonBridgeFallback;
-    final gw = NativeJwGateway();
+    final gw =
+        widget.nativeGateway ??
+        NativeJwGateway(
+          userDataPathForAccount: (accountId) async {
+            final support = await getApplicationSupportDirectory();
+            return p.join(
+              support.path,
+              'webview',
+              _sanitizeOpaqueAccountId(accountId),
+            );
+          },
+        );
     nativeGateway = fallback ? null : gw;
     if (!fallback && diagnostics != null) {
       _diagnosticSub = gw.diagnostics.listen((event) {
@@ -179,10 +225,16 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
 
   @override
   void dispose() {
-    _diagnosticSub?.cancel();
+    final diagnosticSub = _diagnosticSub;
+    _diagnosticSub = null;
+    if (diagnosticSub != null) {
+      unawaited(diagnosticSub.cancel());
+    }
     diagnostics?.dispose();
-    bridge?.shutdown();
-    nativeGateway?.shutdown();
+    final ownedGateway = nativeGateway ?? bridge;
+    if (ownedGateway != null) {
+      unawaited(ownedGateway.shutdown());
+    }
     super.dispose();
   }
 
@@ -358,7 +410,9 @@ class _SyncPageState extends State<SyncPage> {
           context: context,
           builder: (context) => AlertDialog(
             title: const Text('需要登录学校网站'),
-            content: const Text('继续后将打开可见浏览器；仅在你确认后才会读取已保存密码。'),
+            content: const Text(
+              '内嵌浏览器窗口已打开并停留在登录页。点击"继续"后才会读取已保存的密码并自动填写；取消则中止本次同步。',
+            ),
             actions: [
               TextButton(
                 key: const Key('cancel-interactive-login'),
@@ -527,7 +581,16 @@ class _SyncPageState extends State<SyncPage> {
       ),
       body: Column(
         children: [
-          if (busy && _nativeSurface != null) _buildWebViewSurface(),
+          if (widget.nativeGateway != null)
+            Offstage(
+              offstage: !busy,
+              child: KeyedSubtree(
+                key: const Key('jw-webview-surface-host'),
+                child: _buildWebViewSurface(
+                  widget.nativeGateway!.surfaceHost.widget,
+                ),
+              ),
+            ),
           if (widget.diagnostics != null)
             ValueListenableBuilder<List<String>>(
               valueListenable: widget.diagnostics!,
@@ -562,91 +625,83 @@ class _SyncPageState extends State<SyncPage> {
                   )
                 : ListView(
                     padding: const EdgeInsets.all(16),
-              children: [
-                if (states.values.any(
-                  (state) => state.resultCode == 'reauthentication_required',
-                )) ...[
-                  ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: const Icon(Icons.key_off_outlined),
-                    title: const Text('请先重新登录'),
-                    subtitle: const Text('安全凭据已删除，同步不会自动启动登录窗口。'),
-                    trailing: FilledButton(
-                      key: const Key('sync-reauthenticate'),
-                      onPressed:
-                          accountId == null ||
-                              widget.onReauthenticationRequired == null
-                          ? null
-                          : () =>
-                                widget.onReauthenticationRequired!(accountId!),
-                      child: const Text('重新登录'),
-                    ),
+                    children: [
+                      if (states.values.any(
+                        (state) =>
+                            state.resultCode == 'reauthentication_required',
+                      )) ...[
+                        ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          leading: const Icon(Icons.key_off_outlined),
+                          title: const Text('请先重新登录'),
+                          subtitle: const Text('安全凭据已删除，同步不会自动启动登录窗口。'),
+                          trailing: FilledButton(
+                            key: const Key('sync-reauthenticate'),
+                            onPressed:
+                                accountId == null ||
+                                    widget.onReauthenticationRequired == null
+                                ? null
+                                : () => widget.onReauthenticationRequired!(
+                                    accountId!,
+                                  ),
+                            child: const Text('重新登录'),
+                          ),
+                        ),
+                        const Divider(),
+                      ],
+                      Row(
+                        children: [
+                          FilledButton.icon(
+                            key: const Key('sync-all'),
+                            onPressed: busy
+                                ? null
+                                : () => _runAll(SyncTrigger.manual),
+                            icon: const Icon(Icons.sync),
+                            label: const Text('同步全部'),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton.icon(
+                            onPressed: busy ? null : _importFile,
+                            icon: const Icon(Icons.file_open),
+                            label: const Text('导入文件'),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      for (final source in SyncSource.values)
+                        ListTile(
+                          leading: const Icon(Icons.school),
+                          title: const Text('教务系统'),
+                          subtitle: Text(
+                            _stateLabel(states[source]),
+                            key: Key('sync-state-${source.name}'),
+                          ),
+                          trailing: IconButton(
+                            tooltip: '同步',
+                            onPressed: busy
+                                ? null
+                                : () => _run(source, SyncTrigger.manual),
+                            icon: const Icon(Icons.refresh),
+                          ),
+                        ),
+                    ],
                   ),
-                  const Divider(),
-                ],
-                Row(
-                  children: [
-                    FilledButton.icon(
-                      key: const Key('sync-all'),
-                      onPressed: busy
-                          ? null
-                          : () => _runAll(SyncTrigger.manual),
-                      icon: const Icon(Icons.sync),
-                      label: const Text('同步全部'),
-                    ),
-                    const SizedBox(width: 8),
-                    OutlinedButton.icon(
-                      onPressed: busy ? null : _importFile,
-                      icon: const Icon(Icons.file_open),
-                      label: const Text('导入文件'),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                for (final source in SyncSource.values)
-                  ListTile(
-                    leading: const Icon(Icons.school),
-                    title: const Text('教务系统'),
-                    subtitle: Text(
-                      _stateLabel(states[source]),
-                      key: Key('sync-state-${source.name}'),
-                    ),
-                    trailing: IconButton(
-                      tooltip: '同步',
-                      onPressed: busy
-                          ? null
-                          : () => _run(source, SyncTrigger.manual),
-                      icon: const Icon(Icons.refresh),
-                    ),
-                  ),
-              ],
-            ),
           ),
         ],
       ),
     );
   }
 
-  Widget? get _nativeSurface {
-    final gateway = widget.nativeGateway;
-    return gateway?.surface;
-  }
-
   /// A visible WebView2 surface shown while a native collection job is active
   /// so the user can complete CAS login / CAPTCHA in the actual page. Uses a
   /// fixed-height area so the page layout is stable while the controller mounts.
-  Widget _buildWebViewSurface() {
-    final surface = _nativeSurface;
-    if (surface == null) return const SizedBox.shrink();
+  Widget _buildWebViewSurface(Widget surface) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '登录学校网站（原生浏览器）',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          Text('登录学校网站（原生浏览器）', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 4),
           const Text(
             '请在下方浏览器窗口中完成登录（用户名/密码/验证码）。完成登录后将自动继续同步。',
@@ -712,10 +767,7 @@ class _DebugDiagnosticsPanel extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  Text(
-                    '调试日志',
-                    style: Theme.of(context).textTheme.labelLarge,
-                  ),
+                  Text('调试日志', style: Theme.of(context).textTheme.labelLarge),
                   const Spacer(),
                   Text('${entries.length} 条'),
                 ],
@@ -879,6 +931,7 @@ class _FirstLoginPanel extends StatelessWidget {
         ),
         const SizedBox(height: 8),
         FilledButton.icon(
+          key: const Key('first-login-submit'),
           onPressed: busy ? null : onSubmit,
           icon: busy
               ? const SizedBox.square(
