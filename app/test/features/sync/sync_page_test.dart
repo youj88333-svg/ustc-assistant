@@ -246,6 +246,12 @@ void main() {
         findsOneWidget,
       );
       final hostElement = tester.element(hostFinder);
+      final visibilityFinder = find.byKey(
+        const Key('jw-webview-surface-visibility'),
+        skipOffstage: false,
+      );
+      final visibilityElement = tester.element(visibilityFinder);
+      expect(tester.widget<Offstage>(visibilityFinder).offstage, isTrue);
 
       await gateway.surfaceHost.attach(_PageSurfaceController());
       await tester.pump();
@@ -262,14 +268,25 @@ void main() {
       await tester.pump();
 
       expect(hostFinder, findsOneWidget);
+      expect(tester.widget<Offstage>(visibilityFinder).offstage, isFalse);
       expect(
         find.byKey(const Key('first-login-submit'), skipOffstage: false),
         findsOneWidget,
       );
       expect(identical(hostElement, tester.element(hostFinder)), isTrue);
+      expect(
+        identical(visibilityElement, tester.element(visibilityFinder)),
+        isTrue,
+      );
 
       loginResult.complete(const SyncCancelled(SyncSource.jw));
       await tester.pumpAndSettle();
+
+      expect(tester.widget<Offstage>(visibilityFinder).offstage, isTrue);
+      expect(
+        identical(visibilityElement, tester.element(visibilityFinder)),
+        isTrue,
+      );
     },
   );
 
@@ -292,6 +309,40 @@ void main() {
 
     expect(gateway.shutdownCalls, 1);
   });
+
+  testWidgets(
+    'loader shuts down a gateway that resolves after early unmount once',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final creation = Completer<NativeJwGateway>();
+      var factoryCalls = 0;
+      final gateway = _ShutdownTrackingGateway();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPageLoader(
+            database: database,
+            nativeGatewayFactory: () {
+              factoryCalls++;
+              return creation.future;
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(factoryCalls, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      creation.complete(gateway);
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+        await tester.runAsync(() => Future<void>(() {}));
+      }
+
+      expect(gateway.shutdownCalls, 1);
+    },
+  );
 
   testWidgets('first launch offers a school account login form', (
     tester,

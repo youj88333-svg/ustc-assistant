@@ -26,6 +26,19 @@ String _sanitizeOpaqueAccountId(String accountId) {
   return sanitized.isEmpty ? 'account' : sanitized;
 }
 
+NativeJwGateway _createNativeJwGateway() {
+  return NativeJwGateway(
+    userDataPathForAccount: (accountId) async {
+      final support = await getApplicationSupportDirectory();
+      return p.join(
+        support.path,
+        'webview',
+        _sanitizeOpaqueAccountId(accountId),
+      );
+    },
+  );
+}
+
 Future<void> runStartupAutomaticSync(
   AppDatabase database, {
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
@@ -109,6 +122,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onReauthenticationRequired,
     this.onExit,
     this.nativeGateway,
+    this.nativeGatewayFactory,
     super.key,
   });
 
@@ -123,15 +137,22 @@ class SyncPageLoader extends StatefulWidget {
   /// gateway. The loader still owns the supplied gateway for its lifetime.
   final NativeJwGateway? nativeGateway;
 
+  /// Optional asynchronous gateway seam for lifecycle tests and hosts that
+  /// defer gateway creation. The loader owns the resolved gateway.
+  final Future<NativeJwGateway> Function()? nativeGatewayFactory;
+
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
 }
 
 class _SyncPageLoaderState extends State<SyncPageLoader> {
-  late final Future<_SyncDependencies> dependencies = _build();
+  late final Future<_SyncDependencies> dependencies;
   BridgeGateway? bridge;
   NativeJwGateway? nativeGateway;
+  Future<NativeJwGateway>? _nativeGatewayCreation;
   StreamSubscription<String>? _diagnosticSub;
+  bool _disposed = false;
+  final Set<BridgeGateway> _shutdownGateways = Set<BridgeGateway>.identity();
 
   /// Privacy-safe stage-log buffer for the debug diagnostics panel. Only
   /// allocated in debug/profile builds; in release it stays null so the panel
@@ -139,6 +160,50 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   final ValueNotifier<List<String>>? diagnostics = kDebugMode
       ? ValueNotifier<List<String>>(const <String>[])
       : null;
+
+  @override
+  void initState() {
+    super.initState();
+    // Register the gateway synchronously, before _build can cross its first
+    // await. This makes dispose() the owner even when dependency loading is
+    // still in flight. A deferred factory is joined below and handled with
+    // the same disposed/once-only ownership path.
+    if (!kUsePythonBridgeFallback) {
+      final supplied = widget.nativeGateway;
+      if (supplied != null) {
+        nativeGateway = supplied;
+      } else {
+        final factory = widget.nativeGatewayFactory;
+        if (factory != null) {
+          final creation = Future<NativeJwGateway>.sync(factory);
+          _nativeGatewayCreation = creation;
+          // _build may still be waiting on an unrelated dependency when the
+          // State is unmounted. Observe this future independently so a
+          // gateway returned later is still closed, even if _build never
+          // reaches its await site again.
+          unawaited(
+            creation.then<void>((gateway) {
+              if (_disposed) _shutdownOnce(gateway);
+            }, onError: (Object error, StackTrace stack) {}),
+          );
+        } else {
+          nativeGateway = _createNativeJwGateway();
+        }
+      }
+    }
+    dependencies = _build();
+  }
+
+  void _ensureAlive() {
+    if (_disposed) {
+      throw StateError('sync page loader is disposed');
+    }
+  }
+
+  void _shutdownOnce(BridgeGateway gateway) {
+    if (!_shutdownGateways.add(gateway)) return;
+    unawaited(gateway.shutdown());
+  }
 
   Future<_SyncDependencies> _build() async {
     final schemaText = await rootBundle.loadString(
@@ -162,21 +227,34 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     // multiple gateways would multiply initializeEnvironment calls — the
     // known AppHang trigger.
     final fallback = kUsePythonBridgeFallback;
-    final gw =
-        widget.nativeGateway ??
-        NativeJwGateway(
-          userDataPathForAccount: (accountId) async {
-            final support = await getApplicationSupportDirectory();
-            return p.join(
-              support.path,
-              'webview',
-              _sanitizeOpaqueAccountId(accountId),
-            );
-          },
-        );
-    nativeGateway = fallback ? null : gw;
-    if (!fallback && diagnostics != null) {
-      _diagnosticSub = gw.diagnostics.listen((event) {
+    NativeJwGateway? gw;
+    if (!fallback) {
+      gw = nativeGateway;
+      if (gw == null) {
+        final creation = _nativeGatewayCreation;
+        if (creation != null) {
+          gw = await creation;
+          // A factory may complete after the State has unmounted. Do not
+          // assign or use that gateway through the disposed State; it is
+          // still ours to shut down exactly once.
+          if (_disposed) {
+            _shutdownOnce(gw);
+            throw StateError('sync page loader is disposed');
+          }
+          nativeGateway = gw;
+        } else {
+          // This is defensive for an unexpected re-entry; initState normally
+          // registers the default gateway before _build starts.
+          _ensureAlive();
+          gw = _createNativeJwGateway();
+          nativeGateway = gw;
+        }
+      }
+      _ensureAlive();
+    }
+    final activeNativeGateway = gw;
+    if (activeNativeGateway != null && diagnostics != null) {
+      _diagnosticSub = activeNativeGateway.diagnostics.listen((event) {
         debugPrint('[jw-native] $event');
         final notifier = diagnostics;
         if (notifier == null || !mounted) return;
@@ -193,12 +271,21 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       accounts: accounts,
       bridgeFactory: () async {
         final current = bridge;
-        if (current != null) return current;
+        if (current != null) {
+          _ensureAlive();
+          return current;
+        }
         if (!fallback) {
-          bridge = gw;
-          return gw;
+          final native = activeNativeGateway;
+          if (native == null) {
+            throw StateError('native gateway is unavailable');
+          }
+          _ensureAlive();
+          bridge = native;
+          return native;
         }
         final account = await accounts.activeAccount();
+        _ensureAlive();
         final executable = await PythonLocator().locate(
           savedExecutable: account == null
               ? null
@@ -208,23 +295,30 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
                   accountId: account.id,
                 ).pythonPath(),
         );
+        _ensureAlive();
         final started = await BridgeClient.start(pythonExecutable: executable);
+        if (_disposed) {
+          _shutdownOnce(started);
+          throw StateError('sync page loader is disposed');
+        }
         bridge = started;
         return started;
       },
       importBundle: importer.importBytes,
     );
     await coordinator.recoverInterruptedRuns();
+    _ensureAlive();
     return _SyncDependencies(
       accounts: accounts,
       coordinator: coordinator,
-      nativeGateway: fallback ? null : gw,
+      nativeGateway: fallback ? null : activeNativeGateway,
       diagnostics: fallback ? null : diagnostics,
     );
   }
 
   @override
   void dispose() {
+    _disposed = true;
     final diagnosticSub = _diagnosticSub;
     _diagnosticSub = null;
     if (diagnosticSub != null) {
@@ -233,7 +327,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     diagnostics?.dispose();
     final ownedGateway = nativeGateway ?? bridge;
     if (ownedGateway != null) {
-      unawaited(ownedGateway.shutdown());
+      _shutdownOnce(ownedGateway);
     }
     super.dispose();
   }
@@ -583,6 +677,7 @@ class _SyncPageState extends State<SyncPage> {
         children: [
           if (widget.nativeGateway != null)
             Offstage(
+              key: const Key('jw-webview-surface-visibility'),
               offstage: !busy,
               child: KeyedSubtree(
                 key: const Key('jw-webview-surface-host'),
