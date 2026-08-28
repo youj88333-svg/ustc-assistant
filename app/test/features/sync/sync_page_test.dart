@@ -175,6 +175,61 @@ class _ShutdownTrackingGateway extends NativeJwGateway {
   }
 }
 
+class _GatewayUseTrackingGateway extends _ShutdownTrackingGateway {
+  var diagnosticsSubscriptions = 0;
+  var methodCalls = 0;
+
+  @override
+  Stream<String> get diagnostics {
+    diagnosticsSubscriptions++;
+    return super.diagnostics;
+  }
+
+  void _recordMethodCall() {
+    methodCalls++;
+  }
+
+  @override
+  Future<BridgeCapabilities> capabilities() async {
+    _recordMethodCall();
+    return super.capabilities();
+  }
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    _recordMethodCall();
+    return super.startCollection(
+      source: source,
+      accountId: accountId,
+      expectedUsername: expectedUsername,
+      jwSemester: jwSemester,
+    );
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    _recordMethodCall();
+    return super.poll(jobId, after);
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    _recordMethodCall();
+    return super.resumeLogin(jobId, password: password);
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    _recordMethodCall();
+    return super.cancel(jobId);
+  }
+}
+
 Widget _syncPageFixture({
   required AccountService accounts,
   required SyncCoordinator coordinator,
@@ -352,7 +407,7 @@ void main() {
       final creation = Completer<NativeJwGateway>();
       final schema = Completer<String>();
       var factoryCalls = 0;
-      final gateway = _ShutdownTrackingGateway();
+      final gateway = _GatewayUseTrackingGateway();
 
       await tester.pumpWidget(
         MaterialApp(
@@ -387,6 +442,8 @@ void main() {
       }
 
       expect(gateway.shutdownCalls, 1);
+      expect(gateway.diagnosticsSubscriptions, 0);
+      expect(gateway.methodCalls, 0);
     },
   );
 

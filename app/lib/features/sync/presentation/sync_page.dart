@@ -225,6 +225,9 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
             'assets/schemas/source-bundle-1.0.draft7.schema.json',
           )
         : await schemaLoader();
+    // Do not inspect or wire any gateway after dependency loading if the
+    // loader was unmounted while the await was pending.
+    _ensureAlive();
     final accounts = AccountService(
       database: widget.database,
       protector: defaultCredentialProtector(),
@@ -302,14 +305,16 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
         }
         final account = await accounts.activeAccount();
         _ensureAlive();
+        final savedExecutable = account == null
+            ? null
+            : await SettingsService(
+                database: widget.database,
+                accounts: accounts,
+                accountId: account.id,
+              ).pythonPath();
+        _ensureAlive();
         final executable = await PythonLocator().locate(
-          savedExecutable: account == null
-              ? null
-              : await SettingsService(
-                  database: widget.database,
-                  accounts: accounts,
-                  accountId: account.id,
-                ).pythonPath(),
+          savedExecutable: savedExecutable,
         );
         _ensureAlive();
         final started = await BridgeClient.start(pythonExecutable: executable);
