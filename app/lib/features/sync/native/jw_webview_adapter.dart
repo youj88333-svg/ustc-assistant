@@ -34,6 +34,18 @@ import 'jw_web_session.dart';
 /// Produces a fresh initialized [JwWebviewController] (the platform seam).
 typedef JwWebviewControllerFactory = Future<JwWebviewController> Function();
 
+/// Creates the gateway-owned production controller for one account UDF.
+///
+/// [userDataPath] is intentionally nullable so the production implementation
+/// can use the plugin default profile when no account partition resolver is
+/// configured. [safeDiagnostic] receives stage names only; implementations
+/// must never report the physical UDF path or account identity.
+typedef ProductionJwControllerFactory =
+    Future<JwWebviewController> Function({
+      required String? userDataPath,
+      required void Function(String) safeDiagnostic,
+    });
+
 /// Production seam over the plugin's `WebviewController`. Configures the
 /// native navigation policy (allowlist + deny downloads/windows/permissions)
 /// and owns the URL snapshot subscription.
@@ -67,7 +79,8 @@ class ProductionJwWebviewController implements JwWebviewController {
   Future<void> loadUrl(String url) => _controller.loadUrl(url);
 
   @override
-  Future<Object?> executeScript(String source) => _controller.executeScript(source);
+  Future<Object?> executeScript(String source) =>
+      _controller.executeScript(source);
 
   @override
   Future<void> dispatchPrimaryClick(Offset position) =>
@@ -106,34 +119,56 @@ class ProductionJwWebviewController implements JwWebviewController {
   }
 
   static JwLoadingState _mapLoading(LoadingState state) => switch (state) {
-        LoadingState.none => JwLoadingState.none,
-        LoadingState.loading => JwLoadingState.loading,
-        LoadingState.navigationCompleted =>
-          JwLoadingState.navigationCompleted,
-      };
+    LoadingState.none => JwLoadingState.none,
+    LoadingState.loading => JwLoadingState.loading,
+    LoadingState.navigationCompleted => JwLoadingState.navigationCompleted,
+  };
 }
 
 /// Production controller factory: create + initialize a `WebviewController`,
 /// start the URL snapshot, and configure the native policies.
+///
+/// Mirrors the full-branch controller factory's ordering (configure the user
+/// data folder BEFORE controller creation; subscribe before use). Each step
+/// emits a privacy-safe stage via [safeDiagnostic] so a freeze or failure in
+/// the native creation path is attributable by "last successful stage".
 Future<JwWebviewController> createProductionJwWebviewController({
   String? userDataPath,
+  void Function(String)? safeDiagnostic,
 }) async {
+  void diag(String stage) {
+    try {
+      safeDiagnostic?.call(stage);
+    } on Object {
+      // Diagnostics must never break creation.
+    }
+  }
+
+  diag('controller_factory:start');
   if (userDataPath != null && userDataPath.isNotEmpty) {
+    diag('controller_factory:environment_configure');
     await WebviewController.initializeEnvironment(userDataPath: userDataPath);
   }
   final raw = WebviewController();
   var handedOff = false;
   try {
+    diag('controller_factory:controller_initialize');
     await raw.initialize();
     final controller = ProductionJwWebviewController(raw);
     // Start the URL snapshot subscription before any navigation so a fast
     // landing page cannot be missed (lesson 3.2 / three-signal convergence).
+    diag('controller_factory:url_snapshot');
     await controller.beginUrlSnapshot();
+    diag('controller_factory:policies');
     await controller.configurePolicies();
+    diag('controller_factory:ready');
     handedOff = true;
     return controller;
   } finally {
-    if (!handedOff) await raw.dispose();
+    if (!handedOff) {
+      diag('controller_factory:aborted');
+      await raw.dispose();
+    }
   }
 }
 
@@ -149,20 +184,26 @@ class JwWebViewAdapter implements JwWebPage {
     required JwWebviewControllerFactory controllerFactory,
     Duration loginTimeout = defaultLoginTimeout,
     Duration responseTimeout = defaultResponseTimeout,
+    Duration casFormWaitTimeout = const Duration(seconds: 45),
     void Function(String)? safeDiagnostic,
   }) : _loginTimeout = loginTimeout,
        _responseTimeout = responseTimeout,
+       _casFormWaitTimeout = casFormWaitTimeout,
        _safeDiagnostic = safeDiagnostic,
        _controllerFactory = controllerFactory;
 
   final JwWebviewControllerFactory _controllerFactory;
   final Duration _loginTimeout;
   final Duration _responseTimeout;
+  final Duration _casFormWaitTimeout;
   final void Function(String)? _safeDiagnostic;
 
   JwWebviewController? _controller;
   bool _disposed = false;
   bool _loginConsumed = false;
+
+  /// True after [close]. A closed shared-mode adapter must not be reused.
+  bool get isDisposed => _disposed;
 
   /// The visible WebView surface (or a placeholder before the controller is
   /// created). The caller embeds this into the sync page.
@@ -199,8 +240,7 @@ class JwWebViewAdapter implements JwWebPage {
     final done = Completer<void>();
     late final StreamSubscription<JwLoadingState> loadingSub;
     loadingSub = controller.loadingStateChanges.listen((state) {
-      if (state == JwLoadingState.navigationCompleted &&
-          !done.isCompleted) {
+      if (state == JwLoadingState.navigationCompleted && !done.isCompleted) {
         done.complete();
       }
     });
@@ -208,9 +248,8 @@ class JwWebViewAdapter implements JwWebPage {
       await controller.loadUrl(url);
       await done.future.timeout(
         _responseTimeout,
-        onTimeout: () => throw const JwCollectionException(
-          'navigation did not complete',
-        ),
+        onTimeout: () =>
+            throw const JwCollectionException('navigation did not complete'),
       );
     } finally {
       await loadingSub.cancel();
@@ -236,8 +275,10 @@ class JwWebViewAdapter implements JwWebPage {
   Future<void> gotoExamArrange() => _navigate(examEntryUrl);
 
   @override
-  Future<bool> get isAuthenticatedHome async =>
-      isAuthenticatedHomeUrl(await currentUrl);
+  Future<bool> get isAuthenticatedHome async {
+    final url = await currentUrl;
+    return isAuthenticatedHomeUrl(url);
+  }
 
   // --- CAS login ------------------------------------------------------------
   //
@@ -256,21 +297,23 @@ class JwWebViewAdapter implements JwWebPage {
     if (username.isEmpty) {
       throw const JwAccountMismatchException('username is required');
     }
-    if (_loginConsumed) {
-      // CAS ticket is one-shot; an explicit new authentication flow must start
-      // a fresh sso activation (the collector never replays a consumed login).
-      _diag('login_already_consumed');
-      throw const JwCollectionException('login already consumed');
-    }
+    // Full-branch semantics (jw_login_flow.dart): one-shot protection guards
+    // the in-flight ticket, not the login ACTION. Each collector attempt may
+    // start a fresh fill; the guard re-arms on entry and re-arms again after
+    // a completed waitForAuthenticatedHome.
+    final alreadyInFlight = _loginConsumed;
     _loginConsumed = true;
+    if (alreadyInFlight) {
+      _diag('login_restarted');
+    }
 
     final controller = await _ensureController();
-    final current = controller.currentUrlSnapshot ?? '';
+    var current = controller.currentUrlSnapshot ?? '';
 
     // 1. Are we already on the real CAS form (id.ustc.edu.cn)? The collector's
     //    gotoCasEntry navigates to jw.ustc.edu.cn/ucas-sso/login; after a
     //    previous activation we may already be on CAS.
-    final onCasForm = _isCasFormHost(current);
+    var onCasForm = _isCasFormHost(current);
     if (!onCasForm) {
       // 2. Ensure we are on the JW SSO login entry. The collector usually
       //    already landed on `/ucas-sso/login`; only navigate (fresh) when we
@@ -309,19 +352,38 @@ class JwWebViewAdapter implements JwWebPage {
         timeout: _loginTimeout,
         command: _clickSsoEntry,
       );
+      current = controller.currentUrlSnapshot ?? '';
+      onCasForm = _isCasFormHost(current);
     } else {
       _diag('reusing_cas_form');
     }
 
-    // 5. Pre-submit identity guard: if the CAS form renders a non-empty,
-    //    non-matching account selector, fail closed before submitting.
+    // 5. Stale-form guard (evidence only, never fail-closed — the full-branch
+    //    flow has no pre-submit rejection; fillUsername OVERWRITES whatever
+    //    the form remembers, and the real account check is the post-login
+    //    identity proof). A missing probe (null) or a non-empty stale value
+    //    both mean the current document is NOT a usable credential form
+    //    (bare /cas/login redirects to a form-less page; CAS may also
+    //    remember the last account). Recovery ALWAYS reruns the SSO entry
+    //    activation (entry page → 统一身份认证 click → CAS form with the
+    //    service param) — never a bare /cas/login reload, whose converge
+    //    would fire on stale signals of the old document.
     final preSet = await _readPreselectedAccount(controller);
-    if (preSet != null && preSet.trim().isNotEmpty &&
-        !_accountsEqual(preSet, username)) {
-      _diag('identity_preselect_conflict');
-      throw JwAccountMismatchException(
-        'the CAS page already shows another account',
-      );
+    // Privacy-safe evidence only: presence + lengths, never the text.
+    _diag(
+      preSet == null
+          ? 'preselect_absent'
+          : 'preselect_present:${preSet.trim().length}'
+                '/expected:${username.trim().length}'
+                '/equal:${preSet.trim().isNotEmpty && _accountsEqual(preSet, username)}',
+    );
+    final staleOrBroken =
+        onCasForm &&
+        (preSet == null ||
+            (preSet.trim().isNotEmpty && !_accountsEqual(preSet, username)));
+    if (staleOrBroken) {
+      _diag('stale_cas_form_reloading');
+      await _activateSsoEntryAndAwaitForm(controller);
     }
 
     // 6. Fill username (always) and password (when provided).
@@ -364,7 +426,9 @@ class JwWebViewAdapter implements JwWebPage {
   bool _accountsEqual(String a, String b) =>
       a.trim().toLowerCase() == b.trim().toLowerCase();
 
-  Future<String?> _readPreselectedAccount(JwWebviewController controller) async {
+  Future<String?> _readPreselectedAccount(
+    JwWebviewController controller,
+  ) async {
     Object? value;
     try {
       value = await controller.executeScript(
@@ -376,6 +440,12 @@ class JwWebViewAdapter implements JwWebPage {
     return value is String ? value : null;
   }
 
+  /// Fills a CAS field with [secret] bytes. A `missing_selector` /
+  /// `wrong_target` failure usually means the script raced a document switch
+  /// (the probe/converge signals fired on the OLD document) — recover by
+  /// re-running the SSO entry activation once inside the timeout budget
+  /// (full-branch lesson: ExecuteScript failures during document switches are
+  /// retried within the timeout, never treated as final).
   Future<void> _fillSecret(
     JwWebviewController controller,
     String scriptId,
@@ -383,6 +453,24 @@ class JwWebViewAdapter implements JwWebPage {
   ) async {
     final bytes = Uint8List.fromList(utf8.encode(secret));
     try {
+      try {
+        await executeRegisteredScript(
+          controller,
+          scriptId: scriptId,
+          args: <String, Object?>{'secretBytes': bytes},
+          timeout: _responseTimeout,
+          safeDiagnostic: _safeDiagnostic,
+        );
+        return;
+      } on JwCollectionException catch (error) {
+        final text = error.message ?? '';
+        final recoverable =
+            text.contains('missing_selector') || text.contains('wrong_target');
+        if (!recoverable) rethrow;
+        _diag('fill_race_retry:$scriptId');
+      }
+      // One recovery attempt: fresh SSO activation → CAS form → fill again.
+      await _activateSsoEntryAndAwaitForm(controller);
       await executeRegisteredScript(
         controller,
         scriptId: scriptId,
@@ -392,6 +480,83 @@ class JwWebViewAdapter implements JwWebPage {
       );
     } finally {
       bytes.fillRange(0, bytes.length, 0);
+    }
+  }
+
+  /// Shared SSO-entry activation used by both the initial CAS-form wait and
+  /// the fill-race recovery: entry page → 统一身份认证 click → CAS form.
+  Future<void> _activateSsoEntryAndAwaitForm(
+    JwWebviewController controller,
+  ) async {
+    await _converge(
+      target: const JwReadyTarget(
+        id: 'jw.portal.login',
+        url: casEntryUrl,
+        urlPattern: 'https://jw.ustc.edu.cn/ucas-sso*',
+        readySelector: 'button, a[href*="sso"], a[href*="cas"]',
+      ),
+      timeout: _loginTimeout,
+      command: () => controller.loadUrl(casEntryUrl),
+    );
+    try {
+      await _converge(
+        target: const JwReadyTarget(
+          id: 'jw.cas.login',
+          url: 'https://id.ustc.edu.cn/cas/login',
+          urlPattern: 'https://id.ustc.edu.cn/cas/login*',
+          readySelector: 'input[name="username"], input[type="password"]',
+        ),
+        timeout: _casFormWaitTimeout,
+        command: _clickSsoEntry,
+      );
+    } on JwCollectionException {
+      // The CAS form never showed the expected inputs. Capture the real DOM
+      // shape (privacy-safe: counts/types only) so the contract mismatch is
+      // attributable, then rethrow for the caller's retry/failure path.
+      await _diagCasFormShape(controller);
+      rethrow;
+    }
+    // Privacy-safe DOM reconnaissance (once, on convergence): shapes only —
+    // element counts, input types, iframe presence. Never text/values.
+    await _diagCasFormShape(controller);
+  }
+
+  /// One-shot privacy-safe DOM shape probe (element counts and input types
+  /// only — never values or text). Answers "what does the real CAS page
+  /// actually render" without leaking anything.
+  Future<void> _diagCasFormShape(JwWebviewController controller) async {
+    try {
+      final shape = await controller.executeScript('''
+(() => {
+  const inputs = Array.from(document.querySelectorAll("input"));
+  const iframes = document.querySelectorAll("iframe").length;
+  return {
+    inputCount: inputs.length,
+    inputTypes: inputs.map((el) => el.type || "?").join(","),
+    inputNames: inputs.map((el) => el.name || el.id || "-").join(","),
+    hasUsernameField: !!document.querySelector('input[name="username"], #username'),
+    hasPasswordField: !!document.querySelector('input[type="password"]'),
+    iframeCount: iframes,
+    readyState: document.readyState,
+    path: location.pathname
+  };
+})()
+''');
+      if (shape is Map) {
+        _diag(
+          'cas_form_shape:'
+          'inputs=${shape['inputCount']}'
+          '/names=${shape['inputNames']}'
+          '/types=${shape['inputTypes']}'
+          '/user=${shape['hasUsernameField']}'
+          '/pass=${shape['hasPasswordField']}'
+          '/iframes=${shape['iframeCount']}'
+          '/rs=${shape['readyState']}'
+          '/path=${shape['path']}',
+        );
+      }
+    } on Object {
+      // Reconnaissance is best effort.
     }
   }
 
@@ -417,8 +582,17 @@ class JwWebViewAdapter implements JwWebPage {
         storageConflicted: result['storageConflicted'] == true,
       );
       if (row.authoritativeConflicted ||
-          (!row.authoritativeMatched && (row.domConflicted || row.storageConflicted))) {
-        _diag('identity_verification_conflicted');
+          (!row.authoritativeMatched &&
+              (row.domConflicted || row.storageConflicted))) {
+        // Booleans only — never account text (red line).
+        _diag(
+          'identity_verification_conflicted'
+          ':auth=${row.authoritativeMatched}'
+          '/dom=${row.domMatched}'
+          '/storage=${row.storageMatched}'
+          '/domConflict=${row.domConflicted}'
+          '/storageConflict=${row.storageConflicted}',
+        );
         throw JwAccountMismatchException(
           'authenticated account does not match the expected username',
         );
@@ -448,6 +622,10 @@ class JwWebViewAdapter implements JwWebPage {
         'USTC JW login was not completed before timeout',
       ),
     );
+    // The one-shot CAS ticket has been consumed and the session is on /home:
+    // allow a future job of the shared controller to log in again (replay
+    // protection only guards the in-flight login, not a completed one).
+    _loginConsumed = false;
   }
 
   // --- collection -------------------------------------------------------------
@@ -554,7 +732,9 @@ class JwWebViewAdapter implements JwWebPage {
     );
     final html = result['html'];
     if (html is! String || html.isEmpty) {
-      throw const JwCollectionException('exam page did not contain table#exams');
+      throw const JwCollectionException(
+        'exam page did not contain table#exams',
+      );
     }
     return html;
   }
@@ -672,7 +852,8 @@ class JwWebViewAdapter implements JwWebPage {
     return parsed != null &&
         parsed.scheme == 'https' &&
         parsed.host == jwHost &&
-        (parsed.path.startsWith('/ucas-sso') || parsed.path.startsWith('/login') ||
+        (parsed.path.startsWith('/ucas-sso') ||
+            parsed.path.startsWith('/login') ||
             parsed.path == '/');
   }
 
