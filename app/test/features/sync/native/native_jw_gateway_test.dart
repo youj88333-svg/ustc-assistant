@@ -289,7 +289,56 @@ void main() {
               'and $maxAdditionalPumps additional fake-clock pumps',
         );
         await shutdown;
-        expect(calls.indexOf('stop'), lessThan(calls.indexOf('dispose')));
+        expect(calls, <String>['stop', 'stop', 'clear', 'dispose']);
+      },
+    );
+
+    testWidgets(
+      'late controller creation after shutdown is disposed without attachment',
+      (tester) async {
+        final creation = Completer<FakeJwWebviewController>();
+        final calls = <String>[];
+        var factoryCalls = 0;
+        final gateway = NativeJwGateway(
+          controllerFactory: () {
+            factoryCalls++;
+            return creation.future;
+          },
+          controllerCreationTimeout: const Duration(milliseconds: 1),
+        );
+
+        await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'opaque-account-a',
+          expectedUsername: 'PB00000000',
+          jwSemester: kDefaultJwSemester,
+        );
+        await Future<void>.microtask(() {});
+        expect(factoryCalls, 1);
+
+        final shutdown = gateway.shutdown();
+        Object? shutdownError;
+        final shutdownFutureSettled = shutdown.then<void>(
+          (_) {},
+          onError: (Object error, StackTrace _) {
+            shutdownError = error;
+          },
+        );
+        // Elapse the gateway's bounded in-flight creation wait without using
+        // wall-clock time. The factory completes only after that boundary.
+        await tester.pump(const Duration(milliseconds: 1));
+
+        final lateController = FakeJwWebviewController(calls: calls);
+        creation.complete(lateController);
+        for (var i = 0; i < 8; i++) {
+          await tester.pump();
+          await tester.runAsync(() => Future<void>(() {}));
+        }
+
+        await shutdownFutureSettled;
+        expect(shutdownError, isA<TimeoutException>());
+        expect(gateway.surfaceHost.isAttached, isFalse);
+        expect(calls, <String>['stop', 'clear', 'dispose']);
       },
     );
 
@@ -297,17 +346,20 @@ void main() {
       'controller factory receives one account partition per lifecycle',
       () async {
         final requestedAccounts = <String>[];
+        var productionFactoryCalls = 0;
         final gateway = NativeJwGateway(
           userDataPathForAccount: (accountId) async {
             requestedAccounts.add(accountId);
             return 'test-udf/$accountId';
           },
           productionControllerFactory:
-              ({required userDataPath, required safeDiagnostic}) async =>
-                  FakeJwWebviewController()
-                    ..authenticatedSession = true
-                    ..courseDatum = courseDatum
-                    ..examHtml = examHtml,
+              ({required userDataPath, required safeDiagnostic}) async {
+                productionFactoryCalls++;
+                return FakeJwWebviewController()
+                  ..authenticatedSession = true
+                  ..courseDatum = courseDatum
+                  ..examHtml = examHtml;
+              },
         );
         final job = await gateway.startCollection(
           source: SyncSource.jw,
@@ -317,10 +369,21 @@ void main() {
         );
         await _pollUntilTerminal(gateway, job.id);
         expect(requestedAccounts, ['opaque-account-a']);
+        expect(productionFactoryCalls, 1);
+        await expectLater(
+          gateway.startCollection(
+            source: SyncSource.jw,
+            accountId: 'opaque-account-b',
+            expectedUsername: 'PB00000001',
+            jwSemester: kDefaultJwSemester,
+          ),
+          throwsA(isA<StateError>()),
+        );
+        expect(productionFactoryCalls, 1);
+        expect(requestedAccounts, ['opaque-account-a']);
         await gateway.shutdown();
       },
     );
-
   });
 }
 
@@ -345,6 +408,7 @@ Future<BridgeJobPoll> _pollUntilTerminalWithPump(
     final poll = await gateway.poll(id, 0);
     if (poll.terminal) return poll;
     await tester.pump(const Duration(milliseconds: 5));
+    await tester.runAsync(() => Future<void>(() {}));
   }
   fail('job never reached terminal');
 }
@@ -378,6 +442,7 @@ class FakeJwWebviewController implements JwWebviewController {
   bool authenticatedSession = false;
   Map<String, dynamic> courseDatum = const {};
   String examHtml = '<table id="exams"></table>';
+  bool _disposed = false;
 
   void setCurrent(String url) {
     _currentUrl = url;
@@ -392,19 +457,16 @@ class FakeJwWebviewController implements JwWebviewController {
   }
 
   @override
-  Stream<String> get urlChanges =>
-      _ImmediateCancelStream<String>(_urlController.stream);
+  Stream<String> get urlChanges => _urlController.stream;
 
   @override
   String? get currentUrlSnapshot => _currentUrl;
 
   @override
-  Stream<JwLoadingState> get loadingStateChanges =>
-      _ImmediateCancelStream<JwLoadingState>(_loadingController.stream);
+  Stream<JwLoadingState> get loadingStateChanges => _loadingController.stream;
 
   @override
-  Stream<Object?> get webMessages =>
-      _ImmediateCancelStream<Object?>(_webMessageController.stream);
+  Stream<Object?> get webMessages => _webMessageController.stream;
 
   @override
   Widget get surface => const SizedBox();
@@ -551,70 +613,13 @@ class FakeJwWebviewController implements JwWebviewController {
 
   @override
   Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
     calls?.add('dispose');
+    await Future.wait<void>(<Future<void>>[
+      _urlController.close(),
+      _loadingController.close(),
+      _webMessageController.close(),
+    ]);
   }
-}
-
-/// Flutter's fake-async binding does not advance the SDK's internal
-/// `Future._nullFuture` returned by a broadcast subscription's `cancel()`.
-/// The native stream cancellation action itself is synchronous for this fake,
-/// so expose a normal completed Future while still invoking the delegate
-/// cancellation. Production streams are never wrapped by this test helper.
-final class _ImmediateCancelStream<T> extends Stream<T> {
-  _ImmediateCancelStream(this._source);
-
-  final Stream<T> _source;
-
-  @override
-  bool get isBroadcast => _source.isBroadcast;
-
-  @override
-  StreamSubscription<T> listen(
-    void Function(T)? onData, {
-    Function? onError,
-    void Function()? onDone,
-    bool? cancelOnError,
-  }) => _ImmediateCancelSubscription<T>(
-    _source.listen(
-      onData,
-      onError: onError,
-      onDone: onDone,
-      cancelOnError: cancelOnError,
-    ),
-  );
-}
-
-final class _ImmediateCancelSubscription<T>
-    implements StreamSubscription<T> {
-  _ImmediateCancelSubscription(this._delegate);
-
-  final StreamSubscription<T> _delegate;
-
-  @override
-  Future<void> cancel() {
-    unawaited(_delegate.cancel());
-    return Future<void>.value();
-  }
-
-  @override
-  void onData(void Function(T)? handleData) => _delegate.onData(handleData);
-
-  @override
-  void onDone(void Function()? handleDone) => _delegate.onDone(handleDone);
-
-  @override
-  void onError(Function? handleError) => _delegate.onError(handleError);
-
-  @override
-  void pause([Future<void>? resumeSignal]) => _delegate.pause(resumeSignal);
-
-  @override
-  void resume() => _delegate.resume();
-
-  @override
-  bool get isPaused => _delegate.isPaused;
-
-  @override
-  Future<E> asFuture<E>([E? futureValue]) =>
-      _delegate.asFuture<E>(futureValue);
 }

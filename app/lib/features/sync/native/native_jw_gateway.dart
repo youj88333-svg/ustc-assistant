@@ -74,12 +74,14 @@ class NativeJwGateway implements BridgeGateway {
     // the account-bound resolver. It is only consulted when the new resolver
     // is absent.
     Future<String> Function()? userDataPath,
+    Duration controllerCreationTimeout = defaultLoginTimeout,
     void Function(String)? safeDiagnostic,
   }) : _controllerFactory = controllerFactory,
        _semester = semester,
        _userDataPathForAccount = userDataPathForAccount,
        _productionControllerFactory = productionControllerFactory,
        _legacyUserDataPath = userDataPath,
+       _controllerCreationTimeout = controllerCreationTimeout,
        _externalDiagnostic = safeDiagnostic;
 
   final JwWebviewControllerFactory? _controllerFactory;
@@ -87,6 +89,7 @@ class NativeJwGateway implements BridgeGateway {
   final Future<String?> Function(String accountId)? _userDataPathForAccount;
   final ProductionJwControllerFactory? _productionControllerFactory;
   final Future<String> Function()? _legacyUserDataPath;
+  final Duration _controllerCreationTimeout;
 
   /// Optional caller-supplied privacy-safe diagnostic sink (stage names and
   /// stable error codes only — never URL/account/query/DOM). Wired through to
@@ -147,6 +150,34 @@ class NativeJwGateway implements BridgeGateway {
   JwWebviewController? _sharedController;
   Future<JwWebviewController>? _controllerCreation;
 
+  /// Releases a controller that finished creating after this gateway had
+  /// already entered shutdown. It was never stored or attached, so the
+  /// gateway owns this one best-effort cleanup sequence exclusively.
+  Future<void> _disposeControllerAfterShutdown(
+    JwWebviewController controller,
+  ) async {
+    Object? firstError;
+    StackTrace? firstStack;
+
+    Future<void> attempt(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+
+    await attempt(controller.stop);
+    await attempt(controller.clearBrowsingDataAll);
+    await attempt(controller.dispose);
+
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStack ?? StackTrace.current);
+    }
+  }
+
   Future<JwWebviewController> _controller() async {
     if (_shutdown) throw StateError('gateway is shut down');
     final existing = _sharedController;
@@ -160,6 +191,10 @@ class NativeJwGateway implements BridgeGateway {
         final controller = factory != null
             ? await factory()
             : await _createProductionController();
+        if (_shutdown) {
+          await _disposeControllerAfterShutdown(controller);
+          throw StateError('gateway is shut down');
+        }
         // Store first so the host and shutdown always observe the exact
         // controller whose environment was initialized.
         _sharedController = controller;
@@ -261,7 +296,7 @@ class NativeJwGateway implements BridgeGateway {
           semester: jwSemester.toJwSemesterConfig(),
         )
         .listen(
-      (event) {
+          (event) {
             if (!_eventBuffers.containsKey(jobId)) return;
             switch (event) {
               case CollectionStarting():
@@ -414,7 +449,7 @@ class NativeJwGateway implements BridgeGateway {
     final creation = _controllerCreation;
     if (creation != null) {
       await attempt(() async {
-        await creation.timeout(defaultLoginTimeout);
+        await creation.timeout(_controllerCreationTimeout);
       });
     }
     final controller = _sharedController;

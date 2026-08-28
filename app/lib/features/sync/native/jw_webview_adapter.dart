@@ -521,38 +521,23 @@ class JwWebViewAdapter implements JwWebPage {
     await _diagCasFormShape(controller);
   }
 
-  /// One-shot privacy-safe DOM shape probe (element counts and input types
-  /// only — never values or text). Answers "what does the real CAS page
-  /// actually render" without leaking anything.
+  /// One-shot privacy-safe DOM shape probe. It reports only stable booleans,
+  /// never values, names, paths, text, or element metadata.
   Future<void> _diagCasFormShape(JwWebviewController controller) async {
     try {
       final shape = await controller.executeScript('''
 (() => {
-  const inputs = Array.from(document.querySelectorAll("input"));
-  const iframes = document.querySelectorAll("iframe").length;
   return {
-    inputCount: inputs.length,
-    inputTypes: inputs.map((el) => el.type || "?").join(","),
-    inputNames: inputs.map((el) => el.name || el.id || "-").join(","),
     hasUsernameField: !!document.querySelector('input[name="username"], #username'),
     hasPasswordField: !!document.querySelector('input[type="password"]'),
-    iframeCount: iframes,
-    readyState: document.readyState,
-    path: location.pathname
   };
 })()
 ''');
       if (shape is Map) {
         _diag(
           'cas_form_shape:'
-          'inputs=${shape['inputCount']}'
-          '/names=${shape['inputNames']}'
-          '/types=${shape['inputTypes']}'
           '/user=${shape['hasUsernameField']}'
-          '/pass=${shape['hasPasswordField']}'
-          '/iframes=${shape['iframeCount']}'
-          '/rs=${shape['readyState']}'
-          '/path=${shape['path']}',
+          '/pass=${shape['hasPasswordField']}',
         );
       }
     } on Object {
