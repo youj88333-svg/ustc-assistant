@@ -344,6 +344,52 @@ void main() {
     },
   );
 
+  testWidgets(
+    'loader claims a gateway completed before a later dependency await',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final creation = Completer<NativeJwGateway>();
+      final schema = Completer<String>();
+      var factoryCalls = 0;
+      final gateway = _ShutdownTrackingGateway();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPageLoader(
+            database: database,
+            nativeGatewayFactory: () {
+              factoryCalls++;
+              return creation.future;
+            },
+            schemaLoader: () => schema.future,
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(factoryCalls, 1);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      creation.complete(gateway);
+      await tester.pump();
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(gateway.shutdownCalls, 0);
+
+      await tester.pumpWidget(const SizedBox());
+      // The factory result completed while State was alive, but _build is
+      // still waiting on schema. Ownership must already be registered here.
+      expect(gateway.shutdownCalls, 1);
+
+      schema.complete('{}');
+      for (var i = 0; i < 4; i++) {
+        await tester.pump();
+        await tester.runAsync(() => Future<void>(() {}));
+      }
+
+      expect(gateway.shutdownCalls, 1);
+    },
+  );
+
   testWidgets('first launch offers a school account login form', (
     tester,
   ) async {

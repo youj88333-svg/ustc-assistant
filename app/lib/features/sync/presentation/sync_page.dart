@@ -123,6 +123,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onExit,
     this.nativeGateway,
     this.nativeGatewayFactory,
+    this.schemaLoader,
     super.key,
   });
 
@@ -141,6 +142,10 @@ class SyncPageLoader extends StatefulWidget {
   /// defer gateway creation. The loader owns the resolved gateway.
   final Future<NativeJwGateway> Function()? nativeGatewayFactory;
 
+  /// Optional schema-loading seam for lifecycle tests that need dependency
+  /// initialization to remain pending after gateway creation.
+  final Future<String> Function()? schemaLoader;
+
   @override
   State<SyncPageLoader> createState() => _SyncPageLoaderState();
 }
@@ -149,6 +154,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   late final Future<_SyncDependencies> dependencies;
   BridgeGateway? bridge;
   NativeJwGateway? nativeGateway;
+  NativeJwGateway? _resolvedNativeGateway;
   Future<NativeJwGateway>? _nativeGatewayCreation;
   StreamSubscription<String>? _diagnosticSub;
   bool _disposed = false;
@@ -183,7 +189,14 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           // reaches its await site again.
           unawaited(
             creation.then<void>((gateway) {
-              if (_disposed) _shutdownOnce(gateway);
+              if (_disposed) {
+                _shutdownOnce(gateway);
+                return;
+              }
+              // Claim the result immediately, even if _build is awaiting a
+              // later dependency. Dispose must see this ownership window.
+              _resolvedNativeGateway = gateway;
+              nativeGateway ??= gateway;
             }, onError: (Object error, StackTrace stack) {}),
           );
         } else {
@@ -206,9 +219,12 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   }
 
   Future<_SyncDependencies> _build() async {
-    final schemaText = await rootBundle.loadString(
-      'assets/schemas/source-bundle-1.0.draft7.schema.json',
-    );
+    final schemaLoader = widget.schemaLoader;
+    final schemaText = schemaLoader == null
+        ? await rootBundle.loadString(
+            'assets/schemas/source-bundle-1.0.draft7.schema.json',
+          )
+        : await schemaLoader();
     final accounts = AccountService(
       database: widget.database,
       protector: defaultCredentialProtector(),
@@ -229,7 +245,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     final fallback = kUsePythonBridgeFallback;
     NativeJwGateway? gw;
     if (!fallback) {
-      gw = nativeGateway;
+      gw = nativeGateway ?? _resolvedNativeGateway;
       if (gw == null) {
         final creation = _nativeGatewayCreation;
         if (creation != null) {
@@ -325,7 +341,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       unawaited(diagnosticSub.cancel());
     }
     diagnostics?.dispose();
-    final ownedGateway = nativeGateway ?? bridge;
+    final ownedGateway = nativeGateway ?? _resolvedNativeGateway ?? bridge;
     if (ownedGateway != null) {
       _shutdownOnce(ownedGateway);
     }
