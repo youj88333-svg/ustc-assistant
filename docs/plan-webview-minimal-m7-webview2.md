@@ -26,7 +26,7 @@
 | VS 2022 | `/e/Microsoft Visual Studio/18/community`（VC v143 / MSVC 14.42，`cl.exe` 就绪） |
 | CMake / Ninja | `/e/Android/Sdk/cmake/3.22.1`、`/e/Espressif/tools/cmake/3.30.2`（本机可编译 Windows） |
 | 代理 | 127.0.0.1:7897（pub.dev / github 可达，`flutter pub get` 可用） |
-| 基线 | `flutter analyze` 0 error / 15 issues；`flutter test` 1360 pass / 7 fail（M0 起已知基线） |
+| 历史 M5 基线快照 | `flutter analyze` 0 error / 15 issues；`flutter test` 1360 pass / 7 fail（M0 起已知基线；非当前 M7 结果） |
 
 ### 0.2 关键结论：WebView2 插件可自足提取
 
@@ -66,8 +66,8 @@
 
 ### Task 1：基线快照（本机）
 - 复跑并留档：
-  - `flutter analyze` → 0 error / 15 issues
-  - `flutter test` → 1360 pass / 7 fail（已知基线）
+  - 历史 M5 快照：`flutter analyze` → 0 error / 15 issues
+  - 历史 M5 快照：`flutter test` → 1360 pass / 7 fail（已知基线；当前 M7 结果见 §8.5）
 - 记录 HEAD，供 Task 结束对比。
 
 ### Task 2：引入自足 WebView2 插件包
@@ -175,8 +175,8 @@
 ```bash
 cd app
 flutter pub get
-flutter analyze                      # 0 error，issue 数不变（15）
-flutter test                          # 1360 pass / 7 fail（不新增失败）
+flutter analyze                      # 历史 M5/M6 快照：0 error，issue 数 15；当前 M7 见 §8.5
+flutter test                          # 历史 M5 快照：1360 pass / 7 fail；当前 M7 结果见 §8.5
 flutter build windows --release       # 编译通过
 ```
 
@@ -269,14 +269,19 @@ login entry → CAS → identity verified → course context → get-data
 
 Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动化证据：
 
-- loopback：按要求只运行一次；会话静默超过五分钟、无 flutter/dart/app 子进程，
-  Ctrl+C 后退出 1。没有 fresh 测试计数；canonical UDF 无残留子目录。受限 shell
-  无法查询 Application Event Log，故不宣称 Error 1000 计数。Task 8 的既有 loopback
-  GREEN 记录仍在 `task-8-report.md`。
-- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；analyze 会话
-  静默约六分钟后 Ctrl+C，退出 1，test/build 未运行，也没有重启第二套命令。
-- Python：unittest `Ran 140 tests`、2 failures（bridge capabilities 退役字段和
-  CLI 退役命令 parser）；compileall 退出 0。未安装或修改 Conda 依赖。
+- 进程预检和清理后均没有 `flutter`/`dart`/`ustc_assistant_app` 残留。首次无输出
+  的原因已定位为 sandbox 无权写 Flutter SDK 的 `cache/flutter.bat.lock`，不是另一个
+  Flutter 任务占锁。
+- loopback：修正执行权限后只运行一次 fresh 命令，退出 0，`00:03 +1: All tests
+  passed!`，Windows 构建约 23.4s；无设备断开，canonical UDF
+  `UDF_CHILD_COUNT=0`。受限 shell 无法查询 Application Event Log，故不宣称 Error
+  1000 计数。Task 8 的既有 loopback 记录仍保留，但不替代本项。
+- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；analyze 约 8.0s
+  后真实退出 1，输出 18 issues（13 info、5 warning，无 error）。依据停止规则，
+  test/build 未运行，也没有重启第二套命令。
+- Python：临时进程级 `PYTHONPATH` 明确指向本 worktree 的 `src`，导入断言通过；
+  unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
+  Conda 依赖。
 
 若之后的 owner 环境触发已知宿主 `sqlite3.dll` error 126，必须保留原始失败计数并
 停止 build，不能复制 DLL 或重跑第二套 Flutter 命令掩盖失败。

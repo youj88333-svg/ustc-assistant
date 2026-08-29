@@ -15,11 +15,11 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 Flutter analyze 会话悬挂后中止，test/build 未运行；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | Task 9 analyze 真实退出 1（18 issues），按规则 test/build 未运行；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
-| WebView 接线 | ✅ minimal 分支 M7 已接入 Windows 原生 WebView2（§8）；Task 8 有 loopback GREEN 记录，Task 9 fresh 会话中止 | Android/iOS 仍需外部机器 `webview_flutter` |
+| WebView 接线 | ✅ minimal 分支 M7 已接入 Windows 原生 WebView2（§8）；Task 8 与 Task 9 fresh loopback 均有 GREEN 记录 | Android/iOS 仍需外部机器 `webview_flutter` |
 
 **本手册不重复** `docs/m5-three-platform-build-analysis.md` 已记录的三端构建详细错误
 清单（Android 见其 §2.2/§2.3/§2.4，iOS 见 §3.2/§3.3/§3.4）。本手册给出执行步骤、
@@ -50,8 +50,8 @@
 ```bash
 git clone <repo>          # 或对已有仓库 git fetch
 cd <repo>
-git checkout refactor/webview-minimal   # M5 完成分支
-git pull --ff-only        # 确认到最新（M6 两个 docs 提交已含）
+git checkout refactor/webview-minimal   # 当前 M7 minimal 分支
+git pull --ff-only        # 确认到最新（含 M7 实现与 Task 9 文档提交）
 cd app
 flutter pub get           # 需外网拉取 pub 依赖
 ```
@@ -68,18 +68,18 @@ flutter pub get           # 需外网拉取 pub 依赖
 
 ---
 
-## 2. 静态验证复现（外部机器对齐本 VM 结果）
+## 2. 静态验证复现（外部机器对齐历史基线）
 
-在 `app/` 目录下依次执行，结果应与本 VM 在 `docs/m6-refactor-final-verification.md`
-§2 记录一致。任何偏差需先排查再继续构建。
+以下 1360/7 与 15 issues 仅是 M5/M6 交接时的历史快照，不是当前 M7 的通过标准。
+当前 M7/Task 9 实际结果见 §8.7；任何当前结果都不得套用下面的历史数字。
 
 ```bash
 cd app
 flutter analyze 2>&1 | tail -3
-# 预期：0 error / 15 issues（12 info + 3 warning），末行 "15 issues found."
+# 历史 M5 快照：0 error / 15 issues（12 info + 3 warning）；非当前 M7 结论
 
 flutter test 2>&1 | tail -15
-# 预期：1360 pass / 7 fail（7 项为 M0 基线已知失败，见 §6）
+# 历史 M5 快照：1360 pass / 7 fail（见 §6）；非当前 M7 结论
 ```
 
 Python（仅当需重新生成 oracle 时；默认跳过）：
@@ -87,7 +87,7 @@ Python（仅当需重新生成 oracle 时；默认跳过）：
 ```bash
 cd <repo>
 conda run -n ustc_assistant python -m unittest discover -s tests -v 2>&1 | tail -5
-# 预期：Ran 140 tests ... OK (skipped=1)
+# 历史 M5 快照：Ran 140 tests ... OK (skipped=1)；当前 Task 9 结果见 §8.7
 conda run -n ustc_assistant python -m compileall -q src tests 2>&1 | tail -3
 # 预期：无输出（exit 0，即全部编译通过）
 ```
@@ -114,9 +114,9 @@ grep -rln "CampusCatalog\|SearchCurrentSecond\|SearchIcourse\|SearchCampus\|Read
 # 注：campus_affair enum 值与 icourseConsent 退役 DB 列不算活跃引用
 ```
 
-**通过标准**：analyze 0 error；test 1360 pass / 7 fail（且 7 项与 §6 清单一致）；
-4 条 grep 全部符合预期。若 test 失败项多于 7 或失败项不同，说明环境引入了新失败，
-**不得继续构建**——先排查。
+**历史 M5 对照标准**：analyze 0 error；test 1360 pass / 7 fail（且 7 项与 §6
+清单一致）；4 条 grep 全部符合预期。当前 M7 不以这些数字宣称通过；应以 §8.7 的
+实际命令、退出码和停止规则为准。若当前 test 失败，**不得继续构建**——先排查。
 
 ---
 
@@ -339,9 +339,10 @@ f858a3851b7c0929efe8427dd340ffe50985d5c37357d0d1c9a498b19bb91933
 
 ## 6. 基线失败处置（7 项已知失败）
 
-本 VM 在 M5 HEAD `25ec61a` 实测 `flutter test` 为 **1360 pass / 7 fail**，7 项
-全部为 M0 基线已知失败（`c7637ad` 起每个里程碑验证不变）。外部机器应复现**相同**
-结果（7 项、同样的失败原因）；若失败项多于 7 或原因不同，说明环境引入了新失败。
+M5 HEAD `25ec61a` 的历史快照为 **1360 pass / 7 fail**，7 项全部为 M0 基线已知
+失败（`c7637ad` 起每个里程碑验证不变）。这是交接背景，不是当前 M7 的测试结果；
+当前 M7 结果只记录在 §8.7。外部机器若复现该历史快照，可按下述原因解释，但不得
+把历史数字当作当前代码的验证结论。
 
 ### 6.1 1 项 DB migration 健壮性缺口（非"需干净 DB"）
 
@@ -402,8 +403,8 @@ flutter test --update-goldens
 
 外部机器按本手册执行完毕后，M6 才算最终完成：
 
-- [ ] §2 静态验证复现：analyze 0 error、test 1360 pass / 7 fail（与 §6 一致）、
-      4 条 grep 符合预期。
+- [ ] §2 历史 M5 静态快照对照：analyze 0 error、test 1360 pass / 7 fail（与 §6
+      一致）、4 条 grep 符合预期；当前 M7 结果另见 §8.7。
 - [ ] §3.1 Windows Release 构建成功 + exe 运行验证。
 - [ ] §3.2 Android APK 构建成功 + 安装运行验证（含凭据保护/通知/WebView 接线）。
 - [ ] §3.3 iOS 构建成功 + 安装运行验证（含 Keychain/通知/WKWebView 接线）。
@@ -442,13 +443,14 @@ flutter test --update-goldens
   `kUsePythonBridgeFallback=true` 时仍可保留 Python Bridge 的 headless 启动同步。
   两种通道严格一源一通道，不并行。
 
-### 8.2 本机构建与静态验证实测
+### 8.2 本机构建与静态验证实测（历史 M7 初始接入快照）
 
-本机（Windows + VS2022 + Flutter 3.44.5）实测：
+以下是 2026-08-27 初始接入时的快照；它不是当前 Task 9 的 gate 结果，当前结果见
+§8.7。本机（Windows + VS2022 + Flutter 3.44.5）当时实测：
 
 ```
 cd app
-flutter analyze                # 0 error / 15 issues（与 M5 基线一致）
+flutter analyze                # 历史 M5 快照：0 error / 15 issues（当前 Task 9 见 §8.7）
 flutter test                   # 较 M5 基线新增：adapter 15 + gateway 7 单测，全绿
                                # （本机 sqlite3.dll 需在 PATH，见 §8.5）
 flutter build windows --release  # 含插件 C++ 编译
@@ -580,21 +582,22 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
 
 #### Task 9 自动化验证记录（2026-08-29）
 
-- 进程预检：执行 `Get-Process flutter,dart,ustc_assistant_app`，开始前和中止后
-  均未发现相关进程；未终止其他任务。
-- Windows loopback：按要求只启动一次 fresh 命令；会话静默超过五分钟且没有
-  flutter/dart/app 子进程，最终 Ctrl+C 中止并返回 1。没有测试输出或 fresh
-  `All tests passed!` 计数，canonical loopback UDF 无残留子目录；Application
-  Event Log 查询在受限 shell 中不可用，因此不宣称 Error 1000 计数。Task 8 之前
-  的 loopback GREEN 证据仍见 `task-8-report.md`，不能替代本次 fresh 结果。
+- 进程预检：执行 `Get-Process flutter,dart,ustc_assistant_app`，开始前和完成后
+  均未发现相关进程；未终止其他任务。诊断发现首次 sandbox 命令静默是因为 Flutter
+  SDK 位于受限目录，`shared.bat` 无法写入 `cache/flutter.bat.lock`，遂在锁获取循环
+  中等待；未发现其他 Flutter 命令持有者。
+- Windows loopback：在修正上述执行权限后，按要求启动一次 fresh 命令，退出码 0，
+  输出 `00:03 +1: All tests passed!`；构建阶段约 23.4s。无设备断开；完成后无
+  Flutter/Dart/app 残留，canonical loopback UDF 为 `UDF_CHILD_COUNT=0`。Application
+  Event Log 查询在受限 shell 中不可用，因此不宣称 Error 1000 计数。该项仍只证明
+  loopback 自动化，不构成真实校园验收。
 - Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始执行
   `analyze --no-pub → test --no-pub --reporter expanded → build windows --release
-  --no-pub`；首个 analyze 会话静默约六分钟后 Ctrl+C，终端退出 1，test 和 build
-  按规则未运行，也没有重启第二套 Flutter 命令。
-- Python oracle：`conda run -n ustc_assistant python -m unittest discover -s tests -v`
-  实际为 `Ran 140 tests`、2 failures（bridge capabilities 退役字段、CLI 退役命令
-  parser）；`conda run -n ustc_assistant python -m compileall -q src tests` 退出 0。
-  不安装依赖、不改变环境。
+  --no-pub`；analyze 实际运行约 8.0s 后退出 1，输出 18 issues（13 info、5 warning，
+  无 error）。按规则 test 和 build 未运行，未重启第二套 Flutter 命令。
+- Python oracle：使用临时、仅进程级的 `PYTHONPATH` 指向当前 worktree 的绝对
+  `src`，先断言 `ustc_assistant.__file__` 位于该目录；unittest 实际为 `Ran 140
+  tests in 1.666s`、`OK`，compileall 退出 0。不安装依赖、不改变环境。
 - 本机已知限制：若出现 `sqlite3.dll` FFI error 126，记录为宿主环境缺少动态库，
   不复制/下载 DLL、不把失败伪装成基线通过；历史 migration/golden 基线也按 §6
   原因区分。真实校园验收仍未由本机自动化代替。
