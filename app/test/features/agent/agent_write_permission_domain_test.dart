@@ -11,6 +11,8 @@ import 'package:ustc_assistant_app/features/agent/application/agent_permission_p
 import 'package:ustc_assistant_app/features/agent/domain/agent_permission_policy.dart';
 import 'package:ustc_assistant_app/features/agent/domain/agent_write_proposal.dart';
 
+import '../../core/database/pre_v7_fixture.dart';
+
 class _FixedClock implements BeijingClock {
   @override
   DateTime now() => DateTime.fromMillisecondsSinceEpoch(1_700_000_000_000);
@@ -98,6 +100,9 @@ void main() {
         finished_at INTEGER,
         FOREIGN KEY (run_id, account_id) REFERENCES agent_runs(id, account_id) ON DELETE CASCADE
       );
+    ''');
+    createScheduleAndTaskTablesForPreV7Fixture(legacy);
+    legacy.execute('''
       PRAGMA user_version = 3;
     ''');
     legacy.close();
