@@ -329,6 +329,22 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
   已在 Task 9 fix4（`467e090`）补齐，当前 Windows gate 结果见 §8.5。Task 8
   loopback/fake WebView 证据仍不替代 Release gate 或真实校园验收。
 
+### 8.8 真实验收前置修正：无账号入口与全局重置（2026-08-29）
+
+本机 Release 实际验收发现，无 active account 时主聊天页原先只有阻断文案，登录操作
+不可达；同时完全重置依赖 accountId，无法先清除遗留数据再首登。minimal 的单账号语义
+现已明确为：无账号态的聊天页、空账号页和设置页均提供“绑定学校账号”并进入同一个
+`/sync` 首次登录流程，设置页始终保留“完全重置”入口。
+
+完全重置保留既有两次确认，任一取消均为 no-op；确认后通过 canonical service boundary
+全局删除所有 Drift 本地表/分区（包括凭据、source/sync、日程任务、Agent、操作历史和
+撤回槽），再删除应用支持目录 `webview/*` 下的全部账号 UDF。重新登录沿用同一全局
+破坏性流程，在旧 gateway/environment 完全释放后才创建新的首登 loader；不在旧 gateway
+上切换账号，也不并行创建第二个 native environment。
+
+此修正记录的是本机可达性与数据清理契约，不是校园验收结论。学校网络、真实账号和
+真实课程/考试导入仍需按 §8.6 脱敏人工 stage chain 单独确认。
+
 ## 9. 参考
 
 - 全量分支：`E:\107\.worktrees\rewrite\flutter-native`

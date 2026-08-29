@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:ustc_assistant_app/app/app.dart';
 import 'package:ustc_assistant_app/app/router.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
@@ -10,7 +11,9 @@ import 'package:ustc_assistant_app/features/accounts/application/account_service
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
+import 'package:ustc_assistant_app/features/settings/application/settings_service.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
+import 'package:ustc_assistant_app/features/settings/presentation/settings_page.dart';
 
 class FakeWebsiteLauncher implements OfficialWebsiteLauncher {
   final launched = <Uri>[];
@@ -81,6 +84,167 @@ void main() {
     // Without an active account, the chat shows "请先配置学校账号".
     expect(find.text('请先配置学校账号'), findsOneWidget);
   });
+
+  testWidgets('unconfigured chat exposes a reachable first-login action', (
+    tester,
+  ) async {
+    final router = buildRouter(
+      FakeWebsiteLauncher(),
+      database,
+      const NoopReminderReconciler(),
+      null,
+      () async {},
+    );
+    addTearDown(router.dispose);
+    await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('first-login-entry')));
+    expect(router.routeInformationProvider.value.uri.path, '/sync');
+  });
+
+  testWidgets('unconfigured settings expose complete reset without login', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('打开侧边栏'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('设置'));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('complete-reset')), findsOneWidget);
+    expect(find.text('请先配置学校账号'), findsNothing);
+  });
+
+  testWidgets(
+    'unconfigured complete reset keeps data when either confirmation is cancelled',
+    (tester) async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'stale-account',
+              maskedHint: 'PB****0000',
+              isActive: const Value(false),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          websiteLauncher: FakeWebsiteLauncher(),
+          database: database,
+          clearBrowserSession: () async {},
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('打开侧边栏'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消').last);
+      await tester.pumpAndSettle();
+      expect(await database.select(database.localAccounts).get(), hasLength(1));
+
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消').last);
+      await tester.pumpAndSettle();
+      expect(await database.select(database.localAccounts).get(), hasLength(1));
+    },
+  );
+
+  testWidgets(
+    'unconfigured complete reset clears all data and opens first login',
+    (tester) async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'stale-account',
+              maskedHint: 'PB****0000',
+              isActive: const Value(false),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await database
+          .into(database.actionLogs)
+          .insert(
+            ActionLogsCompanion.insert(
+              id: 'stale-log',
+              accountId: const Value('stale-account'),
+              source: 'system',
+              actionType: 'test',
+              result: 'success',
+              safeSummary: 'test',
+              occurredAt: 1,
+            ),
+          );
+
+      var resetCalled = false;
+      final accounts = AccountService(
+        database: database,
+        protector: _NoopProtector(),
+        clearBrowserSession: () async {},
+      );
+      final router = GoRouter(
+        initialLocation: '/settings',
+        routes: [
+          GoRoute(
+            path: '/settings',
+            builder: (context, state) => SettingsPage(
+              service: SettingsService(
+                database: database,
+                accounts: accounts,
+                accountId: null,
+              ),
+              onCompleteReset: () {
+                resetCalled = true;
+                context.go('/sync');
+              },
+            ),
+          ),
+          GoRoute(
+            path: '/sync',
+            builder: (context, state) =>
+                const Scaffold(body: Center(child: Text('fresh first login'))),
+          ),
+        ],
+      );
+      addTearDown(router.dispose);
+      await tester.pumpWidget(MaterialApp.router(routerConfig: router));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(find.text('确认').last);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.actionLogs).get(), isEmpty);
+      expect(resetCalled, isTrue);
+      expect(router.routeInformationProvider.value.uri.path, '/sync');
+      expect(find.text('fresh first login'), findsOneWidget);
+    },
+  );
 
   testWidgets(
     'chat observes active account changes and disposes the old composition',

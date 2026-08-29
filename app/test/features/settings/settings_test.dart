@@ -147,16 +147,18 @@ void main() {
               updatedAt: 1,
             ),
           );
-      await database.into(database.jwDayMoves).insert(
-        JwDayMovesCompanion.insert(
-          id: 'move',
-          accountId: accountId,
-          sourceDate: '2026-08-03',
-          targetDate: '2026-08-04',
-          createdAt: 1,
-          updatedAt: 1,
-        ),
-      );
+      await database
+          .into(database.jwDayMoves)
+          .insert(
+            JwDayMovesCompanion.insert(
+              id: 'move',
+              accountId: accountId,
+              sourceDate: '2026-08-03',
+              targetDate: '2026-08-04',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
       await settings.clearBusinessData(confirmed: false);
       expect(await database.select(database.tasks).get(), hasLength(1));
       expect(await database.select(database.jwDayMoves).get(), hasLength(1));
@@ -262,16 +264,18 @@ void main() {
           ),
         );
     await settings.setPythonPath(r'E:\python.exe');
-    await database.into(database.jwDayMoves).insert(
-      JwDayMovesCompanion.insert(
-        id: 'move',
-        accountId: accountId,
-        sourceDate: '2026-08-03',
-        targetDate: '2026-08-04',
-        createdAt: 1,
-        updatedAt: 1,
-      ),
-    );
+    await database
+        .into(database.jwDayMoves)
+        .insert(
+          JwDayMovesCompanion.insert(
+            id: 'move',
+            accountId: accountId,
+            sourceDate: '2026-08-03',
+            targetDate: '2026-08-04',
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
     await database.replaceUndoSlot(
       commandId: 'undo',
       payload: '{"accountId":"$accountId"}',
@@ -309,6 +313,69 @@ void main() {
     );
     expect(browserClears, 1);
   });
+
+  test(
+    'complete reset without an account clears every local partition',
+    () async {
+      await database
+          .into(database.localAccounts)
+          .insert(
+            LocalAccountsCompanion.insert(
+              id: 'stale-account',
+              maskedHint: 'PB****1111',
+              isActive: const Value(false),
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await (database.update(database.localAccounts)
+            ..where((row) => row.id.equals(accountId)))
+          .write(const LocalAccountsCompanion(isActive: Value(false)));
+      await database
+          .into(database.sourceConfigs)
+          .insert(
+            SourceConfigsCompanion.insert(
+              id: '$accountId:ustc_jw',
+              accountId: accountId,
+              source: 'ustc_jw',
+              updatedAt: 1,
+            ),
+          );
+      await database
+          .into(database.tasks)
+          .insert(
+            TasksCompanion.insert(
+              id: 'stale-task',
+              accountId: accountId,
+              title: 'stale',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+
+      final unconfigured = SettingsService(
+        database: database,
+        accounts: accounts,
+        accountId: null,
+        now: () => 500,
+      );
+      await unconfigured.completeReset(
+        firstConfirmation: true,
+        secondConfirmation: true,
+      );
+
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await database.select(database.sourceConfigs).get(), isEmpty);
+      expect(await database.select(database.tasks).get(), isEmpty);
+      expect(await database.select(database.actionLogs).get(), isEmpty);
+      expect(await database.select(database.undoSlot).get(), isEmpty);
+      expect(browserClears, 1);
+    },
+  );
 
   test('browser cleanup failure does not restore a deleted account', () async {
     final failingAccounts = AccountService(
@@ -374,7 +441,9 @@ void main() {
             id: '$accountId:ustc_jw',
             accountId: accountId,
             source: 'ustc_jw',
-            configJson: const Value('{"semesterId":1,"semesterKey":"x","displayName":"x"}'),
+            configJson: const Value(
+              '{"semesterId":1,"semesterKey":"x","displayName":"x"}',
+            ),
             updatedAt: 1,
           ),
         );

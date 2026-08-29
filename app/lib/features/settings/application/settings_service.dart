@@ -33,14 +33,29 @@ class SettingsService {
 
   final AppDatabase database;
   final AccountService accounts;
-  final String accountId;
+
+  /// The account partition for account-scoped settings. It is nullable for
+  /// the unconfigured state so the canonical complete reset can be reached
+  /// before the first login.
+  final String? accountId;
   final Future<void> Function() clearExternalCache;
   final int Function() now;
 
-  Future<bool> sourceEnabled(String source) async =>
-      (await _source(source))?.enabled ?? true;
+  bool get hasAccount => accountId != null;
+
+  String get _requiredAccountId {
+    final id = accountId;
+    if (id == null) throw StateError('active account required');
+    return id;
+  }
+
+  Future<bool> sourceEnabled(String source) async {
+    if (!hasAccount) return true;
+    return (await _source(source))?.enabled ?? true;
+  }
 
   Future<void> setSourceEnabled(String source, bool enabled) async {
+    final accountId = _requiredAccountId;
     final existing = await _source(source);
     await database
         .into(database.sourceConfigs)
@@ -64,8 +79,10 @@ class SettingsService {
     path?.trim().isEmpty == true ? null : path?.trim(),
   );
 
-  Future<String?> pythonPath() async =>
-      (await _appSettings())['pythonPath'] as String?;
+  Future<String?> pythonPath() async {
+    if (!hasAccount) return null;
+    return (await _appSettings())['pythonPath'] as String?;
+  }
 
   Future<void> setReminderTypeEnabled(String type, bool enabled) async {
     final settings = await _appSettings();
@@ -107,7 +124,7 @@ class SettingsService {
 
   Future<void> clearCredentials({required bool confirmed}) async {
     if (!confirmed) return;
-    await accounts.deleteCredentials(accountId);
+    await accounts.deleteCredentials(_requiredAccountId);
   }
 
   Future<void> clearBrowserSession({required bool confirmed}) async {
@@ -117,6 +134,7 @@ class SettingsService {
 
   Future<void> clearBusinessData({required bool confirmed}) async {
     if (!confirmed) return;
+    final accountId = _requiredAccountId;
     await database.transaction(() async {
       await (database.delete(
         database.reminders,
@@ -172,24 +190,57 @@ class SettingsService {
     required bool secondConfirmation,
   }) async {
     if (!firstConfirmation || !secondConfirmation) return;
-    await database.transaction(() async {
-      await (database.delete(
-        database.actionLogs,
-      )..where((row) => row.accountId.equals(accountId))).go();
-      await database.delete(database.undoSlot).go();
-      await (database.delete(
-        database.localAccounts,
-      )..where((row) => row.id.equals(accountId))).go();
-    });
+    // Minimal is deliberately a single-account product. A complete reset is
+    // therefore global: stale/inactive partitions must not survive a re-login
+    // or an unconfigured-state reset. Delete children explicitly so the
+    // invariant also holds for any rows left by an older schema/migration,
+    // rather than relying only on SQLite cascading foreign keys.
+    await database.transaction(_clearAllLocalData);
     database.notifyActiveAccountChanged();
     try {
-      await accounts.clearDedicatedBrowserSession();
+      await accounts.clearDedicatedBrowserSession(recordLog: false);
     } catch (error) {
       throw BrowserSessionClearAfterResetError(error);
     }
   }
 
+  Future<void> _clearAllLocalData() async {
+    // Referenced rows must be removed before their parent rows. The explicit
+    // order keeps this operation valid even when foreign-key enforcement is
+    // enabled and also cleans stale rows that no longer have an account row.
+    await database.delete(database.reminders).go();
+    await database.delete(database.taskEventLinks).go();
+    await database.delete(database.scheduleRelations).go();
+    await database.delete(database.userOverlays).go();
+    await database.delete(database.calendarEventOccurrenceExceptions).go();
+    await database.delete(database.calendarEvents).go();
+    await database.delete(database.planBlocks).go();
+    await database.delete(database.tasks).go();
+    await database.delete(database.courseSeries).go();
+    await database.delete(database.calendarEventSeries).go();
+    await database.delete(database.scheduleRelationRules).go();
+    await database.delete(database.jwDayMoves).go();
+
+    await database.delete(database.chatMessages).go();
+    await database.delete(database.toolInvocations).go();
+    await database.delete(database.conversationSummaries).go();
+    await database.delete(database.agentRuns).go();
+    await database.delete(database.agentSecrets).go();
+    await database.delete(database.agentSettings).go();
+    await database.delete(database.agentPermissionPolicies).go();
+
+    await database.delete(database.sourceRecords).go();
+    await database.delete(database.syncRuns).go();
+    await database.delete(database.importBatches).go();
+    await database.delete(database.sourceConfigs).go();
+    await database.delete(database.actionLogs).go();
+    await database.delete(database.credentialAccounts).go();
+    await database.delete(database.localAccounts).go();
+    await database.delete(database.undoSlot).go();
+  }
+
   Future<void> _writeJwConfig(Map<String, Object> config) async {
+    final accountId = _requiredAccountId;
     final existing = await _source('ustc_jw');
     await database
         .into(database.sourceConfigs)
@@ -212,6 +263,7 @@ class SettingsService {
   }
 
   Future<void> _updateAppSettings(String key, Object? value) async {
+    final accountId = _requiredAccountId;
     final settings = await _appSettings();
     value == null ? settings.remove(key) : settings[key] = value;
     final existing = await _source('app_settings');
@@ -239,7 +291,8 @@ class SettingsService {
   Future<SourceConfig?> _source(String source) =>
       (database.select(database.sourceConfigs)..where(
             (row) =>
-                row.accountId.equals(accountId) & row.source.equals(source),
+                row.accountId.equals(_requiredAccountId) &
+                row.source.equals(source),
           ))
           .getSingleOrNull();
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -39,6 +40,31 @@ NativeJwGateway _createNativeJwGateway() {
   );
 }
 
+/// Removes every native JW WebView2 user-data partition owned by this app.
+///
+/// The browser profiles are account-partitioned below the application-support
+/// `webview` directory. Complete reset is the one operation allowed to clear
+/// all of them, and it runs only after any active gateway has been shut down.
+/// Refuse a reparse/symlink root so a corrupted path cannot redirect deletion
+/// outside the app-support directory.
+Future<void> clearNativeJwBrowserSessions() async {
+  final support = await getApplicationSupportDirectory();
+  final root = Directory(p.join(support.path, 'webview'));
+  final rootType = await FileSystemEntity.type(root.path, followLinks: false);
+  if (rootType == FileSystemEntityType.notFound) return;
+  if (rootType != FileSystemEntityType.directory) {
+    throw StateError('native browser session root is not a directory');
+  }
+  await for (final entry in root.list(followLinks: false)) {
+    final type = await FileSystemEntity.type(entry.path, followLinks: false);
+    if (type == FileSystemEntityType.directory) {
+      await Directory(entry.path).delete(recursive: true);
+    } else {
+      await entry.delete();
+    }
+  }
+}
+
 Future<void> runStartupAutomaticSync(
   AppDatabase database, {
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
@@ -58,6 +84,7 @@ Future<void> runStartupAutomaticSync(
     final accounts = AccountService(
       database: database,
       protector: defaultCredentialProtector(),
+      clearBrowserSession: clearNativeJwBrowserSessions,
     );
     final account = await accounts.activeAccount();
     if (account == null) return;
@@ -121,6 +148,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onReauthenticated,
     this.onReauthenticationRequired,
     this.onExit,
+    this.clearBrowserSession,
     this.nativeGateway,
     this.nativeGatewayFactory,
     this.createNativeGateway = true,
@@ -134,6 +162,7 @@ class SyncPageLoader extends StatefulWidget {
   final VoidCallback? onReauthenticated;
   final ValueChanged<String>? onReauthenticationRequired;
   final VoidCallback? onExit;
+  final Future<void> Function()? clearBrowserSession;
 
   /// Optional gateway seam for tests and hosts that already own the native
   /// gateway. The loader still owns the supplied gateway for its lifetime.
@@ -292,6 +321,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     final accounts = AccountService(
       database: widget.database,
       protector: defaultCredentialProtector(),
+      clearBrowserSession: widget.clearBrowserSession,
     );
     final importer = ImportService(
       database: widget.database,

@@ -6,12 +6,14 @@ class AccountsPage extends StatefulWidget {
   const AccountsPage({
     required this.service,
     this.onLoginAgain,
+    this.onFirstLogin,
     this.onOpenOfficialPage,
     super.key,
   });
 
   final AccountService service;
   final ValueChanged<String>? onLoginAgain;
+  final VoidCallback? onFirstLogin;
   final VoidCallback? onOpenOfficialPage;
 
   @override
@@ -45,7 +47,23 @@ class _AccountsPageState extends State<AccountsPage> {
           }
           final accounts = snapshot.data ?? const [];
           if (accounts.isEmpty) {
-            return const Center(child: Text('尚未绑定学校账号'));
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('尚未绑定学校账号'),
+                  if (widget.onFirstLogin != null) ...[
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      key: const Key('first-login-entry'),
+                      onPressed: widget.onFirstLogin,
+                      icon: const Icon(Icons.login),
+                      label: const Text('绑定学校账号'),
+                    ),
+                  ],
+                ],
+              ),
+            );
           }
           return ListView.separated(
             padding: const EdgeInsets.all(16),

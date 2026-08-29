@@ -20,11 +20,13 @@ class UstcAssistantApp extends StatefulWidget {
   const UstcAssistantApp({
     this.websiteLauncher = const UrlLauncherOfficialWebsiteLauncher(),
     this.database,
+    this.clearBrowserSession,
     super.key,
   });
 
   final OfficialWebsiteLauncher websiteLauncher;
   final AppDatabase? database;
+  final Future<void> Function()? clearBrowserSession;
 
   @override
   State<UstcAssistantApp> createState() => _UstcAssistantAppState();
@@ -46,7 +48,15 @@ class _UstcAssistantAppState extends State<UstcAssistantApp> {
       reminderService: ReminderService(database: database),
       notifications: ForegroundNotificationAdapter(),
     );
-    router = buildRouter(widget.websiteLauncher, database, reminderReconciler);
+    final clearBrowser =
+        widget.clearBrowserSession ?? clearNativeJwBrowserSessions;
+    router = buildRouter(
+      widget.websiteLauncher,
+      database,
+      reminderReconciler,
+      null,
+      clearBrowser,
+    );
     if (ownsDatabase) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_startBackgroundWork());

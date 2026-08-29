@@ -21,6 +21,27 @@ class Protector implements CredentialProtector {
 }
 
 void main() {
+  testWidgets('empty account page exposes first-login action', (tester) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final service = AccountService(database: database, protector: Protector());
+    var firstLoginPressed = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AccountsPage(
+          service: service,
+          onFirstLogin: () => firstLoginPressed = true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('尚未绑定学校账号'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('first-login-entry')));
+    expect(firstLoginPressed, isTrue);
+  });
+
   testWidgets('credential and browser clearing use separate confirmations', (
     tester,
   ) async {

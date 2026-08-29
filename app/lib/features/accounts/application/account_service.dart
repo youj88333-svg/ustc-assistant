@@ -399,13 +399,15 @@ class AccountService {
     });
   }
 
-  Future<void> clearDedicatedBrowserSession() async {
+  Future<void> clearDedicatedBrowserSession({bool recordLog = true}) async {
     await clearBrowserSession();
-    await _log(
-      'browser_session_cleared',
-      'Cleared the dedicated browser session.',
-      now(),
-    );
+    if (recordLog) {
+      await _log(
+        'browser_session_cleared',
+        'Cleared the dedicated browser session.',
+        now(),
+      );
+    }
   }
 
   Future<List<CalendarEvent>> eventsFor(String accountId) => (database.select(

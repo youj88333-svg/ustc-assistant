@@ -46,8 +46,12 @@ GoRouter buildRouter(
   AppDatabase database, [
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
   AgentCompositionLoader? agentCompositionLoader,
+  Future<void> Function()? clearBrowserSession,
 ]) {
   final loadAgentComposition = agentCompositionLoader ?? _buildAgentComposition;
+  // The app shell injects the physical cleanup callback. Keep direct router
+  // construction side-effect free for widget tests and embedded hosts.
+  final clearBrowser = clearBrowserSession ?? _noopBrowserSession;
   return GoRouter(
     initialLocation: '/chat',
     routes: [
@@ -144,7 +148,9 @@ GoRouter buildRouter(
           service: AccountService(
             database: database,
             protector: defaultCredentialProtector(),
+            clearBrowserSession: clearBrowser,
           ),
+          onFirstLogin: () => context.go('/sync'),
           onLoginAgain: (accountId) =>
               context.push('/accounts/$accountId/reauthenticate'),
           onOpenOfficialPage: () => context.go('/official-websites'),
@@ -157,6 +163,7 @@ GoRouter buildRouter(
           reminderReconciler: reminderReconciler,
           reauthenticateAccountId: state.pathParameters['accountId']!,
           createNativeGateway: false,
+          clearBrowserSession: clearBrowser,
           onReauthenticated: () => context.go('/sync'),
         ),
       ),
@@ -165,6 +172,7 @@ GoRouter buildRouter(
         builder: (context, state) => SyncPageLoader(
           database: database,
           reminderReconciler: reminderReconciler,
+          clearBrowserSession: clearBrowser,
           onExit: () {
             if (context.canPop()) {
               context.pop();
@@ -182,7 +190,10 @@ GoRouter buildRouter(
       ),
       GoRoute(
         path: '/settings',
-        builder: (context, state) => _SettingsLoader(database: database),
+        builder: (context, state) => _SettingsLoader(
+          database: database,
+          clearBrowserSession: clearBrowser,
+        ),
       ),
       GoRoute(
         path: '/settings/agent',
@@ -196,6 +207,8 @@ GoRouter buildRouter(
     ],
   );
 }
+
+Future<void> _noopBrowserSession() async {}
 
 class _MainShell extends StatelessWidget {
   const _MainShell({required this.navigationShell});
@@ -435,9 +448,13 @@ class _PersonalEventManagementLoader extends StatelessWidget {
 }
 
 class _SettingsLoader extends StatelessWidget {
-  const _SettingsLoader({required this.database});
+  const _SettingsLoader({
+    required this.database,
+    required this.clearBrowserSession,
+  });
 
   final AppDatabase database;
+  final Future<void> Function() clearBrowserSession;
 
   @override
   Widget build(BuildContext context) {
@@ -450,19 +467,18 @@ class _SettingsLoader extends StatelessWidget {
           );
         }
         final account = snapshot.data;
-        if (account == null) {
-          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
-        }
         final accounts = AccountService(
           database: database,
           protector: defaultCredentialProtector(),
+          clearBrowserSession: clearBrowserSession,
         );
         return SettingsPage(
           service: SettingsService(
             database: database,
             accounts: accounts,
-            accountId: account.id,
+            accountId: account?.id,
           ),
+          onFirstLogin: account == null ? () => context.go('/sync') : null,
           onCompleteReset: () => context.go('/sync'),
         );
       },
@@ -570,7 +586,23 @@ class _AgentChatLoaderState extends State<_AgentChatLoader> {
         }
         final account = snapshot.data;
         if (account == null) {
-          return const Scaffold(body: Center(child: Text('请先配置学校账号')));
+          return Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('请先配置学校账号'),
+                  const SizedBox(height: 16),
+                  FilledButton.icon(
+                    key: const Key('first-login-entry'),
+                    onPressed: () => context.go('/sync'),
+                    icon: const Icon(Icons.login),
+                    label: const Text('绑定学校账号'),
+                  ),
+                ],
+              ),
+            ),
+          );
         }
 
         return _AgentChatCompositionBuilder(

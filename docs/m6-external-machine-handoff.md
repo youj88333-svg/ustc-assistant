@@ -583,6 +583,24 @@ login entry → CAS → identity verified → course context → get-data
 Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与该人工 chain 分开
 报告，并在 owner 明确确认前保持“真实校园验收未完成”。
 
+#### 8.8 真实验收前置修正：无账号入口与全局重置（2026-08-29）
+
+真实验收时发现一个会阻断首登的可达性问题：没有 active account 时，主聊天页和设置
+页此前只显示“请先配置学校账号”，没有可点击的登录入口；完全重置又被放在需要账号
+分区的设置初始化之后，因而无法清理遗留数据后重新开始。minimal 是单账号产品，现已
+将无账号态统一改为可达状态：聊天页、空账号页和设置页都提供“绑定学校账号”，进入
+同一个 `/sync` 首次登录流程；设置页在无账号态仍显示“完全重置”。
+
+完全重置继续使用原有两次确认，任意一次取消都不改数据。确认后经同一个 canonical
+reset service boundary 全局清除所有本地 Drift 分区（账号、凭据、SourceBundle/同步、
+日程、任务、提醒、Agent、操作历史和撤回槽），再清除应用支持目录下所有账号分区的
+WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍按“旧 gateway/environment
+完全 shutdown → canonical 全局重置 → 创建新的首次登录 loader”执行，不在旧 gateway
+上切换账号，也不创建并行 native gateway。
+
+该修正只恢复本机 Release 应用的入口和清理语义；focused/widget/构建自动化不访问学校
+主机，不能替代 §8.4 的真实校园账号验收。真实校园 stage chain 仍保持未完成。
+
 #### Task 9 自动化验证记录（2026-08-29）
 
 - 进程预检：最终 gate 启动时执行 `Get-Process flutter,dart,ustc_assistant_app`，
