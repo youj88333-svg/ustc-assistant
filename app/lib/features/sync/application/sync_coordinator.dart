@@ -17,6 +17,8 @@ typedef BundleImport =
 
 typedef SyncActionResolver = Future<bool> Function(SyncNeedsUserAction action);
 
+enum _PollProtocolErrorBehavior { mapToSyncFailure, rethrowToCaller }
+
 class _PausedSync {
   const _PausedSync({
     required this.source,
@@ -25,6 +27,7 @@ class _PausedSync {
     required this.jobId,
     required this.sequence,
     required this.bridge,
+    required this.pollProtocolErrorBehavior,
     this.provisional,
     this.verifiedUsername,
   });
@@ -35,6 +38,7 @@ class _PausedSync {
   final String jobId;
   final int sequence;
   final BridgeGateway bridge;
+  final _PollProtocolErrorBehavior pollProtocolErrorBehavior;
   final ProvisionalAccount? provisional;
   final String? verifiedUsername;
 }
@@ -191,6 +195,7 @@ class SyncCoordinator {
         runId: runId,
         jobId: job.id,
         sequence: 0,
+        pollProtocolErrorBehavior: _PollProtocolErrorBehavior.rethrowToCaller,
         provisional: provisional,
         verifiedUsername: username.trim(),
       );
@@ -275,16 +280,30 @@ class SyncCoordinator {
         ? await accounts.passwordForInteractiveLogin(paused.accountId)
         : accounts.stagedPasswordForInteractiveLogin(paused.provisional!);
     await paused.bridge.resumeLogin(jobId, password: password);
-    return _consume(
-      bridge: paused.bridge,
-      source: paused.source,
-      accountId: paused.accountId,
-      runId: paused.runId,
-      jobId: paused.jobId,
-      sequence: paused.sequence,
-      provisional: paused.provisional,
-      verifiedUsername: paused.verifiedUsername,
-    );
+    try {
+      return await _consume(
+        bridge: paused.bridge,
+        source: paused.source,
+        accountId: paused.accountId,
+        runId: paused.runId,
+        jobId: paused.jobId,
+        sequence: paused.sequence,
+        pollProtocolErrorBehavior: paused.pollProtocolErrorBehavior,
+        provisional: paused.provisional,
+        verifiedUsername: paused.verifiedUsername,
+      );
+    } on BridgeProtocolError {
+      // A resumed first-login flow has no enclosing firstLoginSync call left
+      // to provide its stable outer mapping.
+      if (paused.pollProtocolErrorBehavior ==
+          _PollProtocolErrorBehavior.rethrowToCaller) {
+        if (paused.provisional != null) {
+          accounts.cancelFirstLogin(paused.provisional!);
+        }
+        return SyncFailed(paused.source, code: 'first_login_failed');
+      }
+      rethrow;
+    }
   }
 
   Future<SyncOutcome> _consume({
@@ -294,6 +313,8 @@ class SyncCoordinator {
     required String runId,
     required String jobId,
     required int sequence,
+    _PollProtocolErrorBehavior pollProtocolErrorBehavior =
+        _PollProtocolErrorBehavior.mapToSyncFailure,
     ProvisionalAccount? provisional,
     String? verifiedUsername,
   }) async {
@@ -303,6 +324,10 @@ class SyncCoordinator {
       try {
         poll = await bridge.poll(jobId, cursor);
       } on BridgeProtocolError catch (error) {
+        if (pollProtocolErrorBehavior ==
+            _PollProtocolErrorBehavior.rethrowToCaller) {
+          rethrow;
+        }
         // A concurrent shutdown/cancel can invalidate the job between
         // iterations; that is a failed run, never an unhandled exception.
         if (provisional != null) accounts.cancelFirstLogin(provisional);
@@ -325,6 +350,7 @@ class SyncCoordinator {
           jobId: jobId,
           sequence: cursor,
           bridge: bridge,
+          pollProtocolErrorBehavior: pollProtocolErrorBehavior,
           provisional: provisional,
           verifiedUsername: verifiedUsername,
         );

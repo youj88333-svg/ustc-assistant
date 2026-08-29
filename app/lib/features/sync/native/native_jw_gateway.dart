@@ -63,6 +63,8 @@ const BridgeSemesterCapability kDefaultJwSemester = BridgeSemesterCapability(
 /// 一源一通道, never both at once).
 const bool kUsePythonBridgeFallback = false;
 
+typedef JwCollectorFactory = JwCollector Function(String jobId);
+
 /// Implements the Bridge gateway surface over the native WebView2 collector.
 class NativeJwGateway implements BridgeGateway {
   NativeJwGateway({
@@ -70,6 +72,7 @@ class NativeJwGateway implements BridgeGateway {
     BridgeSemesterCapability semester = kDefaultJwSemester,
     Future<String?> Function(String accountId)? userDataPathForAccount,
     ProductionJwControllerFactory? productionControllerFactory,
+    JwCollectorFactory? collectorFactory,
     // Keep the pre-Task-2 seam source-compatible while callers migrate to
     // the account-bound resolver. It is only consulted when the new resolver
     // is absent.
@@ -80,6 +83,7 @@ class NativeJwGateway implements BridgeGateway {
        _semester = semester,
        _userDataPathForAccount = userDataPathForAccount,
        _productionControllerFactory = productionControllerFactory,
+       _collectorFactory = collectorFactory,
        _legacyUserDataPath = userDataPath,
        _controllerCreationTimeout = controllerCreationTimeout,
        _externalDiagnostic = safeDiagnostic;
@@ -88,6 +92,7 @@ class NativeJwGateway implements BridgeGateway {
   final BridgeSemesterCapability _semester;
   final Future<String?> Function(String accountId)? _userDataPathForAccount;
   final ProductionJwControllerFactory? _productionControllerFactory;
+  final JwCollectorFactory? _collectorFactory;
   final Future<String> Function()? _legacyUserDataPath;
   final Duration _controllerCreationTimeout;
 
@@ -280,11 +285,13 @@ class NativeJwGateway implements BridgeGateway {
     final jobId = 'native:${DateTime.now().microsecondsSinceEpoch}';
     final adapter = _makeAdapter();
 
-    final collector = JwCollector(
-      pageFactory: () => adapter,
-      producer: defaultDartProducer,
-      jobId: jobId,
-    );
+    final collector =
+        _collectorFactory?.call(jobId) ??
+        JwCollector(
+          pageFactory: () => adapter,
+          producer: defaultDartProducer,
+          jobId: jobId,
+        );
     _collectors[jobId] = collector;
     final buffer = <Map<String, dynamic>>[];
     _eventBuffers[jobId] = buffer;

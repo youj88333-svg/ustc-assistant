@@ -92,6 +92,17 @@ class AwaitingEventBridge extends FakeBridge {
   }
 }
 
+class PollProtocolErrorBridge extends FakeBridge {
+  PollProtocolErrorBridge(this.code);
+
+  final String code;
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    throw BridgeProtocolError(code);
+  }
+}
+
 BridgeJobPoll successPoll() => const BridgeJobPoll(
   events: [
     {'sequence': 1, 'phase': 'complete'},
@@ -206,6 +217,76 @@ void main() {
     bridge.terminalPoll.complete(successPoll());
     expect(await syncing, isA<SyncSucceeded>());
   });
+
+  test(
+    'normal poll protocol errors retain their stable bridge mapping',
+    () async {
+      final protector = CountingProtector();
+      final (database, accounts, accountId) = await fixture(
+        protector: protector,
+      );
+      addTearDown(database.close);
+      final bridge = PollProtocolErrorBridge('request_failed');
+      final service = coordinator(
+        database: database,
+        accounts: accounts,
+        bridge: bridge,
+        now: () => 100,
+      );
+
+      final outcome = await service.sync(
+        SyncSource.jw,
+        trigger: SyncTrigger.manual,
+        accountId: accountId,
+      );
+
+      expect(
+        outcome,
+        isA<SyncFailed>().having(
+          (value) => value.code,
+          'code',
+          'request_failed',
+        ),
+      );
+    },
+  );
+
+  test(
+    'first-login poll protocol errors use first_login_failed mapping',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final bridge = PollProtocolErrorBridge('query_job_not_found');
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        now: () => 100,
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            throw StateError('must not import'),
+      );
+
+      final outcome = await service.firstLoginSync(
+        SyncSource.jw,
+        username: 'PB00000000',
+        password: 'saved-password',
+      );
+
+      expect(
+        outcome,
+        isA<SyncFailed>().having(
+          (value) => value.code,
+          'code',
+          'first_login_failed',
+        ),
+      );
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+    },
+  );
 
   test('manual sync bypasses automatic backoff', () async {
     var clock = DateTime(2026, 7, 27, 9).millisecondsSinceEpoch;

@@ -16,8 +16,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_collector.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_web_session.dart';
 import 'package:ustc_assistant_app/features/sync/native/native_jw_gateway.dart';
+import 'package:ustc_assistant_app/features/sync/native/source_collection_gateway.dart';
 
 const _homeUrl = 'https://jw.ustc.edu.cn/home';
 const _fixturesRoot = 'test/fixtures/jw';
@@ -110,6 +112,8 @@ void main() {
         controller.releaseBlockedNavigation();
         final poll = await pending;
         expect(poll.events, isNotEmpty);
+        expect(poll.events.first['phase'], 'collecting');
+        expect((poll.events.first['sequence'] as int), greaterThanOrEqualTo(1));
         await gateway.shutdown();
       },
     );
@@ -210,6 +214,50 @@ void main() {
       expect(poll.errorCode, 'cancelled');
       await gateway.shutdown();
     });
+
+    test(
+      'late complete after cancellation cannot replace the cancelled terminal',
+      () async {
+        LateEventCollector? collector;
+        final gateway = NativeJwGateway(
+          controllerFactory: () async => FakeJwWebviewController(),
+          collectorFactory: (jobId) => collector = LateEventCollector(jobId),
+        );
+
+        final job = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'acct_1',
+          expectedUsername: 'ustc.student',
+          jwSemester: kDefaultJwSemester,
+        );
+
+        await gateway.cancel(job.id);
+        final fakeCollector = collector!;
+        final cancelled = await gateway.poll(job.id, 0);
+        expect(cancelled.terminal, isTrue);
+        expect(cancelled.lastPhase, 'cancelled');
+        expect(cancelled.errorCode, 'cancelled');
+        expect(cancelled.result, isNull);
+        final eventCount = cancelled.events.length;
+
+        // This simulates a page operation that settled after cancellation
+        // had already reached the gateway's terminal generation.
+        fakeCollector.emitLateComplete();
+        final afterLateEvent = await gateway.poll(job.id, 0);
+        expect(afterLateEvent.terminal, isTrue);
+        expect(afterLateEvent.lastPhase, 'cancelled');
+        expect(afterLateEvent.errorCode, 'cancelled');
+        expect(afterLateEvent.result, isNull);
+        expect(afterLateEvent.events, hasLength(eventCount));
+        expect(
+          afterLateEvent.events.where((event) => event['phase'] == 'complete'),
+          isEmpty,
+        );
+
+        await gateway.shutdown();
+        await fakeCollector.close();
+      },
+    );
 
     test('unknown jobId makes poll/resume fail closed', () async {
       final gateway = NativeJwGateway(
@@ -457,6 +505,41 @@ Future<BridgeJobPoll> _pollForPhase(
     await Future<void>.delayed(const Duration(milliseconds: 5));
   }
   fail('job never reached phase "$phase"');
+}
+
+class LateEventCollector extends JwCollector {
+  LateEventCollector(this.jobId)
+    : super(pageFactory: () => throw StateError('unused'));
+
+  final String jobId;
+  final _events = StreamController<SourceCollectionEvent>(sync: true);
+
+  @override
+  Stream<SourceCollectionEvent> startJwCollection({
+    required String accountId,
+    String? expectedUsername,
+    required JwSemesterConfig semester,
+  }) => _events.stream;
+
+  @override
+  Future<void> cancel(String id) async {
+    _events.add(CollectionCancelled(jobId: jobId, sequence: 0));
+  }
+
+  @override
+  Future<void> resumeLogin(String id, {String? password}) async {}
+
+  void emitLateComplete() {
+    _events.add(
+      CollectionComplete(
+        jobId: jobId,
+        sequence: 1,
+        bundle: const <String, dynamic>{'schemaVersion': '1.0'},
+      ),
+    );
+  }
+
+  Future<void> close() => _events.close();
 }
 
 /// A scripted fake [JwWebviewController] (reuses the adapter test fake pattern).
