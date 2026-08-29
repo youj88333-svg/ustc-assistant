@@ -152,6 +152,9 @@ TEST(NavigationPolicy, DebugLoopbackRequiresExactIpv4PortAndExplicitFlag) {
   EXPECT_FALSE(enabled.Allows(L"http://localhost:43123/fixture"));
   EXPECT_FALSE(enabled.Allows(L"http://127.0.0.1:43124/fixture"));
   EXPECT_FALSE(enabled.Allows(L"http://127.0.0.1:43123/fixture-evil"));
+  EXPECT_FALSE(enabled.UpgradeInsecureToAllowedHttps(
+                           L"http://127.0.0.1:43123/fixture")
+                   .has_value());
 }
 
 TEST(NavigationPolicy, ReleaseAlwaysRejectsInsecureLoopback) {

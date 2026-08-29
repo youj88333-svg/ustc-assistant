@@ -149,7 +149,7 @@ NavigationPolicy::UpgradeInsecureToAllowedHttps(
     return std::nullopt;
   }
   auto upgraded = std::wstring(L"https://") + url.substr(kHttpPrefixLength);
-  return Allows(upgraded)
+  return Allows(upgraded) && Production().Allows(upgraded)
              ? std::optional<std::wstring>(std::move(upgraded))
              : std::nullopt;
 }
