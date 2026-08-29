@@ -46,6 +46,47 @@ typedef ProductionJwControllerFactory =
       required void Function(String) safeDiagnostic,
     });
 
+// Keep the Dart-side bounds in lockstep with the registered WebView scripts.
+// The script checks protect the page boundary; these checks protect the
+// extraction/message boundary if a page or controller returns an unexpected
+// payload after the script has completed.
+const int _courseGetDataMaxResponseBytes = 8 * 1024 * 1024;
+const int _courseDatumMaxResponseBytes = 16 * 1024 * 1024;
+const int _examTableMaxResponseBytes = 4 * 1024 * 1024;
+const int _maxCourseLessonIds = 20000;
+
+int _utf8ByteLength(String text) => utf8.encode(text).length;
+
+void _requireResponseSize(
+  String text, {
+  required int maxBytes,
+  required String endpoint,
+}) {
+  if (_utf8ByteLength(text) > maxBytes) {
+    throw JwCollectionException('$endpoint response is too large');
+  }
+}
+
+Map<String, dynamic> _parseCourseDatumResponse(String text) {
+  final datum = parseJsonObject(text, endpoint: 'course datum');
+  final result = datum['result'];
+  if (result is! Map<String, dynamic>) {
+    throw const JwCollectionException(
+      'course datum is missing a complete result',
+    );
+  }
+  for (final name in const <String>[
+    'lessonList',
+    'scheduleGroupList',
+    'scheduleList',
+  ]) {
+    if (result[name] is! List) {
+      throw JwCollectionException("course datum result requires list '$name'");
+    }
+  }
+  return datum;
+}
+
 /// Production seam over the plugin's `WebviewController`. Configures the
 /// native navigation policy (allowlist + deny downloads/windows/permissions)
 /// and owns the URL snapshot subscription.
@@ -518,12 +559,25 @@ class JwWebViewAdapter implements JwWebPage {
     if (getDataText is! String) {
       throw const JwCollectionException('course get-data returned no text');
     }
+    _requireResponseSize(
+      getDataText,
+      maxBytes: _courseGetDataMaxResponseBytes,
+      endpoint: 'course get-data',
+    );
     final getData = parseJsonObject(getDataText, endpoint: 'course get-data');
     final lessonIds = getData['lessonIds'];
-    if (lessonIds is! List || lessonIds.isEmpty) {
+    if (lessonIds is! List) {
       throw const JwCollectionException(
         'course get-data response is missing lessonIds',
       );
+    }
+    final ids = lessonIds.whereType<int>().toList(growable: false);
+    if (ids.isEmpty ||
+        ids.length != lessonIds.length ||
+        ids.length > _maxCourseLessonIds ||
+        ids.any((id) => id < 1) ||
+        ids.toSet().length != ids.length) {
+      throw const JwCollectionException('invalid lessonIds');
     }
     _diag('get_data_fetched');
 
@@ -532,7 +586,7 @@ class JwWebViewAdapter implements JwWebPage {
     final datumResult = await executeRegisteredScript(
       controller,
       scriptId: 'jw.course.fetchDatum',
-      args: <String, Object?>{'lessonIds': lessonIds},
+      args: <String, Object?>{'lessonIds': ids},
       timeout: _responseTimeout,
       safeDiagnostic: _safeDiagnostic,
     );
@@ -540,8 +594,13 @@ class JwWebViewAdapter implements JwWebPage {
     if (datumText is! String || datumText.isEmpty) {
       throw const JwCollectionException('course datum returned no data');
     }
+    _requireResponseSize(
+      datumText,
+      maxBytes: _courseDatumMaxResponseBytes,
+      endpoint: 'course datum',
+    );
     _diag('datum_fetched');
-    return parseJsonObject(datumText, endpoint: 'course datum');
+    return _parseCourseDatumResponse(datumText);
   }
 
   @override
@@ -565,6 +624,11 @@ class JwWebViewAdapter implements JwWebPage {
         'exam page did not contain table#exams',
       );
     }
+    _requireResponseSize(
+      html,
+      maxBytes: _examTableMaxResponseBytes,
+      endpoint: 'exam table',
+    );
     return html;
   }
 

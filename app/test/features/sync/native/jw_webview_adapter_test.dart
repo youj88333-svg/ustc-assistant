@@ -535,7 +535,9 @@ void main() {
         () async {
           controller
             ..setCurrent(_courseTableUrl)
-            ..datumText = '{"result":{"lesson":[{"name":"x"}]}}';
+            ..datumText =
+                '{"result":{"lesson":[{"name":"x"}],'
+                '"lessonList":[],"scheduleGroupList":[],"scheduleList":[]}}';
           final datum = await adapter.fetchCourseDatum(
             semesterId: 461,
             dataId: 'data-ctx-1',
@@ -545,15 +547,61 @@ void main() {
             (datum['result'] as Map<String, dynamic>)['lesson'],
             isNotEmpty,
           );
-          expect(controller.lastGetDataSemester, 461);
+          expect(controller.lastGetDataArgs, <String, Object?>{
+            'semesterId': 461,
+            'dataId': 'data-ctx-1',
+          });
           expect(controller.lastDatumLessonIds, <Object?>[101, 102]);
         },
       );
+
+      test('invalid lessonIds fail before the datum script runs', () async {
+        final invalidLessonIds = <List<Object?>>[
+          <Object?>[],
+          <Object?>[0],
+          <Object?>[1, 1],
+          <Object?>['1'],
+          List<Object?>.generate(20001, (index) => index + 1),
+        ];
+
+        for (final lessonIds in invalidLessonIds) {
+          controller
+            ..getDataText = jsonEncode(<String, Object?>{
+              'lessonIds': lessonIds,
+            })
+            ..datumScriptRuns = 0
+            ..lastDatumLessonIds = null;
+
+          await expectLater(
+            adapter.fetchCourseDatum(
+              semesterId: 461,
+              dataId: 'data-ctx-1',
+              referer: _courseTableUrl,
+            ),
+            throwsA(isA<JwCollectionException>()),
+          );
+          expect(controller.datumScriptRuns, 0);
+        }
+      });
 
       test('missing lessonIds maps to JwCollectionException', () async {
         controller
           ..setCurrent(_courseTableUrl)
           ..getDataText = '{"result":"no ids"}';
+        await expectLater(
+          adapter.fetchCourseDatum(
+            semesterId: 461,
+            dataId: 'data-ctx-1',
+            referer: _courseTableUrl,
+          ),
+          throwsA(isA<JwCollectionException>()),
+        );
+      });
+
+      test('incomplete datum result maps to JwCollectionException', () async {
+        controller
+          ..setCurrent(_courseTableUrl)
+          ..datumText = '{"result":{}}';
         await expectLater(
           adapter.fetchCourseDatum(
             semesterId: 461,
@@ -596,6 +644,16 @@ void main() {
         ..examHtml = '<table id="exams"></table>';
       final html = await adapter.fetchExamHtml(const Duration(seconds: 2));
       expect(html, contains('table id="exams"'));
+    });
+
+    test('fetchExamHtml rejects multiple exam tables', () async {
+      controller
+        ..setCurrent(_examUrl)
+        ..examHtml = '<table id="exams"></table><table id="exams"></table>';
+      await expectLater(
+        adapter.fetchExamHtml(const Duration(seconds: 2)),
+        throwsA(isA<JwCollectionException>()),
+      );
     });
 
     test('exam readiness rejects a false target handshake', () async {
@@ -669,13 +727,16 @@ class FakeJwWebviewController implements JwWebviewController {
   // Scripted scenario state.
   String? dataId;
   String getDataText = '{"lessonIds":[101,102]}';
-  String datumText = '{"result":{"lesson":[]}}';
+  String datumText =
+      '{"result":{"lesson":[],"lessonList":[],'
+      '"scheduleGroupList":[],"scheduleList":[]}}';
   String? getDataFailureReason;
   String examHtml = '<table id="exams"></table>';
 
   String? lastLoadedUrl;
-  int? lastGetDataSemester;
+  Map<String, Object?>? lastGetDataArgs;
   List<Object?>? lastDatumLessonIds;
+  int datumScriptRuns = 0;
   String? usernameFilled;
   String? passwordFilled;
   bool submitted = false;
@@ -977,16 +1038,24 @@ class FakeJwWebviewController implements JwWebviewController {
         }
         return {'dataId': dataId};
       case 'jw.course.fetchGetData':
-        lastGetDataSemester = args['semesterId'] as int?;
+        lastGetDataArgs = <String, Object?>{
+          'semesterId': args['semesterId'],
+          'dataId': args['dataId'],
+        };
         if (getDataFailureReason != null) {
           _echoError(getDataFailureReason!);
           return null;
         }
         return {'text': getDataText};
       case 'jw.course.fetchDatum':
+        datumScriptRuns++;
         lastDatumLessonIds = (args['lessonIds'] as List?)?.cast<Object?>();
         return {'text': datumText};
       case 'jw.exam.readTable':
+        if (examHtml.split('<table id="exams">').length - 1 != 1) {
+          _echoError('page_contract_changed');
+          return null;
+        }
         return {'html': examHtml};
       default:
         _echoError('script_failed');
