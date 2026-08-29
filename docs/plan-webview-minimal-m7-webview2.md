@@ -272,16 +272,21 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
 - 进程预检和清理后均没有 `flutter`/`dart`/`ustc_assistant_app` 残留。首次无输出
   的原因已定位为 sandbox 无权写 Flutter SDK 的 `cache/flutter.bat.lock`，不是另一个
   Flutter 任务占锁。
-- loopback：修正执行权限后只运行一次 fresh 命令，退出 0，`00:03 +1: All tests
-  passed!`，Windows 构建约 23.4s；无设备断开，canonical UDF
+- loopback：修正执行权限后只运行一次 fresh 命令；`-d windows` 使用 Debug runner，
+  退出 0，`00:03 +1: All tests passed!`，Debug 构建约 23.4s；无设备断开，canonical UDF
   `UDF_CHILD_COUNT=0`。受限 shell 无法查询 Application Event Log，故不宣称 Error
   1000 计数。Task 8 的既有 loopback 记录仍保留，但不替代本项。
+- sqlite hook：移除 `source: system` override 后执行一次 `flutter pub get`，exit 0；
+  官方 hook 生成 bundled native asset。随后 `schedule_task_schema_test.dart` 串行
+  14/14 通过，确认 sqlite 初始化与 Drift schema 可达；`native_jw_gateway_test.dart`
+  串行 13/13 通过。
 - Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；本轮 lint 修复后
-  analyze 通过（`No issues found!`，gate `ANALYZE_EXIT=0`，约 7.3s）。expanded
-  全量 test 运行约 51.2s 后真实退出 1，末计数为 `493 passed / 948 failed`，失败
-  输出明确为 `Failed to load dynamic library 'sqlite3.dll'`（FFI error 126）。依据
-  停止规则，build 未运行，也没有重启第二套命令；因此没有 Windows Release 构建结果。
-  该 948 项不是历史 M5 的 7 项基线失败计数，本次未到达可将失败归类为那 7 项的环境。
+  analyze 通过（`No issues found!`，gate `ANALYZE_EXIT=0`，约 15.4s）。expanded
+  全量 test 运行约 69.5s 后真实退出 1，末计数为 `1440 passed / 1 failed`，唯一失败为
+  `agent_write_permission_domain_test.dart: schema v4 migrates the v3 policy/action_log tables`
+  的已知 migration 基线。测试未出现 sqlite3.dll error 126，也未发现第二个根因。
+  依据停止规则，build 未运行，也没有重启第二套命令；因此没有 Windows Release 构建结果。
+  该 1 项不是历史 M5 的 7 项基线失败计数，二者不可混写。
 - Python：临时进程级 `PYTHONPATH` 明确指向本 worktree 的 `src`，导入断言通过；
   unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
   Conda 依赖。

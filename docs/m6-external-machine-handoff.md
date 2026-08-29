@@ -15,7 +15,7 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 §8.7：analyze 通过；test 493 pass / 948 fail（sqlite3.dll FFI 126），按规则停止、未 build；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | Task 9 §8.7：analyze 通过；test 1440 pass / 1 known migration-baseline fail，按规则停止、未 build；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
@@ -86,6 +86,11 @@ Python（仅当需重新生成 oracle 时；默认跳过）：
 
 ```bash
 cd <repo>
+# 必须让本进程解析当前 worktree 的 src，避免误导入其他 checkout。
+# 若已有 PYTHONPATH，仅在确认不包含其他 checkout 时保留；否则临时覆盖，
+# 命令结束后恢复，不修改 Conda 环境。
+export PYTHONPATH="$(pwd)/src"
+python -c "import pathlib,ustc_assistant; p=pathlib.Path(ustc_assistant.__file__).resolve(); r=pathlib.Path.cwd().resolve()/'src'; print('USTC_ASSISTANT_FILE='+str(p)); print('IMPORT_ROOT='+str(r)); assert r in p.parents"
 conda run -n ustc_assistant python -m unittest discover -s tests -v 2>&1 | tail -5
 # 历史 M5 快照：Ran 140 tests ... OK (skipped=1)；当前 Task 9 结果见 §8.7
 conda run -n ustc_assistant python -m compileall -q src tests 2>&1 | tail -3
@@ -494,17 +499,12 @@ minimal **不做** C++ session snapshot/DPAPI 会话持久化（全量分支的 
 
 ### 8.5 本机测试 sqlite3.dll 说明（Windows 环境）
 
-本机 `flutter test` 依赖 sqlite3 动态库（drift 打开内存库）。Linux 基线用
-`pubspec.yaml` 的 `hooks.user_defines.sqlite3.source: system` 落在系统
-`libsqlite3.so.0`；Windows 需将 sqlite3.dll 所在目录加入 PATH，例如：
-
-```powershell
-$env:PATH = "<含 sqlite3.dll 的目录>;$env:PATH"
-cd app; flutter test
-```
-
-若 `flutter test` 报 `Failed to load dynamic library 'sqlite3.dll'`（本机首次
-裸跑基线时的症状），即该环境问题，加上 PATH 后恢复基线。
+本机 `flutter test` 依赖 sqlite3 动态库（drift 打开内存库）。当前 minimal
+配置不再覆盖 sqlite3 hook，`flutter pub get` 应让 `sqlite3` 包按默认
+`source: sqlite3` 生成 bundled native asset；不把 `winsqlite3.dll` 冒充为包资产，
+也不要手动复制、改名或安装 DLL。若 hook 无法取得或解析 bundled asset，出现
+`Failed to load dynamic library 'sqlite3.dll'`（FFI error 126），必须保留原始
+失败计数并停止后续 gate，先修复依赖解析/网络缓存环境。
 
 ### 8.6 Debug 验收与阶段日志（仿全量分支可观测形式）
 
@@ -586,19 +586,23 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
   均未发现相关进程；未终止其他任务。诊断发现首次 sandbox 命令静默是因为 Flutter
   SDK 位于受限目录，`shared.bat` 无法写入 `cache/flutter.bat.lock`，遂在锁获取循环
   中等待；未发现其他 Flutter 命令持有者。
-- Windows loopback：在修正上述执行权限后，按要求启动一次 fresh 命令，退出码 0，
-  输出 `00:03 +1: All tests passed!`；构建阶段约 23.4s。无设备断开；完成后无
+- Windows loopback：在修正上述执行权限后，按要求启动一次 fresh 命令；`-d windows`
+  使用 Debug runner，退出码 0，输出 `00:03 +1: All tests passed!`；Debug 构建阶段约
+  23.4s。无设备断开；完成后无
   Flutter/Dart/app 残留，canonical loopback UDF 为 `UDF_CHILD_COUNT=0`。Application
   Event Log 查询在受限 shell 中不可用，因此不宣称 Error 1000 计数。该项仍只证明
   loopback 自动化，不构成真实校园验收。
+- focused controls：配置修复后 `schedule_task_schema_test.dart` 串行 14/14 通过，确认
+  sqlite 初始化与 Drift schema 可达；`native_jw_gateway_test.dart` 串行 13/13 通过。
 - Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始严格执行
   `analyze --no-pub → test --no-pub --reporter expanded → build windows --release
-  --no-pub`。本轮 lint 修复后 analyze 通过（`No issues found!`，实际 gate
-  `ANALYZE_EXIT=0`，约 7.3s）；expanded 全量 test 实际运行约 51.2s 后退出 1，
-  末计数为 `493 passed / 948 failed`，失败输出明确包含
-  `Failed to load dynamic library 'sqlite3.dll'`（FFI error 126）。按规则 build
-  未运行，且未启动第二套 Flutter 命令；本次没有得到 Windows Release 构建结果。
-  这不是历史 M5 的 7 项基线失败计数，本次也未到达可将失败归类为那 7 项的环境。
+  --no-pub`。移除 system sqlite hook 并执行 `flutter pub get` 后，analyze 通过
+  （`No issues found!`，`ANALYZE_EXIT=0`，约 15.4s）；expanded 全量 test 运行约
+  69.5s 后退出 1，末计数为 `1440 passed / 1 failed`，唯一失败为
+  `agent_write_permission_domain_test.dart: schema v4 migrates the v3 policy/action_log tables`
+  的已知 migration 基线。测试未出现 sqlite3.dll error 126，也未发现第二个根因。
+  按规则 build 未运行，且未启动第二套 Flutter 命令；本次没有得到 Windows Release
+  构建结果。该 `1` 项与历史 M5 的 `7` 项快照不同，不能混写。
 - Python oracle：使用临时、仅进程级的 `PYTHONPATH` 指向当前 worktree 的绝对
   `src`，先断言 `ustc_assistant.__file__` 位于该目录；unittest 实际为 `Ran 140
   tests in 1.666s`、`OK`，compileall 退出 0。不安装依赖、不改变环境。
