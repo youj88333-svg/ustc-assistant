@@ -134,8 +134,12 @@ class NativeJwGateway implements BridgeGateway {
       <String, Map<String, dynamic>?>{};
   final Map<String, String?> _errorCodes = <String, String?>{};
   final Map<String, Completer<void>> _settlements = <String, Completer<void>>{};
+  final Map<String, Completer<void>> _changes = <String, Completer<void>>{};
+  final Map<String, bool> _cancelRequested = <String, bool>{};
   String? _controllerAccountId;
   bool _shutdown = false;
+
+  static const _pollWait = Duration(milliseconds: 250);
 
   /// Concurrent calls share one shutdown future, so callers can safely await
   /// the same ordered teardown exactly once.
@@ -288,6 +292,8 @@ class NativeJwGateway implements BridgeGateway {
     _results[jobId] = null;
     _errorCodes[jobId] = null;
     _settlements[jobId] = Completer<void>();
+    _changes[jobId] = Completer<void>();
+    _cancelRequested[jobId] = false;
 
     final subscription = collector
         .startJwCollection(
@@ -297,19 +303,33 @@ class NativeJwGateway implements BridgeGateway {
         )
         .listen(
           (event) {
-            if (!_eventBuffers.containsKey(jobId)) return;
+            if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
+              return;
+            }
+            // Cancellation starts a new terminal generation. A late result
+            // from the cancelled generation must not reach the poll result,
+            // even if the page had already completed before the cancellation
+            // callback was delivered.
+            if (_cancelRequested[jobId] == true &&
+                (event is CollectionComplete || event is CollectionFailed)) {
+              // Preserve the gap-free progress history that preceded the
+              // terminal event, but replace a late result/failure with the
+              // cancellation terminal for this generation.
+              _bufferCancelled(jobId, _nextSequence(jobId));
+              return;
+            }
             switch (event) {
               case CollectionStarting():
               case CollectionStatus():
               case CollectionNeedsUserLogin():
-                buffer.add(<String, dynamic>{
+                _buffer(jobId, <String, dynamic>{
                   'sequence': event.sequence,
                   'phase': event.phase,
                   'jobId': jobId,
                   if (event is CollectionStatus) 'message': event.message,
                 });
               case CollectionComplete():
-                buffer.add(<String, dynamic>{
+                _buffer(jobId, <String, dynamic>{
                   'sequence': event.sequence,
                   'phase': 'complete',
                   'jobId': jobId,
@@ -318,7 +338,7 @@ class NativeJwGateway implements BridgeGateway {
                 _terminal[jobId] = true;
                 _settlements[jobId]?.complete();
               case CollectionFailed():
-                buffer.add(<String, dynamic>{
+                _buffer(jobId, <String, dynamic>{
                   'sequence': event.sequence,
                   'phase': 'failed',
                   'jobId': jobId,
@@ -327,20 +347,19 @@ class NativeJwGateway implements BridgeGateway {
                 _terminal[jobId] = true;
                 _settlements[jobId]?.complete();
               case CollectionCancelled():
-                buffer.add(<String, dynamic>{
-                  'sequence': event.sequence,
-                  'phase': 'cancelled',
-                  'jobId': jobId,
-                });
-                _errorCodes[jobId] = 'cancelled';
-                _terminal[jobId] = true;
-                _settlements[jobId]?.complete();
+                _bufferCancelled(jobId, event.sequence);
             }
           },
           onError: (Object _) {
-            if (!_eventBuffers.containsKey(jobId)) return;
-            buffer.add(<String, dynamic>{
-              'sequence': buffer.length,
+            if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
+              return;
+            }
+            if (_cancelRequested[jobId] == true) {
+              _bufferCancelled(jobId, _nextSequence(jobId));
+              return;
+            }
+            _buffer(jobId, <String, dynamic>{
+              'sequence': _nextSequence(jobId),
               'phase': 'failed',
               'jobId': jobId,
             });
@@ -356,8 +375,12 @@ class NativeJwGateway implements BridgeGateway {
             if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
               return;
             }
-            buffer.add(<String, dynamic>{
-              'sequence': buffer.length,
+            if (_cancelRequested[jobId] == true) {
+              _bufferCancelled(jobId, _nextSequence(jobId));
+              return;
+            }
+            _buffer(jobId, <String, dynamic>{
+              'sequence': _nextSequence(jobId),
               'phase': 'failed',
               'jobId': jobId,
             });
@@ -373,8 +396,46 @@ class NativeJwGateway implements BridgeGateway {
     return BridgeJob(id: jobId, phase: 'starting');
   }
 
-  @override
-  Future<BridgeJobPoll> poll(String jobId, int after) async {
+  /// Buffer a non-terminal event and wake waiters. Replacing the completer
+  /// before completing the old one closes the snapshot/register race: a poll
+  /// that captured the old signal cannot consume a notification intended for
+  /// the next poll.
+  void _buffer(String jobId, Map<String, dynamic> event) {
+    final buffer = _eventBuffers[jobId];
+    if (buffer == null || _terminal[jobId] == true) return;
+    buffer.add(event);
+    _signalChange(jobId);
+  }
+
+  int _nextSequence(String jobId) {
+    final buffer = _eventBuffers[jobId];
+    if (buffer == null || buffer.isEmpty) return 0;
+    return (buffer.last['sequence'] as int) + 1;
+  }
+
+  void _bufferCancelled(String jobId, int sequence) {
+    final buffer = _eventBuffers[jobId];
+    if (buffer == null || _terminal[jobId] == true) return;
+    buffer.add(<String, dynamic>{
+      'sequence': sequence,
+      'phase': 'cancelled',
+      'jobId': jobId,
+    });
+    _results[jobId] = null;
+    _errorCodes[jobId] = 'cancelled';
+    _terminal[jobId] = true;
+    _settlements[jobId]?.complete();
+    _signalChange(jobId);
+  }
+
+  void _signalChange(String jobId) {
+    final signal = _changes[jobId];
+    if (signal == null) return;
+    _changes[jobId] = Completer<void>();
+    if (!signal.isCompleted) signal.complete();
+  }
+
+  BridgeJobPoll _snapshot(String jobId, int after) {
     final buffer = _eventBuffers[jobId];
     if (buffer == null) {
       throw const BridgeProtocolError('job_not_found');
@@ -395,6 +456,26 @@ class NativeJwGateway implements BridgeGateway {
   }
 
   @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    // Snapshot before selecting the signal so already-buffered events always
+    // return without waiting. The second snapshot closes the only possible
+    // synchronous notification gap before the first await.
+    final snapshot = _snapshot(jobId, after);
+    if (snapshot.events.isNotEmpty || snapshot.terminal) return snapshot;
+
+    final signal = _changes[jobId];
+    if (signal == null) throw const BridgeProtocolError('job_not_found');
+    final recheck = _snapshot(jobId, after);
+    if (recheck.events.isNotEmpty || recheck.terminal) return recheck;
+
+    await Future.any<void>(<Future<void>>[
+      signal.future,
+      Future<void>.delayed(_pollWait),
+    ]);
+    return _snapshot(jobId, after);
+  }
+
+  @override
   Future<void> resumeLogin(String jobId, {String? password}) async {
     final collector = _collectors[jobId];
     if (collector == null) throw const BridgeProtocolError('job_not_found');
@@ -405,6 +486,8 @@ class NativeJwGateway implements BridgeGateway {
   Future<void> cancel(String jobId) async {
     final collector = _collectors[jobId];
     if (collector == null) return;
+    if (_terminal[jobId] == true) return;
+    _cancelRequested[jobId] = true;
     await collector.cancel(jobId);
   }
 
@@ -441,6 +524,7 @@ class NativeJwGateway implements BridgeGateway {
     final collectorEntries = _collectors.entries.toList(growable: false);
     for (final entry in collectorEntries) {
       if (_terminal[entry.key] == true) continue;
+      _cancelRequested[entry.key] = true;
       await attempt(() => entry.value.cancel(entry.key));
     }
 
@@ -527,6 +611,8 @@ class NativeJwGateway implements BridgeGateway {
     _results.clear();
     _errorCodes.clear();
     _settlements.clear();
+    _changes.clear();
+    _cancelRequested.clear();
     if (!_diagnosticsController.isClosed) {
       await attempt(_diagnosticsController.close);
     }

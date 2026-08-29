@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -73,6 +74,24 @@ class FakeBridge implements BridgeGateway {
   Future<void> shutdown() async => shutdowns++;
 }
 
+class AwaitingEventBridge extends FakeBridge {
+  final secondPollStarted = Completer<void>();
+  final terminalPoll = Completer<BridgeJobPoll>();
+  var emptyPolls = 0;
+  var _firstPoll = true;
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    if (_firstPoll) {
+      _firstPoll = false;
+      emptyPolls++;
+      return const BridgeJobPoll(events: [], nextSequence: 0, terminal: false);
+    }
+    if (!secondPollStarted.isCompleted) secondPollStarted.complete();
+    return terminalPoll.future;
+  }
+}
+
 BridgeJobPoll successPoll() => const BridgeJobPoll(
   events: [
     {'sequence': 1, 'phase': 'complete'},
@@ -120,6 +139,74 @@ SyncCoordinator coordinator({
 );
 
 void main() {
+  test('cancelled terminal result never reaches the import callback', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    final bridge = FakeBridge()
+      ..polls['jw'] = [
+        const BridgeJobPoll(
+          events: [
+            {'sequence': 0, 'phase': 'cancelled'},
+          ],
+          nextSequence: 1,
+          terminal: true,
+          result: {'schemaVersion': '1.0'},
+          errorCode: 'cancelled',
+        ),
+      ];
+    var importCalls = 0;
+    final service = SyncCoordinator(
+      database: database,
+      accounts: accounts,
+      bridgeFactory: () async => bridge,
+      now: () => 100,
+      importBundle: (bytes, {required accountId, required origin}) async {
+        importCalls++;
+        return const ImportResult(
+          status: ImportStatus.imported,
+          bundleId: 'bundle',
+          source: 'ustc_jw',
+          importedEntityCount: 1,
+        );
+      },
+    );
+
+    final outcome = await service.sync(
+      SyncSource.jw,
+      trigger: SyncTrigger.manual,
+      accountId: accountId,
+    );
+
+    expect(outcome, isA<SyncCancelled>());
+    expect(importCalls, 0);
+  });
+
+  test('coordinator waits on the gateway without a fixed-delay spin', () async {
+    final protector = CountingProtector();
+    final (database, accounts, accountId) = await fixture(protector: protector);
+    addTearDown(database.close);
+    final bridge = AwaitingEventBridge();
+    final service = coordinator(
+      database: database,
+      accounts: accounts,
+      bridge: bridge,
+      now: () => 100,
+    );
+
+    final syncing = service.sync(
+      SyncSource.jw,
+      trigger: SyncTrigger.manual,
+      accountId: accountId,
+    );
+    await bridge.secondPollStarted.future.timeout(
+      const Duration(milliseconds: 100),
+    );
+    expect(bridge.emptyPolls, 1);
+    bridge.terminalPoll.complete(successPoll());
+    expect(await syncing, isA<SyncSucceeded>());
+  });
+
   test('manual sync bypasses automatic backoff', () async {
     var clock = DateTime(2026, 7, 27, 9).millisecondsSinceEpoch;
     final protector = CountingProtector();

@@ -299,7 +299,23 @@ class SyncCoordinator {
   }) async {
     var cursor = sequence;
     while (true) {
-      final poll = await bridge.poll(jobId, cursor);
+      final BridgeJobPoll poll;
+      try {
+        poll = await bridge.poll(jobId, cursor);
+      } on BridgeProtocolError catch (error) {
+        // A concurrent shutdown/cancel can invalidate the job between
+        // iterations; that is a failed run, never an unhandled exception.
+        if (provisional != null) accounts.cancelFirstLogin(provisional);
+        if (provisional == null) {
+          await recordFailure(
+            source,
+            accountId,
+            code: error.code,
+            runId: runId,
+          );
+        }
+        return SyncFailed(source, code: error.code);
+      }
       cursor = poll.nextSequence;
       if (poll.lastPhase == 'needs_user_login') {
         _paused[jobId] = _PausedSync(
@@ -318,6 +334,16 @@ class SyncCoordinator {
         return SyncNeedsUserAction(source, jobId: jobId);
       }
       if (!poll.terminal) continue;
+      final code = poll.errorCode ?? 'collection_failed';
+      // A cancelled terminal generation wins over any stale result that a
+      // gateway may have observed while an in-flight page request settled.
+      if (poll.lastPhase == 'cancelled' || code == 'cancelled') {
+        if (provisional != null) accounts.cancelFirstLogin(provisional);
+        if (provisional == null) {
+          await _finishRun(runId, 'cancelled', code);
+        }
+        return SyncCancelled(source);
+      }
       if (poll.result != null) {
         var importAccountId = accountId;
         var persistedRunId = runId;
@@ -345,14 +371,6 @@ class SyncCoordinator {
           source,
           importedEntityCount: result.importedEntityCount,
         );
-      }
-      final code = poll.errorCode ?? 'collection_failed';
-      if (code == 'cancelled') {
-        if (provisional != null) accounts.cancelFirstLogin(provisional);
-        if (provisional == null) {
-          await _finishRun(runId, 'cancelled', code);
-        }
-        return SyncCancelled(source);
       }
       if (provisional != null) accounts.cancelFirstLogin(provisional);
       if (provisional == null) {

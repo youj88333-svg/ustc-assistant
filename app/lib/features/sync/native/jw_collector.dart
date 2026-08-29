@@ -35,10 +35,20 @@ class CancelToken {
 
 /// Mutable per-job state held by the collector while a job is active.
 class _Job {
-  _Job({required this.id, required this.accountId, required this.semester});
+  _Job({
+    required this.id,
+    required this.accountId,
+    required this.expectedUsername,
+    required this.semester,
+  });
 
   final String id;
   final String accountId;
+
+  /// The REAL school account (e.g. `PB12345678`) used for the CAS login form
+  /// and identity verification — mirrors the full-branch `expectedUsername`
+  /// (the login flow never uses the internal accountId as a credential).
+  final String expectedUsername;
   final JwSemesterConfig semester;
 
   /// Monotonic event sequence counter (mirrors Python job events).
@@ -100,26 +110,30 @@ class JwCollector implements SourceCollectionGateway {
   @override
   Stream<SourceCollectionEvent> startJwCollection({
     required String accountId,
+    String? expectedUsername,
     required JwSemesterConfig semester,
   }) {
     // Single-active-job gate (mirrors Bridge `bridge_busy`): reject a second
     // concurrent job synchronously with a one-event failed stream.
     if (_activeJob != null && !_activeJob!.terminal) {
       final busyJobId = _activeJob!.id;
-      return Stream<SourceCollectionEvent>.fromIterable(
-        <SourceCollectionEvent>[
-          CollectionFailed(
-            jobId: busyJobId,
-            sequence: 0,
-            errorCode: bridgeBusyCode,
-          ),
-        ],
-      );
+      return Stream<SourceCollectionEvent>.fromIterable(<SourceCollectionEvent>[
+        CollectionFailed(
+          jobId: busyJobId,
+          sequence: 0,
+          errorCode: bridgeBusyCode,
+        ),
+      ]);
     }
 
     final job = _Job(
       id: _jobId ?? const Uuid().v4(),
       accountId: accountId,
+      // Full-branch semantics: the CAS form is filled with the REAL school
+      // account; fall back to accountId only for tests that never set one.
+      expectedUsername: (expectedUsername == null || expectedUsername.isEmpty)
+          ? accountId
+          : expectedUsername,
       semester: semester,
     );
     _activeJob = job;
@@ -176,6 +190,20 @@ class JwCollector implements SourceCollectionGateway {
       if (!controller.isClosed) controller.add(event);
     }
 
+    void emitCancelled() {
+      emit(CollectionCancelled(jobId: job.id, sequence: job.nextSequence++));
+    }
+
+    void emitFailed(String errorCode) {
+      emit(
+        CollectionFailed(
+          jobId: job.id,
+          sequence: job.nextSequence++,
+          errorCode: errorCode,
+        ),
+      );
+    }
+
     try {
       emit(CollectionStarting(jobId: job.id, sequence: job.nextSequence++));
 
@@ -194,91 +222,110 @@ class JwCollector implements SourceCollectionGateway {
       }
 
       if (await page.isAuthenticatedHome) {
-        emit(CollectionStatus(
-          jobId: job.id,
-          sequence: job.nextSequence++,
-          message: 'Reused the existing USTC JW browser session.',
-        ));
+        emit(
+          CollectionStatus(
+            jobId: job.id,
+            sequence: job.nextSequence++,
+            message: 'Reused the existing USTC JW browser session.',
+          ),
+        );
       } else {
-        emit(CollectionStatus(
-          jobId: job.id,
-          sequence: job.nextSequence++,
-          message:
-              'Complete USTC CAS login in the Edge window; waiting for /home ...',
-        ));
+        emit(
+          CollectionStatus(
+            jobId: job.id,
+            sequence: job.nextSequence++,
+            message:
+                'Complete USTC CAS login in the Edge window; waiting for /home ...',
+          ),
+        );
         if (job.cancelToken.isCancelled) {
           emit(
-              CollectionCancelled(jobId: job.id, sequence: job.nextSequence++));
+            CollectionCancelled(jobId: job.id, sequence: job.nextSequence++),
+          );
           return;
         }
         await page.gotoCasEntry();
         if (job.cancelToken.isCancelled) {
           emit(
-              CollectionCancelled(jobId: job.id, sequence: job.nextSequence++));
+            CollectionCancelled(jobId: job.id, sequence: job.nextSequence++),
+          );
           return;
         }
         if (await page.isAuthenticatedHome) {
-          emit(CollectionStatus(
-            jobId: job.id,
-            sequence: job.nextSequence++,
-            message: 'Reused the existing USTC CAS session.',
-          ));
+          emit(
+            CollectionStatus(
+              jobId: job.id,
+              sequence: job.nextSequence++,
+              message: 'Reused the existing USTC CAS session.',
+            ),
+          );
         } else {
           // Needs user login — pause the stream.
-          emit(CollectionNeedsUserLogin(
-              jobId: job.id, sequence: job.nextSequence++));
+          emit(
+            CollectionNeedsUserLogin(
+              jobId: job.id,
+              sequence: job.nextSequence++,
+            ),
+          );
           // Wait for resumeLogin (or cancel, which completes with null).
           final password = await job.loginResume.future;
           if (job.cancelToken.isCancelled) {
-            emit(CollectionCancelled(
-                jobId: job.id, sequence: job.nextSequence++));
+            emit(
+              CollectionCancelled(jobId: job.id, sequence: job.nextSequence++),
+            );
             return;
           }
           try {
             await page.fillLogin(
-                LoginCredentials(username: job.accountId, password: password));
+              LoginCredentials(
+                username: job.expectedUsername,
+                password: password,
+              ),
+            );
           } on JwAccountMismatchException {
-            emit(CollectionFailed(
-              jobId: job.id,
-              sequence: job.nextSequence++,
-              errorCode: 'account_mismatch',
-            ));
+            if (job.cancelToken.isCancelled) {
+              emitCancelled();
+            } else {
+              emitFailed('account_mismatch');
+            }
             return;
           }
           if (job.cancelToken.isCancelled) {
-            emit(CollectionCancelled(
-                jobId: job.id, sequence: job.nextSequence++));
+            emit(
+              CollectionCancelled(jobId: job.id, sequence: job.nextSequence++),
+            );
             return;
           }
           try {
             await page.waitForAuthenticatedHome(_loginTimeout);
           } on JwLoginTimeoutException {
-            emit(CollectionFailed(
-              jobId: job.id,
-              sequence: job.nextSequence++,
-              errorCode: 'login_timeout',
-            ));
+            if (job.cancelToken.isCancelled) {
+              emitCancelled();
+            } else {
+              emitFailed('login_timeout');
+            }
             return;
           } on JwAccountMismatchException {
-            emit(CollectionFailed(
-              jobId: job.id,
-              sequence: job.nextSequence++,
-              errorCode: 'account_mismatch',
-            ));
+            if (job.cancelToken.isCancelled) {
+              emitCancelled();
+            } else {
+              emitFailed('account_mismatch');
+            }
             return;
           }
           if (job.cancelToken.isCancelled) {
-            emit(CollectionCancelled(
-                jobId: job.id, sequence: job.nextSequence++));
+            emit(
+              CollectionCancelled(jobId: job.id, sequence: job.nextSequence++),
+            );
             return;
           }
           // After reaching home, verify the account matches.
           if (!await page.isAuthenticatedHome) {
-            emit(CollectionFailed(
-              jobId: job.id,
-              sequence: job.nextSequence++,
-              errorCode: 'login_timeout',
-            ));
+            if (job.cancelToken.isCancelled) {
+              emitCancelled();
+            } else {
+              emitFailed('login_timeout');
+            }
             return;
           }
         }
@@ -289,22 +336,24 @@ class JwCollector implements SourceCollectionGateway {
         emit(CollectionCancelled(jobId: job.id, sequence: job.nextSequence++));
         return;
       }
-      emit(CollectionStatus(
-        jobId: job.id,
-        sequence: job.nextSequence++,
-        message:
-            'Opening the course table and resolving the current data context ...',
-      ));
+      emit(
+        CollectionStatus(
+          jobId: job.id,
+          sequence: job.nextSequence++,
+          message:
+              'Opening the course table and resolving the current data context ...',
+        ),
+      );
 
       final String dataId;
       try {
         dataId = await page.resolveCourseDataId(_responseTimeout);
       } on JwCollectionException {
-        emit(CollectionFailed(
-          jobId: job.id,
-          sequence: job.nextSequence++,
-          errorCode: 'collection_failed',
-        ));
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('collection_failed');
+        }
         return;
       }
       if (job.cancelToken.isCancelled) {
@@ -312,12 +361,14 @@ class JwCollector implements SourceCollectionGateway {
         return;
       }
 
-      emit(CollectionStatus(
-        jobId: job.id,
-        sequence: job.nextSequence++,
-        message:
-            'Collecting course data for configured semester ${job.semester.semesterId} ...',
-      ));
+      emit(
+        CollectionStatus(
+          jobId: job.id,
+          sequence: job.nextSequence++,
+          message:
+              'Collecting course data for configured semester ${job.semester.semesterId} ...',
+        ),
+      );
 
       final Map<String, dynamic> courseDatum;
       try {
@@ -327,11 +378,11 @@ class JwCollector implements SourceCollectionGateway {
           referer: await page.currentUrl,
         );
       } on JwCollectionException {
-        emit(CollectionFailed(
-          jobId: job.id,
-          sequence: job.nextSequence++,
-          errorCode: 'collection_failed',
-        ));
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('collection_failed');
+        }
         return;
       }
       if (job.cancelToken.isCancelled) {
@@ -340,11 +391,13 @@ class JwCollector implements SourceCollectionGateway {
       }
 
       // --- collect exam -----------------------------------------------------
-      emit(CollectionStatus(
-        jobId: job.id,
-        sequence: job.nextSequence++,
-        message: 'Opening the published exam arrangement page ...',
-      ));
+      emit(
+        CollectionStatus(
+          jobId: job.id,
+          sequence: job.nextSequence++,
+          message: 'Opening the published exam arrangement page ...',
+        ),
+      );
       if (job.cancelToken.isCancelled) {
         emit(CollectionCancelled(jobId: job.id, sequence: job.nextSequence++));
         return;
@@ -354,11 +407,11 @@ class JwCollector implements SourceCollectionGateway {
       try {
         examHtml = await page.fetchExamHtml(_responseTimeout);
       } on JwCollectionException {
-        emit(CollectionFailed(
-          jobId: job.id,
-          sequence: job.nextSequence++,
-          errorCode: 'collection_failed',
-        ));
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('collection_failed');
+        }
         return;
       }
       if (job.cancelToken.isCancelled) {
@@ -377,18 +430,27 @@ class JwCollector implements SourceCollectionGateway {
         producer: _producer,
       );
 
-      emit(CollectionComplete(
-        jobId: job.id,
-        sequence: job.nextSequence++,
-        bundle: bundle,
-      ));
+      // Cancellation wins over a bundle built by an in-flight page request;
+      // never publish that result to the gateway/import path.
+      if (job.cancelToken.isCancelled) {
+        emitCancelled();
+        return;
+      }
+      emit(
+        CollectionComplete(
+          jobId: job.id,
+          sequence: job.nextSequence++,
+          bundle: bundle,
+        ),
+      );
     } catch (e) {
-      // Any unexpected exception is a collection failure.
-      emit(CollectionFailed(
-        jobId: job.id,
-        sequence: job.nextSequence++,
-        errorCode: 'collection_failed',
-      ));
+      // Cancellation is terminal-dominant even when a page operation reports
+      // its own failure in the same turn.
+      if (job.cancelToken.isCancelled) {
+        emitCancelled();
+      } else {
+        emitFailed('collection_failed');
+      }
     } finally {
       job.terminal = true;
       await controller.close();

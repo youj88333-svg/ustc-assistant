@@ -75,13 +75,17 @@ void main() {
     late String oracleDigest;
 
     setUpAll(() {
-      courseDatum = jsonDecode(
-        File('$_fixturesRoot/course-datum.json').readAsStringSync(),
-      ) as Map<String, dynamic>;
+      courseDatum =
+          jsonDecode(
+                File('$_fixturesRoot/course-datum.json').readAsStringSync(),
+              )
+              as Map<String, dynamic>;
       examHtml = File('$_fixturesRoot/exam-page.html').readAsStringSync();
-      final oracleBundle = jsonDecode(
-        File('$_fixturesRoot/oracle-bundle.json').readAsStringSync(),
-      ) as Map<String, dynamic>;
+      final oracleBundle =
+          jsonDecode(
+                File('$_fixturesRoot/oracle-bundle.json').readAsStringSync(),
+              )
+              as Map<String, dynamic>;
       oracleDigest = canonicalDigest(oracleBundle);
     });
 
@@ -104,19 +108,14 @@ void main() {
       );
       final collector = buildCollector(() => fake);
       final events = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
+        collector.startJwCollection(accountId: _accountId, semester: _semester),
+      );
       expectMonotonicSequence(events);
       expect(phases(events).last, 'complete');
-      expect(
-        phases(events),
-        contains('collecting'),
-      );
+      expect(phases(events), contains('collecting'));
       // Reuse-session emits the JW-session-reuse status.
       expect(
-        events
-            .whereType<CollectionStatus>()
-            .map((e) => e.message)
-            .toList(),
+        events.whereType<CollectionStatus>().map((e) => e.message).toList(),
         contains('Reused the existing USTC JW browser session.'),
       );
       expect(fake.wentToCas, isFalse, reason: 'should not visit CAS on reuse');
@@ -131,7 +130,8 @@ void main() {
       );
       final collector = buildCollector(() => fake);
       final events = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
+        collector.startJwCollection(accountId: _accountId, semester: _semester),
+      );
       expectMonotonicSequence(events);
       expect(phases(events).last, 'complete');
       expect(fake.wentToCas, isTrue);
@@ -141,100 +141,122 @@ void main() {
       );
     });
 
-    test('3. needs-login-then-resume: non-home -> cas non-home -> resume -> complete',
-        () async {
-      final fake = FakeJwWebPage(
-        rootUrl: _nonHomeUrl,
-        casUrl: _casNonHomeUrl,
-        postLoginUrl: _homeUrl,
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake);
-      final events = <SourceCollectionEvent>[];
-      final sub = collector
-          .startJwCollection(accountId: _accountId, semester: _semester)
-          .listen(events.add);
-      // Wait for the needs_user_login event before resuming.
-      await _waitForPhase(events, 'needs_user_login');
-      expect(fake.fillLoginCalled, isFalse);
-      await collector.resumeLogin(_jobId, password: 'pw');
-      await sub.asFuture(); // stream closes on terminal
-      expectMonotonicSequence(events);
-      expect(phases(events).last, 'complete');
-      expect(fake.fillLoginCalled, isTrue);
-      // Sequence must contain needs_user_login then complete.
-      final phaseList = phases(events);
-      expect(phaseList, contains('needs_user_login'));
-      expect(phaseList.indexOf('needs_user_login'),
-          lessThan(phaseList.indexOf('complete')));
-    });
+    test(
+      '3. needs-login-then-resume: non-home -> cas non-home -> resume -> complete',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake);
+        final events = <SourceCollectionEvent>[];
+        final sub = collector
+            .startJwCollection(accountId: _accountId, semester: _semester)
+            .listen(events.add);
+        // Wait for the needs_user_login event before resuming.
+        await _waitForPhase(events, 'needs_user_login');
+        expect(fake.fillLoginCalled, isFalse);
+        await collector.resumeLogin(_jobId, password: 'pw');
+        await sub.asFuture(); // stream closes on terminal
+        expectMonotonicSequence(events);
+        expect(phases(events).last, 'complete');
+        expect(fake.fillLoginCalled, isTrue);
+        // Sequence must contain needs_user_login then complete.
+        final phaseList = phases(events);
+        expect(phaseList, contains('needs_user_login'));
+        expect(
+          phaseList.indexOf('needs_user_login'),
+          lessThan(phaseList.indexOf('complete')),
+        );
+      },
+    );
 
-    test('4. login-timeout: needs-login -> resume -> waitForHome throws -> failed',
-        () async {
-      final fake = FakeJwWebPage(
-        rootUrl: _nonHomeUrl,
-        casUrl: _casNonHomeUrl,
-        postLoginUrl: _homeUrl,
-        waitForHomeThrows: const JwLoginTimeoutException('timed out'),
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake);
-      final events = <SourceCollectionEvent>[];
-      final sub = collector
-          .startJwCollection(accountId: _accountId, semester: _semester)
-          .listen(events.add);
-      await _waitForPhase(events, 'needs_user_login');
-      await collector.resumeLogin(_jobId, password: 'pw');
-      await sub.asFuture();
-      expectMonotonicSequence(events);
-      expect(phases(events).last, 'failed');
-      expect(events.whereType<CollectionFailed>().single.errorCode,
-          'login_timeout');
-    });
+    test(
+      '4. login-timeout: needs-login -> resume -> waitForHome throws -> failed',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          waitForHomeThrows: const JwLoginTimeoutException('timed out'),
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake);
+        final events = <SourceCollectionEvent>[];
+        final sub = collector
+            .startJwCollection(accountId: _accountId, semester: _semester)
+            .listen(events.add);
+        await _waitForPhase(events, 'needs_user_login');
+        await collector.resumeLogin(_jobId, password: 'pw');
+        await sub.asFuture();
+        expectMonotonicSequence(events);
+        expect(phases(events).last, 'failed');
+        expect(
+          events.whereType<CollectionFailed>().single.errorCode,
+          'login_timeout',
+        );
+      },
+    );
 
-    test('5. account-mismatch: verify username mismatch -> failed account_mismatch',
-        () async {
-      final fake = FakeJwWebPage(
-        rootUrl: _nonHomeUrl,
-        casUrl: _casNonHomeUrl,
-        postLoginUrl: _homeUrl,
-        fillLoginThrows: const JwAccountMismatchException('wrong account'),
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake);
-      final events = <SourceCollectionEvent>[];
-      final sub = collector
-          .startJwCollection(accountId: _accountId, semester: _semester)
-          .listen(events.add);
-      await _waitForPhase(events, 'needs_user_login');
-      await collector.resumeLogin(_jobId, password: 'pw');
-      await sub.asFuture();
-      expectMonotonicSequence(events);
-      expect(phases(events).last, 'failed');
-      expect(events.whereType<CollectionFailed>().single.errorCode,
-          'account_mismatch');
-    });
+    test(
+      '5. account-mismatch: verify username mismatch -> failed account_mismatch',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          fillLoginThrows: const JwAccountMismatchException('wrong account'),
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake);
+        final events = <SourceCollectionEvent>[];
+        final sub = collector
+            .startJwCollection(accountId: _accountId, semester: _semester)
+            .listen(events.add);
+        await _waitForPhase(events, 'needs_user_login');
+        await collector.resumeLogin(_jobId, password: 'pw');
+        await sub.asFuture();
+        expectMonotonicSequence(events);
+        expect(phases(events).last, 'failed');
+        expect(
+          events.whereType<CollectionFailed>().single.errorCode,
+          'account_mismatch',
+        );
+      },
+    );
 
-    test('6. course-fetch-fail: fetchCourseDatum missing lessonIds -> failed', () async {
-      final fake = FakeJwWebPage(
-        rootUrl: _homeUrl,
-        casUrl: _homeUrl,
-        courseDatumFetchThrows:
-            const JwCollectionException('no lessons found'),
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake);
-      final events = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
-      expectMonotonicSequence(events);
-      expect(phases(events).last, 'failed');
-      expect(events.whereType<CollectionFailed>().single.errorCode,
-          'collection_failed');
-    });
+    test(
+      '6. course-fetch-fail: fetchCourseDatum missing lessonIds -> failed',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _homeUrl,
+          casUrl: _homeUrl,
+          courseDatumFetchThrows: const JwCollectionException(
+            'no lessons found',
+          ),
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake);
+        final events = await collectEvents(
+          collector.startJwCollection(
+            accountId: _accountId,
+            semester: _semester,
+          ),
+        );
+        expectMonotonicSequence(events);
+        expect(phases(events).last, 'failed');
+        expect(
+          events.whereType<CollectionFailed>().single.errorCode,
+          'collection_failed',
+        );
+      },
+    );
 
     test('7. exam-missing: fetchExamHtml throws -> failed', () async {
       final fake = FakeJwWebPage(
@@ -242,16 +264,18 @@ void main() {
         casUrl: _homeUrl,
         courseDatum: courseDatum,
         examHtml: examHtml,
-        examHtmlFetchThrows:
-            const JwCollectionException('table#exams missing'),
+        examHtmlFetchThrows: const JwCollectionException('table#exams missing'),
       );
       final collector = buildCollector(() => fake);
       final events = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
+        collector.startJwCollection(accountId: _accountId, semester: _semester),
+      );
       expectMonotonicSequence(events);
       expect(phases(events).last, 'failed');
-      expect(events.whereType<CollectionFailed>().single.errorCode,
-          'collection_failed');
+      expect(
+        events.whereType<CollectionFailed>().single.errorCode,
+        'collection_failed',
+      );
     });
 
     test('8. cancel-during-collect: cancel mid-collect -> cancelled', () async {
@@ -270,7 +294,9 @@ void main() {
       // Cancel once the collector reaches the "Collecting course data" status
       // (mid-collect checkpoint), then let the state machine observe it.
       await _waitForPhaseMessage(
-          events, 'Collecting course data for configured semester');
+        events,
+        'Collecting course data for configured semester',
+      );
       await collector.cancel(_jobId);
       await completer.future;
       await sub.cancel();
@@ -279,60 +305,104 @@ void main() {
       expect(events.whereType<CollectionCancelled>(), isNotEmpty);
     });
 
-    test('9. single-active-job: second concurrent start rejected (bridge_busy)',
-        () async {
-      // First job pauses at needs_user_login (stays active).
-      final fake1 = FakeJwWebPage(
-        rootUrl: _nonHomeUrl,
-        casUrl: _casNonHomeUrl,
-        postLoginUrl: _homeUrl,
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake1);
-      final events1 = <SourceCollectionEvent>[];
-      final sub1 = collector
-          .startJwCollection(accountId: _accountId, semester: _semester)
-          .listen(events1.add);
-      await _waitForPhase(events1, 'needs_user_login');
+    test(
+      'cancel during page failure emits cancelled instead of failed',
+      () async {
+        final page = FakeJwWebPage(
+          rootUrl: _homeUrl,
+          casUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+          blockCourseFailure: true,
+        );
+        final collector = buildCollector(() => page);
+        final events = <SourceCollectionEvent>[];
+        final subscription = collector
+            .startJwCollection(
+              accountId: 'account',
+              expectedUsername: 'PB00000000',
+              semester: _semester,
+            )
+            .listen(events.add);
 
-      // Second concurrent start must be rejected synchronously (the page
-      // factory is never even invoked — the busy gate returns early).
-      final events2 = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
-      expect(events2, hasLength(1));
-      expect(events2.single, isA<CollectionFailed>());
-      expect((events2.single as CollectionFailed).errorCode, bridgeBusyCode);
+        await page.courseStarted.future;
+        await collector.cancel(collector.activeJobId!);
+        page.failCourse();
+        await subscription.asFuture<void>();
 
-      // Clean up the first job.
-      await collector.cancel(_jobId);
-      await sub1.asFuture();
-    });
+        expect(events.last, isA<CollectionCancelled>());
+        expect(events.whereType<CollectionFailed>(), isEmpty);
+        expect(events.whereType<CollectionComplete>(), isEmpty);
+      },
+    );
 
-    test('10. bundle-parity: complete bundle canonical digest == oracle digest',
-        () async {
-      final fake = FakeJwWebPage(
-        rootUrl: _homeUrl,
-        casUrl: _homeUrl,
-        courseDatum: courseDatum,
-        examHtml: examHtml,
-      );
-      final collector = buildCollector(() => fake);
-      final events = await collectEvents(
-          collector.startJwCollection(accountId: _accountId, semester: _semester));
-      expectMonotonicSequence(events);
-      expect(phases(events).last, 'complete');
-      final complete = events.whereType<CollectionComplete>().single;
-      final digest = canonicalDigest(complete.bundle);
-      expect(
-        digest,
-        equals(oracleDigest),
-        reason: 'bundle digest must match the M2 oracle digest '
-            '$oracleDigest but was $digest',
-      );
-      // Sanity: the oracle digest begins with f858a385 (per plan §5 #10).
-      expect(oracleDigest, startsWith('f858a385'));
-    });
+    test(
+      '9. single-active-job: second concurrent start rejected (bridge_busy)',
+      () async {
+        // First job pauses at needs_user_login (stays active).
+        final fake1 = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake1);
+        final events1 = <SourceCollectionEvent>[];
+        final sub1 = collector
+            .startJwCollection(accountId: _accountId, semester: _semester)
+            .listen(events1.add);
+        await _waitForPhase(events1, 'needs_user_login');
+
+        // Second concurrent start must be rejected synchronously (the page
+        // factory is never even invoked — the busy gate returns early).
+        final events2 = await collectEvents(
+          collector.startJwCollection(
+            accountId: _accountId,
+            semester: _semester,
+          ),
+        );
+        expect(events2, hasLength(1));
+        expect(events2.single, isA<CollectionFailed>());
+        expect((events2.single as CollectionFailed).errorCode, bridgeBusyCode);
+
+        // Clean up the first job.
+        await collector.cancel(_jobId);
+        await sub1.asFuture();
+      },
+    );
+
+    test(
+      '10. bundle-parity: complete bundle canonical digest == oracle digest',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _homeUrl,
+          casUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+        );
+        final collector = buildCollector(() => fake);
+        final events = await collectEvents(
+          collector.startJwCollection(
+            accountId: _accountId,
+            semester: _semester,
+          ),
+        );
+        expectMonotonicSequence(events);
+        expect(phases(events).last, 'complete');
+        final complete = events.whereType<CollectionComplete>().single;
+        final digest = canonicalDigest(complete.bundle);
+        expect(
+          digest,
+          equals(oracleDigest),
+          reason:
+              'bundle digest must match the M2 oracle digest '
+              '$oracleDigest but was $digest',
+        );
+        // Sanity: the oracle digest begins with f858a385 (per plan §5 #10).
+        expect(oracleDigest, startsWith('f858a385'));
+      },
+    );
   });
 
   group('URL helpers parity', () {
@@ -352,8 +422,10 @@ void main() {
     });
 
     test('extractDataId rejects non-get-data URLs', () {
-      expect(() => extractDataId('https://jw.ustc.edu.cn/home'),
-          throwsArgumentError);
+      expect(
+        () => extractDataId('https://jw.ustc.edu.cn/home'),
+        throwsArgumentError,
+      );
     });
 
     test('extractDataId rejects missing dataId', () {
@@ -363,8 +435,7 @@ void main() {
 
     test('isAuthenticatedHomeUrl matches /home and variants', () {
       expect(isAuthenticatedHomeUrl('https://jw.ustc.edu.cn/home'), isTrue);
-      expect(
-          isAuthenticatedHomeUrl('https://jw.ustc.edu.cn/home?x=1'), isTrue);
+      expect(isAuthenticatedHomeUrl('https://jw.ustc.edu.cn/home?x=1'), isTrue);
       expect(isAuthenticatedHomeUrl('https://jw.ustc.edu.cn/home/'), isTrue);
       expect(isAuthenticatedHomeUrl('https://jw.ustc.edu.cn/login'), isFalse);
     });
@@ -403,13 +474,17 @@ Future<void> _waitForPhaseMessage(
 ) async {
   const maxIterations = 10000;
   for (var i = 0; i < maxIterations; i++) {
-    if (events.whereType<CollectionStatus>().any((e) => e.message.contains(substring))) {
+    if (events.whereType<CollectionStatus>().any(
+      (e) => e.message.contains(substring),
+    )) {
       return;
     }
     await Future<void>.delayed(Duration.zero);
   }
-  fail('status message containing "$substring" never appeared; '
-      'events so far: ${phases(events)}');
+  fail(
+    'status message containing "$substring" never appeared; '
+    'events so far: ${phases(events)}',
+  );
 }
 
 /// A scripted [JwWebPage] used to drive the collector's state machine in
@@ -426,6 +501,7 @@ class FakeJwWebPage implements JwWebPage {
     this.waitForHomeThrows,
     this.courseDatumFetchThrows,
     this.examHtmlFetchThrows,
+    this.blockCourseFailure = false,
   });
 
   /// URL reported after [gotoRoot].
@@ -456,9 +532,23 @@ class FakeJwWebPage implements JwWebPage {
   /// If set, [fetchExamHtml] throws this (e.g. table#exams missing).
   final Object? examHtmlFetchThrows;
 
+  /// If true, [fetchCourseDatum] waits until [failCourse] completes with a
+  /// collection error, allowing cancellation to race the page failure.
+  final bool blockCourseFailure;
+
   String _currentUrl = '';
   bool wentToCas = false;
   bool fillLoginCalled = false;
+  final courseStarted = Completer<void>();
+  final _courseFailure = Completer<void>();
+
+  void failCourse() {
+    if (!_courseFailure.isCompleted) {
+      _courseFailure.completeError(
+        const JwCollectionException('course page failed'),
+      );
+    }
+  }
 
   @override
   Future<String> get currentUrl async => _currentUrl;
@@ -521,6 +611,10 @@ class FakeJwWebPage implements JwWebPage {
     required String dataId,
     required String referer,
   }) async {
+    if (blockCourseFailure) {
+      if (!courseStarted.isCompleted) courseStarted.complete();
+      await _courseFailure.future;
+    }
     // Yield so an external cancel() can interleave before the next checkpoint.
     await Future<void>.delayed(Duration.zero);
     if (courseDatumFetchThrows != null) {

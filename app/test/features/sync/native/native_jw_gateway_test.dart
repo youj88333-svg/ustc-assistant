@@ -82,6 +82,39 @@ void main() {
     );
 
     test(
+      'poll waits until an event arrives instead of returning an empty spin',
+      () async {
+        final controller = FakeJwWebviewController()
+          ..authenticatedSession = true
+          ..courseDatum = courseDatum
+          ..examHtml = examHtml
+          ..blockRootNavigation = true;
+        final gateway = NativeJwGateway(
+          controllerFactory: () async => controller,
+        );
+
+        final job = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'acct_1',
+          expectedUsername: 'ustc.student',
+          jwSemester: kDefaultJwSemester,
+        );
+        await controller.navigationStarted.future;
+
+        final pending = gateway.poll(job.id, 1);
+        var completed = false;
+        unawaited(pending.then<void>((_) => completed = true));
+        await Future<void>.microtask(() {});
+        expect(completed, isFalse);
+
+        controller.releaseBlockedNavigation();
+        final poll = await pending;
+        expect(poll.events, isNotEmpty);
+        await gateway.shutdown();
+      },
+    );
+
+    test(
       'startCollection reuse-session (goRoot redirects /home) completes',
       () async {
         final controller = FakeJwWebviewController()
@@ -442,9 +475,16 @@ class FakeJwWebviewController implements JwWebviewController {
   bool identityAuthenticated = false;
   bool identityConflict = false;
   bool authenticatedSession = false;
+  bool blockRootNavigation = false;
   Map<String, dynamic> courseDatum = const {};
   String examHtml = '<table id="exams"></table>';
   bool _disposed = false;
+  final navigationStarted = Completer<void>();
+  Completer<void>? _blockedNavigation;
+
+  void releaseBlockedNavigation() {
+    _blockedNavigation?.complete();
+  }
 
   void setCurrent(String url) {
     _currentUrl = url;
@@ -480,6 +520,14 @@ class FakeJwWebviewController implements JwWebviewController {
 
   @override
   Future<void> loadUrl(String url) async {
+    if (url == 'https://jw.ustc.edu.cn/' && blockRootNavigation) {
+      final blocked = Completer<void>();
+      _blockedNavigation = blocked;
+      if (!navigationStarted.isCompleted) navigationStarted.complete();
+      await blocked.future;
+      blockRootNavigation = false;
+      _blockedNavigation = null;
+    }
     // Model the real server behavior: an authenticated session's loaded root
     // (or CAS-entry) redirects to /home; an unauthenticated session stays on
     // the login entry.
