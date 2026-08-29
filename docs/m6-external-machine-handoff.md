@@ -1,11 +1,12 @@
 # M6 外部机器交接手册：三端构建与真实人工验收
 
-> 分支：`refactor/webview-minimal`（M5 已完成，本手册为 M6 交付物）
+> 分支：`refactor/webview-minimal`（M7 原生 WebView2 已接入；本文保留 M6 交接
+> 步骤并补充 Task 9 的自动化验证口径）
 > 依据：`docs/plan-webview-minimal-m6.md` §1（本手册为该节的可执行落地版）
 > 适用对象：在**有完整 SDK 的外部机器**上执行三端构建 + 真实教务采集验收 + 真实
 > Agent 人工验收的操作者。
-> 本 VM 状态：无 Windows/Android/iOS SDK、无外网。本手册由本 VM 在 `25ec61a`
-> （M5 docs 提交，M6 提交前 HEAD）产出；真实构建与验收不在本机执行。
+> 本手册的外部机器步骤仍覆盖 Android/iOS 与真实校园验收；Windows 原生 WebView2
+> 的 loopback 自动化证据另见 §8.7。自动化证据不等于真实校园验收。
 
 ---
 
@@ -13,12 +14,12 @@
 
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
-| 静态验证 | analyze/test/python/grep 实测并记录于 `docs/m6-refactor-final-verification.md` | 复现本机静态验证结果 |
-| 三端构建 | ❌ 无 SDK | ✅ Windows Release / Android APK / iOS |
+| 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
+| 三端构建 | Task 9 Flutter analyze 会话悬挂后中止，test/build 未运行；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
-| WebView 接线 | ❌ M5 时不动 pubspec | ✅ minimal 分支 M7 已接入 Windows 原生 WebView2（§8）；Android/iOS 仍需外部机器 `webview_flutter` |
+| WebView 接线 | ✅ minimal 分支 M7 已接入 Windows 原生 WebView2（§8）；Task 8 有 loopback GREEN 记录，Task 9 fresh 会话中止 | Android/iOS 仍需外部机器 `webview_flutter` |
 
 **本手册不重复** `docs/m5-three-platform-build-analysis.md` 已记录的三端构建详细错误
 清单（Android 见其 §2.2/§2.3/§2.4，iOS 见 §3.2/§3.3/§3.4）。本手册给出执行步骤、
@@ -435,10 +436,11 @@ flutter test --update-goldens
     + `JwWebViewAdapter`；`capabilities()` 返回固定学期
     `(461, 2026fall, 2026 秋季学期)`（来自 `generated_source_defaults.dart`，
     不做动态学期发现）。
-- `sync_page.dart`：`SyncPageLoader`/`runStartupAutomaticSync` 默认用
-  `NativeJwGateway`；保留 `kUsePythonBridgeFallback=false` 开关可临时切回
-  Python Bridge（一源一通道，不并行）。同步页在原生作业进行中显示可见
-  WebView surface（登录/验证码交互）。
+- `sync_page.dart`：同步页拥有一个稳定挂载的原生 WebView surface；手动进入同步页
+  后由 `NativeJwGateway` 驱动登录/验证码交互。由于 `/chat` 启动路由没有挂载该
+  surface，原生模式的 `runStartupAutomaticSync` 明确不启动 headless WebView；
+  `kUsePythonBridgeFallback=true` 时仍可保留 Python Bridge 的 headless 启动同步。
+  两种通道严格一源一通道，不并行。
 
 ### 8.2 本机构建与静态验证实测
 
@@ -528,4 +530,72 @@ minimal 启用 **debug 验收 + 阶段化安全日志**（对齐全量分支
 - `native_jw_gateway_test.dart` —— diagnostics 流透传隐私安全阶段；断言阶段名
   不泄漏 URL/账号/路径。
 - `sync_page_test.dart` —— debug 面板渲染阶段日志且随 notifier 更新、计数正确。
+
+### 8.7 Task 8/9：可达性、生命周期与自动化验证口径
+
+M7 的最小实现沿用单一 `SyncPageLoader` 所有权边界：页面始终挂载一个
+`JwWebViewSurfaceHost` 子树，只通过 `Offstage` 改变可见性；gateway 在控制器完成
+初始化、事件流就绪和策略配置后才 attach。作业结束或页面销毁时，所有权顺序为：
+
+```text
+拒绝新作业 → 取消未终态作业 → 等待终态 settlement
+→ detach surface 并等待 placeholder frame
+→ stop → clear browsing data → dispose
+→ 等待 WebView2 environment release → 关闭订阅/诊断流
+```
+
+每个原生控制器只绑定一个不透明的本地 `accountId` 分区。UDF 位于应用支持目录下
+的 account 子目录，路径经过不透明 ID 清理且不进入诊断；minimal 不保存跨重启的
+session snapshot/DPAPI 会话快照，冷启动后可能需要重新登录。gateway 同一时刻只
+维护一个账号/控制器，避免 WebView2 environment 与 UDF 锁竞争。
+
+导航和采集均 fail-closed：受信目标同时需要 URL、DOM selector 和注册 handshake；
+CAS 之后必须取得权威身份匹配，权威缺失或任一旁证冲突都不能继续。course/exam
+读取另外验证同源请求形状、响应边界和唯一考试表；lesson ID 不合法时不会发起
+datum 请求。诊断只记录阶段名和稳定错误码，不记录 query、ticket、cookie、DOM、
+用户名、data ID、响应体或课程数据。
+
+gateway 的 `poll` 以事件/终态变更唤醒，并保留有界 long-poll 兜底；同步协调器不再
+依赖固定延时 spin。取消在每个主要阶段检查，取消终态优先于迟到结果，已取消作业
+不会触发晚到的 import。
+
+Task 8 的 credential-free Windows loopback gate 覆盖 portal → CAS → home →
+course context → get-data → datum → exam table → SourceBundle，以及真实插件纹理
+surface 的 detach/stop/dispose 和 environment-release 清理。loopback 只证明本机
+fixture、Dart 合约与 WebView2 生命周期；它没有访问学校主机、真实账号或真实 Cookie，
+不构成真实校园验收。Task 9 的最终命令、退出码、通过/失败计数和清理检查应追加在
+下方的验证记录中；若 Flutter gate 某一步失败，必须停止后续 Flutter 步骤并原样
+记录失败，不能由后续成功命令掩盖。
+
+真实校园机器的最小人工 stage chain 为：
+
+```text
+login entry → CAS → identity verified → course context → get-data
+→ datum → exam table → bundle built → imported → schedule visible
+```
+
+操作者只需记录脱敏的阶段结果、聚合计数和错误码；不得记录账号、查询参数、票据、
+Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与该人工 chain 分开
+报告，并在 owner 明确确认前保持“真实校园验收未完成”。
+
+#### Task 9 自动化验证记录（2026-08-29）
+
+- 进程预检：执行 `Get-Process flutter,dart,ustc_assistant_app`，开始前和中止后
+  均未发现相关进程；未终止其他任务。
+- Windows loopback：按要求只启动一次 fresh 命令；会话静默超过五分钟且没有
+  flutter/dart/app 子进程，最终 Ctrl+C 中止并返回 1。没有测试输出或 fresh
+  `All tests passed!` 计数，canonical loopback UDF 无残留子目录；Application
+  Event Log 查询在受限 shell 中不可用，因此不宣称 Error 1000 计数。Task 8 之前
+  的 loopback GREEN 证据仍见 `task-8-report.md`，不能替代本次 fresh 结果。
+- Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始执行
+  `analyze --no-pub → test --no-pub --reporter expanded → build windows --release
+  --no-pub`；首个 analyze 会话静默约六分钟后 Ctrl+C，终端退出 1，test 和 build
+  按规则未运行，也没有重启第二套 Flutter 命令。
+- Python oracle：`conda run -n ustc_assistant python -m unittest discover -s tests -v`
+  实际为 `Ran 140 tests`、2 failures（bridge capabilities 退役字段、CLI 退役命令
+  parser）；`conda run -n ustc_assistant python -m compileall -q src tests` 退出 0。
+  不安装依赖、不改变环境。
+- 本机已知限制：若出现 `sqlite3.dll` FFI error 126，记录为宿主环境缺少动态库，
+  不复制/下载 DLL、不把失败伪装成基线通过；历史 migration/golden 基线也按 §6
+  原因区分。真实校园验收仍未由本机自动化代替。
 

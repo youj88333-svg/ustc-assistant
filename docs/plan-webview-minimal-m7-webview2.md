@@ -1,6 +1,7 @@
 # 计划：按全量重构分支经验重写 minimal 原生 WebView（Windows WebView2）
 
-> 分支：`refactor/webview-minimal`（M6 交接物已落档，本计划为 M6 之后的增量）
+> 分支：`refactor/webview-minimal`（M6 交接物已落档；M7 实现与 Task 9 验证记录在
+> 本文件末尾收敛）
 > 依据：`E:\107\.worktrees\rewrite\flutter-native` 的全量 `M2 Native JW` 真实踩坑复盘
 > （`docs/refactor-docs/m2-native-jw-lessons.md`）与 `docs/acceptance/m2-native-jw.md`。
 > 目标（本计划门）：minimal 教务采集从 Python Bridge 切换为 Flutter 原生 WebView2，
@@ -11,12 +12,9 @@
 - 全量重构分支的 M2 已把 WebView2 采集链路打通，并在多轮真实 debug 构建与人工验收中
   修复了导航、CAS、身份核验、学期、请求载荷、取消、会话等一批问题（见
   `rewrite/flutter-native/docs/refactor-docs/m2-native-jw-lessons.md` 的"问题与根因台账"）。
-- 本 minimal 分支当前仍是：
-  - `lib/features/sync/native/jw_webview_adapter.dart` 为 **stub**（全部方法抛
-    `UnimplementedError`）；
-  - 运行时采集仍走 Python Bridge（`SyncPageLoader` / `runStartupAutomaticSync` 起
-    `BridgeClient.start(python)`）；
-  - `pubspec.yaml` 未引入任何 WebView 依赖。
+- 本计划开始时 minimal 分支仍是 stub；Task 1–8 已将它收敛为可测试的 Windows
+  WebView2 通道：`JwWebViewAdapter`、稳定 surface host、原生 gateway、严格脚本
+  合约和 Debug loopback fixture 均已落地。Python Bridge 仍保留为显式 fallback。
 - 因此本计划把全量分支"踩过的坑"直接落到 minimal 的 `JwWebPage` 实现点上，
   用最小代价替换 Python 运行通道。
 
@@ -139,8 +137,10 @@
   - `resumeLogin(jobId, {password})` → `JwCollector.resumeLogin`
   - `cancel(jobId)` → `JwCollector.cancel`
   - `shutdown()` → close 页面 + 可选清会话
-- `SyncPageLoader` / `runStartupAutomaticSync` 改为注入 `NativeJwGateway`；
-  用常量 `kUsePythonBridgeFallback = false` 保留回退口（可临时切回 Python）。
+- `SyncPageLoader` 在可见同步页中注入 `NativeJwGateway`；`/chat` 没有可挂载的
+  WebView surface，因此 native 模式的 `runStartupAutomaticSync` 不启动 headless
+  采集。用常量 `kUsePythonBridgeFallback = false` 保留回退口（切为 true 时 Python
+  Bridge 仍可执行 headless 启动同步）。
 - 验证：`flutter analyze` 0 error；`flutter test` 全绿（含新增 native gateway 单测）；
   `flutter build windows --release` 编译通过。
 
@@ -185,7 +185,124 @@ flutter build windows --release       # 编译通过
 - 取消/失败/重新登录的终态文案与存储保持一致。
 - 重启后重新登录（已知边界，不阻塞日常使用）。
 
-## 7. 参考
+## 8. M7 实现与 Task 9 验证收敛
+
+### 8.1 运行时生命周期与账号边界
+
+minimal 的 native 路径采用单一稳定 surface：`SyncPage` 永久挂载
+`JwWebViewSurfaceHost`，作业忙闲只切换 `Offstage`，不把原始 WebView widget 在
+不同子树之间搬运。`NativeJwGateway` 在 controller 初始化、event stream readiness
+和策略配置完成后 attach；gateway 独占 controller/account/UDF 所有权。释放严格为：
+
+```text
+reject new work → cancel non-terminal jobs → await terminal settlement
+→ detach and await placeholder unmount → stop
+→ clear browsing data → dispose → await environment release
+→ close subscriptions and diagnostics
+```
+
+每个作业只使用一个不透明 `accountId` 绑定的 UDF 子目录，路径由应用支持目录和
+清理后的 account 分区组成，不写入日志。minimal 不实现跨冷启动 session snapshot
+或 DPAPI 会话恢复；重启后再次同步可能要求重新登录。一个 gateway 不并行维护多个
+账号 controller，Python 与 native 也不对同一来源并发。
+
+### 8.2 Native startup 边界（重要取舍）
+
+`/chat` 启动路由没有已挂载的 WebView surface。为了避免创建不可见、无法完成交互
+和无法安全 teardown 的 WebView2，`runStartupAutomaticSync` 在 native 默认路径
+直接返回；原生采集由用户进入同步页后触发，页面提供可见 surface 供 CAS/CAPTCHA/MFA
+等流程使用。`kUsePythonBridgeFallback=true` 时，Python Bridge 仍可按原有 headless
+语义执行启动自动同步。该行为是稳定生命周期边界，不是遗漏的后台刷新功能。
+
+### 8.3 严格协议与数据导入
+
+portal、CAS、home、course、exam 每个目标都需要 URL + DOM selector + 注册
+credential-free handshake 在同一个 attempt generation 内成功。URL wildcard 按
+路径边界匹配，拒绝 sibling path；旧 generation 的 late signal 不得完成新尝试。
+登录只做一次受控 portal activation 和一次 CAS submit；home 收敛后必须有权威身份
+匹配 expected username，缺失权威证据或出现冲突均 fail-closed。
+
+课程/考试路径严格保持 SourceBundle 1.0 需要的请求契约：使用配置的
+`461 / 2026fall / 2026 秋季学期`，不推算 semester ID；同源 get-data 的参数、
+JSON datum 的 headers/body、lesson ID 正性/唯一性/数量边界和唯一 `table#exams`
+均在 adapter 边界验证。任一认证、页面、请求、解析或 bundle 构造失败都终止整个
+snapshot，不导入部分结果。
+
+gateway poll 为事件驱动并带有界 long-poll；collector 在每个主要阶段和 bundle 完成
+前检查取消，取消终态优先于迟到结果，协调器不会用固定 250ms 延迟掩盖空轮询。已有
+`ImportService` 继续作为唯一 SourceBundle 1.0 导入入口，账号分区和
+`Asia/Shanghai` 语义不变。
+
+### 8.4 自动化 loopback 与真实校园验收边界
+
+`integration_test/minimal_jw_webview_loopback_test.dart` 使用本机 IPv4 loopback fixture
+和 production controller，覆盖 login/CAS/home/course/exam、get-data/datum 请求形状、
+SourceBundle 构造、native texture surface teardown 以及 WebView2 environment-release
+barrier。fixture 只保留方法、无 query 的路径、content type、XHR 标志和 JSON key shape；
+不保存真实账号、Cookie、DOM、响应体或 data ID。UDF 只在 canonical workspace root
+下创建唯一子目录，在 environment release 后删除并检查为空。
+
+该 gate、fake-controller tests、Flutter analyze/test/build 和 Python oracle/compileall
+都是自动化证据；它们不访问学校主机，不使用真实账号，不等同真实校园验收。owner-run
+的脱敏人工 stage chain 必须单独确认：
+
+```text
+login entry → CAS → identity verified → course context → get-data
+→ datum → exam table → bundle built → imported → schedule visible
+```
+
+真实验收时只记录各 stage 的成功/失败和稳定错误码；不得记录 query、ticket、Cookie、
+用户名、DOM、data ID、响应体或私人课程数据。
+
+### 8.5 Task 9 命令与结果记录
+
+执行顺序固定为：
+
+1. 确认没有 `flutter`/`dart`/`ustc_assistant_app` 进程。
+2. 在 `app/` 运行一次 fresh Windows loopback：
+   `flutter test --no-pub --reporter expanded integration_test/minimal_jw_webview_loopback_test.dart -d windows`。
+3. 在同一 PowerShell 终端依次执行 `flutter analyze --no-pub`、
+   `flutter test --no-pub --reporter expanded`、`flutter build windows --release --no-pub`；
+   前一步失败立即停止，不能由后一步覆盖。
+4. 回到 worktree root 在 `ustc_assistant` 环境运行 Python unittest discover 和
+   compileall；禁止安装或改变 Conda 环境。
+
+Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动化证据：
+
+- loopback：按要求只运行一次；会话静默超过五分钟、无 flutter/dart/app 子进程，
+  Ctrl+C 后退出 1。没有 fresh 测试计数；canonical UDF 无残留子目录。受限 shell
+  无法查询 Application Event Log，故不宣称 Error 1000 计数。Task 8 的既有 loopback
+  GREEN 记录仍在 `task-8-report.md`。
+- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；analyze 会话
+  静默约六分钟后 Ctrl+C，退出 1，test/build 未运行，也没有重启第二套命令。
+- Python：unittest `Ran 140 tests`、2 failures（bridge capabilities 退役字段和
+  CLI 退役命令 parser）；compileall 退出 0。未安装或修改 Conda 依赖。
+
+若之后的 owner 环境触发已知宿主 `sqlite3.dll` error 126，必须保留原始失败计数并
+停止 build，不能复制 DLL 或重跑第二套 Flutter 命令掩盖失败。
+
+### 8.6 Owner-run real-campus checklist
+
+- [ ] 校园网/iWAN 可达且用户在 App 中自行输入凭据。
+- [ ] login entry → CAS → identity verified；不记录账号、ticket、Cookie 或 DOM。
+- [ ] course context → get-data → datum；确认 configured semester 仍为 461/2026fall，
+      只记录聚合课程/考试计数。
+- [ ] exam table → bundle built → imported → schedule visible；确认导入后本地课表
+      与教务页面一致，但不保存或回传私人课表。
+- [ ] 取消、失败、重新登录和冷启动后的 needs_user_login 文案/状态符合预期。
+
+自动化 loopback 证据与该 checklist 分开归档。未获得 owner 明确确认前，M7 真实校园
+验收保持未完成。
+
+### 8.7 Deferred/environment notes
+
+- minimal 不实现 Android/iOS 真实 WebView；移动端接线/构建仍按 M6 外部机器手册执行。
+- 本机若无法加载 `sqlite3.dll`（FFI error 126），这是验证宿主环境差异；不安装、
+  复制或下载动态库，不将其报告为代码通过。
+- 历史 migration 健壮性和 golden 字体差异按 M6 §6 记录；Task 8 loopback/fake
+  WebView 证据不覆盖这些既有 baseline failures。
+
+## 9. 参考
 
 - 全量分支：`E:\107\.worktrees\rewrite\flutter-native`
   - `docs/refactor-docs/m2-native-jw-lessons.md`（问题与根因台账 / 有效诊断方法）
