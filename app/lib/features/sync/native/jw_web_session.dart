@@ -589,7 +589,11 @@ class JwReadyTarget {
     if (pattern == null || !pattern.endsWith('*')) {
       return candidate == url;
     }
-    return candidate.startsWith(pattern.substring(0, pattern.length - 1));
+    final prefix = pattern.substring(0, pattern.length - 1);
+    if (!candidate.startsWith(prefix)) return false;
+    if (candidate.length == prefix.length) return true;
+    final next = candidate.codeUnitAt(prefix.length);
+    return next == 0x2f || next == 0x3f || next == 0x23;
   }
 }
 

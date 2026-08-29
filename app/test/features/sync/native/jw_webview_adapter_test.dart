@@ -246,6 +246,16 @@ void main() {
         );
       });
 
+      test('home convergence rejects a sibling prefix URL', () async {
+        controller
+          ..setCurrent('https://jw.ustc.edu.cn/homeevil')
+          ..sessionHealthy = true;
+        await expectLater(
+          adapter.waitForAuthenticatedHome(const Duration(milliseconds: 150)),
+          throwsA(isA<JwLoginTimeoutException>()),
+        );
+      });
+
       test(
         'home readiness rejects a stale CAS document on a home URL event',
         () async {
@@ -728,6 +738,49 @@ void main() {
       );
       expect(isJwNavigationAllowed('https://jw.ustc.edu.cn/admin'), isFalse);
     });
+  });
+
+  group('JwReadyTarget URL pattern boundaries', () {
+    test(
+      'accepts exact query/hash/subpath suffixes but rejects sibling prefixes',
+      () {
+        expect(portalHomeTarget.urlMatches(_homeUrl), isTrue);
+        expect(portalHomeTarget.urlMatches('$_homeUrl?tab=1'), isTrue);
+        expect(portalHomeTarget.urlMatches('$_homeUrl#summary'), isTrue);
+        expect(portalHomeTarget.urlMatches('$_homeUrl/settings'), isTrue);
+        expect(portalHomeTarget.urlMatches('https://jw.ustc.edu.cn/homeevil'), isFalse);
+        expect(
+          productionJwWebRuntimePolicy.isAuthenticatedHomeUrl(
+            'https://jw.ustc.edu.cn/homeevil',
+          ),
+          isFalse,
+        );
+
+        expect(
+          portalLoginTarget.urlMatches('$_loginEntryUrl?next=cas'),
+          isTrue,
+        );
+        expect(
+          portalLoginTarget.urlMatches('https://jw.ustc.edu.cn/loginOther'),
+          isFalse,
+        );
+        expect(
+          casLoginTarget.urlMatches('$_casUrl?ticket=fixture'),
+          isTrue,
+        );
+        expect(
+          courseHomeTarget.urlMatches('$_courseTableUrl/461'),
+          isTrue,
+        );
+        expect(
+          courseHomeTarget.urlMatches(
+            'https://jw.ustc.edu.cn/for-std/course-table-old',
+          ),
+          isFalse,
+        );
+        expect(examListTarget.urlMatches('$_examUrl/print'), isTrue);
+      },
+    );
   });
 }
 
