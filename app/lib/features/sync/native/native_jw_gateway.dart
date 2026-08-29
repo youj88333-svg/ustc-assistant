@@ -468,10 +468,16 @@ class NativeJwGateway implements BridgeGateway {
     final recheck = _snapshot(jobId, after);
     if (recheck.events.isNotEmpty || recheck.terminal) return recheck;
 
-    await Future.any<void>(<Future<void>>[
-      signal.future,
-      Future<void>.delayed(_pollWait),
-    ]);
+    final timeout = Completer<void>();
+    final timer = Timer(_pollWait, timeout.complete);
+    try {
+      await Future.any<void>(<Future<void>>[signal.future, timeout.future]);
+    } finally {
+      // A signal normally wins before the timeout. Cancel its timer so
+      // fake-async/widget tests and callers do not retain a late timer after
+      // the poll has already settled.
+      timer.cancel();
+    }
     return _snapshot(jobId, after);
   }
 
