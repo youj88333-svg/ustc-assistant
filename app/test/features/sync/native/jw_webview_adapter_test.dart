@@ -530,6 +530,17 @@ void main() {
         expect(id, 'data-ctx-1');
       });
 
+      test('resolveCourseDataId rejects a wrong bizTypeId context', () async {
+        controller
+          ..setCurrent(_courseTableUrl)
+          ..dataId = 'data-ctx-1'
+          ..dataContextBizTypeId = '1';
+        await expectLater(
+          adapter.resolveCourseDataId(const Duration(seconds: 2)),
+          throwsA(isA<JwCollectionException>()),
+        );
+      });
+
       test(
         'fetchCourseDatum runs get-data + datum with the right args',
         () async {
@@ -554,6 +565,19 @@ void main() {
           expect(controller.lastDatumLessonIds, <Object?>[101, 102]);
         },
       );
+
+      test('fetchCourseDatum forwards a non-default semester', () async {
+        controller.setCurrent(_courseTableUrl);
+        await adapter.fetchCourseDatum(
+          semesterId: 462,
+          dataId: 'data-ctx-1',
+          referer: _courseTableUrl,
+        );
+        expect(controller.lastGetDataArgs, <String, Object?>{
+          'semesterId': 462,
+          'dataId': 'data-ctx-1',
+        });
+      });
 
       test('invalid lessonIds fail before the datum script runs', () async {
         final invalidLessonIds = <List<Object?>>[
@@ -726,6 +750,7 @@ class FakeJwWebviewController implements JwWebviewController {
 
   // Scripted scenario state.
   String? dataId;
+  String dataContextBizTypeId = '2';
   String getDataText = '{"lessonIds":[101,102]}';
   String datumText =
       '{"result":{"lesson":[],"lessonList":[],'
@@ -1032,16 +1057,13 @@ class FakeJwWebviewController implements JwWebviewController {
           'storageConflicted': storageConflicted ?? identityConflict,
         };
       case 'jw.course.readContext':
-        if (dataId == null) {
+        if (dataId == null || dataContextBizTypeId != '2') {
           _echoError('missing_course_data_context');
           return null;
         }
         return {'dataId': dataId};
       case 'jw.course.fetchGetData':
-        lastGetDataArgs = <String, Object?>{
-          'semesterId': args['semesterId'],
-          'dataId': args['dataId'],
-        };
+        lastGetDataArgs = Map<String, Object?>.from(args);
         if (getDataFailureReason != null) {
           _echoError(getDataFailureReason!);
           return null;

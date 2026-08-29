@@ -393,6 +393,7 @@ const readDataId = () => {
         resource.pathname !== '/for-std/course-table/get-data') continue;
     const keys = Array.from(resource.searchParams.keys()).sort();
     if (keys.join(',') !== 'bizTypeId,dataId,semesterId') continue;
+    if (resource.searchParams.get('bizTypeId') !== '2') continue;
     const candidate = resource.searchParams.get('dataId');
     if (typeof candidate === 'string' && candidate.length > 0) return candidate;
   }
