@@ -8,7 +8,6 @@ import 'package:ustc_assistant_app/features/calendar/domain/calendar_event_locat
 import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart';
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
-import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
 import 'package:ustc_assistant_app/features/schedule/presentation/event_detail_loader.dart';
 
 void main() {
@@ -124,7 +123,7 @@ void main() {
     final locator = encodeCalendarEventLocator(
       RecurringOccurrenceLocator(
         seriesId: seriesId,
-        occurrenceKey: '${seriesId}@2026-07-27T15:00:00',
+        occurrenceKey: '$seriesId@2026-07-27T15:00:00',
       ),
     );
 
@@ -176,7 +175,7 @@ void main() {
     final locator = encodeCalendarEventLocator(
       RecurringOccurrenceLocator(
         seriesId: seriesId,
-        occurrenceKey: '${seriesId}@2026-07-27T09:00:00',
+        occurrenceKey: '$seriesId@2026-07-27T09:00:00',
       ),
     );
 
@@ -198,7 +197,7 @@ void main() {
     );
     expect(item != null, isTrue);
     expect(item!.id, locator);
-    expect(item!.startAt, DateTime(2026, 7, 27, 9));
+    expect(item.startAt, DateTime(2026, 7, 27, 9));
     // The raw series id is never exposed as the item's stable series id is the
     // calendar_event_series identity (kept for series-rule resolution).
     expect(item.seriesId, seriesId);

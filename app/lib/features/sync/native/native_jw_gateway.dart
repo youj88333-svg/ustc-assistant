@@ -222,11 +222,13 @@ class NativeJwGateway implements BridgeGateway {
     if (accountId == null) {
       throw StateError('controller account is not bound');
     }
-    final userDataPath = _userDataPathForAccount != null
-        ? await _userDataPathForAccount!(accountId)
-        : _legacyUserDataPath == null
+    final userDataPathForAccount = _userDataPathForAccount;
+    final legacyUserDataPath = _legacyUserDataPath;
+    final userDataPath = userDataPathForAccount != null
+        ? await userDataPathForAccount(accountId)
+        : legacyUserDataPath == null
         ? null
-        : await _legacyUserDataPath!();
+        : await legacyUserDataPath();
     final productionFactory = _productionControllerFactory;
     if (productionFactory != null) {
       return productionFactory(
@@ -644,12 +646,9 @@ class NativeJwGateway implements BridgeGateway {
 /// tests and callers.
 final class _GatewayOwnedJwWebViewAdapter extends JwWebViewAdapter {
   _GatewayOwnedJwWebViewAdapter({
-    required JwWebviewControllerFactory controllerFactory,
-    void Function(String)? safeDiagnostic,
-  }) : super(
-         controllerFactory: controllerFactory,
-         safeDiagnostic: safeDiagnostic,
-       );
+    required super.controllerFactory,
+    super.safeDiagnostic,
+  });
 
   @override
   Future<void> close() async {}

@@ -5296,7 +5296,7 @@ END
     // A configurable lifecycle write tool whose outcome sequence is scripted.
     // Each execute() returns the next outcome in the list. Distinct inputs keep
     // every call a unique fingerprint so the dedup guard never fires.
-    final lifecycleScript = (int count, List<String> outcomes) =>
+    List<List<LlmEvent>> lifecycleScript(int count, List<String> outcomes) =>
         [
           [
             for (var i = 0; i < count; i++)

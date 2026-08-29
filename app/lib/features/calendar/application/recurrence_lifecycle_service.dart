@@ -1012,9 +1012,12 @@ class RecurringLifecycleService {
             'seriesId': seriesId,
             'occurrenceKey': occurrenceKey,
             'before': before,
-            if (newSeriesId != null) 'newSeriesId': newSeriesId,
-            if (migratedExceptions != null)
-              'migratedExceptions': migratedExceptions,
+            ...?(newSeriesId == null
+                ? null
+                : {'newSeriesId': newSeriesId}),
+            ...?(migratedExceptions == null
+                ? null
+                : {'migratedExceptions': migratedExceptions}),
           },
           safeSummary: _safeSummary(action, ''),
         ),

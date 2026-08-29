@@ -778,7 +778,7 @@ void main() {
 
       // Snapshot the original rows, then destroy them so restore has work.
       final taskBefore =
-          (await database.select(database.tasks)
+          (database.select(database.tasks)
                 ..where(
                   (row) =>
                       row.id.equals('task-composite') &
@@ -794,7 +794,7 @@ void main() {
               ))
           .get();
       final linkBefore =
-          (await database.select(database.taskEventLinks)
+          (database.select(database.taskEventLinks)
                 ..where(
                   (row) =>
                       row.accountId.equals('a') &
@@ -803,7 +803,7 @@ void main() {
                 ))
               .getSingle();
       final policyBefore =
-          (await database.select(database.agentPermissionPolicies)
+          (database.select(database.agentPermissionPolicies)
                 ..where(
                   (row) =>
                       row.id.equals('policy-composite') &
@@ -828,7 +828,7 @@ void main() {
                 'entity': 'reminder_override',
                 'targetType': 'event',
                 'targetId': 'ev-c',
-                'before': (await remindersBefore).map((r) => r.toJson()).toList(),
+                'before': remindersBefore.map((r) => r.toJson()).toList(),
               },
               {
                 'entity': 'task_event_link',

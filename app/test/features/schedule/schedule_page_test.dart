@@ -1449,7 +1449,7 @@ void main() {
     // Edit only the 7-27 occurrence to 8:45.
     await service.editOnlyThis(
       seriesId,
-      '${seriesId}@2026-07-27T08:00:00',
+      '$seriesId@2026-07-27T08:00:00',
       OccurrenceOverride(startAt: OverrideValue.set(DateTime(2026, 7, 27, 8, 45))),
     );
 

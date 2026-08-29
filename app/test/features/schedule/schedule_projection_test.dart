@@ -8,7 +8,6 @@ import 'package:ustc_assistant_app/features/calendar/domain/personal_event.dart'
 import 'package:ustc_assistant_app/features/calendar/domain/recurrence_rule.dart';
 import 'package:ustc_assistant_app/features/schedule/application/conflict_service.dart';
 import 'package:ustc_assistant_app/features/schedule/application/effective_event_repository.dart';
-import 'package:ustc_assistant_app/features/schedule/application/schedule_conflict_projection.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/course_color.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/overlap_engine.dart';
 import 'package:ustc_assistant_app/features/schedule/domain/schedule_grid_item.dart';
@@ -636,7 +635,7 @@ void main() {
     // and update only that occurrence while preserving its locator.
     await service.editOnlyThis(
       seriesId,
-      '${seriesId}@2026-07-27T08:00:00',
+      '$seriesId@2026-07-27T08:00:00',
       OccurrenceOverride(startAt: OverrideValue.set(DateTime(2026, 7, 27, 8, 45))),
     );
     await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -777,7 +776,7 @@ void main() {
       // Override the 7-27 occurrence from 08:00 to 09:00 (duration 30-min).
       await service.editOnlyThis(
         seriesId,
-        '${seriesId}@2026-07-27T08:00:00',
+        '$seriesId@2026-07-27T08:00:00',
         OccurrenceOverride(
           startAt: OverrideValue.set(DateTime(2026, 7, 27, 9)),
         ),
