@@ -15,7 +15,7 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 §8.7：analyze 通过；test 1440 pass / 1 known migration-baseline fail，按规则停止、未 build；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | Task 9 §8.7：Windows analyze/test/build 串行 gate 全部 exit 0（test 1441/0，Release 产物已生成）；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
@@ -349,7 +349,7 @@ M5 HEAD `25ec61a` 的历史快照为 **1360 pass / 7 fail**，7 项全部为 M0 
 当前 M7 结果只记录在 §8.7。外部机器若复现该历史快照，可按下述原因解释，但不得
 把历史数字当作当前代码的验证结论。
 
-### 6.1 1 项 DB migration 健壮性缺口（非"需干净 DB"）
+### 6.1 历史快照中的 1 项 migration fixture 缺陷（已修复）
 
 **失败测试：**
 ```
@@ -362,13 +362,15 @@ test/features/agent/agent_write_permission_domain_test.dart:
 SqliteException(1): while executing, no such table: calendar_event_series, SQL logic error (code 1)
 ```
 
-**根因：** v7 migration 假设任何升级中的 DB 都已有 `calendar_event_series` 表
-（该表自 schedule/task schema 提交起存在），但该测试构造了一个只含 `agent_*` 表的
+**根因：** v7 migration 契约要求升级中的真实 v1–v6 数据库已有
+`calendar_event_series` 等 schedule/task 表，但该测试构造了只含 `agent_*` 表的
 legacy v3 DB（无 calendar schema），导致 `ALTER TABLE calendar_event_series ADD
-COLUMN` 崩溃。这是 **migration 健壮性假设缺口**（非"需干净 DB"）。
+COLUMN` 崩溃。它是 **测试 fixture 不完整**，不是生产迁移应以 `IF EXISTS` 放宽的缺陷。
 
-**处置：** M6 不修。属后续 backlog（M7+ 或独立修复轮）。外部机器复现相同结果即可，
-**不得**把此项当作环境问题排查或当作真实构建/验收的阻塞项。
+**处置：** 该 fixture failure 在 Task 9 fix4 前确实阻塞当前严格 gate：按停止规则，
+`flutter test` 非零时不得启动 Release build。`467e090` 提取并复用了 valid pre-v7
+schedule/task fixture helper，只修改测试；生产 migration 未改。当前 Task 9 结果见
+§8.7，不能把修复前的失败与历史 1360/7 数字混写。
 
 ### 6.2 6 项 golden 字体渲染差异（环境敏感，非 bug）
 
@@ -399,7 +401,7 @@ flutter test --update-goldens
 
 | # | 失败测试 | 根因 | 处置 | 是否阻塞构建/验收 |
 |---|---|---|---|---|
-| 1 | migration test | v7 migration 假设缺口 | M6 不修，后续 backlog | 否 |
+| 1 | migration test | v3 fixture 缺少合法 pre-v7 schedule/task 表链 | Task 9 fix4 补齐 fixture（`467e090`） | 是（修复前严格 gate） |
 | 2–7 | 6 golden tests | 环境字体渲染差异 | 可选 `--update-goldens`（本地基线，不回传） | 否 |
 
 ---
@@ -457,14 +459,15 @@ flutter test --update-goldens
 cd app
 flutter analyze                # 历史 M5 快照：0 error / 15 issues（当前 Task 9 见 §8.7）
 flutter test                   # 较 M5 基线新增：adapter 15 + gateway 7 单测，全绿
-                               # （本机 sqlite3.dll 需在 PATH，见 §8.5）
+                               # （该初始快照在 sqlite hook 修复前；当前依赖口径见 §8.5）
 flutter build windows --release  # 含插件 C++ 编译
 ```
 
-- `flutter test` 全量在**本机**为 **1388 pass / 1 fail**（1 项为 M0 基线
-  migration 健壮性缺口，见 §6.1；6 项 golden 在 Linux VM 失败、本机字体环境
-  通过）。外部 Linux VM 复现仍应为 1360+ 基线 / 已知 7 项失败口径（golden
-  环境差异，不阻塞）。
+- `flutter test` 全量在**本机**为 **1388 pass / 1 fail**（初始快照中的不完整
+  migration fixture，见 §6.1；6 项 golden 在 Linux VM 失败、本机字体环境通过）。
+  这是历史初始接入结果；当前 fixture 已由 Task 9 fix4 修复，当前结果只见 §8.7。
+  外部 Linux VM 复现仍应为 1360+ 基线 / 已知 7 项历史口径（golden 环境差异，
+  不阻塞真实构建/验收）。
 - 新增单测均不触网、不建二进制：驱动 fake `JwWebviewController`（与插件
   `secure_controller_test.dart` 相同的 MethodChannel mock 思路）；
   覆盖三信号收敛、登录激活、身份核验（布尔不回传账号原文）、get-data/datum
@@ -582,10 +585,14 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
 
 #### Task 9 自动化验证记录（2026-08-29）
 
-- 进程预检：执行 `Get-Process flutter,dart,ustc_assistant_app`，开始前和完成后
-  均未发现相关进程；未终止其他任务。诊断发现首次 sandbox 命令静默是因为 Flutter
-  SDK 位于受限目录，`shared.bat` 无法写入 `cache/flutter.bat.lock`，遂在锁获取循环
-  中等待；未发现其他 Flutter 命令持有者。
+- 进程预检：最终 gate 启动时执行 `Get-Process flutter,dart,ustc_assistant_app`，
+  目标进程为零；gate 结束后同一查询也为零。另在结束后的只读进程树检查中发现一
+  个 14:39 启动的旧 Task 9 `schedule_task_schema_test.dart` 包装命令（PowerShell
+  PID 29128 → cmd PID 15848），不是当前 gate；按“只清理已核实任务进程”规则终止这
+  两个 PID，未触碰 Codex/其他任务。最终 Flutter/Dart/app 进程与该包装命令均无残留。
+  首次 sandbox 命令静默的原因已定位为 Flutter SDK 位于受限目录，`shared.bat` 无法
+  写入 `cache/flutter.bat.lock`，遂在锁获取循环中等待；后续 gate 使用必要权限，未
+  启动重复命令。
 - Windows loopback：在修正上述执行权限后，按要求启动一次 fresh 命令；`-d windows`
   使用 Debug runner，退出码 0，输出 `00:03 +1: All tests passed!`；Debug 构建阶段约
   23.4s。无设备断开；完成后无
@@ -596,17 +603,22 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
   sqlite 初始化与 Drift schema 可达；`native_jw_gateway_test.dart` 串行 13/13 通过。
 - Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始严格执行
   `analyze --no-pub → test --no-pub --reporter expanded → build windows --release
-  --no-pub`。移除 system sqlite hook 并执行 `flutter pub get` 后，analyze 通过
-  （`No issues found!`，`ANALYZE_EXIT=0`，约 15.4s）；expanded 全量 test 运行约
-  69.5s 后退出 1，末计数为 `1440 passed / 1 failed`，唯一失败为
-  `agent_write_permission_domain_test.dart: schema v4 migrates the v3 policy/action_log tables`
-  的已知 migration 基线。测试未出现 sqlite3.dll error 126，也未发现第二个根因。
-  按规则 build 未运行，且未启动第二套 Flutter 命令；本次没有得到 Windows Release
-  构建结果。该 `1` 项与历史 M5 的 `7` 项快照不同，不能混写。
+  --no-pub`。Task 9 fix4 后 analyze 通过（`No issues found!`，`ANALYZE_EXIT=0`，
+  gate wrapper 7.6s）；expanded 全量 test 真实退出 0，末计数为 `1441 passed / 0
+  failed`。随后 Release build 的 CMake `INSTALL` 目标完成并退出 0；主构建进程约
+  15:22:59 启动，最后安装状态文件约 15:24:08 更新（约 69s）。Release 产物
+  `app/build/windows/x64/runner/Release/ustc_assistant_app.exe` 存在，92,160 bytes，
+  SHA-256 为 `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`；
+  同轮 `data/app.so` 与 WebView2 插件文件已更新。未出现 sqlite3.dll error 126，未
+  启动第二套 Flutter 命令。修复前 `1440/1` fixture failure 曾按严格停止规则阻塞
+  Release gate；该结果与历史 M5 `7` 项快照不可混写。
 - Python oracle：使用临时、仅进程级的 `PYTHONPATH` 指向当前 worktree 的绝对
   `src`，先断言 `ustc_assistant.__file__` 位于该目录；unittest 实际为 `Ran 140
   tests in 1.666s`、`OK`，compileall 退出 0。不安装依赖、不改变环境。
-- 本机已知限制：若出现 `sqlite3.dll` FFI error 126，记录为宿主环境缺少动态库，
-  不复制/下载 DLL、不把失败伪装成基线通过；历史 migration/golden 基线也按 §6
-  原因区分。真实校园验收仍未由本机自动化代替。
+- sqlite diagnosis 中的 error-126 是配置修复前证据，详见
+  `.superpowers/sdd/2026-08-28-minimal-jw-webview-reachability/task-9-sqlite-diagnosis.md`；
+  当前 Task 9 汇总在忽略的
+  `.superpowers/sdd/2026-08-28-minimal-jw-webview-reachability/task-9-report.md`。
+  若未来 owner 环境再次出现该错误，仍必须保留原始计数并停止后续 gate，不复制、改名、
+  安装或下载 DLL；真实校园验收仍未由本机自动化代替。
 

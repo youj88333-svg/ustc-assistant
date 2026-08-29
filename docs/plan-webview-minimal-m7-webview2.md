@@ -81,7 +81,9 @@
 - **关闭会话快照**：minimal 不调用 `restoreTrustedSessionSnapshot` /
   `persistTrustedSessionSnapshot`（flag 默认 false），保留 `clearBrowsingDataAll` 用于
   退出清会话。
-- 验证：`flutter analyze` 0 error；`flutter build windows --release` 编译通过。
+- 验证：以 §8.5 Task 9 的当前串行 gate 记录为准；`analyze` 与全量 `test` 必须
+  真实退出 0 后才启动 `flutter build windows --release`，任何非零都按停止规则原样
+  记录。历史基线或 Debug loopback 不得替代 Release gate 结果。
 
 ### Task 3：实现 `JwWebViewAdapter implements JwWebPage`（核心）
 替换现有 stub 的 12 个方法体，逻辑对齐全量踩坑后的驾驶方式：
@@ -141,8 +143,9 @@
   WebView surface，因此 native 模式的 `runStartupAutomaticSync` 不启动 headless
   采集。用常量 `kUsePythonBridgeFallback = false` 保留回退口（切为 true 时 Python
   Bridge 仍可执行 headless 启动同步）。
-- 验证：`flutter analyze` 0 error；`flutter test` 全绿（含新增 native gateway 单测）；
-  `flutter build windows --release` 编译通过。
+- 验证：以 §8.5 Task 9 的当前串行 gate 记录为准；`analyze` 与全量 `test` 必须
+  真实退出 0 后才启动 `flutter build windows --release`，任何非零都按停止规则原样
+  记录。历史基线或 Debug loopback 不得替代 Release gate 结果。
 
 ### Task 5：文档与已知边界
 - 在 `docs/m6-external-machine-handoff.md` 增补：WebView2 已接入 minimal 的说明与
@@ -177,7 +180,7 @@ cd app
 flutter pub get
 flutter analyze                      # 历史 M5/M6 快照：0 error，issue 数 15；当前 M7 见 §8.5
 flutter test                          # 历史 M5 快照：1360 pass / 7 fail；当前 M7 结果见 §8.5
-flutter build windows --release       # 编译通过
+flutter build windows --release       # 仅在前两步 exit 0 后执行；当前结果见 §8.5
 ```
 
 真实人工验收（需校园网 + 真实账号）：
@@ -280,13 +283,20 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
   官方 hook 生成 bundled native asset。随后 `schedule_task_schema_test.dart` 串行
   14/14 通过，确认 sqlite 初始化与 Drift schema 可达；`native_jw_gateway_test.dart`
   串行 13/13 通过。
-- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；本轮 lint 修复后
-  analyze 通过（`No issues found!`，gate `ANALYZE_EXIT=0`，约 15.4s）。expanded
-  全量 test 运行约 69.5s 后真实退出 1，末计数为 `1440 passed / 1 failed`，唯一失败为
-  `agent_write_permission_domain_test.dart: schema v4 migrates the v3 policy/action_log tables`
-  的已知 migration 基线。测试未出现 sqlite3.dll error 126，也未发现第二个根因。
-  依据停止规则，build 未运行，也没有重启第二套命令；因此没有 Windows Release 构建结果。
-  该 1 项不是历史 M5 的 7 项基线失败计数，二者不可混写。
+- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；Task 9 fix4 后
+  analyze 通过（`No issues found!`，`ANALYZE_EXIT=0`，gate 计时 7.6s）。expanded
+  全量 test 通过，末计数为 `1441 passed / 0 failed`、exit 0；随后 Release build
+  通过，CMake `INSTALL` 目标完成、exit 0。Release 产物
+  `build/windows/x64/runner/Release/ustc_assistant_app.exe` 存在（92,160 bytes，
+  SHA-256 `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`）；
+  同轮 `data/app.so` 与 WebView2 插件文件已更新。此前 `1440/1` 的 fixture failure
+  是 pre-fix evidence，曾按严格停止规则阻塞 Release gate；`467e090` 只修测试
+  fixture，未放宽生产 migration。全程未出现 sqlite3.dll error 126，也未启动第二套
+  Flutter gate。
+- sqlite diagnosis 的 error-126 记录是配置修复前证据，详见
+  `.superpowers/sdd/2026-08-28-minimal-jw-webview-reachability/task-9-sqlite-diagnosis.md`；
+  本轮当前汇总见忽略的
+  `.superpowers/sdd/2026-08-28-minimal-jw-webview-reachability/task-9-report.md`。
 - Python：临时进程级 `PYTHONPATH` 明确指向本 worktree 的 `src`，导入断言通过；
   unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
   Conda 依赖。
@@ -312,8 +322,9 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
 - minimal 不实现 Android/iOS 真实 WebView；移动端接线/构建仍按 M6 外部机器手册执行。
 - 本机若无法加载 `sqlite3.dll`（FFI error 126），这是验证宿主环境差异；不安装、
   复制或下载动态库，不将其报告为代码通过。
-- 历史 migration 健壮性和 golden 字体差异按 M6 §6 记录；Task 8 loopback/fake
-  WebView 证据不覆盖这些既有 baseline failures。
+- 历史 M5 migration fixture 与 golden 字体差异按 M6 §6 记录；migration fixture
+  已在 Task 9 fix4（`467e090`）补齐，当前 Windows gate 结果见 §8.5。Task 8
+  loopback/fake WebView 证据仍不替代 Release gate 或真实校园验收。
 
 ## 9. 参考
 
