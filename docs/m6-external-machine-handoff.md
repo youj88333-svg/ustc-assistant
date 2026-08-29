@@ -15,7 +15,7 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 analyze 真实退出 1（18 issues），按规则 test/build 未运行；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | Task 9 §8.7：analyze 通过；test 493 pass / 948 fail（sqlite3.dll FFI 126），按规则停止、未 build；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
