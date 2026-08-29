@@ -680,9 +680,9 @@ final class JwWebRuntimePolicy {
     required this.courseHomeTarget,
     required this.examListTarget,
     required Map<String, String> registeredScripts,
-    required this.navigationUrlPredicate,
-    required this.authenticatedHomeUrlPredicate,
-    required this.getDataUrlPredicate,
+    this.navigationUrlPredicate,
+    this.authenticatedHomeUrlPredicate,
+    this.getDataUrlPredicate,
   }) : allowedOrigins = List<String>.unmodifiable(allowedOrigins),
        allowedPathPrefixes =
            Map<String, List<String>>.unmodifiable(<String, List<String>>{
@@ -706,15 +706,35 @@ final class JwWebRuntimePolicy {
   final JwReadyTarget examListTarget;
   final Map<String, String> registeredScripts;
 
-  final bool Function(String) navigationUrlPredicate;
-  final bool Function(String) authenticatedHomeUrlPredicate;
-  final bool Function(String) getDataUrlPredicate;
+  final bool Function(String)? navigationUrlPredicate;
+  final bool Function(String)? authenticatedHomeUrlPredicate;
+  final bool Function(String)? getDataUrlPredicate;
 
-  bool isNavigationAllowed(String url) => navigationUrlPredicate(url);
+  bool isNavigationAllowed(String url) =>
+      navigationUrlPredicate?.call(url) ??
+      _isNavigationAllowedWith(url, allowedOrigins, allowedPathPrefixes);
 
-  bool isAuthenticatedHomeUrl(String url) => authenticatedHomeUrlPredicate(url);
+  bool isAuthenticatedHomeUrl(String url) =>
+      authenticatedHomeUrlPredicate?.call(url) ??
+      portalHomeTarget.urlMatches(url);
 
-  bool isGetDataUrl(String url) => getDataUrlPredicate(url);
+  bool isGetDataUrl(String url) =>
+      getDataUrlPredicate?.call(url) ?? _isGetDataUrlFromFields(url);
+
+  bool _isGetDataUrlFromFields(String url) {
+    final parsed = Uri.tryParse(url);
+    final endpoint = Uri.tryParse(courseEntryUrl);
+    if (parsed == null ||
+        endpoint == null ||
+        parsed.scheme != endpoint.scheme ||
+        parsed.host != endpoint.host ||
+        parsed.port != endpoint.port ||
+        parsed.path != courseGetDataPath) {
+      return false;
+    }
+    final values = parsed.queryParametersAll['dataId'] ?? const <String>[];
+    return values.length == 1 && values.first.isNotEmpty;
+  }
 
   /// Builds a Debug-only policy for the plugin's IPv4 loopback test port.
   ///
@@ -731,6 +751,7 @@ final class JwWebRuntimePolicy {
     const portalLoginPath = '/portal/login';
     const casLoginPath = '/passport/cas/login';
     const portalHomePath = '/portal/home';
+    const loopbackPortalLoginSelector = '[data-loopback-login]';
     const courseEntryPath = '/course/table';
     const courseGetDataPath = '/course/get-data';
     const courseDatumPath = '/course/datum';
@@ -745,7 +766,7 @@ final class JwWebRuntimePolicy {
       id: _jwPortalLoginTarget.id,
       url: loopbackPortalLogin,
       urlPattern: '$loopbackPortalLogin*',
-      readySelector: _jwPortalLoginTarget.readySelector,
+      readySelector: loopbackPortalLoginSelector,
       handshakeScriptId: _jwPortalLoginTarget.handshakeScriptId,
       handshakeExpectation: _jwPortalLoginTarget.handshakeExpectation,
     );
@@ -801,22 +822,14 @@ final class JwWebRuntimePolicy {
       );
     }
 
-    bool loopbackGetDataAllowed(String url) {
-      final parsed = Uri.tryParse(url);
-      if (parsed == null ||
-          parsed.scheme != 'http' ||
-          parsed.host != '127.0.0.1' ||
-          parsed.port != port ||
-          parsed.path != courseGetDataPath) {
-        return false;
-      }
-      final dataIds = parsed.queryParametersAll['dataId'] ?? const <String>[];
-      return dataIds.length == 1 && dataIds.first.isNotEmpty;
-    }
-
+    final loopbackSelectorLiteral = jsonEncode(loopbackPortalLoginSelector);
     String rewriteScript(String source) => source
         .replaceAll('https://jw.ustc.edu.cn', origin)
         .replaceAll('https://id.ustc.edu.cn', origin)
+        .replaceAll(
+          "document.querySelectorAll('#login-unified-wrapper')",
+          'document.querySelectorAll($loopbackSelectorLiteral)',
+        )
         .replaceAll("'/home'", "'$portalHomePath'")
         .replaceAll("'/login'", "'$portalLoginPath'")
         .replaceAll("'/cas/login'", "'$casLoginPath'")
@@ -846,8 +859,6 @@ final class JwWebRuntimePolicy {
           entry.key: rewriteScript(entry.value),
       },
       navigationUrlPredicate: loopbackUrlAllowed,
-      authenticatedHomeUrlPredicate: loopbackPortalHomeTarget.urlMatches,
-      getDataUrlPredicate: loopbackGetDataAllowed,
     );
   }
 }
@@ -868,11 +879,17 @@ final JwWebRuntimePolicy productionJwWebRuntimePolicy = JwWebRuntimePolicy(
   courseHomeTarget: _jwCourseHomeTarget,
   examListTarget: _jwExamListTarget,
   registeredScripts: jwRegisteredScripts,
-  navigationUrlPredicate: (url) =>
-      _isNavigationAllowedWith(url, jwAllowedOrigins, jwAllowedPathPrefixes),
-  authenticatedHomeUrlPredicate: isAuthenticatedHomeUrl,
-  getDataUrlPredicate: isGetDataUrl,
 );
+
+/// Validates the policy guard independently of the host build mode so tests
+/// can exercise the Release rule without pretending [kDebugMode] changed.
+bool isJwRuntimePolicyAllowedForBuild(
+  JwWebRuntimePolicy policy, {
+  required bool debugMode,
+  int? debugLoopbackPort,
+}) =>
+    debugMode ||
+    (debugLoopbackPort == null && identical(policy, productionJwWebRuntimePolicy));
 
 /// True iff [url] is allowed by the immutable production JW policy.
 bool isJwNavigationAllowed(String url) =>

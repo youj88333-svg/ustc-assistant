@@ -54,8 +54,24 @@ const int _courseGetDataMaxResponseBytes = 8 * 1024 * 1024;
 const int _courseDatumMaxResponseBytes = 16 * 1024 * 1024;
 const int _examTableMaxResponseBytes = 4 * 1024 * 1024;
 const int _maxCourseLessonIds = 20000;
+const Duration _environmentReleaseTimeout = Duration(seconds: 30);
+
+Future<void> _awaitEnvironmentReleased() =>
+    WebviewController.awaitEnvironmentReleased().timeout(
+      _environmentReleaseTimeout,
+    );
 
 int _utf8ByteLength(String text) => utf8.encode(text).length;
+
+String _javaScriptStringLiteral(String value) {
+  final jsonLiteral = jsonEncode(value);
+  final body = jsonLiteral
+      .substring(1, jsonLiteral.length - 1)
+      .replaceAll("'", r"\'")
+      .replaceAll('\u2028', r'\u2028')
+      .replaceAll('\u2029', r'\u2029');
+  return "'$body'";
+}
 
 void _requireResponseSize(
   String text, {
@@ -135,9 +151,38 @@ class ProductionJwWebviewController implements JwWebviewController {
 
   @override
   Future<void> dispose() async {
-    await _urlSub?.cancel();
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    void remember(Object error, StackTrace stackTrace) {
+      firstError ??= error;
+      firstStackTrace ??= stackTrace;
+    }
+
+    final urlSubscription = _urlSub;
     _urlSub = null;
-    await _controller.dispose();
+    try {
+      await urlSubscription?.cancel();
+    } on Object catch (error, stackTrace) {
+      remember(error, stackTrace);
+    }
+    try {
+      await _controller.dispose();
+    } on Object catch (error, stackTrace) {
+      remember(error, stackTrace);
+    }
+    // Do not release the UDF until the native browser process has released
+    // the shared WebView2 environment. A bounded wait preserves the first
+    // disposal failure without making cleanup hang forever.
+    try {
+      await _awaitEnvironmentReleased();
+    } on Object catch (error, stackTrace) {
+      remember(error, stackTrace);
+    }
+
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStackTrace ?? StackTrace.current);
+    }
   }
 
   /// Must be called after initialization to start the URL snapshot.
@@ -193,9 +238,11 @@ Future<JwWebviewController> createProductionJwWebviewController({
   }
 
   diag('controller_factory:start');
-  if (!kDebugMode &&
-      (debugLoopbackPort != null ||
-          !identical(runtimePolicy, productionJwWebRuntimePolicy))) {
+  if (!isJwRuntimePolicyAllowedForBuild(
+    runtimePolicy,
+    debugMode: kDebugMode,
+    debugLoopbackPort: debugLoopbackPort,
+  )) {
     throw UnsupportedError(
       'Custom JW WebView runtime policy is unavailable in release builds.',
     );
@@ -213,11 +260,20 @@ Future<JwWebviewController> createProductionJwWebviewController({
     await WebviewController.initializeEnvironment(userDataPath: userDataPath);
   }
   final raw = WebviewController();
+  ProductionJwWebviewController? wrapped;
+  JwWebviewController? result;
+  Object? firstError;
+  StackTrace? firstStackTrace;
+  void remember(Object error, StackTrace stackTrace) {
+    firstError ??= error;
+    firstStackTrace ??= stackTrace;
+  }
+
   var handedOff = false;
   try {
     diag('controller_factory:controller_initialize');
     await raw.initialize();
-    final controller = ProductionJwWebviewController(raw);
+    final controller = wrapped = ProductionJwWebviewController(raw);
     // Start the URL snapshot subscription before any navigation so a fast
     // landing page cannot be missed (lesson 3.2 / three-signal convergence).
     diag('controller_factory:url_snapshot');
@@ -229,13 +285,39 @@ Future<JwWebviewController> createProductionJwWebviewController({
     );
     diag('controller_factory:ready');
     handedOff = true;
-    return controller;
-  } finally {
-    if (!handedOff) {
-      diag('controller_factory:aborted');
-      await raw.dispose();
+    result = controller;
+  } on Object catch (error, stackTrace) {
+    remember(error, stackTrace);
+  }
+
+  if (!handedOff) {
+    diag('controller_factory:aborted');
+    final controller = wrapped;
+    if (controller != null) {
+      try {
+        await controller.dispose();
+      } on Object catch (error, stackTrace) {
+        remember(error, stackTrace);
+      }
+    } else {
+      try {
+        await raw.dispose();
+      } on Object catch (error, stackTrace) {
+        remember(error, stackTrace);
+      }
+      try {
+        await _awaitEnvironmentReleased();
+      } on Object catch (error, stackTrace) {
+        remember(error, stackTrace);
+      }
     }
   }
+
+  final error = firstError;
+  if (error != null) {
+    Error.throwWithStackTrace(error, firstStackTrace ?? StackTrace.current);
+  }
+  return result!;
 }
 
 /// The real Windows WebView2 `JwWebPage`.
@@ -258,7 +340,9 @@ class JwWebViewAdapter implements JwWebPage {
        _casFormWaitTimeout = casFormWaitTimeout,
        _safeDiagnostic = safeDiagnostic,
        _runtimePolicy = runtimePolicy ?? productionJwWebRuntimePolicy,
-       _controllerFactory = controllerFactory;
+       _controllerFactory = controllerFactory {
+    _assertRuntimePolicyAllowed();
+  }
 
   final JwWebviewControllerFactory _controllerFactory;
   final Duration _loginTimeout;
@@ -287,7 +371,19 @@ class JwWebViewAdapter implements JwWebPage {
     }
   }
 
+  void _assertRuntimePolicyAllowed() {
+    if (!isJwRuntimePolicyAllowedForBuild(
+      _runtimePolicy,
+      debugMode: kDebugMode,
+    )) {
+      throw UnsupportedError(
+        'Custom JW WebView runtime policy is unavailable in release builds.',
+      );
+    }
+  }
+
   Future<JwWebviewController> _ensureController() async {
+    _assertRuntimePolicyAllowed();
     if (_disposed) {
       throw const JwCollectionException('webview adapter is closed');
     }
@@ -716,13 +812,16 @@ class JwWebViewAdapter implements JwWebPage {
     if (!isActive()) {
       throw const JwCollectionException('login attempt is no longer active');
     }
+    final selectorLiteral = _javaScriptStringLiteral(
+      _runtimePolicy.portalLoginTarget.readySelector,
+    );
     final geometry = await controller.executeScript('''
 (() => {
-  // The wrapper is the only trusted portal activation target. Do not select
-  // broad text/links/buttons: a different login-like element must never
-  // receive a native click.
-  const element = document.querySelector('#login-unified-wrapper');
-  if (!element || element.id !== 'login-unified-wrapper' ||
+  // The policy-owned selector is the only trusted portal activation target.
+  // Do not select broad text/links/buttons: a different login-like element
+  // must never receive a native click.
+  const element = document.querySelector($selectorLiteral);
+  if (!element || !element.matches($selectorLiteral) ||
       !element.isConnected) return null;
   const style = window.getComputedStyle(element);
   if (style.display === 'none' || style.visibility === 'hidden' ||
