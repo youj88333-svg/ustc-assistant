@@ -19,8 +19,8 @@
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter_windows_secure/webview_flutter_windows.dart';
 
@@ -149,10 +149,14 @@ class ProductionJwWebviewController implements JwWebviewController {
   }
 
   /// Configures the native navigation/deny policies.
-  Future<void> configurePolicies() async {
+  Future<void> configurePolicies({
+    required JwWebRuntimePolicy runtimePolicy,
+    int? debugLoopbackPort,
+  }) async {
     await _controller.setNavigationPolicy(
-      allowedOrigins: jwAllowedOrigins,
-      allowedPathPrefixes: jwAllowedPathPrefixes,
+      allowedOrigins: runtimePolicy.allowedOrigins,
+      allowedPathPrefixes: runtimePolicy.allowedPathPrefixes,
+      debugLoopbackPort: debugLoopbackPort,
     );
     await _controller.denyDownloads();
     await _controller.denyNewWindows();
@@ -176,7 +180,10 @@ class ProductionJwWebviewController implements JwWebviewController {
 Future<JwWebviewController> createProductionJwWebviewController({
   String? userDataPath,
   void Function(String)? safeDiagnostic,
+  int? debugLoopbackPort,
+  JwWebRuntimePolicy? policy,
 }) async {
+  final runtimePolicy = policy ?? productionJwWebRuntimePolicy;
   void diag(String stage) {
     try {
       safeDiagnostic?.call(stage);
@@ -186,6 +193,21 @@ Future<JwWebviewController> createProductionJwWebviewController({
   }
 
   diag('controller_factory:start');
+  if (!kDebugMode &&
+      (debugLoopbackPort != null ||
+          !identical(runtimePolicy, productionJwWebRuntimePolicy))) {
+    throw UnsupportedError(
+      'Custom JW WebView runtime policy is unavailable in release builds.',
+    );
+  }
+  if (debugLoopbackPort != null &&
+      (debugLoopbackPort <= 0 || debugLoopbackPort > 65535)) {
+    throw ArgumentError.value(
+      debugLoopbackPort,
+      'debugLoopbackPort',
+      'must be between 1 and 65535',
+    );
+  }
   if (userDataPath != null && userDataPath.isNotEmpty) {
     diag('controller_factory:environment_configure');
     await WebviewController.initializeEnvironment(userDataPath: userDataPath);
@@ -201,7 +223,10 @@ Future<JwWebviewController> createProductionJwWebviewController({
     diag('controller_factory:url_snapshot');
     await controller.beginUrlSnapshot();
     diag('controller_factory:policies');
-    await controller.configurePolicies();
+    await controller.configurePolicies(
+      runtimePolicy: runtimePolicy,
+      debugLoopbackPort: debugLoopbackPort,
+    );
     diag('controller_factory:ready');
     handedOff = true;
     return controller;
@@ -223,6 +248,7 @@ Future<JwWebviewController> createProductionJwWebviewController({
 class JwWebViewAdapter implements JwWebPage {
   JwWebViewAdapter({
     required JwWebviewControllerFactory controllerFactory,
+    JwWebRuntimePolicy? runtimePolicy,
     Duration loginTimeout = defaultLoginTimeout,
     Duration responseTimeout = defaultResponseTimeout,
     Duration casFormWaitTimeout = const Duration(seconds: 45),
@@ -231,6 +257,7 @@ class JwWebViewAdapter implements JwWebPage {
        _responseTimeout = responseTimeout,
        _casFormWaitTimeout = casFormWaitTimeout,
        _safeDiagnostic = safeDiagnostic,
+       _runtimePolicy = runtimePolicy ?? productionJwWebRuntimePolicy,
        _controllerFactory = controllerFactory;
 
   final JwWebviewControllerFactory _controllerFactory;
@@ -238,6 +265,7 @@ class JwWebViewAdapter implements JwWebPage {
   final Duration _responseTimeout;
   final Duration _casFormWaitTimeout;
   final void Function(String)? _safeDiagnostic;
+  final JwWebRuntimePolicy _runtimePolicy;
 
   JwWebviewController? _controller;
   bool _disposed = false;
@@ -275,7 +303,7 @@ class JwWebViewAdapter implements JwWebPage {
   /// depth; the native policy is the primary guard).
   Future<void> _navigate(String url) async {
     final controller = await _ensureController();
-    if (!isJwNavigationAllowed(url)) {
+    if (!_runtimePolicy.isNavigationAllowed(url)) {
       _diag('navigation_rejected');
       throw const JwCollectionException('navigation policy rejected');
     }
@@ -305,28 +333,28 @@ class JwWebViewAdapter implements JwWebPage {
   }
 
   @override
-  Future<void> gotoRoot() => _navigate(jwRootUrl);
+  Future<void> gotoRoot() => _navigate(_runtimePolicy.jwRootUrl);
 
   @override
   Future<void> gotoCasEntry() async {
     final controller = await _ensureController();
     await _converge(
-      target: portalLoginTarget,
+      target: _runtimePolicy.portalLoginTarget,
       timeout: _loginTimeout,
-      command: (_) => controller.loadUrl(portalLoginTarget.url),
+      command: (_) => controller.loadUrl(_runtimePolicy.portalLoginTarget.url),
     );
   }
 
   @override
-  Future<void> gotoCourseTable() => _navigate(courseEntryUrl);
+  Future<void> gotoCourseTable() => _navigate(_runtimePolicy.courseEntryUrl);
 
   @override
-  Future<void> gotoExamArrange() => _navigate(examEntryUrl);
+  Future<void> gotoExamArrange() => _navigate(_runtimePolicy.examEntryUrl);
 
   @override
   Future<bool> get isAuthenticatedHome async {
     final url = await currentUrl;
-    return isAuthenticatedHomeUrl(url);
+    return _runtimePolicy.isAuthenticatedHomeUrl(url);
   }
 
   // --- CAS login ------------------------------------------------------------
@@ -363,23 +391,29 @@ class JwWebViewAdapter implements JwWebPage {
       // Prepare the exact portal login target before the one native primary
       // click. An already prepared target is only revalidated; a different
       // document is navigated to the trusted `/login` entry first.
-      final onPortalLogin = portalLoginTarget.urlMatches(current);
+      final onPortalLogin = _runtimePolicy.portalLoginTarget.urlMatches(
+        current,
+      );
       if (!onPortalLogin) {
         // Navigate to the trusted `/login` entry when the current document is
         // not already in the exact portal target family.
         _diag('attempt:jw.portal.login');
         await _converge(
-          target: portalLoginTarget,
+          target: _runtimePolicy.portalLoginTarget,
           timeout: _loginTimeout,
-          command: (_) => controller.loadUrl(portalLoginTarget.url),
+          command: (_) =>
+              controller.loadUrl(_runtimePolicy.portalLoginTarget.url),
         );
       } else {
-        await _converge(target: portalLoginTarget, timeout: _loginTimeout);
+        await _converge(
+          target: _runtimePolicy.portalLoginTarget,
+          timeout: _loginTimeout,
+        );
       }
 
       _diag('waiting_for_cas_form');
       await _converge(
-        target: casLoginTarget,
+        target: _runtimePolicy.casLoginTarget,
         timeout: _casFormWaitTimeout,
         command: _clickSsoEntry,
       );
@@ -398,6 +432,7 @@ class JwWebViewAdapter implements JwWebPage {
         controller,
         scriptId: 'jw.cas.submit',
         args: const <String, Object?>{},
+        registeredScripts: _runtimePolicy.registeredScripts,
         timeout: _loginTimeout,
         safeDiagnostic: _safeDiagnostic,
       );
@@ -433,6 +468,7 @@ class JwWebViewAdapter implements JwWebPage {
         controller,
         scriptId: scriptId,
         args: <String, Object?>{'secretBytes': bytes},
+        registeredScripts: _runtimePolicy.registeredScripts,
         timeout: _responseTimeout,
         safeDiagnostic: _safeDiagnostic,
       );
@@ -451,6 +487,7 @@ class JwWebViewAdapter implements JwWebPage {
         controller,
         scriptId: 'jw.identity.verifyExpected',
         args: <String, Object?>{'expectedIdentityBytes': expectedBytes},
+        registeredScripts: _runtimePolicy.registeredScripts,
         timeout: _loginTimeout,
         safeDiagnostic: _safeDiagnostic,
       );
@@ -487,7 +524,7 @@ class JwWebViewAdapter implements JwWebPage {
     final expectedUsername = _pendingExpectedUsername;
     try {
       await _converge(
-        target: portalHomeTarget,
+        target: _runtimePolicy.portalHomeTarget,
         timeout: timeout,
         onTimeout: () => throw JwLoginTimeoutException(
           'USTC JW login was not completed before timeout',
@@ -517,15 +554,21 @@ class JwWebViewAdapter implements JwWebPage {
     // the get-data request on load, and the registration script reads its
     // dataId from the performance entry (mirrors Python `expect_response` +
     // `extract_data_id`).
+    final alreadyOnCourse = _runtimePolicy.courseHomeTarget.urlMatches(
+      controller.currentUrlSnapshot ?? '',
+    );
     await _converge(
-      target: courseHomeTarget,
+      target: _runtimePolicy.courseHomeTarget,
       timeout: timeout,
-      command: (_) => controller.loadUrl(courseEntryUrl),
+      command: alreadyOnCourse
+          ? null
+          : (_) => controller.loadUrl(_runtimePolicy.courseEntryUrl),
     );
     final result = await executeRegisteredScript(
       controller,
       scriptId: 'jw.course.readContext',
       args: const <String, Object?>{},
+      registeredScripts: _runtimePolicy.registeredScripts,
       timeout: timeout,
       safeDiagnostic: _safeDiagnostic,
     );
@@ -552,6 +595,7 @@ class JwWebViewAdapter implements JwWebPage {
       controller,
       scriptId: 'jw.course.fetchGetData',
       args: <String, Object?>{'semesterId': semesterId, 'dataId': dataId},
+      registeredScripts: _runtimePolicy.registeredScripts,
       timeout: _responseTimeout,
       safeDiagnostic: _safeDiagnostic,
     );
@@ -587,6 +631,7 @@ class JwWebViewAdapter implements JwWebPage {
       controller,
       scriptId: 'jw.course.fetchDatum',
       args: <String, Object?>{'lessonIds': ids},
+      registeredScripts: _runtimePolicy.registeredScripts,
       timeout: _responseTimeout,
       safeDiagnostic: _safeDiagnostic,
     );
@@ -606,15 +651,21 @@ class JwWebViewAdapter implements JwWebPage {
   @override
   Future<String> fetchExamHtml(Duration timeout) async {
     final controller = await _ensureController();
+    final alreadyOnExam = _runtimePolicy.examListTarget.urlMatches(
+      controller.currentUrlSnapshot ?? '',
+    );
     await _converge(
-      target: examListTarget,
+      target: _runtimePolicy.examListTarget,
       timeout: timeout,
-      command: (_) => controller.loadUrl(examEntryUrl),
+      command: alreadyOnExam
+          ? null
+          : (_) => controller.loadUrl(_runtimePolicy.examEntryUrl),
     );
     final result = await executeRegisteredScript(
       controller,
       scriptId: 'jw.exam.readTable',
       args: const <String, Object?>{},
+      registeredScripts: _runtimePolicy.registeredScripts,
       timeout: timeout,
       safeDiagnostic: _safeDiagnostic,
     );
@@ -648,6 +699,7 @@ class JwWebViewAdapter implements JwWebPage {
         controller,
         target,
         timeout: timeout,
+        registeredScripts: _runtimePolicy.registeredScripts,
         safeDiagnostic: _safeDiagnostic,
         command: command,
       );

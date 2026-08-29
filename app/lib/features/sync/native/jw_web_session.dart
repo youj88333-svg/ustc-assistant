@@ -63,17 +63,12 @@ const Map<String, List<String>> jwAllowedPathPrefixes = <String, List<String>>{
   'https://id.ustc.edu.cn': <String>['/cas', '/.isg/gateway'],
 };
 
-/// True iff [url] is allowed by the compile-time navigation policy (host +
-/// path prefix). Returns false for non-HTTPS, unknown hosts, or unknown paths.
-///
-/// The `/` prefix in [jwAllowedPathPrefixes] means "the origin root page
-/// itself" (`https://jw.ustc.edu.cn/`), not a blanket allow-everything — this
-/// predicate matches `/` only when the path is exactly `/` (or empty). The
-/// plugin's native policy applies the prefixes at the navigation boundary; this
-/// Dart-side predicate is a defensive stricter re-check (the native layer may
-/// permit the `/` breadth for top-level preamble, but Dart navigation only
-/// issues against known paths).
-bool isJwNavigationAllowed(String url) {
+/// Checks [url] against one immutable origin/path policy.
+bool _isNavigationAllowedWith(
+  String url,
+  List<String> allowedOrigins,
+  Map<String, List<String>> allowedPathPrefixes,
+) {
   final Uri? parsed = Uri.tryParse(url);
   if (parsed == null ||
       parsed.scheme != 'https' ||
@@ -82,7 +77,8 @@ bool isJwNavigationAllowed(String url) {
     return false;
   }
   final origin = 'https://${parsed.host}';
-  final prefixes = jwAllowedPathPrefixes[origin];
+  if (!allowedOrigins.contains(origin)) return false;
+  final prefixes = allowedPathPrefixes[origin];
   if (prefixes == null) return false;
   final path = parsed.path;
   for (final prefix in prefixes) {
@@ -653,6 +649,235 @@ const JwReadyTarget examListTarget = JwReadyTarget(
   handshakeExpectation: JwReadyHandshakeExpectation.targetMatched,
 );
 
+// Private aliases keep the policy factory's static construction unambiguous
+// next to its instance fields with the same descriptive names.
+const _jwPortalLoginTarget = portalLoginTarget;
+const _jwCasLoginTarget = casLoginTarget;
+const _jwPortalHomeTarget = portalHomeTarget;
+const _jwCourseHomeTarget = courseHomeTarget;
+const _jwExamListTarget = examListTarget;
+
+/// The complete runtime contract for one JW WebView session.
+///
+/// Production navigation values, readiness targets, URL predicates, and the
+/// closed registered-script catalog are kept together so the Dart adapter and
+/// native policy cannot silently drift apart.  Collections are defensively
+/// copied and exposed as unmodifiable views; a policy is a value object even
+/// when its predicates are supplied by a Debug-only loopback fixture.
+final class JwWebRuntimePolicy {
+  JwWebRuntimePolicy({
+    required this.jwRootUrl,
+    required this.casEntryUrl,
+    required this.courseEntryUrl,
+    required this.courseGetDataPath,
+    required this.courseDatumUrl,
+    required this.examEntryUrl,
+    required List<String> allowedOrigins,
+    required Map<String, List<String>> allowedPathPrefixes,
+    required this.portalLoginTarget,
+    required this.casLoginTarget,
+    required this.portalHomeTarget,
+    required this.courseHomeTarget,
+    required this.examListTarget,
+    required Map<String, String> registeredScripts,
+    required this.navigationUrlPredicate,
+    required this.authenticatedHomeUrlPredicate,
+    required this.getDataUrlPredicate,
+  }) : allowedOrigins = List<String>.unmodifiable(allowedOrigins),
+       allowedPathPrefixes =
+           Map<String, List<String>>.unmodifiable(<String, List<String>>{
+             for (final entry in allowedPathPrefixes.entries)
+               entry.key: List<String>.unmodifiable(entry.value),
+           }),
+       registeredScripts = Map<String, String>.unmodifiable(registeredScripts);
+
+  final String jwRootUrl;
+  final String casEntryUrl;
+  final String courseEntryUrl;
+  final String courseGetDataPath;
+  final String courseDatumUrl;
+  final String examEntryUrl;
+  final List<String> allowedOrigins;
+  final Map<String, List<String>> allowedPathPrefixes;
+  final JwReadyTarget portalLoginTarget;
+  final JwReadyTarget casLoginTarget;
+  final JwReadyTarget portalHomeTarget;
+  final JwReadyTarget courseHomeTarget;
+  final JwReadyTarget examListTarget;
+  final Map<String, String> registeredScripts;
+
+  final bool Function(String) navigationUrlPredicate;
+  final bool Function(String) authenticatedHomeUrlPredicate;
+  final bool Function(String) getDataUrlPredicate;
+
+  bool isNavigationAllowed(String url) => navigationUrlPredicate(url);
+
+  bool isAuthenticatedHomeUrl(String url) => authenticatedHomeUrlPredicate(url);
+
+  bool isGetDataUrl(String url) => getDataUrlPredicate(url);
+
+  /// Builds a Debug-only policy for the plugin's IPv4 loopback test port.
+  ///
+  /// The native plugin receives the immutable production origins/path map and
+  /// adds its separately validated loopback entry from [port].  The Dart
+  /// predicates and every registered script are rewritten to the same local
+  /// origin.  Release callers are rejected by the controller factory before a
+  /// native controller is initialized.
+  factory JwWebRuntimePolicy.loopback(int port) {
+    if (port <= 0 || port > 65535) {
+      throw ArgumentError.value(port, 'port', 'must be between 1 and 65535');
+    }
+    final origin = 'http://127.0.0.1:$port';
+    const portalLoginPath = '/portal/login';
+    const casLoginPath = '/passport/cas/login';
+    const portalHomePath = '/portal/home';
+    const courseEntryPath = '/course/table';
+    const courseGetDataPath = '/course/get-data';
+    const courseDatumPath = '/course/datum';
+    const examEntryPath = '/exam/arrange';
+
+    final loopbackPortalLogin = '$origin$portalLoginPath';
+    final loopbackCasLogin = '$origin$casLoginPath';
+    final loopbackPortalHome = '$origin$portalHomePath';
+    final loopbackCourse = '$origin$courseEntryPath';
+    final loopbackExam = '$origin$examEntryPath';
+    final loopbackPortalLoginTarget = JwReadyTarget(
+      id: _jwPortalLoginTarget.id,
+      url: loopbackPortalLogin,
+      urlPattern: '$loopbackPortalLogin*',
+      readySelector: _jwPortalLoginTarget.readySelector,
+      handshakeScriptId: _jwPortalLoginTarget.handshakeScriptId,
+      handshakeExpectation: _jwPortalLoginTarget.handshakeExpectation,
+    );
+    final loopbackCasLoginTarget = JwReadyTarget(
+      id: _jwCasLoginTarget.id,
+      url: loopbackCasLogin,
+      urlPattern: '$loopbackCasLogin*',
+      readySelector: _jwCasLoginTarget.readySelector,
+      handshakeScriptId: _jwCasLoginTarget.handshakeScriptId,
+      handshakeExpectation: _jwCasLoginTarget.handshakeExpectation,
+    );
+    final loopbackPortalHomeTarget = JwReadyTarget(
+      id: _jwPortalHomeTarget.id,
+      url: loopbackPortalHome,
+      urlPattern: '$loopbackPortalHome*',
+      readySelector: _jwPortalHomeTarget.readySelector,
+      handshakeScriptId: _jwPortalHomeTarget.handshakeScriptId,
+      handshakeExpectation: _jwPortalHomeTarget.handshakeExpectation,
+    );
+    final loopbackCourseTarget = JwReadyTarget(
+      id: _jwCourseHomeTarget.id,
+      url: loopbackCourse,
+      urlPattern: '$loopbackCourse*',
+      readySelector: _jwCourseHomeTarget.readySelector,
+      handshakeScriptId: _jwCourseHomeTarget.handshakeScriptId,
+      handshakeExpectation: _jwCourseHomeTarget.handshakeExpectation,
+    );
+    final loopbackExamTarget = JwReadyTarget(
+      id: _jwExamListTarget.id,
+      url: loopbackExam,
+      urlPattern: '$loopbackExam*',
+      readySelector: _jwExamListTarget.readySelector,
+      handshakeScriptId: _jwExamListTarget.handshakeScriptId,
+      handshakeExpectation: _jwExamListTarget.handshakeExpectation,
+    );
+
+    bool loopbackUrlAllowed(String url) {
+      final parsed = Uri.tryParse(url);
+      if (parsed == null ||
+          parsed.scheme != 'http' ||
+          parsed.host != '127.0.0.1' ||
+          parsed.port != port) {
+        return false;
+      }
+      const routePrefixes = <String>[
+        '/portal',
+        '/passport',
+        '/course',
+        '/exam',
+      ];
+      return routePrefixes.any(
+        (prefix) => parsed.path == prefix || parsed.path.startsWith('$prefix/'),
+      );
+    }
+
+    bool loopbackGetDataAllowed(String url) {
+      final parsed = Uri.tryParse(url);
+      if (parsed == null ||
+          parsed.scheme != 'http' ||
+          parsed.host != '127.0.0.1' ||
+          parsed.port != port ||
+          parsed.path != courseGetDataPath) {
+        return false;
+      }
+      final dataIds = parsed.queryParametersAll['dataId'] ?? const <String>[];
+      return dataIds.length == 1 && dataIds.first.isNotEmpty;
+    }
+
+    String rewriteScript(String source) => source
+        .replaceAll('https://jw.ustc.edu.cn', origin)
+        .replaceAll('https://id.ustc.edu.cn', origin)
+        .replaceAll("'/home'", "'$portalHomePath'")
+        .replaceAll("'/login'", "'$portalLoginPath'")
+        .replaceAll("'/cas/login'", "'$casLoginPath'")
+        .replaceAll("'/for-std/course-table'", "'$courseEntryPath'")
+        .replaceAll("'/for-std/course-table/get-data'", "'$courseGetDataPath'")
+        .replaceAll("'/for-std/course-table/datum'", "'$courseDatumPath'")
+        .replaceAll("'/for-std/exam-arrange'", "'$examEntryPath'");
+
+    return JwWebRuntimePolicy(
+      jwRootUrl: '$origin/portal/root',
+      casEntryUrl: loopbackPortalLogin,
+      courseEntryUrl: loopbackCourse,
+      courseGetDataPath: courseGetDataPath,
+      courseDatumUrl: '$origin$courseDatumPath',
+      examEntryUrl: loopbackExam,
+      // The native bridge validates these as production HTTPS origins, then
+      // adds its exact 127.0.0.1:<port> Debug entry separately.
+      allowedOrigins: jwAllowedOrigins,
+      allowedPathPrefixes: jwAllowedPathPrefixes,
+      portalLoginTarget: loopbackPortalLoginTarget,
+      casLoginTarget: loopbackCasLoginTarget,
+      portalHomeTarget: loopbackPortalHomeTarget,
+      courseHomeTarget: loopbackCourseTarget,
+      examListTarget: loopbackExamTarget,
+      registeredScripts: <String, String>{
+        for (final entry in jwRegisteredScripts.entries)
+          entry.key: rewriteScript(entry.value),
+      },
+      navigationUrlPredicate: loopbackUrlAllowed,
+      authenticatedHomeUrlPredicate: loopbackPortalHomeTarget.urlMatches,
+      getDataUrlPredicate: loopbackGetDataAllowed,
+    );
+  }
+}
+
+/// The sole immutable production JW runtime contract.
+final JwWebRuntimePolicy productionJwWebRuntimePolicy = JwWebRuntimePolicy(
+  jwRootUrl: jwRootUrl,
+  casEntryUrl: casEntryUrl,
+  courseEntryUrl: courseEntryUrl,
+  courseGetDataPath: courseGetDataPath,
+  courseDatumUrl: courseDatumUrl,
+  examEntryUrl: examEntryUrl,
+  allowedOrigins: jwAllowedOrigins,
+  allowedPathPrefixes: jwAllowedPathPrefixes,
+  portalLoginTarget: _jwPortalLoginTarget,
+  casLoginTarget: _jwCasLoginTarget,
+  portalHomeTarget: _jwPortalHomeTarget,
+  courseHomeTarget: _jwCourseHomeTarget,
+  examListTarget: _jwExamListTarget,
+  registeredScripts: jwRegisteredScripts,
+  navigationUrlPredicate: (url) =>
+      _isNavigationAllowedWith(url, jwAllowedOrigins, jwAllowedPathPrefixes),
+  authenticatedHomeUrlPredicate: isAuthenticatedHomeUrl,
+  getDataUrlPredicate: isGetDataUrl,
+);
+
+/// True iff [url] is allowed by the immutable production JW policy.
+bool isJwNavigationAllowed(String url) =>
+    productionJwWebRuntimePolicy.isNavigationAllowed(url);
+
 /// Runs a registered script by posting a `window.chrome.webview.postMessage`
 /// request and awaiting the matching `webMessage` reply. Does NOT rely on
 /// [JwWebviewController.executeScript]'s future result (the page may switch
@@ -661,10 +886,11 @@ Future<ExtractionResult> executeRegisteredScript(
   JwWebviewController controller, {
   required String scriptId,
   required Map<String, Object?> args,
+  Map<String, String>? registeredScripts,
   Duration timeout = const Duration(seconds: 30),
   void Function(String)? safeDiagnostic,
 }) async {
-  final source = jwRegisteredScripts[scriptId];
+  final source = (registeredScripts ?? jwRegisteredScripts)[scriptId];
   if (source == null) {
     try {
       safeDiagnostic?.call('registered_script_unknown');
@@ -840,6 +1066,7 @@ Future<ExtractionResult> convergeTarget(
   JwWebviewController controller,
   JwReadyTarget target, {
   required Duration timeout,
+  Map<String, String>? registeredScripts,
   void Function(String)? safeDiagnostic,
   JwAttemptCommand? command,
 }) async {
@@ -968,6 +1195,7 @@ Future<ExtractionResult> convergeTarget(
         controller,
         scriptId: handshakeId,
         args: const <String, Object?>{},
+        registeredScripts: registeredScripts,
         timeout: handshakeRemaining,
         safeDiagnostic: safeDiagnostic,
       );
