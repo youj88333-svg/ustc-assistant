@@ -67,6 +67,34 @@ void main() {
       expect(await adapter.isAuthenticatedHome, isFalse);
     });
 
+    test(
+      'reused authenticated home requires strict readiness and identity proof',
+      () async {
+        controller
+          ..setCurrent(_homeUrl)
+          ..sessionHealthy = true
+          ..identityAuthenticated = true;
+
+        expect(
+          await adapter.verifyAuthenticatedHome(
+            expectedUsername: 'ustc.student',
+            timeout: const Duration(seconds: 2),
+          ),
+          isTrue,
+        );
+
+        controller.identityAuthenticated = false;
+        controller.identityConflict = true;
+        await expectLater(
+          adapter.verifyAuthenticatedHome(
+            expectedUsername: 'other.student',
+            timeout: const Duration(seconds: 2),
+          ),
+          throwsA(isA<JwAccountMismatchException>()),
+        );
+      },
+    );
+
     group('CAS login fill', () {
       test(
         'fills username + password, submits, awaits home, verifies identity',
@@ -102,7 +130,7 @@ void main() {
           controller.sessionHealthy = true;
 
           await adapter.fillLogin(
-            const LoginCredentials(username: 'other.user'),
+            const LoginCredentials(username: 'other.user', password: 'pw'),
           );
           await expectLater(
             adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
@@ -111,16 +139,29 @@ void main() {
         },
       );
 
-      test('missing password fills username and submits', () async {
-        controller.setCurrent(_loginEntryUrl);
+      test(
+        'empty password fills username and leaves visible manual submit',
+        () async {
+          controller.setCurrent(_loginEntryUrl);
 
-        await adapter.fillLogin(
-          const LoginCredentials(username: 'ustc.student'),
-        );
-        expect(controller.usernameFilled, 'ustc.student');
-        expect(controller.passwordFilled, isNull);
-        expect(controller.submitted, isTrue);
-      });
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'ustc.student'),
+          );
+          expect(controller.usernameFilled, 'ustc.student');
+          expect(controller.passwordFilled, isNull);
+          expect(controller.submitted, isFalse);
+          expect(controller.submitCalls, 0);
+
+          // Simulate the user entering the password and pressing the visible
+          // CAS submit button. The adapter must still verify the resulting
+          // authenticated session and identity.
+          controller
+            ..identityAuthenticated = true
+            ..sessionHealthy = true
+            ..setCurrent(_homeUrl);
+          await adapter.waitForAuthenticatedHome(const Duration(seconds: 2));
+        },
+      );
 
       test(
         'a failed portal attempt resets the guard and permits retry',
@@ -129,7 +170,9 @@ void main() {
             ..setCurrent(_loginEntryUrl)
             ..portalLoginMatched = false;
           await expectLater(
-            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            adapter.fillLogin(
+              const LoginCredentials(username: 'PB00000000', password: 'pw'),
+            ),
             throwsA(isA<JwCollectionException>()),
           );
 
@@ -137,7 +180,7 @@ void main() {
             ..portalLoginMatched = true
             ..setCurrent(_loginEntryUrl);
           await adapter.fillLogin(
-            const LoginCredentials(username: 'PB00000000'),
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
           );
           expect(controller.primaryClicks, 1);
           expect(controller.submitCalls, 1);
@@ -151,7 +194,9 @@ void main() {
             ..setCurrent(_loginEntryUrl)
             ..submitAcknowledged = false;
           await expectLater(
-            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            adapter.fillLogin(
+              const LoginCredentials(username: 'PB00000000', password: 'pw'),
+            ),
             throwsA(isA<JwCollectionException>()),
           );
 
@@ -160,7 +205,7 @@ void main() {
             ..visitedCas = false
             ..setCurrent(_loginEntryUrl);
           await adapter.fillLogin(
-            const LoginCredentials(username: 'PB00000000'),
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
           );
           expect(controller.primaryClicks, 2);
           expect(controller.submitCalls, 2);
@@ -174,7 +219,9 @@ void main() {
             ..setCurrent(_loginEntryUrl)
             ..cancelScriptId = 'jw.cas.fillUsername';
           await expectLater(
-            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            adapter.fillLogin(
+              const LoginCredentials(username: 'PB00000000', password: 'pw'),
+            ),
             throwsA(isA<JwCollectionException>()),
           );
 
@@ -183,7 +230,7 @@ void main() {
             ..visitedCas = false
             ..setCurrent(_loginEntryUrl);
           await adapter.fillLogin(
-            const LoginCredentials(username: 'PB00000000'),
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
           );
           expect(controller.primaryClicks, 2);
           expect(controller.submitCalls, 1);
@@ -208,7 +255,7 @@ void main() {
           ..identityAuthenticated = true
           ..sessionHealthy = true;
         await adapter.fillLogin(
-          const LoginCredentials(username: 'ustc.student'),
+          const LoginCredentials(username: 'ustc.student', password: 'pw'),
         );
         await adapter.waitForAuthenticatedHome(const Duration(seconds: 2));
       });
@@ -335,7 +382,7 @@ void main() {
             ..sessionHealthy = true
             ..switchDocumentAfterHandshakeReply = true;
           await adapter.fillLogin(
-            const LoginCredentials(username: 'PB00000000'),
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
           );
           await expectLater(
             adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
@@ -353,7 +400,9 @@ void main() {
           ..domMatched = true
           ..storageMatched = true
           ..sessionHealthy = true;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         await expectLater(
           adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
@@ -368,7 +417,9 @@ void main() {
           ..domMatched = true
           ..storageMatched = true
           ..sessionHealthy = true;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         await expectLater(
           adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
@@ -383,7 +434,9 @@ void main() {
           ..domConflicted = true
           ..storageMatched = true
           ..sessionHealthy = true;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         await expectLater(
           adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
@@ -398,7 +451,9 @@ void main() {
           ..storageMatched = true
           ..storageConflicted = true
           ..sessionHealthy = true;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         await expectLater(
           adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
@@ -411,7 +466,9 @@ void main() {
           ..identityAuthenticated = false
           ..identityConflict = true
           ..sessionHealthy = true;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         await expectLater(
           adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
           throwsA(isA<JwAccountMismatchException>()),
@@ -422,7 +479,9 @@ void main() {
           ..identityAuthenticated = true
           ..identityConflict = false
           ..visitedCas = false;
-        await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+        await adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        );
         expect(controller.primaryClicks, 2);
       });
     });
@@ -432,7 +491,9 @@ void main() {
         ..setCurrent(_loginEntryUrl)
         ..authoritativeMatched = true
         ..portalLoginMatched = true;
-      await adapter.fillLogin(const LoginCredentials(username: 'PB00000000'));
+      await adapter.fillLogin(
+        const LoginCredentials(username: 'PB00000000', password: 'pw'),
+      );
       expect(controller.primaryClicks, 1);
       expect(controller.submitCalls, 1);
       expect(controller.selectorProbes, contains('#login-unified-wrapper'));
@@ -444,7 +505,9 @@ void main() {
         ..portalLoginMatched = true
         ..clickProbeMatchesExactWrapper = false;
       await expectLater(
-        adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+        adapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
+        ),
         throwsA(isA<JwCollectionException>()),
       );
       expect(controller.primaryClicks, 0);
@@ -466,7 +529,7 @@ void main() {
           ..geometryDelay = const Duration(milliseconds: 140);
         await expectLater(
           shortAdapter.fillLogin(
-            const LoginCredentials(username: 'PB00000000'),
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
           ),
           throwsA(isA<JwCollectionException>()),
         );
@@ -477,7 +540,7 @@ void main() {
           ..geometryDelay = Duration.zero
           ..setCurrent(_loginEntryUrl);
         await shortAdapter.fillLogin(
-          const LoginCredentials(username: 'PB00000000'),
+          const LoginCredentials(username: 'PB00000000', password: 'pw'),
         );
         expect(controller.primaryClicks, 1);
       },
@@ -490,7 +553,9 @@ void main() {
           ..casFormMatched = false
           ..passwordVisible = false;
         await expectLater(
-          adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+          adapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000', password: 'pw'),
+          ),
           throwsA(isA<JwCollectionException>()),
         );
         expect(controller.primaryClicks, 1);
@@ -505,7 +570,9 @@ void main() {
             ..casFormMatched = false
             ..fieldsInSameForm = false;
           await expectLater(
-            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            adapter.fillLogin(
+              const LoginCredentials(username: 'PB00000000', password: 'pw'),
+            ),
             throwsA(isA<JwCollectionException>()),
           );
           expect(controller.primaryClicks, 1);
@@ -748,7 +815,10 @@ void main() {
         expect(portalHomeTarget.urlMatches('$_homeUrl?tab=1'), isTrue);
         expect(portalHomeTarget.urlMatches('$_homeUrl#summary'), isTrue);
         expect(portalHomeTarget.urlMatches('$_homeUrl/settings'), isTrue);
-        expect(portalHomeTarget.urlMatches('https://jw.ustc.edu.cn/homeevil'), isFalse);
+        expect(
+          portalHomeTarget.urlMatches('https://jw.ustc.edu.cn/homeevil'),
+          isFalse,
+        );
         expect(
           productionJwWebRuntimePolicy.isAuthenticatedHomeUrl(
             'https://jw.ustc.edu.cn/homeevil',
@@ -764,14 +834,8 @@ void main() {
           portalLoginTarget.urlMatches('https://jw.ustc.edu.cn/loginOther'),
           isFalse,
         );
-        expect(
-          casLoginTarget.urlMatches('$_casUrl?ticket=fixture'),
-          isTrue,
-        );
-        expect(
-          courseHomeTarget.urlMatches('$_courseTableUrl/461'),
-          isTrue,
-        );
+        expect(casLoginTarget.urlMatches('$_casUrl?ticket=fixture'), isTrue);
+        expect(courseHomeTarget.urlMatches('$_courseTableUrl/461'), isTrue);
         expect(
           courseHomeTarget.urlMatches(
             'https://jw.ustc.edu.cn/for-std/course-table-old',
@@ -790,10 +854,8 @@ void main() {
           portalLoginTarget: 'https://jw.ustc.edu.cn/loginOther',
           casLoginTarget: 'https://id.ustc.edu.cn/cas/loginOther',
           portalHomeTarget: 'https://jw.ustc.edu.cn/homeevil',
-          courseHomeTarget:
-              'https://jw.ustc.edu.cn/for-std/course-table-old',
-          examListTarget:
-              'https://jw.ustc.edu.cn/for-std/exam-arrange-old',
+          courseHomeTarget: 'https://jw.ustc.edu.cn/for-std/course-table-old',
+          examListTarget: 'https://jw.ustc.edu.cn/for-std/exam-arrange-old',
         };
         for (final entry in siblingUrls.entries) {
           probeController.documentProbeSources.clear();
@@ -869,6 +931,28 @@ void main() {
         }
       },
     );
+
+    test('registered handshakes use the same path boundary contract', () {
+      const handshakeIds = <String>[
+        'jw.portal.login.inspect',
+        'jw.cas.inspect',
+        'jw.cas.form.inspect',
+        'jw.cas.fillUsername',
+        'jw.cas.fillPassword',
+        'jw.cas.submit',
+        'jw.course.inspect',
+        'jw.exam.inspect',
+      ];
+      for (final id in handshakeIds) {
+        final source = jwRegisteredScripts[id]!;
+        expect(source, contains('const pathMatches ='));
+        expect(
+          source,
+          contains(r'location.pathname.startsWith(`${prefix}/`)'),
+          reason: id,
+        );
+      }
+    });
   });
 }
 

@@ -9,6 +9,7 @@ import '../domain/sync_state.dart';
 const bridgeProtocolVersion = '1.0';
 
 const _safeBridgeProtocolCodes = {
+  'bridge_busy',
   'bridge_query_busy',
   'invalid_capabilities',
   'invalid_handshake',
@@ -100,7 +101,6 @@ abstract interface class BridgeGateway {
 
   Future<void> shutdown();
 }
-
 
 abstract interface class BridgeChildProcess {
   Stream<List<int>> get stdout;

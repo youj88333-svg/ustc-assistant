@@ -828,7 +828,9 @@ git commit -m "test(webview-minimal): gate real WebView2 lifecycle"
 Record:
 
 - stable host and detach-before-dispose ownership;
-- per-account UDF routing without session snapshot persistence;
+- single-account-per-gateway UDF routing (different-account requests reject;
+  reauthentication uses shutdown → canonical complete reset → fresh loader)
+  without session snapshot persistence;
 - strict URL/DOM/handshake and authoritative identity requirements;
 - awaitable polling/cancellation semantics;
 - loopback integration evidence versus real-campus acceptance boundary;

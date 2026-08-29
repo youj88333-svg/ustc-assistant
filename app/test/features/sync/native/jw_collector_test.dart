@@ -121,6 +121,35 @@ void main() {
       expect(fake.wentToCas, isFalse, reason: 'should not visit CAS on reuse');
     });
 
+    test(
+      'reuse-session proves the expected identity before collecting',
+      () async {
+        final fake = FakeJwWebPage(
+          rootUrl: _homeUrl,
+          casUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+          verifyHomeThrows: const JwAccountMismatchException('wrong account'),
+        );
+        final collector = buildCollector(() => fake);
+        final events = await collectEvents(
+          collector.startJwCollection(
+            accountId: _accountId,
+            expectedUsername: 'PB00000000',
+            semester: _semester,
+          ),
+        );
+
+        expect(phases(events).last, 'failed');
+        expect(
+          events.whereType<CollectionFailed>().single.errorCode,
+          'account_mismatch',
+        );
+        expect(fake.verifyHomeExpectedUsername, 'PB00000000');
+        expect(fake.wentToCas, isFalse);
+      },
+    );
+
     test('2. cas-reuse: root non-home -> cas /home -> complete', () async {
       final fake = FakeJwWebPage(
         rootUrl: _nonHomeUrl,
@@ -337,6 +366,72 @@ void main() {
     );
 
     test(
+      'cancel after login submit acknowledgement resets reusable page state',
+      () async {
+        final page = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+          blockAfterLoginFill: true,
+        );
+        final collector = buildCollector(() => page);
+        final events = <SourceCollectionEvent>[];
+        final subscription = collector
+            .startJwCollection(
+              accountId: _accountId,
+              expectedUsername: 'PB00000000',
+              semester: _semester,
+            )
+            .listen(events.add);
+
+        await _waitForPhase(events, 'needs_user_login');
+        await collector.resumeLogin(_jobId, password: 'pw');
+        await page.loginFillStarted.future;
+        await collector.cancel(_jobId);
+        page.allowLoginFillReturn.complete();
+        await subscription.asFuture<void>();
+
+        expect(events.last, isA<CollectionCancelled>());
+        expect(page.loginAttemptReset, isTrue);
+      },
+    );
+
+    test(
+      'cancel while home verification waits clears login state immediately',
+      () async {
+        final page = FakeJwWebPage(
+          rootUrl: _nonHomeUrl,
+          casUrl: _casNonHomeUrl,
+          postLoginUrl: _homeUrl,
+          courseDatum: courseDatum,
+          examHtml: examHtml,
+          blockWaitForHome: true,
+        );
+        final collector = buildCollector(() => page);
+        final events = <SourceCollectionEvent>[];
+        final subscription = collector
+            .startJwCollection(
+              accountId: _accountId,
+              expectedUsername: 'PB00000000',
+              semester: _semester,
+            )
+            .listen(events.add);
+
+        await _waitForPhase(events, 'needs_user_login');
+        await collector.resumeLogin(_jobId, password: 'pw');
+        await page.waitForHomeStarted.future;
+        await collector.cancel(_jobId);
+        expect(page.loginAttemptReset, isTrue);
+        page.allowWaitForHomeReturn.complete();
+        await subscription.asFuture<void>();
+
+        expect(events.last, isA<CollectionCancelled>());
+      },
+    );
+
+    test(
       '9. single-active-job: second concurrent start rejected (bridge_busy)',
       () async {
         // First job pauses at needs_user_login (stays active).
@@ -502,6 +597,9 @@ class FakeJwWebPage implements JwWebPage {
     this.courseDatumFetchThrows,
     this.examHtmlFetchThrows,
     this.blockCourseFailure = false,
+    this.verifyHomeThrows,
+    this.blockAfterLoginFill = false,
+    this.blockWaitForHome = false,
   });
 
   /// URL reported after [gotoRoot].
@@ -532,6 +630,17 @@ class FakeJwWebPage implements JwWebPage {
   /// If set, [fetchExamHtml] throws this (e.g. table#exams missing).
   final Object? examHtmlFetchThrows;
 
+  /// If set, strict authenticated-home verification throws this error.
+  final Object? verifyHomeThrows;
+
+  /// If true, [fillLogin] pauses after the side effect has been acknowledged
+  /// so cancellation can race the pending home wait and verify reset cleanup.
+  final bool blockAfterLoginFill;
+
+  /// If true, [waitForAuthenticatedHome] pauses after the login side effect
+  /// so cancellation can clear the adapter guard before navigation settles.
+  final bool blockWaitForHome;
+
   /// If true, [fetchCourseDatum] waits until [failCourse] completes with a
   /// collection error, allowing cancellation to race the page failure.
   final bool blockCourseFailure;
@@ -539,8 +648,14 @@ class FakeJwWebPage implements JwWebPage {
   String _currentUrl = '';
   bool wentToCas = false;
   bool fillLoginCalled = false;
+  String? verifyHomeExpectedUsername;
   final courseStarted = Completer<void>();
   final _courseFailure = Completer<void>();
+  final loginFillStarted = Completer<void>();
+  final allowLoginFillReturn = Completer<void>();
+  final waitForHomeStarted = Completer<void>();
+  final allowWaitForHomeReturn = Completer<void>();
+  bool loginAttemptReset = false;
 
   void failCourse() {
     if (!_courseFailure.isCompleted) {
@@ -579,11 +694,25 @@ class FakeJwWebPage implements JwWebPage {
       isAuthenticatedHomeUrl(_currentUrl);
 
   @override
+  Future<bool> verifyAuthenticatedHome({
+    required String expectedUsername,
+    required Duration timeout,
+  }) async {
+    verifyHomeExpectedUsername = expectedUsername;
+    if (verifyHomeThrows != null) throw verifyHomeThrows!;
+    return isAuthenticatedHomeUrl(_currentUrl);
+  }
+
+  @override
   Future<void> fillLogin(LoginCredentials credentials) async {
     fillLoginCalled = true;
     // Simulate navigating to the CAS login page form first.
     if (fillLoginThrows != null) {
       throw fillLoginThrows!;
+    }
+    if (blockAfterLoginFill) {
+      if (!loginFillStarted.isCompleted) loginFillStarted.complete();
+      await allowLoginFillReturn.future;
     }
   }
 
@@ -591,6 +720,10 @@ class FakeJwWebPage implements JwWebPage {
   Future<void> waitForAuthenticatedHome(Duration timeout) async {
     if (waitForHomeThrows != null) {
       throw waitForHomeThrows!;
+    }
+    if (blockWaitForHome) {
+      if (!waitForHomeStarted.isCompleted) waitForHomeStarted.complete();
+      await allowWaitForHomeReturn.future;
     }
     if (postLoginUrl != null) {
       _currentUrl = postLoginUrl!;
@@ -633,6 +766,11 @@ class FakeJwWebPage implements JwWebPage {
       throw examHtmlFetchThrows!;
     }
     return examHtml;
+  }
+
+  @override
+  Future<void> resetLoginAttempt() async {
+    loginAttemptReset = true;
   }
 
   @override

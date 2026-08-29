@@ -122,10 +122,12 @@ const Set<String> safeScriptFailureReasons = <String>{
 /// probes below. It is the final authenticated-session assertion: a home URL
 /// event plus a body from a stale CAS document cannot satisfy this result.
 const String _casInspectScript = r'''
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
 const onHome = location.origin === 'https://jw.ustc.edu.cn' &&
-  location.pathname === '/home';
+  pathMatches('/home');
 const onCas = location.origin === 'https://id.ustc.edu.cn' &&
-  location.pathname === '/cas/login';
+  pathMatches('/cas/login');
 return {
   sessionHealthy: document.readyState === 'complete' && onHome,
   needsUserLogin: !onHome || onCas,
@@ -136,8 +138,10 @@ return {
 /// adapter separately waits for the exact selector; this registered script
 /// revalidates the live document after URL + DOM convergence.
 const String _portalLoginInspectScript = r'''
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
 const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
-  location.pathname === '/login';
+  pathMatches('/login');
 const wrappers = document.querySelectorAll('#login-unified-wrapper');
 return {
   matched: document.readyState === 'complete' && onTarget &&
@@ -149,6 +153,8 @@ return {
 /// must be descendants of one and the same form. This is deliberately a
 /// closed boolean probe; credentials are never read by readiness scripts.
 const String _casFormInspectScript = r'''
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
 const isVisible = (node) => {
   if (!node || !node.isConnected) return false;
   const style = window.getComputedStyle(node);
@@ -158,7 +164,7 @@ const isVisible = (node) => {
   return rect.width > 0 && rect.height > 0;
 };
 const onTarget = location.origin === 'https://id.ustc.edu.cn' &&
-  location.pathname === '/cas/login';
+  pathMatches('/cas/login');
 const matchedForm = Array.from(document.querySelectorAll('form')).some((form) => {
   const username = form.querySelector('input[name="username"], #username');
   const password = form.querySelector('input[type="password"]');
@@ -173,8 +179,10 @@ return {
 /// Credential-free course-page readiness handshake. Data-bearing course
 /// context extraction remains a separate registered script.
 const String _courseInspectScript = r'''
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
 const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
-  location.pathname === '/for-std/course-table';
+  pathMatches('/for-std/course-table');
 const semesters = document.querySelectorAll('select#allSemesters');
 return {
   matched: document.readyState === 'complete' && onTarget &&
@@ -186,8 +194,10 @@ return {
 /// extraction remains a separate registered script and is never used as the
 /// readiness signal.
 const String _examInspectScript = r'''
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
 const onTarget = location.origin === 'https://jw.ustc.edu.cn' &&
-  location.pathname === '/for-std/exam-arrange';
+  pathMatches('/for-std/exam-arrange');
 const tables = document.querySelectorAll('table#exams');
 return {
   matched: document.readyState === 'complete' && onTarget &&
@@ -196,7 +206,9 @@ return {
 ''';
 
 const String _casFillUsernameScript = r'''
-if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
+if (location.origin !== 'https://id.ustc.edu.cn' || !pathMatches('/cas/login'))
   throw new Error('wrong_target');
 const isVisible = (node) => {
   if (!node || !node.isConnected) return false;
@@ -222,7 +234,9 @@ return {filled: true};
 ''';
 
 const String _casFillPasswordScript = r'''
-if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
+if (location.origin !== 'https://id.ustc.edu.cn' || !pathMatches('/cas/login'))
   throw new Error('wrong_target');
 const isVisible = (node) => {
   if (!node || !node.isConnected) return false;
@@ -248,7 +262,9 @@ return {filled: true};
 ''';
 
 const String _casSubmitScript = r'''
-if (location.origin !== 'https://id.ustc.edu.cn' || location.pathname !== '/cas/login')
+const pathMatches = (prefix) => location.pathname === prefix ||
+  location.pathname.startsWith(`${prefix}/`);
+if (location.origin !== 'https://id.ustc.edu.cn' || !pathMatches('/cas/login'))
   throw new Error('wrong_target');
 const isVisible = (node) => {
   if (!node || !node.isConnected) return false;
@@ -893,7 +909,8 @@ bool isJwRuntimePolicyAllowedForBuild(
   int? debugLoopbackPort,
 }) =>
     debugMode ||
-    (debugLoopbackPort == null && identical(policy, productionJwWebRuntimePolicy));
+    (debugLoopbackPort == null &&
+        identical(policy, productionJwWebRuntimePolicy));
 
 /// True iff [url] is allowed by the immutable production JW policy.
 bool isJwNavigationAllowed(String url) =>

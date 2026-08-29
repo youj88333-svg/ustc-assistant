@@ -123,6 +123,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onExit,
     this.nativeGateway,
     this.nativeGatewayFactory,
+    this.createNativeGateway = true,
     this.schemaLoader,
     super.key,
   });
@@ -142,6 +143,13 @@ class SyncPageLoader extends StatefulWidget {
   /// defer gateway creation. The loader owns the resolved gateway.
   final Future<NativeJwGateway> Function()? nativeGatewayFactory;
 
+  /// Whether this loader should create a native WebView environment during
+  /// dependency initialization. Reauthentication is deliberately a
+  /// credential/data-reset step and sets this to false, so no intermediary
+  /// browser session exists before the canonical reset; the next `/sync`
+  /// loader creates the only fresh environment after reset completes.
+  final bool createNativeGateway;
+
   /// Optional schema-loading seam for lifecycle tests that need dependency
   /// initialization to remain pending after gateway creation.
   final Future<String> Function()? schemaLoader;
@@ -158,7 +166,10 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   Future<NativeJwGateway>? _nativeGatewayCreation;
   StreamSubscription<String>? _diagnosticSub;
   bool _disposed = false;
-  final Set<BridgeGateway> _shutdownGateways = Set<BridgeGateway>.identity();
+  final Map<BridgeGateway, Future<void>> _shutdownFutures =
+      Map<BridgeGateway, Future<void>>.identity();
+  Future<void>? _ownedShutdown;
+  bool _replacementRequested = false;
 
   /// Privacy-safe stage-log buffer for the debug diagnostics panel. Only
   /// allocated in debug/profile builds; in release it stays null so the panel
@@ -178,7 +189,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       final supplied = widget.nativeGateway;
       if (supplied != null) {
         nativeGateway = supplied;
-      } else {
+      } else if (widget.createNativeGateway) {
         final factory = widget.nativeGatewayFactory;
         if (factory != null) {
           final creation = Future<NativeJwGateway>.sync(factory);
@@ -190,7 +201,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           unawaited(
             creation.then<void>((gateway) {
               if (_disposed) {
-                _shutdownOnce(gateway);
+                _observeShutdown(_shutdownOnce(gateway));
                 return;
               }
               // Claim the result immediately, even if _build is awaiting a
@@ -213,9 +224,59 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     }
   }
 
-  void _shutdownOnce(BridgeGateway gateway) {
-    if (!_shutdownGateways.add(gateway)) return;
-    unawaited(gateway.shutdown());
+  Future<void> _shutdownOnce(BridgeGateway gateway) {
+    final existing = _shutdownFutures[gateway];
+    if (existing != null) return existing;
+    final future = Future<void>.sync(gateway.shutdown);
+    _shutdownFutures[gateway] = future;
+    return future;
+  }
+
+  void _observeShutdown(Future<void> future) {
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // Disposal is best-effort because State.dispose cannot be async;
+          // replacement routing awaits the same future and therefore still
+          // fails closed when teardown is unsuccessful.
+          debugPrint('[jw-native] shutdown_failed');
+        },
+      ),
+    );
+  }
+
+  Future<void> _shutdownOwnedForReplacement() {
+    final existing = _ownedShutdown;
+    if (existing != null) return existing;
+    _disposed = true;
+    final future = _shutdownOwnedImpl();
+    _ownedShutdown = future;
+    return future;
+  }
+
+  Future<void> _shutdownOwnedImpl() async {
+    final gateways = Set<BridgeGateway>.identity();
+    final currentNative = nativeGateway ?? _resolvedNativeGateway;
+    if (currentNative != null) gateways.add(currentNative);
+    final currentBridge = bridge;
+    if (currentBridge != null) gateways.add(currentBridge);
+
+    // A factory can still be resolving while schema/coordinator setup is in
+    // flight. Await it before routing so its environment cannot overlap the
+    // replacement loader's fresh environment.
+    final creation = _nativeGatewayCreation;
+    if (creation != null) {
+      try {
+        gateways.add(await creation);
+      } on Object {
+        // The factory owns no gateway when it fails; preserve the failure only
+        // through the loader's dependency future and continue known cleanup.
+      }
+    }
+    for (final gateway in gateways) {
+      await _shutdownOnce(gateway);
+    }
   }
 
   Future<_SyncDependencies> _build() async {
@@ -249,7 +310,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     NativeJwGateway? gw;
     if (!fallback) {
       gw = nativeGateway ?? _resolvedNativeGateway;
-      if (gw == null) {
+      if (gw == null && widget.createNativeGateway) {
         final creation = _nativeGatewayCreation;
         if (creation != null) {
           gw = await creation;
@@ -257,7 +318,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           // assign or use that gateway through the disposed State; it is
           // still ours to shut down exactly once.
           if (_disposed) {
-            _shutdownOnce(gw);
+            _observeShutdown(_shutdownOnce(gw));
             throw StateError('sync page loader is disposed');
           }
           nativeGateway = gw;
@@ -319,7 +380,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
         _ensureAlive();
         final started = await BridgeClient.start(pythonExecutable: executable);
         if (_disposed) {
-          _shutdownOnce(started);
+          _observeShutdown(_shutdownOnce(started));
           throw StateError('sync page loader is disposed');
         }
         bridge = started;
@@ -346,11 +407,26 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       unawaited(diagnosticSub.cancel());
     }
     diagnostics?.dispose();
-    final ownedGateway = nativeGateway ?? _resolvedNativeGateway ?? bridge;
-    if (ownedGateway != null) {
-      _shutdownOnce(ownedGateway);
-    }
+    _observeShutdown(_shutdownOwnedForReplacement());
     super.dispose();
+  }
+
+  void _requestReauthentication(String accountId) {
+    if (_replacementRequested || _disposed) return;
+    _replacementRequested = true;
+    unawaited(_shutdownAndRouteForReauthentication(accountId));
+  }
+
+  Future<void> _shutdownAndRouteForReauthentication(String accountId) async {
+    try {
+      await _shutdownOwnedForReplacement();
+    } on Object {
+      // Never create a second loader while the old environment may still be
+      // alive. The existing page remains visible, and the route callback is
+      // intentionally not invoked on teardown failure.
+      return;
+    }
+    widget.onReauthenticationRequired?.call(accountId);
   }
 
   @override
@@ -374,7 +450,9 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           diagnostics: value.diagnostics,
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
-          onReauthenticationRequired: widget.onReauthenticationRequired,
+          onReauthenticationRequired: widget.onReauthenticationRequired == null
+              ? null
+              : _requestReauthentication,
           onExit: widget.onExit,
         );
       },
@@ -583,32 +661,97 @@ class _SyncPageState extends State<SyncPage> {
     final username = usernameController.text.trim();
     if (id == null || username.isEmpty || busy) return;
     setState(() => busy = true);
-    var outcome = await widget.coordinator.reauthenticate(
-      SyncSource.jw,
-      accountId: id,
-      username: username,
-      password: passwordController.text.isEmpty
-          ? null
-          : passwordController.text,
-      savePassword: savePassword,
-    );
-    outcome = await _handle(outcome);
-    passwordController.clear();
-    if (!mounted) return;
-    setState(() => busy = false);
-    if (outcome is SyncSucceeded) {
-      widget.onReauthenticated?.call();
+    var accountCleared = false;
+    var message = '重新登录未完成';
+    try {
+      // Reauthentication is intentionally a destructive replacement in the
+      // minimal single-account model. Validate the supplied identity before
+      // asking for destructive confirmation, then discard the staged secret
+      // before the canonical reset removes the account partition.
+      final staged = await widget.accounts.stageReauthentication(
+        accountId: id,
+        username: username,
+        password: passwordController.text.isEmpty
+            ? null
+            : passwordController.text,
+        savePassword: savePassword,
+      );
+      final confirmed = await _confirmCompleteReset();
+      if (!confirmed) {
+        widget.accounts.cancelFirstLogin(staged);
+        message = '已取消重新登录';
+        return;
+      }
+      widget.accounts.cancelFirstLogin(staged);
+
+      // The route callback for an existing /sync page already awaited its
+      // loader shutdown before reaching this route. This fresh route still
+      // owns a newly-created gateway, so shut it down before deleting the
+      // account/UDF and before routing to a new first-login loader.
+      await widget.nativeGateway?.shutdown();
+      final settings = SettingsService(
+        database: widget.accounts.database,
+        accounts: widget.accounts,
+        accountId: id,
+      );
+      try {
+        await settings.completeReset(
+          firstConfirmation: true,
+          secondConfirmation: true,
+        );
+        accountCleared = true;
+      } on BrowserSessionClearAfterResetError {
+        // The database transaction has already removed the complete local
+        // partition; a post-delete browser cleanup failure must not leave the
+        // caller on a route that can reuse stale account data.
+        accountCleared = true;
+      }
+      message = '本地数据已清除';
+    } on AccountVerificationError catch (error) {
+      message = '重新登录失败：${error.code}';
+    } on Object {
+      // Keep native/plugin and database details out of the UI and diagnostics.
+      message = '重新登录失败：reauthentication_failed';
+    } finally {
+      passwordController.clear();
+      if (mounted) setState(() => busy = false);
     }
-    final message = switch (outcome) {
-      SyncSucceeded() => '重新登录成功，教务同步完成',
-      SyncCancelled() => '已取消重新登录',
-      SyncFailed(:final code) => '重新登录失败：$code',
-      _ => '重新登录未完成',
-    };
+    if (!mounted) return;
+    if (accountCleared) {
+      widget.onReauthenticated?.call();
+      return;
+    }
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(message)));
   }
+
+  Future<bool> _confirmCompleteReset() async {
+    if (!mounted) return false;
+    if (!await _askResetConfirmation('完全重置本地数据？') || !mounted) {
+      return false;
+    }
+    return _askResetConfirmation('再次确认：此操作不可撤回');
+  }
+
+  Future<bool> _askResetConfirmation(String title) async =>
+      await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(title),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
 
   Future<void> _importFile() async {
     final action = FileImportAction(

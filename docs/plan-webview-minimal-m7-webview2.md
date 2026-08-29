@@ -205,9 +205,12 @@ reject new work → cancel non-terminal jobs → await terminal settlement
 ```
 
 每个作业只使用一个不透明 `accountId` 绑定的 UDF 子目录，路径由应用支持目录和
-清理后的 account 分区组成，不写入日志。minimal 不实现跨冷启动 session snapshot
-或 DPAPI 会话恢复；重启后再次同步可能要求重新登录。一个 gateway 不并行维护多个
-账号 controller，Python 与 native 也不对同一来源并发。
+清理后的 account 分区组成，不写入日志。minimal 是单账号 gateway 生命周期：不同
+账号请求必须 fail-closed，不能在同一个 gateway 中重绑 controller/UDF。重新登录按
+“等待当前 loader/gateway 与环境完全释放 → 调用 canonical complete-reset 清除全部
+本地账号数据 → 路由创建一个全新的首次登录 loader”执行。minimal 不实现跨冷启动
+session snapshot 或 DPAPI 会话恢复；重启后再次同步可能要求重新登录。一个 gateway
+不并行维护多个账号 controller，Python 与 native 也不对同一来源并发。
 
 ### 8.2 Native startup 边界（重要取舍）
 

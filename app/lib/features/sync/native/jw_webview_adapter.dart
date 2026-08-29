@@ -453,6 +453,20 @@ class JwWebViewAdapter implements JwWebPage {
     return _runtimePolicy.isAuthenticatedHomeUrl(url);
   }
 
+  @override
+  Future<bool> verifyAuthenticatedHome({
+    required String expectedUsername,
+    required Duration timeout,
+  }) async {
+    final url = await currentUrl;
+    if (!_runtimePolicy.portalHomeTarget.urlMatches(url)) return false;
+    await _convergeAndVerifyHome(
+      expectedUsername: expectedUsername,
+      timeout: timeout,
+    );
+    return true;
+  }
+
   // --- CAS login ------------------------------------------------------------
   //
   // The collector drives: gotoRoot -> (not home) gotoCasEntry -> (not home)
@@ -514,30 +528,34 @@ class JwWebViewAdapter implements JwWebPage {
         command: _clickSsoEntry,
       );
 
-      // Fill username (always) and password (when provided).
+      // Fill username (always) and password (when provided). An empty
+      // password is an intentional manual-login path: leave the visible CAS
+      // form populated without dispatching a submit with empty credentials.
       await _fillSecret(controller, 'jw.cas.fillUsername', username);
       final password = credentials.password;
-      if (password != null && password.isNotEmpty) {
+      if (password == null || password.isEmpty) {
+        _diag('manual_submit_required');
+      } else {
         await _fillSecret(controller, 'jw.cas.fillPassword', password);
-      }
 
-      // Submit the form once; never replay a side-effecting authentication
-      // action in this attempt.
-      _diag('activationDispatched');
-      final submitResult = await executeRegisteredScript(
-        controller,
-        scriptId: 'jw.cas.submit',
-        args: const <String, Object?>{},
-        registeredScripts: _runtimePolicy.registeredScripts,
-        timeout: _loginTimeout,
-        safeDiagnostic: _safeDiagnostic,
-      );
-      if (submitResult['submitted'] != true) {
-        throw const JwCollectionException('CAS submit was not acknowledged');
+        // Submit the form once; never replay a side-effecting authentication
+        // action in this attempt.
+        _diag('activationDispatched');
+        final submitResult = await executeRegisteredScript(
+          controller,
+          scriptId: 'jw.cas.submit',
+          args: const <String, Object?>{},
+          registeredScripts: _runtimePolicy.registeredScripts,
+          timeout: _loginTimeout,
+          safeDiagnostic: _safeDiagnostic,
+        );
+        if (submitResult['submitted'] != true) {
+          throw const JwCollectionException('CAS submit was not acknowledged');
+        }
       }
-      // The browser follows the CAS callback naturally. Do not wait for a home
-      // URL here: retaining the expected identity makes the later wait the
-      // only owner of home convergence and identity cleanup.
+      // The browser follows the CAS callback naturally (or the user submits
+      // the visible form manually). Retaining the expected identity makes the
+      // later wait the only owner of home convergence and identity cleanup.
       _pendingExpectedUsername = username;
       submitAcknowledged = true;
     } finally {
@@ -639,6 +657,29 @@ class JwWebViewAdapter implements JwWebPage {
       _pendingExpectedUsername = null;
       _loginConsumed = false;
     }
+  }
+
+  Future<void> _convergeAndVerifyHome({
+    required String expectedUsername,
+    required Duration timeout,
+  }) async {
+    await _converge(
+      target: _runtimePolicy.portalHomeTarget,
+      timeout: timeout,
+      onTimeout: () => throw JwLoginTimeoutException(
+        'USTC JW login was not completed before timeout',
+      ),
+    );
+    // Identity proof is authoritative and boolean-only. Any missing or
+    // conflicting evidence fails closed as account_mismatch.
+    final controller = await _ensureController();
+    await _verifyIdentity(controller, expectedUsername);
+  }
+
+  @override
+  Future<void> resetLoginAttempt() async {
+    _pendingExpectedUsername = null;
+    _loginConsumed = false;
   }
 
   // --- collection -------------------------------------------------------------

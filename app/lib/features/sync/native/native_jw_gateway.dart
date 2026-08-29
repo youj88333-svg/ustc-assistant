@@ -20,9 +20,9 @@
 //   - `resumeLogin` / `cancel` forward to the owning collector; `shutdown`
 //     closes the active adapter/page.
 //
-// Concurrency: the `SyncCoordinator` serializes all sync entry points through
-// its `_busy` flag, so this gateway never runs two jobs concurrently in
-// practice; `bridge_busy` semantics are preserved at the coordinator layer.
+// Concurrency: the `SyncCoordinator` normally serializes all sync entry points
+// through its `_busy` flag, but this gateway also owns a fail-closed gate. A
+// direct caller must never drive two jobs through the one adapter/controller.
 
 import 'dart:async';
 
@@ -142,6 +142,8 @@ class NativeJwGateway implements BridgeGateway {
   final Map<String, Completer<void>> _changes = <String, Completer<void>>{};
   final Map<String, bool> _cancelRequested = <String, bool>{};
   String? _controllerAccountId;
+  String? _activeJobId;
+  bool _startInFlight = false;
   bool _shutdown = false;
 
   static const _pollWait = Duration(milliseconds: 250);
@@ -275,134 +277,171 @@ class NativeJwGateway implements BridgeGateway {
     if (source != SyncSource.jw) {
       throw ArgumentError('NativeJwGateway only supports SyncSource.jw');
     }
-    final boundAccount = _controllerAccountId;
-    if (boundAccount != null && boundAccount != accountId) {
-      // Never reuse a controller/UDF for another local account. Keep the
-      // failure text opaque; account IDs and physical profile paths must not
-      // enter diagnostics or UI exceptions.
-      throw StateError('gateway controller is bound to another account');
+    // The adapter/controller is shared by every job of this gateway. Keep the
+    // gate at the gateway boundary as well as in JwCollector: callers may
+    // bypass SyncCoordinator, and an async start must be rejected before it
+    // can race controller creation or account binding.
+    if (_startInFlight || _activeJobId != null) {
+      throw const BridgeProtocolError(bridgeBusyCode);
     }
-    _controllerAccountId ??= accountId;
+    _startInFlight = true;
+    String? jobId;
+    try {
+      final boundAccount = _controllerAccountId;
+      if (boundAccount != null && boundAccount != accountId) {
+        // Never reuse a controller/UDF for another local account. Keep the
+        // failure text opaque; account IDs and physical profile paths must not
+        // enter diagnostics or UI exceptions.
+        throw StateError('gateway controller is bound to another account');
+      }
+      _controllerAccountId ??= accountId;
 
-    final jobId = 'native:${DateTime.now().microsecondsSinceEpoch}';
-    final adapter = _makeAdapter();
+      final createdJobId = 'native:${DateTime.now().microsecondsSinceEpoch}';
+      jobId = createdJobId;
+      final adapter = _makeAdapter();
 
-    final collector =
-        _collectorFactory?.call(jobId) ??
-        JwCollector(
-          pageFactory: () => adapter,
-          producer: defaultDartProducer,
-          jobId: jobId,
-        );
-    _collectors[jobId] = collector;
-    final buffer = <Map<String, dynamic>>[];
-    _eventBuffers[jobId] = buffer;
-    _terminal[jobId] = false;
-    _results[jobId] = null;
-    _errorCodes[jobId] = null;
-    _settlements[jobId] = Completer<void>();
-    _changes[jobId] = Completer<void>();
-    _cancelRequested[jobId] = false;
+      final collector =
+          _collectorFactory?.call(createdJobId) ??
+          JwCollector(
+            pageFactory: () => adapter,
+            producer: defaultDartProducer,
+            jobId: createdJobId,
+          );
+      _collectors[createdJobId] = collector;
+      final buffer = <Map<String, dynamic>>[];
+      _eventBuffers[createdJobId] = buffer;
+      _terminal[createdJobId] = false;
+      _results[createdJobId] = null;
+      _errorCodes[createdJobId] = null;
+      _settlements[createdJobId] = Completer<void>();
+      _changes[createdJobId] = Completer<void>();
+      _cancelRequested[createdJobId] = false;
+      _activeJobId = createdJobId;
 
-    final subscription = collector
-        .startJwCollection(
-          accountId: accountId,
-          expectedUsername: expectedUsername,
-          semester: jwSemester.toJwSemesterConfig(),
-        )
-        .listen(
-          (event) {
-            if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
-              return;
-            }
-            // Cancellation starts a new terminal generation. A late result
-            // from the cancelled generation must not reach the poll result,
-            // even if the page had already completed before the cancellation
-            // callback was delivered.
-            if (_cancelRequested[jobId] == true &&
-                (event is CollectionComplete || event is CollectionFailed)) {
-              // Preserve the gap-free progress history that preceded the
-              // terminal event, but replace a late result/failure with the
-              // cancellation terminal for this generation.
-              _bufferCancelled(jobId, _nextSequence(jobId));
-              return;
-            }
-            switch (event) {
-              case CollectionStarting():
-              case CollectionStatus():
-              case CollectionNeedsUserLogin():
-                _buffer(jobId, <String, dynamic>{
-                  'sequence': event.sequence,
-                  'phase': event.phase,
-                  'jobId': jobId,
-                  if (event is CollectionStatus) 'message': event.message,
-                });
-              case CollectionComplete():
-                _buffer(jobId, <String, dynamic>{
-                  'sequence': event.sequence,
-                  'phase': 'complete',
-                  'jobId': jobId,
-                });
-                _results[jobId] = event.bundle;
-                _terminal[jobId] = true;
-                _settlements[jobId]?.complete();
-              case CollectionFailed():
-                _buffer(jobId, <String, dynamic>{
-                  'sequence': event.sequence,
-                  'phase': 'failed',
-                  'jobId': jobId,
-                });
-                _errorCodes[jobId] = event.errorCode;
-                _terminal[jobId] = true;
-                _settlements[jobId]?.complete();
-              case CollectionCancelled():
-                _bufferCancelled(jobId, event.sequence);
-            }
-          },
-          onError: (Object _) {
-            if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
-              return;
-            }
-            if (_cancelRequested[jobId] == true) {
-              _bufferCancelled(jobId, _nextSequence(jobId));
-              return;
-            }
-            _buffer(jobId, <String, dynamic>{
-              'sequence': _nextSequence(jobId),
-              'phase': 'failed',
-              'jobId': jobId,
-            });
-            _errorCodes[jobId] = 'collection_failed';
-            _terminal[jobId] = true;
-            _settlements[jobId]?.complete();
-          },
-          onDone: () {
-            // JwCollector normally emits one terminal event before closing. If a
-            // broken implementation closes early, still settle the job with a
-            // buffered terminal failure so shutdown cannot release its controller
-            // while a job remains logically live.
-            if (!_eventBuffers.containsKey(jobId) || _terminal[jobId] == true) {
-              return;
-            }
-            if (_cancelRequested[jobId] == true) {
-              _bufferCancelled(jobId, _nextSequence(jobId));
-              return;
-            }
-            _buffer(jobId, <String, dynamic>{
-              'sequence': _nextSequence(jobId),
-              'phase': 'failed',
-              'jobId': jobId,
-            });
-            _errorCodes[jobId] = 'collection_failed';
-            _terminal[jobId] = true;
-            _settlements[jobId]?.complete();
-          },
-        );
-    // Keep the subscription referenced so it is not collected early. The
-    // collector stream closes itself on a terminal event.
-    _collectorSubscriptions[jobId] = subscription;
+      final subscription = collector
+          .startJwCollection(
+            accountId: accountId,
+            expectedUsername: expectedUsername,
+            semester: jwSemester.toJwSemesterConfig(),
+          )
+          .listen(
+            (event) {
+              if (!_eventBuffers.containsKey(createdJobId) ||
+                  _terminal[createdJobId] == true) {
+                return;
+              }
+              // Cancellation starts a new terminal generation. A late result
+              // from the cancelled generation must not reach the poll result,
+              // even if the page had already completed before the cancellation
+              // callback was delivered.
+              if (_cancelRequested[createdJobId] == true &&
+                  (event is CollectionComplete || event is CollectionFailed)) {
+                // Preserve the gap-free progress history that preceded the
+                // terminal event, but replace a late result/failure with the
+                // cancellation terminal for this generation.
+                _bufferCancelled(createdJobId, _nextSequence(createdJobId));
+                return;
+              }
+              switch (event) {
+                case CollectionStarting():
+                case CollectionStatus():
+                case CollectionNeedsUserLogin():
+                  _buffer(createdJobId, <String, dynamic>{
+                    'sequence': event.sequence,
+                    'phase': event.phase,
+                    'jobId': createdJobId,
+                    if (event is CollectionStatus) 'message': event.message,
+                  });
+                case CollectionComplete():
+                  _buffer(createdJobId, <String, dynamic>{
+                    'sequence': event.sequence,
+                    'phase': 'complete',
+                    'jobId': createdJobId,
+                  });
+                  _results[createdJobId] = event.bundle;
+                  _terminal[createdJobId] = true;
+                  _settlements[createdJobId]?.complete();
+                  _releaseActiveJobAfterSettlement(createdJobId);
+                case CollectionFailed():
+                  _buffer(createdJobId, <String, dynamic>{
+                    'sequence': event.sequence,
+                    'phase': 'failed',
+                    'jobId': createdJobId,
+                  });
+                  _errorCodes[createdJobId] = event.errorCode;
+                  _terminal[createdJobId] = true;
+                  _settlements[createdJobId]?.complete();
+                  _releaseActiveJobAfterSettlement(createdJobId);
+                case CollectionCancelled():
+                  _bufferCancelled(createdJobId, event.sequence);
+              }
+            },
+            onError: (Object _) {
+              if (!_eventBuffers.containsKey(createdJobId) ||
+                  _terminal[createdJobId] == true) {
+                return;
+              }
+              if (_cancelRequested[createdJobId] == true) {
+                _bufferCancelled(createdJobId, _nextSequence(createdJobId));
+                return;
+              }
+              _buffer(createdJobId, <String, dynamic>{
+                'sequence': _nextSequence(createdJobId),
+                'phase': 'failed',
+                'jobId': createdJobId,
+              });
+              _errorCodes[createdJobId] = 'collection_failed';
+              _terminal[createdJobId] = true;
+              _settlements[createdJobId]?.complete();
+              _releaseActiveJobAfterSettlement(createdJobId);
+            },
+            onDone: () {
+              // JwCollector normally emits one terminal event before closing. If a
+              // broken implementation closes early, still settle the job with a
+              // buffered terminal failure so shutdown cannot release its controller
+              // while a job remains logically live.
+              if (!_eventBuffers.containsKey(createdJobId)) {
+                return;
+              }
+              if (_terminal[createdJobId] == true) {
+                _releaseActiveJobAfterSettlement(createdJobId);
+                return;
+              }
+              if (_cancelRequested[createdJobId] == true) {
+                _bufferCancelled(createdJobId, _nextSequence(createdJobId));
+                _releaseActiveJobAfterSettlement(createdJobId);
+                return;
+              }
+              _buffer(createdJobId, <String, dynamic>{
+                'sequence': _nextSequence(createdJobId),
+                'phase': 'failed',
+                'jobId': createdJobId,
+              });
+              _errorCodes[createdJobId] = 'collection_failed';
+              _terminal[createdJobId] = true;
+              _settlements[createdJobId]?.complete();
+              _releaseActiveJobAfterSettlement(createdJobId);
+            },
+          );
+      // Keep the subscription referenced so it is not collected early. The
+      // collector stream closes itself on a terminal event.
+      _collectorSubscriptions[createdJobId] = subscription;
 
-    return BridgeJob(id: jobId, phase: 'starting');
+      return BridgeJob(id: createdJobId, phase: 'starting');
+    } catch (_) {
+      if (jobId != null && _activeJobId == jobId) {
+        _activeJobId = null;
+      }
+      rethrow;
+    } finally {
+      _startInFlight = false;
+    }
+  }
+
+  void _releaseActiveJobAfterSettlement(String jobId) {
+    if (_activeJobId == jobId && _terminal[jobId] == true) {
+      _activeJobId = null;
+    }
   }
 
   /// Buffer a non-terminal event and wake waiters. Replacing the completer
@@ -628,6 +667,8 @@ class NativeJwGateway implements BridgeGateway {
     _settlements.clear();
     _changes.clear();
     _cancelRequested.clear();
+    _activeJobId = null;
+    _startInFlight = false;
     if (!_diagnosticsController.isClosed) {
       await attempt(_diagnosticsController.close);
     }

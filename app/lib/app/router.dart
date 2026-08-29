@@ -47,8 +47,7 @@ GoRouter buildRouter(
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
   AgentCompositionLoader? agentCompositionLoader,
 ]) {
-  final loadAgentComposition =
-      agentCompositionLoader ?? _buildAgentComposition;
+  final loadAgentComposition = agentCompositionLoader ?? _buildAgentComposition;
   return GoRouter(
     initialLocation: '/chat',
     routes: [
@@ -157,7 +156,8 @@ GoRouter buildRouter(
           database: database,
           reminderReconciler: reminderReconciler,
           reauthenticateAccountId: state.pathParameters['accountId']!,
-          onReauthenticated: () => context.go('/accounts'),
+          createNativeGateway: false,
+          onReauthenticated: () => context.go('/sync'),
         ),
       ),
       GoRoute(
@@ -173,7 +173,7 @@ GoRouter buildRouter(
             }
           },
           onReauthenticationRequired: (accountId) =>
-              context.push('/accounts/$accountId/reauthenticate'),
+              context.go('/accounts/$accountId/reauthenticate'),
         ),
       ),
       GoRoute(

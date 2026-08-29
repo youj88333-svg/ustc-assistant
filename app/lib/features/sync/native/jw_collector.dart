@@ -64,6 +64,11 @@ class _Job {
 
   /// True once the job has reached a terminal state.
   bool terminal = false;
+
+  /// The page currently owned by this job. Cancellation uses this reference
+  /// to clear adapter-local login guards immediately, even when a native home
+  /// convergence wait is still in flight and has not reached `finally` yet.
+  JwWebPage? page;
 }
 
 /// `JwCollector` drives the JW collection state machine against an injected
@@ -171,6 +176,16 @@ class JwCollector implements SourceCollectionGateway {
     if (!job.loginResume.isCompleted) {
       job.loginResume.complete(null);
     }
+    // A successful CAS submit leaves the adapter's expected-identity guard
+    // pending until home verification. Clear it now rather than waiting for a
+    // potentially long native navigation timeout; the state-machine finally
+    // block repeats this idempotently after the cancellation terminal event.
+    try {
+      await job.page?.resetLoginAttempt();
+    } on Object {
+      // Cancellation remains best-effort; the collector still observes the
+      // token and emits its terminal cancellation event.
+    }
   }
 
   /// Runs the full state machine as a single-subscription stream.
@@ -186,6 +201,7 @@ class JwCollector implements SourceCollectionGateway {
     StreamController<SourceCollectionEvent> controller,
     _Job job,
   ) async {
+    JwWebPage? page;
     void emit(SourceCollectionEvent event) {
       if (!controller.isClosed) controller.add(event);
     }
@@ -207,7 +223,8 @@ class JwCollector implements SourceCollectionGateway {
     try {
       emit(CollectionStarting(jobId: job.id, sequence: job.nextSequence++));
 
-      final page = _pageFactory();
+      page = _pageFactory();
+      job.page = page;
 
       // --- authenticate -----------------------------------------------------
       if (job.cancelToken.isCancelled) {
@@ -221,7 +238,36 @@ class JwCollector implements SourceCollectionGateway {
         return;
       }
 
-      if (await page.isAuthenticatedHome) {
+      var reusedHome = false;
+      try {
+        reusedHome = await page.verifyAuthenticatedHome(
+          expectedUsername: job.expectedUsername,
+          timeout: _loginTimeout,
+        );
+      } on JwAccountMismatchException {
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('account_mismatch');
+        }
+        return;
+      } on JwLoginTimeoutException {
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('login_timeout');
+        }
+        return;
+      } on JwCollectionException {
+        if (job.cancelToken.isCancelled) {
+          emitCancelled();
+        } else {
+          emitFailed('collection_failed');
+        }
+        return;
+      }
+
+      if (reusedHome) {
         emit(
           CollectionStatus(
             jobId: job.id,
@@ -251,7 +297,35 @@ class JwCollector implements SourceCollectionGateway {
           );
           return;
         }
-        if (await page.isAuthenticatedHome) {
+        var reusedCasHome = false;
+        try {
+          reusedCasHome = await page.verifyAuthenticatedHome(
+            expectedUsername: job.expectedUsername,
+            timeout: _loginTimeout,
+          );
+        } on JwAccountMismatchException {
+          if (job.cancelToken.isCancelled) {
+            emitCancelled();
+          } else {
+            emitFailed('account_mismatch');
+          }
+          return;
+        } on JwLoginTimeoutException {
+          if (job.cancelToken.isCancelled) {
+            emitCancelled();
+          } else {
+            emitFailed('login_timeout');
+          }
+          return;
+        } on JwCollectionException {
+          if (job.cancelToken.isCancelled) {
+            emitCancelled();
+          } else {
+            emitFailed('collection_failed');
+          }
+          return;
+        }
+        if (reusedCasHome) {
           emit(
             CollectionStatus(
               jobId: job.id,
@@ -453,7 +527,16 @@ class JwCollector implements SourceCollectionGateway {
       }
     } finally {
       job.terminal = true;
-      await controller.close();
+      // A gateway-owned adapter intentionally keeps close() inert so its
+      // controller can be reused, but a canceled login attempt still has to
+      // consume its pending identity/guard before the next job. Standalone
+      // adapters implement this as a cheap state reset; older fakes inherit
+      // the no-op default.
+      try {
+        await page?.resetLoginAttempt();
+      } finally {
+        await controller.close();
+      }
     }
   }
 }

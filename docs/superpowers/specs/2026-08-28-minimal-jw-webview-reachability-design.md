@@ -139,9 +139,12 @@ The controller is bound to the opaque local `accountId` passed to
 sanitized, non-human-readable account partition. The partition path is never
 logged.
 
-One gateway runs one account/controller at a time. A request for a different
-account first settles the existing job and completes surface/controller
-teardown, then configures the new account UDF. No two controllers race the same
+The minimal branch is single-account per gateway lifecycle. A request for a
+different account is rejected fail-closed; the gateway never rebinds its
+controller/UDF in place. Reauthentication is a destructive replacement flow:
+the current loader/gateway and environment are fully shut down, the canonical
+confirmed complete-reset lifecycle clears all local account data, and routing
+then creates one fresh first-login loader. No two controllers race the same
 plugin environment, and no WebView session is shared across accounts.
 
 The minimal branch does not add cross-process session snapshots. Restarting the

@@ -42,7 +42,8 @@ const String courseEntryUrl = 'https://jw.ustc.edu.cn/for-std/course-table';
 const String courseGetDataPath = '/for-std/course-table/get-data';
 
 /// `https://jw.ustc.edu.cn/for-std/course-table/datum`.
-const String courseDatumUrl = 'https://jw.ustc.edu.cn/for-std/course-table/datum';
+const String courseDatumUrl =
+    'https://jw.ustc.edu.cn/for-std/course-table/datum';
 
 /// `https://jw.ustc.edu.cn/for-std/exam-arrange`.
 const String examEntryUrl = 'https://jw.ustc.edu.cn/for-std/exam-arrange';
@@ -174,12 +175,22 @@ abstract class JwWebPage {
   /// `_is_authenticated_home`).
   Future<bool> get isAuthenticatedHome;
 
+  /// Strictly verifies an already authenticated home session for the expected
+  /// school account. Implementations that own a real browser must converge the
+  /// home URL/DOM/registered handshake and prove the account identity; the
+  /// default keeps older scripted fakes source-compatible.
+  Future<bool> verifyAuthenticatedHome({
+    required String expectedUsername,
+    required Duration timeout,
+  }) async => isAuthenticatedHome;
+
   /// Fill the CAS login form with [credentials] (Python `fill_ustc_login`).
-  /// Implementations should fill the username and, if present, the password
-  /// and attempt submit. Must throw [JwAccountMismatchException] if, after
-  /// filling, the rendered account selector does not match
-  /// `credentials.username` and the mismatch cannot be resolved — the
-  /// collector surfaces this as `account_mismatch`.
+  /// Implementations fill the username and, when a non-empty password is
+  /// supplied, fill and submit it. An empty password deliberately leaves the
+  /// visible form ready for the user to submit manually. Must throw
+  /// [JwAccountMismatchException] if, after filling, the rendered account
+  /// selector does not match `credentials.username` and the mismatch cannot
+  /// be resolved — the collector surfaces this as `account_mismatch`.
   Future<void> fillLogin(LoginCredentials credentials);
 
   /// Wait for navigation to an authenticated `/home` URL (Python
@@ -208,6 +219,12 @@ abstract class JwWebPage {
   /// table is missing or the wait times out.
   Future<String> fetchExamHtml(Duration timeout);
 
+  /// Clears transient login-attempt state after cancellation or a terminal
+  /// failure. Gateway-owned pages may keep their browser controller alive for
+  /// the next same-account job, so this hook must not dispose that controller.
+  /// Older fakes may inherit the no-op default.
+  Future<void> resetLoginAttempt() async {}
+
   /// Release page resources. Implementations may override; the default is a
   /// no-op so fakes need not bother.
   Future<void> close() async {}
@@ -221,7 +238,9 @@ Map<String, dynamic> parseJsonObject(String body, {required String endpoint}) {
   try {
     decoded = jsonDecode(body);
   } on FormatException catch (e) {
-    throw JwCollectionException('$endpoint returned invalid JSON: ${e.message}');
+    throw JwCollectionException(
+      '$endpoint returned invalid JSON: ${e.message}',
+    );
   }
   if (decoded is! Map<String, dynamic>) {
     throw JwCollectionException('$endpoint returned invalid JSON');

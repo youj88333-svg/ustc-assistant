@@ -119,6 +119,54 @@ void main() {
     );
 
     test(
+      'gateway rejects an overlapping job with bridge_busy before controller reuse',
+      () async {
+        final controller = FakeJwWebviewController()
+          ..authenticatedSession = true
+          ..courseDatum = courseDatum
+          ..examHtml = examHtml
+          ..blockRootNavigation = true;
+        final gateway = NativeJwGateway(
+          controllerFactory: () async => controller,
+        );
+        final first = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'acct_1',
+          expectedUsername: 'ustc.student',
+          jwSemester: kDefaultJwSemester,
+        );
+        await controller.navigationStarted.future;
+
+        await expectLater(
+          gateway.startCollection(
+            source: SyncSource.jw,
+            accountId: 'acct_1',
+            expectedUsername: 'ustc.student',
+            jwSemester: kDefaultJwSemester,
+          ),
+          throwsA(
+            isA<BridgeProtocolError>().having(
+              (error) => error.code,
+              'code',
+              bridgeBusyCode,
+            ),
+          ),
+        );
+
+        controller.releaseBlockedNavigation();
+        await _pollUntilTerminal(gateway, first.id);
+        final second = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'acct_1',
+          expectedUsername: 'ustc.student',
+          jwSemester: kDefaultJwSemester,
+        );
+        expect((await _pollUntilTerminal(gateway, second.id)).terminal, isTrue);
+        await gateway.shutdown();
+      },
+    );
+
+    test(
       'startCollection reuse-session (goRoot redirects /home) completes',
       () async {
         final controller = FakeJwWebviewController()
@@ -424,7 +472,7 @@ void main() {
     );
 
     test(
-      'controller factory receives one account partition per lifecycle',
+      'gateway remains single-account and rejects direct cross-account reuse',
       () async {
         final requestedAccounts = <String>[];
         var productionFactoryCalls = 0;
@@ -555,7 +603,9 @@ class FakeJwWebviewController implements JwWebviewController {
   String? _documentUrl;
   String? _lastSource;
   String documentReadyState = 'complete';
-  bool identityAuthenticated = false;
+  // An authenticated-session fixture represents a session already proven for
+  // the expected account unless a test explicitly overrides the proof.
+  bool identityAuthenticated = true;
   bool identityConflict = false;
   bool authenticatedSession = false;
   bool blockRootNavigation = false;

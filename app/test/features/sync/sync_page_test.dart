@@ -175,6 +175,32 @@ class _ShutdownTrackingGateway extends NativeJwGateway {
   }
 }
 
+class _OrderedShutdownGateway extends NativeJwGateway {
+  _OrderedShutdownGateway(this.events)
+    : super(controllerFactory: () async => _PageSurfaceController());
+
+  final List<String> events;
+
+  @override
+  Future<void> shutdown() async {
+    events.add('shutdown');
+  }
+}
+
+class _AwaitableShutdownGateway extends NativeJwGateway {
+  _AwaitableShutdownGateway(this.shutdownGate)
+    : super(controllerFactory: () async => _PageSurfaceController());
+
+  final Completer<void> shutdownGate;
+  var shutdownCalls = 0;
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    await shutdownGate.future;
+  }
+}
+
 class _GatewayUseTrackingGateway extends _ShutdownTrackingGateway {
   var diagnosticsSubscriptions = 0;
   var methodCalls = 0;
@@ -534,6 +560,209 @@ void main() {
     expect(bridge.starts, isEmpty);
     expect(find.textContaining('identity_mismatch'), findsOneWidget);
   });
+
+  testWidgets(
+    'reauthentication shuts down then clears all local data before replacement',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final events = <String>[];
+      final accounts = AccountService(
+        database: database,
+        protector: _TestProtector(),
+        clearBrowserSession: () async => events.add('browser-clear'),
+      );
+      final accountId = await accounts.persistVerifiedAccount(
+        username: 'PB00000000',
+        password: 'old-secret',
+        savePassword: true,
+      );
+      await accounts.deleteCredentials(accountId);
+      await database
+          .into(database.sourceConfigs)
+          .insert(
+            SourceConfigsCompanion.insert(
+              id: '$accountId:ustc_jw',
+              accountId: accountId,
+              source: 'ustc_jw',
+              updatedAt: 100,
+            ),
+          );
+      final gateway = _OrderedShutdownGateway(events);
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => _UnusedBridge(),
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            throw StateError('must not import'),
+      );
+      var replacementRouted = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPage(
+            accounts: accounts,
+            coordinator: coordinator,
+            nativeGateway: gateway,
+            reauthenticateAccountId: accountId,
+            onReauthenticated: () {
+              events.add('new-loader');
+              replacementRouted = true;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('reauth-username')),
+        'PB00000000',
+      );
+      await tester.tap(find.byKey(const Key('submit-reauthentication')));
+      // The page intentionally keeps its busy spinner alive while the first
+      // destructive-confirmation dialog is open, so pump one frame instead of
+      // waiting for all animations to settle.
+      await tester.pump();
+      expect(find.text('完全重置本地数据？'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '确认'));
+      await tester.pump();
+      expect(find.text('再次确认：此操作不可撤回'), findsOneWidget);
+      await tester.tap(find.widgetWithText(FilledButton, '确认'));
+      await tester.pump();
+
+      expect(replacementRouted, isTrue);
+      expect(events, ['shutdown', 'browser-clear', 'new-loader']);
+      expect(await (database.select(database.localAccounts)).get(), isEmpty);
+      expect(
+        await (database.select(database.credentialAccounts)).get(),
+        isEmpty,
+      );
+      expect(await (database.select(database.sourceConfigs)).get(), isEmpty);
+    },
+  );
+
+  testWidgets(
+    'loader awaits gateway shutdown before routing to reauthentication',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = AccountService(
+        database: database,
+        protector: _TestProtector(),
+      );
+      final accountId = await accounts.persistVerifiedAccount(
+        username: 'PB00000000',
+      );
+      await accounts.deleteCredentials(accountId);
+      await database
+          .into(database.syncRuns)
+          .insert(
+            SyncRunsCompanion.insert(
+              id: 'reauth-run',
+              accountId: accountId,
+              source: 'ustc_jw',
+              trigger: 'manual',
+              state: 'failed',
+              resultCode: const Value('reauthentication_required'),
+              startedAt: 1,
+              finishedAt: const Value(2),
+            ),
+          );
+      await database
+          .into(database.sourceConfigs)
+          .insert(
+            SourceConfigsCompanion.insert(
+              id: '$accountId:ustc_jw',
+              accountId: accountId,
+              source: 'ustc_jw',
+              retryAfter: Value(DateTime.now().millisecondsSinceEpoch + 600000),
+              updatedAt: DateTime.now().millisecondsSinceEpoch,
+            ),
+          );
+      final shutdownGate = Completer<void>();
+      final gateway = _AwaitableShutdownGateway(shutdownGate);
+      var routed = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPageLoader(
+            database: database,
+            nativeGateway: gateway,
+            schemaLoader: () async => '{}',
+            onReauthenticationRequired: (_) => routed = true,
+          ),
+        ),
+      );
+      await tester.runAsync(() async {});
+      for (
+        var i = 0;
+        i < 100 &&
+            find.byKey(const Key('sync-reauthenticate')).evaluate().isEmpty;
+        i++
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+        await tester.runAsync(() async {});
+      }
+      expect(find.byKey(const Key('sync-reauthenticate')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('sync-reauthenticate')));
+      await tester.pump();
+      expect(gateway.shutdownCalls, 1);
+      expect(routed, isFalse);
+
+      shutdownGate.complete();
+      await tester.pumpAndSettle();
+      expect(routed, isTrue);
+    },
+  );
+
+  testWidgets(
+    'reauthentication loader defers native environment until fresh route',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = AccountService(
+        database: database,
+        protector: _TestProtector(),
+      );
+      final accountId = await accounts.persistVerifiedAccount(
+        username: 'PB00000000',
+      );
+      await accounts.deleteCredentials(accountId);
+      var factoryCalls = 0;
+      var routed = false;
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPageLoader(
+            database: database,
+            reauthenticateAccountId: accountId,
+            createNativeGateway: false,
+            nativeGatewayFactory: () async {
+              factoryCalls++;
+              return _ShutdownTrackingGateway();
+            },
+            schemaLoader: () async => '{}',
+            onReauthenticated: () => routed = true,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(factoryCalls, 0);
+
+      await tester.enterText(
+        find.byKey(const Key('reauth-username')),
+        'PB00000000',
+      );
+      await tester.tap(find.byKey(const Key('submit-reauthentication')));
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, '确认'));
+      await tester.pump();
+      await tester.tap(find.widgetWithText(FilledButton, '确认'));
+      await tester.pump();
+
+      expect(routed, isTrue);
+      expect(factoryCalls, 0);
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+    },
+  );
 
   testWidgets('sync all resolves login before starting the next source', (
     tester,
