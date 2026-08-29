@@ -272,7 +272,7 @@ class JwWebViewAdapter implements JwWebPage {
     await _converge(
       target: portalLoginTarget,
       timeout: _loginTimeout,
-      command: () => controller.loadUrl(portalLoginTarget.url),
+      command: (_) => controller.loadUrl(portalLoginTarget.url),
     );
   }
 
@@ -305,66 +305,77 @@ class JwWebViewAdapter implements JwWebPage {
       throw const JwAccountMismatchException('username is required');
     }
     // A pending credential attempt cannot be replayed in place: a second call
-    // would otherwise dispatch another native click or CAS submit. The guard
-    // is cleared only when waitForAuthenticatedHome settles the attempt.
-    final alreadyInFlight = _loginConsumed;
-    _loginConsumed = true;
-    if (alreadyInFlight) {
+    // would otherwise dispatch another native click or CAS submit. The active
+    // guard covers concurrent calls; a pending identity covers the interval
+    // after an acknowledged submit and before home verification.
+    if (_loginConsumed || _pendingExpectedUsername != null) {
       _diag('login_already_in_flight');
       throw const JwCollectionException('login attempt is already in flight');
     }
+    _loginConsumed = true;
 
-    final controller = await _ensureController();
-    final current = controller.currentUrlSnapshot ?? '';
+    var submitAcknowledged = false;
+    try {
+      final controller = await _ensureController();
+      final current = controller.currentUrlSnapshot ?? '';
 
-    // Prepare the exact portal login target before the one native primary
-    // click. An already prepared target is only revalidated; a different
-    // document is navigated to the trusted `/login` entry first.
-    final onPortalLogin = portalLoginTarget.urlMatches(current);
-    if (!onPortalLogin) {
-      // Navigate to the trusted `/login` entry when the current document is
-      // not already in the exact portal target family.
-      _diag('attempt:jw.portal.login');
+      // Prepare the exact portal login target before the one native primary
+      // click. An already prepared target is only revalidated; a different
+      // document is navigated to the trusted `/login` entry first.
+      final onPortalLogin = portalLoginTarget.urlMatches(current);
+      if (!onPortalLogin) {
+        // Navigate to the trusted `/login` entry when the current document is
+        // not already in the exact portal target family.
+        _diag('attempt:jw.portal.login');
+        await _converge(
+          target: portalLoginTarget,
+          timeout: _loginTimeout,
+          command: (_) => controller.loadUrl(portalLoginTarget.url),
+        );
+      } else {
+        await _converge(target: portalLoginTarget, timeout: _loginTimeout);
+      }
+
+      _diag('waiting_for_cas_form');
       await _converge(
-        target: portalLoginTarget,
-        timeout: _loginTimeout,
-        command: () => controller.loadUrl(portalLoginTarget.url),
+        target: casLoginTarget,
+        timeout: _casFormWaitTimeout,
+        command: _clickSsoEntry,
       );
-    } else {
-      await _converge(target: portalLoginTarget, timeout: _loginTimeout);
-    }
 
-    _diag('waiting_for_cas_form');
-    await _converge(
-      target: casLoginTarget,
-      timeout: _casFormWaitTimeout,
-      command: _clickSsoEntry,
-    );
+      // Fill username (always) and password (when provided).
+      await _fillSecret(controller, 'jw.cas.fillUsername', username);
+      final password = credentials.password;
+      if (password != null && password.isNotEmpty) {
+        await _fillSecret(controller, 'jw.cas.fillPassword', password);
+      }
 
-    // Fill username (always) and password (when provided).
-    await _fillSecret(controller, 'jw.cas.fillUsername', username);
-    final password = credentials.password;
-    if (password != null && password.isNotEmpty) {
-      await _fillSecret(controller, 'jw.cas.fillPassword', password);
+      // Submit the form once; never replay a side-effecting authentication
+      // action in this attempt.
+      _diag('activationDispatched');
+      final submitResult = await executeRegisteredScript(
+        controller,
+        scriptId: 'jw.cas.submit',
+        args: const <String, Object?>{},
+        timeout: _loginTimeout,
+        safeDiagnostic: _safeDiagnostic,
+      );
+      if (submitResult['submitted'] != true) {
+        throw const JwCollectionException('CAS submit was not acknowledged');
+      }
+      // The browser follows the CAS callback naturally. Do not wait for a home
+      // URL here: retaining the expected identity makes the later wait the
+      // only owner of home convergence and identity cleanup.
+      _pendingExpectedUsername = username;
+      submitAcknowledged = true;
+    } finally {
+      // A failed/canceled fill must never poison the adapter for the next
+      // attempt. On success the pending identity is the guard until the home
+      // wait (or close) consumes it; the active-call flag itself is always
+      // released here so collector cancellation cannot strand it.
+      _loginConsumed = false;
+      if (!submitAcknowledged) _pendingExpectedUsername = null;
     }
-
-    // Submit the form once; never replay a side-effecting authentication
-    // action in this attempt.
-    _diag('activationDispatched');
-    final submitResult = await executeRegisteredScript(
-      controller,
-      scriptId: 'jw.cas.submit',
-      args: const <String, Object?>{},
-      timeout: _loginTimeout,
-      safeDiagnostic: _safeDiagnostic,
-    );
-    if (submitResult['submitted'] != true) {
-      throw const JwCollectionException('CAS submit was not acknowledged');
-    }
-    // The browser follows the CAS callback naturally. Do not wait for a home
-    // URL here: retaining the expected identity makes the later wait the only
-    // owner of home convergence and identity cleanup.
-    _pendingExpectedUsername = username;
   }
 
   /// Fills a CAS field with [secret] bytes. Selector polling may retry while
@@ -468,7 +479,7 @@ class JwWebViewAdapter implements JwWebPage {
     await _converge(
       target: courseHomeTarget,
       timeout: timeout,
-      command: () => controller.loadUrl(courseEntryUrl),
+      command: (_) => controller.loadUrl(courseEntryUrl),
     );
     final result = await executeRegisteredScript(
       controller,
@@ -539,7 +550,7 @@ class JwWebViewAdapter implements JwWebPage {
     await _converge(
       target: examListTarget,
       timeout: timeout,
-      command: () => controller.loadUrl(examEntryUrl),
+      command: (_) => controller.loadUrl(examEntryUrl),
     );
     final result = await executeRegisteredScript(
       controller,
@@ -557,14 +568,15 @@ class JwWebViewAdapter implements JwWebPage {
     return html;
   }
 
-  /// Converges [target]'s three signals. Default timeout error is
+  /// Converges [target]'s URL, live DOM, loading-complete, and handshake
+  /// signals. Default timeout error is
   /// [JwCollectionException]; [JwReadyTarget.id] `jw.portal.home` maps to
   /// [JwLoginTimeoutException] so the collector reports `login_timeout`.
   Future<void> _converge({
     required JwReadyTarget target,
     required Duration timeout,
     void Function()? onTimeout,
-    Future<void> Function()? command,
+    JwAttemptCommand? command,
   }) async {
     final controller = await _ensureController();
     try {
@@ -583,8 +595,11 @@ class JwWebViewAdapter implements JwWebPage {
 
   /// Clicks the SSO entry (统一身份认证) using the native primary-click path
   /// with a geometry/visibility check (lesson 3.2: not just `element.click()`).
-  Future<void> _clickSsoEntry() async {
+  Future<void> _clickSsoEntry(bool Function() isActive) async {
     final controller = await _ensureController();
+    if (!isActive()) {
+      throw const JwCollectionException('login attempt is no longer active');
+    }
     final geometry = await controller.executeScript('''
 (() => {
   // The wrapper is the only trusted portal activation target. Do not select
@@ -618,7 +633,16 @@ class JwWebViewAdapter implements JwWebPage {
   };
 })()
 ''');
+    if (!isActive()) {
+      throw const JwCollectionException('login attempt is no longer active');
+    }
     final point = _validatedClickPoint(geometry);
+    // Keep this check immediately adjacent to the native dispatch. A timeout
+    // can arrive while geometry is being evaluated; that stale completion must
+    // not click the portal entry after the attempt has ended.
+    if (!isActive()) {
+      throw const JwCollectionException('login attempt is no longer active');
+    }
     await controller.dispatchPrimaryClick(point);
     _diag('activation_dispatched');
   }

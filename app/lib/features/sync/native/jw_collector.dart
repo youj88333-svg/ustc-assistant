@@ -259,6 +259,13 @@ class JwCollector implements SourceCollectionGateway {
               errorCode: 'login_timeout',
             ));
             return;
+          } on JwAccountMismatchException {
+            emit(CollectionFailed(
+              jobId: job.id,
+              sequence: job.nextSequence++,
+              errorCode: 'account_mismatch',
+            ));
+            return;
           }
           if (job.cancelToken.isCancelled) {
             emit(CollectionCancelled(

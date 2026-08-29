@@ -790,6 +790,11 @@ String _safeScriptReason(String reason) =>
 
 final Random _secureRandom = Random.secure();
 
+/// A side-effecting command belongs to one convergence attempt. The callback
+/// is false as soon as that attempt times out or otherwise settles, so a late
+/// geometry/script completion cannot dispatch an action for an old attempt.
+typedef JwAttemptCommand = Future<void> Function(bool Function() isActive);
+
 String _newRequestId() {
   final bytes = List<int>.generate(
     18,
@@ -802,7 +807,12 @@ String _newRequestId() {
 /// A convergence attempt token. Signals from a timed-out or completed
 /// attempt must never complete its readiness futures after the attempt has
 /// been invalidated.
+int _nextAttemptGeneration = 0;
+
 final class _JwAttemptToken {
+  _JwAttemptToken(this.generation);
+
+  final int generation;
   bool active = true;
 
   void invalidate() {
@@ -810,8 +820,8 @@ final class _JwAttemptToken {
   }
 }
 
-/// Waits for the [JwReadyTarget] signals (URL match, DOM-ready, ready
-/// handshake) in any order inside [timeout].
+/// Waits for the [JwReadyTarget] signals (URL match, DOM-ready,
+/// loading-complete, ready handshake) in any order inside [timeout].
 ///
 /// The readiness waits are armed BEFORE [command] runs, so a fast navigation
 /// triggered by the command cannot be missed (listen-before-navigate, lesson
@@ -830,12 +840,13 @@ Future<ExtractionResult> convergeTarget(
   JwReadyTarget target, {
   required Duration timeout,
   void Function(String)? safeDiagnostic,
-  Future<void> Function()? command,
+  JwAttemptCommand? command,
 }) async {
-  final token = _JwAttemptToken();
+  final token = _JwAttemptToken(++_nextAttemptGeneration);
   final deadline = DateTime.now().add(timeout);
   final urlMatch = Completer<void>();
   final domReady = Completer<void>();
+  final loadingComplete = Completer<void>();
 
   void signal(String stage) {
     try {
@@ -859,6 +870,13 @@ Future<ExtractionResult> convergeTarget(
     }
   }
 
+  void completeLoading() {
+    if (token.active && !loadingComplete.isCompleted) {
+      signal('loadingComplete:${target.id}');
+      loadingComplete.complete();
+    }
+  }
+
   // Arm the readiness waits before any navigation/action.
   late final StreamSubscription<String> urlSub;
   urlSub = controller.urlChanges.listen((url) {
@@ -873,13 +891,21 @@ Future<ExtractionResult> convergeTarget(
   late final StreamSubscription<JwLoadingState> loadingSub;
   loadingSub = controller.loadingStateChanges.listen((state) {
     if (!token.active) return;
-    // Selector polling owns DOM readiness. We still subscribe to loading so
-    // the attempt's navigation listener is always canceled in finally.
-    if (state == JwLoadingState.navigationCompleted) return;
+    if (state == JwLoadingState.navigationCompleted) {
+      // The event is armed for lifecycle ordering/diagnostics, but it is not
+      // sufficient by itself: some hosts report it while the document is
+      // still `interactive`. The URL-aware readyState probe below remains the
+      // authoritative loading-complete gate.
+      signal('navigationCompleted:${target.id}');
+    }
   });
 
-  // Arm the selector poller (if a DOM selector is required) and the
-  // navigation/action command in listen-before-navigate order.
+  // Arm both live-document pollers (and the navigation/action command) in
+  // listen-before-navigate order. The readyState probe is the bounded
+  // fallback for an already-completed snapshot where the loading event was
+  // emitted before this attempt subscribed. A selector may exist while the
+  // document is still `interactive`; that state must never trigger a false
+  // handshake rejection.
   unawaited(
     _waitForSelector(
       controller,
@@ -895,13 +921,32 @@ Future<ExtractionResult> convergeTarget(
       },
     ),
   );
+  unawaited(
+    _waitForDocumentComplete(
+      controller,
+      target,
+      timeout,
+      isActive: () => token.active,
+    ).then(
+      (_) {
+        if (token.active) completeLoading();
+      },
+      onError: (Object _, StackTrace _) {
+        // Timeout/abort is reported by the bounded readiness wait below.
+      },
+    ),
+  );
 
   try {
     // Invoke the action only after both stream subscriptions and the selector
     // poller are armed. Include its Future in the same bounded wait so command
     // failures propagate instead of being hidden behind a later timeout.
-    final commandFuture = command?.call();
-    final waits = <Future<void>>[urlMatch.future, domReady.future];
+    final commandFuture = command?.call(() => token.active);
+    final waits = <Future<void>>[
+      urlMatch.future,
+      domReady.future,
+      loadingComplete.future,
+    ];
     if (commandFuture != null) waits.add(commandFuture);
     final remaining = deadline.difference(DateTime.now());
     await Future.wait<void>(
@@ -909,7 +954,7 @@ Future<ExtractionResult> convergeTarget(
       eagerError: true,
     ).timeout(remaining.isNegative ? Duration.zero : remaining);
 
-    // The handshake is the third signal. It is credential-free and
+    // The handshake is the final signal. It is credential-free and
     // registered; a missing or false result is a failed attempt, never a
     // degraded two-signal success.
     final handshakeId = target.handshakeScriptId;
@@ -925,9 +970,26 @@ Future<ExtractionResult> convergeTarget(
         timeout: handshakeRemaining,
         safeDiagnostic: safeDiagnostic,
       );
+      if (!token.active) {
+        throw const JwCollectionException('ready attempt is no longer active');
+      }
       if (!target.acceptsHandshake(result)) {
         signal('readyHandshakeRejected:${target.id}');
         throw const JwCollectionException('ready handshake was not accepted');
+      }
+      final liveRemaining = deadline.difference(DateTime.now());
+      if (liveRemaining.isNegative || liveRemaining == Duration.zero) {
+        throw TimeoutException('ready target verification timed out');
+      }
+      final liveTarget = await _verifyLiveTarget(
+        controller,
+        target,
+        liveRemaining,
+        isActive: () => token.active,
+      );
+      if (!token.active || !liveTarget) {
+        signal('readyTargetChanged:${target.id}');
+        throw const JwCollectionException('ready target changed');
       }
       signal('readyHandshake:${target.id}');
       signal('ready:${target.id}');
@@ -949,6 +1011,33 @@ Future<ExtractionResult> convergeTarget(
   }
 }
 
+String _targetDocumentProbeSource(
+  JwReadyTarget target, {
+  required String marker,
+  required bool requireSelector,
+  required bool requireComplete,
+}) {
+  final encodedSelector = jsonEncode(target.readySelector);
+  final encodedPattern = jsonEncode(target.urlPattern ?? target.url);
+  final completeClause = requireComplete
+      ? " && document.readyState === 'complete'"
+      : '';
+  final selectorClause = requireSelector
+      ? ' && Boolean(document.querySelector($encodedSelector))'
+      : '';
+  return '''
+/* $marker */
+(() => {
+  const expected = $encodedPattern;
+  const current = String(location.href);
+  const urlMatches = expected.endsWith('*')
+    ? current.startsWith(expected.slice(0, -1))
+    : current === expected;
+  return urlMatches$completeClause$selectorClause;
+})()
+''';
+}
+
 /// Polls for a CSS selector to be present in the live DOM until [timeout].
 /// ExecuteScript failures during a document switch are expected transient
 /// states and are retried within the original bound.
@@ -963,19 +1052,12 @@ Future<void> _waitForSelector(
   if (selector.isEmpty) {
     throw const JwCollectionException('DOM ready selector is missing');
   }
-  final encodedSelector = jsonEncode(selector);
-  final encodedPattern = jsonEncode(target.urlPattern ?? target.url);
-  final probe =
-      '''
-(() => {
-  const expected = $encodedPattern;
-  const current = String(location.href);
-  const urlMatches = expected.endsWith('*')
-    ? current.startsWith(expected.slice(0, -1))
-    : current === expected;
-  return urlMatches && Boolean(document.querySelector($encodedSelector));
-})()
-''';
+  final probe = _targetDocumentProbeSource(
+    target,
+    marker: 'jw.selectorProbe',
+    requireSelector: true,
+    requireComplete: false,
+  );
   while (true) {
     if (isActive != null && !isActive()) return;
     Object? present;
@@ -991,4 +1073,71 @@ Future<void> _waitForSelector(
     }
     await Future<void>.delayed(const Duration(milliseconds: 25));
   }
+}
+
+/// Polls the live document's loading-complete state. This read-only probe is
+/// deliberately URL-aware, so an already-completed old document cannot arm a
+/// handshake for a newer target merely because a stale loading event arrived.
+Future<void> _waitForDocumentComplete(
+  JwWebviewController controller,
+  JwReadyTarget target,
+  Duration timeout, {
+  bool Function()? isActive,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  final probe = _targetDocumentProbeSource(
+    target,
+    marker: 'jw.documentCompleteProbe',
+    requireSelector: false,
+    requireComplete: true,
+  );
+  while (true) {
+    if (isActive != null && !isActive()) return;
+    Object? complete;
+    try {
+      complete = await controller.executeScript(probe);
+    } on Object {
+      // Document switching; keep polling within the bound.
+    }
+    if (complete == true) return;
+    if (isActive != null && !isActive()) return;
+    if (DateTime.now().isAfter(deadline)) {
+      throw const JwCollectionException('document loading timed out');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+}
+
+/// Rechecks the controller snapshot and current document after the registered
+/// handshake reply. A reply from a document that was replaced while awaiting
+/// `webMessage` is therefore never accepted as readiness.
+Future<bool> _verifyLiveTarget(
+  JwWebviewController controller,
+  JwReadyTarget target,
+  Duration timeout, {
+  required bool Function() isActive,
+}) async {
+  if (!isActive()) return false;
+  final snapshot = controller.currentUrlSnapshot;
+  if (snapshot == null || !target.urlMatches(snapshot)) return false;
+  final probe = _targetDocumentProbeSource(
+    target,
+    marker: 'jw.finalTargetProbe',
+    requireSelector: true,
+    requireComplete: true,
+  );
+  Object? result;
+  try {
+    result = await controller.executeScript(probe).timeout(timeout);
+  } on TimeoutException {
+    // Preserve the bounded timeout so the home target maps it to the public
+    // login-timeout contract instead of looking like an arbitrary script
+    // failure.
+    rethrow;
+  } on Object {
+    return false;
+  }
+  if (!isActive() || result != true) return false;
+  final finalSnapshot = controller.currentUrlSnapshot;
+  return finalSnapshot != null && target.urlMatches(finalSnapshot);
 }

@@ -121,6 +121,74 @@ void main() {
         expect(controller.passwordFilled, isNull);
         expect(controller.submitted, isTrue);
       });
+
+      test(
+        'a failed portal attempt resets the guard and permits retry',
+        () async {
+          controller
+            ..setCurrent(_loginEntryUrl)
+            ..portalLoginMatched = false;
+          await expectLater(
+            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            throwsA(isA<JwCollectionException>()),
+          );
+
+          controller
+            ..portalLoginMatched = true
+            ..setCurrent(_loginEntryUrl);
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000'),
+          );
+          expect(controller.primaryClicks, 1);
+          expect(controller.submitCalls, 1);
+        },
+      );
+
+      test(
+        'an unacknowledged submit resets the guard and permits retry',
+        () async {
+          controller
+            ..setCurrent(_loginEntryUrl)
+            ..submitAcknowledged = false;
+          await expectLater(
+            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            throwsA(isA<JwCollectionException>()),
+          );
+
+          controller
+            ..submitAcknowledged = true
+            ..visitedCas = false
+            ..setCurrent(_loginEntryUrl);
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000'),
+          );
+          expect(controller.primaryClicks, 2);
+          expect(controller.submitCalls, 2);
+        },
+      );
+
+      test(
+        'a canceled fill before wait resets the guard and permits retry',
+        () async {
+          controller
+            ..setCurrent(_loginEntryUrl)
+            ..cancelScriptId = 'jw.cas.fillUsername';
+          await expectLater(
+            adapter.fillLogin(const LoginCredentials(username: 'PB00000000')),
+            throwsA(isA<JwCollectionException>()),
+          );
+
+          controller
+            ..cancelScriptId = null
+            ..visitedCas = false
+            ..setCurrent(_loginEntryUrl);
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000'),
+          );
+          expect(controller.primaryClicks, 2);
+          expect(controller.submitCalls, 1);
+        },
+      );
     });
 
     group('waitForAuthenticatedHome', () {
@@ -203,6 +271,25 @@ void main() {
       });
 
       test(
+        'home handshake waits for loading completion after an interactive DOM',
+        () async {
+          controller
+            ..setCurrent(_homeUrl)
+            ..sessionHealthy = true
+            ..documentReadyState = 'interactive';
+          final wait = adapter.waitForAuthenticatedHome(
+            const Duration(seconds: 1),
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          expect(controller.handshakeCalls, 0);
+
+          controller.documentReadyState = 'complete';
+          await expectLater(wait, throwsA(isA<JwCollectionException>()));
+          expect(controller.handshakeCalls, 1);
+        },
+      );
+
+      test(
         'home readiness propagates a non-timeout handshake failure',
         () async {
           controller
@@ -228,6 +315,24 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 125));
         expect(diagnostics, isNot(contains('ready:jw.portal.home')));
       });
+
+      test(
+        'a late home handshake after document switch fails closed',
+        () async {
+          controller
+            ..setCurrent(_loginEntryUrl)
+            ..identityAuthenticated = true
+            ..sessionHealthy = true
+            ..switchDocumentAfterHandshakeReply = true;
+          await adapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000'),
+          );
+          await expectLater(
+            adapter.waitForAuthenticatedHome(const Duration(seconds: 2)),
+            throwsA(isA<JwCollectionException>()),
+          );
+        },
+      );
     });
 
     group('strict identity proof', () {
@@ -335,6 +440,38 @@ void main() {
       expect(controller.primaryClicks, 0);
       expect(controller.selectorProbes, contains('#login-unified-wrapper'));
     });
+
+    test(
+      'geometry completing after convergence timeout cannot click',
+      () async {
+        final shortAdapter = JwWebViewAdapter(
+          controllerFactory: () async => controller,
+          loginTimeout: const Duration(seconds: 1),
+          casFormWaitTimeout: const Duration(milliseconds: 40),
+          responseTimeout: const Duration(seconds: 1),
+          safeDiagnostic: diagnostics.add,
+        );
+        controller
+          ..setCurrent(_loginEntryUrl)
+          ..geometryDelay = const Duration(milliseconds: 140);
+        await expectLater(
+          shortAdapter.fillLogin(
+            const LoginCredentials(username: 'PB00000000'),
+          ),
+          throwsA(isA<JwCollectionException>()),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 170));
+        expect(controller.primaryClicks, 0);
+
+        controller
+          ..geometryDelay = Duration.zero
+          ..setCurrent(_loginEntryUrl);
+        await shortAdapter.fillLogin(
+          const LoginCredentials(username: 'PB00000000'),
+        );
+        expect(controller.primaryClicks, 1);
+      },
+    );
 
     group('CAS form proof', () {
       test('hidden password input fails CAS readiness closed', () async {
@@ -564,12 +701,18 @@ class FakeJwWebviewController implements JwWebviewController {
   bool clickProbeMatchesExactWrapper = true;
   String? handshakeFailureReason;
   Duration selectorProbeDelay = Duration.zero;
+  Duration geometryDelay = Duration.zero;
+  String documentReadyState = 'complete';
+  bool submitAcknowledged = true;
+  bool switchDocumentAfterHandshakeReply = false;
+  String? cancelScriptId;
   bool rejectUnknownNavigation = false;
   bool suppressUrl = false;
   bool selectorPresent = true;
   bool suppressWebMessage = false;
   int primaryClicks = 0;
   int submitCalls = 0;
+  int handshakeCalls = 0;
   final List<String> selectorProbes = <String>[];
   String? _documentUrl;
 
@@ -626,6 +769,29 @@ class FakeJwWebviewController implements JwWebviewController {
   @override
   Future<Object?> executeScript(String source) async {
     _lastSource = source;
+    if (source.contains('jw.documentCompleteProbe') ||
+        source.contains('jw.finalTargetProbe')) {
+      var documentMatchesTarget = true;
+      final expectedMatch = RegExp(
+        r'const expected = ("(?:\\.|[^"])*");',
+      ).firstMatch(source);
+      if (expectedMatch != null) {
+        final expected = jsonDecode(expectedMatch.group(1)!);
+        if (expected is String) {
+          final documentUrl = _documentUrl ?? '';
+          documentMatchesTarget = expected.endsWith('*')
+              ? documentUrl.startsWith(
+                  expected.substring(0, expected.length - 1),
+                )
+              : documentUrl == expected;
+        }
+      }
+      final complete = documentReadyState == 'complete';
+      if (source.contains('jw.documentCompleteProbe')) {
+        return documentMatchesTarget && complete;
+      }
+      return documentMatchesTarget && complete && selectorPresent;
+    }
     if (source.startsWith('Boolean(document.querySelector') ||
         source.contains('const urlMatches =') &&
             source.contains('document.querySelector(')) {
@@ -666,6 +832,9 @@ class FakeJwWebviewController implements JwWebviewController {
       return '';
     }
     if (source.contains('scrollIntoView')) {
+      if (geometryDelay > Duration.zero) {
+        await Future<void>.delayed(geometryDelay);
+      }
       if (!clickProbeMatchesExactWrapper ||
           !source.contains(
             "document.querySelector('#login-unified-wrapper')",
@@ -732,6 +901,13 @@ class FakeJwWebviewController implements JwWebviewController {
     final scriptId = entry.key;
     final reply = _replyFor(scriptId, args);
     _echoReply(reply, scriptId);
+    if (scriptId == cancelScriptId) {
+      cancelScriptId = null;
+      throw const JwCollectionException('cancelled');
+    }
+    if (scriptId == 'jw.cas.inspect' && switchDocumentAfterHandshakeReply) {
+      _documentUrl = _casUrl;
+    }
     return true;
   }
 
@@ -747,12 +923,16 @@ class FakeJwWebviewController implements JwWebviewController {
         return {'filled': true};
       case 'jw.cas.submit':
         submitCalls++;
+        if (!submitAcknowledged) {
+          return {'submitted': false};
+        }
         submitted = true;
         // The natural post-submit redirect lands on the JW home page.
         _navigateTo(_homeUrl);
         visitedHome = true;
         return {'submitted': true};
       case 'jw.cas.inspect':
+        handshakeCalls++;
         if (handshakeFailureReason != null) {
           _echoError(handshakeFailureReason!);
           return null;

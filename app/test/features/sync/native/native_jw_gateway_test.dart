@@ -263,7 +263,7 @@ void main() {
             (_) {
               shutdownSettled = true;
             },
-            onError: (Object _, StackTrace __) {
+            onError: (Object _, StackTrace _) {
               shutdownSettled = true;
             },
           ),
@@ -436,7 +436,9 @@ class FakeJwWebviewController implements JwWebviewController {
   final _webMessageController = StreamController<Object?>.broadcast();
 
   String? _currentUrl;
+  String? _documentUrl;
   String? _lastSource;
+  String documentReadyState = 'complete';
   bool identityAuthenticated = false;
   bool identityConflict = false;
   bool authenticatedSession = false;
@@ -446,11 +448,13 @@ class FakeJwWebviewController implements JwWebviewController {
 
   void setCurrent(String url) {
     _currentUrl = url;
+    _documentUrl = url;
     _urlController.add(url);
   }
 
   void _navigateTo(String url) {
     _currentUrl = url;
+    _documentUrl = url;
     _urlController.add(url);
     _loadingController.add(JwLoadingState.loading);
     _loadingController.add(JwLoadingState.navigationCompleted);
@@ -491,6 +495,18 @@ class FakeJwWebviewController implements JwWebviewController {
   @override
   Future<Object?> executeScript(String source) async {
     _lastSource = source;
+    if (source.contains('jw.selectorProbe') ||
+        source.contains('jw.documentCompleteProbe') ||
+        source.contains('jw.finalTargetProbe')) {
+      final matches = _documentMatchesExpected(source);
+      if (source.contains('jw.documentCompleteProbe')) {
+        return matches && documentReadyState == 'complete';
+      }
+      if (source.contains('jw.finalTargetProbe')) {
+        return matches && documentReadyState == 'complete';
+      }
+      return matches;
+    }
     if (source.startsWith('Boolean(document.querySelector')) return true;
     if (source.contains('input[name=username]') &&
         source.contains('||{value:""}).value')) {
@@ -509,6 +525,19 @@ class FakeJwWebviewController implements JwWebviewController {
     final entry = _matchRegisteredScript(source);
     if (entry == null) return null;
     return _handleScript(entry);
+  }
+
+  bool _documentMatchesExpected(String source) {
+    final expectedMatch = RegExp(
+      r'const expected = ("(?:\\.|[^"])*");',
+    ).firstMatch(source);
+    if (expectedMatch == null) return true;
+    final expected = jsonDecode(expectedMatch.group(1)!);
+    if (expected is! String) return false;
+    final documentUrl = _documentUrl ?? '';
+    return expected.endsWith('*')
+        ? documentUrl.startsWith(expected.substring(0, expected.length - 1))
+        : documentUrl == expected;
   }
 
   MapEntry<String, String>? _matchRegisteredScript(String source) {
@@ -555,8 +584,26 @@ class FakeJwWebviewController implements JwWebviewController {
         return <String, Object?>{'submitted': true};
       case 'jw.cas.inspect':
         return <String, Object?>{
-          'sessionHealthy': true,
-          'needsUserLogin': false,
+          'sessionHealthy': _documentUrl == _homeUrl,
+          'needsUserLogin': _documentUrl != _homeUrl,
+        };
+      case 'jw.portal.login.inspect':
+        return <String, Object?>{
+          'matched': _documentUrl == 'https://jw.ustc.edu.cn/login',
+        };
+      case 'jw.cas.form.inspect':
+        return <String, Object?>{
+          'matched': _documentUrl == 'https://id.ustc.edu.cn/cas/login',
+        };
+      case 'jw.course.inspect':
+        return <String, Object?>{
+          'matched':
+              _documentUrl == 'https://jw.ustc.edu.cn/for-std/course-table',
+        };
+      case 'jw.exam.inspect':
+        return <String, Object?>{
+          'matched':
+              _documentUrl == 'https://jw.ustc.edu.cn/for-std/exam-arrange',
         };
       case 'jw.identity.verifyExpected':
         return <String, Object?>{
