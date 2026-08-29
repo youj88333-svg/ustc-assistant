@@ -276,9 +276,12 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
   passed!`，Windows 构建约 23.4s；无设备断开，canonical UDF
   `UDF_CHILD_COUNT=0`。受限 shell 无法查询 Application Event Log，故不宣称 Error
   1000 计数。Task 8 的既有 loopback 记录仍保留，但不替代本项。
-- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；analyze 约 8.0s
-  后真实退出 1，输出 18 issues（13 info、5 warning，无 error）。依据停止规则，
-  test/build 未运行，也没有重启第二套命令。
+- Flutter analyze/test/build：同一 PowerShell 终端按规定顺序启动；本轮 lint 修复后
+  analyze 通过（`No issues found!`，gate `ANALYZE_EXIT=0`，约 7.3s）。expanded
+  全量 test 运行约 51.2s 后真实退出 1，末计数为 `493 passed / 948 failed`，失败
+  输出明确为 `Failed to load dynamic library 'sqlite3.dll'`（FFI error 126）。依据
+  停止规则，build 未运行，也没有重启第二套命令；因此没有 Windows Release 构建结果。
+  该 948 项不是历史 M5 的 7 项基线失败计数，本次未到达可将失败归类为那 7 项的环境。
 - Python：临时进程级 `PYTHONPATH` 明确指向本 worktree 的 `src`，导入断言通过；
   unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
   Conda 依赖。

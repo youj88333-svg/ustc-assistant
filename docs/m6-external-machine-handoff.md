@@ -591,10 +591,14 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
   Flutter/Dart/app 残留，canonical loopback UDF 为 `UDF_CHILD_COUNT=0`。Application
   Event Log 查询在受限 shell 中不可用，因此不宣称 Error 1000 计数。该项仍只证明
   loopback 自动化，不构成真实校园验收。
-- Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始执行
+- Flutter 三件套：在同一 PowerShell 终端从 `app/` 开始严格执行
   `analyze --no-pub → test --no-pub --reporter expanded → build windows --release
-  --no-pub`；analyze 实际运行约 8.0s 后退出 1，输出 18 issues（13 info、5 warning，
-  无 error）。按规则 test 和 build 未运行，未重启第二套 Flutter 命令。
+  --no-pub`。本轮 lint 修复后 analyze 通过（`No issues found!`，实际 gate
+  `ANALYZE_EXIT=0`，约 7.3s）；expanded 全量 test 实际运行约 51.2s 后退出 1，
+  末计数为 `493 passed / 948 failed`，失败输出明确包含
+  `Failed to load dynamic library 'sqlite3.dll'`（FFI error 126）。按规则 build
+  未运行，且未启动第二套 Flutter 命令；本次没有得到 Windows Release 构建结果。
+  这不是历史 M5 的 7 项基线失败计数，本次也未到达可将失败归类为那 7 项的环境。
 - Python oracle：使用临时、仅进程级的 `PYTHONPATH` 指向当前 worktree 的绝对
   `src`，先断言 `ustc_assistant.__file__` 位于该目录；unittest 实际为 `Ran 140
   tests in 1.666s`、`OK`，compileall 退出 0。不安装依赖、不改变环境。
