@@ -79,24 +79,6 @@ dev_dependencies:
   # lockfile version so `pub get` does not churn.
   timezone: 0.11.1
 
-
-# --- dev environment: make native hook offline-friendly ---
-# This repo's dev VM cannot reach github.com (sqlite3 native asset download
-# fails). Ask the sqlite3 hook to use the system sqlite instead so that
-# `flutter analyze/test` work without downloading GitHub-hosted binaries.
-# Actual release builds should keep the default ("source: sqlite3") prebuilt.
-# This is a local convenience and can be removed when offline unittest runner
-# is no longer needed.
-hooks:
-  user_defines:
-    sqlite3:
-      source: system
-      # Linux only ships libsqlite3.so.0 (no -dev .so symlink); use the soname
-      name_linux: /lib/x86_64-linux-gnu/libsqlite3.so.0
-      name_windows: sqlite3
-      name_macos: sqlite3
-      name_android: sqlite3
-
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
 
