@@ -781,6 +781,94 @@ void main() {
         expect(examListTarget.urlMatches('$_examUrl/print'), isTrue);
       },
     );
+
+    test(
+      'live document probes reject sibling prefixes for every trailing target',
+      () async {
+        final probeController = FakeJwWebviewController();
+        final siblingUrls = <JwReadyTarget, String>{
+          portalLoginTarget: 'https://jw.ustc.edu.cn/loginOther',
+          casLoginTarget: 'https://id.ustc.edu.cn/cas/loginOther',
+          portalHomeTarget: 'https://jw.ustc.edu.cn/homeevil',
+          courseHomeTarget:
+              'https://jw.ustc.edu.cn/for-std/course-table-old',
+          examListTarget:
+              'https://jw.ustc.edu.cn/for-std/exam-arrange-old',
+        };
+        for (final entry in siblingUrls.entries) {
+          probeController.documentProbeSources.clear();
+          probeController.setCurrent(entry.value);
+          // Keep the URL signal on the trusted target while the live document
+          // remains on the sibling path. This isolates the JS probe gate from
+          // the already-tested Dart URL signal.
+          probeController.emitUrlOnly(entry.key.url);
+
+          await expectLater(
+            convergeTarget(
+              probeController,
+              entry.key,
+              timeout: const Duration(milliseconds: 100),
+            ),
+            throwsA(isA<TimeoutException>()),
+            reason: entry.key.id,
+          );
+          expect(
+            probeController.documentProbeSources,
+            isNotEmpty,
+            reason: entry.key.id,
+          );
+          expect(
+            probeController.documentProbeSources,
+            everyElement(
+              allOf(
+                contains('const prefix = expected.slice(0, -1);'),
+                contains('current.charAt(prefix.length)'),
+                contains("next === '/"),
+                contains("next === '?"),
+                contains("next === '#"),
+              ),
+            ),
+            reason: entry.key.id,
+          );
+        }
+
+        final validUrls = <JwReadyTarget, String>{
+          portalLoginTarget: '$_loginEntryUrl?next=cas',
+          casLoginTarget: '$_casUrl#form',
+          portalHomeTarget: _homeUrl,
+          courseHomeTarget: '$_courseTableUrl/section',
+          examListTarget: '$_examUrl/print',
+        };
+        probeController.sessionHealthy = true;
+        for (final entry in validUrls.entries) {
+          probeController.documentProbeSources.clear();
+          probeController.setCurrent(entry.value);
+          await convergeTarget(
+            probeController,
+            entry.key,
+            timeout: const Duration(milliseconds: 500),
+          );
+          expect(
+            probeController.documentProbeSources,
+            isNotEmpty,
+            reason: entry.key.id,
+          );
+          expect(
+            probeController.documentProbeSources,
+            everyElement(
+              allOf(
+                contains('const prefix = expected.slice(0, -1);'),
+                contains('current.charAt(prefix.length)'),
+                contains("next === '/"),
+                contains("next === '?"),
+                contains("next === '#"),
+              ),
+            ),
+            reason: entry.key.id,
+          );
+        }
+      },
+    );
   });
 }
 
@@ -853,6 +941,7 @@ class FakeJwWebviewController implements JwWebviewController {
   int submitCalls = 0;
   int handshakeCalls = 0;
   final List<String> selectorProbes = <String>[];
+  final List<String> documentProbeSources = <String>[];
   String? _documentUrl;
 
   void setCurrent(String url) {
@@ -910,6 +999,7 @@ class FakeJwWebviewController implements JwWebviewController {
     _lastSource = source;
     if (source.contains('jw.documentCompleteProbe') ||
         source.contains('jw.finalTargetProbe')) {
+      documentProbeSources.add(source);
       var documentMatchesTarget = true;
       final expectedMatch = RegExp(
         r'const expected = ("(?:\\.|[^"])*");',
@@ -918,11 +1008,11 @@ class FakeJwWebviewController implements JwWebviewController {
         final expected = jsonDecode(expectedMatch.group(1)!);
         if (expected is String) {
           final documentUrl = _documentUrl ?? '';
-          documentMatchesTarget = expected.endsWith('*')
-              ? documentUrl.startsWith(
-                  expected.substring(0, expected.length - 1),
-                )
-              : documentUrl == expected;
+          documentMatchesTarget = _matchesGeneratedUrlPattern(
+            source,
+            expected,
+            documentUrl,
+          );
         }
       }
       final complete = documentReadyState == 'complete';
@@ -956,11 +1046,11 @@ class FakeJwWebviewController implements JwWebviewController {
         final expected = jsonDecode(expectedMatch.group(1)!);
         if (expected is String) {
           final documentUrl = _documentUrl ?? '';
-          documentMatchesTarget = expected.endsWith('*')
-              ? documentUrl.startsWith(
-                  expected.substring(0, expected.length - 1),
-                )
-              : documentUrl == expected;
+          documentMatchesTarget = _matchesGeneratedUrlPattern(
+            source,
+            expected,
+            documentUrl,
+          );
         }
       }
       return selectorPresent && documentMatchesTarget;
@@ -997,6 +1087,24 @@ class FakeJwWebviewController implements JwWebviewController {
       throw const JwCollectionException('unregistered script');
     }
     return _handleScript(entry, _decodeArgs(source));
+  }
+
+  bool _matchesGeneratedUrlPattern(
+    String source,
+    String expected,
+    String current,
+  ) {
+    if (!expected.endsWith('*')) return current == expected;
+    final prefix = expected.substring(0, expected.length - 1);
+    if (!source.contains('const prefix = expected.slice(0, -1);')) {
+      // Keep the fake's pre-fix behavior so the source-level regression above
+      // fails against a raw startsWith probe instead of masking the bug.
+      return current.startsWith(prefix);
+    }
+    if (!current.startsWith(prefix)) return false;
+    if (current.length == prefix.length) return true;
+    final next = current.codeUnitAt(prefix.length);
+    return next == 0x2f || next == 0x3f || next == 0x23;
   }
 
   MapEntry<String, String>? _matchRegisteredScript(String source) {

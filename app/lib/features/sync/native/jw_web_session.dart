@@ -1280,9 +1280,14 @@ String _targetDocumentProbeSource(
 (() => {
   const expected = $encodedPattern;
   const current = String(location.href);
-  const urlMatches = expected.endsWith('*')
-    ? current.startsWith(expected.slice(0, -1))
-    : current === expected;
+  const urlMatches = (() => {
+    if (!expected.endsWith('*')) return current === expected;
+    const prefix = expected.slice(0, -1);
+    if (!current.startsWith(prefix)) return false;
+    if (current.length === prefix.length) return true;
+    const next = current.charAt(prefix.length);
+    return next === '/' || next === '?' || next === '#';
+  })();
   return urlMatches$completeClause$selectorClause;
 })()
 ''';
