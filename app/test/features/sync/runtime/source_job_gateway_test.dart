@@ -663,6 +663,163 @@ void main() {
       await gateway.shutdown();
     },
   );
+
+  test('cancellation keeps the lease through gated fallback cleanup', () async {
+    final firstSync = Completer<SyncOutcome>();
+    final firstBridge = _GatedShutdownBridge();
+    final secondBridge = _SuccessfulBridge();
+    var factoryCalls = 0;
+    BridgeGateway? selected;
+    late SourceJobGatewayAdapter gateway;
+    Future<BridgeGateway> selectBridge() async {
+      factoryCalls++;
+      return selected ??= factoryCalls == 1 ? firstBridge : secondBridge;
+    }
+
+    void invalidateBridge(BridgeGateway bridge) {
+      if (identical(selected, bridge)) selected = null;
+      gateway.invalidateCachedBridge(bridge);
+    }
+
+    final coordinator = _PostOperationCoordinator(
+      database: database,
+      accounts: accounts,
+      firstSync: firstSync,
+    );
+    gateway = SourceJobGatewayAdapter(
+      coordinator: coordinator,
+      arbiter: JwJobArbiter(),
+      selectedKind: JwJobKind.pythonFallback,
+      bridgeFactory: selectBridge,
+      invalidateBridge: invalidateBridge,
+    );
+
+    final running = gateway.sync(
+      accountId: 'account-a',
+      trigger: SyncTrigger.manual,
+    );
+    await Future<void>.microtask(() {});
+    expect(coordinator.syncCalls, 1);
+
+    final cancellation = gateway.cancelCurrent();
+    firstSync.complete(const SyncCancelled(SyncSource.jw));
+    expect(await running, isA<SyncCancelled>());
+    await firstBridge.shutdownStarted.future;
+    var cancellationSettled = false;
+    unawaited(
+      cancellation.then<void>(
+        (_) => cancellationSettled = true,
+        onError: (Object _, StackTrace _) => cancellationSettled = true,
+      ),
+    );
+    await Future<void>.microtask(() {});
+    expect(cancellationSettled, isFalse);
+
+    final blockedSync = await gateway.sync(
+      accountId: 'account-a',
+      trigger: SyncTrigger.manual,
+    );
+    final blockedLogin = await gateway.firstLogin(
+      const FirstLoginCommand(username: 'PB00000000'),
+    );
+    expect(blockedSync, isA<SyncFailed>());
+    expect((blockedSync as SyncFailed).code, 'bridge_busy');
+    expect(blockedLogin, isA<SyncFailed>());
+    expect((blockedLogin as SyncFailed).code, 'bridge_busy');
+    expect(factoryCalls, 1);
+    expect(coordinator.syncCalls, 1);
+    expect(coordinator.loginCalls, 0);
+
+    firstBridge.shutdownGate.complete();
+    await cancellation;
+    final retry = await gateway.sync(
+      accountId: 'account-a',
+      trigger: SyncTrigger.manual,
+    );
+    expect(retry, isA<SyncSucceeded>());
+    expect(factoryCalls, 2);
+    expect(coordinator.syncCalls, 2);
+    await gateway.shutdown();
+  });
+
+  test(
+    'cleanup errors still release only after settlement and permit retry',
+    () async {
+      final firstSync = Completer<SyncOutcome>();
+      final firstBridge = _GatedShutdownBridge(throwOnShutdown: true);
+      final secondBridge = _SuccessfulBridge();
+      var factoryCalls = 0;
+      BridgeGateway? selected;
+      late SourceJobGatewayAdapter gateway;
+      Future<BridgeGateway> selectBridge() async {
+        factoryCalls++;
+        return selected ??= factoryCalls == 1 ? firstBridge : secondBridge;
+      }
+
+      void invalidateBridge(BridgeGateway bridge) {
+        if (identical(selected, bridge)) selected = null;
+        gateway.invalidateCachedBridge(bridge);
+      }
+
+      final coordinator = _PostOperationCoordinator(
+        database: database,
+        accounts: accounts,
+        firstSync: firstSync,
+      );
+      gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+        selectedKind: JwJobKind.pythonFallback,
+        bridgeFactory: selectBridge,
+        invalidateBridge: invalidateBridge,
+      );
+
+      final running = gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      await Future<void>.microtask(() {});
+      final cancellation = gateway.cancelCurrent();
+      firstSync.complete(const SyncCancelled(SyncSource.jw));
+      expect(await running, isA<SyncCancelled>());
+      await firstBridge.shutdownStarted.future;
+      var cancellationSettled = false;
+      unawaited(
+        cancellation.then<void>(
+          (_) => cancellationSettled = true,
+          onError: (Object _, StackTrace _) => cancellationSettled = true,
+        ),
+      );
+      await Future<void>.microtask(() {});
+      expect(cancellationSettled, isFalse);
+
+      final blockedSync = await gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      final blockedLogin = await gateway.firstLogin(
+        const FirstLoginCommand(username: 'PB00000000'),
+      );
+      expect(blockedSync, isA<SyncFailed>());
+      expect((blockedSync as SyncFailed).code, 'bridge_busy');
+      expect(blockedLogin, isA<SyncFailed>());
+      expect((blockedLogin as SyncFailed).code, 'bridge_busy');
+      expect(factoryCalls, 1);
+      expect(coordinator.syncCalls, 1);
+      expect(coordinator.loginCalls, 0);
+
+      firstBridge.shutdownGate.complete();
+      await expectLater(cancellation, throwsA(isA<BridgeProtocolError>()));
+      final retry = await gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      expect(retry, isA<SyncSucceeded>());
+      expect(factoryCalls, 2);
+      expect(coordinator.syncCalls, 2);
+      await gateway.shutdown();
+    },
+  );
 }
 
 final class _NoopProtector implements CredentialProtector {
@@ -752,6 +909,58 @@ final class _ScriptedCoordinator extends SyncCoordinator {
     return resumeResult ??
         super.resumeInteractive(jobId, userConfirmed: userConfirmed);
   }
+}
+
+final class _PostOperationCoordinator extends SyncCoordinator {
+  _PostOperationCoordinator({
+    required super.database,
+    required super.accounts,
+    required this.firstSync,
+  }) : super(
+         bridgeFactory: () async => _TrackingBridge(),
+         importBundle: (bytes, {required accountId, required origin}) async =>
+             const ImportResult(
+               status: ImportStatus.imported,
+               bundleId: 'test',
+               source: 'ustc_jw',
+               importedEntityCount: 1,
+             ),
+       );
+
+  final Completer<SyncOutcome> firstSync;
+  var syncCalls = 0;
+  var loginCalls = 0;
+
+  @override
+  Future<SyncOutcome> sync(
+    SyncSource source, {
+    required SyncTrigger trigger,
+    String? accountId,
+    BridgeSemesterCapability? semesterOverride,
+  }) {
+    syncCalls++;
+    if (syncCalls == 1) return firstSync.future;
+    return Future.value(
+      const SyncSucceeded(SyncSource.jw, importedEntityCount: 1),
+    );
+  }
+
+  @override
+  Future<SyncOutcome> firstLoginSync(
+    SyncSource source, {
+    required String username,
+    String? password,
+    bool savePassword = false,
+    BridgeSemesterCapability? semesterOverride,
+  }) {
+    loginCalls++;
+    return Future.value(
+      const SyncSucceeded(SyncSource.jw, importedEntityCount: 1),
+    );
+  }
+
+  @override
+  Future<void> cancelCurrent() async {}
 }
 
 final class _RealInteractiveFixture {
@@ -975,6 +1184,75 @@ final class _ClosedFallbackBridge implements BridgeGateway {
   Future<void> shutdown() async {
     shutdownCalls++;
     _closed = true;
+  }
+
+  void _checkOpen() {
+    if (_closed) throw StateError('bridge is closed');
+  }
+}
+
+final class _GatedShutdownBridge implements BridgeGateway {
+  _GatedShutdownBridge({this.throwOnShutdown = false});
+
+  final bool throwOnShutdown;
+  final shutdownGate = Completer<void>();
+  final shutdownStarted = Completer<void>();
+  var shutdownCalls = 0;
+  var _closed = false;
+
+  @override
+  Future<BridgeCapabilities> capabilities() async {
+    _checkOpen();
+    return const BridgeCapabilities(
+      jwSemester: BridgeSemesterCapability(
+        semesterId: 461,
+        semesterKey: '2026fall',
+        displayName: '2026 秋季学期',
+      ),
+    );
+  }
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    _checkOpen();
+    return const BridgeJob(id: 'gated-shutdown-job', phase: 'starting');
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    _checkOpen();
+    return const BridgeJobPoll(
+      events: [
+        {'sequence': 1, 'phase': 'complete'},
+      ],
+      nextSequence: 1,
+      terminal: true,
+      result: {'schemaVersion': '1.0'},
+    );
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    _checkOpen();
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    _checkOpen();
+  }
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    if (!shutdownStarted.isCompleted) shutdownStarted.complete();
+    await shutdownGate.future;
+    _closed = true;
+    if (throwOnShutdown) throw StateError('private-cleanup-failure');
   }
 
   void _checkOpen() {

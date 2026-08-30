@@ -143,6 +143,33 @@ final class _ExitGatedGateway implements SourceJobGateway {
   }
 }
 
+final class _ExitFailingGateway implements SourceJobGateway {
+  var shutdownCalls = 0;
+
+  @override
+  Stream<SourceJobSnapshot> get states =>
+      const Stream<SourceJobSnapshot>.empty();
+
+  @override
+  Future<SyncOutcome> firstLogin(FirstLoginCommand command) async =>
+      const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<SyncOutcome> sync({
+    required String accountId,
+    required SyncTrigger trigger,
+  }) async => const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<void> cancelCurrent() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    throw StateError('private-cleanup-failure');
+  }
+}
+
 final class _ExitTrackingDatabase extends AppDatabase {
   _ExitTrackingDatabase(this.events) : super(NativeDatabase.memory());
 
@@ -718,6 +745,49 @@ void main() {
       await tester.pump();
       expect(gateway.shutdownCalls, 1);
       expect(database.closeCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'registered Windows exit acknowledges after attempt-all cleanup failure',
+    (tester) async {
+      final database = _ExitTrackingDatabase(<String>[]);
+      final gateway = _ExitFailingGateway();
+      final sessionAdmin = _AppShellSessionAdmin();
+      final diagnostics = <String>[];
+      final runtime = MinimalJwRuntime(
+        gateway: gateway,
+        browserSessions: sessionAdmin,
+      );
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async => runtime,
+          runtimeDiagnosticSink: diagnostics.add,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final firstExit = WidgetsBinding.instance.handleRequestAppExit();
+      await tester.pump();
+      expect(await firstExit, AppExitResponse.exit);
+      expect(gateway.shutdownCalls, 1);
+      expect(sessionAdmin.shutdownCalls, 1);
+      expect(database.closeCalls, 1);
+      expect(diagnostics, ['runtime_shutdown_failed']);
+
+      final secondExit = WidgetsBinding.instance.handleRequestAppExit();
+      await tester.pump();
+      expect(await secondExit, AppExitResponse.exit);
+      expect(gateway.shutdownCalls, 1);
+      expect(sessionAdmin.shutdownCalls, 1);
+      expect(database.closeCalls, 1);
+      expect(diagnostics, ['runtime_shutdown_failed']);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
     },
   );
 

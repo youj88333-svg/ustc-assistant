@@ -183,6 +183,8 @@ final class SourceJobGatewayAdapter
   bool _admissionCancellationIssued = false;
   BridgeGateway? _admissionCancelledBridge;
   int _nextJobNumber = 0;
+  int _nextOperationGeneration = 0;
+  int? _operationGeneration;
 
   /// Exposed only for focused tests/composition diagnostics; callers should
   /// use the interface's [states] stream for UI state.
@@ -294,6 +296,8 @@ final class SourceJobGatewayAdapter
     _cancelRequested = false;
     _admissionCancellationIssued = false;
     _admissionCancelledBridge = null;
+    final generation = ++_nextOperationGeneration;
+    _operationGeneration = generation;
     _emit(const SourceJobSnapshot(phase: 'starting'));
     late final Future<SyncOutcome> tracked;
     try {
@@ -332,7 +336,7 @@ final class SourceJobGatewayAdapter
         }
         return operation();
       });
-      tracked = _track(pending, lease);
+      tracked = _track(pending, lease, generation);
     } on Object catch (error, stack) {
       _release(lease);
       _emit(const SourceJobSnapshot(phase: 'failed', safeCode: 'sync_failed'));
@@ -345,6 +349,7 @@ final class SourceJobGatewayAdapter
   Future<SyncOutcome> _track(
     Future<SyncOutcome> operation,
     JwJobLease lease,
+    int generation,
   ) async {
     try {
       final outcome = await operation;
@@ -356,14 +361,22 @@ final class SourceJobGatewayAdapter
         return outcome;
       }
       _emitSnapshotForOutcome(outcome);
-      _release(lease);
+      if (!_cancelRequested && identical(_operationGeneration, generation)) {
+        _operation = null;
+        _release(lease);
+      }
       return outcome;
     } on Object {
       _emit(const SourceJobSnapshot(phase: 'failed', safeCode: 'sync_failed'));
-      _release(lease);
+      if (!_cancelRequested && identical(_operationGeneration, generation)) {
+        _operation = null;
+        _release(lease);
+      }
       rethrow;
     } finally {
-      if (_pausedJobId == null) {
+      if (_pausedJobId == null &&
+          !_cancelRequested &&
+          identical(_operationGeneration, generation)) {
         _operation = null;
       }
     }
@@ -412,10 +425,17 @@ final class SourceJobGatewayAdapter
         const SyncFailed(SyncSource.jw, code: 'job_not_found'),
       );
     }
+    final generation = _operationGeneration;
+    if (generation == null) {
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'job_not_found'),
+      );
+    }
     final operation = _resumeInteractiveImpl(
       jobId,
       userConfirmed: userConfirmed,
       lease: lease,
+      generation: generation,
     );
     // Claim the resume before its first asynchronous continuation. Duplicate
     // resume calls now join this exact Future rather than racing the paused
@@ -446,6 +466,7 @@ final class SourceJobGatewayAdapter
     String jobId, {
     required bool userConfirmed,
     required JwJobLease lease,
+    required int generation,
   }) async {
     try {
       final outcome = await _coordinator.resumeInteractive(
@@ -459,15 +480,19 @@ final class SourceJobGatewayAdapter
       }
       _pausedJobId = null;
       _emitSnapshotForOutcome(outcome);
-      _release(lease);
-      _operation = null;
+      if (!_cancelRequested && identical(_operationGeneration, generation)) {
+        _operation = null;
+        _release(lease);
+      }
       return outcome;
     } on Object catch (error) {
       _pausedJobId = null;
       final safe = _safeError(error, fallback: 'sync_failed');
       _emit(SourceJobSnapshot(phase: 'failed', safeCode: safe.code));
-      _release(lease);
-      _operation = null;
+      if (!_cancelRequested && identical(_operationGeneration, generation)) {
+        _operation = null;
+        _release(lease);
+      }
       return SyncFailed(SyncSource.jw, code: safe.code);
     }
   }
@@ -494,6 +519,8 @@ final class SourceJobGatewayAdapter
   Future<void> _cancelCurrentImpl() async {
     final lease = _lease;
     if (lease == null) return;
+    final generation = _operationGeneration;
+    final operationAtStart = _operation;
     _cancelRequested = true;
     _cancelJobId = _resumeJobId ?? _pausedJobId;
     final coordinatorOwnsBridge =
@@ -524,7 +551,7 @@ final class SourceJobGatewayAdapter
     } else {
       await attempt(_coordinator.cancelCurrent);
     }
-    final operation = _operation;
+    final operation = _operation ?? operationAtStart;
     if (operation != null) {
       await attempt(() async {
         await operation;
@@ -537,8 +564,12 @@ final class SourceJobGatewayAdapter
       }
     }
     _emit(const SourceJobSnapshot(phase: 'cancelled', safeCode: 'cancelled'));
-    _release(lease);
-    _operation = null;
+    if (generation != null &&
+        identical(_lease, lease) &&
+        identical(_operationGeneration, generation)) {
+      _operation = null;
+      _release(lease);
+    }
     final error = firstError;
     if (error != null) {
       Error.throwWithStackTrace(
@@ -674,6 +705,7 @@ final class SourceJobGatewayAdapter
     _cancelRequested = false;
     _cancelJobId = null;
     _admissionCancellationIssued = false;
+    _operationGeneration = null;
   }
 
   void _emitSnapshotForOutcome(SyncOutcome outcome) {

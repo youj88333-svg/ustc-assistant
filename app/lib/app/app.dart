@@ -219,11 +219,6 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     } on Object catch (_, stack) {
       firstError = StateError('runtime_shutdown_failed');
       firstStack = stack;
-      try {
-        widget.runtimeDiagnosticSink?.call('runtime_shutdown_failed');
-      } on Object {
-        // A diagnostic observer cannot alter exit ordering.
-      }
     }
     try {
       await reminderReconciler.dispose();
@@ -241,6 +236,11 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     }
     final error = firstError;
     if (error != null) {
+      try {
+        widget.runtimeDiagnosticSink?.call('runtime_shutdown_failed');
+      } on Object {
+        // A diagnostic observer cannot alter exit ordering.
+      }
       Error.throwWithStackTrace(error, firstStack ?? StackTrace.current);
     }
   }
@@ -248,15 +248,12 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   Future<AppExitResponse> _handleExitRequested() async {
     try {
       await prepareForExit();
-      return AppExitResponse.exit;
     } on Object {
-      try {
-        widget.runtimeDiagnosticSink?.call('runtime_shutdown_failed');
-      } on Object {
-        // Exit decisions must never expose implementation or database text.
-      }
-      return AppExitResponse.cancel;
+      // A user-requested terminal exit must be acknowledged after all owned
+      // cleanup stages have been attempted, even when one stage failed. The
+      // boundary has already observed the fixed safe diagnostic.
     }
+    return AppExitResponse.exit;
   }
 
   @override
