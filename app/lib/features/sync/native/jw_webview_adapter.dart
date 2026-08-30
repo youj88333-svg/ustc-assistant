@@ -34,6 +34,22 @@ import 'jw_web_session.dart';
 /// Produces a fresh initialized [JwWebviewController] (the platform seam).
 typedef JwWebviewControllerFactory = Future<JwWebviewController> Function();
 
+/// Lifecycle operations that a controller handed to the browser-session
+/// owner must provide in addition to the page-driving surface.
+///
+/// [disposeControllerAndAwaitRelease] is deliberately separate from
+/// [JwWebviewController.dispose].  The latter is a Dart-facing disposal call;
+/// the former is the native WebView2 release barrier that must settle before
+/// the account UDF can be touched.  Production controllers implement this
+/// interface, while test controllers can record the barrier explicitly.
+abstract interface class JwWebviewControllerLifecycle {
+  Future<void> beginSubscriptions();
+
+  Future<void> disposeSubscriptions();
+
+  Future<void> disposeControllerAndAwaitRelease();
+}
+
 /// Creates the gateway-owned production controller for one account UDF.
 ///
 /// [userDataPath] is intentionally nullable so the production implementation
@@ -106,12 +122,15 @@ Map<String, dynamic> _parseCourseDatumResponse(String text) {
 /// Production seam over the plugin's `WebviewController`. Configures the
 /// native navigation policy (allowlist + deny downloads/windows/permissions)
 /// and owns the URL snapshot subscription.
-class ProductionJwWebviewController implements JwWebviewController {
+class ProductionJwWebviewController
+    implements JwWebviewController, JwWebviewControllerLifecycle {
   ProductionJwWebviewController(this._controller);
 
   final WebviewController _controller;
   StreamSubscription<String>? _urlSub;
   String? _currentUrl;
+  Future<void>? _subscriptionsDispose;
+  Future<void>? _controllerRelease;
 
   @override
   Stream<String> get urlChanges => _controller.url;
@@ -150,7 +169,64 @@ class ProductionJwWebviewController implements JwWebviewController {
   Future<void> clearBrowsingDataAll() => _controller.clearBrowsingDataAll();
 
   @override
-  Future<void> dispose() async {
+  Future<void> beginSubscriptions() => beginUrlSnapshot();
+
+  @override
+  Future<void> disposeSubscriptions() {
+    final existing = _subscriptionsDispose;
+    if (existing != null) return existing;
+    final operation = _disposeSubscriptionsImpl();
+    _subscriptionsDispose = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_subscriptionsDispose, operation)) {
+            _subscriptionsDispose = null;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _disposeSubscriptionsImpl() async {
+    final urlSubscription = _urlSub;
+    if (urlSubscription == null) return;
+    try {
+      await urlSubscription.cancel();
+      _urlSub = null;
+      _currentUrl = null;
+    } catch (_) {
+      // Keep the subscription reference so an owning session can retry the
+      // failed stage without dropping the only cleanup handle.
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> disposeControllerAndAwaitRelease() {
+    final existing = _controllerRelease;
+    if (existing != null) return existing;
+    final operation = _disposeControllerAndAwaitReleaseImpl();
+    _controllerRelease = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_controllerRelease, operation)) {
+            // A failed native release leaves the controller retryable.  Do
+            // not retain a failed Future that would make close permanently
+            // unrecoverable.
+            _controllerRelease = null;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _disposeControllerAndAwaitReleaseImpl() async {
     Object? firstError;
     StackTrace? firstStackTrace;
     void remember(Object error, StackTrace stackTrace) {
@@ -158,13 +234,6 @@ class ProductionJwWebviewController implements JwWebviewController {
       firstStackTrace ??= stackTrace;
     }
 
-    final urlSubscription = _urlSub;
-    _urlSub = null;
-    try {
-      await urlSubscription?.cancel();
-    } on Object catch (error, stackTrace) {
-      remember(error, stackTrace);
-    }
     try {
       await _controller.dispose();
     } on Object catch (error, stackTrace) {
@@ -179,6 +248,27 @@ class ProductionJwWebviewController implements JwWebviewController {
       remember(error, stackTrace);
     }
 
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStackTrace ?? StackTrace.current);
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    Future<void> attempt(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } on Object catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
+    }
+
+    await attempt(disposeSubscriptions);
+    await attempt(disposeControllerAndAwaitRelease);
     final error = firstError;
     if (error != null) {
       Error.throwWithStackTrace(error, firstStackTrace ?? StackTrace.current);
@@ -335,12 +425,14 @@ class JwWebViewAdapter implements JwWebPage {
     Duration responseTimeout = defaultResponseTimeout,
     Duration casFormWaitTimeout = const Duration(seconds: 45),
     void Function(String)? safeDiagnostic,
+    JwWebviewController? initialController,
   }) : _loginTimeout = loginTimeout,
        _responseTimeout = responseTimeout,
        _casFormWaitTimeout = casFormWaitTimeout,
        _safeDiagnostic = safeDiagnostic,
        _runtimePolicy = runtimePolicy ?? productionJwWebRuntimePolicy,
-       _controllerFactory = controllerFactory {
+       _controllerFactory = controllerFactory,
+       _controller = initialController {
     _assertRuntimePolicyAllowed();
   }
 
@@ -353,11 +445,17 @@ class JwWebViewAdapter implements JwWebPage {
 
   JwWebviewController? _controller;
   bool _disposed = false;
+  Future<void>? _closeFuture;
   bool _loginConsumed = false;
   String? _pendingExpectedUsername;
 
   /// True after [close]. A closed shared-mode adapter must not be reused.
   bool get isDisposed => _disposed;
+
+  /// The controller after it has been created, for the session owner that
+  /// attaches the native surface. Callers should prefer [surface] and the
+  /// lifecycle methods below; this getter never creates a controller.
+  JwWebviewController? get controller => _controller;
 
   /// The visible WebView surface (or a placeholder before the controller is
   /// created). The caller embeds this into the sync page.
@@ -392,6 +490,42 @@ class JwWebViewAdapter implements JwWebPage {
     final created = await _controllerFactory();
     _controller = created;
     return created;
+  }
+
+  /// Starts the controller's always-on subscriptions before page use.
+  /// Production controllers subscribe to URL snapshots here; a minimal test
+  /// seam still gets the native event-stream readiness barrier.
+  Future<void> beginSubscriptions() async {
+    final controller = await _ensureController();
+    if (controller is JwWebviewControllerLifecycle) {
+      await (controller as JwWebviewControllerLifecycle).beginSubscriptions();
+    } else {
+      await controller.awaitEventStreamReady();
+    }
+  }
+
+  /// Disposes subscriptions without releasing the native controller.
+  Future<void> disposeSubscriptions() async {
+    final controller = _controller;
+    if (controller == null) return;
+    if (controller is JwWebviewControllerLifecycle) {
+      await (controller as JwWebviewControllerLifecycle).disposeSubscriptions();
+    }
+  }
+
+  /// Releases the native controller and awaits the WebView2 environment
+  /// barrier. Controllers without the explicit lifecycle seam are rejected so
+  /// a Dart-only dispose cannot be mistaken for native release.
+  Future<void> disposeControllerAndAwaitRelease() async {
+    final controller = _controller;
+    if (controller == null) return;
+    if (controller is! JwWebviewControllerLifecycle) {
+      throw const JwCollectionException(
+        'webview controller release barrier is unavailable',
+      );
+    }
+    await (controller as JwWebviewControllerLifecycle)
+        .disposeControllerAndAwaitRelease();
   }
 
   /// Navigates [url] and waits for the native loading state to complete.
@@ -944,21 +1078,55 @@ class JwWebViewAdapter implements JwWebPage {
   }
 
   @override
-  Future<void> close() async {
+  Future<void> close() {
+    final existing = _closeFuture;
+    if (existing != null) return existing;
+    final operation = _closeImpl();
+    _closeFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_closeFuture, operation)) {
+            // A failed release keeps the controller available for a later
+            // owner-driven retry; a successful close keeps the completed
+            // Future for idempotent callers.
+            _closeFuture = null;
+            _disposed = false;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _closeImpl() async {
     if (_disposed) return;
     _disposed = true;
     _pendingExpectedUsername = null;
     _loginConsumed = false;
     final controller = _controller;
-    _controller = null;
     if (controller == null) return;
-    try {
-      await controller.stop();
-      await controller.clearBrowsingDataAll();
-    } on Object {
-      // Browsing-data cleanup is best effort.
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    Future<void> attempt(Future<void> Function() operation) async {
+      try {
+        await operation();
+      } on Object catch (error, stackTrace) {
+        firstError ??= error;
+        firstStackTrace ??= stackTrace;
+      }
     }
-    await controller.dispose();
+
+    await attempt(controller.stop);
+    await attempt(controller.clearBrowsingDataAll);
+    await attempt(disposeSubscriptions);
+    await attempt(disposeControllerAndAwaitRelease);
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStackTrace ?? StackTrace.current);
+    }
+    _controller = null;
   }
 }
 

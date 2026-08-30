@@ -89,6 +89,13 @@ String handshake({
 });
 
 void main() {
+  test('browser session quarantine is a stable public protocol code', () {
+    expect(
+      const BridgeProtocolError('browser_session_quarantined').code,
+      'browser_session_quarantined',
+    );
+  });
+
   test(
     'token never appears in process arguments and authenticates requests',
     () async {

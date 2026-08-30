@@ -8,9 +8,15 @@ import 'jw_web_session.dart';
 /// time, and exposes completion only after Flutter has rendered its
 /// placeholder during detach.
 final class JwWebViewSurfaceHost {
-  JwWebViewSurfaceHost() {
+  JwWebViewSurfaceHost({this.onDetachRequested}) {
     widget = _JwSurfaceWidget(host: this);
   }
+
+  /// Optional privacy-safe test/diagnostic seam invoked synchronously after
+  /// the source is cleared and before the detach acknowledgement is awaited.
+  /// It carries the controller object only so tests can identify the source;
+  /// callers must not inspect or log controller internals.
+  final void Function(JwWebviewController controller)? onDetachRequested;
 
   late final Widget widget;
   JwWebviewController? _controller;
@@ -47,6 +53,7 @@ final class JwWebViewSurfaceHost {
     _pendingUnmount = completer;
     _pendingSource = controller;
     _pendingGeneration = _generation;
+    onDetachRequested?.call(controller);
     _notify!.call();
     return completer.future;
   }
@@ -65,9 +72,7 @@ final class JwWebViewSurfaceHost {
         }
       });
     }
-    return const SizedBox(
-      key: Key('jw-webview-surface-placeholder'),
-    );
+    return const SizedBox(key: Key('jw-webview-surface-placeholder'));
   }
 
   void _completePendingUnmount() {

@@ -11,6 +11,8 @@ const bridgeProtocolVersion = '1.0';
 const _safeBridgeProtocolCodes = {
   'bridge_busy',
   'bridge_query_busy',
+  'browser_cleanup_incomplete',
+  'browser_session_quarantined',
   'invalid_capabilities',
   'invalid_handshake',
   'invalid_job_state',

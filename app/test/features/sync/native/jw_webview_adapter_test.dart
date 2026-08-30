@@ -774,6 +774,19 @@ void main() {
       expect(controller.disposed, isTrue);
       expect(controller.browsingCleared, isTrue);
     });
+
+    test(
+      'session lifecycle splits subscriptions from the release barrier',
+      () async {
+        await adapter.gotoRoot();
+        await adapter.beginSubscriptions();
+        await adapter.disposeSubscriptions();
+        await adapter.disposeControllerAndAwaitRelease();
+
+        expect(controller.subscriptionsDisposed, isTrue);
+        expect(controller.releaseBarrierAwaited, isTrue);
+      },
+    );
   });
 
   group('isJwNavigationAllowed allowlist', () {
@@ -963,7 +976,8 @@ void main() {
 /// the requestId embedded in the wrapper and echoing a `webMessage` reply.
 /// Secrets travel as `secretBytes` Lists; the fake records the decoded value
 /// only for assertions and never logs/keeps it as account plaintext.
-class FakeJwWebviewController implements JwWebviewController {
+class FakeJwWebviewController
+    implements JwWebviewController, JwWebviewControllerLifecycle {
   final _urlController = StreamController<String>.broadcast();
   final _loadingController = StreamController<JwLoadingState>.broadcast();
   final _webMessageController = StreamController<Object?>.broadcast();
@@ -972,6 +986,8 @@ class FakeJwWebviewController implements JwWebviewController {
   String? _lastSource;
   bool disposed = false;
   bool browsingCleared = false;
+  bool subscriptionsDisposed = false;
+  bool releaseBarrierAwaited = false;
 
   // Scripted scenario state.
   String? dataId;
@@ -1387,12 +1403,26 @@ class FakeJwWebviewController implements JwWebviewController {
   Future<void> stop() async {}
 
   @override
+  Future<void> beginSubscriptions() async {}
+
+  @override
+  Future<void> disposeSubscriptions() async {
+    subscriptionsDisposed = true;
+  }
+
+  @override
+  Future<void> disposeControllerAndAwaitRelease() async {
+    releaseBarrierAwaited = true;
+    disposed = true;
+  }
+
+  @override
   Future<void> clearBrowsingDataAll() async {
     browsingCleared = true;
   }
 
   @override
   Future<void> dispose() async {
-    disposed = true;
+    await disposeControllerAndAwaitRelease();
   }
 }
