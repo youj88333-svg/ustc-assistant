@@ -38,12 +38,17 @@ void main() {
     late FakeJwWebviewController controller;
     late JwWebViewAdapter adapter;
     late List<String> diagnostics;
+    late int factoryCalls;
 
     setUp(() {
       controller = FakeJwWebviewController();
       diagnostics = <String>[];
+      factoryCalls = 0;
       adapter = JwWebViewAdapter(
-        controllerFactory: () async => controller,
+        controllerFactory: () async {
+          factoryCalls++;
+          return controller;
+        },
         loginTimeout: const Duration(seconds: 5),
         responseTimeout: const Duration(seconds: 3),
         safeDiagnostic: diagnostics.add,
@@ -805,6 +810,44 @@ void main() {
         expect(controller.disposed, isTrue);
       },
     );
+
+    test(
+      'early cleanup failure after release permanently closes the adapter',
+      () async {
+        await adapter.gotoRoot();
+        controller.failStop = true;
+        final callsBeforeClose = factoryCalls;
+
+        await expectLater(adapter.close(), throwsA(isA<StateError>()));
+
+        expect(adapter.isDisposed, isTrue);
+        expect(adapter.controller, isNull);
+        expect(controller.releaseCalls, 1);
+        await expectLater(
+          adapter.gotoRoot(),
+          throwsA(isA<JwCollectionException>()),
+        );
+        expect(factoryCalls, callsBeforeClose);
+      },
+    );
+
+    test(
+      'release failure retains the controller for a retrying close',
+      () async {
+        await adapter.gotoRoot();
+        controller.failReleaseAttempts = 1;
+
+        await expectLater(adapter.close(), throwsA(isA<StateError>()));
+        expect(adapter.isDisposed, isFalse);
+        expect(adapter.controller, same(controller));
+        expect(controller.releaseCalls, 1);
+
+        await adapter.close();
+        expect(adapter.isDisposed, isTrue);
+        expect(adapter.controller, isNull);
+        expect(controller.releaseCalls, 2);
+      },
+    );
   });
 
   group('isJwNavigationAllowed allowlist', () {
@@ -1006,6 +1049,10 @@ class FakeJwWebviewController
   bool browsingCleared = false;
   bool subscriptionsDisposed = false;
   bool releaseBarrierAwaited = false;
+  bool failStop = false;
+  int failReleaseAttempts = 0;
+  int stopCalls = 0;
+  int releaseCalls = 0;
 
   // Scripted scenario state.
   String? dataId;
@@ -1418,7 +1465,10 @@ class FakeJwWebviewController
   }
 
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    stopCalls++;
+    if (failStop) throw StateError('stop failed');
+  }
 
   @override
   Future<void> beginSubscriptions() async {}
@@ -1430,7 +1480,12 @@ class FakeJwWebviewController
 
   @override
   Future<void> disposeControllerAndAwaitRelease() async {
+    releaseCalls++;
     releaseBarrierAwaited = true;
+    if (failReleaseAttempts > 0) {
+      failReleaseAttempts--;
+      throw StateError('release failed');
+    }
     disposed = true;
   }
 

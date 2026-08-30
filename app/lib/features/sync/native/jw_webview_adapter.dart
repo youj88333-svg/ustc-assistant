@@ -445,6 +445,7 @@ class JwWebViewAdapter implements JwWebPage {
 
   JwWebviewController? _controller;
   bool _disposed = false;
+  bool _nativeReleaseSucceeded = false;
   Future<void>? _closeFuture;
   bool _loginConsumed = false;
   String? _pendingExpectedUsername;
@@ -533,6 +534,7 @@ class JwWebViewAdapter implements JwWebPage {
     _pendingExpectedUsername = null;
     _loginConsumed = false;
     _controller = null;
+    _nativeReleaseSucceeded = true;
   }
 
   /// Navigates [url] and waits for the native loading state to complete.
@@ -1099,7 +1101,7 @@ class JwWebViewAdapter implements JwWebPage {
             // owner-driven retry; a successful close keeps the completed
             // Future for idempotent callers.
             _closeFuture = null;
-            _disposed = false;
+            if (!_nativeReleaseSucceeded) _disposed = false;
           }
         },
       ),
