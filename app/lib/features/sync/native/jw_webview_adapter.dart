@@ -526,6 +526,13 @@ class JwWebViewAdapter implements JwWebPage {
     }
     await (controller as JwWebviewControllerLifecycle)
         .disposeControllerAndAwaitRelease();
+    // Native release is now a settled barrier. Invalidate the page-facing
+    // adapter as part of that same ownership transition so no later page
+    // operation can reuse or recreate native state.
+    _disposed = true;
+    _pendingExpectedUsername = null;
+    _loginConsumed = false;
+    _controller = null;
   }
 
   /// Navigates [url] and waits for the native loading state to complete.

@@ -787,6 +787,24 @@ void main() {
         expect(controller.releaseBarrierAwaited, isTrue);
       },
     );
+
+    test(
+      'native release invalidates the page and never recreates the controller',
+      () async {
+        await adapter.gotoRoot();
+        expect(adapter.controller, same(controller));
+
+        await adapter.disposeControllerAndAwaitRelease();
+
+        expect(adapter.isDisposed, isTrue);
+        expect(adapter.controller, isNull);
+        await expectLater(
+          adapter.gotoRoot(),
+          throwsA(isA<JwCollectionException>()),
+        );
+        expect(controller.disposed, isTrue);
+      },
+    );
   });
 
   group('isJwNavigationAllowed allowlist', () {

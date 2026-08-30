@@ -61,6 +61,7 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
   _WindowsJwBrowserSessionHandle? _live;
   final Set<String> _quarantinedTokens = <String>{};
   bool _openInFlight = false;
+  bool _clearInFlight = false;
   Completer<void>? _openCompletion;
   bool _shutdown = false;
   Future<void>? _shutdownFuture;
@@ -73,10 +74,13 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
     final ref = _udfStore.referenceFor(accountId);
     // A marker written by this owner is known synchronously, so a retained
     // retry handle cannot normalize the stable quarantine code to bridge_busy.
+    if (_clearInFlight) {
+      throw const BridgeProtocolError('bridge_busy');
+    }
     if (_quarantinedTokens.contains(ref.opaqueToken)) {
       throw const BridgeProtocolError('browser_session_quarantined');
     }
-    if (_shutdown || _live != null || _openInFlight) {
+    if (_shutdown || _live != null || _openInFlight || _clearInFlight) {
       throw const BridgeProtocolError('bridge_busy');
     }
     // This assignment occurs before the first await, so concurrent callers
@@ -114,33 +118,32 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
         );
       }
 
-      final adapter = JwWebViewAdapter(
-        controllerFactory: () async => controller,
-        safeDiagnostic: _safeDiagnostic,
-        initialController: controller,
-      );
-      final page = _pageFactory?.call(controller) ?? adapter;
       final handle = _WindowsJwBrowserSessionHandle(
         admin: this,
-        page: page,
         partition: ref,
-        adapter: adapter,
         controller: controller,
       );
-      // Store immediately after factory hand-off. If subscription or surface
-      // setup fails, close() still has the exact native retry handle.
+      // Store immediately after factory hand-off, before any adapter/page
+      // setup can throw. This provisional owner is the exact native release
+      // handle for every later setup failure.
       _live = handle;
-      if (_shutdown) {
-        // Shutdown may have started while the native factory was awaiting a
-        // controller. Release this late hand-off under the same owner before
-        // allowing shutdown to complete.
-        await _closeLive(handle);
-        throw const BridgeProtocolError('bridge_busy');
-      }
       try {
+        final adapter = JwWebViewAdapter(
+          controllerFactory: () async => controller,
+          safeDiagnostic: _safeDiagnostic,
+          initialController: controller,
+        );
+        handle._adapter = adapter;
+        handle._page = _pageFactory?.call(controller) ?? adapter;
+        if (_shutdown) {
+          // Shutdown may have started while the native factory was awaiting a
+          // controller. Release this late hand-off under the same owner before
+          // allowing shutdown to complete.
+          await _closeLive(handle);
+          throw const BridgeProtocolError('bridge_busy');
+        }
         await adapter.beginSubscriptions();
         await _surfaceHost.attach(controller).timeout(_surfaceUnmountTimeout);
-        return handle;
       } on Object catch (error, stackTrace) {
         final openingFailure = _safeError(error, fallback: 'request_failed');
         try {
@@ -154,6 +157,7 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
         await _markQuarantined(ref, 'collection_failed');
         Error.throwWithStackTrace(openingFailure, stackTrace);
       }
+      return handle;
     } finally {
       _openInFlight = false;
       _openCompletion = null;
@@ -185,9 +189,12 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
   Future<void> clearAllPartitions() async {
     // An in-flight open may have created a native controller before its
     // handle is published. Refuse the destructive operation until it settles.
-    if (_live != null || _openInFlight) {
+    if (_live != null || _openInFlight || _clearInFlight) {
       throw const BridgeProtocolError('bridge_busy');
     }
+    // Claim maintenance admission synchronously, before the first await, so
+    // a concurrent open cannot pass the check while the delete is paused.
+    _clearInFlight = true;
     try {
       await _udfStore.clearAllPartitions();
       _quarantinedTokens.clear();
@@ -196,6 +203,8 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
         _safeError(error, fallback: 'browser_cleanup_incomplete'),
         stackTrace,
       );
+    } finally {
+      _clearInFlight = false;
     }
   }
 
@@ -270,10 +279,10 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
           .timeout(_surfaceUnmountTimeout),
     );
     await attempt(handle.controller.stop);
-    await attempt(handle.adapter.disposeSubscriptions);
+    await attempt(handle.disposeSubscriptions);
     var releaseSucceeded = false;
     try {
-      await handle.adapter.disposeControllerAndAwaitRelease();
+      await handle.disposeControllerAndAwaitRelease();
       releaseSucceeded = true;
     } on Object catch (error, stackTrace) {
       firstError ??= error;
@@ -283,6 +292,7 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
     // Retain ownership on any failure, including a detach error followed by a
     // successful release. This keeps the contract fail-closed and makes the
     // original handle the only authority able to retry cleanup.
+    if (releaseSucceeded) handle._page = null;
     if (releaseSucceeded && firstError == null) {
       handle._released = true;
       if (identical(_live, handle)) _live = null;
@@ -321,21 +331,51 @@ final class WindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
 final class _WindowsJwBrowserSessionHandle implements JwBrowserSessionHandle {
   _WindowsJwBrowserSessionHandle({
     required this.admin,
-    required this.page,
     required this.partition,
-    required this.adapter,
     required this.controller,
   });
 
   final WindowsJwBrowserSessionAdmin admin;
+  JwWebPage? _page;
+
   @override
-  final JwWebPage page;
+  JwWebPage get page =>
+      _page ?? (throw const JwCollectionException('webview session is closed'));
+
   @override
   final JwSessionPartitionRef partition;
-  final JwWebViewAdapter adapter;
   final JwWebviewController controller;
+  JwWebViewAdapter? _adapter;
   bool _released = false;
   Future<void>? _closeFuture;
+
+  Future<void> disposeSubscriptions() async {
+    final adapter = _adapter;
+    if (adapter != null) {
+      await adapter.disposeSubscriptions();
+      return;
+    }
+    final lifecycle = controller;
+    if (lifecycle is JwWebviewControllerLifecycle) {
+      await (lifecycle as JwWebviewControllerLifecycle).disposeSubscriptions();
+    }
+  }
+
+  Future<void> disposeControllerAndAwaitRelease() async {
+    final adapter = _adapter;
+    if (adapter != null) {
+      await adapter.disposeControllerAndAwaitRelease();
+      return;
+    }
+    final lifecycle = controller;
+    if (lifecycle is! JwWebviewControllerLifecycle) {
+      throw const JwCollectionException(
+        'webview controller release barrier is unavailable',
+      );
+    }
+    await (lifecycle as JwWebviewControllerLifecycle)
+        .disposeControllerAndAwaitRelease();
+  }
 
   @override
   Future<void> close() => admin._closeLive(this);

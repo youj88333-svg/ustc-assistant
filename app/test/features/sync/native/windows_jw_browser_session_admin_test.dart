@@ -94,6 +94,64 @@ void main() {
     );
   });
 
+  test('post-controller page setup failure releases and quarantines', () async {
+    final events = <String>[];
+    final controller = _FakeSessionController(events);
+    final store = WindowsJwUdfStore(privateRoot: root);
+    final admin = WindowsJwBrowserSessionAdmin(
+      udfStore: store,
+      controllerFactory: () async => controller,
+      pageFactory: (_) => throw StateError('page setup failed'),
+    );
+
+    await expectLater(
+      admin.open('student'),
+      throwsA(
+        isA<BridgeProtocolError>().having(
+          (error) => error.code,
+          'code',
+          'request_failed',
+        ),
+      ),
+    );
+    expect(events, <String>[
+      'controller.stop',
+      'subscriptions.dispose',
+      'controller.dispose_and_release',
+    ]);
+    expect(await store.isQuarantined(store.referenceFor('student')), isTrue);
+  });
+
+  test(
+    'post-controller setup release failure is retried by shutdown',
+    () async {
+      final events = <String>[];
+      final controller = _FakeSessionController(events, failReleaseAttempts: 1);
+      final store = WindowsJwUdfStore(privateRoot: root);
+      final admin = WindowsJwBrowserSessionAdmin(
+        udfStore: store,
+        controllerFactory: () async => controller,
+        pageFactory: (_) => throw StateError('page setup failed'),
+      );
+
+      await expectLater(
+        admin.open('student'),
+        throwsA(isA<BridgeProtocolError>()),
+      );
+      await admin.shutdown();
+
+      expect(events, <String>[
+        'controller.stop',
+        'subscriptions.dispose',
+        'controller.dispose_and_release',
+        'controller.stop',
+        'subscriptions.dispose',
+        'controller.dispose_and_release',
+      ]);
+      expect(await store.isQuarantined(store.referenceFor('student')), isTrue);
+    },
+  );
+
   test('release failure retains the exact handle for retry', () async {
     final controller = _FakeSessionController(
       <String>[],
@@ -187,6 +245,100 @@ void main() {
     },
   );
 
+  test('clear admission blocks open until the delete settles', () async {
+    final deleteEntered = Completer<void>();
+    final releaseDelete = Completer<void>();
+    final controller = _FakeSessionController(<String>[]);
+    final store = WindowsJwUdfStore(
+      privateRoot: root,
+      deleteDirectory: (directory) async {
+        if (!deleteEntered.isCompleted) deleteEntered.complete();
+        await releaseDelete.future;
+        if (await directory.exists()) await directory.delete(recursive: true);
+      },
+    );
+    final admin = WindowsJwBrowserSessionAdmin(
+      udfStore: store,
+      controllerFactory: () async => controller,
+    );
+    final first = await admin.open('student');
+    await first.close();
+
+    final clearing = admin.clearAllPartitions();
+    await deleteEntered.future;
+    await expectLater(
+      admin.open('student'),
+      throwsA(
+        isA<BridgeProtocolError>().having(
+          (error) => error.code,
+          'code',
+          'bridge_busy',
+        ),
+      ),
+    );
+    await expectLater(
+      admin.clearAllPartitions(),
+      throwsA(
+        isA<BridgeProtocolError>().having(
+          (error) => error.code,
+          'code',
+          'bridge_busy',
+        ),
+      ),
+    );
+
+    releaseDelete.complete();
+    await clearing;
+    final second = await admin.open('student');
+    await second.close();
+  });
+
+  testWidgets('detach timeout retains the handle until the host settles', (
+    tester,
+  ) async {
+    final host = JwWebViewSurfaceHost();
+    final controller = _FakeSessionController(<String>[]);
+    final admin = _admin(
+      root: root,
+      controller: controller,
+      surfaceHost: host,
+      surfaceUnmountTimeout: const Duration(milliseconds: 1),
+    );
+    await tester.pumpWidget(MaterialApp(home: host.widget));
+    final handle = await tester.runAsync(() => admin.open('student'));
+    await tester.pump();
+
+    BridgeProtocolError? firstCloseError;
+    await tester.runAsync<void>(() async {
+      try {
+        await handle!.close();
+      } on BridgeProtocolError catch (error) {
+        firstCloseError = error;
+      }
+    });
+    expect(firstCloseError?.code, 'browser_cleanup_incomplete');
+    await expectLater(
+      admin.clearAllPartitions(),
+      throwsA(
+        isA<BridgeProtocolError>().having(
+          (error) => error.code,
+          'code',
+          'bridge_busy',
+        ),
+      ),
+    );
+
+    // The real host's pending unmount completes once its placeholder frame is
+    // pumped. The same retained handle can then retry the failed detach.
+    await tester.pump();
+    await tester.runAsync<void>(() async {
+      await handle!.close();
+    });
+    await tester.runAsync<void>(() async {
+      await admin.clearAllPartitions();
+    });
+  });
+
   test('shutdown waits for an opening controller and releases it', () async {
     final creation = Completer<JwWebviewController>();
     final events = <String>[];
@@ -218,11 +370,13 @@ WindowsJwBrowserSessionAdmin _admin({
   required Directory root,
   required _FakeSessionController controller,
   JwWebViewSurfaceHost? surfaceHost,
+  Duration surfaceUnmountTimeout = const Duration(seconds: 5),
 }) {
   return WindowsJwBrowserSessionAdmin(
     udfStore: WindowsJwUdfStore(privateRoot: root),
     controllerFactory: () async => controller,
     surfaceHost: surfaceHost,
+    surfaceUnmountTimeout: surfaceUnmountTimeout,
   );
 }
 

@@ -60,6 +60,32 @@ void main() {
     await detach;
     expect(host.isAttached, isFalse);
   });
+
+  testWidgets('detach callback failure does not strand the host', (tester) async {
+    var failCallback = true;
+    final host = JwWebViewSurfaceHost(
+      onDetachRequested: (_) {
+        if (failCallback) throw StateError('detach diagnostic failed');
+      },
+    );
+    final controller = _SurfaceController(const Key('surface-a'));
+    await tester.pumpWidget(MaterialApp(home: host.widget));
+    await host.attach(controller);
+    await tester.pump();
+
+    await expectLater(
+      host.detachAndAwaitUnmount(controller),
+      throwsA(isA<StateError>()),
+    );
+    expect(host.isAttached, isFalse);
+
+    failCallback = false;
+    await host.attach(controller);
+    await tester.pump();
+    final retry = host.detachAndAwaitUnmount(controller);
+    await tester.pump();
+    await retry;
+  });
 }
 
 class _SurfaceController implements JwWebviewController {

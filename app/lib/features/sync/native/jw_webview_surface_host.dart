@@ -40,21 +40,29 @@ final class JwWebViewSurfaceHost {
     _notify?.call();
   }
 
-  Future<void> detachAndAwaitUnmount(JwWebviewController controller) {
+  Future<void> detachAndAwaitUnmount(JwWebviewController controller) async {
     final pending = _pendingUnmount;
     if (pending != null && identical(_pendingSource, controller)) {
       return pending.future;
     }
-    if (!identical(_controller, controller)) return Future<void>.value();
+    if (!identical(_controller, controller)) return;
     _generation++;
     _controller = null;
-    if (_notify == null) return Future<void>.value();
+    if (_notify == null) return;
     final completer = Completer<void>();
     _pendingUnmount = completer;
     _pendingSource = controller;
     _pendingGeneration = _generation;
-    onDetachRequested?.call(controller);
-    _notify!.call();
+    try {
+      onDetachRequested?.call(controller);
+      _notify!.call();
+    } on Object catch (error, stackTrace) {
+      // The source was already removed before the callback. Complete and
+      // clear the pending state on callback/notification failure so a later
+      // attach/detach can retry without a stranded host.
+      _completePendingUnmount();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
     return completer.future;
   }
 
