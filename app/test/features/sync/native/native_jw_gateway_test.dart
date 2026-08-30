@@ -17,9 +17,14 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_collector.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_browser_session_admin.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_web_session.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_web_page.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_webview_adapter.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_webview_surface_host.dart';
 import 'package:ustc_assistant_app/features/sync/native/native_jw_gateway.dart';
 import 'package:ustc_assistant_app/features/sync/native/source_collection_gateway.dart';
+import 'package:ustc_assistant_app/features/sync/native/windows_jw_udf_store.dart';
 
 const _homeUrl = 'https://jw.ustc.edu.cn/home';
 const _fixturesRoot = 'test/fixtures/jw';
@@ -513,6 +518,38 @@ void main() {
         await gateway.shutdown();
       },
     );
+
+    test(
+      'session-admin mode reuses one handle and leaves its close to the admin',
+      () async {
+        final controller = FakeJwWebviewController()
+          ..authenticatedSession = true
+          ..courseDatum = courseDatum
+          ..examHtml = examHtml;
+        final admin = _GatewaySessionAdmin(controller);
+        final gateway = NativeJwGateway(sessionAdmin: admin);
+
+        final first = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'account-a',
+          expectedUsername: 'PB00000000',
+          jwSemester: kDefaultJwSemester,
+        );
+        await _pollUntilTerminal(gateway, first.id);
+        final second = await gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'account-a',
+          expectedUsername: 'PB00000000',
+          jwSemester: kDefaultJwSemester,
+        );
+        await _pollUntilTerminal(gateway, second.id);
+
+        expect(admin.openCalls, 1);
+        await gateway.shutdown();
+        expect(admin.shutdownCalls, 1);
+        expect(admin.handleCloseCalls, 1);
+      },
+    );
   });
 }
 
@@ -588,6 +625,65 @@ class LateEventCollector extends JwCollector {
   }
 
   Future<void> close() => _events.close();
+}
+
+final class _GatewaySessionAdmin implements JwBrowserSessionAdmin {
+  _GatewaySessionAdmin(this.controller);
+
+  final FakeJwWebviewController controller;
+  final JwWebViewSurfaceHost _surfaceHost = JwWebViewSurfaceHost();
+  var openCalls = 0;
+  var shutdownCalls = 0;
+  var handleCloseCalls = 0;
+  _GatewaySessionHandle? handle;
+
+  @override
+  JwWebViewSurfaceHost get surfaceHost => _surfaceHost;
+
+  @override
+  Future<JwBrowserSessionHandle> open(String accountId) async {
+    openCalls++;
+    final adapter = JwWebViewAdapter(
+      controllerFactory: () async => controller,
+      initialController: controller,
+    );
+    await adapter.beginSubscriptions();
+    final next = _GatewaySessionHandle(
+      page: adapter,
+      onClose: () => handleCloseCalls++,
+    );
+    handle = next;
+    return next;
+  }
+
+  @override
+  Future<void> clearAllPartitions() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    await handle?.close();
+  }
+}
+
+final class _GatewaySessionHandle implements JwBrowserSessionHandle {
+  _GatewaySessionHandle({required this.page, required this.onClose});
+
+  @override
+  final JwWebPage page;
+
+  final void Function() onClose;
+  bool _closed = false;
+
+  @override
+  final partition = const JwSessionPartitionRef('jw_000000000000000000000000');
+
+  @override
+  Future<void> close() async {
+    if (_closed) return;
+    _closed = true;
+    onClose();
+  }
 }
 
 /// A scripted fake [JwWebviewController] (reuses the adapter test fake pattern).

@@ -37,12 +37,18 @@ import '../data/bridge_client.dart'
         BridgeGateway;
 import '../domain/sync_state.dart' show SyncSource;
 import 'jw_collector.dart';
-import 'jw_web_page.dart' show defaultLoginTimeout;
+import 'jw_browser_session_admin.dart';
+import 'jw_web_page.dart' show JwWebPage, LoginCredentials, defaultLoginTimeout;
 import 'jw_source_bundle_builder.dart' show defaultDartProducer;
 import 'jw_web_session.dart' show JwWebviewController;
 import 'jw_webview_adapter.dart';
 import 'jw_webview_surface_host.dart';
 import 'source_collection_gateway.dart';
+import '../runtime/source_job_gateway.dart'
+    show SourceJobDiagnosticReader, SourceJobSessionOwner;
+
+/// Preserve the historical import location for the explicit channel switch.
+export '../runtime/source_job_gateway.dart' show kUsePythonBridgeFallback;
 
 // Constructor parameters keep public-facing names (not private-field
 // initializing formals); the lint is cosmetic only.
@@ -57,16 +63,15 @@ const BridgeSemesterCapability kDefaultJwSemester = BridgeSemesterCapability(
   displayName: kDefaultJwSemesterDisplayName,
 );
 
-/// Whether the minimal sync page uses the Python Bridge fallback instead of
-/// the native WebView2 channel. Kept at false so the native channel is the
-/// default and the Bridge remains switchable for emergency fallback (red line:
-/// 一源一通道, never both at once).
-const bool kUsePythonBridgeFallback = false;
-
 typedef JwCollectorFactory = JwCollector Function(String jobId);
 
 /// Implements the Bridge gateway surface over the native WebView2 collector.
-class NativeJwGateway implements BridgeGateway {
+class NativeJwGateway
+    implements
+        BridgeGateway,
+        SourceJobSessionOwner,
+        SourceJobDiagnosticReader,
+        JwWebViewSurfaceProvider {
   NativeJwGateway({
     JwWebviewControllerFactory? controllerFactory,
     BridgeSemesterCapability semester = kDefaultJwSemester,
@@ -79,6 +84,7 @@ class NativeJwGateway implements BridgeGateway {
     Future<String> Function()? userDataPath,
     Duration controllerCreationTimeout = defaultLoginTimeout,
     void Function(String)? safeDiagnostic,
+    JwBrowserSessionAdmin? sessionAdmin,
   }) : _controllerFactory = controllerFactory,
        _semester = semester,
        _userDataPathForAccount = userDataPathForAccount,
@@ -86,7 +92,8 @@ class NativeJwGateway implements BridgeGateway {
        _collectorFactory = collectorFactory,
        _legacyUserDataPath = userDataPath,
        _controllerCreationTimeout = controllerCreationTimeout,
-       _externalDiagnostic = safeDiagnostic;
+       _externalDiagnostic = safeDiagnostic,
+       _sessionAdmin = sessionAdmin;
 
   final JwWebviewControllerFactory? _controllerFactory;
   final BridgeSemesterCapability _semester;
@@ -100,6 +107,10 @@ class NativeJwGateway implements BridgeGateway {
   /// stable error codes only — never URL/account/query/DOM). Wired through to
   /// the adapter's `safeDiagnostic`.
   final void Function(String)? _externalDiagnostic;
+  final JwBrowserSessionAdmin? _sessionAdmin;
+
+  @override
+  bool get ownsBrowserSessions => _sessionAdmin != null;
 
   /// Broadcast stream of privacy-safe stage diagnostics emitted by the active
   /// adapter (e.g. `attempt:jw.portal.login`, `activationDispatched`,
@@ -108,6 +119,7 @@ class NativeJwGateway implements BridgeGateway {
       StreamController<String>.broadcast();
 
   /// Stream of privacy-safe stage diagnostics (see [_externalDiagnostic]).
+  @override
   Stream<String> get diagnostics => _diagnosticsController.stream;
 
   /// Forwards a privacy-safe stage to the caller sink and the diagnostics
@@ -126,7 +138,16 @@ class NativeJwGateway implements BridgeGateway {
   /// The sole stable surface host for this gateway's controller generation.
   /// The page mounts [surfaceHost.widget] once; it never receives a raw
   /// WebView widget or controller.
-  final JwWebViewSurfaceHost surfaceHost = JwWebViewSurfaceHost();
+  final JwWebViewSurfaceHost _standaloneSurfaceHost = JwWebViewSurfaceHost();
+
+  /// The app-owned admin supplies the stable host in production.  The
+  /// standalone host remains for legacy/focused fake-controller construction.
+  @override
+  JwWebViewSurfaceHost get surfaceHost =>
+      _sessionAdmin?.surfaceHost ?? _standaloneSurfaceHost;
+
+  JwBrowserSessionHandle? _sessionHandle;
+  JwWebPage? _sessionPage;
 
   final Map<String, JwCollector> _collectors = <String, JwCollector>{};
   final Map<String, StreamSubscription<SourceCollectionEvent>>
@@ -144,6 +165,7 @@ class NativeJwGateway implements BridgeGateway {
   String? _controllerAccountId;
   String? _activeJobId;
   bool _startInFlight = false;
+  Completer<void>? _startCompletion;
   bool _shutdown = false;
 
   static const _pollWait = Duration(milliseconds: 250);
@@ -262,6 +284,32 @@ class NativeJwGateway implements BridgeGateway {
     return adapter;
   }
 
+  /// Opens the session admin exactly once for this gateway/account and wraps
+  /// its page so the collector's per-job `close()` hook cannot release the
+  /// admin-owned controller.  The admin remains the only release authority.
+  Future<JwWebPage> _pageForAccount(String accountId) async {
+    final existingHandle = _sessionHandle;
+    if (existingHandle != null) {
+      if (_controllerAccountId != accountId) {
+        throw StateError('gateway controller is bound to another account');
+      }
+      return _sessionPage!;
+    }
+    final admin = _sessionAdmin;
+    if (admin == null) return _makeAdapter();
+    final handle = await admin.open(accountId);
+    if (_shutdown) {
+      // Shutdown raced a late admin open.  The admin owns this handle and its
+      // idempotent close path; never invoke controller methods here.
+      await handle.close();
+      throw StateError('gateway is shut down');
+    }
+    _sessionHandle = handle;
+    final page = _SessionOwnedJwWebPage(handle.page);
+    _sessionPage = page;
+    return page;
+  }
+
   @override
   Future<BridgeCapabilities> capabilities() async =>
       BridgeCapabilities(jwSemester: _semester);
@@ -285,6 +333,8 @@ class NativeJwGateway implements BridgeGateway {
       throw const BridgeProtocolError(bridgeBusyCode);
     }
     _startInFlight = true;
+    final startCompletion = Completer<void>();
+    _startCompletion = startCompletion;
     String? jobId;
     try {
       final boundAccount = _controllerAccountId;
@@ -298,7 +348,7 @@ class NativeJwGateway implements BridgeGateway {
 
       final createdJobId = 'native:${DateTime.now().microsecondsSinceEpoch}';
       jobId = createdJobId;
-      final adapter = _makeAdapter();
+      final adapter = await _pageForAccount(accountId);
 
       final collector =
           _collectorFactory?.call(createdJobId) ??
@@ -435,6 +485,8 @@ class NativeJwGateway implements BridgeGateway {
       rethrow;
     } finally {
       _startInFlight = false;
+      _startCompletion = null;
+      if (!startCompletion.isCompleted) startCompletion.complete();
     }
   }
 
@@ -572,6 +624,13 @@ class NativeJwGateway implements BridgeGateway {
       }
     }
 
+    final starting = _startCompletion;
+    if (starting != null) {
+      await attempt(() async {
+        await starting.future.timeout(_controllerCreationTimeout);
+      });
+    }
+
     // Ask every non-terminal collector to stop before touching the shared
     // controller. Cancellation unblocks collectors paused for user login;
     // controller.stop below interrupts navigation/fetches in progress.
@@ -669,6 +728,15 @@ class NativeJwGateway implements BridgeGateway {
     _cancelRequested.clear();
     _activeJobId = null;
     _startInFlight = false;
+    _startCompletion = null;
+    if (_sessionAdmin != null) {
+      // In the app-owned runtime this is the same admin supplied by the
+      // composition root.  The admin owns detach/stop/subscriptions/native
+      // release; this gateway never touches its controller directly.
+      await attempt(_sessionAdmin.shutdown);
+      _sessionHandle = null;
+      _sessionPage = null;
+    }
     if (!_diagnosticsController.isClosed) {
       await attempt(_diagnosticsController.close);
     }
@@ -690,6 +758,80 @@ final class _GatewayOwnedJwWebViewAdapter extends JwWebViewAdapter {
     required super.controllerFactory,
     super.safeDiagnostic,
   });
+
+  @override
+  Future<void> close() async {}
+}
+
+/// A collector-facing page view backed by a session-admin handle.
+///
+/// [JwCollector] calls [JwWebPage.close] in its per-job `finally` block.  A
+/// session-admin handle has a longer lifetime than one collection, so that
+/// callback must not release the handle (or its controller).  All operational
+/// methods are forwarded while [close] deliberately remains a no-op; the
+/// owning [JwBrowserSessionAdmin] is the only component that closes the
+/// handle.
+final class _SessionOwnedJwWebPage implements JwWebPage {
+  _SessionOwnedJwWebPage(this._delegate);
+
+  final JwWebPage _delegate;
+
+  @override
+  Future<String> get currentUrl => _delegate.currentUrl;
+
+  @override
+  Future<void> gotoRoot() => _delegate.gotoRoot();
+
+  @override
+  Future<void> gotoCasEntry() => _delegate.gotoCasEntry();
+
+  @override
+  Future<void> gotoCourseTable() => _delegate.gotoCourseTable();
+
+  @override
+  Future<void> gotoExamArrange() => _delegate.gotoExamArrange();
+
+  @override
+  Future<bool> get isAuthenticatedHome => _delegate.isAuthenticatedHome;
+
+  @override
+  Future<bool> verifyAuthenticatedHome({
+    required String expectedUsername,
+    required Duration timeout,
+  }) => _delegate.verifyAuthenticatedHome(
+    expectedUsername: expectedUsername,
+    timeout: timeout,
+  );
+
+  @override
+  Future<void> fillLogin(LoginCredentials credentials) =>
+      _delegate.fillLogin(credentials);
+
+  @override
+  Future<void> waitForAuthenticatedHome(Duration timeout) =>
+      _delegate.waitForAuthenticatedHome(timeout);
+
+  @override
+  Future<String> resolveCourseDataId(Duration timeout) =>
+      _delegate.resolveCourseDataId(timeout);
+
+  @override
+  Future<Map<String, dynamic>> fetchCourseDatum({
+    required int semesterId,
+    required String dataId,
+    required String referer,
+  }) => _delegate.fetchCourseDatum(
+    semesterId: semesterId,
+    dataId: dataId,
+    referer: referer,
+  );
+
+  @override
+  Future<String> fetchExamHtml(Duration timeout) =>
+      _delegate.fetchExamHtml(timeout);
+
+  @override
+  Future<void> resetLoginAttempt() => _delegate.resetLoginAttempt();
 
   @override
   Future<void> close() async {}

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -11,9 +13,16 @@ import 'package:ustc_assistant_app/features/accounts/application/account_service
 import 'package:ustc_assistant_app/features/agent/application/agent_composition.dart';
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
+import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
 import 'package:ustc_assistant_app/features/settings/application/settings_service.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/settings_page.dart';
+import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
+import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_browser_session_admin.dart';
+import 'package:ustc_assistant_app/features/sync/native/jw_webview_surface_host.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/minimal_jw_runtime.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/source_job_gateway.dart';
 
 class FakeWebsiteLauncher implements OfficialWebsiteLauncher {
   final launched = <Uri>[];
@@ -36,6 +45,69 @@ class _NoopProtector implements CredentialProtector {
   @override
   Future<Uint8List> unprotect(ProtectedSecret protected) async =>
       Uint8List.fromList(protected.bytes);
+}
+
+final class _AppShellGateway
+    implements SourceJobGateway, SourceJobStateReader, SourceJobImportReader {
+  final StreamController<SourceJobSnapshot> _states =
+      StreamController<SourceJobSnapshot>.broadcast();
+  var shutdownCalls = 0;
+
+  @override
+  Stream<SourceJobSnapshot> get states => _states.stream;
+
+  @override
+  Future<SyncOutcome> firstLogin(FirstLoginCommand command) async =>
+      const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<SyncOutcome> sync({
+    required String accountId,
+    required SyncTrigger trigger,
+  }) async => const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<void> cancelCurrent() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    await _states.close();
+  }
+
+  @override
+  Future<SyncSourceState> stateFor(String accountId) async =>
+      const SyncSourceState(source: SyncSource.jw, phase: SyncPhase.idle);
+
+  @override
+  BundleImport get importBundle =>
+      (bytes, {required accountId, required origin}) async =>
+          const ImportResult(
+            status: ImportStatus.imported,
+            bundleId: 'test',
+            source: 'ustc_jw',
+            importedEntityCount: 0,
+          );
+}
+
+final class _AppShellSessionAdmin implements JwBrowserSessionAdmin {
+  final JwWebViewSurfaceHost _surfaceHost = JwWebViewSurfaceHost();
+  var shutdownCalls = 0;
+
+  @override
+  JwWebViewSurfaceHost get surfaceHost => _surfaceHost;
+
+  @override
+  Future<JwBrowserSessionHandle> open(String accountId) =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> clearAllPartitions() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+  }
 }
 
 void main() {
@@ -424,6 +496,96 @@ void main() {
 
     expect(find.byKey(const Key('reauth-username')), findsOneWidget);
     expect(find.textContaining('PB****0000'), findsOneWidget);
+  });
+
+  testWidgets('sync routes borrow one app-owned runtime identity', (
+    tester,
+  ) async {
+    final gateway = _AppShellGateway();
+    final sessions = _AppShellSessionAdmin();
+    final runtime = MinimalJwRuntime(
+      gateway: gateway,
+      browserSessions: sessions,
+    );
+    var loadCalls = 0;
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+        runtimeLoader: () {
+          loadCalls++;
+          return Future<MinimalJwRuntime>.value(runtime);
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('first-login-entry')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('first-login-username')), findsOneWidget);
+    expect(loadCalls, 1);
+
+    await tester.tap(find.byKey(const Key('exit-sync')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('first-login-entry')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('first-login-username')), findsOneWidget);
+    expect(loadCalls, 1);
+
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await runtime.shutdown();
+    expect(gateway.shutdownCalls, 1);
+    expect(sessions.shutdownCalls, 1);
+  });
+
+  testWidgets('reauthentication route reuses the same runtime owner', (
+    tester,
+  ) async {
+    await database
+        .into(database.localAccounts)
+        .insert(
+          LocalAccountsCompanion.insert(
+            id: 'runtime-account',
+            maskedHint: 'PB****0000',
+            identityDigest: const Value('digest'),
+            isActive: const Value(true),
+            createdAt: 1,
+            updatedAt: 1,
+          ),
+        );
+    final gateway = _AppShellGateway();
+    final sessions = _AppShellSessionAdmin();
+    final runtime = MinimalJwRuntime(
+      gateway: gateway,
+      browserSessions: sessions,
+    );
+    var loadCalls = 0;
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+        runtimeLoader: () {
+          loadCalls++;
+          return Future.value(runtime);
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.menu));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byIcon(Icons.badge_outlined).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('reauthenticate-runtime-account')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('reauth-username')), findsOneWidget);
+    expect(loadCalls, 1);
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
+    await runtime.shutdown();
+    expect(gateway.shutdownCalls, 1);
+    expect(sessions.shutdownCalls, 1);
   });
 
   testWidgets('official website page exposes only allowlisted HTTPS targets', (

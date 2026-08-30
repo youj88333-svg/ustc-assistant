@@ -29,6 +29,8 @@ import '../features/settings/presentation/official_websites_page.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/sync/presentation/sync_page.dart';
+import '../features/sync/runtime/minimal_jw_runtime.dart';
+import '../features/sync/runtime/minimal_jw_runtime_scope.dart';
 import '../features/tasks/application/task_lifecycle_service.dart';
 import '../features/tasks/application/undo_service.dart';
 import '../features/tasks/presentation/task_form.dart';
@@ -47,6 +49,7 @@ GoRouter buildRouter(
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
   AgentCompositionLoader? agentCompositionLoader,
   Future<void> Function()? clearBrowserSession,
+  MinimalJwRuntimeOwner? runtimeOwner,
 ]) {
   final loadAgentComposition = agentCompositionLoader ?? _buildAgentComposition;
   // The app shell injects the physical cleanup callback. Keep direct router
@@ -158,30 +161,66 @@ GoRouter buildRouter(
       ),
       GoRoute(
         path: '/accounts/:accountId/reauthenticate',
-        builder: (context, state) => SyncPageLoader(
-          database: database,
-          reminderReconciler: reminderReconciler,
-          reauthenticateAccountId: state.pathParameters['accountId']!,
-          createNativeGateway: false,
-          clearBrowserSession: clearBrowser,
-          onReauthenticated: () => context.go('/sync'),
+        builder: (context, state) => _RuntimeSyncRoute(
+          owner: runtimeOwner,
+          // Direct router hosts do not have the app composition owner. Keep
+          // their legacy, side-effect-free form available without creating a
+          // native gateway, controller, environment, or UDF path here.
+          missingRuntime: SyncPageLoader(
+            database: database,
+            reminderReconciler: reminderReconciler,
+            reauthenticateAccountId: state.pathParameters['accountId']!,
+            clearBrowserSession: clearBrowser,
+            createNativeGateway: false,
+          ),
+          builder: (runtime) => SyncPageLoader(
+            database: database,
+            reminderReconciler: reminderReconciler,
+            runtime: runtime,
+            reauthenticateAccountId: state.pathParameters['accountId']!,
+            clearBrowserSession: clearBrowser,
+            onReauthenticated: () =>
+                _replaceRuntimeAndGo(context, runtimeOwner),
+          ),
         ),
       ),
       GoRoute(
         path: '/sync',
-        builder: (context, state) => SyncPageLoader(
-          database: database,
-          reminderReconciler: reminderReconciler,
-          clearBrowserSession: clearBrowser,
-          onExit: () {
-            if (context.canPop()) {
-              context.pop();
-            } else {
-              context.go('/chat');
-            }
-          },
-          onReauthenticationRequired: (accountId) =>
-              context.go('/accounts/$accountId/reauthenticate'),
+        builder: (context, state) => _RuntimeSyncRoute(
+          owner: runtimeOwner,
+          // See the reauthentication route above. Production app routes
+          // always resolve the borrowed runtime; this branch only preserves
+          // direct/embedded router hosts that intentionally omit composition.
+          missingRuntime: SyncPageLoader(
+            database: database,
+            reminderReconciler: reminderReconciler,
+            clearBrowserSession: clearBrowser,
+            createNativeGateway: false,
+            onExit: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/chat');
+              }
+            },
+            onReauthenticationRequired: (accountId) =>
+                context.go('/accounts/$accountId/reauthenticate'),
+          ),
+          builder: (runtime) => SyncPageLoader(
+            database: database,
+            reminderReconciler: reminderReconciler,
+            runtime: runtime,
+            clearBrowserSession: clearBrowser,
+            onExit: () {
+              if (context.canPop()) {
+                context.pop();
+              } else {
+                context.go('/chat');
+              }
+            },
+            onReauthenticationRequired: (accountId) =>
+                context.go('/accounts/$accountId/reauthenticate'),
+          ),
         ),
       ),
       GoRoute(
@@ -193,6 +232,7 @@ GoRouter buildRouter(
         builder: (context, state) => _SettingsLoader(
           database: database,
           clearBrowserSession: clearBrowser,
+          runtimeOwner: runtimeOwner,
         ),
       ),
       GoRoute(
@@ -205,6 +245,59 @@ GoRouter buildRouter(
             OfficialWebsitesPage(launcher: websiteLauncher),
       ),
     ],
+  );
+}
+
+/// Resolves the one app-owned runtime for a source route. Direct router
+/// construction in embedded/test hosts remains side-effect free and renders
+/// [missingRuntime] rather than constructing a page-owned gateway.
+final class _RuntimeSyncRoute extends StatelessWidget {
+  const _RuntimeSyncRoute({
+    required this.owner,
+    required this.builder,
+    required this.missingRuntime,
+  });
+
+  final MinimalJwRuntimeOwner? owner;
+  final Widget Function(MinimalJwRuntime runtime) builder;
+  final Widget missingRuntime;
+
+  @override
+  Widget build(BuildContext context) {
+    final runtimeOwner = owner;
+    if (runtimeOwner == null) return missingRuntime;
+    return FutureBuilder<MinimalJwRuntime>(
+      future: runtimeOwner.current,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return missingRuntime;
+        final runtime = snapshot.data;
+        if (runtime == null) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return MinimalJwRuntimeScope(runtime: runtime, child: builder(runtime));
+      },
+    );
+  }
+}
+
+void _replaceRuntimeAndGo(BuildContext context, MinimalJwRuntimeOwner? owner) {
+  final runtimeOwner = owner;
+  if (runtimeOwner == null) {
+    context.go('/sync');
+    return;
+  }
+  unawaited(
+    runtimeOwner.replaceAfterReset().then<void>(
+      (_) {
+        if (context.mounted) context.go('/sync');
+      },
+      onError: (Object _, StackTrace _) {
+        // Keep the current route visible on a failed teardown; no fresh
+        // browser environment may be created while the old one is uncertain.
+      },
+    ),
   );
 }
 
@@ -451,10 +544,12 @@ class _SettingsLoader extends StatelessWidget {
   const _SettingsLoader({
     required this.database,
     required this.clearBrowserSession,
+    this.runtimeOwner,
   });
 
   final AppDatabase database;
   final Future<void> Function() clearBrowserSession;
+  final MinimalJwRuntimeOwner? runtimeOwner;
 
   @override
   Widget build(BuildContext context) {
@@ -467,10 +562,18 @@ class _SettingsLoader extends StatelessWidget {
           );
         }
         final account = snapshot.data;
+        final runtimeOwner = this.runtimeOwner;
         final accounts = AccountService(
           database: database,
           protector: defaultCredentialProtector(),
-          clearBrowserSession: clearBrowserSession,
+          clearBrowserSession: () async {
+            // Complete reset must stop the app-owned runtime before its UDF
+            // partitions are cleared. The owner future is shared with the
+            // subsequent replacement route, so no browser environment can
+            // overlap the destructive reset.
+            if (runtimeOwner != null) await runtimeOwner.beginShutdown();
+            await clearBrowserSession();
+          },
         );
         return SettingsPage(
           service: SettingsService(
@@ -479,7 +582,7 @@ class _SettingsLoader extends StatelessWidget {
             accountId: account?.id,
           ),
           onFirstLogin: account == null ? () => context.go('/sync') : null,
-          onCompleteReset: () => context.go('/sync'),
+          onCompleteReset: () => _replaceRuntimeAndGo(context, runtimeOwner),
         );
       },
     );

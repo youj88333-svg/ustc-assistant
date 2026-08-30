@@ -4,6 +4,12 @@ import 'package:flutter/material.dart';
 
 import 'jw_web_session.dart';
 
+/// Read-only surface seam for presentation hosts. It exposes the stable host
+/// widget without exposing a controller or native environment.
+abstract interface class JwWebViewSurfaceProvider {
+  JwWebViewSurfaceHost get surfaceHost;
+}
+
 /// Keeps a native JW WebView surface mounted for exactly one controller at a
 /// time, and exposes completion only after Flutter has rendered its
 /// placeholder during detach.

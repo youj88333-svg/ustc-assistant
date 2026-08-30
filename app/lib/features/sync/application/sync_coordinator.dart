@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
@@ -7,6 +8,7 @@ import '../../accounts/application/account_service.dart';
 import '../../import/domain/import_result.dart';
 import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
+import '../native/jw_web_page.dart' show defaultLoginTimeout;
 
 typedef BundleImport =
     Future<ImportResult> Function(
@@ -43,6 +45,13 @@ class _PausedSync {
   final String? verifiedUsername;
 }
 
+class _CurrentSyncJob {
+  const _CurrentSyncJob({required this.bridge, required this.jobId});
+
+  final BridgeGateway bridge;
+  final String jobId;
+}
+
 class SyncCoordinator {
   SyncCoordinator({
     required this.database,
@@ -62,6 +71,8 @@ class SyncCoordinator {
   static const _uuid = Uuid();
   bool _busy = false;
   final Map<String, _PausedSync> _paused = {};
+  _CurrentSyncJob? _currentJob;
+  Completer<void>? _currentSettlement;
 
   Future<bool> isAutomaticDue(SyncSource source, String accountId) async {
     final config = await _config(source, accountId);
@@ -114,14 +125,25 @@ class SyncCoordinator {
         expectedUsername: username,
         jwSemester: semesterOverride ?? capabilities.jwSemester,
       );
-      return await _consume(
-        bridge: bridge,
-        source: source,
-        accountId: account.id,
-        runId: runId,
-        jobId: job.id,
-        sequence: 0,
-      );
+      final settlement = Completer<void>();
+      _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
+      _currentSettlement = settlement;
+      SyncOutcome? outcome;
+      try {
+        outcome = await _consume(
+          bridge: bridge,
+          source: source,
+          accountId: account.id,
+          runId: runId,
+          jobId: job.id,
+          sequence: 0,
+        );
+        return outcome;
+      } finally {
+        if (_paused[job.id] == null && _currentJob?.jobId == job.id) {
+          _completeCurrentSettlement(job.id, settlement);
+        }
+      }
     } on AccountVerificationError catch (error) {
       final code = error.code == 'credentials_not_found'
           ? 'reauthentication_required'
@@ -188,17 +210,26 @@ class SyncCoordinator {
         expectedUsername: accounts.stagedUsernameForSync(provisional),
         jwSemester: semesterOverride ?? capabilities.jwSemester,
       );
-      return await _consume(
-        bridge: bridge,
-        source: source,
-        accountId: provisional.accountId,
-        runId: runId,
-        jobId: job.id,
-        sequence: 0,
-        pollProtocolErrorBehavior: _PollProtocolErrorBehavior.rethrowToCaller,
-        provisional: provisional,
-        verifiedUsername: username.trim(),
-      );
+      final settlement = Completer<void>();
+      _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
+      _currentSettlement = settlement;
+      try {
+        return await _consume(
+          bridge: bridge,
+          source: source,
+          accountId: provisional.accountId,
+          runId: runId,
+          jobId: job.id,
+          sequence: 0,
+          pollProtocolErrorBehavior: _PollProtocolErrorBehavior.rethrowToCaller,
+          provisional: provisional,
+          verifiedUsername: username.trim(),
+        );
+      } finally {
+        if (_paused[job.id] == null && _currentJob?.jobId == job.id) {
+          _completeCurrentSettlement(job.id, settlement);
+        }
+      }
     } on Object {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
       return SyncFailed(source, code: 'first_login_failed');
@@ -234,16 +265,25 @@ class SyncCoordinator {
         expectedUsername: accounts.stagedUsernameForSync(provisional),
         jwSemester: semesterOverride ?? capabilities.jwSemester,
       );
-      return await _consume(
-        bridge: bridge,
-        source: source,
-        accountId: provisional.accountId,
-        runId: runId,
-        jobId: job.id,
-        sequence: 0,
-        provisional: provisional,
-        verifiedUsername: username.trim(),
-      );
+      final settlement = Completer<void>();
+      _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
+      _currentSettlement = settlement;
+      try {
+        return await _consume(
+          bridge: bridge,
+          source: source,
+          accountId: provisional.accountId,
+          runId: runId,
+          jobId: job.id,
+          sequence: 0,
+          provisional: provisional,
+          verifiedUsername: username.trim(),
+        );
+      } finally {
+        if (_paused[job.id] == null && _currentJob?.jobId == job.id) {
+          _completeCurrentSettlement(job.id, settlement);
+        }
+      }
     } on AccountVerificationError catch (error) {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
       return SyncFailed(source, code: error.code);
@@ -268,20 +308,24 @@ class SyncCoordinator {
       return const SyncFailed(SyncSource.jw, code: 'job_not_found');
     }
     if (!userConfirmed) {
-      await paused.bridge.cancel(jobId);
-      if (paused.provisional == null) {
-        await _finishRun(paused.runId, 'cancelled', 'cancelled');
-      } else {
-        accounts.cancelFirstLogin(paused.provisional!);
+      try {
+        await paused.bridge.cancel(jobId);
+        if (paused.provisional == null) {
+          await _finishRun(paused.runId, 'cancelled', 'cancelled');
+        } else {
+          accounts.cancelFirstLogin(paused.provisional!);
+        }
+      } finally {
+        _completeCurrentSettlement(jobId);
       }
       return SyncCancelled(paused.source);
     }
-    final password = paused.provisional == null
-        ? await accounts.passwordForInteractiveLogin(paused.accountId)
-        : accounts.stagedPasswordForInteractiveLogin(paused.provisional!);
-    await paused.bridge.resumeLogin(jobId, password: password);
     try {
-      return await _consume(
+      final password = paused.provisional == null
+          ? await accounts.passwordForInteractiveLogin(paused.accountId)
+          : accounts.stagedPasswordForInteractiveLogin(paused.provisional!);
+      await paused.bridge.resumeLogin(jobId, password: password);
+      final outcome = await _consume(
         bridge: paused.bridge,
         source: paused.source,
         accountId: paused.accountId,
@@ -292,6 +336,10 @@ class SyncCoordinator {
         provisional: paused.provisional,
         verifiedUsername: paused.verifiedUsername,
       );
+      if (outcome is! SyncNeedsUserAction && _currentJob?.jobId == jobId) {
+        _completeCurrentSettlement(jobId);
+      }
+      return outcome;
     } on BridgeProtocolError {
       // A resumed first-login flow has no enclosing firstLoginSync call left
       // to provide its stable outer mapping.
@@ -300,10 +348,74 @@ class SyncCoordinator {
         if (paused.provisional != null) {
           accounts.cancelFirstLogin(paused.provisional!);
         }
+        _completeCurrentSettlement(jobId);
         return SyncFailed(paused.source, code: 'first_login_failed');
       }
+      _completeCurrentSettlement(jobId);
+      rethrow;
+    } on Object {
+      if (paused.pollProtocolErrorBehavior ==
+          _PollProtocolErrorBehavior.rethrowToCaller) {
+        if (paused.provisional != null) {
+          accounts.cancelFirstLogin(paused.provisional!);
+        }
+        _completeCurrentSettlement(jobId);
+        return SyncFailed(paused.source, code: 'first_login_failed');
+      }
+      _completeCurrentSettlement(jobId);
       rethrow;
     }
+  }
+
+  /// Cancels the one active or paused coordinator job and waits for its
+  /// terminal poll/cleanup settlement.  SourceJobGateway uses this method so
+  /// UI cancellation never releases its arbiter lease early.
+  Future<void> cancelCurrent() async {
+    final current = _currentJob;
+    if (current == null) return;
+    final paused = _paused[current.jobId];
+    if (paused != null) {
+      await resumeInteractive(current.jobId, userConfirmed: false);
+      return;
+    }
+
+    Object? firstError;
+    StackTrace? firstStack;
+    try {
+      await current.bridge.cancel(current.jobId);
+    } on Object catch (error, stack) {
+      firstError = error;
+      firstStack = stack;
+    }
+    final settlement = _currentSettlement;
+    if (settlement != null && !settlement.isCompleted) {
+      try {
+        await settlement.future.timeout(defaultLoginTimeout);
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    if (_currentJob?.jobId == current.jobId) {
+      _completeCurrentSettlement(current.jobId);
+    }
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStack ?? StackTrace.current);
+    }
+  }
+
+  void _completeCurrentSettlement(
+    String jobId, [
+    Completer<void>? knownSettlement,
+  ]) {
+    if (_currentJob?.jobId != jobId) return;
+    final settlement = knownSettlement ?? _currentSettlement;
+    if (settlement != null && !settlement.isCompleted) {
+      settlement.complete();
+    }
+    _currentJob = null;
+    _currentSettlement = null;
   }
 
   Future<SyncOutcome> _consume({

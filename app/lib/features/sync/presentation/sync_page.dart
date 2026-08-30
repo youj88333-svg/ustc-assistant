@@ -1,12 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/security/credential_protector_factory.dart';
@@ -18,68 +15,24 @@ import '../../import/presentation/file_import_action.dart';
 import '../../settings/application/settings_service.dart';
 import '../application/sync_coordinator.dart';
 import '../data/bridge_client.dart';
-import '../data/python_locator.dart';
 import '../domain/sync_state.dart';
-import '../native/native_jw_gateway.dart';
-
-String _sanitizeOpaqueAccountId(String accountId) {
-  final sanitized = accountId.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
-  return sanitized.isEmpty ? 'account' : sanitized;
-}
-
-NativeJwGateway _createNativeJwGateway() {
-  return NativeJwGateway(
-    userDataPathForAccount: (accountId) async {
-      final support = await getApplicationSupportDirectory();
-      return p.join(
-        support.path,
-        'webview',
-        _sanitizeOpaqueAccountId(accountId),
-      );
-    },
-  );
-}
-
-/// Removes every native JW WebView2 user-data partition owned by this app.
-///
-/// The browser profiles are account-partitioned below the application-support
-/// `webview` directory. Complete reset is the one operation allowed to clear
-/// all of them, and it runs only after any active gateway has been shut down.
-/// Refuse a reparse/symlink root so a corrupted path cannot redirect deletion
-/// outside the app-support directory.
-Future<void> clearNativeJwBrowserSessions() async {
-  final support = await getApplicationSupportDirectory();
-  final root = Directory(p.join(support.path, 'webview'));
-  final rootType = await FileSystemEntity.type(root.path, followLinks: false);
-  if (rootType == FileSystemEntityType.notFound) return;
-  if (rootType != FileSystemEntityType.directory) {
-    throw StateError('native browser session root is not a directory');
-  }
-  await for (final entry in root.list(followLinks: false)) {
-    final type = await FileSystemEntity.type(entry.path, followLinks: false);
-    if (type == FileSystemEntityType.directory) {
-      await Directory(entry.path).delete(recursive: true);
-    } else {
-      await entry.delete();
-    }
-  }
-}
+import '../native/jw_webview_surface_host.dart';
+import '../runtime/minimal_jw_runtime.dart';
+import '../runtime/jw_browser_session_cleanup.dart';
+import '../runtime/source_job_gateway.dart';
 
 Future<void> runStartupAutomaticSync(
   AppDatabase database, {
   ReminderReconciler reminderReconciler = const NoopReminderReconciler(),
+  SourceJobGateway? gateway,
 }) async {
-  // M7 (native channel): the startup automatic sync no longer creates its own
-  // gateway. A second NativeJwGateway would race the sync page's gateway for
-  // the same WebView2 UDF (profile lock) and drive an invisible collection
-  // (its surface is never mounted), so its result could never surface to the
-  // user. Automatic sync now belongs to the page's coordinator (the UI owns
-  // the one visible WebView). The Python Bridge fallback keeps its original
-  // headless startup behavior.
-  if (!kUsePythonBridgeFallback) {
-    return;
-  }
-  BridgeGateway? bridge;
+  // Startup work borrows the app-owned gateway. A missing gateway is a
+  // side-effect-free no-op for direct/embedded hosts; production composition
+  // always supplies the selected native-or-fallback gateway.
+  // Native WebView2 collection requires the mounted SyncPage surface for CAS
+  // interaction; startup must not launch an invisible native job. The
+  // explicit Python fallback remains eligible for headless startup work.
+  if (gateway == null || !kUsePythonBridgeFallback) return;
   try {
     final accounts = AccountService(
       database: database,
@@ -88,55 +41,9 @@ Future<void> runStartupAutomaticSync(
     );
     final account = await accounts.activeAccount();
     if (account == null) return;
-    final schemaText = await rootBundle.loadString(
-      'assets/schemas/source-bundle-1.0.draft7.schema.json',
-    );
-    final importer = ImportService(
-      database: database,
-      decoder: SourceBundleDecoder(
-        jsonDecode(schemaText) as Map<String, dynamic>,
-      ),
-      reminderReconciler: reminderReconciler,
-    );
-    final coordinator = SyncCoordinator(
-      database: database,
-      accounts: accounts,
-      bridgeFactory: () async {
-        final current = bridge;
-        if (current != null) return current;
-        if (!kUsePythonBridgeFallback) {
-          return bridge = NativeJwGateway(
-            userDataPathForAccount: (accountId) async {
-              final support = await getApplicationSupportDirectory();
-              return p.join(
-                support.path,
-                'webview',
-                _sanitizeOpaqueAccountId(accountId),
-              );
-            },
-          );
-        }
-        final executable = await PythonLocator().locate(
-          savedExecutable: await SettingsService(
-            database: database,
-            accounts: accounts,
-            accountId: account.id,
-          ).pythonPath(),
-        );
-        return bridge = await BridgeClient.start(pythonExecutable: executable);
-      },
-      importBundle: importer.importBytes,
-    );
-    await coordinator.recoverInterruptedRuns();
-    await coordinator.syncAll(
-      trigger: SyncTrigger.automatic,
-      accountId: account.id,
-      resolveUserAction: (_) async => false,
-    );
+    await gateway.sync(accountId: account.id, trigger: SyncTrigger.automatic);
   } on Object {
     // Startup synchronization is best-effort and must not block local data.
-  } finally {
-    await bridge?.shutdown();
   }
 }
 
@@ -149,6 +56,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onReauthenticationRequired,
     this.onExit,
     this.clearBrowserSession,
+    this.runtime,
     this.nativeGateway,
     this.nativeGatewayFactory,
     this.createNativeGateway = true,
@@ -164,19 +72,21 @@ class SyncPageLoader extends StatefulWidget {
   final VoidCallback? onExit;
   final Future<void> Function()? clearBrowserSession;
 
+  /// The app-owned runtime. When present, this loader borrows its gateway and
+  /// surface and does not create or dispose any browser resource.
+  final MinimalJwRuntime? runtime;
+
   /// Optional gateway seam for tests and hosts that already own the native
   /// gateway. The loader still owns the supplied gateway for its lifetime.
-  final NativeJwGateway? nativeGateway;
+  final BridgeGateway? nativeGateway;
 
   /// Optional asynchronous gateway seam for lifecycle tests and hosts that
   /// defer gateway creation. The loader owns the resolved gateway.
-  final Future<NativeJwGateway> Function()? nativeGatewayFactory;
+  final Future<BridgeGateway> Function()? nativeGatewayFactory;
 
-  /// Whether this loader should create a native WebView environment during
-  /// dependency initialization. Reauthentication is deliberately a
-  /// credential/data-reset step and sets this to false, so no intermediary
-  /// browser session exists before the canonical reset; the next `/sync`
-  /// loader creates the only fresh environment after reset completes.
+  /// Legacy compatibility flag. App routes pass [runtime] and therefore do
+  /// not create a native environment here; hosts using this loader directly
+  /// must inject [nativeGateway] or [nativeGatewayFactory].
   final bool createNativeGateway;
 
   /// Optional schema-loading seam for lifecycle tests that need dependency
@@ -190,9 +100,9 @@ class SyncPageLoader extends StatefulWidget {
 class _SyncPageLoaderState extends State<SyncPageLoader> {
   late final Future<_SyncDependencies> dependencies;
   BridgeGateway? bridge;
-  NativeJwGateway? nativeGateway;
-  NativeJwGateway? _resolvedNativeGateway;
-  Future<NativeJwGateway>? _nativeGatewayCreation;
+  BridgeGateway? nativeGateway;
+  BridgeGateway? _resolvedNativeGateway;
+  Future<BridgeGateway>? _nativeGatewayCreation;
   StreamSubscription<String>? _diagnosticSub;
   bool _disposed = false;
   final Map<BridgeGateway, Future<void>> _shutdownFutures =
@@ -210,38 +120,43 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   @override
   void initState() {
     super.initState();
+    if (widget.runtime != null) {
+      // Runtime resources belong to the app composition owner. This page only
+      // borrows the already-selected source gateway and visible surface.
+      dependencies = _build();
+      return;
+    }
     // Register the gateway synchronously, before _build can cross its first
     // await. This makes dispose() the owner even when dependency loading is
     // still in flight. A deferred factory is joined below and handled with
     // the same disposed/once-only ownership path.
-    if (!kUsePythonBridgeFallback) {
-      final supplied = widget.nativeGateway;
-      if (supplied != null) {
-        nativeGateway = supplied;
-      } else if (widget.createNativeGateway) {
-        final factory = widget.nativeGatewayFactory;
-        if (factory != null) {
-          final creation = Future<NativeJwGateway>.sync(factory);
-          _nativeGatewayCreation = creation;
-          // _build may still be waiting on an unrelated dependency when the
-          // State is unmounted. Observe this future independently so a
-          // gateway returned later is still closed, even if _build never
-          // reaches its await site again.
-          unawaited(
-            creation.then<void>((gateway) {
-              if (_disposed) {
-                _observeShutdown(_shutdownOnce(gateway));
-                return;
-              }
-              // Claim the result immediately, even if _build is awaiting a
-              // later dependency. Dispose must see this ownership window.
-              _resolvedNativeGateway = gateway;
-              nativeGateway ??= gateway;
-            }, onError: (Object error, StackTrace stack) {}),
-          );
-        } else {
-          nativeGateway = _createNativeJwGateway();
-        }
+    final supplied = widget.nativeGateway;
+    if (supplied != null) {
+      nativeGateway = supplied;
+    } else if (widget.createNativeGateway) {
+      final factory = widget.nativeGatewayFactory;
+      if (factory != null) {
+        final creation = Future<BridgeGateway>.sync(factory);
+        _nativeGatewayCreation = creation;
+        // _build may still be waiting on an unrelated dependency when the
+        // State is unmounted. Observe this future independently so a
+        // gateway returned later is still closed, even if _build never
+        // reaches its await site again.
+        unawaited(
+          creation.then<void>((gateway) {
+            if (_disposed) {
+              _observeShutdown(_shutdownOnce(gateway));
+              return;
+            }
+            // Claim the result immediately, even if _build is awaiting a
+            // later dependency. Dispose must see this ownership window.
+            _resolvedNativeGateway = gateway;
+            nativeGateway ??= gateway;
+          }, onError: (Object error, StackTrace stack) {}),
+        );
+      } else {
+        // A page without an app-owned runtime must receive an explicit
+        // gateway from its host; route composition never creates one here.
       }
     }
     dependencies = _build();
@@ -276,6 +191,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   }
 
   Future<void> _shutdownOwnedForReplacement() {
+    if (widget.runtime != null) return Future<void>.value();
     final existing = _ownedShutdown;
     if (existing != null) return existing;
     _disposed = true;
@@ -309,6 +225,46 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   }
 
   Future<_SyncDependencies> _build() async {
+    final runtime = widget.runtime;
+    if (runtime != null) {
+      _ensureAlive();
+      final accounts = AccountService(
+        database: widget.database,
+        protector: defaultCredentialProtector(),
+        clearBrowserSession: widget.clearBrowserSession,
+      );
+      final sourceGateway = runtime.gateway;
+      final diagnosticReader = sourceGateway is SourceJobDiagnosticReader
+          ? sourceGateway as SourceJobDiagnosticReader
+          : null;
+      if (diagnosticReader != null && diagnostics != null) {
+        _diagnosticSub = diagnosticReader.diagnostics.listen((event) {
+          debugPrint('[jw-source] $event');
+          final notifier = diagnostics;
+          if (notifier == null || !mounted) return;
+          final current = notifier.value;
+          final next = <String>[...current, event];
+          if (next.length > 80) {
+            next.removeRange(0, next.length - 80);
+          }
+          notifier.value = next;
+        });
+      }
+      final importReader = sourceGateway is SourceJobImportReader
+          ? sourceGateway as SourceJobImportReader
+          : null;
+      final importer = importReader?.importBundle;
+      if (importer == null) {
+        throw StateError('source gateway import is unavailable');
+      }
+      return _SyncDependencies(
+        accounts: accounts,
+        gateway: sourceGateway,
+        importBundle: importer,
+        surfaceHost: runtime.surfaceHost,
+        diagnostics: diagnostics,
+      );
+    }
     final schemaLoader = widget.schemaLoader;
     final schemaText = schemaLoader == null
         ? await rootBundle.loadString(
@@ -330,41 +286,39 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       ),
       reminderReconciler: widget.reminderReconciler,
     );
-    // M7: native WebView2 is the default channel; the Python Bridge remains
-    // reachable via the kUsePythonBridgeFallback switch (one-source-one-
-    // channel — never both at once, per red line). The gateway owns exactly
-    // one WebView2 environment and receives an account-bound UDF resolver;
-    // multiple gateways would multiply initializeEnvironment calls — the
-    // known AppHang trigger.
-    final fallback = kUsePythonBridgeFallback;
-    NativeJwGateway? gw;
-    if (!fallback) {
-      gw = nativeGateway ?? _resolvedNativeGateway;
-      if (gw == null && widget.createNativeGateway) {
-        final creation = _nativeGatewayCreation;
-        if (creation != null) {
-          gw = await creation;
-          // A factory may complete after the State has unmounted. Do not
-          // assign or use that gateway through the disposed State; it is
-          // still ours to shut down exactly once.
-          if (_disposed) {
-            _observeShutdown(_shutdownOnce(gw));
-            throw StateError('sync page loader is disposed');
-          }
-          nativeGateway = gw;
-        } else {
-          // This is defensive for an unexpected re-entry; initState normally
-          // registers the default gateway before _build starts.
-          _ensureAlive();
-          gw = _createNativeJwGateway();
-          nativeGateway = gw;
+    // Direct/legacy hosts may still inject one already-selected bridge or
+    // defer that same gateway through [nativeGatewayFactory]. Production
+    // routes provide [runtime]; bridge selection (including the explicit
+    // Python fallback) lives only in app composition and is never started by
+    // this presentation layer.
+    BridgeGateway? gw = nativeGateway ?? _resolvedNativeGateway;
+    if (gw == null && widget.createNativeGateway) {
+      final creation = _nativeGatewayCreation;
+      if (creation != null) {
+        gw = await creation;
+        // A factory may complete after the State has unmounted. Do not
+        // assign or use that gateway through the disposed State; it is
+        // still ours to shut down exactly once.
+        if (_disposed) {
+          _observeShutdown(_shutdownOnce(gw));
+          throw StateError('sync page loader is disposed');
         }
+        nativeGateway = gw;
+      } else {
+        // This is defensive for an unexpected re-entry; initState normally
+        // registers the default gateway before _build starts.
+        _ensureAlive();
+        // No page-owned default exists. A direct legacy host must supply a
+        // gateway/factory; app routes always provide [runtime].
       }
-      _ensureAlive();
     }
+    _ensureAlive();
     final activeNativeGateway = gw;
-    if (activeNativeGateway != null && diagnostics != null) {
-      _diagnosticSub = activeNativeGateway.diagnostics.listen((event) {
+    final diagnosticReader = activeNativeGateway is SourceJobDiagnosticReader
+        ? activeNativeGateway as SourceJobDiagnosticReader
+        : null;
+    if (diagnosticReader != null && diagnostics != null) {
+      _diagnosticSub = diagnosticReader.diagnostics.listen((event) {
         debugPrint('[jw-native] $event');
         final notifier = diagnostics;
         if (notifier == null || !mounted) return;
@@ -385,36 +339,13 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           _ensureAlive();
           return current;
         }
-        if (!fallback) {
-          final native = activeNativeGateway;
-          if (native == null) {
-            throw StateError('native gateway is unavailable');
-          }
-          _ensureAlive();
-          bridge = native;
-          return native;
+        final native = activeNativeGateway;
+        if (native == null) {
+          throw StateError('source gateway is unavailable');
         }
-        final account = await accounts.activeAccount();
         _ensureAlive();
-        final savedExecutable = account == null
-            ? null
-            : await SettingsService(
-                database: widget.database,
-                accounts: accounts,
-                accountId: account.id,
-              ).pythonPath();
-        _ensureAlive();
-        final executable = await PythonLocator().locate(
-          savedExecutable: savedExecutable,
-        );
-        _ensureAlive();
-        final started = await BridgeClient.start(pythonExecutable: executable);
-        if (_disposed) {
-          _observeShutdown(_shutdownOnce(started));
-          throw StateError('sync page loader is disposed');
-        }
-        bridge = started;
-        return started;
+        bridge = native;
+        return native;
       },
       importBundle: importer.importBytes,
     );
@@ -423,8 +354,12 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
     return _SyncDependencies(
       accounts: accounts,
       coordinator: coordinator,
-      nativeGateway: fallback ? null : activeNativeGateway,
-      diagnostics: fallback ? null : diagnostics,
+      importBundle: importer.importBytes,
+      nativeGateway: activeNativeGateway,
+      surfaceHost: activeNativeGateway is JwWebViewSurfaceProvider
+          ? (activeNativeGateway as JwWebViewSurfaceProvider).surfaceHost
+          : null,
+      diagnostics: diagnostics,
     );
   }
 
@@ -444,6 +379,13 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
   void _requestReauthentication(String accountId) {
     if (_replacementRequested || _disposed) return;
     _replacementRequested = true;
+    if (widget.runtime != null) {
+      // The app-owned runtime is intentionally reused by the reauth route;
+      // the reauth page shuts it down only after its confirmed destructive
+      // reset, immediately before the owner installs a replacement.
+      widget.onReauthenticationRequired?.call(accountId);
+      return;
+    }
     unawaited(_shutdownAndRouteForReauthentication(accountId));
   }
 
@@ -476,7 +418,10 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
         return SyncPage(
           accounts: value.accounts,
           coordinator: value.coordinator,
+          gateway: value.gateway,
           nativeGateway: value.nativeGateway,
+          surfaceHost: value.surfaceHost,
+          importBundle: value.importBundle,
           diagnostics: value.diagnostics,
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
@@ -493,22 +438,31 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
 class _SyncDependencies {
   const _SyncDependencies({
     required this.accounts,
-    required this.coordinator,
+    this.coordinator,
+    this.gateway,
+    this.importBundle,
     this.nativeGateway,
+    this.surfaceHost,
     this.diagnostics,
   });
 
   final AccountService accounts;
-  final SyncCoordinator coordinator;
-  final NativeJwGateway? nativeGateway;
+  final SyncCoordinator? coordinator;
+  final SourceJobGateway? gateway;
+  final BundleImport? importBundle;
+  final BridgeGateway? nativeGateway;
+  final JwWebViewSurfaceHost? surfaceHost;
   final ValueNotifier<List<String>>? diagnostics;
 }
 
 class SyncPage extends StatefulWidget {
   const SyncPage({
     required this.accounts,
-    required this.coordinator,
+    this.coordinator,
+    this.gateway,
     this.nativeGateway,
+    this.surfaceHost,
+    this.importBundle,
     this.diagnostics,
     this.filePicker = const SystemImportFilePicker(),
     this.reauthenticateAccountId,
@@ -519,8 +473,14 @@ class SyncPage extends StatefulWidget {
   });
 
   final AccountService accounts;
-  final SyncCoordinator coordinator;
-  final NativeJwGateway? nativeGateway;
+
+  /// Legacy coordinator seam retained for focused tests/embedded hosts. App
+  /// routes pass [gateway] instead so presentation never owns a coordinator.
+  final SyncCoordinator? coordinator;
+  final SourceJobGateway? gateway;
+  final BridgeGateway? nativeGateway;
+  final JwWebViewSurfaceHost? surfaceHost;
+  final BundleImport? importBundle;
   final ValueNotifier<List<String>>? diagnostics;
   final ImportFilePicker filePicker;
   final String? reauthenticateAccountId;
@@ -584,7 +544,13 @@ class _SyncPageState extends State<SyncPage> {
     }
     final loaded = <SyncSource, SyncSourceState>{};
     for (final source in SyncSource.values) {
-      loaded[source] = await widget.coordinator.stateFor(source, id);
+      final gateway = widget.gateway;
+      final stateReader = gateway is SourceJobStateReader
+          ? gateway as SourceJobStateReader
+          : null;
+      loaded[source] = stateReader != null
+          ? await stateReader.stateFor(id)
+          : await widget.coordinator!.stateFor(source, id);
     }
     if (mounted) setState(() => states = loaded);
   }
@@ -593,11 +559,14 @@ class _SyncPageState extends State<SyncPage> {
     final id = accountId;
     if (id == null || busy) return;
     setState(() => busy = true);
-    final outcome = await widget.coordinator.sync(
-      source,
-      trigger: trigger,
-      accountId: id,
-    );
+    final gateway = widget.gateway;
+    final outcome = gateway != null
+        ? await gateway.sync(accountId: id, trigger: trigger)
+        : await widget.coordinator!.sync(
+            source,
+            trigger: trigger,
+            accountId: id,
+          );
     await _handle(outcome);
     if (mounted) setState(() => busy = false);
     await _refresh();
@@ -607,13 +576,36 @@ class _SyncPageState extends State<SyncPage> {
     final id = accountId;
     if (id == null || busy) return;
     setState(() => busy = true);
-    await widget.coordinator.syncAll(
-      trigger: trigger,
-      accountId: id,
-      resolveUserAction: trigger == SyncTrigger.automatic
-          ? (_) async => false
-          : _confirmInteractiveLogin,
-    );
+    final gateway = widget.gateway;
+    if (gateway != null) {
+      var outcome = await gateway.sync(accountId: id, trigger: trigger);
+      if (outcome is SyncNeedsUserAction) {
+        final confirmed = trigger == SyncTrigger.automatic
+            ? false
+            : await _confirmInteractiveLogin(outcome);
+        final InteractiveSourceJobGateway? interactive =
+            gateway is InteractiveSourceJobGateway
+            ? gateway as InteractiveSourceJobGateway
+            : null;
+        outcome = interactive == null
+            ? const SyncFailed(SyncSource.jw, code: 'sync_failed')
+            : await interactive.resumeInteractive(
+                outcome.jobId,
+                userConfirmed: confirmed,
+              );
+      }
+      // Keep the one-source page behavior identical to coordinator.syncAll;
+      // the gateway is the only UI-facing job entry point.
+      await _handle(outcome);
+    } else {
+      await widget.coordinator!.syncAll(
+        trigger: trigger,
+        accountId: id,
+        resolveUserAction: trigger == SyncTrigger.automatic
+            ? (_) async => false
+            : _confirmInteractiveLogin,
+      );
+    }
     if (mounted) setState(() => busy = false);
     await _refresh();
   }
@@ -621,7 +613,14 @@ class _SyncPageState extends State<SyncPage> {
   Future<SyncOutcome> _handle(SyncOutcome outcome) async {
     if (outcome is! SyncNeedsUserAction || !mounted) return outcome;
     final confirmed = await _confirmInteractiveLogin(outcome);
-    return widget.coordinator.resumeInteractive(
+    final gateway = widget.gateway;
+    if (gateway is InteractiveSourceJobGateway) {
+      return (gateway as InteractiveSourceJobGateway).resumeInteractive(
+        outcome.jobId,
+        userConfirmed: confirmed,
+      );
+    }
+    return widget.coordinator!.resumeInteractive(
       outcome.jobId,
       userConfirmed: confirmed,
     );
@@ -657,14 +656,25 @@ class _SyncPageState extends State<SyncPage> {
     final username = usernameController.text.trim();
     if (username.isEmpty || busy) return;
     setState(() => busy = true);
-    var outcome = await widget.coordinator.firstLoginSync(
-      SyncSource.jw,
-      username: username,
-      password: passwordController.text.isEmpty
-          ? null
-          : passwordController.text,
-      savePassword: savePassword,
-    );
+    final gateway = widget.gateway;
+    var outcome = gateway != null
+        ? await gateway.firstLogin(
+            FirstLoginCommand(
+              username: username,
+              password: passwordController.text.isEmpty
+                  ? null
+                  : passwordController.text,
+              savePassword: savePassword,
+            ),
+          )
+        : await widget.coordinator!.firstLoginSync(
+            SyncSource.jw,
+            username: username,
+            password: passwordController.text.isEmpty
+                ? null
+                : passwordController.text,
+            savePassword: savePassword,
+          );
     outcome = await _handle(outcome);
     passwordController.clear();
     if (!mounted) return;
@@ -718,7 +728,8 @@ class _SyncPageState extends State<SyncPage> {
       // loader shutdown before reaching this route. This fresh route still
       // owns a newly-created gateway, so shut it down before deleting the
       // account/UDF and before routing to a new first-login loader.
-      await widget.nativeGateway?.shutdown();
+      await widget.gateway?.shutdown();
+      if (widget.gateway == null) await widget.nativeGateway?.shutdown();
       final settings = SettingsService(
         database: widget.accounts.database,
         accounts: widget.accounts,
@@ -784,11 +795,16 @@ class _SyncPageState extends State<SyncPage> {
       false;
 
   Future<void> _importFile() async {
+    final importBundle =
+        widget.importBundle ??
+        (widget.gateway is SourceJobImportReader
+            ? (widget.gateway! as SourceJobImportReader).importBundle
+            : widget.coordinator!.importBundle);
     final action = FileImportAction(
       accounts: widget.accounts,
       picker: widget.filePicker,
       confirmTarget: _confirmTarget,
-      importBundle: widget.coordinator.importBundle,
+      importBundle: importBundle,
     );
     try {
       final outcome = await action.run();
@@ -869,14 +885,18 @@ class _SyncPageState extends State<SyncPage> {
       ),
       body: Column(
         children: [
-          if (widget.nativeGateway != null)
+          if (widget.surfaceHost != null ||
+              widget.nativeGateway is JwWebViewSurfaceProvider)
             Offstage(
               key: const Key('jw-webview-surface-visibility'),
               offstage: !busy,
               child: KeyedSubtree(
                 key: const Key('jw-webview-surface-host'),
                 child: _buildWebViewSurface(
-                  widget.nativeGateway!.surfaceHost.widget,
+                  (widget.surfaceHost ??
+                          (widget.nativeGateway! as JwWebViewSurfaceProvider)
+                              .surfaceHost)
+                      .widget,
                 ),
               ),
             ),
