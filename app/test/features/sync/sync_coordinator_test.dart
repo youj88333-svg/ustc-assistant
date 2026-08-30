@@ -74,6 +74,17 @@ class FakeBridge implements BridgeGateway {
   Future<void> shutdown() async => shutdowns++;
 }
 
+final class _AdmissionFakeBridge extends FakeBridge
+    implements BridgeAdmissionCancellation {
+  var admissionCancelCalls = 0;
+
+  @override
+  Future<void> cancelAdmission() async {
+    admissionCancelCalls++;
+    await shutdown();
+  }
+}
+
 class AwaitingEventBridge extends FakeBridge {
   final secondPollStarted = Completer<void>();
   final terminalPoll = Completer<BridgeJobPoll>();
@@ -192,6 +203,46 @@ void main() {
     expect(outcome, isA<SyncCancelled>());
     expect(importCalls, 0);
   });
+
+  test(
+    'cancelCurrent joins bridge admission and cleans a late bridge before release',
+    () async {
+      final protector = CountingProtector();
+      final (database, accounts, accountId) = await fixture(
+        protector: protector,
+      );
+      addTearDown(database.close);
+      final bridgeReady = Completer<BridgeGateway>();
+      final factoryStarted = Completer<void>();
+      final bridge = _AdmissionFakeBridge();
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () {
+          if (!factoryStarted.isCompleted) factoryStarted.complete();
+          return bridgeReady.future;
+        },
+        now: () => 100,
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            throw StateError('must not import'),
+      );
+
+      final syncing = service.sync(
+        SyncSource.jw,
+        trigger: SyncTrigger.manual,
+        accountId: accountId,
+      );
+      await factoryStarted.future;
+      final cancellation = service.cancelCurrent();
+      bridgeReady.complete(bridge);
+
+      expect(await syncing, isA<SyncCancelled>());
+      await cancellation;
+      expect(bridge.admissionCancelCalls, 1);
+      expect(bridge.shutdowns, 1);
+      expect(bridge.starts, isEmpty);
+    },
+  );
 
   test('coordinator waits on the gateway without a fixed-delay spin', () async {
     final protector = CountingProtector();

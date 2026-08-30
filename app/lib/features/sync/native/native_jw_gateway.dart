@@ -34,6 +34,7 @@ import '../data/bridge_client.dart'
         BridgeJobPoll,
         BridgeProtocolError,
         BridgeSemesterCapability,
+        BridgeAdmissionCancellation,
         BridgeGateway;
 import '../domain/sync_state.dart' show SyncSource;
 import 'jw_collector.dart';
@@ -69,6 +70,7 @@ typedef JwCollectorFactory = JwCollector Function(String jobId);
 class NativeJwGateway
     implements
         BridgeGateway,
+        BridgeAdmissionCancellation,
         SourceJobSessionOwner,
         SourceJobDiagnosticReader,
         JwWebViewSurfaceProvider {
@@ -166,6 +168,7 @@ class NativeJwGateway
   String? _activeJobId;
   bool _startInFlight = false;
   Completer<void>? _startCompletion;
+  bool _admissionCancelRequested = false;
   bool _shutdown = false;
 
   static const _pollWait = Duration(milliseconds: 250);
@@ -224,9 +227,11 @@ class NativeJwGateway
         final controller = factory != null
             ? await factory()
             : await _createProductionController();
-        if (_shutdown) {
+        if (_shutdown || _admissionCancelRequested) {
           await _disposeControllerAfterShutdown(controller);
-          throw StateError('gateway is shut down');
+          throw StateError(
+            _shutdown ? 'gateway is shut down' : 'native admission cancelled',
+          );
         }
         // Store first so the host and shutdown always observe the exact
         // controller whose environment was initialized.
@@ -304,6 +309,12 @@ class NativeJwGateway
       await handle.close();
       throw StateError('gateway is shut down');
     }
+    if (_admissionCancelRequested) {
+      // The admin owns the handle even though this gateway has not published
+      // it yet. Close this late result before rejecting the admission.
+      await handle.close();
+      throw StateError('native admission cancelled');
+    }
     _sessionHandle = handle;
     final page = _SessionOwnedJwWebPage(handle.page);
     _sessionPage = page;
@@ -332,6 +343,10 @@ class NativeJwGateway
     if (_startInFlight || _activeJobId != null) {
       throw const BridgeProtocolError(bridgeBusyCode);
     }
+    if (_admissionCancelRequested) {
+      _admissionCancelRequested = false;
+      throw StateError('native admission cancelled');
+    }
     _startInFlight = true;
     final startCompletion = Completer<void>();
     _startCompletion = startCompletion;
@@ -349,6 +364,9 @@ class NativeJwGateway
       final createdJobId = 'native:${DateTime.now().microsecondsSinceEpoch}';
       jobId = createdJobId;
       final adapter = await _pageForAccount(accountId);
+      if (_admissionCancelRequested) {
+        throw StateError('native admission cancelled');
+      }
 
       final collector =
           _collectorFactory?.call(createdJobId) ??
@@ -486,6 +504,7 @@ class NativeJwGateway
     } finally {
       _startInFlight = false;
       _startCompletion = null;
+      _admissionCancelRequested = false;
       if (!startCompletion.isCompleted) startCompletion.complete();
     }
   }
@@ -598,10 +617,23 @@ class NativeJwGateway
   }
 
   @override
+  Future<void> cancelAdmission() async {
+    _admissionCancelRequested = true;
+    final completion = _startCompletion;
+    if (completion != null) {
+      await completion.future;
+    } else {
+      // No start is awaiting a resource. Do not poison a future admission.
+      _admissionCancelRequested = false;
+    }
+  }
+
+  @override
   Future<void> shutdown() async {
     final existing = _shutdownFuture;
     if (existing != null) return existing;
     _shutdown = true;
+    _admissionCancelRequested = true;
     final future = _shutdownImpl();
     _shutdownFuture = future;
     return future;

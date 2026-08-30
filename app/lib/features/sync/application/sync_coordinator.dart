@@ -73,6 +73,58 @@ class SyncCoordinator {
   final Map<String, _PausedSync> _paused = {};
   _CurrentSyncJob? _currentJob;
   Completer<void>? _currentSettlement;
+  bool _cancelRequested = false;
+  BridgeGateway? _admissionBridge;
+  Completer<void>? _admissionSettlement;
+  Future<void>? _cancelFuture;
+  bool _admissionCancellationIssued = false;
+  String? _cancelIssuedJobId;
+
+  Completer<void> _beginAdmission() {
+    _cancelRequested = false;
+    _admissionBridge = null;
+    _admissionCancellationIssued = false;
+    final admission = Completer<void>();
+    _admissionSettlement = admission;
+    return admission;
+  }
+
+  void _completeAdmission([Completer<void>? knownAdmission]) {
+    final admission = knownAdmission ?? _admissionSettlement;
+    if (admission == null ||
+        (_admissionSettlement != null &&
+            !identical(_admissionSettlement, admission))) {
+      return;
+    }
+    if (!admission.isCompleted) admission.complete();
+    _admissionSettlement = null;
+    _admissionBridge = null;
+  }
+
+  Future<void> _cancelBridgeAdmission(BridgeGateway bridge) async {
+    if (_admissionCancellationIssued) return;
+    _admissionCancellationIssued = true;
+    if (bridge is BridgeAdmissionCancellation) {
+      await (bridge as BridgeAdmissionCancellation).cancelAdmission();
+      return;
+    }
+    // A bridge without the optional admission seam still has an owned
+    // process/session. Shutdown is its only safe way to interrupt a
+    // capabilities/start request that has not yielded a job id yet.
+    await bridge.shutdown();
+  }
+
+  Future<void> _cancelBridgeJob(_CurrentSyncJob current) async {
+    if (_cancelIssuedJobId == current.jobId) return;
+    _cancelIssuedJobId = current.jobId;
+    await current.bridge.cancel(current.jobId);
+  }
+
+  Future<bool> _cancelIfRequested(BridgeGateway bridge) async {
+    if (!_cancelRequested) return false;
+    await _cancelBridgeAdmission(bridge);
+    return true;
+  }
 
   Future<bool> isAutomaticDue(SyncSource source, String accountId) async {
     final config = await _config(source, accountId);
@@ -113,12 +165,23 @@ class SyncCoordinator {
       return SyncFailed(source, code: 'reauthentication_required');
     }
     _busy = true;
+    final admission = _beginAdmission();
+    String? runId;
     try {
       final bridge = await bridgeFactory();
+      _admissionBridge = bridge;
+      if (await _cancelIfRequested(bridge)) return SyncCancelled(source);
       final capabilities = await bridge.capabilities();
+      if (await _cancelIfRequested(bridge)) return SyncCancelled(source);
       await _persistCapabilities(account.id, capabilities);
+      if (await _cancelIfRequested(bridge)) return SyncCancelled(source);
       final username = await accounts.usernameForSync(account.id);
-      final runId = await _startRun(account.id, source, trigger);
+      if (await _cancelIfRequested(bridge)) return SyncCancelled(source);
+      runId = await _startRun(account.id, source, trigger);
+      if (await _cancelIfRequested(bridge)) {
+        await _finishRun(runId, 'cancelled', 'cancelled');
+        return SyncCancelled(source);
+      }
       final job = await bridge.startCollection(
         source: source,
         accountId: account.id,
@@ -128,6 +191,7 @@ class SyncCoordinator {
       final settlement = Completer<void>();
       _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
       _currentSettlement = settlement;
+      _completeAdmission(admission);
       SyncOutcome? outcome;
       try {
         outcome = await _consume(
@@ -145,19 +209,32 @@ class SyncCoordinator {
         }
       }
     } on AccountVerificationError catch (error) {
+      if (_cancelRequested) {
+        if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
+        return SyncCancelled(source);
+      }
       final code = error.code == 'credentials_not_found'
           ? 'reauthentication_required'
           : error.code;
       await recordFailure(source, account.id, code: code);
       return SyncFailed(source, code: code);
     } on BridgeProtocolError catch (error) {
+      if (_cancelRequested) {
+        if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
+        return SyncCancelled(source);
+      }
       final code = error.code == 'busy' ? 'bridge_busy' : error.code;
       await recordFailure(source, account.id, code: code);
       return SyncFailed(source, code: code);
     } on Object {
+      if (_cancelRequested) {
+        if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
+        return SyncCancelled(source);
+      }
       await recordFailure(source, account.id, code: 'sync_failed');
       return SyncFailed(source, code: 'sync_failed');
     } finally {
+      _completeAdmission(admission);
       _busy = false;
     }
   }
@@ -191,6 +268,7 @@ class SyncCoordinator {
   }) async {
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
+    final admission = _beginAdmission();
     ProvisionalAccount? provisional;
     try {
       final existingId = await accounts.accountIdFor(username);
@@ -201,9 +279,26 @@ class SyncCoordinator {
         savePassword: savePassword,
         provisional: provisional,
       );
+      if (_cancelRequested) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final bridge = await bridgeFactory();
+      _admissionBridge = bridge;
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final capabilities = await bridge.capabilities();
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final runId = 'provisional:${_uuid.v4()}';
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final job = await bridge.startCollection(
         source: source,
         accountId: provisional.accountId,
@@ -213,6 +308,7 @@ class SyncCoordinator {
       final settlement = Completer<void>();
       _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
       _currentSettlement = settlement;
+      _completeAdmission(admission);
       try {
         return await _consume(
           bridge: bridge,
@@ -232,8 +328,10 @@ class SyncCoordinator {
       }
     } on Object {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
+      if (_cancelRequested) return SyncCancelled(source);
       return SyncFailed(source, code: 'first_login_failed');
     } finally {
+      _completeAdmission(admission);
       _busy = false;
     }
   }
@@ -248,6 +346,7 @@ class SyncCoordinator {
   }) async {
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
+    final admission = _beginAdmission();
     ProvisionalAccount? provisional;
     try {
       provisional = await accounts.stageReauthentication(
@@ -256,9 +355,26 @@ class SyncCoordinator {
         password: password,
         savePassword: savePassword,
       );
+      if (_cancelRequested) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final bridge = await bridgeFactory();
+      _admissionBridge = bridge;
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final capabilities = await bridge.capabilities();
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final runId = 'provisional:${_uuid.v4()}';
+      if (await _cancelIfRequested(bridge)) {
+        accounts.cancelFirstLogin(provisional);
+        return SyncCancelled(source);
+      }
       final job = await bridge.startCollection(
         source: source,
         accountId: provisional.accountId,
@@ -268,6 +384,7 @@ class SyncCoordinator {
       final settlement = Completer<void>();
       _currentJob = _CurrentSyncJob(bridge: bridge, jobId: job.id);
       _currentSettlement = settlement;
+      _completeAdmission(admission);
       try {
         return await _consume(
           bridge: bridge,
@@ -286,15 +403,19 @@ class SyncCoordinator {
       }
     } on AccountVerificationError catch (error) {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
+      if (_cancelRequested) return SyncCancelled(source);
       return SyncFailed(source, code: error.code);
     } on BridgeProtocolError catch (error) {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
+      if (_cancelRequested) return SyncCancelled(source);
       final code = error.code == 'busy' ? 'bridge_busy' : error.code;
       return SyncFailed(source, code: code);
     } on Object {
       if (provisional != null) accounts.cancelFirstLogin(provisional);
+      if (_cancelRequested) return SyncCancelled(source);
       return SyncFailed(source, code: 'reauthentication_failed');
     } finally {
+      _completeAdmission(admission);
       _busy = false;
     }
   }
@@ -370,34 +491,74 @@ class SyncCoordinator {
   /// Cancels the one active or paused coordinator job and waits for its
   /// terminal poll/cleanup settlement.  SourceJobGateway uses this method so
   /// UI cancellation never releases its arbiter lease early.
-  Future<void> cancelCurrent() async {
-    final current = _currentJob;
-    if (current == null) return;
-    final paused = _paused[current.jobId];
-    if (paused != null) {
-      await resumeInteractive(current.jobId, userConfirmed: false);
-      return;
-    }
+  Future<void> cancelCurrent() {
+    final existing = _cancelFuture;
+    if (existing != null) return existing;
+    final operation = _cancelCurrentImpl();
+    _cancelFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {
+          if (identical(_cancelFuture, operation)) _cancelFuture = null;
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_cancelFuture, operation)) _cancelFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
 
+  Future<void> _cancelCurrentImpl() async {
+    final admission = _admissionSettlement;
+    final admittedJob = _currentJob;
+    if (admission == null && admittedJob == null) return;
+
+    // Set this before the first await. Every admission checkpoint and the
+    // poll/import boundary then observes the same cancellation generation.
+    _cancelRequested = true;
     Object? firstError;
     StackTrace? firstStack;
-    try {
-      await current.bridge.cancel(current.jobId);
-    } on Object catch (error, stack) {
-      firstError = error;
-      firstStack = stack;
-    }
-    final settlement = _currentSettlement;
-    if (settlement != null && !settlement.isCompleted) {
+    Future<void> attempt(Future<void> Function() action) async {
       try {
-        await settlement.future.timeout(defaultLoginTimeout);
+        await action();
       } on Object catch (error, stack) {
         firstError ??= error;
         firstStack ??= stack;
       }
     }
-    if (_currentJob?.jobId == current.jobId) {
-      _completeCurrentSettlement(current.jobId);
+
+    // If the bridge has not yielded a job yet, cancel its whole admission
+    // operation. The late factory/controller/session result is then either
+    // explicitly cancelled or shut down by the bridge implementation.
+    if (admission != null) {
+      final bridge = _admissionBridge;
+      if (bridge != null) {
+        await attempt(() => _cancelBridgeAdmission(bridge));
+      }
+      await attempt(() => admission.future.timeout(defaultLoginTimeout));
+    }
+
+    // A start operation can return a job just as admission cancellation is
+    // settling. Re-read the current job after that handshake and cancel the
+    // exact late job before waiting for its terminal poll settlement.
+    final current = _currentJob;
+    if (current != null) {
+      final paused = _paused[current.jobId];
+      if (paused != null) {
+        await attempt(() async {
+          await resumeInteractive(current.jobId, userConfirmed: false);
+        });
+      } else {
+        await attempt(() => _cancelBridgeJob(current));
+      }
+      final settlement = _currentSettlement;
+      if (settlement != null && !settlement.isCompleted) {
+        await attempt(() => settlement.future.timeout(defaultLoginTimeout));
+      }
+      if (_currentJob?.jobId == current.jobId) {
+        _completeCurrentSettlement(current.jobId);
+      }
     }
     final error = firstError;
     if (error != null) {
@@ -416,6 +577,7 @@ class SyncCoordinator {
     }
     _currentJob = null;
     _currentSettlement = null;
+    _cancelIssuedJobId = null;
   }
 
   Future<SyncOutcome> _consume({
@@ -432,6 +594,9 @@ class SyncCoordinator {
   }) async {
     var cursor = sequence;
     while (true) {
+      if (_cancelRequested) {
+        await _cancelBridgeJob(_CurrentSyncJob(bridge: bridge, jobId: jobId));
+      }
       final BridgeJobPoll poll;
       try {
         poll = await bridge.poll(jobId, cursor);
@@ -439,6 +604,14 @@ class SyncCoordinator {
         if (pollProtocolErrorBehavior ==
             _PollProtocolErrorBehavior.rethrowToCaller) {
           rethrow;
+        }
+        if (_cancelRequested) {
+          if (provisional != null) {
+            accounts.cancelFirstLogin(provisional);
+          } else {
+            await _finishRun(runId, 'cancelled', 'cancelled');
+          }
+          return SyncCancelled(source);
         }
         // A concurrent shutdown/cancel can invalidate the job between
         // iterations; that is a failed run, never an unhandled exception.
@@ -454,6 +627,27 @@ class SyncCoordinator {
         return SyncFailed(source, code: error.code);
       }
       cursor = poll.nextSequence;
+      if (_cancelRequested) {
+        // Do not pause or import a generation after its cancellation was
+        // requested. A non-terminal poll must continue until the bridge emits
+        // its cancellation terminal; an already-terminal stale success has
+        // nevertheless settled the resource and is mapped to cancellation.
+        await _cancelBridgeJob(_CurrentSyncJob(bridge: bridge, jobId: jobId));
+        final terminalCode = poll.errorCode;
+        final terminalCancelled =
+            poll.lastPhase == 'cancelled' || terminalCode == 'cancelled';
+        if (!poll.terminal || !terminalCancelled) {
+          if (poll.terminal) {
+            if (provisional != null) {
+              accounts.cancelFirstLogin(provisional);
+            } else {
+              await _finishRun(runId, 'cancelled', 'cancelled');
+            }
+            return SyncCancelled(source);
+          }
+          continue;
+        }
+      }
       if (poll.lastPhase == 'needs_user_login') {
         _paused[jobId] = _PausedSync(
           source: source,

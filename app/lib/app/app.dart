@@ -41,6 +41,7 @@ class UstcAssistantApp extends StatefulWidget {
   const UstcAssistantApp({
     this.websiteLauncher = const UrlLauncherOfficialWebsiteLauncher(),
     this.database,
+    this.databaseFactory,
     this.clearBrowserSession,
     this.runtimeLoader,
     this.runtimeDiagnosticSink,
@@ -49,26 +50,31 @@ class UstcAssistantApp extends StatefulWidget {
 
   final OfficialWebsiteLauncher websiteLauncher;
   final AppDatabase? database;
+  final AppDatabase Function()? databaseFactory;
   final Future<void> Function()? clearBrowserSession;
   final Future<MinimalJwRuntime> Function()? runtimeLoader;
   final void Function(String)? runtimeDiagnosticSink;
 
   @override
-  State<UstcAssistantApp> createState() => _UstcAssistantAppState();
+  UstcAssistantAppState createState() => UstcAssistantAppState();
 }
 
-class _UstcAssistantAppState extends State<UstcAssistantApp> {
+class UstcAssistantAppState extends State<UstcAssistantApp> {
   late final bool ownsDatabase;
   late final AppDatabase database;
   late final GoRouter router;
   late final WindowsReminderReconciler reminderReconciler;
   late final MinimalJwRuntimeOwner runtimeOwner;
+  Future<void>? _exitFuture;
 
   @override
   void initState() {
     super.initState();
     ownsDatabase = widget.database == null;
-    database = widget.database ?? AppDatabase(openAppDatabase());
+    database =
+        widget.database ??
+        widget.databaseFactory?.call() ??
+        AppDatabase(openAppDatabase());
     reminderReconciler = WindowsReminderReconciler(
       database: database,
       reminderService: ReminderService(database: database),
@@ -183,18 +189,55 @@ class _UstcAssistantAppState extends State<UstcAssistantApp> {
     );
   }
 
+  /// Awaitable process-exit/pre-dispose boundary. Runtime teardown must settle
+  /// before the owned database closes so an active cancellation/import cannot
+  /// continue using a closed executor. Repeated callers share one Future.
+  Future<void> prepareForExit() {
+    final existing = _exitFuture;
+    if (existing != null) return existing;
+    final operation = _prepareForExit();
+    _exitFuture = operation;
+    return operation;
+  }
+
+  Future<void> _prepareForExit() async {
+    Object? firstError;
+    StackTrace? firstStack;
+    try {
+      await runtimeOwner.beginShutdown();
+    } on Object catch (_, stack) {
+      firstError = StateError('runtime_shutdown_failed');
+      firstStack = stack;
+      try {
+        widget.runtimeDiagnosticSink?.call('runtime_shutdown_failed');
+      } on Object {
+        // A diagnostic observer cannot alter exit ordering.
+      }
+    }
+    try {
+      await reminderReconciler.dispose();
+    } on Object catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+    }
+    if (ownsDatabase) {
+      try {
+        await database.close();
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    final error = firstError;
+    if (error != null) {
+      Error.throwWithStackTrace(error, firstStack ?? StackTrace.current);
+    }
+  }
+
   @override
   void dispose() {
     router.dispose();
-    unawaited(reminderReconciler.dispose());
-    unawaited(
-      runtimeOwner.beginShutdown().catchError((_) {
-        // Shutdown diagnostics contain only stable safe codes.  State.dispose
-        // cannot await, but the owner still exposes the same future to reset
-        // and process-exit callers.
-      }),
-    );
-    if (ownsDatabase) database.close();
+    unawaited(prepareForExit().catchError((_) {}));
     super.dispose();
   }
 

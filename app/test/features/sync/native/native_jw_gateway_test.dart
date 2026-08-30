@@ -550,6 +550,44 @@ void main() {
         expect(admin.handleCloseCalls, 1);
       },
     );
+
+    test(
+      'admission cancellation closes a session handle that opens late',
+      () async {
+        final controller = FakeJwWebviewController();
+        final adapter = JwWebViewAdapter(
+          controllerFactory: () async => controller,
+          initialController: controller,
+        );
+        await adapter.beginSubscriptions();
+        var closeCalls = 0;
+        final handle = _GatewaySessionHandle(
+          page: adapter,
+          onClose: () => closeCalls++,
+        );
+        final admin = _BlockingGatewaySessionAdmin(handle);
+        final gateway = NativeJwGateway(sessionAdmin: admin);
+
+        final start = gateway.startCollection(
+          source: SyncSource.jw,
+          accountId: 'account-a',
+          expectedUsername: 'PB00000000',
+          jwSemester: kDefaultJwSemester,
+        );
+        await Future<void>.microtask(() {});
+        expect(admin.openCalls, 1);
+
+        final cancellation = gateway.cancelAdmission();
+        await Future<void>.microtask(() {});
+        expect(admin.openGate.isCompleted, isFalse);
+
+        admin.openGate.complete(handle);
+        await expectLater(start, throwsA(anything));
+        await cancellation;
+        expect(closeCalls, 1);
+        await gateway.shutdown();
+      },
+    );
   });
 }
 
@@ -663,6 +701,33 @@ final class _GatewaySessionAdmin implements JwBrowserSessionAdmin {
   Future<void> shutdown() async {
     shutdownCalls++;
     await handle?.close();
+  }
+}
+
+final class _BlockingGatewaySessionAdmin implements JwBrowserSessionAdmin {
+  _BlockingGatewaySessionAdmin(this.handle);
+
+  final JwBrowserSessionHandle handle;
+  final JwWebViewSurfaceHost _surfaceHost = JwWebViewSurfaceHost();
+  final Completer<JwBrowserSessionHandle> openGate =
+      Completer<JwBrowserSessionHandle>();
+  var openCalls = 0;
+
+  @override
+  JwWebViewSurfaceHost get surfaceHost => _surfaceHost;
+
+  @override
+  Future<JwBrowserSessionHandle> open(String accountId) {
+    openCalls++;
+    return openGate.future;
+  }
+
+  @override
+  Future<void> clearAllPartitions() async {}
+
+  @override
+  Future<void> shutdown() async {
+    await handle.close();
   }
 }
 

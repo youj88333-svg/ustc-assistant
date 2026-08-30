@@ -264,6 +264,138 @@ void main() {
       'aggregateCount': 0,
     });
   });
+
+  test(
+    'resumeInteractive is single-flight and retains the lease to terminal',
+    () async {
+      final resumeGate = Completer<SyncOutcome>();
+      final coordinator = _ScriptedCoordinator(
+        database: database,
+        accounts: accounts,
+        syncResult: Future.value(
+          const SyncNeedsUserAction(SyncSource.jw, jobId: 'paused-job'),
+        ),
+        resumeResult: resumeGate.future,
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+      );
+
+      expect(
+        await gateway.sync(accountId: 'account-a', trigger: SyncTrigger.manual),
+        isA<SyncNeedsUserAction>(),
+      );
+      final firstResume = gateway.resumeInteractive(
+        'paused-job',
+        userConfirmed: true,
+      );
+      await Future<void>.microtask(() {});
+      final secondResume = gateway.resumeInteractive(
+        'paused-job',
+        userConfirmed: false,
+      );
+
+      expect(identical(firstResume, secondResume), isTrue);
+      expect(coordinator.resumeCalls, 1);
+      expect(gateway.arbiter.isBusy, isTrue);
+
+      resumeGate.complete(
+        const SyncSucceeded(SyncSource.jw, importedEntityCount: 1),
+      );
+      await firstResume;
+      expect(gateway.arbiter.isBusy, isFalse);
+      await gateway.shutdown();
+    },
+  );
+
+  test(
+    'cancelCurrent joins an in-flight resume instead of releasing early',
+    () async {
+      final resumeGate = Completer<SyncOutcome>();
+      final coordinator = _ScriptedCoordinator(
+        database: database,
+        accounts: accounts,
+        syncResult: Future.value(
+          const SyncNeedsUserAction(SyncSource.jw, jobId: 'paused-job'),
+        ),
+        resumeResult: resumeGate.future,
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+      );
+      await gateway.sync(accountId: 'account-a', trigger: SyncTrigger.manual);
+
+      final resume = gateway.resumeInteractive(
+        'paused-job',
+        userConfirmed: true,
+      );
+      await Future<void>.microtask(() {});
+      final cancel = gateway.cancelCurrent();
+      await Future<void>.microtask(() {});
+
+      expect(coordinator.resumeCalls, 1);
+      expect(coordinator.cancelCalls, 1);
+      expect(gateway.arbiter.isBusy, isTrue);
+
+      resumeGate.complete(const SyncCancelled(SyncSource.jw));
+      await cancel;
+      await resume;
+      expect(gateway.arbiter.isBusy, isFalse);
+      await gateway.shutdown();
+    },
+  );
+
+  test('shutdown closes diagnostics even when bridge cleanup fails', () async {
+    final gateway = SourceJobGatewayAdapter(
+      coordinator: _ScriptedCoordinator(database: database, accounts: accounts),
+      arbiter: JwJobArbiter(),
+      bridge: _TrackingBridge(throwOnShutdown: true),
+    );
+    final diagnosticsDone = expectLater(gateway.diagnostics, emitsDone);
+
+    await expectLater(gateway.shutdown(), throwsA(anything));
+    await diagnosticsDone.timeout(const Duration(seconds: 1));
+  });
+
+  test(
+    'cancelCurrent covers bridge admission before a coordinator job exists',
+    () async {
+      final bridgeReady = Completer<BridgeGateway>();
+      final bridge = _AdmissionTrackingBridge();
+      final coordinator = _ScriptedCoordinator(
+        database: database,
+        accounts: accounts,
+        syncResult: Future.value(
+          const SyncSucceeded(SyncSource.jw, importedEntityCount: 1),
+        ),
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+        bridgeFactory: () => bridgeReady.future,
+      );
+
+      final running = gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      await Future<void>.microtask(() {});
+      final cancellation = gateway.cancelCurrent();
+      await Future<void>.microtask(() {});
+      expect(gateway.arbiter.isBusy, isTrue);
+
+      bridgeReady.complete(bridge);
+      final outcome = await running;
+      await cancellation;
+      expect(outcome, isA<SyncCancelled>());
+      expect(bridge.cancelAdmissionCalls, 1);
+      expect(bridge.shutdownCalls, 1);
+      expect(coordinator.syncCalls, 0);
+      expect(gateway.arbiter.isBusy, isFalse);
+    },
+  );
 }
 
 final class _NoopProtector implements CredentialProtector {
@@ -286,6 +418,7 @@ final class _ScriptedCoordinator extends SyncCoordinator {
     this.syncResult,
     this.loginResult,
     this.cancelError,
+    this.resumeResult,
   }) : super(
          bridgeFactory: () async => _TrackingBridge(),
          importBundle: (bytes, {required accountId, required origin}) async =>
@@ -300,9 +433,11 @@ final class _ScriptedCoordinator extends SyncCoordinator {
   final Future<SyncOutcome>? syncResult;
   final Future<SyncOutcome>? loginResult;
   final Object? cancelError;
+  final Future<SyncOutcome>? resumeResult;
   var syncCalls = 0;
   var loginCalls = 0;
   var cancelCalls = 0;
+  var resumeCalls = 0;
 
   @override
   Future<SyncOutcome> sync(
@@ -340,9 +475,19 @@ final class _ScriptedCoordinator extends SyncCoordinator {
     final error = cancelError;
     if (error != null) throw error;
   }
+
+  @override
+  Future<SyncOutcome> resumeInteractive(
+    String jobId, {
+    required bool userConfirmed,
+  }) {
+    resumeCalls++;
+    return resumeResult ??
+        super.resumeInteractive(jobId, userConfirmed: userConfirmed);
+  }
 }
 
-final class _TrackingBridge implements BridgeGateway {
+class _TrackingBridge implements BridgeGateway {
   _TrackingBridge({this.throwOnCancel = false, this.throwOnShutdown = false});
 
   final bool throwOnCancel;
@@ -378,5 +523,16 @@ final class _TrackingBridge implements BridgeGateway {
   Future<void> shutdown() async {
     shutdownCalls++;
     if (throwOnShutdown) throw const BridgeProtocolError('request_failed');
+  }
+}
+
+final class _AdmissionTrackingBridge extends _TrackingBridge
+    implements BridgeAdmissionCancellation {
+  var cancelAdmissionCalls = 0;
+
+  @override
+  Future<void> cancelAdmission() async {
+    cancelAdmissionCalls++;
+    await shutdown();
   }
 }

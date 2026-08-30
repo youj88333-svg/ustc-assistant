@@ -110,6 +110,52 @@ final class _AppShellSessionAdmin implements JwBrowserSessionAdmin {
   }
 }
 
+final class _ExitGatedGateway implements SourceJobGateway {
+  _ExitGatedGateway(this.events, this.shutdownGate);
+
+  final List<String> events;
+  final Completer<void> shutdownGate;
+  var shutdownCalls = 0;
+
+  @override
+  Stream<SourceJobSnapshot> get states => const Stream.empty();
+
+  @override
+  Future<SyncOutcome> firstLogin(FirstLoginCommand command) async =>
+      const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<SyncOutcome> sync({
+    required String accountId,
+    required SyncTrigger trigger,
+  }) async => const SyncFailed(SyncSource.jw, code: 'test');
+
+  @override
+  Future<void> cancelCurrent() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    events.add('runtime-shutdown-start');
+    await shutdownGate.future;
+    events.add('runtime-shutdown-end');
+  }
+}
+
+final class _ExitTrackingDatabase extends AppDatabase {
+  _ExitTrackingDatabase(this.events) : super(NativeDatabase.memory());
+
+  final List<String> events;
+  var closeCalls = 0;
+
+  @override
+  Future<void> close() async {
+    closeCalls++;
+    events.add('database-close');
+    await super.close();
+  }
+}
+
 void main() {
   late AppDatabase database;
 
@@ -587,6 +633,50 @@ void main() {
     expect(gateway.shutdownCalls, 1);
     expect(sessions.shutdownCalls, 1);
   });
+
+  testWidgets(
+    'explicit app exit waits for runtime shutdown before closing its database',
+    (tester) async {
+      final events = <String>[];
+      final database = _ExitTrackingDatabase(events);
+      final shutdownGate = Completer<void>();
+      final gateway = _ExitGatedGateway(events, shutdownGate);
+      final runtime = MinimalJwRuntime(
+        gateway: gateway,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final appKey = GlobalKey<UstcAssistantAppState>();
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          key: appKey,
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async => runtime,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final exit = appKey.currentState!.prepareForExit();
+      await Future<void>.microtask(() {});
+      expect(events, ['runtime-shutdown-start']);
+      expect(database.closeCalls, 0);
+
+      shutdownGate.complete();
+      await exit;
+      expect(events, [
+        'runtime-shutdown-start',
+        'runtime-shutdown-end',
+        'database-close',
+      ]);
+      expect(database.closeCalls, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      expect(gateway.shutdownCalls, 1);
+      expect(database.closeCalls, 1);
+    },
+  );
 
   testWidgets('official website page exposes only allowlisted HTTPS targets', (
     tester,

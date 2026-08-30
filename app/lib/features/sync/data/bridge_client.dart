@@ -104,6 +104,14 @@ abstract interface class BridgeGateway {
   Future<void> shutdown();
 }
 
+/// Optional cancellation boundary for a bridge whose admission/start phase
+/// has not returned a [BridgeJob] yet. Existing bridges that can only cancel
+/// after admission need not implement this seam; callers keep the admission
+/// future joined until it settles.
+abstract interface class BridgeAdmissionCancellation {
+  Future<void> cancelAdmission();
+}
+
 abstract interface class BridgeChildProcess {
   Stream<List<int>> get stdout;
   Stream<List<int>> get stderr;

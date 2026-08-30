@@ -571,7 +571,7 @@ class _SettingsLoader extends StatelessWidget {
             // partitions are cleared. The owner future is shared with the
             // subsequent replacement route, so no browser environment can
             // overlap the destructive reset.
-            if (runtimeOwner != null) await runtimeOwner.beginShutdown();
+            if (runtimeOwner != null) await runtimeOwner.prepareForReset();
             await clearBrowserSession();
           },
         );

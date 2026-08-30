@@ -169,10 +169,14 @@ final class SourceJobGatewayAdapter
   SourceJobSnapshot _lastSnapshot = const SourceJobSnapshot(phase: 'idle');
   JwJobLease? _lease;
   Future<SyncOutcome>? _operation;
+  Future<SyncOutcome>? _resumeOperation;
+  String? _resumeJobId;
   String? _pausedJobId;
   Future<void>? _shutdownFuture;
   Future<void>? _cancelFuture;
   bool _shutdownStarted = false;
+  bool _cancelRequested = false;
+  bool _admissionCancellationIssued = false;
   int _nextJobNumber = 0;
 
   /// Exposed only for focused tests/composition diagnostics; callers should
@@ -275,6 +279,8 @@ final class SourceJobGatewayAdapter
     // observe the held lease in that same turn.
     _lease = lease;
     _pausedJobId = null;
+    _cancelRequested = false;
+    _admissionCancellationIssued = false;
     _emit(const SourceJobSnapshot(phase: 'starting'));
     late final Future<SyncOutcome> tracked;
     try {
@@ -289,16 +295,27 @@ final class SourceJobGatewayAdapter
             if (_shutdownStarted) {
               return const SyncFailed(SyncSource.jw, code: 'runtime_shutdown');
             }
+            if (_cancelRequested) {
+              return const SyncCancelled(SyncSource.jw);
+            }
             return SyncFailed(SyncSource.jw, code: _safeCode(error.code));
           } on Object {
             if (_shutdownStarted) {
               return const SyncFailed(SyncSource.jw, code: 'runtime_shutdown');
+            }
+            if (_cancelRequested) {
+              return const SyncCancelled(SyncSource.jw);
             }
             return const SyncFailed(SyncSource.jw, code: 'sync_failed');
           }
         }
         if (_shutdownStarted) {
           return const SyncFailed(SyncSource.jw, code: 'runtime_shutdown');
+        }
+        if (_cancelRequested) {
+          final bridge = _bridge;
+          if (bridge != null) await _cancelBridgeAdmission(bridge);
+          return const SyncCancelled(SyncSource.jw);
         }
         return operation();
       });
@@ -352,14 +369,60 @@ final class SourceJobGatewayAdapter
   Future<SyncOutcome> resumeInteractive(
     String jobId, {
     required bool userConfirmed,
-  }) async {
+  }) {
     if (_shutdownStarted) {
-      return const SyncFailed(SyncSource.jw, code: 'runtime_shutdown');
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'runtime_shutdown'),
+      );
+    }
+    final existing = _resumeOperation;
+    if (existing != null) {
+      if (_resumeJobId == jobId) return existing;
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'bridge_busy'),
+      );
     }
     final lease = _lease;
     if (lease == null || _pausedJobId != jobId) {
-      return const SyncFailed(SyncSource.jw, code: 'job_not_found');
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'job_not_found'),
+      );
     }
+    final operation = _resumeInteractiveImpl(
+      jobId,
+      userConfirmed: userConfirmed,
+      lease: lease,
+    );
+    // Claim the resume before its first asynchronous continuation. Duplicate
+    // resume calls now join this exact Future rather than racing the paused
+    // marker or releasing the arbiter lease behind the active collection.
+    _resumeJobId = jobId;
+    _resumeOperation = operation;
+    _operation = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {
+          if (identical(_resumeOperation, operation)) {
+            _resumeOperation = null;
+            _resumeJobId = null;
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_resumeOperation, operation)) {
+            _resumeOperation = null;
+            _resumeJobId = null;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<SyncOutcome> _resumeInteractiveImpl(
+    String jobId, {
+    required bool userConfirmed,
+    required JwJobLease lease,
+  }) async {
     try {
       final outcome = await _coordinator.resumeInteractive(
         jobId,
@@ -407,6 +470,7 @@ final class SourceJobGatewayAdapter
   Future<void> _cancelCurrentImpl() async {
     final lease = _lease;
     if (lease == null) return;
+    _cancelRequested = true;
 
     Object? firstError;
     StackTrace? firstStack;
@@ -419,8 +483,13 @@ final class SourceJobGatewayAdapter
       }
     }
 
+    final resumed = _resumeOperation;
     final paused = _pausedJobId;
-    if (paused != null) {
+    if (resumed != null) {
+      // A resumed collection has already consumed the coordinator's paused
+      // marker. Cancel the active job, then join the same resumed Future.
+      await attempt(_coordinator.cancelCurrent);
+    } else if (paused != null) {
       await attempt(() async {
         await _coordinator.resumeInteractive(paused, userConfirmed: false);
       });
@@ -483,6 +552,9 @@ final class SourceJobGatewayAdapter
     if (!_statesController.isClosed) {
       await attempt(_statesController.close);
     }
+    if (!_diagnosticsController.isClosed) {
+      await attempt(_diagnosticsController.close);
+    }
     final error = firstError;
     if (error != null) {
       final safe = _safeError(error, fallback: 'runtime_shutdown_failed');
@@ -517,7 +589,22 @@ final class SourceJobGatewayAdapter
       await resolved.shutdown();
     }
     _attachDiagnostics(_bridge);
+    if (_cancelRequested) {
+      await _cancelBridgeAdmission(_bridge!);
+    }
     return _bridge!;
+  }
+
+  Future<void> _cancelBridgeAdmission(BridgeGateway bridge) async {
+    if (_admissionCancellationIssued) return;
+    _admissionCancellationIssued = true;
+    if (bridge is BridgeAdmissionCancellation) {
+      await (bridge as BridgeAdmissionCancellation).cancelAdmission();
+      return;
+    }
+    // A bridge without a pre-job cancellation endpoint is still owned by
+    // this gateway. Its shutdown path is the safe admission cleanup fallback.
+    await bridge.shutdown();
   }
 
   void _attachDiagnostics(BridgeGateway? bridge) {
@@ -538,6 +625,8 @@ final class SourceJobGatewayAdapter
     if (!identical(_lease, lease)) return;
     _arbiter.release(lease);
     _lease = null;
+    _cancelRequested = false;
+    _admissionCancellationIssued = false;
   }
 
   void _emitSnapshotForOutcome(SyncOutcome outcome) {

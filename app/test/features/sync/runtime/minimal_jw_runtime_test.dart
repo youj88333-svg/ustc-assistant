@@ -82,6 +82,90 @@ void main() {
     },
   );
 
+  test(
+    'reset teardown remains replaceable before terminal app shutdown',
+    () async {
+      final old = _FakeRuntime();
+      final fresh = _FakeRuntime();
+      var loadCalls = 0;
+      final owner = MinimalJwRuntimeOwner(() async {
+        loadCalls++;
+        return loadCalls == 1 ? old.runtime : fresh.runtime;
+      });
+      await owner.current;
+
+      await owner.prepareForReset();
+      await owner.replaceAfterReset();
+      expect(await owner.current, same(fresh.runtime));
+      expect(loadCalls, 2);
+    },
+  );
+
+  test('current rejects access after terminal shutdown starts', () async {
+    final runtime = _FakeRuntime();
+    final owner = MinimalJwRuntimeOwner(() async => runtime.runtime);
+    await owner.current;
+
+    final shutdown = owner.beginShutdown();
+    await expectLater(owner.current, throwsA(isA<StateError>()));
+    await shutdown;
+  });
+
+  test('terminal app shutdown wins a concurrent reset replacement', () async {
+    final oldShutdownGate = Completer<void>();
+    final old = _FakeRuntime(shutdownGate: oldShutdownGate);
+    final fresh = _FakeRuntime();
+    var loadCalls = 0;
+    final owner = MinimalJwRuntimeOwner(() async {
+      loadCalls++;
+      return loadCalls == 1 ? old.runtime : fresh.runtime;
+    });
+    await owner.current;
+
+    final replacement = owner.replaceAfterReset();
+    await Future<void>.microtask(() {});
+    final terminalShutdown = owner.beginShutdown();
+    oldShutdownGate.complete();
+
+    await expectLater(replacement, throwsA(isA<StateError>()));
+    await terminalShutdown;
+    expect(loadCalls, 1);
+    expect(fresh.shutdownCalls, 0);
+    await expectLater(owner.current, throwsA(isA<StateError>()));
+  });
+
+  test(
+    'terminal shutdown drains a fresh runtime admitted by a racing reset',
+    () async {
+      final oldShutdownGate = Completer<void>();
+      final freshLoadGate = Completer<MinimalJwRuntime>();
+      final freshLoadStarted = Completer<void>();
+      final old = _FakeRuntime(shutdownGate: oldShutdownGate);
+      final fresh = _FakeRuntime();
+      var loadCalls = 0;
+      final owner = MinimalJwRuntimeOwner(() async {
+        loadCalls++;
+        if (loadCalls == 1) return old.runtime;
+        if (!freshLoadStarted.isCompleted) freshLoadStarted.complete();
+        return freshLoadGate.future;
+      });
+      await owner.current;
+
+      final replacement = owner.replaceAfterReset();
+      await Future<void>.microtask(() {});
+      oldShutdownGate.complete();
+      await freshLoadStarted.future;
+
+      final terminalShutdown = owner.beginShutdown();
+      freshLoadGate.complete(fresh.runtime);
+
+      await expectLater(replacement, throwsA(isA<StateError>()));
+      await terminalShutdown;
+      expect(fresh.shutdownCalls, 2);
+      await expectLater(owner.current, throwsA(isA<StateError>()));
+    },
+  );
+
   testWidgets('runtime scope returns the app-owned runtime', (tester) async {
     final runtime = _FakeRuntime().runtime;
     late MinimalJwRuntime resolved;
