@@ -58,6 +58,7 @@ class SyncCoordinator {
     required this.accounts,
     required this.bridgeFactory,
     required this.importBundle,
+    this.invalidateBridge,
     int Function()? now,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
@@ -65,6 +66,7 @@ class SyncCoordinator {
   final AccountService accounts;
   final Future<BridgeGateway> Function() bridgeFactory;
   final BundleImport importBundle;
+  final void Function(BridgeGateway bridge)? invalidateBridge;
   final int Function() now;
   static const freshness = Duration(hours: 12);
   static const retryBackoff = Duration(hours: 1);
@@ -79,6 +81,14 @@ class SyncCoordinator {
   Future<void>? _cancelFuture;
   bool _admissionCancellationIssued = false;
   String? _cancelIssuedJobId;
+
+  /// True when cancellation may be handled by the coordinator's bridge/job
+  /// owner. The UI gateway uses this to close a bridge it selected before the
+  /// coordinator reached its bridge factory (for example during account
+  /// preflight), without shutting down an active job's usable bridge.
+  bool get hasCurrentJob => _currentJob != null;
+
+  bool get hasAdmittedBridge => _admissionBridge != null;
 
   Completer<void> _beginAdmission() {
     _cancelRequested = false;
@@ -111,7 +121,16 @@ class SyncCoordinator {
     // A bridge without the optional admission seam still has an owned
     // process/session. Shutdown is its only safe way to interrupt a
     // capabilities/start request that has not yielded a job id yet.
-    await bridge.shutdown();
+    try {
+      await bridge.shutdown();
+    } finally {
+      try {
+        invalidateBridge?.call(bridge);
+      } on Object {
+        // Cache invalidation is best effort after the bridge has been closed;
+        // teardown must continue to settle the admission.
+      }
+    }
   }
 
   Future<void> _cancelBridgeJob(_CurrentSyncJob current) async {
@@ -144,30 +163,39 @@ class SyncCoordinator {
     BridgeSemesterCapability? semesterOverride,
   }) async {
     if (_busy) return SyncSkipped(source, reason: 'busy');
-    final account = accountId == null
-        ? await accounts.activeAccount()
-        : await (database.select(
-            database.localAccounts,
-          )..where((row) => row.id.equals(accountId))).getSingleOrNull();
-    if (account == null) return SyncSkipped(source, reason: 'no_account');
-    if (trigger == SyncTrigger.automatic &&
-        !await isAutomaticDue(source, account.id)) {
-      return SyncSkipped(source, reason: 'fresh_or_backoff');
-    }
-    if (!await accounts.hasCredentials(account.id)) {
-      final runId = await _startRun(account.id, source, trigger);
-      await recordFailure(
-        source,
-        account.id,
-        code: 'reauthentication_required',
-        runId: runId,
-      );
-      return SyncFailed(source, code: 'reauthentication_required');
-    }
     _busy = true;
     final admission = _beginAdmission();
+    LocalAccount? account;
     String? runId;
     try {
+      account = accountId == null
+          ? await accounts.activeAccount()
+          : await (database.select(
+              database.localAccounts,
+            )..where((row) => row.id.equals(accountId))).getSingleOrNull();
+      if (_cancelRequested) return SyncCancelled(source);
+      if (account == null) return SyncSkipped(source, reason: 'no_account');
+      if (trigger == SyncTrigger.automatic) {
+        final due = await isAutomaticDue(source, account.id);
+        if (_cancelRequested) return SyncCancelled(source);
+        if (!due) return SyncSkipped(source, reason: 'fresh_or_backoff');
+      }
+      final hasCredentials = await accounts.hasCredentials(account.id);
+      if (_cancelRequested) return SyncCancelled(source);
+      if (!hasCredentials) {
+        runId = await _startRun(account.id, source, trigger);
+        if (_cancelRequested) {
+          await _finishRun(runId, 'cancelled', 'cancelled');
+          return SyncCancelled(source);
+        }
+        await recordFailure(
+          source,
+          account.id,
+          code: 'reauthentication_required',
+          runId: runId,
+        );
+        return SyncFailed(source, code: 'reauthentication_required');
+      }
       final bridge = await bridgeFactory();
       _admissionBridge = bridge;
       if (await _cancelIfRequested(bridge)) return SyncCancelled(source);
@@ -213,25 +241,31 @@ class SyncCoordinator {
         if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
         return SyncCancelled(source);
       }
+      final currentAccount = account;
+      if (currentAccount == null) rethrow;
       final code = error.code == 'credentials_not_found'
           ? 'reauthentication_required'
           : error.code;
-      await recordFailure(source, account.id, code: code);
+      await recordFailure(source, currentAccount.id, code: code);
       return SyncFailed(source, code: code);
     } on BridgeProtocolError catch (error) {
       if (_cancelRequested) {
         if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
         return SyncCancelled(source);
       }
+      final currentAccount = account;
+      if (currentAccount == null) rethrow;
       final code = error.code == 'busy' ? 'bridge_busy' : error.code;
-      await recordFailure(source, account.id, code: code);
+      await recordFailure(source, currentAccount.id, code: code);
       return SyncFailed(source, code: code);
     } on Object {
       if (_cancelRequested) {
         if (runId != null) await _finishRun(runId, 'cancelled', 'cancelled');
         return SyncCancelled(source);
       }
-      await recordFailure(source, account.id, code: 'sync_failed');
+      final currentAccount = account;
+      if (currentAccount == null) rethrow;
+      await recordFailure(source, currentAccount.id, code: 'sync_failed');
       return SyncFailed(source, code: 'sync_failed');
     } finally {
       _completeAdmission(admission);

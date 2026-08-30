@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -65,6 +66,7 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   late final GoRouter router;
   late final WindowsReminderReconciler reminderReconciler;
   late final MinimalJwRuntimeOwner runtimeOwner;
+  late final AppLifecycleListener _exitListener;
   Future<void>? _exitFuture;
 
   @override
@@ -93,6 +95,7 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       clearBrowser,
       runtimeOwner,
     );
+    _exitListener = AppLifecycleListener(onExitRequested: _handleExitRequested);
     if (ownsDatabase) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_startBackgroundWork());
@@ -141,6 +144,7 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     );
     final arbiter = JwJobArbiter();
     BridgeGateway? selectedBridge;
+    late SourceJobGatewayAdapter gateway;
     Future<BridgeGateway> selectBridge() async {
       final existing = selectedBridge;
       if (existing != null) return existing;
@@ -166,19 +170,26 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       return selectedBridge!;
     }
 
+    void invalidateBridge(BridgeGateway bridge) {
+      if (identical(selectedBridge, bridge)) selectedBridge = null;
+      gateway.invalidateCachedBridge(bridge);
+    }
+
     final coordinator = SyncCoordinator(
       database: database,
       accounts: accounts,
       bridgeFactory: selectBridge,
+      invalidateBridge: invalidateBridge,
       importBundle: importer.importBytes,
     );
-    final gateway = SourceJobGatewayAdapter(
+    gateway = SourceJobGatewayAdapter(
       coordinator: coordinator,
       arbiter: arbiter,
       selectedKind: kUsePythonBridgeFallback
           ? JwJobKind.pythonFallback
           : JwJobKind.sync,
       bridgeFactory: selectBridge,
+      invalidateBridge: invalidateBridge,
       ownsBrowserSessions: !kUsePythonBridgeFallback,
       safeDiagnostic: widget.runtimeDiagnosticSink,
     );
@@ -234,8 +245,23 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     }
   }
 
+  Future<AppExitResponse> _handleExitRequested() async {
+    try {
+      await prepareForExit();
+      return AppExitResponse.exit;
+    } on Object {
+      try {
+        widget.runtimeDiagnosticSink?.call('runtime_shutdown_failed');
+      } on Object {
+        // Exit decisions must never expose implementation or database text.
+      }
+      return AppExitResponse.cancel;
+    }
+  }
+
   @override
   void dispose() {
+    _exitListener.dispose();
     router.dispose();
     unawaited(prepareForExit().catchError((_) {}));
     super.dispose();

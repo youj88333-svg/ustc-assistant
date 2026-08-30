@@ -347,6 +347,75 @@ void main() {
     },
   );
 
+  test(
+    'cancel-first serializes a real paused resume until cancellation settles',
+    () async {
+      final fixture = await _realInteractiveFixture(database, accounts);
+      final paused = await fixture.gateway.sync(
+        accountId: fixture.accountId,
+        trigger: SyncTrigger.manual,
+      );
+      expect(paused, isA<SyncNeedsUserAction>());
+
+      final cancellation = fixture.gateway.cancelCurrent();
+      await Future<void>.microtask(() {});
+      expect(fixture.bridge.cancelCalls, 1);
+      expect(fixture.gateway.arbiter.isBusy, isTrue);
+
+      final resume = fixture.gateway.resumeInteractive(
+        'gated-job',
+        userConfirmed: true,
+      );
+      var resumeSettled = false;
+      unawaited(resume.then<void>((_) => resumeSettled = true));
+      await Future<void>.microtask(() {});
+      expect(resumeSettled, isFalse);
+      expect(fixture.bridge.resumeCalls, 0);
+      expect(fixture.gateway.arbiter.isBusy, isTrue);
+
+      fixture.bridge.cancelGate.complete();
+      await cancellation;
+      expect(await resume, isA<SyncCancelled>());
+      expect(fixture.gateway.arbiter.isBusy, isFalse);
+      await fixture.gateway.shutdown();
+    },
+  );
+
+  test(
+    'resume-first and cancel remain one real coordinator operation',
+    () async {
+      final fixture = await _realInteractiveFixture(database, accounts);
+      final paused = await fixture.gateway.sync(
+        accountId: fixture.accountId,
+        trigger: SyncTrigger.manual,
+      );
+      expect(paused, isA<SyncNeedsUserAction>());
+
+      final resume = fixture.gateway.resumeInteractive(
+        'gated-job',
+        userConfirmed: true,
+      );
+      await fixture.bridge.resumeStarted.future;
+      expect(fixture.bridge.resumeCalls, 1);
+      final duplicate = fixture.gateway.resumeInteractive(
+        'gated-job',
+        userConfirmed: false,
+      );
+      expect(identical(resume, duplicate), isTrue);
+
+      final cancellation = fixture.gateway.cancelCurrent();
+      await Future<void>.microtask(() {});
+      expect(fixture.bridge.cancelCalls, 1);
+      expect(fixture.gateway.arbiter.isBusy, isTrue);
+
+      fixture.bridge.cancelGate.complete();
+      expect(await resume, isA<SyncCancelled>());
+      await cancellation;
+      expect(fixture.gateway.arbiter.isBusy, isFalse);
+      await fixture.gateway.shutdown();
+    },
+  );
+
   test('shutdown closes diagnostics even when bridge cleanup fails', () async {
     final gateway = SourceJobGatewayAdapter(
       coordinator: _ScriptedCoordinator(database: database, accounts: accounts),
@@ -394,6 +463,204 @@ void main() {
       expect(bridge.shutdownCalls, 1);
       expect(coordinator.syncCalls, 0);
       expect(gateway.arbiter.isBusy, isFalse);
+    },
+  );
+
+  test(
+    'gateway holds its lease while coordinator admits a gated account lookup',
+    () async {
+      final accountId = await accounts.persistVerifiedAccount(
+        username: 'PB00000000',
+        password: 'saved-password',
+        savePassword: true,
+      );
+      final credentialsGate = Completer<bool>();
+      final credentialsStarted = Completer<void>();
+      final gatedAccounts = _GatedCredentialsAccountService(
+        database: database,
+        protector: _NoopProtector(),
+        credentialsGate: credentialsGate,
+        started: credentialsStarted,
+      );
+      final bridge = _SuccessfulBridge();
+      var importCalls = 0;
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: gatedAccounts,
+        bridgeFactory: () async => bridge,
+        importBundle: (bytes, {required accountId, required origin}) async {
+          importCalls++;
+          return const ImportResult(
+            status: ImportStatus.imported,
+            bundleId: 'test',
+            source: 'ustc_jw',
+            importedEntityCount: 1,
+          );
+        },
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+        bridge: bridge,
+      );
+
+      final running = gateway.sync(
+        accountId: accountId,
+        trigger: SyncTrigger.manual,
+      );
+      await credentialsStarted.future;
+      final cancellation = gateway.cancelCurrent();
+      var cancellationSettled = false;
+      unawaited(cancellation.then<void>((_) => cancellationSettled = true));
+      await Future<void>.microtask(() {});
+      expect(cancellationSettled, isFalse);
+      expect(gateway.arbiter.isBusy, isTrue);
+
+      credentialsGate.complete(true);
+      expect(await running, isA<SyncCancelled>());
+      await cancellation;
+      expect(bridge.starts, isEmpty);
+      expect(importCalls, 0);
+      expect(gateway.arbiter.isBusy, isFalse);
+      await gateway.shutdown();
+    },
+  );
+
+  test(
+    'coordinator admission cancellation invalidates both fallback bridge caches',
+    () async {
+      final accountId = await accounts.persistVerifiedAccount(
+        username: 'PB00000000',
+        password: 'saved-password',
+        savePassword: true,
+      );
+      final credentialsGate = Completer<bool>();
+      final credentialsStarted = Completer<void>();
+      final gatedAccounts = _GatedCredentialsAccountService(
+        database: database,
+        protector: _NoopProtector(),
+        credentialsGate: credentialsGate,
+        started: credentialsStarted,
+      );
+      final first = _ClosedFallbackBridge();
+      final second = _SuccessfulBridge();
+      BridgeGateway? selected;
+      var factoryCalls = 0;
+      var firstCreated = false;
+      Future<BridgeGateway> selectBridge() async {
+        factoryCalls++;
+        if (selected != null) return selected!;
+        selected = firstCreated ? second : first;
+        firstCreated = true;
+        return selected!;
+      }
+
+      late SourceJobGatewayAdapter gateway;
+      void invalidateBridge(BridgeGateway bridge) {
+        if (identical(selected, bridge)) selected = null;
+        gateway.invalidateCachedBridge(bridge);
+      }
+
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: gatedAccounts,
+        bridgeFactory: selectBridge,
+        invalidateBridge: invalidateBridge,
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            const ImportResult(
+              status: ImportStatus.imported,
+              bundleId: 'test',
+              source: 'ustc_jw',
+              importedEntityCount: 1,
+            ),
+      );
+      gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+        selectedKind: JwJobKind.pythonFallback,
+        bridgeFactory: selectBridge,
+        invalidateBridge: invalidateBridge,
+      );
+
+      final running = gateway.sync(
+        accountId: accountId,
+        trigger: SyncTrigger.manual,
+      );
+      await credentialsStarted.future;
+      final cancellation = gateway.cancelCurrent();
+      await Future<void>.microtask(() {});
+      expect(gateway.arbiter.isBusy, isTrue);
+      credentialsGate.complete(true);
+      expect(await running, isA<SyncCancelled>());
+      await cancellation;
+      expect(first.shutdownCalls, 1);
+      await expectLater(first.capabilities(), throwsA(anything));
+
+      final retry = await gateway.sync(
+        accountId: accountId,
+        trigger: SyncTrigger.manual,
+      );
+      expect(retry, isA<SyncSucceeded>());
+      expect(factoryCalls, 3);
+      await gateway.shutdown();
+    },
+  );
+
+  test(
+    'fallback admission cancellation invalidates its cached bridge before retry',
+    () async {
+      final first = _ClosedFallbackBridge();
+      final second = _ClosedFallbackBridge();
+      final firstReady = Completer<BridgeGateway>();
+      BridgeGateway? selected;
+      var factoryCalls = 0;
+      Future<BridgeGateway> selectBridge() async {
+        factoryCalls++;
+        if (factoryCalls == 1) {
+          final bridge = await firstReady.future;
+          selected = bridge;
+          return bridge;
+        }
+        return selected ??= second;
+      }
+
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: _ScriptedCoordinator(
+          database: database,
+          accounts: accounts,
+          syncResult: Future.value(
+            const SyncSucceeded(SyncSource.jw, importedEntityCount: 1),
+          ),
+        ),
+        arbiter: JwJobArbiter(),
+        selectedKind: JwJobKind.pythonFallback,
+        bridgeFactory: selectBridge,
+        invalidateBridge: (bridge) {
+          if (identical(selected, bridge)) selected = null;
+        },
+      );
+
+      final running = gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      await Future<void>.microtask(() {});
+      final cancellation = gateway.cancelCurrent();
+      firstReady.complete(first);
+      expect(await running, isA<SyncCancelled>());
+      await cancellation;
+      expect(first.shutdownCalls, 1);
+      expect(factoryCalls, 1);
+      await expectLater(first.capabilities(), throwsA(anything));
+
+      final retry = await gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      expect(retry, isA<SyncSucceeded>());
+      expect(factoryCalls, 2);
+      expect(second.shutdownCalls, 0);
+      await gateway.shutdown();
     },
   );
 }
@@ -484,6 +751,234 @@ final class _ScriptedCoordinator extends SyncCoordinator {
     resumeCalls++;
     return resumeResult ??
         super.resumeInteractive(jobId, userConfirmed: userConfirmed);
+  }
+}
+
+final class _RealInteractiveFixture {
+  _RealInteractiveFixture({
+    required this.database,
+    required this.accountId,
+    required this.bridge,
+    required this.gateway,
+  });
+
+  final AppDatabase database;
+  final String accountId;
+  final _GatedInteractiveBridge bridge;
+  final SourceJobGatewayAdapter gateway;
+}
+
+final class _GatedCredentialsAccountService extends AccountService {
+  _GatedCredentialsAccountService({
+    required super.database,
+    required super.protector,
+    required this.credentialsGate,
+    required this.started,
+  });
+
+  final Completer<bool> credentialsGate;
+  final Completer<void> started;
+
+  @override
+  Future<bool> hasCredentials(String accountId) {
+    if (!started.isCompleted) started.complete();
+    return credentialsGate.future;
+  }
+}
+
+final class _SuccessfulBridge implements BridgeGateway {
+  final starts = <SyncSource>[];
+
+  @override
+  Future<BridgeCapabilities> capabilities() async {
+    return const BridgeCapabilities(
+      jwSemester: BridgeSemesterCapability(
+        semesterId: 461,
+        semesterKey: '2026fall',
+        displayName: '2026 秋季学期',
+      ),
+    );
+  }
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    starts.add(source);
+    return const BridgeJob(id: 'successful-job', phase: 'starting');
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    return const BridgeJobPoll(
+      events: [
+        {'sequence': 1, 'phase': 'complete'},
+      ],
+      nextSequence: 1,
+      terminal: true,
+      result: {'schemaVersion': '1.0'},
+    );
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {}
+
+  @override
+  Future<void> cancel(String jobId) async {}
+
+  @override
+  Future<void> shutdown() async {}
+}
+
+Future<_RealInteractiveFixture> _realInteractiveFixture(
+  AppDatabase database,
+  AccountService accounts,
+) async {
+  final accountId = await accounts.persistVerifiedAccount(
+    username: 'PB00000000',
+    password: 'saved-password',
+    savePassword: true,
+  );
+  final bridge = _GatedInteractiveBridge();
+  final coordinator = SyncCoordinator(
+    database: database,
+    accounts: accounts,
+    bridgeFactory: () async => bridge,
+    importBundle: (bytes, {required accountId, required origin}) async =>
+        const ImportResult(
+          status: ImportStatus.imported,
+          bundleId: 'test',
+          source: 'ustc_jw',
+          importedEntityCount: 1,
+        ),
+  );
+  return _RealInteractiveFixture(
+    database: database,
+    accountId: accountId,
+    bridge: bridge,
+    gateway: SourceJobGatewayAdapter(
+      coordinator: coordinator,
+      arbiter: JwJobArbiter(),
+      bridge: bridge,
+    ),
+  );
+}
+
+final class _GatedInteractiveBridge implements BridgeGateway {
+  final cancelGate = Completer<void>();
+  final resumePollGate = Completer<void>();
+  final resumeStarted = Completer<void>();
+  var _pausedPollReturned = false;
+  var cancelCalls = 0;
+  var resumeCalls = 0;
+
+  @override
+  Future<BridgeCapabilities> capabilities() async => const BridgeCapabilities(
+    jwSemester: BridgeSemesterCapability(
+      semesterId: 461,
+      semesterKey: '2026fall',
+      displayName: '2026 秋季学期',
+    ),
+  );
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async => const BridgeJob(id: 'gated-job', phase: 'starting');
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    if (!_pausedPollReturned) {
+      _pausedPollReturned = true;
+      return const BridgeJobPoll(
+        events: [
+          {'sequence': 1, 'phase': 'needs_user_login'},
+        ],
+        nextSequence: 1,
+        terminal: false,
+      );
+    }
+    await resumePollGate.future;
+    return const BridgeJobPoll(
+      events: [
+        {'sequence': 2, 'phase': 'cancelled'},
+      ],
+      nextSequence: 2,
+      terminal: true,
+      errorCode: 'cancelled',
+    );
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    resumeCalls++;
+    if (!resumeStarted.isCompleted) resumeStarted.complete();
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    cancelCalls++;
+    if (!resumePollGate.isCompleted) resumePollGate.complete();
+    await cancelGate.future;
+  }
+
+  @override
+  Future<void> shutdown() async {}
+}
+
+final class _ClosedFallbackBridge implements BridgeGateway {
+  var shutdownCalls = 0;
+  var _closed = false;
+
+  @override
+  Future<BridgeCapabilities> capabilities() async {
+    _checkOpen();
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    _checkOpen();
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    _checkOpen();
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {
+    _checkOpen();
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> cancel(String jobId) async {
+    _checkOpen();
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    _closed = true;
+  }
+
+  void _checkOpen() {
+    if (_closed) throw StateError('bridge is closed');
   }
 }
 

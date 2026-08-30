@@ -85,6 +85,20 @@ final class _AdmissionFakeBridge extends FakeBridge
   }
 }
 
+final class _GatedPreflightAccountService extends AccountService {
+  _GatedPreflightAccountService({
+    required super.database,
+    required super.protector,
+    this.activeAccountGate,
+  });
+
+  final Completer<LocalAccount?>? activeAccountGate;
+
+  @override
+  Future<LocalAccount?> activeAccount() =>
+      activeAccountGate?.future ?? super.activeAccount();
+}
+
 class AwaitingEventBridge extends FakeBridge {
   final secondPollStarted = Completer<void>();
   final terminalPoll = Completer<BridgeJobPoll>();
@@ -161,6 +175,53 @@ SyncCoordinator coordinator({
 );
 
 void main() {
+  test(
+    'immediate cancel owns a gated account lookup before bridge admission',
+    () async {
+      final protector = CountingProtector();
+      final (database, accounts, _) = await fixture(protector: protector);
+      addTearDown(database.close);
+      final account = await database.select(database.localAccounts).getSingle();
+      final accountGate = Completer<LocalAccount?>();
+      final gatedAccounts = _GatedPreflightAccountService(
+        database: database,
+        protector: protector,
+        activeAccountGate: accountGate,
+      );
+      final bridge = FakeBridge();
+      var importCalls = 0;
+      final service = SyncCoordinator(
+        database: database,
+        accounts: gatedAccounts,
+        bridgeFactory: () async => bridge,
+        importBundle: (bytes, {required accountId, required origin}) async {
+          importCalls++;
+          return const ImportResult(
+            status: ImportStatus.imported,
+            bundleId: 'bundle',
+            source: 'ustc_jw',
+            importedEntityCount: 1,
+          );
+        },
+      );
+
+      final syncing = service.sync(SyncSource.jw, trigger: SyncTrigger.manual);
+      await Future<void>.microtask(() {});
+      final cancellation = service.cancelCurrent();
+      var cancellationSettled = false;
+      unawaited(cancellation.then<void>((_) => cancellationSettled = true));
+      await Future<void>.microtask(() {});
+      expect(cancellationSettled, isFalse);
+      expect(bridge.starts, isEmpty);
+
+      accountGate.complete(account);
+      expect(await syncing, isA<SyncCancelled>());
+      await cancellation;
+      expect(bridge.starts, isEmpty);
+      expect(importCalls, 0);
+    },
+  );
+
   test('cancelled terminal result never reaches the import callback', () async {
     final protector = CountingProtector();
     final (database, accounts, accountId) = await fixture(protector: protector);

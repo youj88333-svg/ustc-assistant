@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show AppExitResponse;
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
@@ -664,6 +665,48 @@ void main() {
 
       shutdownGate.complete();
       await exit;
+      expect(events, [
+        'runtime-shutdown-start',
+        'runtime-shutdown-end',
+        'database-close',
+      ]);
+      expect(database.closeCalls, 1);
+
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+      expect(gateway.shutdownCalls, 1);
+      expect(database.closeCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'registered Windows exit request awaits cleanup before acknowledging exit',
+    (tester) async {
+      final events = <String>[];
+      final database = _ExitTrackingDatabase(events);
+      final shutdownGate = Completer<void>();
+      final gateway = _ExitGatedGateway(events, shutdownGate);
+      final runtime = MinimalJwRuntime(
+        gateway: gateway,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async => runtime,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final exitRequest = WidgetsBinding.instance.handleRequestAppExit();
+      await tester.pump();
+      expect(events, ['runtime-shutdown-start']);
+      expect(database.closeCalls, 0);
+
+      shutdownGate.complete();
+      expect(await exitRequest, AppExitResponse.exit);
       expect(events, [
         'runtime-shutdown-start',
         'runtime-shutdown-end',

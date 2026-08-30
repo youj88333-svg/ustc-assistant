@@ -143,6 +143,7 @@ final class SourceJobGatewayAdapter
     JwJobKind selectedKind = JwJobKind.sync,
     Future<BridgeGateway> Function()? bridgeFactory,
     BridgeGateway? bridge,
+    void Function(BridgeGateway bridge)? invalidateBridge,
     bool ownsBrowserSessions = false,
     void Function(String)? safeDiagnostic,
   }) : _coordinator = coordinator,
@@ -150,6 +151,7 @@ final class SourceJobGatewayAdapter
        _selectedKind = selectedKind,
        _bridgeFactory = bridgeFactory,
        _bridge = bridge,
+       _invalidateBridge = invalidateBridge,
        _ownsBrowserSessions = ownsBrowserSessions,
        _safeDiagnostic = safeDiagnostic;
 
@@ -158,6 +160,7 @@ final class SourceJobGatewayAdapter
   final JwJobKind _selectedKind;
   final Future<BridgeGateway> Function()? _bridgeFactory;
   BridgeGateway? _bridge;
+  final void Function(BridgeGateway bridge)? _invalidateBridge;
   final bool _ownsBrowserSessions;
   final void Function(String)? _safeDiagnostic;
 
@@ -176,12 +179,21 @@ final class SourceJobGatewayAdapter
   Future<void>? _cancelFuture;
   bool _shutdownStarted = false;
   bool _cancelRequested = false;
+  String? _cancelJobId;
   bool _admissionCancellationIssued = false;
+  BridgeGateway? _admissionCancelledBridge;
   int _nextJobNumber = 0;
 
   /// Exposed only for focused tests/composition diagnostics; callers should
   /// use the interface's [states] stream for UI state.
   JwJobArbiter get arbiter => _arbiter;
+
+  /// Drops a selected bridge after another owner has closed it during
+  /// admission cancellation. The next operation must resolve a fresh bridge
+  /// through the composition factory, after the old bridge has settled.
+  void invalidateCachedBridge(BridgeGateway bridge) {
+    if (identical(_bridge, bridge)) _bridge = null;
+  }
 
   /// Most recent privacy-safe state. This is an in-memory convenience for
   /// hosts that attach after an emission; it carries no request data.
@@ -281,6 +293,7 @@ final class SourceJobGatewayAdapter
     _pausedJobId = null;
     _cancelRequested = false;
     _admissionCancellationIssued = false;
+    _admissionCancelledBridge = null;
     _emit(const SourceJobSnapshot(phase: 'starting'));
     late final Future<SyncOutcome> tracked;
     try {
@@ -382,6 +395,17 @@ final class SourceJobGatewayAdapter
         const SyncFailed(SyncSource.jw, code: 'bridge_busy'),
       );
     }
+    final cancelling = _cancelFuture;
+    if (cancelling != null && _cancelRequested && _cancelJobId == jobId) {
+      return cancelling.then<SyncOutcome>(
+        (_) => const SyncCancelled(SyncSource.jw),
+      );
+    }
+    if (cancelling != null) {
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'bridge_busy'),
+      );
+    }
     final lease = _lease;
     if (lease == null || _pausedJobId != jobId) {
       return Future<SyncOutcome>.value(
@@ -471,6 +495,9 @@ final class SourceJobGatewayAdapter
     final lease = _lease;
     if (lease == null) return;
     _cancelRequested = true;
+    _cancelJobId = _resumeJobId ?? _pausedJobId;
+    final coordinatorOwnsBridge =
+        _coordinator.hasCurrentJob || _coordinator.hasAdmittedBridge;
 
     Object? firstError;
     StackTrace? firstStack;
@@ -502,6 +529,12 @@ final class SourceJobGatewayAdapter
       await attempt(() async {
         await operation;
       });
+    }
+    if (!coordinatorOwnsBridge) {
+      final bridge = _bridge;
+      if (bridge != null && !identical(_admissionCancelledBridge, bridge)) {
+        await attempt(() => _cancelBridgeAdmission(bridge));
+      }
     }
     _emit(const SourceJobSnapshot(phase: 'cancelled', safeCode: 'cancelled'));
     _release(lease);
@@ -590,7 +623,9 @@ final class SourceJobGatewayAdapter
     }
     _attachDiagnostics(_bridge);
     if (_cancelRequested) {
-      await _cancelBridgeAdmission(_bridge!);
+      final selected = _bridge!;
+      await _cancelBridgeAdmission(selected);
+      return selected;
     }
     return _bridge!;
   }
@@ -598,13 +633,24 @@ final class SourceJobGatewayAdapter
   Future<void> _cancelBridgeAdmission(BridgeGateway bridge) async {
     if (_admissionCancellationIssued) return;
     _admissionCancellationIssued = true;
+    _admissionCancelledBridge = bridge;
     if (bridge is BridgeAdmissionCancellation) {
       await (bridge as BridgeAdmissionCancellation).cancelAdmission();
       return;
     }
     // A bridge without a pre-job cancellation endpoint is still owned by
     // this gateway. Its shutdown path is the safe admission cleanup fallback.
-    await bridge.shutdown();
+    try {
+      await bridge.shutdown();
+    } finally {
+      if (identical(_bridge, bridge)) _bridge = null;
+      try {
+        _invalidateBridge?.call(bridge);
+      } on Object {
+        // Cache invalidation is best effort after the bridge has been closed;
+        // teardown must continue to release the current lease.
+      }
+    }
   }
 
   void _attachDiagnostics(BridgeGateway? bridge) {
@@ -626,6 +672,7 @@ final class SourceJobGatewayAdapter
     _arbiter.release(lease);
     _lease = null;
     _cancelRequested = false;
+    _cancelJobId = null;
     _admissionCancellationIssued = false;
   }
 
