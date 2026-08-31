@@ -11,6 +11,16 @@ import '../domain/source_bundle.dart';
 import '../domain/source_bundle_error.dart';
 import 'reminder_reconciler.dart';
 
+/// A schema-validated, complete SourceBundle that is ready for a caller-owned
+/// transaction to persist.  Preparing is intentionally separate from
+/// persistence so first login can stage validation before creating its account
+/// rows.
+final class PreparedSourceBundle {
+  const PreparedSourceBundle(this.bundle);
+
+  final SourceBundle bundle;
+}
+
 class ImportService {
   ImportService({
     required this.database,
@@ -24,12 +34,34 @@ class ImportService {
   final ImportRepository repository;
   static const _uuid = Uuid();
 
+  /// Decodes and validates a complete SourceBundle without touching SQLite.
+  Future<PreparedSourceBundle> prepare(Uint8List bytes) async {
+    return PreparedSourceBundle(decoder.decode(bytes));
+  }
+
   Future<ImportResult> importBytes(
     Uint8List bytes, {
     required String accountId,
     required ImportOrigin origin,
   }) async {
-    final bundle = decoder.decode(bytes);
+    final prepared = await prepare(bytes);
+    final result = await database.transaction(
+      () => persistPrepared(prepared, accountId: accountId, origin: origin),
+    );
+    return _reconcileAfterCommit(result, accountId: accountId);
+  }
+
+  /// Persists a prepared bundle in the transaction owned by the caller.
+  ///
+  /// This method deliberately does not call [AppDatabase.transaction].  The
+  /// first-login commit uses it after inserting the account and credential so
+  /// every write rolls back as one unit.
+  Future<ImportResult> persistPrepared(
+    PreparedSourceBundle prepared, {
+    required String accountId,
+    required ImportOrigin origin,
+  }) async {
+    final bundle = prepared.bundle;
     bundle.requireSubject(accountId);
 
     final existing = await repository.batchByBundleId(
@@ -48,19 +80,33 @@ class ImportService {
       );
     }
 
-    final result = await database.transaction(
-      () => _importTransaction(bundle, accountId, origin),
-    );
+    return _importTransaction(bundle, accountId, origin);
+  }
+
+  /// Runs reminder reconciliation after a successful persistence transaction.
+  /// A failure is represented by the existing retryable marker and never
+  /// removes already-imported data.
+  Future<ImportResult> reconcileAfterCommit(
+    ImportResult result, {
+    required String accountId,
+  }) async {
+    return _reconcileAfterCommit(result, accountId: accountId);
+  }
+
+  Future<ImportResult> _reconcileAfterCommit(
+    ImportResult result, {
+    required String accountId,
+  }) async {
     try {
       await reminderReconciler.reconcile(
         accountId: accountId,
-        source: bundle.source,
+        source: result.source,
       );
       return result;
     } catch (_) {
       await database.actionLogsRepository.append(
         accountId: accountId,
-        source: bundle.source,
+        source: result.source,
         actionType: 'reminder_reconcile',
         result: 'retryable_failure',
         safeSummary: 'Reminder reconciliation is pending.',

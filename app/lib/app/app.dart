@@ -12,6 +12,7 @@ import '../core/database/app_database.dart';
 import '../core/database/connection.dart';
 import '../core/security/credential_protector_factory.dart';
 import '../features/accounts/application/account_service.dart';
+import '../features/accounts/application/first_login_commit_service.dart';
 import '../features/settings/presentation/official_websites_page.dart';
 import '../features/reminders/application/reminder_service.dart';
 import '../features/reminders/application/windows_reminder_reconciler.dart';
@@ -135,6 +136,11 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       ),
       reminderReconciler: reminderReconciler,
     );
+    final firstLoginCommit = FirstLoginCommitService(
+      accounts: accounts,
+      persistPrepared: importer.persistPrepared,
+      reminderReconciler: reminderReconciler,
+    );
     final admin = _LazyWindowsJwBrowserSessionAdmin(
       safeDiagnostic: widget.runtimeDiagnosticSink,
     );
@@ -181,6 +187,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       bridgeFactory: selectBridge,
       invalidateBridge: invalidateBridge,
       importBundle: importer.importBytes,
+      prepareBundle: importer.prepare,
+      firstLoginCommitService: firstLoginCommit,
     );
     gateway = SourceJobGatewayAdapter(
       coordinator: coordinator,

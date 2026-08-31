@@ -112,6 +112,31 @@ void main() {
     expect(await db.select(db.actionLogs).get(), isEmpty);
   });
 
+  test(
+    'prepare is write-free and persistPrepared uses the caller transaction',
+    () async {
+      final db = await testDatabase();
+      addTearDown(db.close);
+      final service = ImportService(database: db, decoder: testDecoder());
+
+      final prepared = await service.prepare(fixture('jw-with-exam.json'));
+      expect(await db.select(db.importBatches).get(), isEmpty);
+      expect(await db.select(db.calendarEvents).get(), isEmpty);
+
+      final result = await db.transaction(
+        () => service.persistPrepared(
+          prepared,
+          accountId: 'acct_fixture',
+          origin: ImportOrigin.bridge,
+        ),
+      );
+
+      expect(result.status, ImportStatus.imported);
+      expect(await db.select(db.importBatches).get(), hasLength(1));
+      expect(await db.select(db.syncRuns).get(), hasLength(1));
+    },
+  );
+
   test('bundle subject must match the explicit target account', () async {
     final db = await testDatabase();
     addTearDown(db.close);

@@ -22,6 +22,33 @@ class ProvisionalAccount {
   final String accountId;
 }
 
+/// In-memory state for a first-login attempt.
+///
+/// A provisional account id is only a partition key for the active browser
+/// session.  It is deliberately not persisted until the verified identity and
+/// the complete source bundle are committed together.
+final class ProvisionalFirstLogin extends ProvisionalAccount {
+  ProvisionalFirstLogin({
+    required String accountId,
+    required this.expectedUsername,
+    this.passwordBytes,
+    this.savePassword = false,
+  }) : super(accountId);
+
+  final String expectedUsername;
+  Uint8List? passwordBytes;
+  final bool savePassword;
+
+  /// Clears the only mutable plaintext secret owned by this object.
+  void discard() {
+    final bytes = passwordBytes;
+    if (bytes != null) {
+      bytes.fillRange(0, bytes.length, 0);
+      passwordBytes = null;
+    }
+  }
+}
+
 class AccountSummary {
   const AccountSummary({
     required this.id,
@@ -76,10 +103,28 @@ class AccountService {
   final int Function() now;
   static const _uuid = Uuid();
   _StagedLogin? _staged;
+  ProvisionalFirstLogin? _stagedFirstLogin;
 
-  ProvisionalAccount beginFirstLogin() => ProvisionalAccount(_uuid.v4());
+  ProvisionalFirstLogin beginFirstLogin({
+    String expectedUsername = '',
+    Uint8List? passwordBytes,
+    bool savePassword = false,
+  }) => ProvisionalFirstLogin(
+    accountId: _uuid.v4(),
+    expectedUsername: expectedUsername,
+    passwordBytes: passwordBytes,
+    savePassword: savePassword,
+  );
 
-  void cancelFirstLogin(ProvisionalAccount provisional) {
+  void cancelFirstLogin(Object provisional) {
+    if (provisional is ProvisionalFirstLogin) {
+      provisional.discard();
+      if (identical(_stagedFirstLogin, provisional)) {
+        _stagedFirstLogin = null;
+      }
+      return;
+    }
+    if (provisional is! ProvisionalAccount) return;
     if (_staged?.accountId == provisional.accountId) {
       _staged?.discard();
       _staged = null;
@@ -97,8 +142,10 @@ class AccountService {
     if (normalized.isEmpty) {
       throw const AccountVerificationError('blank_username');
     }
+    _stagedFirstLogin?.discard();
+    _stagedFirstLogin = null;
     _staged?.discard();
-    final session = provisional ?? beginFirstLogin();
+    final session = provisional ?? ProvisionalAccount(_uuid.v4());
     _staged = _StagedLogin(
       accountId: session.accountId,
       username: normalized,
@@ -106,6 +153,44 @@ class AccountService {
       savePassword: savePassword,
       fixedAccount: fixedAccount,
     );
+    return session;
+  }
+
+  /// Stages first-login secrets in memory only.  The account row and
+  /// credentials are created by [FirstLoginCommitService] after the verified
+  /// source bundle is prepared.
+  Future<ProvisionalFirstLogin> stageFirstLogin({
+    required String username,
+    String? password,
+    bool savePassword = false,
+    ProvisionalFirstLogin? provisional,
+  }) async {
+    final normalized = username.trim();
+    if (normalized.isEmpty) {
+      throw const AccountVerificationError('blank_username');
+    }
+    _staged?.discard();
+    _staged = null;
+    _stagedFirstLogin?.discard();
+    final session =
+        provisional ?? beginFirstLogin(expectedUsername: normalized);
+    if (session.expectedUsername.trim().isNotEmpty &&
+        session.expectedUsername.trim() != normalized) {
+      session.discard();
+      throw const AccountVerificationError('identity_mismatch');
+    }
+    if (session.expectedUsername.trim().isEmpty) {
+      // The expected username is immutable on the public provisional object;
+      // callers should normally let this method create it.  Rejecting an
+      // empty externally-created value keeps the commit identity check strict.
+      session.discard();
+      throw const AccountVerificationError('blank_username');
+    }
+    if (password != null) {
+      session.discard();
+      session.passwordBytes = Uint8List.fromList(utf8.encode(password));
+    }
+    _stagedFirstLogin = session;
     return session;
   }
 
@@ -374,12 +459,35 @@ class AccountService {
     }
   }
 
-  String stagedUsernameForSync(ProvisionalAccount provisional) {
+  String stagedUsernameForSync(Object provisional) {
+    if (provisional is ProvisionalFirstLogin) {
+      final staged = _stagedFirstLogin;
+      if (staged == null ||
+          !identical(staged, provisional) ||
+          staged.expectedUsername.trim().isEmpty) {
+        throw const AccountVerificationError('no_staged_login');
+      }
+      return staged.expectedUsername.trim();
+    }
+    if (provisional is! ProvisionalAccount) {
+      throw const AccountVerificationError('no_staged_login');
+    }
     final staged = _requireStaged(provisional);
     return staged.username!;
   }
 
-  String? stagedPasswordForInteractiveLogin(ProvisionalAccount provisional) {
+  String? stagedPasswordForInteractiveLogin(Object provisional) {
+    if (provisional is ProvisionalFirstLogin) {
+      final staged = _stagedFirstLogin;
+      if (staged == null || !identical(staged, provisional)) {
+        throw const AccountVerificationError('no_staged_login');
+      }
+      final bytes = staged.passwordBytes;
+      return bytes == null ? null : utf8.decode(bytes);
+    }
+    if (provisional is! ProvisionalAccount) {
+      throw const AccountVerificationError('no_staged_login');
+    }
     return _requireStaged(provisional).password;
   }
 

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart' hide isNotNull, isNull;
@@ -7,6 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
+import 'package:ustc_assistant_app/features/accounts/application/first_login_commit_service.dart';
+import 'package:ustc_assistant_app/features/import/application/import_service.dart';
+import 'package:ustc_assistant_app/features/import/data/source_bundle_decoder.dart';
 import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
 import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
@@ -72,6 +77,70 @@ class FakeBridge implements BridgeGateway {
 
   @override
   Future<void> shutdown() async => shutdowns++;
+}
+
+final class DynamicBundleBridge extends FakeBridge {
+  String? startedAccountId;
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    startedAccountId = accountId;
+    return BridgeJob(id: source.name, phase: 'starting');
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    final bundle =
+        jsonDecode(
+              File(
+                'test/fixtures/source_bundle/positive/jw-with-exam.json',
+              ).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    (bundle['subject'] as Map<String, dynamic>)['accountId'] = startedAccountId;
+    return BridgeJobPoll(
+      events: const [
+        {'sequence': 1, 'phase': 'complete'},
+      ],
+      nextSequence: 1,
+      terminal: true,
+      result: bundle,
+    );
+  }
+}
+
+final class RetryIdentityBridge extends FakeBridge {
+  final accountIds = <String>[];
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async {
+    accountIds.add(accountId);
+    return BridgeJob(
+      id: '${source.name}:${accountIds.length}',
+      phase: 'starting',
+    );
+  }
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async =>
+      const BridgeJobPoll(
+        events: [
+          {'sequence': 1, 'phase': 'failed'},
+        ],
+        nextSequence: 1,
+        terminal: true,
+        errorCode: 'collection_failed',
+      );
 }
 
 final class _AdmissionFakeBridge extends FakeBridge
@@ -721,6 +790,243 @@ void main() {
           .getSingle();
       expect(importedAccount, persisted.id);
       expect(bridge.starts, [SyncSource.jw]);
+    },
+  );
+
+  test(
+    'first login rolls back the account when bundle persistence fails',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final bridge = DynamicBundleBridge();
+      final commit = FirstLoginCommitService(
+        database: database,
+        protector: accounts.protector,
+        persistPrepared:
+            (prepared, {required accountId, required origin}) async {
+              await imports.persistPrepared(
+                prepared,
+                accountId: accountId,
+                origin: origin,
+              );
+              throw StateError('persist_failed');
+            },
+      );
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        now: () => 100,
+        importBundle: imports.importBytes,
+        prepareBundle: imports.prepare,
+        firstLoginCommitService: commit,
+      );
+
+      expect(
+        await service.firstLoginSync(
+          SyncSource.jw,
+          username: 'PB00000000',
+          password: 'secret',
+          savePassword: true,
+        ),
+        isA<SyncFailed>(),
+      );
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await database.select(database.calendarEvents).get(), isEmpty);
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.syncRuns).get(), isEmpty);
+    },
+  );
+
+  test(
+    'cancellation before first-login commit leaves every local table empty',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final bridge = DynamicBundleBridge();
+      final preparing = Completer<void>();
+      final releasePrepare = Completer<PreparedSourceBundle>();
+      final commit = FirstLoginCommitService(
+        database: database,
+        protector: accounts.protector,
+        persistPrepared: imports.persistPrepared,
+      );
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        now: () => 100,
+        importBundle: imports.importBytes,
+        prepareBundle: (_) {
+          if (!preparing.isCompleted) preparing.complete();
+          return releasePrepare.future;
+        },
+        firstLoginCommitService: commit,
+      );
+
+      final syncing = service.firstLoginSync(
+        SyncSource.jw,
+        username: 'PB00000000',
+        password: 'secret',
+        savePassword: true,
+      );
+      await preparing.future;
+      final cancellation = service.cancelCurrent();
+      releasePrepare.complete(
+        await imports.prepare(
+          await File(
+            'test/fixtures/source_bundle/positive/jw-with-exam.json',
+          ).readAsBytes(),
+        ),
+      );
+
+      expect(await syncing, isA<SyncCancelled>());
+      await cancellation;
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await database.select(database.calendarEvents).get(), isEmpty);
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.syncRuns).get(), isEmpty);
+    },
+  );
+
+  test(
+    'atomic first login imports the verified bundle without a provisional run',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final bridge = DynamicBundleBridge();
+      final commit = FirstLoginCommitService(
+        database: database,
+        protector: accounts.protector,
+        persistPrepared: imports.persistPrepared,
+      );
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        now: () => 100,
+        importBundle: imports.importBytes,
+        prepareBundle: imports.prepare,
+        firstLoginCommitService: commit,
+      );
+
+      expect(
+        await service.firstLoginSync(
+          SyncSource.jw,
+          username: 'PB00000000',
+          password: 'secret',
+          savePassword: true,
+        ),
+        isA<SyncSucceeded>(),
+      );
+      expect(await database.select(database.localAccounts).get(), hasLength(1));
+      expect(
+        await database.select(database.credentialAccounts).get(),
+        hasLength(1),
+      );
+      expect(await database.select(database.importBatches).get(), hasLength(1));
+      expect(await database.select(database.syncRuns).get(), hasLength(1));
+      expect(
+        (await database.select(database.syncRuns).getSingle()).state,
+        'success',
+      );
+    },
+  );
+
+  test(
+    'failed first login retries with the same provisional session binding',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final bridge = RetryIdentityBridge();
+      final commit = FirstLoginCommitService(
+        database: database,
+        protector: accounts.protector,
+        persistPrepared: imports.persistPrepared,
+      );
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        now: () => 100,
+        importBundle: imports.importBytes,
+        prepareBundle: imports.prepare,
+        firstLoginCommitService: commit,
+      );
+
+      expect(
+        await service.firstLoginSync(SyncSource.jw, username: 'PB00000000'),
+        isA<SyncFailed>(),
+      );
+      expect(
+        await service.firstLoginSync(SyncSource.jw, username: 'PB00000000'),
+        isA<SyncFailed>(),
+      );
+      expect(bridge.accountIds, hasLength(2));
+      expect(bridge.accountIds[0], bridge.accountIds[1]);
+      expect(await database.select(database.localAccounts).get(), isEmpty);
     },
   );
 

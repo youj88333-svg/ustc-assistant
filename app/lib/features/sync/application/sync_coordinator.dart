@@ -5,6 +5,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/database/app_database.dart';
 import '../../accounts/application/account_service.dart';
+import '../../accounts/application/first_login_commit_service.dart';
+import '../../import/application/import_service.dart';
 import '../../import/domain/import_result.dart';
 import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
@@ -16,6 +18,8 @@ typedef BundleImport =
       required String accountId,
       required ImportOrigin origin,
     });
+
+typedef BundlePrepare = Future<PreparedSourceBundle> Function(Uint8List bytes);
 
 typedef SyncActionResolver = Future<bool> Function(SyncNeedsUserAction action);
 
@@ -30,6 +34,7 @@ class _PausedSync {
     required this.sequence,
     required this.bridge,
     required this.pollProtocolErrorBehavior,
+    this.capabilities,
     this.provisional,
     this.verifiedUsername,
   });
@@ -41,7 +46,8 @@ class _PausedSync {
   final int sequence;
   final BridgeGateway bridge;
   final _PollProtocolErrorBehavior pollProtocolErrorBehavior;
-  final ProvisionalAccount? provisional;
+  final BridgeCapabilities? capabilities;
+  final Object? provisional;
   final String? verifiedUsername;
 }
 
@@ -58,6 +64,10 @@ class SyncCoordinator {
     required this.accounts,
     required this.bridgeFactory,
     required this.importBundle,
+    this.prepareBundle,
+    this.firstLoginCommitService,
+    this.firstLoginCommit,
+    this.importService,
     this.invalidateBridge,
     int Function()? now,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
@@ -66,6 +76,10 @@ class SyncCoordinator {
   final AccountService accounts;
   final Future<BridgeGateway> Function() bridgeFactory;
   final BundleImport importBundle;
+  final BundlePrepare? prepareBundle;
+  final FirstLoginCommitService? firstLoginCommitService;
+  final FirstLoginCommitService? firstLoginCommit;
+  final ImportService? importService;
   final void Function(BridgeGateway bridge)? invalidateBridge;
   final int Function() now;
   static const freshness = Duration(hours: 12);
@@ -81,6 +95,13 @@ class SyncCoordinator {
   Future<void>? _cancelFuture;
   bool _admissionCancellationIssued = false;
   String? _cancelIssuedJobId;
+  String? _pendingFirstLoginAccountId;
+
+  FirstLoginCommitService? get _atomicFirstLoginCommit =>
+      firstLoginCommitService ?? firstLoginCommit;
+
+  BundlePrepare? get _prepareFirstLoginBundle =>
+      prepareBundle ?? importService?.prepare;
 
   /// True when cancellation may be handled by the coordinator's bridge/job
   /// owner. The UI gateway uses this to close a bridge it selected before the
@@ -229,6 +250,7 @@ class SyncCoordinator {
           runId: runId,
           jobId: job.id,
           sequence: 0,
+          capabilities: capabilities,
         );
         return outcome;
       } finally {
@@ -303,16 +325,35 @@ class SyncCoordinator {
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
     final admission = _beginAdmission();
-    ProvisionalAccount? provisional;
+    Object? provisional;
     try {
       final existingId = await accounts.accountIdFor(username);
-      provisional = ProvisionalAccount(existingId ?? _uuid.v4());
-      await accounts.stageLogin(
-        username: username,
-        password: password,
-        savePassword: savePassword,
-        provisional: provisional,
-      );
+      final atomicCommit = _atomicFirstLoginCommit;
+      final prepareBundle = _prepareFirstLoginBundle;
+      final provisionalId =
+          _pendingFirstLoginAccountId ?? existingId ?? _uuid.v4();
+      if (atomicCommit != null && prepareBundle != null) {
+        provisional = await accounts.stageFirstLogin(
+          username: username,
+          password: password,
+          savePassword: savePassword,
+          provisional: ProvisionalFirstLogin(
+            accountId: provisionalId,
+            expectedUsername: username.trim(),
+            savePassword: savePassword,
+          ),
+        );
+        _pendingFirstLoginAccountId =
+            (provisional as ProvisionalFirstLogin).accountId;
+      } else {
+        provisional = ProvisionalAccount(provisionalId);
+        await accounts.stageLogin(
+          username: username,
+          password: password,
+          savePassword: savePassword,
+          provisional: provisional as ProvisionalAccount,
+        );
+      }
       if (_cancelRequested) {
         accounts.cancelFirstLogin(provisional);
         return SyncCancelled(source);
@@ -335,7 +376,7 @@ class SyncCoordinator {
       }
       final job = await bridge.startCollection(
         source: source,
-        accountId: provisional.accountId,
+        accountId: (provisional as ProvisionalAccount).accountId,
         expectedUsername: accounts.stagedUsernameForSync(provisional),
         jwSemester: semesterOverride ?? capabilities.jwSemester,
       );
@@ -344,17 +385,20 @@ class SyncCoordinator {
       _currentSettlement = settlement;
       _completeAdmission(admission);
       try {
-        return await _consume(
+        final outcome = await _consume(
           bridge: bridge,
           source: source,
           accountId: provisional.accountId,
           runId: runId,
           jobId: job.id,
           sequence: 0,
+          capabilities: capabilities,
           pollProtocolErrorBehavior: _PollProtocolErrorBehavior.rethrowToCaller,
           provisional: provisional,
           verifiedUsername: username.trim(),
         );
+        if (outcome is SyncSucceeded) _pendingFirstLoginAccountId = null;
+        return outcome;
       } finally {
         if (_paused[job.id] == null && _currentJob?.jobId == job.id) {
           _completeCurrentSettlement(job.id, settlement);
@@ -487,6 +531,7 @@ class SyncCoordinator {
         runId: paused.runId,
         jobId: paused.jobId,
         sequence: paused.sequence,
+        capabilities: paused.capabilities,
         pollProtocolErrorBehavior: paused.pollProtocolErrorBehavior,
         provisional: paused.provisional,
         verifiedUsername: paused.verifiedUsername,
@@ -621,9 +666,10 @@ class SyncCoordinator {
     required String runId,
     required String jobId,
     required int sequence,
+    BridgeCapabilities? capabilities,
     _PollProtocolErrorBehavior pollProtocolErrorBehavior =
         _PollProtocolErrorBehavior.mapToSyncFailure,
-    ProvisionalAccount? provisional,
+    Object? provisional,
     String? verifiedUsername,
   }) async {
     var cursor = sequence;
@@ -691,6 +737,7 @@ class SyncCoordinator {
           sequence: cursor,
           bridge: bridge,
           pollProtocolErrorBehavior: pollProtocolErrorBehavior,
+          capabilities: capabilities,
           provisional: provisional,
           verifiedUsername: verifiedUsername,
         );
@@ -711,6 +758,40 @@ class SyncCoordinator {
         return SyncCancelled(source);
       }
       if (poll.result != null) {
+        final bytes = Uint8List.fromList(utf8.encode(jsonEncode(poll.result)));
+        final atomicCommit = _atomicFirstLoginCommit;
+        final prepareBundle = _prepareFirstLoginBundle;
+        if (provisional is ProvisionalFirstLogin &&
+            atomicCommit != null &&
+            prepareBundle != null) {
+          // Prepare is deliberately outside the account transaction.  A
+          // cancellation observed after preparation still owns no SQLite
+          // rows and must not enter the commit boundary.
+          if (_cancelRequested) {
+            accounts.cancelFirstLogin(provisional);
+            return SyncCancelled(source);
+          }
+          final prepared = await prepareBundle(bytes);
+          if (_cancelRequested) {
+            accounts.cancelFirstLogin(provisional);
+            return SyncCancelled(source);
+          }
+          final committed = await atomicCommit.commit(
+            provisional: provisional,
+            verifiedUsername: verifiedUsername!,
+            prepared: prepared,
+            cancellationRequested: () => _cancelRequested,
+          );
+          await _persistCapabilities(
+            committed.accountId,
+            capabilities ?? await bridge.capabilities(),
+          );
+          return SyncSucceeded(
+            source,
+            importedEntityCount: committed.importedEntityCount,
+          );
+        }
+
         var importAccountId = accountId;
         var persistedRunId = runId;
         if (provisional != null) {
@@ -728,7 +809,7 @@ class SyncCoordinator {
           );
         }
         final result = await importBundle(
-          Uint8List.fromList(utf8.encode(jsonEncode(poll.result))),
+          bytes,
           accountId: importAccountId,
           origin: ImportOrigin.bridge,
         );
