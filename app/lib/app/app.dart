@@ -13,7 +13,9 @@ import '../core/database/connection.dart';
 import '../core/security/credential_protector_factory.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/application/first_login_commit_service.dart';
+import '../features/agent/application/agent_composition.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/settings/application/minimal_reset_coordinator.dart';
 import '../features/reminders/application/reminder_service.dart';
 import '../features/reminders/application/windows_reminder_reconciler.dart';
 import '../features/reminders/data/foreground_notification_adapter.dart';
@@ -67,8 +69,11 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   late final GoRouter router;
   late final WindowsReminderReconciler reminderReconciler;
   late final MinimalJwRuntimeOwner runtimeOwner;
+  late final AgentCompositionOwner agentCompositionOwner;
   late final AppLifecycleListener _exitListener;
   Future<void>? _exitFuture;
+  MinimalResetCoordinator? _resetCoordinator;
+  Future<MinimalResetCoordinator>? _resetCoordinatorFuture;
 
   @override
   void initState() {
@@ -86,6 +91,9 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     runtimeOwner = MinimalJwRuntimeOwner(
       widget.runtimeLoader ?? _loadDefaultRuntime,
     );
+    agentCompositionOwner = AgentCompositionOwner(
+      loader: buildAgentComposition,
+    );
     final clearBrowser =
         widget.clearBrowserSession ?? clearNativeJwBrowserSessions;
     router = buildRouter(
@@ -95,6 +103,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       null,
       clearBrowser,
       runtimeOwner,
+      agentCompositionOwner,
+      _loadResetCoordinator,
     );
     _exitListener = AppLifecycleListener(onExitRequested: _handleExitRequested);
     if (ownsDatabase) {
@@ -119,6 +129,70 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     );
   }
 
+  Future<MinimalResetCoordinator> _loadResetCoordinator() {
+    final existing = _resetCoordinator;
+    if (existing != null) {
+      return Future<MinimalResetCoordinator>.value(existing);
+    }
+    final pending = _resetCoordinatorFuture;
+    if (pending != null) return pending;
+    final operation = _loadResetCoordinatorImpl();
+    _resetCoordinatorFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {
+          if (identical(_resetCoordinatorFuture, operation)) {
+            _resetCoordinatorFuture = null;
+          }
+        },
+        onError: (Object _, StackTrace _) {
+          if (identical(_resetCoordinatorFuture, operation)) {
+            _resetCoordinatorFuture = null;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<MinimalResetCoordinator> _loadResetCoordinatorImpl() async {
+    final runtime = await runtimeOwner.current;
+    final sync = runtime.syncCoordinator;
+    if (sync == null) {
+      throw StateError('reset_composition_unavailable');
+    }
+    final udfStore = await runtime.resolveUdfStore();
+    late final MinimalResetCoordinator coordinator;
+    coordinator = MinimalResetCoordinator(
+      runtime: runtime,
+      sync: sync,
+      agent: agentCompositionOwner,
+      reminders: reminderReconciler,
+      settings: SettingsService(
+        database: database,
+        accounts: AccountService(
+          database: database,
+          protector: defaultCredentialProtector(),
+        ),
+        // Reset is global in the one-account minimal product, including when
+        // startup has no active account but stale rows remain.
+        accountId: null,
+      ),
+      udfStore: udfStore,
+      recomposeRuntime: () async {
+        // Keep Agent and runtime admission closed until both have been
+        // replaced. The coordinator calls writer.resume only afterwards.
+        await agentCompositionOwner.recompose();
+        await runtimeOwner.replaceAfterReset();
+        if (identical(_resetCoordinator, coordinator)) {
+          _resetCoordinator = null;
+        }
+      },
+    );
+    _resetCoordinator = coordinator;
+    return coordinator;
+  }
+
   Future<MinimalJwRuntime> _loadDefaultRuntime() async {
     final accounts = AccountService(
       database: database,
@@ -141,7 +215,28 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       persistPrepared: importer.persistPrepared,
       reminderReconciler: reminderReconciler,
     );
+    Future<WindowsJwUdfStore>? udfStoreFuture;
+    Future<WindowsJwUdfStore> loadUdfStore() {
+      final existing = udfStoreFuture;
+      if (existing != null) return existing;
+      final operation = () async {
+        final support = await getApplicationSupportDirectory();
+        return WindowsJwUdfStore(privateRoot: Directory(support.path));
+      }();
+      udfStoreFuture = operation;
+      unawaited(
+        operation.then<void>(
+          (_) {},
+          onError: (Object _, StackTrace _) {
+            if (identical(udfStoreFuture, operation)) udfStoreFuture = null;
+          },
+        ),
+      );
+      return operation;
+    }
+
     final admin = _LazyWindowsJwBrowserSessionAdmin(
+      udfStoreLoader: loadUdfStore,
       safeDiagnostic: widget.runtimeDiagnosticSink,
     );
     final native = NativeJwGateway(
@@ -189,6 +284,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       importBundle: importer.importBytes,
       prepareBundle: importer.prepare,
       firstLoginCommitService: firstLoginCommit,
+      gatewayQuiesce: () => gateway.quiesce(),
+      gatewayResume: () => gateway.resume(),
     );
     gateway = SourceJobGatewayAdapter(
       coordinator: coordinator,
@@ -204,6 +301,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     return MinimalJwRuntime(
       gateway: gateway,
       browserSessions: admin,
+      syncCoordinator: coordinator,
+      udfStoreLoader: loadUdfStore,
       safeDiagnostic: widget.runtimeDiagnosticSink,
     );
   }
@@ -230,6 +329,12 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     }
     try {
       await reminderReconciler.dispose();
+    } on Object catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+    }
+    try {
+      await agentCompositionOwner.dispose();
     } on Object catch (error, stack) {
       firstError ??= error;
       firstStack ??= stack;
@@ -288,11 +393,16 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
 /// route entry remains synchronous for non-sync destinations and test hosts
 /// without a path-provider plugin do not block the shell.
 final class _LazyWindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
-  _LazyWindowsJwBrowserSessionAdmin({this.safeDiagnostic});
+  _LazyWindowsJwBrowserSessionAdmin({
+    required this.udfStoreLoader,
+    this.safeDiagnostic,
+  });
 
+  final Future<WindowsJwUdfStore> Function() udfStoreLoader;
   final void Function(String)? safeDiagnostic;
   final JwWebViewSurfaceHost _surfaceHost = JwWebViewSurfaceHost();
   Future<WindowsJwBrowserSessionAdmin>? _adminFuture;
+  Future<WindowsJwUdfStore>? _udfStoreFuture;
   bool _shutdown = false;
 
   @override
@@ -307,9 +417,9 @@ final class _LazyWindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
       );
     }
     final future = () async {
-      final support = await getApplicationSupportDirectory();
+      final udfStore = await _loadUdfStore();
       final admin = WindowsJwBrowserSessionAdmin(
-        udfStore: WindowsJwUdfStore(privateRoot: Directory(support.path)),
+        udfStore: udfStore,
         surfaceHost: _surfaceHost,
         safeDiagnostic: safeDiagnostic,
       );
@@ -323,6 +433,22 @@ final class _LazyWindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
     return future;
   }
 
+  Future<WindowsJwUdfStore> _loadUdfStore() {
+    final existing = _udfStoreFuture;
+    if (existing != null) return existing;
+    final operation = Future<WindowsJwUdfStore>.sync(udfStoreLoader);
+    _udfStoreFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_udfStoreFuture, operation)) _udfStoreFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
+
   @override
   Future<JwBrowserSessionHandle> open(String accountId) async =>
       (await _resolve()).open(accountId);
@@ -330,8 +456,14 @@ final class _LazyWindowsJwBrowserSessionAdmin implements JwBrowserSessionAdmin {
   @override
   Future<void> clearAllPartitions() async {
     final existing = _adminFuture;
-    if (existing == null && _shutdown) return;
-    await (existing ?? _resolve()).then((admin) => admin.clearAllPartitions());
+    if (existing != null) {
+      await existing.then((admin) => admin.clearAllPartitions());
+      return;
+    }
+    // A never-resolved admin does not imply an empty store. Enumerate the
+    // explicit UDF root so stale partitions from an earlier launch are also
+    // cleared from an unconfigured startup.
+    await _loadUdfStore().then((store) => store.clearAllPartitions());
   }
 
   @override

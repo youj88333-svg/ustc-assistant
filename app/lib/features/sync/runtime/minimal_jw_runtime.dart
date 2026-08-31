@@ -5,6 +5,8 @@ import 'dart:async';
 
 import '../native/jw_webview_surface_host.dart';
 import '../native/jw_browser_session_admin.dart';
+import '../native/windows_jw_udf_store.dart';
+import '../application/sync_coordinator.dart';
 import 'source_job_gateway.dart';
 
 /// The app-owned JW runtime bundle.  Routes borrow these ports; they never
@@ -13,15 +15,51 @@ final class MinimalJwRuntime {
   MinimalJwRuntime({
     required this.gateway,
     required this.browserSessions,
+    this.syncCoordinator,
+    this.udfStore,
+    this.udfStoreLoader,
     void Function(String)? safeDiagnostic,
   }) : _safeDiagnostic = safeDiagnostic;
 
   final SourceJobGateway gateway;
   final JwBrowserSessionAdmin browserSessions;
+  final SyncCoordinator? syncCoordinator;
+  final WindowsJwUdfStore? udfStore;
+  final Future<WindowsJwUdfStore> Function()? udfStoreLoader;
   final void Function(String)? _safeDiagnostic;
   Future<void>? _shutdownFuture;
+  Future<WindowsJwUdfStore>? _udfStoreFuture;
 
   JwWebViewSurfaceHost get surfaceHost => browserSessions.surfaceHost;
+
+  /// Resolves the app-owned UDF store without forcing platform path lookup
+  /// during ordinary shell/runtime startup. The reset boundary invokes this
+  /// explicit port when a store was not needed by an earlier browser job.
+  Future<WindowsJwUdfStore> resolveUdfStore() {
+    final existingStore = udfStore;
+    if (existingStore != null) {
+      return Future<WindowsJwUdfStore>.value(existingStore);
+    }
+    final existing = _udfStoreFuture;
+    if (existing != null) return existing;
+    final loader = udfStoreLoader;
+    if (loader == null) {
+      return Future<WindowsJwUdfStore>.error(
+        StateError('UDF store is unavailable'),
+      );
+    }
+    final operation = Future<WindowsJwUdfStore>.sync(loader);
+    _udfStoreFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_udfStoreFuture, operation)) _udfStoreFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
 
   /// Shuts down the gateway (job cancellation/settlement) and then the
   /// session admin (surface/controller/environment release).  Both stages are
@@ -32,6 +70,16 @@ final class MinimalJwRuntime {
     if (existing != null) return existing;
     final operation = _shutdownImpl();
     _shutdownFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // Keep the gateway/session owners alive for a later reset retry;
+          // caching a failed Future would make recovery impossible.
+          if (identical(_shutdownFuture, operation)) _shutdownFuture = null;
+        },
+      ),
+    );
     return operation;
   }
 
@@ -108,6 +156,16 @@ final class MinimalJwRuntimeOwner {
     _shutdownRequested = true;
     final operation = _terminalShutdownImpl();
     _terminalShutdownFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_terminalShutdownFuture, operation)) {
+            _terminalShutdownFuture = null;
+          }
+        },
+      ),
+    );
     return operation;
   }
 
@@ -124,6 +182,14 @@ final class MinimalJwRuntimeOwner {
     _shutdownTarget = target;
     final operation = _shutdownCurrent(target);
     _shutdownFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_shutdownFuture, operation)) _shutdownFuture = null;
+        },
+      ),
+    );
     return operation;
   }
 

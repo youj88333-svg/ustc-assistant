@@ -9,12 +9,18 @@ class SettingsPage extends StatefulWidget {
     required this.service,
     this.onFirstLogin,
     this.onCompleteReset,
+    this.coordinatedReset,
     super.key,
   });
 
   final SettingsService service;
   final VoidCallback? onFirstLogin;
   final VoidCallback? onCompleteReset;
+
+  /// App-owned reset boundary. When supplied, this replaces the legacy
+  /// service-local DB/browser clear while preserving the page's double
+  /// confirmation UI.
+  final Future<void> Function()? coordinatedReset;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -193,10 +199,15 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() => resetting = true);
     var accountCleared = false;
     try {
-      await widget.service.completeReset(
-        firstConfirmation: true,
-        secondConfirmation: true,
-      );
+      final coordinatedReset = widget.coordinatedReset;
+      if (coordinatedReset != null) {
+        await coordinatedReset();
+      } else {
+        await widget.service.completeReset(
+          firstConfirmation: true,
+          secondConfirmation: true,
+        );
+      }
       accountCleared = true;
     } on BrowserSessionClearAfterResetError {
       accountCleared = true;
@@ -204,6 +215,12 @@ class _SettingsPageState extends State<SettingsPage> {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(const SnackBar(content: Text('本地数据已清除，但浏览器会话清理失败')));
+      }
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地数据重置失败，请重试')));
       }
     } finally {
       if (mounted) setState(() => resetting = false);

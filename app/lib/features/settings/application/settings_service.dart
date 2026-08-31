@@ -195,13 +195,21 @@ class SettingsService {
     // or an unconfigured-state reset. Delete children explicitly so the
     // invariant also holds for any rows left by an older schema/migration,
     // rather than relying only on SQLite cascading foreign keys.
-    await database.transaction(_clearAllLocalData);
-    database.notifyActiveAccountChanged();
+    await clearAllLocalData();
     try {
       await accounts.clearDedicatedBrowserSession(recordLog: false);
     } catch (error) {
       throw BrowserSessionClearAfterResetError(error);
     }
+  }
+
+  /// Clears every persisted local account partition in one idempotent
+  /// transaction.  Browser/UDF cleanup intentionally lives outside this port
+  /// so the app-owned reset coordinator can settle all writers before either
+  /// physical store is touched, and can retry an already-empty database.
+  Future<void> clearAllLocalData() async {
+    await database.transaction(_clearAllLocalData);
+    database.notifyActiveAccountChanged();
   }
 
   Future<void> _clearAllLocalData() async {

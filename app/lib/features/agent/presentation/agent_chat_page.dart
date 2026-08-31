@@ -35,6 +35,7 @@ class AgentChatPage extends StatefulWidget {
     required this.websiteLauncher,
     this.sessionModel = AgentConfigurationService.defaultModel,
     this.onSessionModelChanged,
+    this.disposeSessionOnDispose = true,
     super.key,
   });
 
@@ -47,6 +48,10 @@ class AgentChatPage extends StatefulWidget {
   final OfficialWebsiteLauncher websiteLauncher;
   final String sessionModel;
   final VoidCallback? onSessionModelChanged;
+
+  /// App-owned compositions survive route/page disposal; direct hosts keep
+  /// the historical page-owned behavior by default.
+  final bool disposeSessionOnDispose;
 
   @override
   State<AgentChatPage> createState() => _AgentChatPageState();
@@ -135,7 +140,9 @@ class _AgentChatPageState extends State<AgentChatPage> {
   void dispose() {
     _streamSubscription?.cancel();
     _settingsSubscription?.cancel();
-    unawaited(widget.sessionService.dispose());
+    if (widget.disposeSessionOnDispose) {
+      unawaited(widget.sessionService.dispose());
+    }
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();

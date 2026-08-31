@@ -53,6 +53,7 @@ class SyncPageLoader extends StatefulWidget {
     this.reminderReconciler = const NoopReminderReconciler(),
     this.reauthenticateAccountId,
     this.onReauthenticated,
+    this.coordinatedReset,
     this.onReauthenticationRequired,
     this.onExit,
     this.clearBrowserSession,
@@ -68,6 +69,10 @@ class SyncPageLoader extends StatefulWidget {
   final ReminderReconciler reminderReconciler;
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
+
+  /// App-owned complete reset boundary used by re-login. Legacy direct hosts
+  /// leave this null and retain the service-local compatibility path below.
+  final Future<void> Function()? coordinatedReset;
   final ValueChanged<String>? onReauthenticationRequired;
   final VoidCallback? onExit;
   final Future<void> Function()? clearBrowserSession;
@@ -425,6 +430,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           diagnostics: value.diagnostics,
           reauthenticateAccountId: widget.reauthenticateAccountId,
           onReauthenticated: widget.onReauthenticated,
+          coordinatedReset: widget.coordinatedReset,
           onReauthenticationRequired: widget.onReauthenticationRequired == null
               ? null
               : _requestReauthentication,
@@ -467,6 +473,7 @@ class SyncPage extends StatefulWidget {
     this.filePicker = const SystemImportFilePicker(),
     this.reauthenticateAccountId,
     this.onReauthenticated,
+    this.coordinatedReset,
     this.onReauthenticationRequired,
     this.onExit,
     super.key,
@@ -485,6 +492,7 @@ class SyncPage extends StatefulWidget {
   final ImportFilePicker filePicker;
   final String? reauthenticateAccountId;
   final VoidCallback? onReauthenticated;
+  final Future<void> Function()? coordinatedReset;
   final ValueChanged<String>? onReauthenticationRequired;
   final VoidCallback? onExit;
 
@@ -724,28 +732,36 @@ class _SyncPageState extends State<SyncPage> {
       }
       widget.accounts.cancelFirstLogin(staged);
 
-      // The route callback for an existing /sync page already awaited its
-      // loader shutdown before reaching this route. This fresh route still
-      // owns a newly-created gateway, so shut it down before deleting the
-      // account/UDF and before routing to a new first-login loader.
-      await widget.gateway?.shutdown();
-      if (widget.gateway == null) await widget.nativeGateway?.shutdown();
-      final settings = SettingsService(
-        database: widget.accounts.database,
-        accounts: widget.accounts,
-        accountId: id,
-      );
-      try {
-        await settings.completeReset(
-          firstConfirmation: true,
-          secondConfirmation: true,
+      final coordinatedReset = widget.coordinatedReset;
+      if (coordinatedReset != null) {
+        // The app-owned coordinator closes every real writer, drains the
+        // borrowed runtime, clears DB/UDF state, and installs the fresh
+        // runtime before this route is allowed to continue.
+        await coordinatedReset();
+        accountCleared = true;
+      } else {
+        // Legacy direct hosts still own their supplied gateway locally. Keep
+        // their compatibility path, but do not let it replace the app-owned
+        // fixed reset boundary used by production routes.
+        await widget.gateway?.shutdown();
+        if (widget.gateway == null) await widget.nativeGateway?.shutdown();
+        final settings = SettingsService(
+          database: widget.accounts.database,
+          accounts: widget.accounts,
+          accountId: id,
         );
-        accountCleared = true;
-      } on BrowserSessionClearAfterResetError {
-        // The database transaction has already removed the complete local
-        // partition; a post-delete browser cleanup failure must not leave the
-        // caller on a route that can reuse stale account data.
-        accountCleared = true;
+        try {
+          await settings.completeReset(
+            firstConfirmation: true,
+            secondConfirmation: true,
+          );
+          accountCleared = true;
+        } on BrowserSessionClearAfterResetError {
+          // The database transaction has already removed the complete local
+          // partition; a post-delete browser cleanup failure must not leave the
+          // caller on a route that can reuse stale account data.
+          accountCleared = true;
+        }
       }
       message = '本地数据已清除';
     } on AccountVerificationError catch (error) {

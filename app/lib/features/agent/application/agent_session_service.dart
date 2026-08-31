@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
+import '../../settings/application/minimal_reset_coordinator.dart';
 import '../data/drift_chat_repository.dart';
 import '../domain/agent_models.dart';
 import '../domain/agent_tool.dart';
@@ -108,7 +109,7 @@ class _ActiveRun {
 /// Stop semantics: once [cancel] fires mid-loop, the in-flight stream is
 /// allowed to drain, but no new model call is started; the run is marked
 /// `cancelled` and streamed draft text is preserved.
-class AgentSessionService {
+class AgentSessionService implements ResetWriterPort {
   AgentSessionService({
     required this._chatRepository,
     required this._database,
@@ -151,7 +152,92 @@ class AgentSessionService {
   /// so a late summary from an older run cannot clear a newer run.
   final Map<String, _ActiveRun> _activeRuns = {};
   bool _disposed = false;
+  bool _quiescing = false;
+  final Set<Future<void>> _operations = <Future<void>>{};
+  Future<void>? _quiesceFuture;
   final Map<({String accountId, String runId}), _PausedRun> _pausedRuns = {};
+
+  /// Closes all Agent entry points before awaiting cancellation and drains the
+  /// real run/resume futures. Stream subscribers are not used as the barrier:
+  /// a caller may abandon a stream while its database writes are still live.
+  @override
+  Future<void> quiesce() {
+    final existing = _quiesceFuture;
+    if (existing != null) return existing;
+    _quiescing = true;
+    for (final active in _activeRuns.values.toList()) {
+      active.signal.cancel();
+    }
+    final operation = _quiesceImpl();
+    _quiesceFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // Keep admission closed, but allow a later reset retry to drain a
+          // retained pending invocation/session operation again.
+          if (identical(_quiesceFuture, operation)) _quiesceFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _quiesceImpl() async {
+    Object? firstError;
+    StackTrace? firstStack;
+    try {
+      await _cancelPausedRuns((_) => true);
+    } on Object catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+    }
+    final operations = _operations.toList(growable: false);
+    for (final operation in operations) {
+      try {
+        await operation;
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(
+        StateError('agent_quiesce_failed'),
+        firstStack ?? StackTrace.current,
+      );
+    }
+  }
+
+  @override
+  Future<void> resume() async {
+    if (_disposed) return;
+    _quiescing = false;
+    _quiesceFuture = null;
+  }
+
+  Stream<AgentRunViewState> _rejectedStream(String errorCode) =>
+      Stream<AgentRunViewState>.value(
+        AgentRunViewState(
+          runId: '',
+          state: AgentRunState.failed,
+          errorCode: errorCode,
+        ),
+      );
+
+  void _observeOperation(Future<void> operation) {
+    _operations.add(operation);
+    unawaited(
+      operation.then<void>(
+        (_) {
+          _operations.remove(operation);
+        },
+        onError: (Object _, StackTrace _) {
+          _operations.remove(operation);
+        },
+      ),
+    );
+  }
 
   /// Sends [userText] as a new user turn and runs the Agent loop.
   ///
@@ -161,19 +247,26 @@ class AgentSessionService {
     required String accountId,
     required String userText,
   }) {
+    if (_quiescing || _disposed) {
+      return _rejectedStream(
+        _disposed ? 'service_disposed' : 'maintenance_in_progress',
+      );
+    }
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
     final active = _ActiveRun(signal: signal);
     var terminalEmitted = false;
 
-    () async {
+    final operation = () async {
       try {
-        if (_disposed) {
+        if (_disposed || _quiescing) {
           controller.add(
-            const AgentRunViewState(
+            AgentRunViewState(
               runId: '',
               state: AgentRunState.failed,
-              errorCode: 'service_disposed',
+              errorCode: _disposed
+                  ? 'service_disposed'
+                  : 'maintenance_in_progress',
             ),
           );
           terminalEmitted = true;
@@ -217,6 +310,7 @@ class AgentSessionService {
         await controller.close();
       }
     }();
+    _observeOperation(operation);
     return controller.stream;
   }
 
@@ -236,18 +330,25 @@ class AgentSessionService {
   /// linked only through local metadata (history). The most recent completed
   /// user message is reused as the prompt.
   Stream<AgentRunViewState> retryLast({required String accountId}) {
+    if (_quiescing || _disposed) {
+      return _rejectedStream(
+        _disposed ? 'service_disposed' : 'maintenance_in_progress',
+      );
+    }
     final controller = StreamController<AgentRunViewState>(sync: true);
     final signal = CancellationSignal();
     final active = _ActiveRun(signal: signal);
     var terminalEmitted = false;
-    () async {
+    final operation = () async {
       try {
-        if (_disposed) {
+        if (_disposed || _quiescing) {
           controller.add(
-            const AgentRunViewState(
+            AgentRunViewState(
               runId: '',
               state: AgentRunState.failed,
-              errorCode: 'service_disposed',
+              errorCode: _disposed
+                  ? 'service_disposed'
+                  : 'maintenance_in_progress',
             ),
           );
           terminalEmitted = true;
@@ -312,6 +413,7 @@ class AgentSessionService {
         await controller.close();
       }
     }();
+    _observeOperation(operation);
     return controller.stream;
   }
 
@@ -325,8 +427,13 @@ class AgentSessionService {
     required String runId,
     Map<String, Object?>? userActionPayload,
   }) {
+    if (_quiescing || _disposed) {
+      return _rejectedStream(
+        _disposed ? 'service_disposed' : 'maintenance_in_progress',
+      );
+    }
     final controller = StreamController<AgentRunViewState>(sync: true);
-    () async {
+    final operation = () async {
       try {
         final key = (accountId: accountId, runId: runId);
         final paused = _pausedRuns[key];
@@ -373,6 +480,7 @@ class AgentSessionService {
         await controller.close();
       }
     }();
+    _observeOperation(operation);
     return controller.stream;
   }
 
@@ -386,8 +494,13 @@ class AgentSessionService {
     required bool approve,
     required bool remember,
   }) {
+    if (_quiescing || _disposed) {
+      return _rejectedStream(
+        _disposed ? 'service_disposed' : 'maintenance_in_progress',
+      );
+    }
     final controller = StreamController<AgentRunViewState>(sync: true);
-    () async {
+    final operation = () async {
       try {
         final key = (accountId: accountId, runId: runId);
         final paused = _pausedRuns[key];
@@ -453,16 +566,27 @@ class AgentSessionService {
         await controller.close();
       }
     }();
+    _observeOperation(operation);
     return controller.stream;
   }
 
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    _quiescing = true;
     for (final active in _activeRuns.values.toList()) {
       active.signal.cancel();
     }
     await _cancelPausedRuns((_) => true);
+    final operations = _operations.toList(growable: false);
+    for (final operation in operations) {
+      try {
+        await operation;
+      } on Object {
+        // Dispose is best-effort; the owning reset/exit boundary has already
+        // closed admission and still waits for this operation to settle.
+      }
+    }
   }
 
   void _releaseActive(String accountId, _ActiveRun active) {
@@ -572,10 +696,10 @@ class AgentSessionService {
     // issued calls; it never expands the budget or auto-continues. Declared
     // here (before the tool-budget block) so it is in scope for the whole loop.
     MutationLedger? mutationLedger;
-    final isLifecycleMutation = grounding != null &&
+    final isLifecycleMutation =
+        grounding != null &&
         grounding.mutationIntent &&
-        grounding.terminalTools
-            .any(MutationLedger.isLifecycleWriteTool);
+        grounding.terminalTools.any(MutationLedger.isLifecycleWriteTool);
     if (isLifecycleMutation) {
       mutationLedger = MutationLedger();
     }
@@ -908,8 +1032,7 @@ class AgentSessionService {
               // write attempt; never carry titles/refs/ids.
               terminalState = AgentRunState.failed;
               errorCode = mutationLedger!.terminalErrorCode;
-              assistantText =
-                  mutationLedger.terminalMessage ?? assistantText;
+              assistantText = mutationLedger.terminalMessage ?? assistantText;
               break;
             case _GroundedSettlement.correct:
               // Case 3: no required tool succeeded and no corrective call used

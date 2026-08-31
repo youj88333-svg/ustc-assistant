@@ -429,6 +429,85 @@ void main() {
   });
 
   test(
+    'direct file import is admitted, drained, and refused across gateway quiesce',
+    () async {
+      final importGate = Completer<ImportResult>();
+      var importCalls = 0;
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => _TrackingBridge(),
+        importBundle: (bytes, {required accountId, required origin}) {
+          importCalls++;
+          if (importCalls == 1) return importGate.future;
+          return Future<ImportResult>.value(
+            const ImportResult(
+              status: ImportStatus.imported,
+              bundleId: 'file-import',
+              source: 'ustc_jw',
+              importedEntityCount: 1,
+            ),
+          );
+        },
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+      );
+
+      final admitted = gateway.importBundle(
+        Uint8List.fromList(<int>[1]),
+        accountId: 'opaque-account',
+        origin: ImportOrigin.file,
+      );
+      expect(importCalls, 1);
+      final quiescing = gateway.quiesce();
+      var quiesced = false;
+      unawaited(quiescing.then<void>((_) => quiesced = true));
+      await Future<void>.microtask(() {});
+      expect(quiesced, isFalse);
+
+      await expectLater(
+        gateway.importBundle(
+          Uint8List.fromList(<int>[2]),
+          accountId: 'opaque-account',
+          origin: ImportOrigin.file,
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (error) => error.toString(),
+            'message',
+            contains('maintenance_in_progress'),
+          ),
+        ),
+      );
+
+      importGate.complete(
+        const ImportResult(
+          status: ImportStatus.imported,
+          bundleId: 'file-import',
+          source: 'ustc_jw',
+          importedEntityCount: 1,
+        ),
+      );
+      await admitted;
+      await quiescing;
+      expect(quiesced, isTrue);
+      await gateway.resume();
+      expect(
+        await gateway.importBundle(
+          Uint8List.fromList(<int>[3]),
+          accountId: 'opaque-account',
+          origin: ImportOrigin.file,
+        ),
+        isA<ImportResult>(),
+      );
+      expect(importCalls, 2);
+      await gateway.shutdown();
+    },
+  );
+
+  test(
     'cancelCurrent covers bridge admission before a coordinator job exists',
     () async {
       final bridgeReady = Completer<BridgeGateway>();

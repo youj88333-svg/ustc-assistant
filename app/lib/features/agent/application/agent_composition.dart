@@ -1,6 +1,9 @@
+import 'dart:async';
+
 import '../../../core/database/app_database.dart';
 import '../../../core/time/beijing_clock.dart';
 import '../../accounts/application/account_service.dart';
+import '../../settings/application/minimal_reset_coordinator.dart';
 import '../data/anthropic_llm_provider.dart';
 import '../data/drift_agent_write_gateway.dart';
 import '../data/drift_agent_write_unit_of_work.dart';
@@ -25,6 +28,146 @@ import 'outbound_privacy_filter.dart';
 /// defaultCredentialProtector())` (DPAPI). Android/iOS: inject an in-memory or
 /// flutter_secure_storage-backed implementation.
 typedef SecretStoreFactory = AgentSecretStore Function(AppDatabase database);
+
+typedef AgentCompositionLoader =
+    Future<AgentCompositionResult> Function(
+      AppDatabase database,
+      String accountId,
+    );
+
+/// App-owned owner for the lazy Agent composition.
+///
+/// Route entries borrow the active composition through [load]; they never
+/// dispose it on page pop. Reset admission closes before any pending build is
+/// awaited, and a composition that completes late is still quiesced or
+/// disposed under this same owner.
+final class AgentCompositionOwner implements ResetWriterPort {
+  AgentCompositionOwner({required this.loader});
+
+  final AgentCompositionLoader loader;
+  AgentCompositionResult? _active;
+  Future<AgentCompositionResult>? _compositionFuture;
+  Future<void>? _quiesceFuture;
+  bool _quiescing = false;
+  bool _disposed = false;
+
+  AgentCompositionResult? get active => _active;
+
+  Future<AgentCompositionResult> load(
+    AppDatabase database,
+    String accountId,
+  ) async {
+    if (_disposed || _quiescing) {
+      throw StateError('maintenance_in_progress');
+    }
+    final active = _active;
+    if (active != null && active.accountId == accountId) return active;
+    final pending = _compositionFuture;
+    if (pending != null) {
+      final composition = await pending;
+      if (composition.accountId == accountId) return composition;
+      await recompose();
+    }
+    final existing = _active;
+    if (existing != null && existing.accountId != accountId) {
+      await recompose();
+    }
+    if (_disposed || _quiescing) {
+      throw StateError('maintenance_in_progress');
+    }
+    final future = Future<AgentCompositionResult>.sync(
+      () => loader(database, accountId),
+    );
+    _compositionFuture = future;
+    try {
+      final composition = await future;
+      if (_disposed || _quiescing) {
+        // A late result is owned by this composition root even when its page
+        // has already gone away. Drain it before releasing it.
+        _active ??= composition;
+        try {
+          await composition.sessionService.quiesce();
+        } finally {
+          if (_disposed) await composition.dispose();
+        }
+        throw StateError('maintenance_in_progress');
+      }
+      _active = composition;
+      return composition;
+    } finally {
+      if (identical(_compositionFuture, future)) _compositionFuture = null;
+    }
+  }
+
+  /// Disposes the current composition during a successful reset, while its
+  /// admission gate remains closed. The next route load creates a fresh
+  /// session against the new account/runtime state.
+  Future<void> recompose() async {
+    final pending = _compositionFuture;
+    if (pending != null) {
+      try {
+        await pending;
+      } on Object {
+        // A late composition may have been rejected by reset admission. Its
+        // loader owns any returned result through the guarded load path.
+      }
+    }
+    final composition = _active;
+    _active = null;
+    if (composition != null) await composition.dispose();
+  }
+
+  @override
+  Future<void> quiesce() {
+    final existing = _quiesceFuture;
+    if (existing != null) return existing;
+    _quiescing = true;
+    final operation = _quiesceImpl();
+    _quiesceFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_quiesceFuture, operation)) _quiesceFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _quiesceImpl() async {
+    AgentCompositionResult? composition = _active;
+    final pending = _compositionFuture;
+    if (composition == null && pending != null) {
+      try {
+        composition = await pending;
+      } on Object {
+        // The guarded loader either has no composition or has already drained
+        // its late result. Keep reset progress independent of a page error.
+      }
+    }
+    if (composition != null) await composition.sessionService.quiesce();
+  }
+
+  @override
+  Future<void> resume() async {
+    if (_disposed) return;
+    final active = _active;
+    // Keep the owner gate closed until the actual app-owned session has
+    // reopened. Reopening only the composition wrapper would leave the lazy
+    // Agent service permanently in maintenance after reset.
+    if (active != null) await active.sessionService.resume();
+    _quiescing = false;
+    _quiesceFuture = null;
+  }
+
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    _quiescing = true;
+    await recompose();
+  }
+}
 
 /// Composed Agent services for the active account.
 ///
@@ -68,7 +211,10 @@ class AgentComposition {
 
     // Write tools: shared permission policy, per-account write gateway, and the
     // confirmation store that backs the pause/resume cycle for the write card.
-    final policyService = AgentPermissionPolicyService(database: database, clock: clock);
+    final policyService = AgentPermissionPolicyService(
+      database: database,
+      clock: clock,
+    );
     final writeGateway = DriftAgentWriteGateway(
       database: database,
       accountId: accountId,
@@ -117,10 +263,20 @@ class AgentComposition {
       // writeConfirmation 的恢复由确认卡在 UI 层完成（Task 9/10 接线），
       // 不经过此会话级 resumer。外部来源登录恢复已随 query gateway 退役移除。
       userActionResumer:
-          ({required String accountId, required AgentUserAction action}) async {},
+          ({
+            required String accountId,
+            required AgentUserAction action,
+          }) async {},
       writeConfirmationResumer:
-          ({required String handle, required bool approve, required bool remember}) =>
-              confirmationStore.resolve(handle, approve: approve, remember: remember),
+          ({
+            required String handle,
+            required bool approve,
+            required bool remember,
+          }) => confirmationStore.resolve(
+            handle,
+            approve: approve,
+            remember: remember,
+          ),
     );
 
     return AgentCompositionResult(

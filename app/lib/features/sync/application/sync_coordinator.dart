@@ -8,9 +8,14 @@ import '../../accounts/application/account_service.dart';
 import '../../accounts/application/first_login_commit_service.dart';
 import '../../import/application/import_service.dart';
 import '../../import/domain/import_result.dart';
+import '../../settings/application/minimal_reset_coordinator.dart';
 import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
 import '../native/jw_web_page.dart' show defaultLoginTimeout;
+
+// The constructor keeps the established public `importBundle` name while
+// storing a guarded private callback behind the fixed admission port.
+// ignore_for_file: prefer_initializing_formals
 
 typedef BundleImport =
     Future<ImportResult> Function(
@@ -64,31 +69,44 @@ class _CurrentSyncJob {
   final String jobId;
 }
 
-class SyncCoordinator {
+class SyncCoordinator implements ResetWriterPort {
   SyncCoordinator({
     required this.database,
     required this.accounts,
     required this.bridgeFactory,
-    required this.importBundle,
+    required BundleImport importBundle,
     this.prepareBundle,
     this.firstLoginCommitService,
     this.firstLoginCommit,
     this.importService,
     this.persistFirstLoginConfig,
     this.invalidateBridge,
+    this.gatewayQuiesce,
+    this.gatewayResume,
     int Function()? now,
-  }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
+  }) : _importBundle = importBundle,
+       now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final AppDatabase database;
   final AccountService accounts;
   final Future<BridgeGateway> Function() bridgeFactory;
-  final BundleImport importBundle;
+  final BundleImport _importBundle;
   final BundlePrepare? prepareBundle;
   final FirstLoginCommitService? firstLoginCommitService;
   final FirstLoginCommitService? firstLoginCommit;
   final ImportService? importService;
   final FirstLoginConfigPersist? persistFirstLoginConfig;
   final void Function(BridgeGateway bridge)? invalidateBridge;
+
+  /// Optional fixed callback owned by [SourceJobGatewayAdapter]. When present
+  /// it settles the adapter's arbiter lease and coordinator job together,
+  /// avoiding a second cancellation/release path during reset.
+  final Future<void> Function()? gatewayQuiesce;
+
+  /// Paired with [gatewayQuiesce]. The adapter owns the arbiter lease and its
+  /// own admission flag, so reopening the coordinator alone would strand the
+  /// real UI gateway in maintenance after a successful reset.
+  final Future<void> Function()? gatewayResume;
   final int Function() now;
   static const freshness = Duration(hours: 12);
   static const retryBackoff = Duration(hours: 1);
@@ -104,6 +122,15 @@ class SyncCoordinator {
   bool _admissionCancellationIssued = false;
   String? _cancelIssuedJobId;
   String? _pendingFirstLoginAccountId;
+  bool _resetAdmissionClosed = false;
+  Future<void>? _resetQuiesceFuture;
+  int _activeImportCount = 0;
+  Completer<void>? _importDrain;
+
+  /// The explicit import port used by both sync-driven and user-selected file
+  /// imports. Admission is claimed synchronously so a picker/confirmation
+  /// continuation cannot start a write after reset maintenance begins.
+  BundleImport get importBundle => _importBytes;
 
   FirstLoginCommitService? get _atomicFirstLoginCommit =>
       firstLoginCommitService ?? firstLoginCommit;
@@ -118,6 +145,124 @@ class SyncCoordinator {
   bool get hasCurrentJob => _currentJob != null;
 
   bool get hasAdmittedBridge => _admissionBridge != null;
+
+  /// The adapter calls this synchronous prefix when the file-import-facing
+  /// gateway is quiesced directly. The normal reset path calls [quiesce]
+  /// first, but keeping this explicit port closes the same import admission
+  /// for a late picker/confirmation continuation in either path.
+  void closeResetAdmission() {
+    _resetAdmissionClosed = true;
+  }
+
+  /// Waits for all imports admitted through [importBundle]. This is a fixed
+  /// port used by the source gateway; it is deliberately not a participant
+  /// registry.
+  Future<void> settleImports() async {
+    final drain = _importDrain;
+    if (drain != null && !drain.isCompleted) await drain.future;
+  }
+
+  void openResetAdmission() {
+    _resetAdmissionClosed = false;
+    _resetQuiesceFuture = null;
+  }
+
+  /// Closes sync and import admission before the first await, then waits for
+  /// the exact gateway/coordinator settlement and every direct import.
+  ///
+  /// A failed quiesce remains retryable. The admission flag intentionally
+  /// stays closed until the reset coordinator calls [resume] after database,
+  /// UDF and runtime recomposition all succeed.
+  @override
+  Future<void> quiesce() {
+    final existing = _resetQuiesceFuture;
+    if (existing != null) return existing;
+    closeResetAdmission();
+
+    Future<void> gatewaySettlement;
+    try {
+      gatewaySettlement = gatewayQuiesce?.call() ?? cancelCurrent();
+    } on Object catch (error, stack) {
+      gatewaySettlement = Future<void>.error(error, stack);
+    }
+    final operation = _quiesceImpl(gatewaySettlement);
+    _resetQuiesceFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // Keep maintenance admission closed, but permit retryReset to make
+          // a fresh settlement attempt against retained ownership.
+          if (identical(_resetQuiesceFuture, operation)) {
+            _resetQuiesceFuture = null;
+          }
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _quiesceImpl(Future<void> gatewaySettlement) async {
+    Object? firstError;
+    StackTrace? firstStack;
+    try {
+      await gatewaySettlement;
+    } on Object catch (error, stack) {
+      firstError = error;
+      firstStack = stack;
+    }
+    // Direct file imports are not necessarily represented by a gateway job.
+    // Always drain that independent writer boundary even when gateway
+    // cancellation reported an error; the coordinator remains fail-closed.
+    try {
+      await settleImports();
+    } on Object catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStack ?? StackTrace.current);
+    }
+  }
+
+  @override
+  Future<void> resume() async {
+    if (!_resetAdmissionClosed) return;
+    await gatewayResume?.call();
+    _resetAdmissionClosed = false;
+    _resetQuiesceFuture = null;
+  }
+
+  Future<ImportResult> _importBytes(
+    Uint8List bytes, {
+    required String accountId,
+    required ImportOrigin origin,
+  }) {
+    if (_resetAdmissionClosed) {
+      return Future<ImportResult>.error(StateError('maintenance_in_progress'));
+    }
+    _activeImportCount++;
+    _importDrain ??= Completer<void>();
+    final operation = Future<ImportResult>.sync(
+      () => _importBundle(bytes, accountId: accountId, origin: origin),
+    );
+    unawaited(
+      operation.then<void>(
+        (_) => _completeImport(),
+        onError: (Object _, StackTrace _) => _completeImport(),
+      ),
+    );
+    return operation;
+  }
+
+  void _completeImport() {
+    if (_activeImportCount > 0) _activeImportCount--;
+    if (_activeImportCount == 0) {
+      final drain = _importDrain;
+      if (drain != null && !drain.isCompleted) drain.complete();
+      _importDrain = null;
+    }
+  }
 
   Completer<void> _beginAdmission() {
     _cancelRequested = false;
@@ -191,6 +336,9 @@ class SyncCoordinator {
     String? accountId,
     BridgeSemesterCapability? semesterOverride,
   }) async {
+    if (_resetAdmissionClosed) {
+      return SyncSkipped(source, reason: 'maintenance_in_progress');
+    }
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
     final admission = _beginAdmission();
@@ -330,6 +478,9 @@ class SyncCoordinator {
     bool savePassword = false,
     BridgeSemesterCapability? semesterOverride,
   }) async {
+    if (_resetAdmissionClosed) {
+      return SyncSkipped(source, reason: 'maintenance_in_progress');
+    }
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
     final admission = _beginAdmission();
@@ -430,6 +581,9 @@ class SyncCoordinator {
     bool savePassword = false,
     BridgeSemesterCapability? semesterOverride,
   }) async {
+    if (_resetAdmissionClosed) {
+      return SyncSkipped(source, reason: 'maintenance_in_progress');
+    }
     if (_busy) return SyncSkipped(source, reason: 'busy');
     _busy = true;
     final admission = _beginAdmission();
@@ -510,6 +664,9 @@ class SyncCoordinator {
     String jobId, {
     required bool userConfirmed,
   }) async {
+    if (_resetAdmissionClosed) {
+      return const SyncFailed(SyncSource.jw, code: 'maintenance_in_progress');
+    }
     final paused = _paused.remove(jobId);
     if (paused == null) {
       return const SyncFailed(SyncSource.jw, code: 'job_not_found');

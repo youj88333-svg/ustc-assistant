@@ -26,6 +26,7 @@ import '../features/schedule/presentation/schedule_page.dart';
 import '../features/schedule/presentation/event_detail_loader.dart';
 import '../features/schedule/presentation/conflict_management_page.dart';
 import '../features/settings/presentation/official_websites_page.dart';
+import '../features/settings/application/minimal_reset_coordinator.dart';
 import '../features/settings/application/settings_service.dart';
 import '../features/settings/presentation/settings_page.dart';
 import '../features/sync/presentation/sync_page.dart';
@@ -37,12 +38,6 @@ import '../features/tasks/presentation/task_form.dart';
 import '../features/tasks/presentation/task_detail_loader.dart';
 import 'app_drawer.dart';
 
-typedef AgentCompositionLoader =
-    Future<AgentCompositionResult> Function(
-      AppDatabase database,
-      String accountId,
-    );
-
 GoRouter buildRouter(
   OfficialWebsiteLauncher websiteLauncher,
   AppDatabase database, [
@@ -50,8 +45,10 @@ GoRouter buildRouter(
   AgentCompositionLoader? agentCompositionLoader,
   Future<void> Function()? clearBrowserSession,
   MinimalJwRuntimeOwner? runtimeOwner,
+  AgentCompositionOwner? agentCompositionOwner,
+  Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader,
 ]) {
-  final loadAgentComposition = agentCompositionLoader ?? _buildAgentComposition;
+  final loadAgentComposition = agentCompositionLoader ?? buildAgentComposition;
   // The app shell injects the physical cleanup callback. Keep direct router
   // construction side-effect free for widget tests and embedded hosts.
   final clearBrowser = clearBrowserSession ?? _noopBrowserSession;
@@ -70,6 +67,7 @@ GoRouter buildRouter(
                   database: database,
                   websiteLauncher: websiteLauncher,
                   compositionLoader: loadAgentComposition,
+                  compositionOwner: agentCompositionOwner,
                 ),
               ),
             ],
@@ -179,8 +177,18 @@ GoRouter buildRouter(
             runtime: runtime,
             reauthenticateAccountId: state.pathParameters['accountId']!,
             clearBrowserSession: clearBrowser,
-            onReauthenticated: () =>
-                _replaceRuntimeAndGo(context, runtimeOwner),
+            coordinatedReset: resetCoordinatorLoader == null
+                ? null
+                : () async => (await resetCoordinatorLoader()).completeReset(),
+            onReauthenticated: () {
+              if (resetCoordinatorLoader != null) {
+                // The coordinated reset has already installed the fresh
+                // runtime. Do not call replaceAfterReset a second time.
+                context.go('/sync');
+              } else {
+                _replaceRuntimeAndGo(context, runtimeOwner);
+              }
+            },
           ),
         ),
       ),
@@ -233,6 +241,7 @@ GoRouter buildRouter(
           database: database,
           clearBrowserSession: clearBrowser,
           runtimeOwner: runtimeOwner,
+          resetCoordinatorLoader: resetCoordinatorLoader,
         ),
       ),
       GoRoute(
@@ -545,11 +554,13 @@ class _SettingsLoader extends StatelessWidget {
     required this.database,
     required this.clearBrowserSession,
     this.runtimeOwner,
+    this.resetCoordinatorLoader,
   });
 
   final AppDatabase database;
   final Future<void> Function() clearBrowserSession;
   final MinimalJwRuntimeOwner? runtimeOwner;
+  final Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader;
 
   @override
   Widget build(BuildContext context) {
@@ -575,6 +586,7 @@ class _SettingsLoader extends StatelessWidget {
             await clearBrowserSession();
           },
         );
+        final resetLoader = resetCoordinatorLoader;
         return SettingsPage(
           service: SettingsService(
             database: database,
@@ -582,7 +594,16 @@ class _SettingsLoader extends StatelessWidget {
             accountId: account?.id,
           ),
           onFirstLogin: account == null ? () => context.go('/sync') : null,
-          onCompleteReset: () => _replaceRuntimeAndGo(context, runtimeOwner),
+          coordinatedReset: resetLoader == null
+              ? null
+              : () async => (await resetLoader()).completeReset(),
+          onCompleteReset: () {
+            if (resetLoader != null) {
+              context.go('/sync');
+            } else {
+              _replaceRuntimeAndGo(context, runtimeOwner);
+            }
+          },
         );
       },
     );
@@ -644,11 +665,13 @@ class _AgentChatLoader extends StatefulWidget {
     required this.database,
     required this.websiteLauncher,
     required this.compositionLoader,
+    this.compositionOwner,
   });
 
   final AppDatabase database;
   final OfficialWebsiteLauncher websiteLauncher;
   final AgentCompositionLoader compositionLoader;
+  final AgentCompositionOwner? compositionOwner;
 
   @override
   State<_AgentChatLoader> createState() => _AgentChatLoaderState();
@@ -714,6 +737,7 @@ class _AgentChatLoaderState extends State<_AgentChatLoader> {
           accountId: account.id,
           websiteLauncher: widget.websiteLauncher,
           compositionLoader: widget.compositionLoader,
+          compositionOwner: widget.compositionOwner,
         );
       },
     );
@@ -733,6 +757,7 @@ class _AgentChatCompositionBuilder extends StatefulWidget {
     required this.accountId,
     required this.websiteLauncher,
     required this.compositionLoader,
+    this.compositionOwner,
     super.key,
   });
 
@@ -740,6 +765,7 @@ class _AgentChatCompositionBuilder extends StatefulWidget {
   final String accountId;
   final OfficialWebsiteLauncher websiteLauncher;
   final AgentCompositionLoader compositionLoader;
+  final AgentCompositionOwner? compositionOwner;
 
   @override
   State<_AgentChatCompositionBuilder> createState() =>
@@ -755,8 +781,11 @@ class _AgentChatCompositionBuilderState
   @override
   void initState() {
     super.initState();
+    final owner = widget.compositionOwner;
     _compositionFuture = _trackComposition(
-      widget.compositionLoader(widget.database, widget.accountId),
+      owner == null
+          ? widget.compositionLoader(widget.database, widget.accountId)
+          : owner.load(widget.database, widget.accountId),
     );
   }
 
@@ -765,7 +794,7 @@ class _AgentChatCompositionBuilderState
   ) async {
     final composition = await future;
     if (_disposed) {
-      await composition.dispose();
+      if (widget.compositionOwner == null) await composition.dispose();
       throw StateError('composition_disposed');
     }
     _composition = composition;
@@ -773,6 +802,17 @@ class _AgentChatCompositionBuilderState
   }
 
   Future<void> _reloadComposition() async {
+    final owner = widget.compositionOwner;
+    if (owner != null) {
+      await owner.recompose();
+      if (!mounted) return;
+      setState(() {
+        _compositionFuture = _trackComposition(
+          owner.load(widget.database, widget.accountId),
+        );
+      });
+      return;
+    }
     final previous = _composition;
     _composition = null;
     if (previous != null) await previous.dispose();
@@ -788,7 +828,9 @@ class _AgentChatCompositionBuilderState
   void dispose() {
     _disposed = true;
     final composition = _composition;
-    if (composition != null) unawaited(composition.dispose());
+    if (widget.compositionOwner == null && composition != null) {
+      unawaited(composition.dispose());
+    }
     super.dispose();
   }
 
@@ -820,6 +862,7 @@ class _AgentChatCompositionBuilderState
           websiteLauncher: widget.websiteLauncher,
           sessionModel: composition.model,
           onSessionModelChanged: _reloadComposition,
+          disposeSessionOnDispose: widget.compositionOwner == null,
         );
       },
     );
@@ -833,7 +876,7 @@ class _NoResolvedUsername implements Exception {
   const _NoResolvedUsername();
 }
 
-Future<AgentCompositionResult> _buildAgentComposition(
+Future<AgentCompositionResult> buildAgentComposition(
   AppDatabase database,
   String accountId,
 ) async {

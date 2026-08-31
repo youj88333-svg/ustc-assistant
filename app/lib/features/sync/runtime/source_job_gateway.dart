@@ -6,6 +6,8 @@ import 'dart:async';
 import '../application/sync_coordinator.dart';
 import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
+import '../../settings/application/minimal_reset_coordinator.dart';
+import '../../import/domain/import_result.dart';
 import 'jw_job_arbiter.dart';
 
 /// Explicit composition switch. Native WebView2 is the default; setting this
@@ -136,7 +138,8 @@ final class SourceJobGatewayAdapter
         InteractiveSourceJobGateway,
         SourceJobImportReader,
         SourceJobDiagnosticReader,
-        SourceJobSessionOwner {
+        SourceJobSessionOwner,
+        ResetWriterPort {
   SourceJobGatewayAdapter({
     required SyncCoordinator coordinator,
     required JwJobArbiter arbiter,
@@ -179,6 +182,8 @@ final class SourceJobGatewayAdapter
   Future<void>? _cancelFuture;
   bool _shutdownStarted = false;
   bool _cancelRequested = false;
+  bool _quiescing = false;
+  Future<void>? _quiesceFuture;
   String? _cancelJobId;
   bool _admissionCancellationIssued = false;
   BridgeGateway? _admissionCancelledBridge;
@@ -214,7 +219,85 @@ final class SourceJobGatewayAdapter
           (_bridge! as SourceJobSessionOwner).ownsBrowserSessions);
 
   @override
-  BundleImport get importBundle => _coordinator.importBundle;
+  BundleImport
+  get importBundle => (bytes, {required accountId, required origin}) {
+    // Terminal app shutdown and reset maintenance must cover the presentation
+    // import callback too; a picker/confirmation continuation may retain this
+    // function after its page has started disposing.
+    if (_shutdownStarted || _quiescing) {
+      return Future<ImportResult>.error(StateError('maintenance_in_progress'));
+    }
+    return _coordinator.importBundle(
+      bytes,
+      accountId: accountId,
+      origin: origin,
+    );
+  };
+
+  /// Closes gateway admission before awaiting coordinator cancellation so the
+  /// arbiter lease cannot be released while a late operation is still being
+  /// attached to this adapter.
+  @override
+  Future<void> quiesce() {
+    final existing = _quiesceFuture;
+    if (existing != null) return existing;
+    // This is the synchronous prefix for the real file-import path. The
+    // coordinator normally closes this flag before invoking gatewayQuiesce,
+    // but direct adapter users (SyncPage's picker continuation) must get the
+    // same fixed barrier when they quiesce the gateway itself.
+    _coordinator.closeResetAdmission();
+    _quiescing = true;
+    final operation = _quiesceImpl();
+    _quiesceFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_quiesceFuture, operation)) _quiesceFuture = null;
+        },
+      ),
+    );
+    return operation;
+  }
+
+  Future<void> _quiesceImpl() async {
+    Object? firstError;
+    StackTrace? firstStack;
+    try {
+      await cancelCurrent();
+    } on Object catch (error, stack) {
+      firstError = error;
+      firstStack = stack;
+    }
+    final operation = _operation;
+    if (operation != null) {
+      try {
+        await operation;
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    // File imports can be admitted without an arbiter lease. They must still
+    // settle when native-job cancellation reports a failure.
+    try {
+      await _coordinator.settleImports();
+    } on Object catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStack ?? StackTrace.current);
+    }
+  }
+
+  @override
+  Future<void> resume() async {
+    if (_shutdownStarted) return;
+    _quiescing = false;
+    _quiesceFuture = null;
+    _coordinator.openResetAdmission();
+  }
 
   @override
   Stream<String> get diagnostics {
@@ -229,7 +312,7 @@ final class SourceJobGatewayAdapter
 
   @override
   Future<SyncOutcome> firstLogin(FirstLoginCommand command) {
-    if (_shutdownStarted) {
+    if (_shutdownStarted || _quiescing) {
       return Future<SyncOutcome>.value(
         const SyncFailed(SyncSource.jw, code: 'runtime_shutdown'),
       );
@@ -259,7 +342,7 @@ final class SourceJobGatewayAdapter
     required String accountId,
     required SyncTrigger trigger,
   }) {
-    if (_shutdownStarted) {
+    if (_shutdownStarted || _quiescing) {
       return Future<SyncOutcome>.value(
         const SyncFailed(SyncSource.jw, code: 'runtime_shutdown'),
       );
@@ -280,6 +363,11 @@ final class SourceJobGatewayAdapter
     required JwJobKind kind,
     required Future<SyncOutcome> Function() operation,
   }) {
+    if (_quiescing || _shutdownStarted) {
+      return Future<SyncOutcome>.value(
+        const SyncFailed(SyncSource.jw, code: 'runtime_shutdown'),
+      );
+    }
     final lease = _tryAcquire(kind);
     if (lease == null) {
       _emit(const SourceJobSnapshot(phase: 'failed', safeCode: 'bridge_busy'));
@@ -396,7 +484,7 @@ final class SourceJobGatewayAdapter
     String jobId, {
     required bool userConfirmed,
   }) {
-    if (_shutdownStarted) {
+    if (_shutdownStarted || _quiescing) {
       return Future<SyncOutcome>.value(
         const SyncFailed(SyncSource.jw, code: 'runtime_shutdown'),
       );
@@ -584,8 +672,19 @@ final class SourceJobGatewayAdapter
     final existing = _shutdownFuture;
     if (existing != null) return existing;
     _shutdownStarted = true;
+    _quiescing = true;
     final operation = _shutdownImpl();
     _shutdownFuture = operation;
+    unawaited(
+      operation.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // A failed shutdown retains the selected bridge for a real retry;
+          // do not cache the failed Future forever or drop ownership.
+          if (identical(_shutdownFuture, operation)) _shutdownFuture = null;
+        },
+      ),
+    );
     return operation;
   }
 
