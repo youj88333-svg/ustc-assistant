@@ -508,6 +508,47 @@ void main() {
     expect(find.widgetWithText(FilledButton, '登录并同步教务'), findsOneWidget);
   });
 
+  testWidgets(
+    'gated first-login completion after page pop does not touch disposed state',
+    (tester) async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = AccountService(
+        database: database,
+        protector: _TestProtector(),
+      );
+      final loginResult = Completer<SyncOutcome>();
+      final coordinator = _BlockingSyncCoordinator(
+        database: database,
+        accounts: accounts,
+        loginResult: loginResult.future,
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SyncPage(accounts: accounts, coordinator: coordinator),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('first-login-username')),
+        'PB00000000',
+      );
+      await tester.tap(find.byKey(const Key('first-login-submit')));
+      await tester.pump();
+
+      // Complete the actual first-login future only after SyncPage has been
+      // removed. Any continuation touching its password controller or
+      // attempting stale navigation would surface during the final pump.
+      await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: Text('after-sync-pop'))),
+      );
+      loginResult.complete(const SyncCancelled(SyncSource.jw));
+      await tester.pumpAndSettle();
+      expect(find.text('after-sync-pop'), findsOneWidget);
+    },
+  );
+
   testWidgets('reauthentication mode targets an existing local account reset', (
     tester,
   ) async {

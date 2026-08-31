@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
-import 'package:drift/drift.dart';
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -24,6 +24,7 @@ import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.da
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_browser_session_admin.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_webview_surface_host.dart';
+import 'package:ustc_assistant_app/features/sync/presentation/sync_page.dart';
 import 'package:ustc_assistant_app/features/sync/runtime/jw_job_arbiter.dart';
 import 'package:ustc_assistant_app/features/sync/runtime/minimal_jw_runtime.dart';
 import 'package:ustc_assistant_app/features/sync/runtime/source_job_gateway.dart';
@@ -276,6 +277,84 @@ final class _ImmediateResetUdf implements ResetUdfPort {
   @override
   Future<void> clearAllPartitions() async {
     clearCalls++;
+  }
+}
+
+final class _RecoveryGateway
+    implements SourceJobGateway, SourceJobStateReader, SourceJobImportReader {
+  _RecoveryGateway(this.name, this.events, {this.shutdownImpl});
+
+  final String name;
+  final List<String> events;
+  final Future<void> Function()? shutdownImpl;
+  final StreamController<SourceJobSnapshot> _states =
+      StreamController<SourceJobSnapshot>.broadcast();
+  var shutdownCalls = 0;
+  var firstLoginCalls = 0;
+
+  @override
+  Stream<SourceJobSnapshot> get states => _states.stream;
+
+  @override
+  Future<SyncOutcome> firstLogin(FirstLoginCommand command) async {
+    firstLoginCalls++;
+    events.add('$name.first-login');
+    return const SyncCancelled(SyncSource.jw);
+  }
+
+  @override
+  Future<SyncOutcome> sync({
+    required String accountId,
+    required SyncTrigger trigger,
+  }) async => const SyncCancelled(SyncSource.jw);
+
+  @override
+  Future<void> cancelCurrent() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    events.add('$name.shutdown');
+    await shutdownImpl?.call();
+    await _states.close();
+  }
+
+  @override
+  Future<SyncSourceState> stateFor(String accountId) async =>
+      const SyncSourceState(source: SyncSource.jw, phase: SyncPhase.idle);
+
+  @override
+  BundleImport get importBundle =>
+      (bytes, {required accountId, required origin}) async =>
+          const ImportResult(
+            status: ImportStatus.imported,
+            bundleId: 'recovery-test',
+            source: 'ustc_jw',
+            importedEntityCount: 0,
+          );
+}
+
+final class _FailOnceRecoveryWriter implements ResetWriterPort {
+  _FailOnceRecoveryWriter({required this.retryStarted, required this.release});
+
+  final Completer<void> retryStarted;
+  final Completer<void> release;
+  var quiesceCalls = 0;
+  var resumeCalls = 0;
+
+  @override
+  Future<void> quiesce() {
+    quiesceCalls++;
+    if (quiesceCalls == 1) {
+      return Future<void>.error(StateError('reset-writer-failure'));
+    }
+    if (!retryStarted.isCompleted) retryStarted.complete();
+    return release.future;
+  }
+
+  @override
+  Future<void> resume() async {
+    resumeCalls++;
   }
 }
 
@@ -561,6 +640,217 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('重置失败'), findsOneWidget);
     expect(runtimeLoads, 0);
+  });
+
+  testWidgets(
+    'production recovery retries through resetting to borrowed fresh login',
+    (tester) async {
+      final events = <String>[];
+      final firstGateway = _RecoveryGateway('retired', events);
+      final replacementGateway = _RecoveryGateway('replacement', events);
+      final firstRuntime = MinimalJwRuntime(
+        gateway: firstGateway,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final replacementRuntime = MinimalJwRuntime(
+        gateway: replacementGateway,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final retryStarted = Completer<void>();
+      final releaseRetry = Completer<void>();
+      final syncWriter = _FailOnceRecoveryWriter(
+        retryStarted: retryStarted,
+        release: releaseRetry,
+      );
+      final appKey = GlobalKey<UstcAssistantAppState>();
+      var runtimeLoads = 0;
+      late final MinimalResetCoordinator coordinator;
+      coordinator = MinimalResetCoordinator(
+        runtime: firstRuntime,
+        sync: syncWriter,
+        agent: _AppShellResetWriter(),
+        reminders: _AppShellResetWriter(),
+        settings: SettingsService(
+          database: database,
+          accounts: AccountService(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          accountId: null,
+        ),
+        udfStore: _ImmediateResetUdf(),
+        recomposeRuntime: () async {
+          await appKey.currentState!.runtimeOwner.replaceAfterReset();
+          final replacement = await appKey.currentState!.runtimeOwner.current;
+          coordinator.bindReplacementRuntime(
+            runtime: replacement,
+            sync: syncWriter,
+          );
+        },
+      );
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          key: appKey,
+          websiteLauncher: FakeWebsiteLauncher(),
+          database: database,
+          runtimeLoader: () async {
+            runtimeLoads++;
+            return runtimeLoads == 1 ? firstRuntime : replacementRuntime;
+          },
+          resetCoordinatorLoader: () async => coordinator,
+        ),
+      );
+      await tester.pumpAndSettle();
+      final app = appKey.currentState!;
+      final phaseEvents = <MinimalAppPhase>[];
+      void recordPhase() => phaseEvents.add(app.appState.phase);
+
+      app.appState.addListener(recordPhase);
+      addTearDown(() => app.appState.removeListener(recordPhase));
+
+      // Prime the real runtime owner and then return through the real shell.
+      app.router.go('/sync');
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<SyncPageLoader>(find.byType(SyncPageLoader)).runtime,
+        same(firstRuntime),
+      );
+      app.router.go('/chat');
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+
+      expect(app.appState.phase, MinimalAppPhase.resetFailed);
+      expect(
+        app.router.routeInformationProvider.value.uri.path,
+        '/reset-recovery',
+      );
+      expect(find.byKey(const Key('retry-reset')), findsOneWidget);
+
+      // Both a deep link and a back attempt remain inside the fail-closed
+      // recovery route while the retained reset has not succeeded.
+      app.router.go('/schedule');
+      await tester.pumpAndSettle();
+      expect(
+        app.router.routeInformationProvider.value.uri.path,
+        '/reset-recovery',
+      );
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('重置失败'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('retry-reset')));
+      await retryStarted.future;
+      await tester.pump();
+      expect(app.appState.phase, MinimalAppPhase.resetting);
+      expect(app.router.routeInformationProvider.value.uri.path, '/resetting');
+
+      releaseRetry.complete();
+      await tester.pumpAndSettle();
+      expect(phaseEvents, contains(MinimalAppPhase.resetFailed));
+      expect(phaseEvents, contains(MinimalAppPhase.resetting));
+      expect(phaseEvents, contains(MinimalAppPhase.unconfigured));
+      expect(app.appState.hasAccount, isFalse);
+      expect(app.router.routeInformationProvider.value.uri.path, '/sync');
+
+      final borrowed = tester.widget<SyncPageLoader>(
+        find.byType(SyncPageLoader),
+      );
+      expect(borrowed.runtime, same(replacementRuntime));
+      expect(borrowed.nativeGateway, isNull);
+      expect(borrowed.nativeGatewayFactory, isNull);
+
+      await tester.enterText(
+        find.byKey(const Key('first-login-username')),
+        'PB00000000',
+      );
+      await tester.tap(find.byKey(const Key('first-login-submit')));
+      await tester.pumpAndSettle();
+      expect(firstGateway.firstLoginCalls, 0);
+      expect(replacementGateway.firstLoginCalls, 1);
+
+      await app.prepareForExit();
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    },
+  );
+
+  testWidgets('recovery exit awaits owned cleanup before requesting app exit', (
+    tester,
+  ) async {
+    final events = <String>[];
+    final shutdownGate = Completer<void>();
+    final runtime = MinimalJwRuntime(
+      gateway: _RecoveryGateway(
+        'owned',
+        events,
+        shutdownImpl: () async {
+          events.add('owned-shutdown-start');
+          await shutdownGate.future;
+          events.add('owned-shutdown-end');
+        },
+      ),
+      browserSessions: _AppShellSessionAdmin(),
+    );
+    final appKey = GlobalKey<UstcAssistantAppState>();
+    var exitRequests = 0;
+
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        key: appKey,
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+        runtimeLoader: () async => runtime,
+        resetCoordinatorLoader: () => Future<MinimalResetCoordinator>.error(
+          StateError('reset-composition-failure'),
+        ),
+        requestAppExit: () async {
+          exitRequests++;
+          events.add('os-exit');
+          return AppExitResponse.exit;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    final app = appKey.currentState!;
+    app.router.go('/sync');
+    await tester.pumpAndSettle();
+    app.router.go('/chat');
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('complete-reset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认').last);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('exit-app')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('exit-app')));
+    await tester.pump();
+    expect(
+      events,
+      containsAllInOrder(<String>['owned.shutdown', 'owned-shutdown-start']),
+    );
+    expect(exitRequests, 0);
+
+    shutdownGate.complete();
+    await tester.pumpAndSettle();
+    expect(
+      events,
+      containsAllInOrder(<String>['owned-shutdown-end', 'os-exit']),
+    );
+    expect(exitRequests, 1);
+
+    await app.prepareForExit();
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump();
   });
 
   testWidgets('unconfigured chat exposes a reachable first-login action', (
