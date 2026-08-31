@@ -1,7 +1,7 @@
 # M6 外部机器交接手册：三端构建与真实人工验收
 
 > 分支：`refactor/webview-minimal`（M7 原生 WebView2 已接入；本文保留 M6 交接
-> 步骤并补充 Task 9 的自动化验证口径）
+> 步骤并补充 targeted Task 9 自动化验证口径，当前结果为 2026-08-31）
 > 依据：`docs/plan-webview-minimal-m6.md` §1（本手册为该节的可执行落地版）
 > 适用对象：在**有完整 SDK 的外部机器**上执行三端构建 + 真实教务采集验收 + 真实
 > Agent 人工验收的操作者。
@@ -15,7 +15,7 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 §8.7：Windows analyze/test/build 串行 gate 全部 exit 0（test 1441/0，Release 产物已生成）；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | Task 9 §8.7：Windows analyze/test/build 串行 gate 全部 exit 0（当前 targeted test 1574/0，Release 产物已生成）；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
@@ -601,7 +601,7 @@ WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍�
 该修正只恢复本机 Release 应用的入口和清理语义；focused/widget/构建自动化不访问学校
 主机，不能替代 §8.4 的真实校园账号验收。真实校园 stage chain 仍保持未完成。
 
-#### Task 9 自动化验证记录（2026-08-29）
+#### Task 9 自动化验证记录：历史快照（2026-08-29）
 
 - 进程预检：最终 gate 启动时执行 `Get-Process flutter,dart,ustc_assistant_app`，
   目标进程为零；gate 结束后同一查询也为零。另在结束后的只读进程树检查中发现一
@@ -639,4 +639,33 @@ WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍�
   `.superpowers/sdd/2026-08-28-minimal-jw-webview-reachability/task-9-report.md`。
   若未来 owner 环境再次出现该错误，仍必须保留原始计数并停止后续 gate，不复制、改名、
   安装或下载 DLL；真实校园验收仍未由本机自动化代替。
+
+#### Task 9 targeted runtime acceptance：当前自动化结果（2026-08-31）
+
+本节取代上面的历史 1441/0 快照，仍不代表真实校园验收：
+
+- Windows Debug loopback 使用 brief 精确命令和 production app-owned runtime 链路，
+  单进程退出 `0`，`+2: All tests passed!`。真实合成 portal/CAS/course/exam 首次登录
+  在继续前保持 DB 空，继续后导入 aggregate `13`；首次真实采集后 `/chat` → `/sync`
+  仍复用同一 runtime/controller/environment，不产生第二次 fixture 采集。
+- 真实 Settings `ListTile` tap 触发两次确认和 production reset。注入底层 release
+  failure 三次后达到 `resetFailed`/`/reset-recovery`，process=0、DB 清空、UDF 保留一分区；
+  retry 第四次删除后只创建一个 fresh runtime，DB/UDF/process 均清零。callback-only 运行
+  不作为通过证据；真实 tap 等待临时同步 `SnackBar` 消退后命中。
+- focused Native/Runtime/Reset suites 串行 `--concurrency=1`：`+118: All tests
+  passed!`。Python `ustc_assistant` local-root oracle：`Ran 140 tests`、`OK`，
+  compileall exit `0`，无 Conda/Python 改动。
+- 唯一最终 PowerShell 终端严格按 `analyze --no-pub` → `test --no-pub --reporter
+  expanded` → `build windows --release --no-pub`：analyze `No issues found!`，全量
+  test `+1574: All tests passed!`，Release build exit `0`。Release exe 运行计数为 `0`；
+  产物 `app/build/windows/x64/runner/Release/ustc_assistant_app.exe` 为 92,160 bytes，
+  SHA-256 `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`。
+- 失败运行遗留的 34 个精确 `minimal_jw_runtime_loopback-*` 目录均在
+  canonical direct-child、无 reparse、owned process=0 条件下逐项复核删除；固定的
+  `minimal_jw_loopback` 空父目录（0 children、非 reparse）未删除，因为它不是唯一
+  targeted root。未触碰真实用户支持目录。
+
+自动化证据仅覆盖本机 synthetic fixture、内存数据库和 production reset/runtime seam。
+校园网/iWAN、真实账号、真实课表/考试和 Agent API Key 仍需用户在 Release App 中按本手册
+第 4/5 节脱敏验收；本机不宣称这些项目通过。
 

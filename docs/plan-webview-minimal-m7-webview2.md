@@ -1,7 +1,7 @@
 # 计划：按全量重构分支经验重写 minimal 原生 WebView（Windows WebView2）
 
-> 分支：`refactor/webview-minimal`（M6 交接物已落档；M7 实现与 Task 9 验证记录在
-> 本文件末尾收敛）
+> 分支：`refactor/webview-minimal`（M6 交接物已落档；M7 实现与 targeted Task 9
+> 运行时验证记录（2026-08-31）在本文件末尾收敛）
 > 依据：`E:\107\.worktrees\rewrite\flutter-native` 的全量 `M2 Native JW` 真实踩坑复盘
 > （`docs/refactor-docs/m2-native-jw-lessons.md`）与 `docs/acceptance/m2-native-jw.md`。
 > 目标（本计划门）：minimal 教务采集从 Python Bridge 切换为 Flutter 原生 WebView2，
@@ -27,6 +27,7 @@
 | CMake / Ninja | `/e/Android/Sdk/cmake/3.22.1`、`/e/Espressif/tools/cmake/3.30.2`（本机可编译 Windows） |
 | 代理 | 127.0.0.1:7897（pub.dev / github 可达，`flutter pub get` 可用） |
 | 历史 M5 基线快照 | `flutter analyze` 0 error / 15 issues；`flutter test` 1360 pass / 7 fail（M0 起已知基线；非当前 M7 结果） |
+| targeted Task 9 Windows gate（2026-08-31） | analyze 0 issues；全量 test 1574/0；Release build exit 0；真实 UI reset loopback +2；真实校园验收仍外置 |
 
 ### 0.2 关键结论：WebView2 插件可自足提取
 
@@ -204,6 +205,12 @@ reject new work → cancel non-terminal jobs → await terminal settlement
 → close subscriptions and diagnostics
 ```
 
+应用本身由 `UstcAssistantApp` 持有 `MinimalJwRuntimeOwner`；`/chat`、`/sync` 等
+路由只借用同一个当前 runtime，不因路由切换创建或释放 controller/environment。
+app-owned `MinimalResetCoordinator` 是完全重置的唯一生产边界：它先关闭 runtime
+所有 writer，再清理 DB/UDF，成功后才允许 runtime owner 创建一个新的首次登录 runtime；
+失败则进入 fail-closed recovery，不在旧 runtime 上继续工作。
+
 每个作业只使用一个不透明 `accountId` 绑定的 UDF 子目录，路径由应用支持目录和
 清理后的 account 分区组成，不写入日志。minimal 是单账号 gateway 生命周期：不同
 账号请求必须 fail-closed，不能在同一个 gateway 中重绑 controller/UDF。重新登录按
@@ -248,6 +255,10 @@ barrier。fixture 只保留方法、无 query 的路径、content type、XHR 标
 不保存真实账号、Cookie、DOM、响应体或 data ID。UDF 只在 canonical workspace root
 下创建唯一子目录，在 environment release 后删除并检查为空。
 
+当前 targeted runtime case 还覆盖 app-owned runtime lazy load/reuse、首次登录的原子提交、
+production reset 的两次确认、底层 release 失败后的 fail-closed recovery、retry 后唯一
+fresh runtime，以及真实 Settings UI reset tap；它仍只使用合成 fixture 和内存数据库。
+
 该 gate、fake-controller tests、Flutter analyze/test/build 和 Python oracle/compileall
 都是自动化证据；它们不访问学校主机，不使用真实账号，不等同真实校园验收。owner-run
 的脱敏人工 stage chain 必须单独确认：
@@ -273,7 +284,8 @@ login entry → CAS → identity verified → course context → get-data
 4. 回到 worktree root 在 `ustc_assistant` 环境运行 Python unittest discover 和
    compileall；禁止安装或改变 Conda 环境。
 
-Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动化证据：
+历史 Task 9 运行结果（2026-08-29；已被下方 2026-08-31 targeted runtime 结果取代）
+如下，且只代表本机自动化证据：
 
 - 进程预检和清理后均没有 `flutter`/`dart`/`ustc_assistant_app` 残留。首次无输出
   的原因已定位为 sandbox 无权写 Flutter SDK 的 `cache/flutter.bat.lock`，不是另一个
@@ -303,6 +315,35 @@ Task 9 的 fresh 运行结果（2026-08-29）如下，且只代表本机自动�
 - Python：临时进程级 `PYTHONPATH` 明确指向本 worktree 的 `src`，导入断言通过；
   unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
   Conda 依赖。
+
+#### 8.5.1 当前 targeted runtime gate（2026-08-31）
+
+- Debug loopback 按 brief 的精确命令、单一 Windows Flutter 进程运行并退出 `0`，
+  末计数 `+2: All tests passed!`。第二个测试使用 production
+  `UstcAssistantApp.runtimeLoader`、`MinimalJwRuntime`、`SyncCoordinator`、
+  `NativeJwGateway`、`WindowsJwBrowserSessionAdmin`、`WindowsJwUdfStore`、
+  `FirstLoginCommitService` 和 `ImportService`，fixture 仅是本机合成 portal/CAS/course/
+  exam。首次登录在继续操作前 DB 为空；继续后成功导入 aggregate `13`，账号/凭据/
+  import/sync 各一条，随后在首次真实采集后再次 `/chat` → `/sync` 仍复用一个 runtime、
+  controller/environment，且没有第二次 fixture 采集。
+- reset 通过真实 Settings `ListTile` finder tap 和两次确认进入 production reset；
+  注入的底层 release failure 三次后进入 `resetFailed`/`/reset-recovery`，owned
+  WebView process 为 `0`、UDF 保留一分区、DB 已清空。retry 的第四次删除成功，只创建
+  一个 fresh runtime，最终 DB/UDF 均为空、process 为 `0`。先前 callback-only 运行只
+  作诊断，不计入此项；实际 UI tap 需等待同步完成提示条自然消退后才命中。
+- focused Native/Runtime/Reset suites 串行 `--concurrency=1` 为 `+118: All tests
+  passed!`。本地 root Python oracle 为 `Ran 140 tests`、`OK`，compileall exit `0`，
+  未变更 Python 或 Conda。
+- 同一 PowerShell 终端严格执行 `analyze --no-pub` → `test --no-pub --reporter
+  expanded` → `build windows --release --no-pub`：analyze `No issues found!`，全量
+  test `+1574: All tests passed!`，Release build exit `0`。构建前 Release exe 运行计数
+  为 `0`；产物 `build/windows/x64/runner/Release/ustc_assistant_app.exe` 存在，
+  92,160 bytes，SHA-256 `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`，
+  构建后运行计数仍为 `0`。
+- 早期 UI 失败运行遗留的 34 个精确 `minimal_jw_runtime_loopback-*` 目录均经
+  canonical direct-child/reparse/owned-process 检查后逐项立即复核并删除；固定的旧
+  `minimal_jw_loopback` 空父目录（0 children、非 reparse）未删除。该自动化证据不访问
+  学校主机，不含真实凭据、query、DOM、响应体或私人课程内容。
 
 若之后的 owner 环境触发已知宿主 `sqlite3.dll` error 126，必须保留原始失败计数并
 停止 build，不能复制 DLL 或重跑第二套 Flutter 命令掩盖失败。

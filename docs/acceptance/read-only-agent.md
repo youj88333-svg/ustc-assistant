@@ -1,6 +1,6 @@
 # USTC Assistant Agent 人工验收清单（minimal 注记版）
 
-更新时间：2026-08-02（minimal 适配注记 2026-08-26）
+更新时间：2026-08-31（minimal 适配注记）
 
 > **minimal 分支适用性**：本分支已删除二课（young）、评课（icourse）、校园公开目录
 > （campus）的用户功能与外部 Agent 来源工具。因此：
@@ -12,6 +12,14 @@
 
 本清单由用户在真实校园网、Panabit iWAN 和学校模型服务环境下逐项执行。每一项末尾的
 `完成：`留空，由用户在真实验收后填写安全的结果文字（成功 / 失败 / 原因简述）。
+
+Task 9 的当前自动化证据（2026-08-31）为 Windows analyze 无 issues、全量 Flutter
+test `1574/0`、Release build exit `0`，以及 synthetic portal/CAS/course/exam 首次
+登录、原子导入、runtime reuse、两次确认 reset、fail-closed recovery/retry 的 Debug
+loopback `+2`；focused Native/Runtime/Reset suites 为 `+118`，Python oracle 为
+`140` tests/compileall `0`。这些只验证本机代码与合成 fixture，绝不填写或替代下面的
+真实校园网、真实账号、真实课表/考试或学校模型服务人工 `完成：`结果；所有人工字段继续
+留空，直到用户在新构建的 Windows Release App 中逐项确认。
 
 2026-08-01 人工验收修复轮（Grounding Policy、标题查询定位、PlanBlock 周网格、
 默认冲突推导、整日课程移动等）修复路径的人工复测项见第 11 节；这些仍在 minimal 生效，
