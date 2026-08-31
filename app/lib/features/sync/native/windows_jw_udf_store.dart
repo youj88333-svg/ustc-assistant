@@ -7,6 +7,8 @@ import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 import 'package:win32/win32.dart';
 
+import '../../settings/application/minimal_reset_coordinator.dart';
+
 typedef DirectoryDelete = Future<void> Function(Directory directory);
 typedef ReleaseDelay = Future<void> Function(Duration duration);
 
@@ -73,7 +75,7 @@ final class JwUdfClearError extends JwUdfError {
 }
 
 /// Platform-private, fail-closed JW UDF and quarantine marker store.
-final class WindowsJwUdfStore {
+final class WindowsJwUdfStore implements ResetUdfPort {
   WindowsJwUdfStore({
     required Directory privateRoot,
     DirectoryDelete? deleteDirectory,
@@ -337,6 +339,7 @@ final class WindowsJwUdfStore {
 
   /// Attempts every owned partition, retaining the first failure as the
   /// public failure while still making best effort on later partitions.
+  @override
   Future<void> clearAllPartitions() async {
     final refs = await _listClearablePartitions();
     Object? firstFailure;

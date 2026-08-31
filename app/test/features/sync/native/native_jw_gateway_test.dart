@@ -11,9 +11,16 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:drift/native.dart';
+import 'package:ustc_assistant_app/core/database/app_database.dart';
+import 'package:ustc_assistant_app/core/security/credential_protector.dart';
+import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
+import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
+import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_collector.dart';
@@ -25,6 +32,9 @@ import 'package:ustc_assistant_app/features/sync/native/jw_webview_surface_host.
 import 'package:ustc_assistant_app/features/sync/native/native_jw_gateway.dart';
 import 'package:ustc_assistant_app/features/sync/native/source_collection_gateway.dart';
 import 'package:ustc_assistant_app/features/sync/native/windows_jw_udf_store.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/jw_job_arbiter.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/minimal_jw_runtime.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/source_job_gateway.dart';
 
 const _homeUrl = 'https://jw.ustc.edu.cn/home';
 const _fixturesRoot = 'test/fixtures/jw';
@@ -552,6 +562,68 @@ void main() {
     );
 
     test(
+      'runtime retry reaches a retained NativeJwGateway session admin',
+      () async {
+        final controller = FakeJwWebviewController()
+          ..authenticatedSession = true
+          ..courseDatum = courseDatum
+          ..examHtml = examHtml;
+        final admin = _GatewaySessionAdmin(
+          controller,
+          shutdownFailures: 1,
+        );
+        final native = NativeJwGateway(sessionAdmin: admin);
+        final database = AppDatabase(NativeDatabase.memory());
+        addTearDown(database.close);
+        final accounts = AccountService(
+          database: database,
+          protector: _NativeNoopProtector(),
+        );
+        final coordinator = SyncCoordinator(
+          database: database,
+          accounts: accounts,
+          bridgeFactory: () async => native,
+          importBundle: (bytes, {required accountId, required origin}) async =>
+              const ImportResult(
+                status: ImportStatus.imported,
+                bundleId: 'native-reset-test',
+                source: 'ustc_jw',
+                importedEntityCount: 0,
+              ),
+        );
+        final gateway = SourceJobGatewayAdapter(
+          coordinator: coordinator,
+          arbiter: JwJobArbiter(),
+          bridge: native,
+          ownsBrowserSessions: true,
+        );
+        final runtime = MinimalJwRuntime(
+          gateway: gateway,
+          browserSessions: admin,
+        );
+
+        final job = await native.startCollection(
+          source: SyncSource.jw,
+          accountId: 'account-retry',
+          expectedUsername: 'PB00000000',
+          jwSemester: kDefaultJwSemester,
+        );
+        await _pollUntilTerminal(native, job.id);
+
+        await expectLater(runtime.shutdown(), throwsA(isA<StateError>()));
+        expect(admin.shutdownCalls, 1);
+        expect(admin.handleCloseCalls, 0);
+
+        // The same runtime/gateway/admin chain must retry the exact retained
+        // handle rather than replaying a cached failed Future.
+        await runtime.shutdown();
+        expect(admin.shutdownCalls, 2);
+        expect(admin.handleCloseCalls, 1);
+        expect(admin.openCalls, 1);
+      },
+    );
+
+    test(
       'admission cancellation closes a session handle that opens late',
       () async {
         final controller = FakeJwWebviewController();
@@ -666,9 +738,10 @@ class LateEventCollector extends JwCollector {
 }
 
 final class _GatewaySessionAdmin implements JwBrowserSessionAdmin {
-  _GatewaySessionAdmin(this.controller);
+  _GatewaySessionAdmin(this.controller, {this.shutdownFailures = 0});
 
   final FakeJwWebviewController controller;
+  int shutdownFailures;
   final JwWebViewSurfaceHost _surfaceHost = JwWebViewSurfaceHost();
   var openCalls = 0;
   var shutdownCalls = 0;
@@ -700,8 +773,25 @@ final class _GatewaySessionAdmin implements JwBrowserSessionAdmin {
   @override
   Future<void> shutdown() async {
     shutdownCalls++;
+    if (shutdownFailures > 0) {
+      shutdownFailures--;
+      throw StateError('transient session release failure');
+    }
     await handle?.close();
   }
+}
+
+final class _NativeNoopProtector implements CredentialProtector {
+  @override
+  Future<ProtectedSecret> protect(Uint8List plaintext) async => ProtectedSecret(
+    bytes: Uint8List.fromList(plaintext),
+    scheme: 'test',
+    version: 1,
+  );
+
+  @override
+  Future<Uint8List> unprotect(ProtectedSecret protected) async =>
+      Uint8List.fromList(protected.bytes);
 }
 
 final class _BlockingGatewaySessionAdmin implements JwBrowserSessionAdmin {

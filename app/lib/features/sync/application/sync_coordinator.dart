@@ -664,7 +664,29 @@ class SyncCoordinator implements ResetWriterPort {
     String jobId, {
     required bool userConfirmed,
   }) async {
-    if (_resetAdmissionClosed) {
+    return _resumeInteractive(jobId, userConfirmed: userConfirmed);
+  }
+
+  /// Cancels an owned paused job as part of the coordinator/gateway teardown
+  /// barrier. This is deliberately narrower than [resumeInteractive]: only
+  /// the internal negative decision may cross the maintenance gate, and it
+  /// still removes the paused provisional and settles its job synchronously
+  /// before awaiting bridge cancellation.
+  Future<SyncOutcome> cancelPausedForReset(String jobId) {
+    return _resumeInteractive(
+      jobId,
+      userConfirmed: false,
+      allowMaintenanceCancellation: true,
+    );
+  }
+
+  Future<SyncOutcome> _resumeInteractive(
+    String jobId, {
+    required bool userConfirmed,
+    bool allowMaintenanceCancellation = false,
+  }) async {
+    if (_resetAdmissionClosed &&
+        !(allowMaintenanceCancellation && !userConfirmed)) {
       return const SyncFailed(SyncSource.jw, code: 'maintenance_in_progress');
     }
     final paused = _paused.remove(jobId);
@@ -791,7 +813,7 @@ class SyncCoordinator implements ResetWriterPort {
       final paused = _paused[current.jobId];
       if (paused != null) {
         await attempt(() async {
-          await resumeInteractive(current.jobId, userConfirmed: false);
+          await cancelPausedForReset(current.jobId);
         });
       } else {
         await attempt(() => _cancelBridgeJob(current));

@@ -15,13 +15,16 @@ import 'package:ustc_assistant_app/features/agent/application/agent_composition.
 import 'package:ustc_assistant_app/features/agent/data/protected_agent_secret_store.dart';
 import 'package:ustc_assistant_app/features/import/application/reminder_reconciler.dart';
 import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
+import 'package:ustc_assistant_app/features/settings/application/minimal_reset_coordinator.dart';
 import 'package:ustc_assistant_app/features/settings/application/settings_service.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/official_websites_page.dart';
 import 'package:ustc_assistant_app/features/settings/presentation/settings_page.dart';
 import 'package:ustc_assistant_app/features/sync/domain/sync_state.dart';
 import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
+import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_browser_session_admin.dart';
 import 'package:ustc_assistant_app/features/sync/native/jw_webview_surface_host.dart';
+import 'package:ustc_assistant_app/features/sync/runtime/jw_job_arbiter.dart';
 import 'package:ustc_assistant_app/features/sync/runtime/minimal_jw_runtime.dart';
 import 'package:ustc_assistant_app/features/sync/runtime/source_job_gateway.dart';
 
@@ -182,6 +185,228 @@ final class _ExitTrackingDatabase extends AppDatabase {
     events.add('database-close');
     await super.close();
   }
+}
+
+final class _AppShellResetGateway implements SourceJobGateway {
+  bool admitted = true;
+  var quiesceCalls = 0;
+  var resumeCalls = 0;
+  var shutdownCalls = 0;
+
+  @override
+  Stream<SourceJobSnapshot> get states => const Stream<SourceJobSnapshot>.empty();
+
+  @override
+  Future<SyncOutcome> firstLogin(FirstLoginCommand command) async {
+    if (!admitted) {
+      return const SyncFailed(SyncSource.jw, code: 'maintenance_in_progress');
+    }
+    return const SyncSucceeded(SyncSource.jw, importedEntityCount: 0);
+  }
+
+  @override
+  Future<SyncOutcome> sync({
+    required String accountId,
+    required SyncTrigger trigger,
+  }) async {
+    if (!admitted) {
+      return const SyncFailed(SyncSource.jw, code: 'maintenance_in_progress');
+    }
+    return const SyncSucceeded(SyncSource.jw, importedEntityCount: 0);
+  }
+
+  @override
+  Future<void> cancelCurrent() async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+    admitted = false;
+  }
+
+  Future<void> quiesce() {
+    quiesceCalls++;
+    admitted = false;
+    return Future<void>.value();
+  }
+
+  Future<void> resume() {
+    resumeCalls++;
+    admitted = true;
+    return Future<void>.value();
+  }
+}
+
+final class _AppShellResetWriter implements ResetWriterPort {
+  _AppShellResetWriter({this.gateway});
+
+  final _AppShellResetGateway? gateway;
+  var quiesceCalls = 0;
+  var resumeCalls = 0;
+
+  @override
+  Future<void> quiesce() async {
+    quiesceCalls++;
+    await gateway?.quiesce();
+  }
+
+  @override
+  Future<void> resume() async {
+    resumeCalls++;
+    await gateway?.resume();
+  }
+}
+
+final class _ImmediateResetUdf implements ResetUdfPort {
+  var clearCalls = 0;
+
+  @override
+  Future<void> clearAllPartitions() async {
+    clearCalls++;
+  }
+}
+
+final class _GatedResetUdf implements ResetUdfPort {
+  _GatedResetUdf({required this.started, required this.release});
+
+  final Completer<void> started;
+  final Completer<void> release;
+  var clearCalls = 0;
+
+  @override
+  Future<void> clearAllPartitions() async {
+    clearCalls++;
+    if (!started.isCompleted) started.complete();
+    await release.future;
+  }
+}
+
+final class _AppShellEmptyBridge implements BridgeGateway {
+  var shutdownCalls = 0;
+
+  @override
+  Future<BridgeCapabilities> capabilities() async => const BridgeCapabilities(
+    jwSemester: BridgeSemesterCapability(
+      semesterId: 461,
+      semesterKey: '2026fall',
+      displayName: '2026 秋季学期',
+    ),
+  );
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async => const BridgeJob(id: 'app-shell-job', phase: 'starting');
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async =>
+      const BridgeJobPoll(
+        events: [
+          {'sequence': 1, 'phase': 'complete'},
+        ],
+        nextSequence: 1,
+        terminal: true,
+        result: {'schemaVersion': '1.0'},
+      );
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {}
+
+  @override
+  Future<void> cancel(String jobId) async {}
+
+  @override
+  Future<void> shutdown() async {
+    shutdownCalls++;
+  }
+}
+
+final class _AppShellFailingResumeCoordinator extends SyncCoordinator {
+  _AppShellFailingResumeCoordinator({
+    required super.database,
+    required super.accounts,
+    required super.bridgeFactory,
+    required super.importBundle,
+    required super.gatewayQuiesce,
+    required super.gatewayResume,
+  });
+
+  @override
+  Future<void> resume() =>
+      Future<void>.error(StateError('replacement resume failed'));
+}
+
+final class _AppShellRuntimeBundle {
+  _AppShellRuntimeBundle({
+    required this.runtime,
+    required this.gateway,
+    required this.coordinator,
+    required this.bridge,
+  });
+
+  final MinimalJwRuntime runtime;
+  final SourceJobGatewayAdapter gateway;
+  final SyncCoordinator coordinator;
+  final _AppShellEmptyBridge bridge;
+}
+
+_AppShellRuntimeBundle _buildAppShellRuntime({
+  required AppDatabase database,
+  required JwBrowserSessionAdmin browserSessions,
+  bool failResume = false,
+}) {
+  final accounts = AccountService(
+    database: database,
+    protector: _NoopProtector(),
+  );
+  final bridge = _AppShellEmptyBridge();
+  late SourceJobGatewayAdapter gateway;
+  Future<BridgeGateway> bridgeFactory() async => bridge;
+  Future<ImportResult> importBundle(
+    Uint8List bytes, {
+    required String accountId,
+    required ImportOrigin origin,
+  }) async => const ImportResult(
+    status: ImportStatus.imported,
+    bundleId: 'app-shell-runtime-test',
+    source: 'ustc_jw',
+    importedEntityCount: 0,
+  );
+  final SyncCoordinator coordinator = failResume
+      ? _AppShellFailingResumeCoordinator(
+          database: database,
+          accounts: accounts,
+          bridgeFactory: bridgeFactory,
+          importBundle: importBundle,
+          gatewayQuiesce: () => gateway.quiesce(),
+          gatewayResume: () => gateway.resume(),
+        )
+      : SyncCoordinator(
+          database: database,
+          accounts: accounts,
+          bridgeFactory: bridgeFactory,
+          importBundle: importBundle,
+          gatewayQuiesce: () => gateway.quiesce(),
+          gatewayResume: () => gateway.resume(),
+        );
+  gateway = SourceJobGatewayAdapter(
+    coordinator: coordinator,
+    arbiter: JwJobArbiter(),
+    bridge: bridge,
+  );
+  return _AppShellRuntimeBundle(
+    runtime: MinimalJwRuntime(
+      gateway: gateway,
+      browserSessions: browserSessions,
+      syncCoordinator: coordinator,
+    ),
+    gateway: gateway,
+    coordinator: coordinator,
+    bridge: bridge,
+  );
 }
 
 void main() {
@@ -683,7 +908,7 @@ void main() {
           runtimeLoader: () async => runtime,
         ),
       );
-      await tester.pumpAndSettle();
+      await tester.pump();
 
       final exit = appKey.currentState!.prepareForExit();
       await Future<void>.microtask(() {});
@@ -703,6 +928,235 @@ void main() {
       await tester.pump();
       expect(gateway.shutdownCalls, 1);
       expect(database.closeCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'app exit joins a reset paused in UDF settlement before closing database',
+    (tester) async {
+      final events = <String>[];
+      final database = _ExitTrackingDatabase(events);
+      final udfStarted = Completer<void>();
+      final releaseUdf = Completer<void>();
+      final udf = _GatedResetUdf(
+        started: udfStarted,
+        release: releaseUdf,
+      );
+      final gateway = _AppShellResetGateway();
+      final runtime = MinimalJwRuntime(
+        gateway: gateway,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final coordinator = MinimalResetCoordinator(
+        runtime: runtime,
+        sync: _AppShellResetWriter(gateway: gateway),
+        agent: _AppShellResetWriter(),
+        reminders: _AppShellResetWriter(),
+        settings: SettingsService(
+          database: database,
+          accounts: AccountService(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          accountId: null,
+        ),
+        udfStore: udf,
+        recomposeRuntime: () async {},
+      );
+      final appKey = GlobalKey<UstcAssistantAppState>();
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          key: appKey,
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async => runtime,
+          resetCoordinatorLoader: () async => coordinator,
+        ),
+      );
+      await tester.pump();
+      await Future<void>.microtask(() {});
+      await tester.tap(find.byTooltip('打开侧边栏'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pump(const Duration(milliseconds: 500));
+      await udfStarted.future;
+
+      final exit = appKey.currentState!.prepareForExit();
+      await Future<void>.microtask(() {});
+      expect(database.closeCalls, 0);
+
+      releaseUdf.complete();
+      await exit;
+      expect(database.closeCalls, 1);
+    },
+  );
+
+  testWidgets(
+    'app exit joins a reset coordinator loader already in flight',
+    (tester) async {
+      final database = _ExitTrackingDatabase(<String>[]);
+      final runtime = MinimalJwRuntime(
+        gateway: _AppShellGateway(),
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final loaderStarted = Completer<void>();
+      final loaderGate = Completer<MinimalResetCoordinator>();
+      final coordinator = MinimalResetCoordinator(
+        runtime: runtime,
+        sync: _AppShellResetWriter(),
+        agent: _AppShellResetWriter(),
+        reminders: _AppShellResetWriter(),
+        settings: SettingsService(
+          database: database,
+          accounts: AccountService(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          accountId: null,
+        ),
+        udfStore: _ImmediateResetUdf(),
+        recomposeRuntime: () async {},
+      );
+      final appKey = GlobalKey<UstcAssistantAppState>();
+
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          key: appKey,
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async => runtime,
+          resetCoordinatorLoader: () {
+            if (!loaderStarted.isCompleted) loaderStarted.complete();
+            return loaderGate.future;
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('打开侧边栏'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pump();
+      await loaderStarted.future;
+
+      final exit = appKey.currentState!.prepareForExit();
+      await Future<void>.microtask(() {});
+      expect(database.closeCalls, 0);
+
+      loaderGate.complete(coordinator);
+      await exit;
+      expect(database.closeCalls, 1);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
+    },
+  );
+
+  testWidgets(
+    'resume failure closes the actual replacement gateway for recovery',
+    (tester) async {
+      final database = _ExitTrackingDatabase(<String>[]);
+      final first = _buildAppShellRuntime(
+        database: database,
+        browserSessions: _AppShellSessionAdmin(),
+      );
+      final replacement = _buildAppShellRuntime(
+        database: database,
+        browserSessions: _AppShellSessionAdmin(),
+        failResume: true,
+      );
+      var runtimeLoads = 0;
+      var resetLoaderCalls = 0;
+      final appKey = GlobalKey<UstcAssistantAppState>();
+      late final MinimalResetCoordinator coordinator;
+      coordinator = MinimalResetCoordinator(
+        runtime: first.runtime,
+        sync: first.coordinator,
+        agent: _AppShellResetWriter(),
+        reminders: _AppShellResetWriter(),
+        settings: SettingsService(
+          database: database,
+          accounts: AccountService(
+            database: database,
+            protector: _NoopProtector(),
+          ),
+          accountId: null,
+        ),
+        udfStore: _ImmediateResetUdf(),
+        recomposeRuntime: () async {
+          await appKey.currentState!.runtimeOwner.replaceAfterReset();
+          coordinator.bindReplacementRuntime(
+            runtime: replacement.runtime,
+            sync: replacement.coordinator,
+          );
+        },
+      );
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          key: appKey,
+          websiteLauncher: FakeWebsiteLauncher(),
+          databaseFactory: () => database,
+          runtimeLoader: () async {
+            runtimeLoads++;
+            return runtimeLoads == 1 ? first.runtime : replacement.runtime;
+          },
+          resetCoordinatorLoader: () async {
+            resetLoaderCalls++;
+            return coordinator;
+          },
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('打开侧边栏'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      expect(runtimeLoads, 2);
+      expect(resetLoaderCalls, 1);
+      final blocked = await replacement.gateway.sync(
+        accountId: 'account-a',
+        trigger: SyncTrigger.manual,
+      );
+      expect(blocked, isA<SyncFailed>());
+      // The real gateway uses its terminal-safe code for both shutdown and
+      // quiesced admission; either way no replacement write is admitted.
+      expect((blocked as SyncFailed).code, 'runtime_shutdown');
+      expect(replacement.gateway.arbiter.isBusy, isFalse);
+      expect(replacement.bridge.shutdownCalls, 0);
+
+      // The failed boundary remains owned by the app. Retrying from the same
+      // settings page must reuse it and therefore continue to target this
+      // replacement gateway, not create a detached coordinator.
+      await tester.tap(find.byKey(const Key('complete-reset')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      expect(resetLoaderCalls, 1);
+      expect(replacement.gateway.arbiter.isBusy, isFalse);
+
+      await appKey.currentState!.prepareForExit();
+      expect(replacement.bridge.shutdownCalls, 1);
+      await tester.pumpWidget(const SizedBox());
+      await tester.pump();
     },
   );
 

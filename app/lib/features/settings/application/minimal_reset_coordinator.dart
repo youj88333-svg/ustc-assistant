@@ -1,6 +1,11 @@
 import 'dart:async';
 
-import '../../sync/native/windows_jw_udf_store.dart';
+// Mutable private runtime/sync fields are initialized from the fixed
+// composition ports and rebound only after a successful runtime replacement.
+// They intentionally cannot use initializing formals without changing the
+// public named constructor parameters.
+// ignore_for_file: prefer_initializing_formals
+
 import '../../sync/runtime/minimal_jw_runtime.dart';
 import 'settings_service.dart';
 
@@ -16,6 +21,13 @@ abstract interface class ResetWriterPort {
   Future<void> resume();
 }
 
+/// Fixed persistent-browser cleanup port. The production implementation is
+/// [WindowsJwUdfStore]; keeping this tiny seam explicit lets lifecycle tests
+/// gate physical cleanup without introducing a participant registry.
+abstract interface class ResetUdfPort {
+  Future<void> clearAllPartitions();
+}
+
 enum MinimalResetPhase {
   idle,
   quiescing,
@@ -29,27 +41,35 @@ enum MinimalResetPhase {
 /// dropping ownership of an incompletely released runtime or UDF partition.
 final class MinimalResetCoordinator {
   MinimalResetCoordinator({
-    required this.runtime,
-    required this.sync,
+    required MinimalJwRuntime runtime,
+    required ResetWriterPort sync,
     required this.agent,
     required this.reminders,
     required this.settings,
-    required this.udfStore,
+    required ResetUdfPort udfStore,
     required this.recomposeRuntime,
-  });
+  }) : _runtime = runtime,
+       _sync = sync,
+       udfStore = udfStore;
 
-  final MinimalJwRuntime runtime;
-  final ResetWriterPort sync;
+  MinimalJwRuntime _runtime;
+  ResetWriterPort _sync;
   final ResetWriterPort agent;
   final ResetWriterPort reminders;
   final SettingsService settings;
-  final WindowsJwUdfStore udfStore;
+  final ResetUdfPort udfStore;
   final Future<void> Function() recomposeRuntime;
 
   final StreamController<MinimalResetPhase> _phasesController =
       StreamController<MinimalResetPhase>.broadcast(sync: true);
   MinimalResetPhase _phase = MinimalResetPhase.idle;
   Future<void>? _resetFuture;
+  Future<void>? _exitFuture;
+  bool _terminalExitRequested = false;
+
+  MinimalJwRuntime get runtime => _runtime;
+
+  ResetWriterPort get sync => _sync;
 
   Stream<MinimalResetPhase> get phases => _phasesController.stream;
 
@@ -58,6 +78,9 @@ final class MinimalResetCoordinator {
   /// Starts one complete reset. Concurrent callers join the same operation;
   /// after a failure, calling this method is equivalent to [retryReset].
   Future<void> completeReset() {
+    if (_terminalExitRequested) {
+      return Future<void>.error(StateError('reset_exit_requested'));
+    }
     final existing = _resetFuture;
     if (existing != null) return existing;
     if (_phase == MinimalResetPhase.failed) return retryReset();
@@ -69,6 +92,9 @@ final class MinimalResetCoordinator {
   /// persisted partitions so an empty database does not hide stale browser
   /// state.
   Future<void> retryReset() {
+    if (_terminalExitRequested) {
+      return Future<void>.error(StateError('reset_exit_requested'));
+    }
     final existing = _resetFuture;
     if (existing != null) return existing;
     return _startReset();
@@ -88,6 +114,40 @@ final class MinimalResetCoordinator {
       ),
     );
     return operation;
+  }
+
+  /// Marks this coordinator terminal and joins the reset operation, if one
+  /// has already crossed its synchronous admission boundary. The app invokes
+  /// this before terminal runtime shutdown so a reset cannot install a fresh
+  /// runtime after exit has been requested. A failed reset is still joined;
+  /// its failure is reported by the caller after all other exit stages run.
+  Future<void> prepareForExit() {
+    final existing = _exitFuture;
+    if (existing != null) return existing;
+    _terminalExitRequested = true;
+    final reset = _resetFuture;
+    final operation = _joinResetForExit(reset);
+    _exitFuture = operation;
+    return operation;
+  }
+
+  Future<void> _joinResetForExit(Future<void>? reset) async {
+    if (reset != null) await reset;
+  }
+
+  /// Rebinds the fixed runtime/sync ports after the app-owned runtime has
+  /// been replaced. This is explicit composition wiring, not a participant
+  /// registry: retries must drain the actual current runtime rather than the
+  /// runtime that was quiesced by the first reset attempt.
+  void bindReplacementRuntime({
+    required MinimalJwRuntime runtime,
+    required ResetWriterPort sync,
+  }) {
+    if (_terminalExitRequested) {
+      throw StateError('reset_exit_requested');
+    }
+    _runtime = runtime;
+    _sync = sync;
   }
 
   Future<void> _runReset() async {

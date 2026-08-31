@@ -48,6 +48,7 @@ class UstcAssistantApp extends StatefulWidget {
     this.databaseFactory,
     this.clearBrowserSession,
     this.runtimeLoader,
+    this.resetCoordinatorLoader,
     this.runtimeDiagnosticSink,
     super.key,
   });
@@ -57,6 +58,10 @@ class UstcAssistantApp extends StatefulWidget {
   final AppDatabase Function()? databaseFactory;
   final Future<void> Function()? clearBrowserSession;
   final Future<MinimalJwRuntime> Function()? runtimeLoader;
+  /// Optional lifecycle-test seam. Production composition uses the fixed
+  /// loader below; injecting a coordinator never creates a registry or moves
+  /// ownership out of this app state.
+  final Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader;
   final void Function(String)? runtimeDiagnosticSink;
 
   @override
@@ -72,6 +77,7 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   late final AgentCompositionOwner agentCompositionOwner;
   late final AppLifecycleListener _exitListener;
   Future<void>? _exitFuture;
+  bool _exitRequested = false;
   MinimalResetCoordinator? _resetCoordinator;
   Future<MinimalResetCoordinator>? _resetCoordinatorFuture;
 
@@ -130,6 +136,11 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   }
 
   Future<MinimalResetCoordinator> _loadResetCoordinator() {
+    if (_exitRequested) {
+      return Future<MinimalResetCoordinator>.error(
+        StateError('app_exit_requested'),
+      );
+    }
     final existing = _resetCoordinator;
     if (existing != null) {
       return Future<MinimalResetCoordinator>.value(existing);
@@ -140,7 +151,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     _resetCoordinatorFuture = operation;
     unawaited(
       operation.then<void>(
-        (_) {
+        (coordinator) {
+          _resetCoordinator ??= coordinator;
           if (identical(_resetCoordinatorFuture, operation)) {
             _resetCoordinatorFuture = null;
           }
@@ -156,6 +168,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   }
 
   Future<MinimalResetCoordinator> _loadResetCoordinatorImpl() async {
+    final injected = widget.resetCoordinatorLoader;
+    if (injected != null) return injected();
     final runtime = await runtimeOwner.current;
     final sync = runtime.syncCoordinator;
     if (sync == null) {
@@ -184,9 +198,18 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
         // replaced. The coordinator calls writer.resume only afterwards.
         await agentCompositionOwner.recompose();
         await runtimeOwner.replaceAfterReset();
-        if (identical(_resetCoordinator, coordinator)) {
-          _resetCoordinator = null;
+        final replacement = await runtimeOwner.current;
+        final replacementSync = replacement.syncCoordinator;
+        if (replacementSync == null) {
+          throw StateError('reset_composition_unavailable');
         }
+        // Keep this coordinator bound to the actual current runtime until
+        // every resume stage succeeds. If a resume fails, its fail-closed
+        // retry must quiesce this replacement rather than the retired one.
+        coordinator.bindReplacementRuntime(
+          runtime: replacement,
+          sync: replacementSync,
+        );
       },
     );
     _resetCoordinator = coordinator;
@@ -313,6 +336,10 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   Future<void> prepareForExit() {
     final existing = _exitFuture;
     if (existing != null) return existing;
+    // Close app-level reset-loader admission before _prepareForExit's first
+    // await. A settings callback arriving during runtime teardown must not
+    // compose a fresh coordinator after the terminal boundary.
+    _exitRequested = true;
     final operation = _prepareForExit();
     _exitFuture = operation;
     return operation;
@@ -321,11 +348,80 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   Future<void> _prepareForExit() async {
     Object? firstError;
     StackTrace? firstStack;
+    Future<void> attempt(Future<void> Function() action) async {
+      try {
+        await action();
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+
+    // Capture a loader already in flight before the first await. Its result
+    // may arrive while runtime shutdown is settling and still needs the same
+    // terminal prepare/join boundary below.
+    final loadingResetAtStart = _resetCoordinatorFuture;
+
+    // Claim terminal runtime ownership synchronously. A reset that is
+    // already running will observe this at replacement; a new reset cannot
+    // install a runtime after this boundary begins.
+    Future<void>? runtimeShutdown;
     try {
-      await runtimeOwner.beginShutdown();
-    } on Object catch (_, stack) {
+      runtimeShutdown = runtimeOwner.beginShutdown();
+      unawaited(runtimeShutdown.catchError((_) {}));
+    } on Object catch (error, stack) {
       firstError = StateError('runtime_shutdown_failed');
       firstStack = stack;
+    }
+
+    // If a reset coordinator is already composed, close its terminal gate
+    // before the first await and retain the exact active reset Future. A
+    // loader still in flight is joined below; runtime shutdown prevents it
+    // from admitting a new browser operation in the meantime.
+    Future<void>? resetSettlement;
+    final composedReset = _resetCoordinator;
+    if (composedReset != null) {
+      try {
+        resetSettlement = composedReset.prepareForExit();
+        unawaited(resetSettlement.catchError((_) {}));
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+
+    if (runtimeShutdown != null) {
+      await attempt(() => runtimeShutdown!);
+    }
+
+    final loadingReset = _resetCoordinatorFuture ?? loadingResetAtStart;
+    if (loadingReset != null) {
+      try {
+        final loaded = await loadingReset;
+        if (resetSettlement == null) {
+          resetSettlement = loaded.prepareForExit();
+          unawaited(resetSettlement.catchError((_) {}));
+        }
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    // The loader may have completed and published its coordinator while the
+    // runtime shutdown await above was in flight. Re-read the fixed owner so
+    // a reset begun from that coordinator cannot race database close.
+    final loadedAfterShutdown = _resetCoordinator;
+    if (resetSettlement == null && loadedAfterShutdown != null) {
+      try {
+        resetSettlement = loadedAfterShutdown.prepareForExit();
+        unawaited(resetSettlement.catchError((_) {}));
+      } on Object catch (error, stack) {
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+    }
+    if (resetSettlement != null) {
+      await attempt(() => resetSettlement!);
     }
     try {
       await reminderReconciler.dispose();

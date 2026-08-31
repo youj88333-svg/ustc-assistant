@@ -636,6 +636,18 @@ class NativeJwGateway
     _admissionCancelRequested = true;
     final future = _shutdownImpl();
     _shutdownFuture = future;
+    unawaited(
+      future.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          // A transient native/session-admin release failure must not be
+          // cached forever. The admin retains the exact controller/handle and
+          // owns the next retry; no new admission is allowed while _shutdown
+          // remains true.
+          if (identical(_shutdownFuture, future)) _shutdownFuture = null;
+        },
+      ),
+    );
     return future;
   }
 
@@ -761,13 +773,20 @@ class NativeJwGateway
     _activeJobId = null;
     _startInFlight = false;
     _startCompletion = null;
-    if (_sessionAdmin != null) {
+    final sessionAdmin = _sessionAdmin;
+    if (sessionAdmin != null) {
       // In the app-owned runtime this is the same admin supplied by the
       // composition root.  The admin owns detach/stop/subscriptions/native
       // release; this gateway never touches its controller directly.
-      await attempt(_sessionAdmin.shutdown);
-      _sessionHandle = null;
-      _sessionPage = null;
+      try {
+        await sessionAdmin.shutdown();
+        _sessionHandle = null;
+        _sessionPage = null;
+      } on Object catch (error, stack) {
+        // Keep the gateway's handle reference as well as the admin's live
+        // handle when release fails, so the retry still names one owner.
+        capture(error, stack);
+      }
     }
     if (!_diagnosticsController.isClosed) {
       await attempt(_diagnosticsController.close);

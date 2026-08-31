@@ -2331,6 +2331,75 @@ END
     });
 
     test(
+      'quiesce settles a never-listened stream without waiting for its consumer',
+      () async {
+        final tool = _PausingTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pause',
+              name: 'pause_tool',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+        final abandoned = service.send(
+          accountId: account,
+          userText: 'pause',
+        );
+        await tool.paused.future;
+
+        // There is deliberately no listener. The real run must still be the
+        // only quiesce barrier; StreamController.done must not be one.
+        await service.quiesce().timeout(const Duration(milliseconds: 250));
+
+        // Attach and cancel only after the barrier has proved independent of
+        // delivery, so the test does not leave a pending stream behind.
+        final subscription = abandoned.listen((_) {});
+        await subscription.cancel();
+      },
+    );
+
+    test(
+      'quiesce settles a paused abandoned subscription independently',
+      () async {
+        final tool = _PausingTool();
+        final provider = _ScriptedProvider([
+          [
+            const ToolUseCompletedEvent(
+              id: 'tu-pause',
+              name: 'pause_tool',
+              input: {},
+            ),
+            const CompletedEvent(),
+          ],
+        ]);
+        final service = _buildService(
+          database: database,
+          provider: provider,
+          clock: _SequenceClock(DateTime(2026, 7, 29, 12)),
+          tools: [tool],
+        );
+        final subscription = service
+            .send(accountId: account, userText: 'pause')
+            .listen((_) {});
+        subscription.pause();
+        await tool.paused.future;
+
+        await service.quiesce().timeout(const Duration(milliseconds: 250));
+
+        await subscription.cancel();
+      },
+    );
+
+    test(
       'starting account B does not cancel the previous paused account A',
       () async {
         const secondAccount = 'b';

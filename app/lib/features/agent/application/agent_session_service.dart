@@ -307,7 +307,7 @@ class AgentSessionService implements ResetWriterPort {
         }
       } finally {
         _releaseActive(accountId, active);
-        await controller.close();
+        _closeViewStream(controller);
       }
     }();
     _observeOperation(operation);
@@ -410,7 +410,7 @@ class AgentSessionService implements ResetWriterPort {
         }
       } finally {
         _releaseActive(accountId, active);
-        await controller.close();
+        _closeViewStream(controller);
       }
     }();
     _observeOperation(operation);
@@ -477,7 +477,7 @@ class AgentSessionService implements ResetWriterPort {
           await _cancelPausedRun(paused);
         }
       } finally {
-        await controller.close();
+        _closeViewStream(controller);
       }
     }();
     _observeOperation(operation);
@@ -563,7 +563,7 @@ class AgentSessionService implements ResetWriterPort {
           await _cancelPausedRun(paused);
         }
       } finally {
-        await controller.close();
+        _closeViewStream(controller);
       }
     }();
     _observeOperation(operation);
@@ -622,6 +622,18 @@ class AgentSessionService implements ResetWriterPort {
     } catch (_) {
       // The owning run receives a bounded terminal result from the invocation.
     }
+  }
+
+  /// Closing a single-subscription stream can wait for a paused or never
+  /// attached consumer's done event. That delivery future is UI-owned and is
+  /// not part of the Agent writer operation: the operation has already
+  /// completed its real run/database cleanup at this point. Invoke close
+  /// synchronously to publish the terminal stream state, but deliberately do
+  /// not await the consumer-dependent future from the reset barrier.
+  void _closeViewStream(StreamController<AgentRunViewState> controller) {
+    if (controller.isClosed) return;
+    final closing = controller.close();
+    unawaited(closing.catchError((_) {}));
   }
 
   // --- The loop ---------------------------------------------------------

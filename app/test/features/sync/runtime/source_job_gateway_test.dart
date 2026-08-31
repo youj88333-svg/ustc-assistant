@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -6,6 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_app/core/database/app_database.dart';
 import 'package:ustc_assistant_app/core/security/credential_protector.dart';
 import 'package:ustc_assistant_app/features/accounts/application/account_service.dart';
+import 'package:ustc_assistant_app/features/accounts/application/first_login_commit_service.dart';
+import 'package:ustc_assistant_app/features/import/application/import_service.dart';
+import 'package:ustc_assistant_app/features/import/data/source_bundle_decoder.dart';
 import 'package:ustc_assistant_app/features/import/domain/import_result.dart';
 import 'package:ustc_assistant_app/features/sync/application/sync_coordinator.dart';
 import 'package:ustc_assistant_app/features/sync/data/bridge_client.dart';
@@ -504,6 +509,121 @@ void main() {
       );
       expect(importCalls, 2);
       await gateway.shutdown();
+    },
+  );
+
+  test(
+    'quiesce cancels a real paused first login and discards password bytes',
+    () async {
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final trackingAccounts = _CapturingFirstLoginAccountService(
+        database: database,
+        protector: _NoopProtector(),
+      );
+      final bridge = _PausedFirstLoginBridge();
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: trackingAccounts,
+        bridgeFactory: () async => bridge,
+        importBundle: imports.importBytes,
+        prepareBundle: imports.prepare,
+        firstLoginCommitService: FirstLoginCommitService(
+          database: database,
+          protector: trackingAccounts.protector,
+          persistPrepared: imports.persistPrepared,
+        ),
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+        bridge: bridge,
+      );
+
+      final paused = await gateway.firstLogin(
+        const FirstLoginCommand(
+          username: 'PB00000000',
+          password: 'first-login-secret',
+          savePassword: true,
+        ),
+      );
+      expect(paused, isA<SyncNeedsUserAction>());
+
+      // The adapter's quiesce is the real fixed coordinator+gateway path. It
+      // must use the owned cancellation operation even after admission closed.
+      await gateway.quiesce();
+
+      expect(bridge.cancelCalls, 1);
+      expect(gateway.arbiter.isBusy, isFalse);
+      expect(coordinator.hasCurrentJob, isFalse);
+      final provisional = trackingAccounts.cancelled;
+      expect(provisional, isA<ProvisionalFirstLogin>());
+      expect((provisional! as ProvisionalFirstLogin).passwordBytes, isNull);
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.syncRuns).get(), isEmpty);
+
+      await gateway.resume();
+      await gateway.shutdown();
+    },
+  );
+
+  test(
+    'terminal shutdown closes admission and drains a direct file import',
+    () async {
+      final importGate = Completer<ImportResult>();
+      final coordinator = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => _TrackingBridge(),
+        importBundle: (bytes, {required accountId, required origin}) =>
+            importGate.future,
+      );
+      final gateway = SourceJobGatewayAdapter(
+        coordinator: coordinator,
+        arbiter: JwJobArbiter(),
+      );
+
+      final admitted = gateway.importBundle(
+        Uint8List.fromList(<int>[1]),
+        accountId: 'opaque-account',
+        origin: ImportOrigin.file,
+      );
+      final shutdown = gateway.shutdown();
+      await expectLater(
+        gateway.importBundle(
+          Uint8List.fromList(<int>[2]),
+          accountId: 'opaque-account',
+          origin: ImportOrigin.file,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      var settled = false;
+      unawaited(shutdown.then<void>((_) => settled = true));
+      await Future<void>.microtask(() {});
+      expect(settled, isFalse);
+
+      importGate.complete(
+        const ImportResult(
+          status: ImportStatus.imported,
+          bundleId: 'exit-import',
+          source: 'ustc_jw',
+          importedEntityCount: 1,
+        ),
+      );
+      await admitted;
+      await shutdown;
+      expect(settled, isTrue);
     },
   );
 
@@ -1072,6 +1192,76 @@ final class _GatedCredentialsAccountService extends AccountService {
     if (!started.isCompleted) started.complete();
     return credentialsGate.future;
   }
+}
+
+final class _CapturingFirstLoginAccountService extends AccountService {
+  _CapturingFirstLoginAccountService({
+    required super.database,
+    required super.protector,
+  });
+
+  Object? cancelled;
+
+  @override
+  void cancelFirstLogin(Object provisional) {
+    cancelled = provisional;
+    super.cancelFirstLogin(provisional);
+  }
+}
+
+final class _PausedFirstLoginBridge implements BridgeGateway {
+  var cancelCalls = 0;
+  var _polled = false;
+
+  @override
+  Future<BridgeCapabilities> capabilities() async => const BridgeCapabilities(
+    jwSemester: BridgeSemesterCapability(
+      semesterId: 461,
+      semesterKey: '2026fall',
+      displayName: '2026 秋季学期',
+    ),
+  );
+
+  @override
+  Future<BridgeJob> startCollection({
+    required SyncSource source,
+    required String accountId,
+    required String expectedUsername,
+    required BridgeSemesterCapability jwSemester,
+  }) async => const BridgeJob(id: 'paused-first-login', phase: 'starting');
+
+  @override
+  Future<BridgeJobPoll> poll(String jobId, int after) async {
+    if (!_polled) {
+      _polled = true;
+      return const BridgeJobPoll(
+        events: [
+          {'sequence': 1, 'phase': 'needs_user_login'},
+        ],
+        nextSequence: 1,
+        terminal: false,
+      );
+    }
+    return const BridgeJobPoll(
+      events: [
+        {'sequence': 2, 'phase': 'cancelled'},
+      ],
+      nextSequence: 2,
+      terminal: true,
+      errorCode: 'cancelled',
+    );
+  }
+
+  @override
+  Future<void> resumeLogin(String jobId, {String? password}) async {}
+
+  @override
+  Future<void> cancel(String jobId) async {
+    cancelCalls++;
+  }
+
+  @override
+  Future<void> shutdown() async {}
 }
 
 final class _SuccessfulBridge implements BridgeGateway {

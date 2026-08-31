@@ -633,7 +633,7 @@ final class SourceJobGatewayAdapter
       await attempt(_coordinator.cancelCurrent);
     } else if (paused != null) {
       await attempt(() async {
-        await _coordinator.resumeInteractive(paused, userConfirmed: false);
+        await _coordinator.cancelPausedForReset(paused);
       });
       _pausedJobId = null;
     } else {
@@ -673,6 +673,10 @@ final class SourceJobGatewayAdapter
     if (existing != null) return existing;
     _shutdownStarted = true;
     _quiescing = true;
+    // Direct file imports have no arbiter lease. Close their coordinator
+    // admission in the same synchronous terminal prefix as the gateway gate,
+    // before any bridge cancellation or shutdown await begins.
+    _coordinator.closeResetAdmission();
     final operation = _shutdownImpl();
     _shutdownFuture = operation;
     unawaited(
@@ -707,6 +711,10 @@ final class SourceJobGatewayAdapter
     if (bridge != null) {
       await attempt(bridge.shutdown);
     }
+    // A picker/confirmation continuation can own an import without a source
+    // job or lease. Always join that independent writer even when cancellation
+    // or bridge teardown reported an earlier error.
+    await attempt(_coordinator.settleImports);
     final diagnosticsSubscription = _bridgeDiagnosticsSubscription;
     _bridgeDiagnosticsSubscription = null;
     if (diagnosticsSubscription != null) {
