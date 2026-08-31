@@ -21,6 +21,12 @@ typedef BundleImport =
 
 typedef BundlePrepare = Future<PreparedSourceBundle> Function(Uint8List bytes);
 
+typedef FirstLoginConfigPersist =
+    Future<void> Function({
+      required String accountId,
+      required BridgeCapabilities capabilities,
+    });
+
 typedef SyncActionResolver = Future<bool> Function(SyncNeedsUserAction action);
 
 enum _PollProtocolErrorBehavior { mapToSyncFailure, rethrowToCaller }
@@ -68,6 +74,7 @@ class SyncCoordinator {
     this.firstLoginCommitService,
     this.firstLoginCommit,
     this.importService,
+    this.persistFirstLoginConfig,
     this.invalidateBridge,
     int Function()? now,
   }) : now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
@@ -80,6 +87,7 @@ class SyncCoordinator {
   final FirstLoginCommitService? firstLoginCommitService;
   final FirstLoginCommitService? firstLoginCommit;
   final ImportService? importService;
+  final FirstLoginConfigPersist? persistFirstLoginConfig;
   final void Function(BridgeGateway bridge)? invalidateBridge;
   final int Function() now;
   static const freshness = Duration(hours: 12);
@@ -776,15 +784,31 @@ class SyncCoordinator {
             accounts.cancelFirstLogin(provisional);
             return SyncCancelled(source);
           }
+          final requiredCapabilities =
+              capabilities ?? await bridge.capabilities();
+          if (_cancelRequested) {
+            accounts.cancelFirstLogin(provisional);
+            return SyncCancelled(source);
+          }
+          final persistConfig =
+              persistFirstLoginConfig ??
+              ({
+                required String accountId,
+                required BridgeCapabilities capabilities,
+              }) => _persistCapabilities(
+                accountId,
+                capabilities,
+                markSuccess: true,
+              );
           final committed = await atomicCommit.commit(
             provisional: provisional,
             verifiedUsername: verifiedUsername!,
             prepared: prepared,
             cancellationRequested: () => _cancelRequested,
-          );
-          await _persistCapabilities(
-            committed.accountId,
-            capabilities ?? await bridge.capabilities(),
+            persistRequiredConfig: () => persistConfig(
+              accountId: provisional.accountId,
+              capabilities: requiredCapabilities,
+            ),
           );
           return SyncSucceeded(
             source,
@@ -964,8 +988,9 @@ class SyncCoordinator {
 
   Future<void> _persistCapabilities(
     String accountId,
-    BridgeCapabilities capabilities,
-  ) async {
+    BridgeCapabilities capabilities, {
+    bool markSuccess = false,
+  }) async {
     final timestamp = now();
     await _ensureConfig(
       SyncSource.jw,
@@ -973,6 +998,20 @@ class SyncCoordinator {
       timestamp: timestamp,
       config: capabilities.jwSemester.toJson(),
     );
+    if (markSuccess) {
+      await (database.update(database.sourceConfigs)..where(
+            (row) =>
+                row.accountId.equals(accountId) &
+                row.source.equals(SyncSource.jw.storage),
+          ))
+          .write(
+            SourceConfigsCompanion(
+              lastSuccessAt: Value(timestamp),
+              retryAfter: const Value(null),
+              updatedAt: Value(timestamp),
+            ),
+          );
+    }
   }
 
   Future<void> _ensureConfig(

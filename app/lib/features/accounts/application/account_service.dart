@@ -173,7 +173,11 @@ class AccountService {
     _staged = null;
     _stagedFirstLogin?.discard();
     final session =
-        provisional ?? beginFirstLogin(expectedUsername: normalized);
+        provisional ??
+        beginFirstLogin(
+          expectedUsername: normalized,
+          savePassword: savePassword,
+        );
     if (session.expectedUsername.trim().isNotEmpty &&
         session.expectedUsername.trim() != normalized) {
       session.discard();

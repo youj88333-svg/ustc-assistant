@@ -21,16 +21,21 @@ final class PreparedSourceBundle {
   final SourceBundle bundle;
 }
 
+typedef ReminderRetryMarkerWriter =
+    Future<void> Function({required String accountId, required String source});
+
 class ImportService {
   ImportService({
     required this.database,
     required this.decoder,
     this.reminderReconciler = const NoopReminderReconciler(),
+    this.writeReminderRetryMarker,
   }) : repository = ImportRepository(database);
 
   final AppDatabase database;
   final SourceBundleDecoder decoder;
   final ReminderReconciler reminderReconciler;
+  final ReminderRetryMarkerWriter? writeReminderRetryMarker;
   final ImportRepository repository;
   static const _uuid = Uuid();
 
@@ -104,14 +109,24 @@ class ImportService {
       );
       return result;
     } catch (_) {
-      await database.actionLogsRepository.append(
-        accountId: accountId,
-        source: result.source,
-        actionType: 'reminder_reconcile',
-        result: 'retryable_failure',
-        safeSummary: 'Reminder reconciliation is pending.',
-        occurredAt: DateTime.now().millisecondsSinceEpoch,
-      );
+      try {
+        final markerWriter = writeReminderRetryMarker;
+        if (markerWriter != null) {
+          await markerWriter(accountId: accountId, source: result.source);
+        } else {
+          await database.actionLogsRepository.append(
+            accountId: accountId,
+            source: result.source,
+            actionType: 'reminder_reconcile',
+            result: 'retryable_failure',
+            safeSummary: 'Reminder reconciliation is pending.',
+            occurredAt: DateTime.now().millisecondsSinceEpoch,
+          );
+        }
+      } catch (_) {
+        // The import is already durable; callers can retry reconciliation even
+        // when the best-effort marker writer is unavailable.
+      }
       return result.copyWith(reminderReconciliationPending: true);
     }
   }

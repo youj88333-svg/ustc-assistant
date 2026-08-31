@@ -109,6 +109,30 @@ void main() {
     expect(await database.select(database.localAccounts).get(), isEmpty);
   });
 
+  test(
+    'staged first login preserves save-password intent in its provisional',
+    () async {
+      final database = await fixtureDatabase();
+      addTearDown(database.close);
+      final service = AccountService(
+        database: database,
+        protector: FakeProtector(),
+      );
+
+      final provisional = await service.stageFirstLogin(
+        username: 'PB00000000',
+        password: 'secret',
+        savePassword: true,
+      );
+
+      expect(provisional.savePassword, isTrue);
+      expect(service.stagedPasswordForInteractiveLogin(provisional), 'secret');
+      service.cancelFirstLogin(provisional);
+      expect(provisional.passwordBytes, isNull);
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+    },
+  );
+
   test('username mismatch persists neither account nor credentials', () async {
     final database = await fixtureDatabase();
     addTearDown(database.close);

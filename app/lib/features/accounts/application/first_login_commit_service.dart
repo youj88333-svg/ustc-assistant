@@ -28,20 +28,33 @@ final class FirstLoginCommitResult {
   const FirstLoginCommitResult({
     required this.accountId,
     required this.importResult,
+    this.safeDiagnostic,
   });
 
   final String accountId;
   final ImportResult importResult;
+  final String? safeDiagnostic;
 
   /// Short aliases keep the result convenient for sync and acceptance code
   /// without exposing any credential or source payload.
   ImportResult get result => importResult;
+  String? get diagnostic => safeDiagnostic;
   ImportStatus get status => importResult.status;
   String get bundleId => importResult.bundleId;
   String get source => importResult.source;
   int get importedEntityCount => importResult.importedEntityCount;
   bool get reminderReconciliationPending =>
       importResult.reminderReconciliationPending;
+}
+
+final class _ReminderReconciliationOutcome {
+  const _ReminderReconciliationOutcome({
+    required this.result,
+    this.safeDiagnostic,
+  });
+
+  final ImportResult result;
+  final String? safeDiagnostic;
 }
 
 /// Atomically commits a verified first-login identity and its complete JW
@@ -59,6 +72,8 @@ final class FirstLoginCommitService {
     ReminderReconciler? reminderReconciler,
     Future<void> Function({required String accountId, required String source})?
     reconcileReminders,
+    Future<void> Function({required String accountId, required String source})?
+    writeReminderRetryMarker,
     int Function()? now,
   }) : _database = database ?? accounts?.database ?? accountService?.database,
        _protector =
@@ -71,6 +86,7 @@ final class FirstLoginCommitService {
        _importService = importService,
        _reminderReconciler = reminderReconciler,
        _reconcileReminders = reconcileReminders,
+       _writeReminderRetryMarker = writeReminderRetryMarker,
        _now = now ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final AppDatabase? _database;
@@ -84,6 +100,11 @@ final class FirstLoginCommitService {
     required String source,
   })?
   _reconcileReminders;
+  final Future<void> Function({
+    required String accountId,
+    required String source,
+  })?
+  _writeReminderRetryMarker;
   final int Function() _now;
 
   Future<FirstLoginCommitResult> commit({
@@ -91,6 +112,7 @@ final class FirstLoginCommitService {
     required String verifiedUsername,
     required PreparedSourceBundle prepared,
     bool Function()? cancellationRequested,
+    Future<void> Function()? persistRequiredConfig,
   }) async {
     try {
       final verified = verifiedUsername.trim();
@@ -115,14 +137,11 @@ final class FirstLoginCommitService {
       final result = await database.transaction(() async {
         final timestamp = _now();
         final digest = _identityDigest(verified);
-        final existing =
-            await (database.select(database.localAccounts)
-                  ..where((row) => row.id.equals(provisional.accountId)))
-                .getSingleOrNull();
-        if (existing != null &&
-            existing.identityDigest != null &&
-            existing.identityDigest != digest) {
-          throw const AccountVerificationError('identity_mismatch');
+        final existingAccounts = await database
+            .select(database.localAccounts)
+            .get();
+        if (existingAccounts.isNotEmpty) {
+          throw const AccountVerificationError('account_exists');
         }
 
         final usernameBytes = Uint8List.fromList(utf8.encode(verified));
@@ -148,8 +167,8 @@ final class FirstLoginCommitService {
               : Uint8List.fromList(passwordSecret.bytes);
 
           // First login is the only account admission path in the minimal
-          // app.  Deactivate any stale row before publishing this one, while
-          // retaining all of the operation inside the same rollback boundary.
+          // app. The authoritative empty-database check above is in this same
+          // transaction, so no existing partition is modified here.
           await database
               .update(database.localAccounts)
               .write(
@@ -166,7 +185,7 @@ final class FirstLoginCommitService {
                   maskedHint: _maskedHint(verified),
                   identityDigest: Value(digest),
                   isActive: const Value(true),
-                  createdAt: existing?.createdAt ?? timestamp,
+                  createdAt: timestamp,
                   updatedAt: timestamp,
                 ),
               );
@@ -206,6 +225,7 @@ final class FirstLoginCommitService {
           accountId: provisional.accountId,
           origin: ImportOrigin.bridge,
         );
+        await persistRequiredConfig?.call();
         _throwIfCancelled(cancellationRequested);
         return persisted;
       });
@@ -217,7 +237,8 @@ final class FirstLoginCommitService {
       );
       return FirstLoginCommitResult(
         accountId: provisional.accountId,
-        importResult: reconciled,
+        importResult: reconciled.result,
+        safeDiagnostic: reconciled.safeDiagnostic,
       );
     } finally {
       provisional.discard();
@@ -225,7 +246,7 @@ final class FirstLoginCommitService {
     }
   }
 
-  Future<ImportResult> _reconcileAfterCommit(
+  Future<_ReminderReconciliationOutcome> _reconcileAfterCommit(
     ImportResult result, {
     required String accountId,
   }) async {
@@ -239,25 +260,41 @@ final class FirstLoginCommitService {
           source: result.source,
         );
       } else if (_importService != null) {
-        return _importService.reconcileAfterCommit(
-          result,
-          accountId: accountId,
+        return _ReminderReconciliationOutcome(
+          result: await _importService.reconcileAfterCommit(
+            result,
+            accountId: accountId,
+          ),
         );
       }
-      return result;
+      return _ReminderReconciliationOutcome(result: result);
     } catch (_) {
       final database = _database;
-      if (database != null) {
-        await database.actionLogsRepository.append(
-          accountId: accountId,
-          source: result.source,
-          actionType: 'reminder_reconcile',
-          result: 'retryable_failure',
-          safeSummary: 'Reminder reconciliation is pending.',
-          occurredAt: _now(),
+      try {
+        final markerWriter = _writeReminderRetryMarker;
+        if (markerWriter != null) {
+          await markerWriter(accountId: accountId, source: result.source);
+        } else if (database != null) {
+          await database.actionLogsRepository.append(
+            accountId: accountId,
+            source: result.source,
+            actionType: 'reminder_reconcile',
+            result: 'retryable_failure',
+            safeSummary: 'Reminder reconciliation is pending.',
+            occurredAt: _now(),
+          );
+        } else {
+          throw StateError('reminder_retry_marker_unavailable');
+        }
+      } catch (_) {
+        return _ReminderReconciliationOutcome(
+          result: result.copyWith(reminderReconciliationPending: true),
+          safeDiagnostic: 'reminder_retry_marker_unavailable',
         );
       }
-      return result.copyWith(reminderReconciliationPending: true);
+      return _ReminderReconciliationOutcome(
+        result: result.copyWith(reminderReconciliationPending: true),
+      );
     }
   }
 

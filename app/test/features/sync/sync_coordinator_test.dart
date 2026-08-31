@@ -855,6 +855,63 @@ void main() {
   );
 
   test(
+    'first-login config persistence failure rolls back every commit row',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final schema =
+          jsonDecode(
+                File(
+                  'assets/schemas/source-bundle-1.0.draft7.schema.json',
+                ).readAsStringSync(),
+              )
+              as Map<String, dynamic>;
+      final imports = ImportService(
+        database: database,
+        decoder: SourceBundleDecoder(schema),
+      );
+      final accounts = AccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final commit = FirstLoginCommitService(
+        database: database,
+        protector: accounts.protector,
+        persistPrepared: imports.persistPrepared,
+      );
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => DynamicBundleBridge(),
+        now: () => 100,
+        importBundle: imports.importBytes,
+        prepareBundle: imports.prepare,
+        firstLoginCommitService: commit,
+        persistFirstLoginConfig:
+            ({required accountId, required capabilities}) async {
+              throw StateError('config_failed');
+            },
+      );
+
+      expect(
+        await service.firstLoginSync(
+          SyncSource.jw,
+          username: 'PB00000000',
+          password: 'secret',
+          savePassword: true,
+        ),
+        isA<SyncFailed>(),
+      );
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(await database.select(database.credentialAccounts).get(), isEmpty);
+      expect(await database.select(database.calendarEvents).get(), isEmpty);
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.syncRuns).get(), isEmpty);
+      expect(await database.select(database.sourceConfigs).get(), isEmpty);
+    },
+  );
+
+  test(
     'cancellation before first-login commit leaves every local table empty',
     () async {
       final database = AppDatabase(NativeDatabase.memory());
@@ -977,6 +1034,11 @@ void main() {
         (await database.select(database.syncRuns).getSingle()).state,
         'success',
       );
+      final config = await database.select(database.sourceConfigs).getSingle();
+      expect(config.source, 'ustc_jw');
+      expect(config.lastSuccessAt, 100);
+      expect(config.retryAfter, isNull);
+      expect(config.configJson, contains('"semesterId":461'));
     },
   );
 

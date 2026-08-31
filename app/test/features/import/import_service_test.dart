@@ -236,6 +236,30 @@ void main() {
     },
   );
 
+  test('retry marker failure keeps the committed import pending', () async {
+    final db = await testDatabase();
+    addTearDown(db.close);
+    final reconciler = RecordingReconciler()..fail = true;
+    final service = ImportService(
+      database: db,
+      decoder: testDecoder(),
+      reminderReconciler: reconciler,
+      writeReminderRetryMarker: ({required accountId, required source}) async {
+        throw StateError('marker_unavailable');
+      },
+    );
+
+    final result = await service.importBytes(
+      fixture('young-empty-window.json'),
+      accountId: 'acct_fixture',
+      origin: ImportOrigin.bridge,
+    );
+
+    expect(result.status, ImportStatus.imported);
+    expect(result.reminderReconciliationPending, isTrue);
+    expect(await db.select(db.importBatches).get(), hasLength(1));
+  });
+
   test(
     'a newer complete snapshot marks absent records within scope missing',
     () async {
