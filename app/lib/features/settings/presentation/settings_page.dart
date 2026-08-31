@@ -4,6 +4,54 @@ import 'package:go_router/go_router.dart';
 import '../../../../core/config/generated_source_defaults.dart';
 import '../application/settings_service.dart';
 
+/// Shared destructive-reset confirmation used by every unconfigured entry
+/// point. The second dialog is only reachable after the first confirmation;
+/// dismissing either one is a no-op.
+Future<bool> confirmCompleteReset(BuildContext context) async {
+  if (!context.mounted) return false;
+  final first = await showDialog<bool>(
+    context: context,
+    builder: (context) => AlertDialog(
+      title: const Text('完全重置本地数据？'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('确认'),
+        ),
+      ],
+    ),
+  );
+  if (first != true || !context.mounted) return false;
+  return await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('再次确认：此操作不可撤回'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('确认'),
+            ),
+          ],
+        ),
+      ) ??
+      false;
+}
+
+void showResetCancelledMessage(BuildContext context) {
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(const SnackBar(content: Text('已取消重新登录')));
+}
+
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     required this.service,
@@ -71,7 +119,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ListTile(
                 key: const Key('settings-first-login-entry'),
                 leading: const Icon(Icons.login),
-                title: const Text('绑定学校账号'),
+                title: const Text('登录教务'),
                 onTap: widget.onFirstLogin,
               ),
             const Divider(),
@@ -162,7 +210,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ListTile(
             key: const Key('complete-reset'),
             leading: const Icon(Icons.warning_amber),
-            title: const Text('完全重置'),
+            title: Text(hasAccount ? '完全重置' : '清除全部数据'),
             subtitle: hasAccount ? null : const Text('清除全部残留本地数据和浏览器会话'),
             enabled: !resetting,
             onTap: resetting ? null : _completeReset,
@@ -194,8 +242,12 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> _completeReset() async {
     if (resetting) return;
-    if (!await _ask('完全重置本地数据？') || !mounted) return;
-    if (!await _ask('再次确认：此操作不可撤回') || !mounted) return;
+    final confirmed = await confirmCompleteReset(context);
+    if (!mounted) return;
+    if (!confirmed) {
+      showResetCancelledMessage(context);
+      return;
+    }
     setState(() => resetting = true);
     var accountCleared = false;
     try {
@@ -227,23 +279,4 @@ class _SettingsPageState extends State<SettingsPage> {
     }
     if (accountCleared && mounted) widget.onCompleteReset?.call();
   }
-
-  Future<bool> _ask(String title) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认'),
-            ),
-          ],
-        ),
-      ) ??
-      false;
 }

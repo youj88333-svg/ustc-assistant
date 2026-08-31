@@ -42,6 +42,34 @@ void main() {
     expect(firstLoginPressed, isTrue);
   });
 
+  testWidgets('empty account page exposes login and complete reset actions', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final service = AccountService(database: database, protector: Protector());
+
+    await tester.pumpWidget(MaterialApp(home: AccountsPage(service: service)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('登录教务'), findsOneWidget);
+    expect(find.text('清除全部数据'), findsOneWidget);
+  });
+
+  testWidgets('single-account page does not offer account switching', (
+    tester,
+  ) async {
+    final database = AppDatabase(NativeDatabase.memory());
+    addTearDown(database.close);
+    final service = AccountService(database: database, protector: Protector());
+    await service.persistVerifiedAccount(username: 'PB00000000');
+
+    await tester.pumpWidget(MaterialApp(home: AccountsPage(service: service)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('切换'), findsNothing);
+  });
+
   testWidgets('credential and browser clearing use separate confirmations', (
     tester,
   ) async {

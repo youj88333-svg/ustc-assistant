@@ -37,6 +37,9 @@ import '../features/tasks/application/undo_service.dart';
 import '../features/tasks/presentation/task_form.dart';
 import '../features/tasks/presentation/task_detail_loader.dart';
 import 'app_drawer.dart';
+import 'minimal_app_state.dart';
+
+export 'minimal_app_state.dart';
 
 GoRouter buildRouter(
   OfficialWebsiteLauncher websiteLauncher,
@@ -47,13 +50,65 @@ GoRouter buildRouter(
   MinimalJwRuntimeOwner? runtimeOwner,
   AgentCompositionOwner? agentCompositionOwner,
   Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader,
+  MinimalAppStateController? appStateController,
+  Future<void> Function()? requestAppExit,
 ]) {
   final loadAgentComposition = agentCompositionLoader ?? buildAgentComposition;
   // The app shell injects the physical cleanup callback. Keep direct router
   // construction side-effect free for widget tests and embedded hosts.
   final clearBrowser = clearBrowserSession ?? _noopBrowserSession;
+  final appState = appStateController;
+
+  Future<void> completeReset() async {
+    try {
+      final loader = resetCoordinatorLoader;
+      if (loader != null) {
+        await (await loader()).completeReset();
+        return;
+      }
+      final accounts = AccountService(
+        database: database,
+        protector: defaultCredentialProtector(),
+        clearBrowserSession: clearBrowser,
+      );
+      await SettingsService(
+        database: database,
+        accounts: accounts,
+        accountId: null,
+      ).completeReset(firstConfirmation: true, secondConfirmation: true);
+      appState?.showUnconfiguredAfterReset();
+    } on Object {
+      appState?.markResetFailed();
+      rethrow;
+    }
+  }
+
+  Future<void> confirmAndReset(BuildContext context) async {
+    final confirmed = await confirmCompleteReset(context);
+    if (!context.mounted) return;
+    if (!confirmed) {
+      showResetCancelledMessage(context);
+      return;
+    }
+    try {
+      await completeReset();
+      if (context.mounted) context.go('/sync');
+    } on Object {
+      // The app-owned state controller routes coordinator failures to the
+      // fail-closed recovery page. Direct embedded hosts get only a safe
+      // generic message and never see an exception string.
+      if (context.mounted && appState == null) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('本地数据重置失败，请重试')));
+      }
+    }
+  }
+
   return GoRouter(
     initialLocation: '/chat',
+    refreshListenable: appState,
+    redirect: (context, state) => _minimalRouteRedirect(appState, state),
     routes: [
       StatefulShellRoute.indexedStack(
         builder: (context, state, navigationShell) =>
@@ -68,6 +123,7 @@ GoRouter buildRouter(
                   websiteLauncher: websiteLauncher,
                   compositionLoader: loadAgentComposition,
                   compositionOwner: agentCompositionOwner,
+                  onReset: () => confirmAndReset(context),
                 ),
               ),
             ],
@@ -155,6 +211,10 @@ GoRouter buildRouter(
           onLoginAgain: (accountId) =>
               context.push('/accounts/$accountId/reauthenticate'),
           onOpenOfficialPage: () => context.go('/official-websites'),
+          coordinatedReset: completeReset,
+          onCompleteReset: () {
+            if (context.mounted) context.go('/sync');
+          },
         ),
       ),
       GoRoute(
@@ -168,6 +228,7 @@ GoRouter buildRouter(
             database: database,
             reminderReconciler: reminderReconciler,
             reauthenticateAccountId: state.pathParameters['accountId']!,
+            appStateController: appState,
             clearBrowserSession: clearBrowser,
             createNativeGateway: false,
           ),
@@ -175,11 +236,12 @@ GoRouter buildRouter(
             database: database,
             reminderReconciler: reminderReconciler,
             runtime: runtime,
+            appStateController: appState,
             reauthenticateAccountId: state.pathParameters['accountId']!,
             clearBrowserSession: clearBrowser,
             coordinatedReset: resetCoordinatorLoader == null
                 ? null
-                : () async => (await resetCoordinatorLoader()).completeReset(),
+                : completeReset,
             onReauthenticated: () {
               if (resetCoordinatorLoader != null) {
                 // The coordinated reset has already installed the fresh
@@ -202,6 +264,7 @@ GoRouter buildRouter(
           missingRuntime: SyncPageLoader(
             database: database,
             reminderReconciler: reminderReconciler,
+            appStateController: appState,
             clearBrowserSession: clearBrowser,
             createNativeGateway: false,
             onExit: () {
@@ -218,6 +281,7 @@ GoRouter buildRouter(
             database: database,
             reminderReconciler: reminderReconciler,
             runtime: runtime,
+            appStateController: appState,
             clearBrowserSession: clearBrowser,
             onExit: () {
               if (context.canPop()) {
@@ -242,6 +306,7 @@ GoRouter buildRouter(
           clearBrowserSession: clearBrowser,
           runtimeOwner: runtimeOwner,
           resetCoordinatorLoader: resetCoordinatorLoader,
+          coordinatedReset: appState == null ? null : completeReset,
         ),
       ),
       GoRoute(
@@ -253,8 +318,132 @@ GoRouter buildRouter(
         builder: (context, state) =>
             OfficialWebsitesPage(launcher: websiteLauncher),
       ),
+      GoRoute(
+        path: '/reset-recovery',
+        builder: (context, state) => ResetRecoveryView(
+          safeCode:
+              appState?.safeCode ?? MinimalAppStateController.resetFailedCode,
+          onRetry: resetCoordinatorLoader == null && appState == null
+              ? null
+              : () async {
+                  try {
+                    if (resetCoordinatorLoader != null) {
+                      await (await resetCoordinatorLoader()).retryReset();
+                    } else {
+                      await completeReset();
+                    }
+                  } on Object {
+                    // The retained coordinator publishes failed again. Keep
+                    // raw cleanup details out of this route.
+                  }
+                },
+          onExit: requestAppExit,
+        ),
+      ),
+      GoRoute(
+        path: '/resetting',
+        builder: (context, state) => const _MinimalProgressPage(),
+      ),
     ],
   );
+}
+
+String? _minimalRouteRedirect(
+  MinimalAppStateController? appState,
+  GoRouterState state,
+) {
+  final phase = appState?.viewState.phase;
+  final location = state.matchedLocation;
+  if (phase == MinimalAppPhase.resetFailed) {
+    return location == '/reset-recovery' ? null : '/reset-recovery';
+  }
+  if (phase == MinimalAppPhase.resetting) {
+    return location == '/resetting' ? null : '/resetting';
+  }
+  if (location == '/reset-recovery' || location == '/resetting') {
+    return '/sync';
+  }
+  return null;
+}
+
+final class ResetRecoveryView extends StatelessWidget {
+  const ResetRecoveryView({
+    required this.safeCode,
+    required this.onRetry,
+    required this.onExit,
+    super.key,
+  });
+
+  final String? safeCode;
+  final Future<void> Function()? onRetry;
+  final Future<void> Function()? onExit;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        automaticallyImplyLeading: false,
+        title: const Text('恢复本地状态'),
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.error_outline, size: 48),
+              const SizedBox(height: 16),
+              Text('重置失败', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              Text(
+                '错误代码：${safeCode ?? MinimalAppStateController.resetFailedCode}',
+              ),
+              const SizedBox(height: 24),
+              FilledButton.icon(
+                key: const Key('retry-reset'),
+                onPressed: onRetry == null
+                    ? null
+                    : () async {
+                        try {
+                          await onRetry!();
+                        } on Object {
+                          // The controller remains in the safe recovery
+                          // state and exposes another retry.
+                        }
+                      },
+                icon: const Icon(Icons.refresh),
+                label: const Text('重试清除全部数据'),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                key: const Key('exit-app'),
+                onPressed: onExit == null
+                    ? null
+                    : () async {
+                        try {
+                          await onExit!();
+                        } on Object {
+                          // Exit is best effort; no raw platform error is
+                          // allowed to escape into the recovery UI.
+                        }
+                      },
+                icon: const Icon(Icons.exit_to_app),
+                label: const Text('退出应用'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+final class _MinimalProgressPage extends StatelessWidget {
+  const _MinimalProgressPage();
+
+  @override
+  Widget build(BuildContext context) =>
+      const Scaffold(body: Center(child: CircularProgressIndicator()));
 }
 
 /// Resolves the one app-owned runtime for a source route. Direct router
@@ -555,12 +744,14 @@ class _SettingsLoader extends StatelessWidget {
     required this.clearBrowserSession,
     this.runtimeOwner,
     this.resetCoordinatorLoader,
+    this.coordinatedReset,
   });
 
   final AppDatabase database;
   final Future<void> Function() clearBrowserSession;
   final MinimalJwRuntimeOwner? runtimeOwner;
   final Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader;
+  final Future<void> Function()? coordinatedReset;
 
   @override
   Widget build(BuildContext context) {
@@ -594,9 +785,10 @@ class _SettingsLoader extends StatelessWidget {
             accountId: account?.id,
           ),
           onFirstLogin: account == null ? () => context.go('/sync') : null,
-          coordinatedReset: resetLoader == null
-              ? null
-              : () async => (await resetLoader()).completeReset(),
+          coordinatedReset: coordinatedReset ??
+              (resetLoader == null
+                  ? null
+                  : () async => (await resetLoader()).completeReset()),
           onCompleteReset: () {
             if (resetLoader != null) {
               context.go('/sync');
@@ -666,12 +858,14 @@ class _AgentChatLoader extends StatefulWidget {
     required this.websiteLauncher,
     required this.compositionLoader,
     this.compositionOwner,
+    this.onReset,
   });
 
   final AppDatabase database;
   final OfficialWebsiteLauncher websiteLauncher;
   final AgentCompositionLoader compositionLoader;
   final AgentCompositionOwner? compositionOwner;
+  final VoidCallback? onReset;
 
   @override
   State<_AgentChatLoader> createState() => _AgentChatLoaderState();
@@ -723,7 +917,14 @@ class _AgentChatLoaderState extends State<_AgentChatLoader> {
                     key: const Key('first-login-entry'),
                     onPressed: () => context.go('/sync'),
                     icon: const Icon(Icons.login),
-                    label: const Text('绑定学校账号'),
+                    label: const Text('登录教务'),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    key: const Key('complete-reset'),
+                    onPressed: widget.onReset,
+                    icon: const Icon(Icons.delete_forever_outlined),
+                    label: const Text('清除全部数据'),
                   ),
                 ],
               ),

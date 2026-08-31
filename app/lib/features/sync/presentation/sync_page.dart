@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../../app/minimal_app_state.dart';
 import '../../../core/database/app_database.dart';
 import '../../../core/security/credential_protector_factory.dart';
 import '../../accounts/application/account_service.dart';
@@ -13,6 +14,7 @@ import '../../import/application/reminder_reconciler.dart';
 import '../../import/data/source_bundle_decoder.dart';
 import '../../import/presentation/file_import_action.dart';
 import '../../settings/application/settings_service.dart';
+import '../../settings/presentation/settings_page.dart';
 import '../application/sync_coordinator.dart';
 import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
@@ -58,6 +60,7 @@ class SyncPageLoader extends StatefulWidget {
     this.onExit,
     this.clearBrowserSession,
     this.runtime,
+    this.appStateController,
     this.nativeGateway,
     this.nativeGatewayFactory,
     this.createNativeGateway = true,
@@ -80,6 +83,10 @@ class SyncPageLoader extends StatefulWidget {
   /// The app-owned runtime. When present, this loader borrows its gateway and
   /// surface and does not create or dispose any browser resource.
   final MinimalJwRuntime? runtime;
+
+  /// App-root state bridge for explicit login and collection phases. This
+  /// page never owns the runtime or reset coordinator.
+  final MinimalAppStateController? appStateController;
 
   /// Optional gateway seam for tests and hosts that already own the native
   /// gateway. The loader still owns the supplied gateway for its lifetime.
@@ -403,6 +410,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
       // intentionally not invoked on teardown failure.
       return;
     }
+    if (!mounted) return;
     widget.onReauthenticationRequired?.call(accountId);
   }
 
@@ -429,6 +437,7 @@ class _SyncPageLoaderState extends State<SyncPageLoader> {
           importBundle: value.importBundle,
           diagnostics: value.diagnostics,
           reauthenticateAccountId: widget.reauthenticateAccountId,
+          appStateController: widget.appStateController,
           onReauthenticated: widget.onReauthenticated,
           coordinatedReset: widget.coordinatedReset,
           onReauthenticationRequired: widget.onReauthenticationRequired == null
@@ -476,6 +485,7 @@ class SyncPage extends StatefulWidget {
     this.coordinatedReset,
     this.onReauthenticationRequired,
     this.onExit,
+    this.appStateController,
     super.key,
   });
 
@@ -495,6 +505,7 @@ class SyncPage extends StatefulWidget {
   final Future<void> Function()? coordinatedReset;
   final ValueChanged<String>? onReauthenticationRequired;
   final VoidCallback? onExit;
+  final MinimalAppStateController? appStateController;
 
   @override
   State<SyncPage> createState() => _SyncPageState();
@@ -512,6 +523,9 @@ class _SyncPageState extends State<SyncPage> {
   @override
   void initState() {
     super.initState();
+    if (widget.reauthenticateAccountId != null) {
+      _publishAppState((state) => state.showLoginVisible());
+    }
     _loadAndAutoSync();
   }
 
@@ -522,24 +536,38 @@ class _SyncPageState extends State<SyncPage> {
     super.dispose();
   }
 
+  void _publishAppState(void Function(MinimalAppStateController state) update) {
+    final appState = widget.appStateController;
+    if (appState == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) update(appState);
+    });
+  }
+
   Future<void> _loadAndAutoSync() async {
     final reauthenticateId = widget.reauthenticateAccountId;
     if (reauthenticateId != null) {
       accountId = reauthenticateId;
       final summaries = await widget.accounts.summaries();
+      if (!mounted) return;
       for (final summary in summaries) {
         if (summary.id == reauthenticateId) {
           reauthenticationHint = summary.maskedHint;
           break;
         }
       }
-      if (!mounted) return;
+      _publishAppState((state) => state.showLoginVisible());
       await _refresh();
       return;
     }
     final account = await widget.accounts.activeAccount();
     if (!mounted) return;
     accountId = account?.id;
+    if (account == null) {
+      _publishAppState((state) => state.showLoginVisible());
+    } else {
+      _publishAppState((state) => state.showConfigured());
+    }
     await _refresh();
     if (account != null) await _runAll(SyncTrigger.automatic);
   }
@@ -567,60 +595,75 @@ class _SyncPageState extends State<SyncPage> {
     final id = accountId;
     if (id == null || busy) return;
     setState(() => busy = true);
-    final gateway = widget.gateway;
-    final outcome = gateway != null
-        ? await gateway.sync(accountId: id, trigger: trigger)
-        : await widget.coordinator!.sync(
-            source,
-            trigger: trigger,
-            accountId: id,
-          );
-    await _handle(outcome);
-    if (mounted) setState(() => busy = false);
-    await _refresh();
+    _publishAppState((state) => state.beginCollecting());
+    try {
+      final gateway = widget.gateway;
+      final outcome = gateway != null
+          ? await gateway.sync(accountId: id, trigger: trigger)
+          : await widget.coordinator!.sync(
+              source,
+              trigger: trigger,
+              accountId: id,
+            );
+      await _handle(outcome);
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+        _publishAppState((state) => state.showConfigured());
+        await _refresh();
+      }
+    }
   }
 
   Future<void> _runAll(SyncTrigger trigger) async {
     final id = accountId;
     if (id == null || busy) return;
     setState(() => busy = true);
-    final gateway = widget.gateway;
-    if (gateway != null) {
-      var outcome = await gateway.sync(accountId: id, trigger: trigger);
-      if (outcome is SyncNeedsUserAction) {
-        final confirmed = trigger == SyncTrigger.automatic
-            ? false
-            : await _confirmInteractiveLogin(outcome);
-        final InteractiveSourceJobGateway? interactive =
-            gateway is InteractiveSourceJobGateway
-            ? gateway as InteractiveSourceJobGateway
-            : null;
-        outcome = interactive == null
-            ? const SyncFailed(SyncSource.jw, code: 'sync_failed')
-            : await interactive.resumeInteractive(
-                outcome.jobId,
-                userConfirmed: confirmed,
-              );
+    _publishAppState((state) => state.beginCollecting());
+    try {
+      final gateway = widget.gateway;
+      if (gateway != null) {
+        var outcome = await gateway.sync(accountId: id, trigger: trigger);
+        if (outcome is SyncNeedsUserAction) {
+          final confirmed = trigger == SyncTrigger.automatic
+              ? false
+              : await _confirmInteractiveLogin(outcome);
+          final InteractiveSourceJobGateway? interactive =
+              gateway is InteractiveSourceJobGateway
+              ? gateway as InteractiveSourceJobGateway
+              : null;
+          outcome = interactive == null
+              ? const SyncFailed(SyncSource.jw, code: 'sync_failed')
+              : await interactive.resumeInteractive(
+                  outcome.jobId,
+                  userConfirmed: confirmed,
+                );
+        }
+        // Keep the one-source page behavior identical to coordinator.syncAll;
+        // the gateway is the only UI-facing job entry point.
+        await _handle(outcome);
+      } else {
+        await widget.coordinator!.syncAll(
+          trigger: trigger,
+          accountId: id,
+          resolveUserAction: trigger == SyncTrigger.automatic
+              ? (_) async => false
+              : _confirmInteractiveLogin,
+        );
       }
-      // Keep the one-source page behavior identical to coordinator.syncAll;
-      // the gateway is the only UI-facing job entry point.
-      await _handle(outcome);
-    } else {
-      await widget.coordinator!.syncAll(
-        trigger: trigger,
-        accountId: id,
-        resolveUserAction: trigger == SyncTrigger.automatic
-            ? (_) async => false
-            : _confirmInteractiveLogin,
-      );
+    } finally {
+      if (mounted) {
+        setState(() => busy = false);
+        _publishAppState((state) => state.showConfigured());
+        await _refresh();
+      }
     }
-    if (mounted) setState(() => busy = false);
-    await _refresh();
   }
 
   Future<SyncOutcome> _handle(SyncOutcome outcome) async {
     if (outcome is! SyncNeedsUserAction || !mounted) return outcome;
     final confirmed = await _confirmInteractiveLogin(outcome);
+    if (!mounted) return outcome;
     final gateway = widget.gateway;
     if (gateway is InteractiveSourceJobGateway) {
       return (gateway as InteractiveSourceJobGateway).resumeInteractive(
@@ -664,6 +707,7 @@ class _SyncPageState extends State<SyncPage> {
     final username = usernameController.text.trim();
     if (username.isEmpty || busy) return;
     setState(() => busy = true);
+    _publishAppState((state) => state.beginCollecting());
     final gateway = widget.gateway;
     var outcome = gateway != null
         ? await gateway.firstLogin(
@@ -684,14 +728,20 @@ class _SyncPageState extends State<SyncPage> {
             savePassword: savePassword,
           );
     outcome = await _handle(outcome);
-    passwordController.clear();
     if (!mounted) return;
+    passwordController.clear();
     if (outcome is SyncSucceeded) {
       accountId = (await widget.accounts.activeAccount())?.id;
+      if (!mounted) return;
       await _refresh();
     }
     if (mounted) {
       setState(() => busy = false);
+      if (outcome is SyncSucceeded) {
+        _publishAppState((state) => state.showConfigured());
+      } else {
+        _publishAppState((state) => state.showLoginVisible());
+      }
       final message = switch (outcome) {
         SyncSucceeded() => '账号已绑定，教务同步完成',
         SyncCancelled() => '已取消登录',
@@ -706,75 +756,34 @@ class _SyncPageState extends State<SyncPage> {
 
   Future<void> _reauthenticate() async {
     final id = widget.reauthenticateAccountId;
-    final username = usernameController.text.trim();
-    if (id == null || username.isEmpty || busy) return;
+    if (id == null || busy) return;
     setState(() => busy = true);
+    _publishAppState((state) => state.showLoginVisible());
     var accountCleared = false;
     var message = '重新登录未完成';
     try {
-      // Reauthentication is intentionally a destructive replacement in the
-      // minimal single-account model. Validate the supplied identity before
-      // asking for destructive confirmation, then discard the staged secret
-      // before the canonical reset removes the account partition.
-      final staged = await widget.accounts.stageReauthentication(
-        accountId: id,
-        username: username,
-        password: passwordController.text.isEmpty
-            ? null
-            : passwordController.text,
-        savePassword: savePassword,
-      );
       final confirmed = await _confirmCompleteReset();
       if (!confirmed) {
-        widget.accounts.cancelFirstLogin(staged);
         message = '已取消重新登录';
-        return;
-      }
-      widget.accounts.cancelFirstLogin(staged);
-
-      final coordinatedReset = widget.coordinatedReset;
-      if (coordinatedReset != null) {
-        // The app-owned coordinator closes every real writer, drains the
-        // borrowed runtime, clears DB/UDF state, and installs the fresh
-        // runtime before this route is allowed to continue.
-        await coordinatedReset();
-        accountCleared = true;
       } else {
-        // Legacy direct hosts still own their supplied gateway locally. Keep
-        // their compatibility path, but do not let it replace the app-owned
-        // fixed reset boundary used by production routes.
-        await widget.gateway?.shutdown();
-        if (widget.gateway == null) await widget.nativeGateway?.shutdown();
-        final settings = SettingsService(
-          database: widget.accounts.database,
-          accounts: widget.accounts,
-          accountId: id,
-        );
-        try {
-          await settings.completeReset(
-            firstConfirmation: true,
-            secondConfirmation: true,
-          );
-          accountCleared = true;
-        } on BrowserSessionClearAfterResetError {
-          // The database transaction has already removed the complete local
-          // partition; a post-delete browser cleanup failure must not leave the
-          // caller on a route that can reuse stale account data.
-          accountCleared = true;
-        }
+        await _completeResetWithoutConfirmation();
+        accountCleared = true;
+        message = '本地数据已清除';
       }
-      message = '本地数据已清除';
     } on AccountVerificationError catch (error) {
       message = '重新登录失败：${error.code}';
     } on Object {
       // Keep native/plugin and database details out of the UI and diagnostics.
       message = '重新登录失败：reauthentication_failed';
     } finally {
-      passwordController.clear();
-      if (mounted) setState(() => busy = false);
+      if (mounted) {
+        passwordController.clear();
+        setState(() => busy = false);
+      }
     }
     if (!mounted) return;
     if (accountCleared) {
+      _publishAppState((state) => state.showUnconfigured());
       widget.onReauthenticated?.call();
       return;
     }
@@ -784,31 +793,39 @@ class _SyncPageState extends State<SyncPage> {
   }
 
   Future<bool> _confirmCompleteReset() async {
-    if (!mounted) return false;
-    if (!await _askResetConfirmation('完全重置本地数据？') || !mounted) {
-      return false;
-    }
-    return _askResetConfirmation('再次确认：此操作不可撤回');
+    return confirmCompleteReset(context);
   }
 
-  Future<bool> _askResetConfirmation(String title) async =>
-      await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: Text(title),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('确认'),
-            ),
-          ],
-        ),
-      ) ??
-      false;
+  Future<void> _completeResetWithoutConfirmation() async {
+    final coordinatedReset = widget.coordinatedReset;
+    if (coordinatedReset != null) {
+      // The app-owned coordinator closes every real writer, drains the
+      // borrowed runtime, clears DB/UDF state, and installs the fresh runtime
+      // before this route is allowed to continue.
+      await coordinatedReset();
+      return;
+    }
+    // Legacy direct hosts still own their supplied gateway locally. Keep
+    // their compatibility path, but do not let it replace the app-owned
+    // fixed reset boundary used by production routes.
+    await widget.gateway?.shutdown();
+    if (widget.gateway == null) await widget.nativeGateway?.shutdown();
+    final settings = SettingsService(
+      database: widget.accounts.database,
+      accounts: widget.accounts,
+      accountId: null,
+    );
+    try {
+      await settings.completeReset(
+        firstConfirmation: true,
+        secondConfirmation: true,
+      );
+    } on BrowserSessionClearAfterResetError {
+      // The database transaction has already removed the complete local
+      // partition; a post-delete browser cleanup failure must not leave the
+      // caller on a route that can reuse stale account data.
+    }
+  }
 
   Future<void> _importFile() async {
     final importBundle =

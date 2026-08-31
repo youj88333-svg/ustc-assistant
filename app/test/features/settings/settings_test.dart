@@ -504,4 +504,32 @@ void main() {
         '$kDefaultJwSemesterDisplayName';
     expect(find.text(subtitle), findsOneWidget);
   });
+
+  testWidgets('cancelling either complete reset confirmation is observable', (
+    tester,
+  ) async {
+    final unconfiguredSettings = SettingsService(
+      database: database,
+      accounts: accounts,
+      accountId: null,
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: SettingsPage(service: unconfiguredSettings)),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('complete-reset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(find.text('已取消重新登录'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('complete-reset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(find.text('已取消重新登录'), findsOneWidget);
+  });
 }

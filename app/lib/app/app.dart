@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' show AppExitResponse;
+import 'dart:ui' show AppExitResponse, AppExitType;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -50,6 +50,7 @@ class UstcAssistantApp extends StatefulWidget {
     this.runtimeLoader,
     this.resetCoordinatorLoader,
     this.runtimeDiagnosticSink,
+    this.requestAppExit,
     super.key,
   });
 
@@ -58,11 +59,13 @@ class UstcAssistantApp extends StatefulWidget {
   final AppDatabase Function()? databaseFactory;
   final Future<void> Function()? clearBrowserSession;
   final Future<MinimalJwRuntime> Function()? runtimeLoader;
+
   /// Optional lifecycle-test seam. Production composition uses the fixed
   /// loader below; injecting a coordinator never creates a registry or moves
   /// ownership out of this app state.
   final Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader;
   final void Function(String)? runtimeDiagnosticSink;
+  final Future<AppExitResponse> Function()? requestAppExit;
 
   @override
   UstcAssistantAppState createState() => UstcAssistantAppState();
@@ -75,7 +78,9 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   late final WindowsReminderReconciler reminderReconciler;
   late final MinimalJwRuntimeOwner runtimeOwner;
   late final AgentCompositionOwner agentCompositionOwner;
+  late final MinimalAppStateController appState;
   late final AppLifecycleListener _exitListener;
+  StreamSubscription<void>? _accountSubscription;
   Future<void>? _exitFuture;
   bool _exitRequested = false;
   MinimalResetCoordinator? _resetCoordinator;
@@ -97,6 +102,10 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     runtimeOwner = MinimalJwRuntimeOwner(
       widget.runtimeLoader ?? _loadDefaultRuntime,
     );
+    appState = MinimalAppStateController();
+    _accountSubscription = database.activeAccountChanges.listen((_) {
+      if (mounted && !_exitRequested) unawaited(_refreshAppAccountState());
+    });
     agentCompositionOwner = AgentCompositionOwner(
       loader: buildAgentComposition,
     );
@@ -111,8 +120,11 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       runtimeOwner,
       agentCompositionOwner,
       _loadResetCoordinator,
+      appState,
+      _exitFromRecovery,
     );
     _exitListener = AppLifecycleListener(onExitRequested: _handleExitRequested);
+    unawaited(_refreshAppAccountState());
     if (ownsDatabase) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         unawaited(_startBackgroundWork());
@@ -133,6 +145,20 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       reminderReconciler: reminderReconciler,
       gateway: await runtimeOwner.current.then((runtime) => runtime.gateway),
     );
+  }
+
+  Future<void> _refreshAppAccountState() async {
+    if (!mounted || _exitRequested) return;
+    try {
+      final account = await (database.select(
+        database.localAccounts,
+      )..where((row) => row.isActive.equals(true))).getSingleOrNull();
+      if (!mounted || _exitRequested) return;
+      appState.setAccountConfigured(account != null);
+    } on Object {
+      // Database close can race a best-effort account refresh during app
+      // teardown. No UI state is published after that terminal boundary.
+    }
   }
 
   Future<MinimalResetCoordinator> _loadResetCoordinator() {
@@ -169,7 +195,17 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
 
   Future<MinimalResetCoordinator> _loadResetCoordinatorImpl() async {
     final injected = widget.resetCoordinatorLoader;
-    if (injected != null) return injected();
+    if (injected != null) {
+      final coordinator = await injected();
+      if (mounted && !_exitRequested) {
+        appState.attachResetCoordinator(coordinator);
+      }
+      // Publish injected coordinators at the same composition boundary as
+      // production coordinators. The retained reference is what makes a
+      // failed reset retryable without asking a page to build another one.
+      _resetCoordinator ??= coordinator;
+      return coordinator;
+    }
     final runtime = await runtimeOwner.current;
     final sync = runtime.syncCoordinator;
     if (sync == null) {
@@ -212,6 +248,9 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
         );
       },
     );
+    if (mounted && !_exitRequested) {
+      appState.attachResetCoordinator(coordinator);
+    }
     _resetCoordinator = coordinator;
     return coordinator;
   }
@@ -454,6 +493,21 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     }
   }
 
+  Future<void> _exitFromRecovery() async {
+    try {
+      await prepareForExit();
+    } on Object {
+      // The terminal boundary attempts every owned cleanup stage and keeps
+      // the OS exit request independent from a safe cleanup error.
+    }
+    final request = widget.requestAppExit;
+    if (request != null) {
+      await request();
+      return;
+    }
+    await ServicesBinding.instance.exitApplication(AppExitType.cancelable);
+  }
+
   Future<AppExitResponse> _handleExitRequested() async {
     try {
       await prepareForExit();
@@ -468,7 +522,9 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
   @override
   void dispose() {
     _exitListener.dispose();
+    unawaited(_accountSubscription?.cancel());
     router.dispose();
+    appState.dispose();
     unawaited(prepareForExit().catchError((_) {}));
     super.dispose();
   }

@@ -257,6 +257,19 @@ final class _AppShellResetWriter implements ResetWriterPort {
   }
 }
 
+final class _FailingAppShellResetWriter implements ResetWriterPort {
+  var quiesceCalls = 0;
+
+  @override
+  Future<void> quiesce() async {
+    quiesceCalls++;
+    throw StateError('reset-writer-failure');
+  }
+
+  @override
+  Future<void> resume() async {}
+}
+
 final class _ImmediateResetUdf implements ResetUdfPort {
   var clearCalls = 0;
 
@@ -454,6 +467,100 @@ void main() {
 
     // Without an active account, the chat shows "请先配置学校账号".
     expect(find.text('请先配置学校账号'), findsOneWidget);
+  });
+
+  testWidgets('unconfigured chat exposes login and complete reset actions', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('登录教务'), findsOneWidget);
+    expect(find.text('清除全部数据'), findsOneWidget);
+  });
+
+  testWidgets(
+    'unconfigured settings exposes login and complete reset actions',
+    (tester) async {
+      await tester.pumpWidget(
+        UstcAssistantApp(
+          websiteLauncher: FakeWebsiteLauncher(),
+          database: database,
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('打开侧边栏'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('设置'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('登录教务'), findsOneWidget);
+      expect(find.text('清除全部数据'), findsOneWidget);
+    },
+  );
+
+  testWidgets('reset failure enters a global recovery route', (tester) async {
+    var runtimeLoads = 0;
+    final runtime = MinimalJwRuntime(
+      gateway: _AppShellGateway(),
+      browserSessions: _AppShellSessionAdmin(),
+    );
+    final failingSync = _FailingAppShellResetWriter();
+    final coordinator = MinimalResetCoordinator(
+      runtime: runtime,
+      sync: failingSync,
+      agent: _AppShellResetWriter(),
+      reminders: _AppShellResetWriter(),
+      settings: SettingsService(
+        database: database,
+        accounts: AccountService(
+          database: database,
+          protector: _NoopProtector(),
+        ),
+        accountId: null,
+      ),
+      udfStore: _ImmediateResetUdf(),
+      recomposeRuntime: () async {},
+    );
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+        runtimeLoader: () async {
+          runtimeLoads++;
+          return runtime;
+        },
+        resetCoordinatorLoader: () async => coordinator,
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('complete-reset')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认').last);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('确认').last);
+    await tester.pumpAndSettle();
+
+    expect(find.text('重置失败'), findsOneWidget);
+    expect(find.byKey(const Key('retry-reset')), findsOneWidget);
+    expect(find.byKey(const Key('exit-app')), findsOneWidget);
+    expect(find.text('登录教务'), findsNothing);
+    expect(failingSync.quiesceCalls, 1);
+    expect(runtimeLoads, 0);
+
+    // A deep link cannot bypass the fail-closed route or create another
+    // runtime while the retained coordinator remains failed.
+    tester.state<UstcAssistantAppState>(find.byType(UstcAssistantApp)).router.go(
+      '/schedule',
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('重置失败'), findsOneWidget);
+    expect(runtimeLoads, 0);
   });
 
   testWidgets('unconfigured chat exposes a reachable first-login action', (
@@ -1141,14 +1248,10 @@ void main() {
       expect(replacement.gateway.arbiter.isBusy, isFalse);
       expect(replacement.bridge.shutdownCalls, 0);
 
-      // The failed boundary remains owned by the app. Retrying from the same
-      // settings page must reuse it and therefore continue to target this
-      // replacement gateway, not create a detached coordinator.
-      await tester.tap(find.byKey(const Key('complete-reset')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('确认').last);
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('确认').last);
+      // The failed boundary remains owned by the app. Recovery is the only
+      // interactive route and retry reuses the retained coordinator.
+      expect(find.byKey(const Key('retry-reset')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('retry-reset')));
       await tester.pumpAndSettle();
       expect(resetLoaderCalls, 1);
       expect(replacement.gateway.arbiter.isBusy, isFalse);
