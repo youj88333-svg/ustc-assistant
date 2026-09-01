@@ -65,6 +65,40 @@ void main() {
       },
     );
 
+    test(
+      'gotoCasEntry reuses an already-ready portal login without reloading',
+      () async {
+        controller.setCurrent(_loginEntryUrl);
+
+        await adapter.gotoCasEntry();
+
+        expect(controller.loadUrlCalls, 0);
+        expect(controller.lastLoadedUrl, isNull);
+        expect(diagnostics, contains('ready:jw.portal.login'));
+      },
+    );
+
+    test(
+      'gotoCasEntry navigates once from a non-target and requires its handshake',
+      () async {
+        controller
+          ..setCurrent(_homeUrl)
+          ..portalLoginMatched = false;
+
+        await expectLater(
+          adapter.gotoCasEntry(),
+          throwsA(isA<JwCollectionException>()),
+        );
+
+        expect(controller.loadUrlCalls, 1);
+        expect(controller.lastLoadedUrl, _loginEntryUrl);
+        expect(
+          diagnostics,
+          contains('readyHandshakeRejected:jw.portal.login'),
+        );
+      },
+    );
+
     test('isAuthenticatedHome reflects currentUrl', () async {
       controller.setCurrent(_homeUrl);
       expect(await adapter.isAuthenticatedHome, isTrue);
@@ -1065,6 +1099,7 @@ class FakeJwWebviewController
   String examHtml = '<table id="exams"></table>';
 
   String? lastLoadedUrl;
+  int loadUrlCalls = 0;
   Map<String, Object?>? lastGetDataArgs;
   List<Object?>? lastDatumLessonIds;
   int datumScriptRuns = 0;
@@ -1151,6 +1186,7 @@ class FakeJwWebviewController
 
   @override
   Future<void> loadUrl(String url) async {
+    loadUrlCalls++;
     if (rejectUnknownNavigation && !isJwNavigationAllowed(url)) {
       rejectUnknownNavigation = false;
       throw const JwCollectionException('navigation policy rejected');

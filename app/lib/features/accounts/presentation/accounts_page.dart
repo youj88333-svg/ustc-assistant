@@ -87,7 +87,6 @@ class _AccountsPageState extends State<AccountsPage> {
                   ? null
                   : () => widget.onLoginAgain!(accounts[index].id),
               onDeleteCredentials: () => _deleteCredentials(accounts[index]),
-              onClearBrowser: () => _clearBrowserSession(accounts[index]),
               onOpenOfficialPage: widget.onOpenOfficialPage,
             ),
           );
@@ -105,16 +104,6 @@ class _AccountsPageState extends State<AccountsPage> {
     if (!confirmed) return;
     await widget.service.deleteCredentials(account.id);
     if (mounted) reload();
-  }
-
-  Future<void> _clearBrowserSession(AccountSummary account) async {
-    final confirmed = await _confirm(
-      title: '清除浏览器会话？',
-      body: '只清除专用 Edge 登录会话，不删除已保存凭据。',
-      confirmLabel: '清除会话',
-    );
-    if (!confirmed) return;
-    await widget.service.clearDedicatedBrowserSession();
   }
 
   Future<void> _completeReset() async {
@@ -181,14 +170,12 @@ class _AccountPanel extends StatelessWidget {
     required this.account,
     required this.onLoginAgain,
     required this.onDeleteCredentials,
-    required this.onClearBrowser,
     required this.onOpenOfficialPage,
   });
 
   final AccountSummary account;
   final VoidCallback? onLoginAgain;
   final VoidCallback onDeleteCredentials;
-  final VoidCallback onClearBrowser;
   final VoidCallback? onOpenOfficialPage;
 
   @override
@@ -229,12 +216,6 @@ class _AccountPanel extends StatelessWidget {
               onPressed: account.hasCredentials ? onDeleteCredentials : null,
               icon: const Icon(Icons.key_off_outlined),
               label: const Text('删除凭据'),
-            ),
-            TextButton.icon(
-              key: Key('clear-browser-${account.id}'),
-              onPressed: onClearBrowser,
-              icon: const Icon(Icons.delete_sweep_outlined),
-              label: const Text('清除浏览器会话'),
             ),
           ],
         ),

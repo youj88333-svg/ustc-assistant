@@ -186,14 +186,6 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.web_asset_off),
-              title: const Text('清除专用浏览器会话'),
-              onTap: () => _confirm(
-                '清除浏览器会话？',
-                () => widget.service.clearBrowserSession(confirmed: true),
-              ),
-            ),
-            ListTile(
               leading: const Icon(Icons.delete_outline),
               title: const Text('清除业务数据'),
               onTap: () => _confirm(

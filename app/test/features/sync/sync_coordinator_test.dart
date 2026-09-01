@@ -154,6 +154,44 @@ final class _AdmissionFakeBridge extends FakeBridge
   }
 }
 
+final class _ThrowingCancelBridge extends FakeBridge {
+  _ThrowingCancelBridge(this.cancelError);
+
+  final Object cancelError;
+
+  @override
+  Future<void> cancel(String jobId) async {
+    cancelled.add(jobId);
+    throw cancelError;
+  }
+}
+
+final class _CapturingFirstLoginAccountService extends AccountService {
+  _CapturingFirstLoginAccountService({
+    required super.database,
+    required super.protector,
+  });
+
+  ProvisionalFirstLogin? captured;
+
+  @override
+  Future<ProvisionalFirstLogin> stageFirstLogin({
+    required String username,
+    String? password,
+    bool savePassword = false,
+    ProvisionalFirstLogin? provisional,
+  }) async {
+    final staged = await super.stageFirstLogin(
+      username: username,
+      password: password,
+      savePassword: savePassword,
+      provisional: provisional,
+    );
+    captured = staged;
+    return staged;
+  }
+}
+
 final class _GatedPreflightAccountService extends AccountService {
   _GatedPreflightAccountService({
     required super.database,
@@ -623,6 +661,128 @@ void main() {
     expect(bridge.cancelled, ['jw']);
     expect(bridge.starts, [SyncSource.jw]);
   });
+
+  test(
+    'user cancellation clears staged password when bridge cancellation throws',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = _CapturingFirstLoginAccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final cancelError = StateError('cancel transport failed');
+      final bridge = _ThrowingCancelBridge(cancelError)
+        ..polls['jw'] = [
+          const BridgeJobPoll(
+            events: [
+              {'sequence': 1, 'phase': 'needs_user_login'},
+            ],
+            nextSequence: 1,
+            terminal: false,
+          ),
+        ];
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            throw StateError('must not import'),
+        prepareBundle: (_) async => throw StateError('must not prepare'),
+        firstLoginCommitService: FirstLoginCommitService(),
+      );
+
+      final paused = await service.firstLoginSync(
+        SyncSource.jw,
+        username: 'PB00000000',
+        password: 'secret',
+        savePassword: true,
+      );
+      expect(paused, isA<SyncNeedsUserAction>());
+      final provisional = accounts.captured!;
+      expect(provisional.passwordBytes, isNotNull);
+      final passwordBytes = provisional.passwordBytes!;
+      expect(passwordBytes, contains(115));
+
+      await expectLater(
+        service.resumeInteractive(
+          (paused as SyncNeedsUserAction).jobId,
+          userConfirmed: false,
+        ),
+        throwsA(same(cancelError)),
+      );
+
+      expect(provisional.passwordBytes, isNull);
+      expect(passwordBytes, everyElement(0));
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(
+        await database.select(database.credentialAccounts).get(),
+        isEmpty,
+      );
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.sourceRecords).get(), isEmpty);
+      expect(await database.select(database.calendarEvents).get(), isEmpty);
+      expect(service.hasCurrentJob, isFalse);
+    },
+  );
+
+  test(
+    'reset cancellation clears staged password and preserves bridge error',
+    () async {
+      final database = AppDatabase(NativeDatabase.memory());
+      addTearDown(database.close);
+      final accounts = _CapturingFirstLoginAccountService(
+        database: database,
+        protector: CountingProtector(),
+      );
+      final cancelError = StateError('reset cancel transport failed');
+      final bridge = _ThrowingCancelBridge(cancelError)
+        ..polls['jw'] = [
+          const BridgeJobPoll(
+            events: [
+              {'sequence': 1, 'phase': 'needs_user_login'},
+            ],
+            nextSequence: 1,
+            terminal: false,
+          ),
+        ];
+      final service = SyncCoordinator(
+        database: database,
+        accounts: accounts,
+        bridgeFactory: () async => bridge,
+        importBundle: (bytes, {required accountId, required origin}) async =>
+            throw StateError('must not import'),
+        prepareBundle: (_) async => throw StateError('must not prepare'),
+        firstLoginCommitService: FirstLoginCommitService(),
+      );
+
+      final paused = await service.firstLoginSync(
+        SyncSource.jw,
+        username: 'PB00000000',
+        password: 'secret',
+        savePassword: true,
+      );
+      expect(paused, isA<SyncNeedsUserAction>());
+      final provisional = accounts.captured!;
+      expect(provisional.passwordBytes, isNotNull);
+      final passwordBytes = provisional.passwordBytes!;
+
+      service.closeResetAdmission();
+      await expectLater(service.quiesce(), throwsA(same(cancelError)));
+
+      expect(provisional.passwordBytes, isNull);
+      expect(passwordBytes, everyElement(0));
+      expect(await database.select(database.localAccounts).get(), isEmpty);
+      expect(
+        await database.select(database.credentialAccounts).get(),
+        isEmpty,
+      );
+      expect(await database.select(database.importBatches).get(), isEmpty);
+      expect(await database.select(database.sourceRecords).get(), isEmpty);
+      expect(await database.select(database.calendarEvents).get(), isEmpty);
+      expect(service.hasCurrentJob, isFalse);
+    },
+  );
 
   test('sync without credentials fails before bridge startup', () async {
     final protector = CountingProtector();

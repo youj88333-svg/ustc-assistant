@@ -216,6 +216,44 @@ void main() {
     },
   );
 
+  test('reset clears legacy UDF even when the database is already empty', () async {
+    final events = <String>[];
+    final database = _database();
+    addTearDown(database.close);
+    final root = await Directory.systemTemp.createTemp('ustc-reset-legacy-');
+    addTearDown(() => root.delete(recursive: true));
+    final store = WindowsJwUdfStore(privateRoot: root);
+    final newPartition = await store.ensurePartition(
+      store.referenceFor('new-account'),
+    );
+    const legacyId = '550e8400-e29b-41d4-a716-446655440000';
+    final legacyPartition = Directory(
+      '${root.path}${Platform.pathSeparator}webview'
+      '${Platform.pathSeparator}$legacyId',
+    );
+    await legacyPartition.create(recursive: true);
+    final settings = _SettingsSpy(database, events);
+    final coordinator = MinimalResetCoordinator(
+      runtime: _runtime(events),
+      sync: _Writer('sync', events),
+      agent: _Writer('agent', events),
+      reminders: _Writer('reminder', events),
+      settings: settings,
+      udfStore: store,
+      recomposeRuntime: () async => events.add('runtime.recompose'),
+    );
+    (coordinator.sync as _Writer).allowQuiesce();
+    (coordinator.agent as _Writer).allowQuiesce();
+    (coordinator.reminders as _Writer).allowQuiesce();
+
+    await coordinator.completeReset();
+
+    expect(await database.select(database.localAccounts).get(), isEmpty);
+    expect(await newPartition.exists(), isFalse);
+    expect(await legacyPartition.exists(), isFalse);
+    expect(settings.clearCalls, 1);
+  });
+
   test(
     'real Agent session drains cancellation before reset can continue',
     () async {

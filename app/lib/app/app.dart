@@ -1,16 +1,15 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:ui' show AppExitResponse, AppExitType;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../core/database/app_database.dart';
 import '../core/database/connection.dart';
 import '../core/security/credential_protector_factory.dart';
+import '../core/storage/minimal_storage.dart';
 import '../features/accounts/application/account_service.dart';
 import '../features/accounts/application/first_login_commit_service.dart';
 import '../features/agent/application/agent_composition.dart';
@@ -31,7 +30,6 @@ import '../features/sync/native/jw_webview_surface_host.dart';
 import '../features/sync/native/windows_jw_browser_session_admin.dart';
 import '../features/sync/native/windows_jw_udf_store.dart';
 import '../features/sync/runtime/jw_job_arbiter.dart';
-import '../features/sync/runtime/jw_browser_session_cleanup.dart';
 import '../features/sync/runtime/minimal_jw_runtime.dart';
 import '../features/sync/runtime/source_job_gateway.dart';
 import '../features/settings/application/settings_service.dart';
@@ -109,14 +107,12 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     agentCompositionOwner = AgentCompositionOwner(
       loader: buildAgentComposition,
     );
-    final clearBrowser =
-        widget.clearBrowserSession ?? clearNativeJwBrowserSessions;
     router = buildRouter(
       widget.websiteLauncher,
       database,
       reminderReconciler,
       null,
-      clearBrowser,
+      widget.clearBrowserSession,
       runtimeOwner,
       agentCompositionOwner,
       _loadResetCoordinator,
@@ -259,8 +255,6 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
     final accounts = AccountService(
       database: database,
       protector: defaultCredentialProtector(),
-      clearBrowserSession:
-          widget.clearBrowserSession ?? clearNativeJwBrowserSessions,
     );
     final schemaText = await rootBundle.loadString(
       'assets/schemas/source-bundle-1.0.draft7.schema.json',
@@ -282,8 +276,8 @@ class UstcAssistantAppState extends State<UstcAssistantApp> {
       final existing = udfStoreFuture;
       if (existing != null) return existing;
       final operation = () async {
-        final support = await getApplicationSupportDirectory();
-        return WindowsJwUdfStore(privateRoot: Directory(support.path));
+        final root = await resolveMinimalStorageRoot();
+        return WindowsJwUdfStore(privateRoot: root);
       }();
       udfStoreFuture = operation;
       unawaited(

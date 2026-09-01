@@ -34,6 +34,90 @@ void main() {
     expect(runtime.browserSessions.shutdownCalls, 1);
   });
 
+  test('initial loader failure clears construction ownership for retry', () async {
+    final runtime = _FakeRuntime();
+    final loadError = StateError('initial construction failed');
+    var loadCalls = 0;
+    final owner = MinimalJwRuntimeOwner(() async {
+      loadCalls++;
+      if (loadCalls == 1) throw loadError;
+      return runtime.runtime;
+    });
+
+    await expectLater(owner.current, throwsA(same(loadError)));
+    await Future<void>.microtask(() {});
+    expect(await owner.current, same(runtime.runtime));
+    expect(loadCalls, 2);
+
+    await owner.beginShutdown();
+  });
+
+  test('replacement loader failure can recover without another live runtime', () async {
+    final old = _FakeRuntime();
+    final fresh = _FakeRuntime();
+    final replacementError = StateError('replacement construction failed');
+    var loadCalls = 0;
+    final owner = MinimalJwRuntimeOwner(() async {
+      loadCalls++;
+      if (loadCalls == 1) return old.runtime;
+      if (loadCalls == 2) throw replacementError;
+      return fresh.runtime;
+    });
+
+    expect(await owner.current, same(old.runtime));
+    await expectLater(owner.replaceAfterReset(), throwsA(same(replacementError)));
+    await Future<void>.microtask(() {});
+
+    await owner.replaceAfterReset();
+    expect(loadCalls, 3);
+    expect(await owner.current, same(fresh.runtime));
+    expect(old.gateway.shutdownCalls, 1);
+
+    await owner.beginShutdown();
+  });
+
+  test('terminal shutdown treats a late loader failure as no runtime to release', () async {
+    final loaderGate = Completer<MinimalJwRuntime>();
+    final loadError = StateError('late construction failed');
+    var loadCalls = 0;
+    final owner = MinimalJwRuntimeOwner(() {
+      loadCalls++;
+      return loaderGate.future;
+    });
+
+    final loading = owner.current;
+    final shutdown = owner.beginShutdown();
+    loaderGate.completeError(loadError);
+
+    await shutdown;
+    await expectLater(loading, throwsA(same(loadError)));
+    expect(loadCalls, 1);
+    await expectLater(owner.current, throwsA(isA<StateError>()));
+  });
+
+  test('shutdown failure retains the live runtime for a later retry', () async {
+    final old = _FakeRuntime(failShutdown: true);
+    final fresh = _FakeRuntime();
+    var loadCalls = 0;
+    final owner = MinimalJwRuntimeOwner(() async {
+      loadCalls++;
+      return loadCalls == 1 ? old.runtime : fresh.runtime;
+    });
+
+    await owner.current;
+    await expectLater(owner.replaceAfterReset(), throwsA(isA<StateError>()));
+    expect(loadCalls, 1);
+    expect(old.gateway.shutdownCalls, 1);
+
+    old.gateway.failShutdown = false;
+    await owner.replaceAfterReset();
+    expect(loadCalls, 2);
+    expect(old.gateway.shutdownCalls, 2);
+    expect(await owner.current, same(fresh.runtime));
+
+    await owner.beginShutdown();
+  });
+
   test(
     'shutdown closes a runtime that finishes loading after disposal',
     () async {
@@ -185,8 +269,8 @@ void main() {
 }
 
 final class _FakeRuntime {
-  _FakeRuntime({Completer<void>? shutdownGate}) {
-    gateway = _FakeGateway(shutdownGate);
+  _FakeRuntime({Completer<void>? shutdownGate, bool failShutdown = false}) {
+    gateway = _FakeGateway(shutdownGate, failShutdown: failShutdown);
     browserSessions = _FakeSessionAdmin();
     runtime = MinimalJwRuntime(
       gateway: gateway,
@@ -203,9 +287,10 @@ final class _FakeRuntime {
 }
 
 final class _FakeGateway implements SourceJobGateway {
-  _FakeGateway(this.shutdownGate);
+  _FakeGateway(this.shutdownGate, {this.failShutdown = false});
 
   final Completer<void>? shutdownGate;
+  bool failShutdown;
   var shutdownCalls = 0;
 
   @override
@@ -228,6 +313,7 @@ final class _FakeGateway implements SourceJobGateway {
   Future<void> shutdown() async {
     shutdownCalls++;
     await shutdownGate?.future;
+    if (failShutdown) throw StateError('gateway shutdown failed');
   }
 }
 

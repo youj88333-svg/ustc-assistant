@@ -13,13 +13,46 @@
 本清单由用户在真实校园网、Panabit iWAN 和学校模型服务环境下逐项执行。每一项末尾的
 `完成：`留空，由用户在真实验收后填写安全的结果文字（成功 / 失败 / 原因简述）。
 
-Task 9 的当前自动化证据（2026-08-31）为 Windows analyze 无 issues、全量 Flutter
-test `1574/0`、Release build exit `0`，以及 synthetic portal/CAS/course/exam 首次
-登录、原子导入、runtime reuse、两次确认 reset、fail-closed recovery/retry 的 Debug
-loopback `+2`；focused Native/Runtime/Reset suites 为 `+118`，Python oracle 为
-`140` tests/compileall `0`。这些只验证本机代码与合成 fixture，绝不填写或替代下面的
-真实校园网、真实账号、真实课表/考试或学校模型服务人工 `完成：`结果；所有人工字段继续
-留空，直到用户在新构建的 Windows Release App 中逐项确认。
+Task 9 的 `+1574`/Release 与 `+2` loopback 是 2026-08-31 F1–F4 fix wave 之前的
+历史自动化证据，不是该阶段 dirty snapshot 的 final gate。该 fix wave 已完成受影响
+链路 focused suites `+199` 和 Windows synthetic loopback 重跑 `+2`；当时 serial analyze、
+全量 expanded test、Release build 按 storage-isolation 顺序延期。下方 addition 记录其后
+的实际 gate 结果。
+这些只验证本机代码与合成 fixture，绝不填写或替代下面的真实校园网、真实账号、真实课表/
+考试或学校模型服务人工 `完成：`结果；所有人工字段继续留空，直到用户在后续新构建的
+Windows Release App 中逐项确认。
+
+Storage-isolation addition（2026-08-31）已完成 focused `+7`、fresh Windows
+synthetic loopback `+2`，以及 serial analyze `No issues found!`、全量 expanded test
+`1595 passed / 0 failed`、Windows Release build exit `0`。产物 hash 与固定
+`getApplicationSupportDirectory()/branches/minimal` 根的自动化证据详见交接手册 §8.7；
+这些仍不替代真实校园网/账号验收，所有人工 `完成：`字段继续留空。
+
+完整重置的历史兼容清理边界已收紧：只在注入的私有根下识别并清除
+`webview/<strict UUIDv4>` 直接子目录；新分区使用 `browser_sessions/jw/jw_<digest>`。
+legacy 会话只允许 clear-only，不复用、不迁移；未知名称、reparse/link 或 containment
+不确定均 fail closed。本分支 Windows minimal 的固定私有根是
+`getApplicationSupportDirectory()/branches/minimal`，SQLite 文件为其下的
+`ustc_assistant.sqlite`；fresh install 不迁移、不读取或删除旧 Documents/shared support
+数据，reset 只清理该 privateRoot。本批次未读取或清理真实应用支持/profile 数据。
+
+Portal pre-consent fix addition（2026-09-01）：真实运行中 JW `/login` 短暂出现后即
+`collection_failed`，没有登录确认框或 CAS 页。credential-free 原生 probe 先确认
+`gotoRoot` 结束在 portal `/login`，再确认同目标 reload 前的
+`pre_reload_handshake_matched=true`；未改动的 `gotoCasEntry` 随后以
+`ready_handshake_rejected` 失败，根因为冗余同目标 reload 的 readiness race。TDD 在旧逻辑
+上为 RED（54 通过、1 失败），最小修复后 focused adapter 为 `+56: All tests passed!`；
+changed-production probe 达到 `portal_ready`（`failure_boundary=none`），且测试 profile
+已安全释放清理。以上仅是本机无凭据 portal readiness/fix 证据，不是 CAS、真实账号、课程/
+考试采集或 SourceBundle import 验收；这些仍须用户在新构建 Windows Release App 中完成，
+本清单所有真实人工 `完成：`字段继续留空。
+
+随后最终 Windows serial gate 在同一 PowerShell 进程中以精确 Flutter SDK、`--no-pub` 和
+进程级代理完成：analyze `No issues found!` / exit `0`，全量 expanded test
+`1597 passed / 0 failed` / exit `0`，Release build exit `0`；Release launcher 为
+92,160 bytes，`data/app.so` 为 11,469,712 bytes，gate 后 Flutter/Dart/app 进程计数为
+`0`。这些仍只是自动化与本机 portal readiness 证据，所有 CAS/login、真实账号、课程/考试
+采集和 SourceBundle import 的人工 `完成：`字段继续留空。
 
 2026-08-01 人工验收修复轮（Grounding Policy、标题查询定位、PlanBlock 周网格、
 默认冲突推导、整日课程移动等）修复路径的人工复测项见第 11 节；这些仍在 minimal 生效，

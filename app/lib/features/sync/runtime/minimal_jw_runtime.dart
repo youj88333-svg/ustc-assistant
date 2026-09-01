@@ -143,6 +143,17 @@ final class MinimalJwRuntimeOwner {
     if (existing != null) return existing;
     final loaded = Future<MinimalJwRuntime>.sync(_loader);
     _currentFuture = loaded;
+    // A failed construction owns no runtime to release. Observe it here so
+    // the failed Future cannot become a permanent retry poison or surface as
+    // an unhandled error when shutdown joins a late loader.
+    unawaited(
+      loaded.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {
+          if (identical(_currentFuture, loaded)) _currentFuture = null;
+        },
+      ),
+    );
     return loaded;
   }
 
@@ -196,7 +207,16 @@ final class MinimalJwRuntimeOwner {
   Future<void> _shutdownCurrent(Future<MinimalJwRuntime>? target) async {
     final loaded = target;
     if (loaded == null) return;
-    final runtime = await loaded;
+    late final MinimalJwRuntime runtime;
+    try {
+      runtime = await loaded;
+    } on Object {
+      // The construction future failed before producing an owned runtime.
+      // Clear only that exact failed generation; a newer generation, if any,
+      // remains owned by its caller and is not admitted during shutdown.
+      if (identical(_currentFuture, loaded)) _currentFuture = null;
+      return;
+    }
     await runtime.shutdown();
   }
 

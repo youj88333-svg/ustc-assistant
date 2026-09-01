@@ -265,6 +265,140 @@ void main() {
     },
   );
 
+  test('clear all removes new and recognized legacy partitions', () async {
+    final store = WindowsJwUdfStore(privateRoot: root);
+    final newRef = store.referenceFor('new-account');
+    final newPartition = await store.ensurePartition(newRef);
+    const legacyId = '550e8400-e29b-41d4-a716-446655440000';
+    final legacy = Directory(
+      '${root.path}${Platform.pathSeparator}webview'
+      '${Platform.pathSeparator}$legacyId',
+    );
+    await legacy.create(recursive: true);
+
+    await store.clearAllPartitions();
+
+    expect(await newPartition.exists(), isFalse);
+    expect(await legacy.exists(), isFalse);
+  });
+
+  test('unknown legacy entries fail clear-all before deleting owned entries', () async {
+    final attempted = <String>[];
+    final store = WindowsJwUdfStore(
+      privateRoot: root,
+      releaseAttempts: 1,
+      deleteDirectory: (directory) async {
+        attempted.add(directory.path);
+        await directory.delete(recursive: true);
+      },
+    );
+    final ref = store.referenceFor('new-account');
+    await store.ensurePartition(ref);
+    final legacyRoot = Directory(
+      '${root.path}${Platform.pathSeparator}webview',
+    );
+    await legacyRoot.create(recursive: true);
+    final unknown = Directory(
+      '${legacyRoot.path}${Platform.pathSeparator}foreign-name',
+    );
+    await unknown.create();
+
+    await expectLater(
+      store.clearAllPartitions(),
+      throwsA(isA<JwUdfPrivacyError>()),
+    );
+    expect(attempted, isEmpty);
+    expect(await store.resolveForTest(ref).exists(), isTrue);
+    expect(await unknown.exists(), isTrue);
+  });
+
+  test(
+    'locked legacy first child still attempts later owned items and retries',
+    () async {
+      final attempted = <String>[];
+      var shouldFail = true;
+      final store = WindowsJwUdfStore(
+        privateRoot: root,
+        releaseAttempts: 1,
+        releaseDelay: (_) async {},
+        deleteDirectory: (directory) async {
+          attempted.add(directory.path);
+          if (shouldFail && attempted.length == 1) {
+            throw const FileSystemException('locked');
+          }
+          await directory.delete(recursive: true);
+        },
+      );
+      final newRef = store.referenceFor('new-account');
+      final newPartition = await store.ensurePartition(newRef);
+      const firstLegacyId = '550e8400-e29b-41d4-a716-446655440000';
+      const secondLegacyId = '6ba7b810-9dad-41d1-80b4-00c04fd430c8';
+      final legacyRoot = Directory(
+        '${root.path}${Platform.pathSeparator}webview',
+      );
+      final firstLegacy = Directory(
+        '${legacyRoot.path}${Platform.pathSeparator}$firstLegacyId',
+      );
+      final secondLegacy = Directory(
+        '${legacyRoot.path}${Platform.pathSeparator}$secondLegacyId',
+      );
+      await firstLegacy.create(recursive: true);
+      await secondLegacy.create(recursive: true);
+
+      await expectLater(
+        store.clearAllPartitions(),
+        throwsA(isA<JwUdfClearError>()),
+      );
+      expect(attempted, hasLength(3));
+      expect(attempted, contains(firstLegacy.path.toLowerCase()));
+      expect(attempted, contains(secondLegacy.path.toLowerCase()));
+      expect(attempted, contains(newPartition.path.toLowerCase()));
+
+      shouldFail = false;
+      await store.clearAllPartitions();
+      expect(await firstLegacy.exists(), isFalse);
+      expect(await secondLegacy.exists(), isFalse);
+      expect(await newPartition.exists(), isFalse);
+    },
+  );
+
+  test(
+    'rejects a legacy direct symlink without touching its target',
+    () async {
+      final attempted = <String>[];
+      final store = WindowsJwUdfStore(
+        privateRoot: root,
+        deleteDirectory: (directory) async {
+          attempted.add(directory.path);
+          await directory.delete(recursive: true);
+        },
+      );
+      final outside = await Directory.systemTemp.createTemp(
+        'ustc-jw-legacy-outside-',
+      );
+      addTearDown(() async {
+        if (await outside.exists()) await outside.delete(recursive: true);
+      });
+      const legacyId = '550e8400-e29b-41d4-a716-446655440000';
+      final legacyRoot = Directory(
+        '${root.path}${Platform.pathSeparator}webview',
+      );
+      await legacyRoot.create(recursive: true);
+      final link = Link(
+        '${legacyRoot.path}${Platform.pathSeparator}$legacyId',
+      );
+      await link.create(outside.path);
+
+      await expectLater(
+        store.clearAllPartitions(),
+        throwsA(isA<JwUdfPrivacyError>()),
+      );
+      expect(attempted, isEmpty);
+      expect(await outside.exists(), isTrue);
+    },
+    skip: !Platform.isWindows,
+  );
+
   test(
     'clear all attempts later partitions after the first deletion fails',
     () async {

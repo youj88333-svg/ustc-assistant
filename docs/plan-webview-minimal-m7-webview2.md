@@ -27,7 +27,8 @@
 | CMake / Ninja | `/e/Android/Sdk/cmake/3.22.1`、`/e/Espressif/tools/cmake/3.30.2`（本机可编译 Windows） |
 | 代理 | 127.0.0.1:7897（pub.dev / github 可达，`flutter pub get` 可用） |
 | 历史 M5 基线快照 | `flutter analyze` 0 error / 15 issues；`flutter test` 1360 pass / 7 fail（M0 起已知基线；非当前 M7 结果） |
-| targeted Task 9 Windows gate（2026-08-31） | analyze 0 issues；全量 test 1574/0；Release build exit 0；真实 UI reset loopback +2；真实校园验收仍外置 |
+| historical targeted Task 9 Windows gate（2026-08-31，F1–F4 前） | analyze 0 issues；全量 test 1574/0；Release build exit 0；真实 UI reset loopback +2；仅为历史证据，不代表当前 dirty snapshot |
+| final combined runtime/UDF fix wave（2026-08-31） | F1–F4 affected suites +199/0；Windows loopback 重跑 +2；serial analyze/test/Release 延至后续 storage-isolation wave；真实校园验收仍外置 |
 
 ### 0.2 关键结论：WebView2 插件可自足提取
 
@@ -211,9 +212,12 @@ app-owned `MinimalResetCoordinator` 是完全重置的唯一生产边界：它�
 所有 writer，再清理 DB/UDF，成功后才允许 runtime owner 创建一个新的首次登录 runtime；
 失败则进入 fail-closed recovery，不在旧 runtime 上继续工作。
 
-每个作业只使用一个不透明 `accountId` 绑定的 UDF 子目录，路径由应用支持目录和
-清理后的 account 分区组成，不写入日志。minimal 是单账号 gateway 生命周期：不同
-账号请求必须 fail-closed，不能在同一个 gateway 中重绑 controller/UDF。重新登录按
+每个作业只使用一个不透明 `accountId` 绑定的 UDF 子目录，路径位于固定的
+`getApplicationSupportDirectory()/branches/minimal` privateRoot 下，不写入日志。SQLite
+同样位于该根下的 `ustc_assistant.sqlite`；namespace 不随账号、cwd、Git/worktree 或
+build mode 变化。解析失败必须 fail-closed，不能回退到 Documents 或旧 shared support
+root。minimal 是单账号 gateway 生命周期：不同账号请求必须 fail-closed，不能在同一个
+gateway 中重绑 controller/UDF。重新登录按
 “等待当前 loader/gateway 与环境完全释放 → 调用 canonical complete-reset 清除全部
 本地账号数据 → 路由创建一个全新的首次登录 loader”执行。minimal 不实现跨冷启动
 session snapshot 或 DPAPI 会话恢复；重启后再次同步可能要求重新登录。一个 gateway
@@ -316,7 +320,10 @@ login entry → CAS → identity verified → course context → get-data
   unittest `Ran 140 tests in 1.666s`、`OK`，compileall 退出 0。未安装或修改
   Conda 依赖。
 
-#### 8.5.1 当前 targeted runtime gate（2026-08-31）
+#### 8.5.1 历史 targeted runtime gate（2026-08-31，F1–F4 前）
+
+本节的 `+1574`、Release 产物和对应 loopback 记录均来自最终 F1–F4 fix wave
+之前的 dirty snapshot；它们保留作历史审计证据，不得当作当前代码的最终 gate。
 
 - Debug loopback 按 brief 的精确命令、单一 Windows Flutter 进程运行并退出 `0`，
   末计数 `+2: All tests passed!`。第二个测试使用 production
@@ -344,6 +351,71 @@ login entry → CAS → identity verified → course context → get-data
   canonical direct-child/reparse/owned-process 检查后逐项立即复核并删除；固定的旧
   `minimal_jw_loopback` 空父目录（0 children、非 reparse）未删除。该自动化证据不访问
   学校主机，不含真实凭据、query、DOM、响应体或私人课程内容。
+
+#### 8.5.2 Final F1–F4 fix wave（2026-08-31）
+
+- F1/F2/F3/F4 受影响链路的单一 serial focused Flutter 进程退出 `0`，末计数
+  `+199: All tests passed!`；包含 coordinator、runtime owner、UDF、Native/session、
+  Accounts、Settings、reset coordinator 和 app shell suites。
+- F4 的 full-reset legacy 兼容边界仅识别固定 minimal `privateRoot` 下
+  `privateRoot/webview/<strict UUIDv4>` 的
+  直接子目录；不复用、不迁移其内容，未知名称、非目录、reparse/link 或 containment
+  不确定均 fail closed；新分区仍使用 `browser_sessions/jw/jw_<digest>`。
+- storage isolation 将 SQLite 与 native UDF/quarantine 固定到
+  `getApplicationSupportDirectory()/branches/minimal`；fresh install 不迁移、不读取或
+  删除旧 Documents/shared support 数据，reset 也只清理该 minimal privateRoot。
+- Windows Debug loopback 按精确命令首次遇到一次 CAS fixture readiness timeout；无源码
+  变化、无残留进程/root 后按同一命令重跑一次，`+2: All tests passed!`。该结果仍只属
+  synthetic fixture 证据；未检查或清理真实应用支持/profile 路径。
+- 在 F1–F4 fix wave 当时，final serial `analyze → expanded test → build windows --release`
+  尚未执行，按 storage-isolation 顺序延后；此前 `+1574`/Release hash 不可代替后续
+  addition gate。下方记录 storage-isolation wave 的实际结果。
+
+#### 8.5.3 Storage-isolation addition gate（2026-08-31）
+
+- storage isolation focused suite 为 `+7: All tests passed!`，包含真实
+  `UstcAssistantApp` 默认 runtime loader seam、DB 重启持久化、reset 清理边界、旧
+  shared support sentinel 保留，以及 branch/database-file link fail-closed。fresh
+  Windows synthetic loopback 退出 `0`，为 `+2: All tests passed!`；本次未复现先前
+  的 CAS-readiness timeout。
+- 同一 PowerShell 串行执行 `flutter analyze --no-pub`、
+  `flutter test --no-pub --reporter expanded`、`flutter build windows --release --no-pub`：
+  analyze `No issues found!` / exit `0`；全量 test `1595 passed / 0 failed` / exit `0`；
+  Release build exit `0`。产物 `build/windows/x64/runner/Release/ustc_assistant_app.exe`
+  92,160 bytes，SHA-256
+  `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`。exact Release
+  进程计数为 `0`，测试 synthetic root cleanup 剩余 `0`。
+- 该 gate 仅证明本机 synthetic fixture、静态检查和构建；不代表真实校园网/账号验收，
+  也未读取、迁移或删除旧 Documents/shared support/profile 数据。
+
+#### 8.5.4 Portal pre-consent failure and same-target reload fix（2026-09-01）
+
+真实运行曾出现 JW `/login` 短暂显示后立即 `collection_failed`，没有中间登录确认框，也
+没有 CAS 凭据页。credential-free 原生 probe 的两次实验确认：`gotoRoot` 成功结束在
+portal `/login`；在未改动的 `gotoCasEntry` 前直接执行注册
+`jw.portal.login.inspect` 得到 `pre_reload_handshake_matched=true`，而原先的同目标
+reload 随后以 `ready_handshake_rejected` 失败。根因是冗余 `/login` reload 与 readiness
+replacement-document race，不是放宽 selector、handshake 或 timeout。
+
+TDD 回归在旧 unconditional reload 上为 RED（54 通过、1 失败），最小同目标分支修复后
+focused adapter suite 为 `+56: All tests passed!`；非目标/null snapshot 仍只导航一次并
+要求既有 readiness/handshake。changed-production credential-free probe 随后达到
+`portal_ready`（`root_finished_on_portal_login=true`、`pre_reload_handshake_matched=true`、
+`portal_login_target_ready=true`、`failure_boundary=none`），native release 与唯一测试
+profile cleanup 均成功。
+
+此证据只覆盖本机原生 portal readiness 和 targeted fix；未执行 CAS/真实账号登录、课程/考试
+采集或 SourceBundle import。真实校园 CAS/login 与 import acceptance 仍由 owner 按 §8.6
+单独完成，`portal_ready` 不得替代真实校园验收。
+
+随后完成最终 Windows serial gate（同一 PowerShell、`E:\flutter\flutter\bin\flutter.bat`、
+`--no-pub`、进程级代理）：analyze `No issues found!` / exit `0`，全量 expanded test
+`1597 passed / 0 failed` / exit `0`，Release build exit `0`。`ustc_assistant_app.exe`
+为 92,160 bytes（SHA-256 `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`），
+`data/app.so` 为 11,469,712 bytes（SHA-256
+`49ABECA52729693BC6FA86D33273B43F803A0F4A04DA2AED6D6A7D0872F77528`）；gate 后
+Flutter/Dart/app 进程计数为 `0`。该 gate 仍不替代真实 CAS/login、课程/考试采集和
+SourceBundle import acceptance。
 
 若之后的 owner 环境触发已知宿主 `sqlite3.dll` error 126，必须保留原始失败计数并
 停止 build，不能复制 DLL 或重跑第二套 Flutter 命令掩盖失败。
@@ -379,7 +451,9 @@ login entry → CAS → identity verified → course context → get-data
 
 完全重置保留既有两次确认，任一取消均为 no-op；确认后通过 canonical service boundary
 全局删除所有 Drift 本地表/分区（包括凭据、source/sync、日程任务、Agent、操作历史和
-撤回槽），再删除应用支持目录 `webview/*` 下的全部账号 UDF。重新登录沿用同一全局
+撤回槽），再删除注入的应用支持根下仅 allowlisted 的新分区及历史
+`webview/<strict UUIDv4>` 直接子目录；未知 legacy 项 fail closed，不复用或迁移其内容。
+重新登录沿用同一全局
 破坏性流程，在旧 gateway/environment 完全释放后才创建新的首登 loader；不在旧 gateway
 上切换账号，也不并行创建第二个 native environment。
 

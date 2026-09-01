@@ -20,7 +20,6 @@ import '../data/bridge_client.dart';
 import '../domain/sync_state.dart';
 import '../native/jw_webview_surface_host.dart';
 import '../runtime/minimal_jw_runtime.dart';
-import '../runtime/jw_browser_session_cleanup.dart';
 import '../runtime/source_job_gateway.dart';
 
 Future<void> runStartupAutomaticSync(
@@ -39,7 +38,6 @@ Future<void> runStartupAutomaticSync(
     final accounts = AccountService(
       database: database,
       protector: defaultCredentialProtector(),
-      clearBrowserSession: clearNativeJwBrowserSessions,
     );
     final account = await accounts.activeAccount();
     if (account == null) return;

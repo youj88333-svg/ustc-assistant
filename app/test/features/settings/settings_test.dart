@@ -130,6 +130,17 @@ void main() {
     expect(browserClears, 1);
   });
 
+  testWidgets('configured settings do not expose browser-only clearing', (
+    tester,
+  ) async {
+    await tester.pumpWidget(MaterialApp(home: SettingsPage(service: settings)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('清除专用浏览器会话'), findsNothing);
+    expect(find.byIcon(Icons.web_asset_off), findsNothing);
+    expect(browserClears, 0);
+  });
+
   test(
     'business clear and complete reset require distinct confirmations',
     () async {
@@ -532,4 +543,68 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('已取消重新登录'), findsOneWidget);
   });
+
+  testWidgets(
+    'configured cancellation leaves data and reset boundary untouched',
+    (tester) async {
+      var resetCalls = 0;
+      await database
+          .into(database.tasks)
+          .insert(
+            TasksCompanion.insert(
+              id: 'configured-cancel-task',
+              accountId: accountId,
+              title: 'keep',
+              state: 'active',
+              importance: 'normal',
+              tagsJson: '[]',
+              createdAt: 1,
+              updatedAt: 1,
+            ),
+          );
+      await tester.pumpWidget(
+        MaterialApp(
+          home: SettingsPage(
+            service: settings,
+            coordinatedReset: () async => resetCalls++,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.dragUntilVisible(
+        find.byKey(const Key('complete-reset')),
+        find.byType(ListView),
+        const Offset(0, -200),
+      );
+
+      tester
+          .widget<ListTile>(find.byKey(const Key('complete-reset')))
+          .onTap!
+          .call();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消').last);
+      await tester.pumpAndSettle();
+      expect(resetCalls, 0);
+      expect(await database.select(database.localAccounts).get(), hasLength(1));
+      expect(await database.select(database.tasks).get(), hasLength(1));
+
+      await tester.dragUntilVisible(
+        find.byKey(const Key('complete-reset')),
+        find.byType(ListView),
+        const Offset(0, -200),
+      );
+      tester
+          .widget<ListTile>(find.byKey(const Key('complete-reset')))
+          .onTap!
+          .call();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('确认').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消').last);
+      await tester.pumpAndSettle();
+      expect(resetCalls, 0);
+      expect(await database.select(database.localAccounts).get(), hasLength(1));
+      expect(await database.select(database.tasks).get(), hasLength(1));
+    },
+  );
 }

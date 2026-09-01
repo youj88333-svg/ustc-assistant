@@ -670,8 +670,8 @@ class SyncCoordinator implements ResetWriterPort {
   /// Cancels an owned paused job as part of the coordinator/gateway teardown
   /// barrier. This is deliberately narrower than [resumeInteractive]: only
   /// the internal negative decision may cross the maintenance gate, and it
-  /// still removes the paused provisional and settles its job synchronously
-  /// before awaiting bridge cancellation.
+  /// still removes the paused provisional, clears its secrets, and settles
+  /// its job before returning even when bridge cancellation fails.
   Future<SyncOutcome> cancelPausedForReset(String jobId) {
     return _resumeInteractive(
       jobId,
@@ -694,15 +694,35 @@ class SyncCoordinator implements ResetWriterPort {
       return const SyncFailed(SyncSource.jw, code: 'job_not_found');
     }
     if (!userConfirmed) {
+      Object? firstError;
+      StackTrace? firstStack;
       try {
         await paused.bridge.cancel(jobId);
+      } on Object catch (error, stack) {
+        // Transport cancellation can fail after the paused job has already
+        // been removed from the coordinator. Keep that error authoritative,
+        // but do not let it bypass cleanup of the staged first-login secret.
+        firstError = error;
+        firstStack = stack;
+      }
+      try {
         if (paused.provisional == null) {
           await _finishRun(paused.runId, 'cancelled', 'cancelled');
         } else {
           accounts.cancelFirstLogin(paused.provisional!);
         }
-      } finally {
-        _completeCurrentSettlement(jobId);
+      } on Object catch (error, stack) {
+        // A cleanup failure is reported when transport cancellation itself
+        // succeeded; never replace the original cancellation error.
+        firstError ??= error;
+        firstStack ??= stack;
+      }
+      // Settlement is independent of both cancellation and staged-secret
+      // cleanup. The arbiter/reset caller must never retain this job lease.
+      _completeCurrentSettlement(jobId);
+      final error = firstError;
+      if (error != null) {
+        Error.throwWithStackTrace(error, firstStack ?? StackTrace.current);
       }
       return SyncCancelled(paused.source);
     }

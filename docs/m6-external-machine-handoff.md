@@ -15,7 +15,7 @@
 | 项 | 本 VM 已做 | 外部机器执行（本手册覆盖） |
 |---|---|---|
 | 静态验证 | 历史基线见 `docs/m6-refactor-final-verification.md`；Task 9 fresh 结果见 §8.7 | 在完整 SDK 机器复现并对照记录 |
-| 三端构建 | Task 9 §8.7：Windows analyze/test/build 串行 gate 全部 exit 0（当前 targeted test 1574/0，Release 产物已生成）；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
+| 三端构建 | storage-isolation wave 已完成 Windows analyze/test/Release serial gate（§8.7）；Android/iOS 未在本机运行 | ✅ Windows Release / Android APK / iOS |
 | 真实教务采集 | ❌ 无校园网/iWAN | ✅ 触发 JW 同步 + digest 对齐 |
 | 真实 Agent 验收 | ❌ 无真实 API Key | ✅ 按 `docs/acceptance/read-only-agent.md` 逐项 |
 | 凭据保护替换 | ❌ 不动 pubspec | ✅ `flutter_secure_storage` |
@@ -549,10 +549,14 @@ M7 的最小实现沿用单一 `SyncPageLoader` 所有权边界：页面始终�
 → 等待 WebView2 environment release → 关闭订阅/诊断流
 ```
 
-每个原生控制器只绑定一个不透明的本地 `accountId` 分区。UDF 位于应用支持目录下
-的 account 子目录，路径经过不透明 ID 清理且不进入诊断；minimal 不保存跨重启的
-session snapshot/DPAPI 会话快照，冷启动后可能需要重新登录。gateway 同一时刻只
-维护一个账号/控制器，避免 WebView2 environment 与 UDF 锁竞争。
+每个原生控制器只绑定一个不透明的本地 `accountId` 分区。Windows minimal 的固定
+私有根是 `getApplicationSupportDirectory()/branches/minimal`：SQLite 位于该根下的
+`ustc_assistant.sqlite`，WebView2 UDF 的 `browser_sessions/`、quarantine marker
+和仅 clear-only 的 legacy `webview/` 也都位于同一根。该 namespace 不随账号、cwd、
+Git/worktree 或 build mode 变化；解析失败 fail-closed，绝不回退到 Documents 或旧
+shared support root。minimal 不保存跨重启的 session snapshot/DPAPI 会话快照，冷启动
+后可能需要重新登录。gateway 同一时刻只维护一个账号/控制器，避免 WebView2
+environment 与 UDF 锁竞争。
 
 导航和采集均 fail-closed：受信目标同时需要 URL、DOM selector 和注册 handshake；
 CAS 之后必须取得权威身份匹配，权威缺失或任一旁证冲突都不能继续。course/exam
@@ -592,11 +596,13 @@ Cookie、响应体、data ID 或私人课表。请将 loopback/构建结果与�
 同一个 `/sync` 首次登录流程；设置页在无账号态仍显示“完全重置”。
 
 完全重置继续使用原有两次确认，任意一次取消都不改数据。确认后经同一个 canonical
-reset service boundary 全局清除所有本地 Drift 分区（账号、凭据、SourceBundle/同步、
-日程、任务、提醒、Agent、操作历史和撤回槽），再清除应用支持目录下所有账号分区的
-WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍按“旧 gateway/environment
-完全 shutdown → canonical 全局重置 → 创建新的首次登录 loader”执行，不在旧 gateway
-上切换账号，也不创建并行 native gateway。
+reset service boundary 全局清除当前固定 `getApplicationSupportDirectory()/branches/minimal`
+根下的所有本地 Drift 分区（账号、凭据、SourceBundle/同步、日程、任务、提醒、Agent、
+操作历史和撤回槽），再清除该根下所有账号分区的 WebView2 UDF；只识别该 privateRoot
+内的 `webview/<strict UUIDv4>` legacy 直接子目录。不会扫描、迁移或删除旧 Documents/
+shared support root，也不读取旧 shared 数据；不记录凭据、URL、Cookie 或课程数据。
+重新登录仍按“旧 gateway/environment 完全 shutdown → canonical 全局重置 → 创建新的首次
+登录 loader”执行，不在旧 gateway 上切换账号，也不创建并行 native gateway。
 
 该修正只恢复本机 Release 应用的入口和清理语义；focused/widget/构建自动化不访问学校
 主机，不能替代 §8.4 的真实校园账号验收。真实校园 stage chain 仍保持未完成。
@@ -640,9 +646,11 @@ WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍�
   若未来 owner 环境再次出现该错误，仍必须保留原始计数并停止后续 gate，不复制、改名、
   安装或下载 DLL；真实校园验收仍未由本机自动化代替。
 
-#### Task 9 targeted runtime acceptance：当前自动化结果（2026-08-31）
+#### Task 9 targeted runtime acceptance：历史自动化结果（2026-08-31，F1–F4 前）
 
-本节取代上面的历史 1441/0 快照，仍不代表真实校园验收：
+本节取代上面的历史 1441/0 快照，但自身仍是 F1–F4 fix wave 之前的 dirty
+snapshot；`+1574`、Release 产物和对应 loopback 仅作历史审计证据，不代表当前
+最终 gate，也不代表真实校园验收：
 
 - Windows Debug loopback 使用 brief 精确命令和 production app-owned runtime 链路，
   单进程退出 `0`，`+2: All tests passed!`。真实合成 portal/CAS/course/exam 首次登录
@@ -668,4 +676,69 @@ WebView2 UDF；不记录凭据、URL、Cookie 或课程数据。重新登录仍�
 自动化证据仅覆盖本机 synthetic fixture、内存数据库和 production reset/runtime seam。
 校园网/iWAN、真实账号、真实课表/考试和 Agent API Key 仍需用户在 Release App 中按本手册
 第 4/5 节脱敏验收；本机不宣称这些项目通过。
+
+#### Final F1–F4 fix wave status（2026-08-31）
+
+- 受影响链路的单一 serial focused Flutter rerun 为 `+199: All tests passed!`；Windows
+  loopback 先观察到一次 CAS fixture readiness timeout，按原精确命令且无源码变化重跑一次为
+  `+2: All tests passed!`。一次 unchanged passing rerun 仅说明观察到的行为具有非确定性，
+  不足以证明 fixture timing 是根因或排除 production defect；失败运行无残留
+  Flutter/Dart/app 进程或 test-owned runtime root。
+- 完整 reset 仅在注入 private root 下清理新 `browser_sessions/jw/jw_<digest>` 分区与
+  严格识别的历史 `webview/<UUIDv4>` 直接子目录；未知名、reparse/link 和 containment
+  不确定 fail closed。legacy 仅 clear-only，不迁移、不复用；本批次不读取、不清理真实
+  应用支持/profile 数据。
+- 在 F1–F4 fix wave 当时的 dirty snapshot 不声称 `analyze`、全量 expanded test 或
+  Release build 已通过；这些步骤按顺序延至后续 storage-isolation wave。上文历史
+  `1574/0` 和 Release hash 不覆盖该阶段的 gate 证据；下方 addition 记录后续实际结果。
+
+#### Storage-isolation addition gate（2026-08-31）
+
+- focused storage isolation/reset suite 为 `+7: All tests passed!`；覆盖真实
+  `UstcAssistantApp` 默认 runtime loader、固定 root DB、重启持久化、reset 边界、
+  shared sentinel 保留和 branch/database-file link fail-closed。fresh synthetic
+  Windows loopback 按精确命令退出 `0`，为 `+2: All tests passed!`；本次未复现先前
+  的 CAS-readiness timeout。
+- 同一 PowerShell serial gate 按 `analyze --no-pub → test --no-pub --reporter
+  expanded → build windows --release --no-pub` 执行：analyze `No issues found!`
+  / exit `0`；全量 expanded test `1595 passed / 0 failed` / exit `0`；Release build
+  exit `0`。产物 `app/build/windows/x64/runner/Release/ustc_assistant_app.exe`
+  为 92,160 bytes，SHA-256
+  `01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`。
+- exact Release exe 预检与 gate 后运行计数均为 `0`；测试 synthetic root teardown
+  剩余 `0`。证据仍只覆盖本机合成 fixture/自动化，不等同真实校园验收；未读取、迁移
+  或删除旧 Documents/shared support/profile 数据。
+
+#### Portal pre-consent failure and same-target reload fix（2026-09-01）
+
+真实使用中曾观察到 JW `/login` 短暂出现后立即 `collection_failed`，没有“需要登录学校网站”
+确认框，也没有 CAS 凭据页。两次凭据无关的原生 public-portal probe 将边界收敛为：
+
+- `gotoRoot` 成功结束在 portal `/login`；第一次 probe 的 `gotoCasEntry` 在
+  `ready_handshake_rejected`（`JwCollectionException`）失败。
+- 第二次 probe 在 `gotoCasEntry` 前直接执行注册的
+  `jw.portal.login.inspect`，只记录 `pre_reload_handshake_matched=true`；随后未改动的
+  同目标 reload 再次以相同 handshake 拒绝失败，确认根因为冗余的同目标 `/login` 导航造成
+  replacement-document readiness race，而不是放宽 selector/handshake/timeout。
+- TDD 回归在旧 unconditional reload 上为 RED（54 通过、1 失败）；最小生产分支修复后
+  focused adapter suite 为 `+56: All tests passed!`。非目标/null snapshot 仍只导航一次并
+  要求同一 readiness/handshake。
+- changed-production credential-free probe 为 `portal_ready`：
+  `root_finished_on_portal_login=true`、`pre_reload_handshake_matched=true`、
+  `portal_login_target_ready=true`、`failure_boundary=none`；native release 与唯一
+  probe profile cleanup 均成功，残留为 `0`。
+
+上述仅证明本机真实 WebView2 portal readiness 边界和 targeted fix；没有执行 CAS 登录、真实
+账号、课程/考试采集或 SourceBundle import。真实校园 stage chain 仍须由用户在新构建的
+Windows Release App 中按本手册单独完成，不能把 `portal_ready` 当作真实 CAS/import 验收。
+
+随后按同一 PowerShell 进程、`E:\flutter\flutter\bin\flutter.bat`、`--no-pub` 和进程级代理
+执行最终 serial gate：analyze `No issues found!` / exit `0`，全量 expanded test
+`1597 passed / 0 failed` / exit `0`，Windows Release build exit `0`。产物
+`ustc_assistant_app.exe` 为 92,160 bytes、SHA-256
+`01270100CCFEE86E5BA1B3C1D3C9CBA7690CC4BC2D81E661379F9895D5C4B211`；`data/app.so`
+为 11,469,712 bytes、SHA-256
+`49ABECA52729693BC6FA86D33273B43F803A0F4A04DA2AED6D6A7D0872F77528`。gate 后
+Flutter/Dart/app 进程计数为 `0`，未启动 Release、未触碰真实 profile；Python unchanged
+oracle 仍为 140 tests / compileall `0`。这只是本机 gate，不改变上述真实 CAS/import 待办。
 

@@ -577,11 +577,21 @@ class JwWebViewAdapter implements JwWebPage {
   @override
   Future<void> gotoCasEntry() async {
     final controller = await _ensureController();
-    await _converge(
-      target: _runtimePolicy.portalLoginTarget,
-      timeout: _loginTimeout,
-      command: (_) => controller.loadUrl(_runtimePolicy.portalLoginTarget.url),
-    );
+    final current = controller.currentUrlSnapshot ?? '';
+    final onPortalLogin = _runtimePolicy.portalLoginTarget.urlMatches(current);
+    if (onPortalLogin) {
+      await _converge(
+        target: _runtimePolicy.portalLoginTarget,
+        timeout: _loginTimeout,
+      );
+    } else {
+      await _converge(
+        target: _runtimePolicy.portalLoginTarget,
+        timeout: _loginTimeout,
+        command: (_) =>
+            controller.loadUrl(_runtimePolicy.portalLoginTarget.url),
+      );
+    }
   }
 
   @override

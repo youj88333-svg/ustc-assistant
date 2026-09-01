@@ -70,7 +70,7 @@ void main() {
     expect(find.text('切换'), findsNothing);
   });
 
-  testWidgets('credential and browser clearing use separate confirmations', (
+  testWidgets('configured account page keeps credential controls only', (
     tester,
   ) async {
     final database = AppDatabase(NativeDatabase.memory());
@@ -100,17 +100,9 @@ void main() {
       await database.select(database.credentialAccounts).get(),
       hasLength(1),
     );
-
-    await tester.tap(find.byKey(Key('clear-browser-$id')));
-    await tester.pumpAndSettle();
-    expect(find.text('只清除专用 Edge 登录会话，不删除已保存凭据。'), findsOneWidget);
-    await tester.tap(find.text('清除会话'));
-    await tester.pumpAndSettle();
-    expect(browserClears, 1);
-    expect(
-      await database.select(database.credentialAccounts).get(),
-      hasLength(1),
-    );
+    expect(find.byKey(Key('clear-browser-$id')), findsNothing);
+    expect(find.text('清除浏览器会话'), findsNothing);
+    expect(browserClears, 0);
   });
 
   testWidgets('deleted credentials expose same-account reauthentication', (

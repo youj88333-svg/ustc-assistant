@@ -12,6 +12,22 @@ import '../../settings/application/minimal_reset_coordinator.dart';
 typedef DirectoryDelete = Future<void> Function(Directory directory);
 typedef ReleaseDelay = Future<void> Function(Duration duration);
 
+final class _ClearTarget {
+  const _ClearTarget({
+    required this.directory,
+    this.ref,
+    required this.legacy,
+  });
+
+  final Directory directory;
+  final JwSessionPartitionRef? ref;
+  final bool legacy;
+
+  String get sortKey => legacy
+      ? 'legacy:${WindowsJwUdfStore._normalizePath(directory.path)}'
+      : 'partition:${ref!.opaqueToken}';
+}
+
 /// Opaque capability for one JW browser user-data partition.
 ///
 /// The token is deliberately not a path and contains no account material.
@@ -89,6 +105,10 @@ final class WindowsJwUdfStore implements ResetUdfPort {
        _releaseDelay = releaseDelay ?? _defaultReleaseDelay;
 
   static final RegExp _tokenPattern = RegExp(r'^jw_[0-9a-f]{24}$');
+  static final RegExp _legacyUuidV4Pattern = RegExp(
+    r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+    caseSensitive: false,
+  );
   static final RegExp _markerPattern = RegExp(r'^(jw_[0-9a-f]{24})\.json$');
   static final RegExp _temporaryMarkerPattern = RegExp(
     r'^(jw_[0-9a-f]{24})\.json\.tmp$',
@@ -126,6 +146,8 @@ final class WindowsJwUdfStore implements ResetUdfPort {
 
   String get _quarantineRootPath =>
       _joinPath(_browserSessionsRootPath, 'quarantine');
+
+  String get _legacyRootPath => _joinPath(_privateRoot.path, 'webview');
 
   /// Derives a stable opaque token without retaining or returning account text.
   JwSessionPartitionRef referenceFor(String accountId) {
@@ -173,17 +195,76 @@ final class WindowsJwUdfStore implements ResetUdfPort {
     return refs;
   }
 
-  Future<List<JwSessionPartitionRef>> _listClearablePartitions() async {
-    final byToken = <String, JwSessionPartitionRef>{};
+  Future<List<_ClearTarget>> _listClearablePartitions() async {
+    final byPath = <String, _ClearTarget>{};
     for (final ref in await listOwnedPartitions()) {
-      byToken[ref.opaqueToken] = ref;
+      final directory = _resolve(ref);
+      byPath[_normalizePath(directory.path)] = _ClearTarget(
+        directory: directory,
+        ref: ref,
+        legacy: false,
+      );
     }
     for (final ref in await _listQuarantineArtifacts()) {
-      byToken[ref.opaqueToken] = ref;
+      final directory = _resolve(ref);
+      byPath[_normalizePath(directory.path)] = _ClearTarget(
+        directory: directory,
+        ref: ref,
+        legacy: false,
+      );
     }
-    final refs = byToken.values.toList()
-      ..sort((left, right) => left.opaqueToken.compareTo(right.opaqueToken));
-    return refs;
+    for (final directory in await _listLegacyPartitions()) {
+      byPath[_normalizePath(directory.path)] = _ClearTarget(
+        directory: directory,
+        legacy: true,
+      );
+    }
+    final targets = byPath.values.toList()
+      ..sort((left, right) => left.sortKey.compareTo(right.sortKey));
+    return targets;
+  }
+
+  /// Enumerates only historical UUIDv4 direct children of the injected
+  /// [privateRoot]/webview directory. Legacy sessions are clear-only targets;
+  /// they are never mapped back to an account or reused for collection.
+  Future<List<Directory>> _listLegacyPartitions() async {
+    final root = Directory(_legacyRootPath);
+    await _assertNoReparseTraversal(root.path);
+    final rootType = await _typeWithoutFollowing(root.path);
+    if (rootType == FileSystemEntityType.notFound) {
+      return <Directory>[];
+    }
+    if (rootType != FileSystemEntityType.directory) {
+      throw const JwUdfPrivacyError();
+    }
+
+    final directories = <Directory>[];
+    try {
+      await for (final entry in root.list(followLinks: false)) {
+        final target = Directory(_normalizePath(entry.path));
+        _validateLegacyResolvedPath(target);
+        final name = _basename(target.path);
+        if (!_isLegacyUuidV4(name)) {
+          throw const JwUdfPrivacyError();
+        }
+        if (await _typeWithoutFollowing(target.path) !=
+            FileSystemEntityType.directory) {
+          throw const JwUdfPrivacyError();
+        }
+        await _assertNoReparseTree(target);
+        directories.add(target);
+      }
+    } on JwUdfError {
+      rethrow;
+    } on Object catch (error, stack) {
+      Error.throwWithStackTrace(const JwUdfPrivacyError(), stack);
+    }
+    directories.sort(
+      (left, right) => _normalizePath(left.path).compareTo(
+        _normalizePath(right.path),
+      ),
+    );
+    return directories;
   }
 
   Future<List<JwSessionPartitionRef>> _listQuarantineArtifacts() async {
@@ -341,12 +422,16 @@ final class WindowsJwUdfStore implements ResetUdfPort {
   /// public failure while still making best effort on later partitions.
   @override
   Future<void> clearAllPartitions() async {
-    final refs = await _listClearablePartitions();
+    final targets = await _listClearablePartitions();
     Object? firstFailure;
     StackTrace? firstStack;
-    for (final ref in refs) {
+    for (final target in targets) {
       try {
-        await clearPartition(ref);
+        if (target.legacy) {
+          await _deleteLegacyDirectory(target.directory);
+        } else {
+          await clearPartition(target.ref!);
+        }
       } on Object catch (error, stack) {
         firstFailure ??= error;
         firstStack ??= stack;
@@ -361,14 +446,28 @@ final class WindowsJwUdfStore implements ResetUdfPort {
   }
 
   Future<void> _deleteOwnedDirectory(Directory directory) async {
-    _validateResolvedPath(directory);
+    await _deleteContainedDirectory(directory, _validateResolvedPath);
+  }
+
+  Future<void> _deleteLegacyDirectory(Directory directory) async {
+    await _deleteContainedDirectory(directory, _validateLegacyResolvedPath);
+  }
+
+  Future<void> _deleteContainedDirectory(
+    Directory directory,
+    void Function(Directory) validate,
+  ) async {
+    validate(directory);
     final type = await _typeWithoutFollowing(directory.path);
     if (type == FileSystemEntityType.notFound) return;
     if (type != FileSystemEntityType.directory) {
       throw const JwUdfPrivacyError();
     }
     await _assertNoReparseTree(directory);
-    await _deleteAfterRelease(directory);
+    await _deleteAfterRelease(
+      directory,
+      validate: () => validate(directory),
+    );
     final remaining = await _typeWithoutFollowing(directory.path);
     if (remaining != FileSystemEntityType.notFound) {
       throw const JwUdfClearError();
@@ -424,6 +523,18 @@ final class WindowsJwUdfStore implements ResetUdfPort {
     if (normalizedTarget == normalizedRoot ||
         _normalizePath(target.parent.path) != normalizedRoot ||
         !_isToken(_basename(normalizedTarget))) {
+      throw const JwUdfPrivacyError();
+    }
+  }
+
+  void _validateLegacyResolvedPath(Directory target) {
+    final normalizedBoundary = _normalizePath(_privateRoot.path);
+    final normalizedRoot = _normalizePath(_legacyRootPath);
+    final normalizedTarget = _normalizePath(target.path);
+    if (normalizedTarget == normalizedRoot ||
+        _normalizePath(target.parent.path) != normalizedRoot ||
+        !_isWithin(normalizedTarget, normalizedBoundary) ||
+        !_isLegacyUuidV4(_basename(normalizedTarget))) {
       throw const JwUdfPrivacyError();
     }
   }
@@ -520,9 +631,24 @@ final class WindowsJwUdfStore implements ResetUdfPort {
     }
   }
 
-  Future<void> _deleteAfterRelease(Directory directory) async {
+  Future<void> _deleteAfterRelease(
+    Directory directory, {
+    required void Function() validate,
+  }) async {
     for (var attempt = 1; attempt <= _releaseAttempts; attempt++) {
       try {
+        // Revalidate the canonical direct-child boundary and the full tree on
+        // every physical attempt. A retry can observe a changed filesystem
+        // after the release delay, so the initial pre-delay check is not
+        // sufficient.
+        validate();
+        final type = await _typeWithoutFollowing(directory.path);
+        if (type == FileSystemEntityType.notFound) return;
+        if (type != FileSystemEntityType.directory) {
+          throw const JwUdfPrivacyError();
+        }
+        await _assertNoReparseTree(directory);
+        validate();
         await _deleteDirectory(directory);
         return;
       } on FileSystemException catch (error, stack) {
@@ -554,6 +680,9 @@ final class WindowsJwUdfStore implements ResetUdfPort {
   }
 
   static bool _isToken(String value) => _tokenPattern.hasMatch(value);
+
+  static bool _isLegacyUuidV4(String value) =>
+      _legacyUuidV4Pattern.hasMatch(value);
 
   static bool _isWithin(String target, String boundary) {
     if (target == boundary) return true;

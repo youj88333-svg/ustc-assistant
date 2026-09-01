@@ -54,9 +54,6 @@ GoRouter buildRouter(
   Future<void> Function()? requestAppExit,
 ]) {
   final loadAgentComposition = agentCompositionLoader ?? buildAgentComposition;
-  // The app shell injects the physical cleanup callback. Keep direct router
-  // construction side-effect free for widget tests and embedded hosts.
-  final clearBrowser = clearBrowserSession ?? _noopBrowserSession;
   final appState = appStateController;
 
   Future<void> completeReset() async {
@@ -69,7 +66,7 @@ GoRouter buildRouter(
       final accounts = AccountService(
         database: database,
         protector: defaultCredentialProtector(),
-        clearBrowserSession: clearBrowser,
+        clearBrowserSession: clearBrowserSession,
       );
       await SettingsService(
         database: database,
@@ -205,7 +202,6 @@ GoRouter buildRouter(
           service: AccountService(
             database: database,
             protector: defaultCredentialProtector(),
-            clearBrowserSession: clearBrowser,
           ),
           onFirstLogin: () => context.go('/sync'),
           onLoginAgain: (accountId) =>
@@ -229,7 +225,7 @@ GoRouter buildRouter(
             reminderReconciler: reminderReconciler,
             reauthenticateAccountId: state.pathParameters['accountId']!,
             appStateController: appState,
-            clearBrowserSession: clearBrowser,
+            clearBrowserSession: clearBrowserSession,
             createNativeGateway: false,
           ),
           builder: (runtime) => SyncPageLoader(
@@ -238,7 +234,7 @@ GoRouter buildRouter(
             runtime: runtime,
             appStateController: appState,
             reauthenticateAccountId: state.pathParameters['accountId']!,
-            clearBrowserSession: clearBrowser,
+            clearBrowserSession: clearBrowserSession,
             coordinatedReset: resetCoordinatorLoader == null
                 ? null
                 : completeReset,
@@ -265,7 +261,7 @@ GoRouter buildRouter(
             database: database,
             reminderReconciler: reminderReconciler,
             appStateController: appState,
-            clearBrowserSession: clearBrowser,
+            clearBrowserSession: clearBrowserSession,
             createNativeGateway: false,
             onExit: () {
               if (context.canPop()) {
@@ -282,7 +278,7 @@ GoRouter buildRouter(
             reminderReconciler: reminderReconciler,
             runtime: runtime,
             appStateController: appState,
-            clearBrowserSession: clearBrowser,
+            clearBrowserSession: clearBrowserSession,
             onExit: () {
               if (context.canPop()) {
                 context.pop();
@@ -303,7 +299,6 @@ GoRouter buildRouter(
         path: '/settings',
         builder: (context, state) => _SettingsLoader(
           database: database,
-          clearBrowserSession: clearBrowser,
           runtimeOwner: runtimeOwner,
           resetCoordinatorLoader: resetCoordinatorLoader,
           coordinatedReset: appState == null ? null : completeReset,
@@ -498,8 +493,6 @@ void _replaceRuntimeAndGo(BuildContext context, MinimalJwRuntimeOwner? owner) {
     ),
   );
 }
-
-Future<void> _noopBrowserSession() async {}
 
 class _MainShell extends StatelessWidget {
   const _MainShell({required this.navigationShell});
@@ -741,14 +734,12 @@ class _PersonalEventManagementLoader extends StatelessWidget {
 class _SettingsLoader extends StatelessWidget {
   const _SettingsLoader({
     required this.database,
-    required this.clearBrowserSession,
     this.runtimeOwner,
     this.resetCoordinatorLoader,
     this.coordinatedReset,
   });
 
   final AppDatabase database;
-  final Future<void> Function() clearBrowserSession;
   final MinimalJwRuntimeOwner? runtimeOwner;
   final Future<MinimalResetCoordinator> Function()? resetCoordinatorLoader;
   final Future<void> Function()? coordinatedReset;
@@ -768,14 +759,6 @@ class _SettingsLoader extends StatelessWidget {
         final accounts = AccountService(
           database: database,
           protector: defaultCredentialProtector(),
-          clearBrowserSession: () async {
-            // Complete reset must stop the app-owned runtime before its UDF
-            // partitions are cleared. The owner future is shared with the
-            // subsequent replacement route, so no browser environment can
-            // overlap the destructive reset.
-            if (runtimeOwner != null) await runtimeOwner.prepareForReset();
-            await clearBrowserSession();
-          },
         );
         final resetLoader = resetCoordinatorLoader;
         return SettingsPage(

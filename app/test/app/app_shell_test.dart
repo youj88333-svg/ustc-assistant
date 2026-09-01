@@ -891,6 +891,41 @@ void main() {
     expect(find.text('请先配置学校账号'), findsNothing);
   });
 
+  testWidgets('configured Accounts and Settings hide browser-only cleanup', (
+    tester,
+  ) async {
+    final accounts = AccountService(
+      database: database,
+      protector: _NoopProtector(),
+    );
+    final accountId = await accounts.persistVerifiedAccount(
+      username: 'PB00000000',
+    );
+    var browserClears = 0;
+    final appKey = GlobalKey<UstcAssistantAppState>();
+
+    await tester.pumpWidget(
+      UstcAssistantApp(
+        key: appKey,
+        websiteLauncher: FakeWebsiteLauncher(),
+        database: database,
+        clearBrowserSession: () async => browserClears++,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    appKey.currentState!.router.go('/accounts');
+    await tester.pumpAndSettle();
+    expect(find.text('清除浏览器会话'), findsNothing);
+    expect(find.byKey(Key('clear-browser-$accountId')), findsNothing);
+
+    appKey.currentState!.router.go('/settings');
+    await tester.pumpAndSettle();
+    expect(find.text('清除专用浏览器会话'), findsNothing);
+    expect(find.byIcon(Icons.web_asset_off), findsNothing);
+    expect(browserClears, 0);
+  });
+
   testWidgets(
     'unconfigured complete reset keeps data when either confirmation is cancelled',
     (tester) async {
