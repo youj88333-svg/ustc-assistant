@@ -1,0 +1,17 @@
+# 本机私有研究与验收资产
+tmp/
+temp.md
+*.db
+*.db-shm
+*.db-wal
+
+# 开始构建后产生的本地产物
+**/.dart_tool/
+**/build/
+**/.flutter-plugins-dependencies
+**/__pycache__/
+*.py[cod]
+
+# 编辑器本地设置
+.idea/
+.vscode/

@@ -1,22 +1,21 @@
 # 重构文档索引
 
-> 更新日期：2026-08-28 ｜ 适用分支：`rewrite/flutter-native` ｜ 当前状态：M0、M1、
-> M2 已关闭，M3 二课双链路设计已确认、实施待开始。完整导航见
+> 更新日期：2026-10-08 ｜ 适用分支：`codex/design-reset` ｜ 当前状态：保留设计资料，
+> 重新确认设计后从零构建；本分支没有已完成的实现里程碑。完整导航见
 > [`docs/README.md`](../README.md)。
 
 本索引收纳模块快照、设计阶梯、契约锚点、端到端链路和目标态迁移总览。`07-constitution.md`
-至 `15-construction-methodology.md` 是新房的设计与施工权威；`01-authentication.md` 至
-`06-agent-harness.md` 是旧房实现的冻结快照，只用于理解现状，不覆盖新房决定。
-`docs/data-sources/` 与 `docs/schedule-data-model.md` 是稳定的来源契约和产品模型输入。
+至 `15-construction-methodology.md` 是待重新确认的设计基线；`01-authentication.md` 至
+`06-agent-harness.md` 是旧房实现的冻结快照，只用于理解历史能力，不覆盖新决定。
+除 00–15 文档外的原工程内容均未带入。文中旧源码、Schema、来源契约和产品模型路径
+保留历史含义，实际所需输入在重新设计时定义。
 
-## 当前入口（M3）
+## 当前入口（从设计重新开始）
 
-- 当前交接与里程碑证据：[`handover.md`](handover.md)。
-- 当前仅有两份 active 施工文档：
-  [`M3 原生二课双链路设计`](../superpowers/specs/2026-08-28-m3-native-young-design.md)
-  与 [`M3 Native Young 实施计划`](../superpowers/plans/2026-08-28-m3-native-young.md)。
-- M3 不改变 07–15 的设计决定；历史 specs、plans、旧房 handover、Windows 首版验收材料
-  和 M0–M2 施工报告已从 rewrite 分支移除，仍可通过 Git 历史或 `main` 恢复。
+- 当前状态与重新确认顺序：[`docs/README.md`](../README.md)。
+- 新协作方式：根目录 `AGENTS.md`；采用单 agent、简短任务与相关验证。
+- 原实现与施工流程已退出本分支。其里程碑完成状态、测试结果、任务号和历史路径
+  不构成本分支的完成证据；新的设计结论与 M0 实现须重新建立。
 
 ## 0. 设计阶梯与施工文档入口（07–15）
 
