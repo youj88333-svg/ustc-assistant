@@ -23,6 +23,6 @@
 - 自动测试不访问真实学校网站。凭据、验证码与授权确认由用户操作；秘密、原始响应和浏览器会话资产不进入 Git 或日志。
 - 单账号、北京时间业务语义、一源一通道、事务性导入与审计仍是设计审查重点。
 - 用户验收记录不被覆盖，不把失败改为通过。
-- 旧 `main` 与原施工 worktree 保留。新工程只在本 worktree 修改；未经用户要求不推送。
+- 本地 `main` 位于 `E:\107`，内容为原 minimal 项目及其未提交源码与资源；旧 `main` 分支已按用户要求删除。原 minimal worktree 保留为 detached 参考，原 `rewrite/flutter-native` worktree 暂停并保留。新工程只在本 worktree 修改；未经用户要求不推送。
 - 手工编辑使用 `apply_patch`，保留用户未提交修改。
 - 如需要 Python，优先使用 Conda `basic310` 环境。
