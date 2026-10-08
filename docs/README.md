@@ -16,12 +16,12 @@
 | 目录 | 当前身份与用途 |
 |---|---|
 | `E:\107` | 本地 `main` 主工作区，已替换为 minimal 项目及其未提交源码与资源；共享 Git 仓库与个人文件保留 |
-| `E:\107\.worktrees\refactor-webview-minimal` | detached 参考，原项目文件与个人交付材料保留 |
 | `E:\107\.worktrees\rewrite\design-reset` | `codex/design-reset`，独立根提交的新设计与施工工作区 |
 | `E:\107\.worktrees\rewrite\flutter-native` | `rewrite/flutter-native`，暂停；源码、文档和验收数据保留，构建产物已清理 |
 
 这些本地调整不包含推送或应用功能变更。`main` 中的历史验证记录不是新施工分支的验收结果。
 旧 `main` 分支已删除，不建立备份分支；根目录原有未提交说明文件保存在原 flutter-native 的私有 `tmp/closeout-2026-10-08/root-local-documents` 中。
+2026-10-09 已将原 minimal 独有材料迁入 main，移除重复 worktree 和历史本地试验分支；本地只剩上表三个分支/worktree。原 minimal 私有调试数据与重名不同文件保存在 main 的 `private/migrated-minimal/`，不带入本设计分支。
 
 ## 如何使用保留文档
 
