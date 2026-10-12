@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0/M1/M2 已验收关闭，M3 已批准恢复，先确定未来 Agent 公开查询的内部契约与长期目录，再推进实现。具体状态见 [状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M3 已关闭，M4 进入范围讨论，尚未批准实施。具体交付边界与未观察项见 [状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
@@ -17,7 +17,7 @@
 | 审查方法及实际设计裁决 | [14 总体审查](reviews/14-overall-review.md) · [历轮审查记录](reviews/2026-10-09-design-review.md) |
 | 主/子代理怎样协作和交付 | [15 工作流标准](workflow.md) · [AGENTS](../AGENTS.md) |
 | 各来源的具体字段、分页、内容与时间语义 | [来源契约参考](reference/sources/README.md) |
-| M0–M3 的计划、失败、检查与用户验收 | [阶段索引](milestones/README.md) |
+| 各阶段的计划、失败、检查与用户关闭 | [阶段索引](milestones/README.md) |
 | 长期知识资料的 Markdown 制作与样稿 | [知识材料目录](../knowledge/README.md) |
 | 如何启动和使用应用 | [应用说明](../app/README.md) |
 | 前置实验、诊断与证据在哪里 | [verification](../verification/README.md) |

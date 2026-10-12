@@ -1,6 +1,6 @@
 # 校园公开信息：教务处与财务处
 
-状态：2026-10-12，内部 public-query-v1 与首批 knowledge-edition-v1 已装配；正式 Dart HTTP 已有限复验公开栏目、文章和教务关键词，实际随包资料末端核验通过，M3 阶段关闭待用户确认。两提供方属于同一逻辑校园来源；通用要求见 [09 K-01/K-03/K-04/K-07](../../architecture/09-contracts.md)，本期范围见 [M3](../../milestones/m3/plan.md)。研究时数量不作为站点常量。
+状态：2026-10-12，内部 public-query-v1 与首批 knowledge-edition-v1 已装配；正式 Dart HTTP 已有限复验公开栏目、文章和教务关键词，实际随包资料末端核验通过，[M3 已关闭](../../milestones/m3/acceptance.md)，未观察项继续保留。两提供方属于同一逻辑校园来源；通用要求见 [09 K-01/K-03/K-04/K-07](../../architecture/09-contracts.md)，本期范围见 [M3](../../milestones/m3/plan.md)。研究时数量不作为站点常量。
 
 ## 教务处
 

@@ -1,6 +1,6 @@
 # 评课社区公开查询
 
-状态：2026-10-12，内部 public-query-v1 已装配，正式 Dart 匿名 HTTP 已作有限公开契约复验；临时界面仅为可选核对辅助，M3 阶段关闭待用户确认。依据 [09 K-01/K-03/K-04](../../architecture/09-contracts.md)、[07](../../architecture/07-constitution.md)的最少出站/首次授权及 [M3 范围](../../milestones/m3/plan.md)，不申请学校凭据或评课账号。
+状态：2026-10-12，内部 public-query-v1 已装配，正式 Dart 匿名 HTTP 已作有限公开契约复验；[M3 已关闭](../../milestones/m3/acceptance.md)，临时界面仅为可选核对辅助，未观察项继续保留。依据 [09 K-01/K-03/K-04](../../architecture/09-contracts.md)、[07](../../architecture/07-constitution.md)的最少出站/首次授权及 [M3 范围](../../milestones/m3/plan.md)，不申请学校凭据或评课账号。
 
 ## 已观察的页面与请求
 
