@@ -65,7 +65,7 @@ M4.2 补齐原来遗漏的地点、教师等日程事实，采用下文 v2 规�
 
 | 来源事实 | 固定映射与语义 |
 |---|---|
-| 地点 | 每次上课行的 `room.nameZh`/`room.code`、`room.building.nameZh`、`room.building.campus.nameZh`、`customPlace` 与可空 `room.virtual`；分别保留校区、楼宇、教室/代码、补充地点和虚拟标志。地点显示优先教室名称、代码，再补充地点，与已知校区/楼宇组合；不因部分结构而丢补充地点 |
+| 地点 | 每次上课行的 `room.nameZh`/`room.code`、`room.building.nameZh`、`room.building.campus.nameZh`、`customPlace` 与可空 `room.virtual`；分别保留校区、楼宇、教室/代码、补充地点和虚拟标志。显示以教室名称优先，缺失则取代码，再取补充地点，后接已知楼宇、校区；不解析代号推算楼层/校区，不因部分结构而丢补充地点。排序只改展示，存储事实/版本不变 |
 | 教师 | 每次上课行 `personName`，不保存 teacherId/personId。姓名集合去重并按确定顺序保存，可多名；最多 64 名，每名 100 字符 |
 | 课程 | `lesson.code` 和 `courseTypeName` 形成课程号/类别；lesson/group 标识与行所属必须一致。课表学期标签来自本次服务端目录中已接受 ID 的 name，不按日期造标签 |
 | 教学安排 | 行 `weekIndex`、`weekday`、`periods`、`exerciseClass`，缺失为未知，不按钟点反推；已提供星期须与明确日期一致。可空整数/布尔使用已登记类型/界限，不接受任意对象 |
