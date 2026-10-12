@@ -1,0 +1,163 @@
+{
+  "version": "knowledge-edition-v1",
+  "key": "campus-longterm-2026-10-12-v1",
+  "observedOn": "2026-10-12",
+  "reviewVersion": "sol-curated-2026-10-12-v1",
+  "applicability": "unknown",
+  "materials": [
+    {
+      "key": "teach-selection",
+      "title": "选课办理规则",
+      "provider": "teach",
+      "topic": "courseSelection",
+      "audience": "undergraduate",
+      "sourceVersion": "page-updated-2026-06-18",
+      "articleUrl": "https://www.teach.ustc.edu.cn/service/svc-student/3543.html",
+      "sourceDigestKind": "decoded-html-utf8",
+      "sourceDigest": "48a5f599fd0f4fbbb0a190d2d04fb59b0376f9259291c9f817078d280a56d1e1",
+      "coveredScope": "选课规则第1–3、7项；预选/抽签/正选第1–5项；个性化申请。排除推荐课程、分层教学个例、年度窗口及当期通知。",
+      "publishedOn": "2015-07-21",
+      "updatedOn": "2026-06-18",
+      "draft": "curated/teach/course-selection.md",
+      "draftSha256": "24c408adf06fc657ca0edf078f330b93b46d581024c7b51b2a0b26c5292e9bcb",
+      "sections": [
+        "办理规则",
+        "选课阶段",
+        "退课、换班与个性化申请",
+        "覆盖范围与排除项"
+      ]
+    },
+    {
+      "key": "teach-adjustment",
+      "title": "本科生选课调整流程",
+      "provider": "teach",
+      "topic": "courseSelection",
+      "audience": "undergraduate",
+      "sourceVersion": "diagram-2023",
+      "articleUrl": "https://www.teach.ustc.edu.cn/service/svc-student/12522.html",
+      "materialUrl": "https://www.teach.ustc.edu.cn/wp-content/uploads/2020/11/1-2%E6%9C%AC%E7%A7%91%E7%94%9F%E9%80%89%E8%AF%BE%E8%B0%83%E6%95%B4%E7%AE%A1%E7%90%86%E6%B5%81%E7%A8%8B-790x1183.png",
+      "sourceDigestKind": "image-bytes",
+      "sourceDigest": "3fcaa16f57c305fab9ecc2177b68f538308f44303e5c8eb7966eeffec0c2b8d5",
+      "coveredScope": "完整图示的角色、换班条件、个性化申请、教师A/B分支、退课/缓修及规则框；排除页脚联系方式，不覆盖另行引用的课程缓修流程。",
+      "publishedOn": "2020-11-26",
+      "updatedOn": "2023-04-17",
+      "draft": "curated/teach/course-adjustment.md",
+      "draftSha256": "ed67f9923c335fd0615bb39a57d8af7753479dc275380884a7917de6afad4f04",
+      "sections": [
+        "角色泳道",
+        "换班及个性化选课",
+        "退课申请及缓修限定"
+      ]
+    },
+    {
+      "key": "teach-withdrawal",
+      "title": "本科生放弃课程修读流程",
+      "provider": "teach",
+      "topic": "courseWithdrawal",
+      "audience": "undergraduate",
+      "sourceVersion": "diagram-2023",
+      "articleUrl": "https://www.teach.ustc.edu.cn/service/svc-student/2648.html",
+      "materialUrl": "https://www.teach.ustc.edu.cn/wp-content/uploads/2020/11/1-4%E6%9C%AC%E7%A7%91%E7%94%9F%E6%94%BE%E5%BC%83%E8%AF%BE%E7%A8%8B%E4%BF%AE%E8%AF%BB%E7%AE%A1%E7%90%86%E6%B5%81%E7%A8%8B-790x1232.png",
+      "sourceDigestKind": "image-bytes",
+      "sourceDigest": "ab4d74bf108b01cfda7ec0e2b35912d9ad07e1854df2a8e417e7dcc25423a930",
+      "coveredScope": "完整图示的限制、申请/审核/取消、课堂教学截止及系统不支持申请的补充；排除页脚联系方式，无当前日历期限。",
+      "publishedOn": "2020-11-27",
+      "updatedOn": "2023-04-17",
+      "draft": "curated/teach/course-withdrawal.md",
+      "draftSha256": "2c0da010f933871ac5e28ca57f9927d1b0f738ce18f53801572fa03ff512962d",
+      "sections": [
+        "角色泳道",
+        "适用限制",
+        "申请流程",
+        "系统不支持申请时"
+      ]
+    },
+    {
+      "key": "teach-deferred-exam",
+      "title": "缓考管理流程",
+      "provider": "teach",
+      "topic": "deferredExams",
+      "audience": "undergraduate",
+      "sourceVersion": "page-updated-2026-07-22",
+      "articleUrl": "https://www.teach.ustc.edu.cn/service/svc-student/2690.html",
+      "materialUrl": "https://www.teach.ustc.edu.cn/wp-content/uploads/2015/07/%E7%BC%93%E8%80%83%E7%AE%A1%E7%90%86%E6%B5%81%E7%A8%8B-790x1155.png",
+      "sourceDigestKind": "image-bytes",
+      "sourceDigest": "e0df5457fcf7babd5cace2a0e37c8585d1b80f2579d11b20b957326af3752cd2",
+      "coveredScope": "完整图示的三方角色、审批分流、材料、补考条件及补充说明；排除页脚联系方式，不推断具体申请日期。",
+      "publishedOn": "2015-07-03",
+      "updatedOn": "2026-07-22",
+      "draft": "curated/teach/deferred-exam.md",
+      "draftSha256": "de6d54c54ad6d99b22a18c1a4d2369eacde88c918b787cc2c2e1593d810e2353",
+      "sections": [
+        "角色与职责",
+        "缓考办理步骤",
+        "申请材料",
+        "补考条件与申请",
+        "补充说明"
+      ]
+    },
+    {
+      "key": "teach-certificates",
+      "title": "成绩单、排名证明与在读证明",
+      "provider": "teach",
+      "topic": "certificates",
+      "audience": "enrolledStudent",
+      "sourceVersion": "page-updated-2026-03-16",
+      "articleUrl": "https://www.teach.ustc.edu.cn/service/svc-student/13824.html",
+      "sourceDigestKind": "decoded-html-utf8",
+      "sourceDigest": "cd09e7709e6fa30698b2cece3c78c9abdccb9b6362a76d3e062e1f949aab3bd8",
+      "coveredScope": "公开FAQ的电子/纸质办理、下载次数、地点、封装及防伪说明；不读取实际证明，未说明的用途和材料不推断。",
+      "publishedOn": "2021-11-09",
+      "updatedOn": "2026-03-16",
+      "draft": "curated/teach/certificates.md",
+      "draftSha256": "b3005eba01b6087472ef5df36951c0ecd6f086a72b5e254055fac672b8a0aef2",
+      "sections": [
+        "电子版",
+        "纸质版",
+        "出国成绩单封装",
+        "材料与用途边界"
+      ]
+    },
+    {
+      "key": "finance-business-index",
+      "title": "财务高频业务名称与指南索引",
+      "provider": "finance",
+      "topic": "financialServices",
+      "audience": "public",
+      "sourceVersion": "page-published-2025-11-28",
+      "articleUrl": "https://finance.ustc.edu.cn/2025/1128/c21817a712082/page.psp",
+      "sourceDigestKind": "decoded-html-utf8",
+      "sourceDigest": "5a74186a6bcda952868a6e7eee097b94e01fccb3275a792b215f71e6292f3aa7",
+      "coveredScope": "原表20项业务名称及两处直接官方入口；排除人员/联系方式/地点/备注和关联页正文，不宣称全表或指南已覆盖。",
+      "publishedOn": "2025-11-28",
+      "draft": "curated/finance/business-index.md",
+      "draftSha256": "ad4c31f7df0bffc45045ff3803ce779b17bceb59374f753fd5ac1d66991d8965",
+      "sections": [
+        "业务名称",
+        "来源中直接关联的入口",
+        "覆盖范围与日期"
+      ]
+    },
+    {
+      "key": "finance-student-activities",
+      "title": "学生活动经费报销说明",
+      "provider": "finance",
+      "topic": "studentActivityExpenses",
+      "audience": "studentActivityOrganiser",
+      "sourceVersion": "page-published-2021-01-28",
+      "articleUrl": "https://finance.ustc.edu.cn/2021/0128/c22118a470108/page.psp",
+      "sourceDigestKind": "decoded-html-utf8",
+      "sourceDigest": "73214f3f14fc6807b4a1480a5e03eddb6ce5732ba7f688ea4045e07e56dbd0b7",
+      "coveredScope": "该页报销范围、材料、票据/例外、办理条件及制度引用；2021金额为来源事实，现行效力未知，不含被引用制度正文。",
+      "publishedOn": "2021-01-28",
+      "draft": "curated/finance/student-activities.md",
+      "draftSha256": "a1f7c43261a884e67ff60e5f91cd44897c21376c0b310cb1e8bb1d42da62f6ec",
+      "sections": [
+        "报销范围",
+        "页面列出的材料",
+        "票据、例外与办理条件",
+        "相关制度与覆盖边界"
+      ]
+    }
+  ]
+}
