@@ -835,7 +835,7 @@ void main() {
     final dayTeacherKey = const ValueKey(
       'calendar-day-academic-course-325-0-teachers',
     );
-    expect(find.text('地点：东区 · 教学楼 · A301'), findsOneWidget);
+    expect(find.text('地点：A301 · 教学楼 · 东区'), findsOneWidget);
     final dayTeacher = tester.widget<Text>(
       find
           .descendant(
@@ -861,7 +861,7 @@ void main() {
     final panel = find.byKey(const ValueKey('calendar-academic-details-panel'));
     expect(panel, findsOneWidget);
     for (final text in [
-      '地点：东区 · 教学楼 · A301',
+      '地点：A301 · 教学楼 · 东区',
       '校区：东区',
       '楼宇：教学楼',
       '教室：A301',

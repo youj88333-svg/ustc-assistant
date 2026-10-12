@@ -76,7 +76,7 @@ void main() {
   });
 
   test(
-    'combines known location parts and uses room code or custom fallback',
+    'puts the classroom first and preserves known location parts and fallbacks',
     () {
       final fullLocation = JwAcademicDetails(
         campus: '东区',
@@ -93,8 +93,8 @@ void main() {
       );
       final fallbackLocation = JwAcademicDetails(customPlace: '线上会议室');
 
-      expect(fullLocation.locationLabel, '东区 · 教学楼 301');
-      expect(roomCodeLocation.locationLabel, '东区 · 理科楼 · L-202');
+      expect(fullLocation.locationLabel, '教学楼 301 · 东区');
+      expect(roomCodeLocation.locationLabel, 'L-202 · 理科楼 · 东区');
       expect(fallbackLocation.locationLabel, '线上会议室');
       expect(
         JwAcademicDetails(
@@ -102,7 +102,7 @@ void main() {
           building: '教学楼',
           customPlace: '机房 A',
         ).locationLabel,
-        '东区 · 教学楼 · 机房 A',
+        '机房 A · 教学楼 · 东区',
       );
       expect(JwAcademicDetails().locationLabel, isEmpty);
     },

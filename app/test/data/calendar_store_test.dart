@@ -81,7 +81,7 @@ void main() {
       course = window.items.single;
       expect(course.reference.identity, localId);
       expect(course.reference.version, previousVersion + 1);
-      expect(course.location, '合成东区 · 合成教学楼 · 5304');
+      expect(course.location, '5304 · 合成教学楼 · 合成东区');
       expect(course.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
       expect(course.hidden, isTrue);
       expect(course.note, '保留合成备注');

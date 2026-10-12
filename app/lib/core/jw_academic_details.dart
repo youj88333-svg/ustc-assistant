@@ -81,9 +81,9 @@ final class JwAcademicDetails {
         ? roomCode
         : customPlace;
     final parts = [
-      campus,
-      building,
       primaryRoom,
+      building,
+      campus,
     ].where((value) => value.isNotEmpty).toSet();
     return parts.isEmpty ? customPlace : parts.join(' · ');
   }

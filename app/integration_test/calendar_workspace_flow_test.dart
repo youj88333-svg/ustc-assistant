@@ -826,7 +826,7 @@ void main() {
         expect(course.reference.identity.kind, CalendarKind.course);
         expect(young.reference.identity.kind, CalendarKind.young);
         expect(course.hidden, isFalse);
-        expect(course.location, '合成东校区 · 合成教学楼 · 合成教室 5304');
+        expect(course.location, '合成教室 5304 · 合成教学楼 · 合成东校区');
         expect(course.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
         expect(young.hidden, isFalse);
         await _captureSyntheticUi(tester, 'day');

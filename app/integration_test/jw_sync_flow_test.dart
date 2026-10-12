@@ -239,7 +239,7 @@ void main() {
           expect(course.presence, JwPresence.observed);
           expect(
             course.academicDetails!.locationLabel,
-            '合成东校区 · 合成教学楼 · 合成教室 5304',
+            '合成教室 5304 · 合成教学楼 · 合成东校区',
           );
           expect(course.academicDetails!.teachers, ['合成教师甲']);
           expect(course.academicDetails!.courseCode, 'SYN-C101.01');
@@ -249,7 +249,7 @@ void main() {
           expect(exam.title, '合成考试课程');
           expect(exam.semesterId, isNull);
           expect(exam.presence, JwPresence.observed);
-          expect(exam.academicDetails!.locationLabel, '合成校区 · 合成教学楼 · 合成考场');
+          expect(exam.academicDetails!.locationLabel, '合成考场 · 合成教学楼 · 合成校区');
           expect(exam.academicDetails!.examNote, '合成考试说明');
           expect(exam.academicDetails!.teachers, isEmpty);
           expect(exam.academicDetails!.semesterName, isEmpty);

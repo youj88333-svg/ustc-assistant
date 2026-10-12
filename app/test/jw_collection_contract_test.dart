@@ -165,7 +165,7 @@ void main() {
         exerciseClass: false,
       ).toMap();
       final event = decode(root).events.single;
-      expect(event.academicDetails!.locationLabel, '合成东校区 · 合成教学楼 · 5304');
+      expect(event.academicDetails!.locationLabel, '5304 · 合成教学楼 · 合成东校区');
       expect(event.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
       expect(event.academicDetails!.courseCode, 'SYN101.01');
       expect(event.academicDetails!.weekIndex, 6);
@@ -266,7 +266,7 @@ void main() {
       ).toMap();
       final exam = decode(root).events.single;
       expect(exam.academicDetails!.examNote, '合成考试说明');
-      expect(exam.academicDetails!.locationLabel, '合成校区 · 合成楼 · 合成考场');
+      expect(exam.academicDetails!.locationLabel, '合成考场 · 合成楼 · 合成校区');
       expect(exam.academicDetails!.semesterName, isEmpty);
       expect(exam.academicDetails!.teachers, isEmpty);
     },
