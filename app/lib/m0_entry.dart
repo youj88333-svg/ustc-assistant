@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'app/demo_runtime.dart';
 import 'app/product_app.dart';
 import 'app/source_settings_page.dart';
+import 'app/calendar_workspace_page.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
 import 'app/jw_sync_panel.dart';
@@ -68,6 +69,8 @@ final class _OwnedAppState extends State<_OwnedApp> {
   @override
   Widget build(BuildContext context) => ProductApp(
     controller: widget.runtime.shell,
+    agendaBuilder: (context) =>
+        CalendarWorkspacePage(controller: widget.runtime.calendar),
     settingsBuilder: (context) => SourceSettingsPage(
       controller: widget.runtime.shell,
       diagnosticsBuilder: developmentDiagnosticsEnabled || m3ValidationEnabled

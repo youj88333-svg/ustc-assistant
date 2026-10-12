@@ -6,6 +6,9 @@ import 'package:drift/drift.dart';
 import 'package:crypto/crypto.dart';
 
 import '../core/contracts.dart';
+import '../core/agenda_contract.dart';
+import '../core/calendar_contract.dart';
+import '../core/calendar_validation.dart';
 import '../core/public_query_contract.dart';
 import '../core/knowledge_contract.dart';
 import '../core/jw_work_contract.dart';
@@ -19,9 +22,11 @@ import 'jw_import_contract.dart';
 import 'young_import_contract.dart';
 import 'knowledge_markdown.dart';
 import 'bundled_knowledge_identity.dart';
+import 'calendar_projection.dart';
 
 part 'young_store_extension.dart';
 part 'public_store.dart';
+part 'local_calendar_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
 
@@ -71,6 +76,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     this.credentialProtector,
     this.onYoungCheckpoint,
     this.onKnowledgeCheckpoint,
+    this.onCalendarCheckpoint,
     this.knowledgeIdentity = bundledKnowledgeIdentity,
     // Keep the public capability names independent of platform internals.
     // ignore: prefer_initializing_formals
@@ -85,8 +91,10 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   final JwCredentialProtector? credentialProtector;
   final Future<void> Function(YoungStoreCheckpoint)? onYoungCheckpoint;
   final Future<void> Function()? onKnowledgeCheckpoint;
+  final Future<void> Function()? onCalendarCheckpoint;
   final KnowledgeEditionIdentity knowledgeIdentity;
   late final PublicStore publicStore = PublicStore._(this);
+  late final LocalCalendarStore localCalendar = LocalCalendarStore._(this);
   final String _newOwnerId;
   final Map<String, JwJobTicket> _tickets = {};
   final Map<String, YoungJobTicket> _youngTickets = {};
@@ -101,7 +109,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -116,6 +124,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ..._catalogSchema,
         ..._youngSchema,
         ...PublicStore.schema,
+        ...LocalCalendarStore.schema,
       ]) {
         await customStatement(statement);
       }
@@ -128,7 +137,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 4 || to != 5) {
+      if (from < 1 || from > 5 || to != 6) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -137,7 +146,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from == 1) ..._credentialSchema,
           if (from <= 2) ..._catalogSchema,
           if (from <= 3) ..._youngSchema,
-          ...PublicStore.schema,
+          if (from <= 4) ...PublicStore.schema,
+          ...LocalCalendarStore.schema,
         ]) {
           await customStatement(statement);
         }
@@ -165,6 +175,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         result.completeError(error);
       } on PublicFailure catch (error) {
         result.completeError(error);
+      } on CalendarFailure catch (error) {
+        result.completeError(error);
       } on Object {
         result.completeError(const AppFailure(FailureCode.storageFailed));
       }
@@ -186,6 +198,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
 
   Future<void> _guard() async {
     _ownership.ensureHeld();
+    if ((await localCalendar._agendaState()).read<int>('maintenance') != 0) {
+      throw const AppFailure(FailureCode.cleanupPending);
+    }
   }
 
   Future<void> initialize() => _serialized(() async {
@@ -1380,6 +1395,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void> _drainAndClose() async {
     _closing = true;
     publicStore._invalidateMemory();
+    localCalendar._invalidateMemory();
     for (final ticket in [..._tickets.values, ..._youngTickets.values]) {
       ticket._credentialsRevoked = true;
       ticket._secretLease?.revoke();
@@ -1391,6 +1407,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     _youngTickets.clear();
     _youngFirstWriteCheckpoints.clear();
     await _credentialChanges.close();
+    await localCalendar._changes.close();
     await super.close();
   }
 

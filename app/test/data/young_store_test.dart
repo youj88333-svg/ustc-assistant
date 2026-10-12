@@ -6,6 +6,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
+import '../support/calendar_legacy_schema.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/young_work_contract.dart';
@@ -1206,6 +1207,7 @@ Future<_SyntheticJwFacts> _seedJwLedger(JwStore store) async {
 void _setSyntheticSchemaVersion(File file, int version) {
   final database = sqlite3.sqlite3.open(file.path);
   try {
+    removeCalendarTablesForLegacyFixture(database);
     for (final table in [
       'knowledge_load_items',
       'knowledge_sections',

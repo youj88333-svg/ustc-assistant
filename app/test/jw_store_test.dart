@@ -13,6 +13,7 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/source/jw_collection_contract.dart';
 import 'package:ustc_assistant_m0/source/jw_probe_contract.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
+import 'support/calendar_legacy_schema.dart';
 
 void main() {
   test(
@@ -2183,6 +2184,7 @@ final class _SyntheticCredentialProtector implements JwCredentialProtector {
 
 /// The fixture downgrades only an isolated synthetic copy, never real data.
 void _removeYoungTablesForLegacyFixture(sqlite3.Database database) {
+  removeCalendarTablesForLegacyFixture(database);
   for (final table in const [
     'knowledge_load_items',
     'knowledge_sections',

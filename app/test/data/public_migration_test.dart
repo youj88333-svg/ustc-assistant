@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
+import '../support/calendar_legacy_schema.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/public_query_contract.dart';
@@ -187,6 +188,7 @@ void main() {
       await store.close();
       final raw = sqlite3.sqlite3.open(file.path);
       try {
+        removeCalendarTablesForLegacyFixture(raw);
         for (final table in const [
           'knowledge_load_items',
           'knowledge_sections',

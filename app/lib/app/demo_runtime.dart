@@ -23,6 +23,7 @@ import '../source/synthetic_source.dart';
 import '../source/observation_contract.dart';
 import 'demo_controller.dart';
 import 'app_shell_controller.dart';
+import 'calendar_workspace_controller.dart';
 
 /// Owns the separate demonstration and formal directories. No old asset opens.
 final class DemoRuntime {
@@ -41,6 +42,7 @@ final class DemoRuntime {
     this.publicQueries,
     this.knowledge,
     this.shell,
+    this.calendar,
   );
 
   final DemoDirectory directory;
@@ -57,6 +59,7 @@ final class DemoRuntime {
   final PublicQueryCoordinator publicQueries;
   final KnowledgeService knowledge;
   final AppShellController shell;
+  final CalendarWorkspaceController calendar;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -80,6 +83,7 @@ final class DemoRuntime {
     ObservationCoordinator? youngObservation;
     NativeObservationBrowser? browser;
     AppShellController? shell;
+    CalendarWorkspaceController? calendar;
     try {
       jwDirectory = await DemoDirectory.acquire(
         jwDirectoryPath ??
@@ -160,6 +164,12 @@ final class DemoRuntime {
           publicQueries.changes,
         ],
       );
+      calendar = CalendarWorkspaceController(
+        calendar: jwStore.localCalendar,
+        shell: shell,
+        clock: clock,
+      );
+      await calendar.load();
       return DemoRuntime._(
         directory,
         store,
@@ -175,8 +185,11 @@ final class DemoRuntime {
         publicQueries,
         knowledge,
         shell,
+        calendar,
       );
     } catch (error) {
+      await calendar?.shutdown();
+      calendar?.dispose();
       shell?.dispose();
       // Do not release an owner if database/session drain itself fails.
       await coordinator?.close();
@@ -204,6 +217,7 @@ final class DemoRuntime {
   });
 
   Future<void> _close() async {
+    await calendar.shutdown();
     await coordinator.close();
     await publicQueries.close();
     await knowledge.close();
@@ -215,6 +229,7 @@ final class DemoRuntime {
     await youngSync.shutdown();
     await browser.dispose();
     if (!_controllerDisposed) {
+      calendar.dispose();
       shell.dispose();
       controller.dispose();
       _controllerDisposed = true;

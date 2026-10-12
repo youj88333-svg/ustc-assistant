@@ -1,0 +1,1051 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
+import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
+import 'package:ustc_assistant_m0/core/agenda_contract.dart';
+import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('unready is distinct from a completed empty query', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final port = _FakeCalendarWorkspacePort()..loadGate = Completer<void>();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pump();
+    expect(find.text('正在读取日程'), findsOneWidget);
+    expect(find.text('该日期范围暂无日程'), findsNothing);
+
+    port.loadGate!.complete();
+    port.loadGate = null;
+    await tester.pumpAndSettle();
+    expect(find.text('该日期范围暂无日程'), findsOneWidget);
+    expect(find.text('正在读取日程'), findsNothing);
+  });
+
+  testWidgets('creates a timed personal event from Beijing time as UTC', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final port = _FakeCalendarWorkspacePort();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('calendar-personal-create')));
+    await tester.pumpAndSettle();
+
+    await _enter(tester, 'calendar-event-title', '时间转换验证');
+    await _enter(tester, 'calendar-event-start-date', '2026-10-12');
+    await _enter(tester, 'calendar-event-start-time', '09:30');
+    await _enter(tester, 'calendar-event-end-date', '2026-10-12');
+    await _enter(tester, 'calendar-event-end-time', '10:45');
+    await _saveEvent(tester);
+
+    final intent = port.intents.single as CreatePersonalEvent;
+    expect(intent.draft.start, DateTime.utc(2026, 10, 12, 1, 30));
+    expect(intent.draft.end, DateTime.utc(2026, 10, 12, 2, 45));
+    expect(intent.draft.allDay, isFalse);
+    expect(find.text('已保存。'), findsWidgets);
+  });
+
+  testWidgets(
+    'all-day end date is inclusive and weekly cutoff stays a Beijing date',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final port = _FakeCalendarWorkspacePort();
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('calendar-personal-create')));
+      await tester.pumpAndSettle();
+
+      await _enter(tester, 'calendar-event-title', '每周全天安排');
+      await tester.tap(find.byKey(const ValueKey('calendar-event-all-day')));
+      await tester.pumpAndSettle();
+      await _enter(tester, 'calendar-event-start-date', '2026-10-12');
+      await _enter(tester, 'calendar-event-end-date', '2026-10-14');
+      await tester.tap(find.byKey(const ValueKey('calendar-event-weekly')));
+      await tester.pumpAndSettle();
+      await _enter(tester, 'calendar-event-until', '2026-11-02');
+      await _saveEvent(tester);
+
+      final intent = port.intents.single as CreatePersonalEvent;
+      expect(intent.draft.allDay, isTrue);
+      expect(intent.draft.weekly, isTrue);
+      expect(intent.draft.start, DateTime.utc(2026, 10, 12));
+      expect(intent.draft.end, DateTime.utc(2026, 10, 15));
+      expect(intent.draft.untilDay, DateTime.utc(2026, 11, 2));
+    },
+  );
+
+  testWidgets(
+    'editing one weekly occurrence submits a non-recurring replacement',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final occurrence = _occurrence(
+        kind: CalendarKind.personal,
+        id: 31,
+        ordinal: 0,
+        title: '每周安排',
+      );
+      final seriesDraft = PersonalEventDraft(
+        title: '每周安排',
+        start: DateTime.utc(2026, 10, 12, 1),
+        end: DateTime.utc(2026, 10, 12, 2),
+        weekly: true,
+      );
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [occurrence],
+        personalDrafts: {occurrence.reference.identity: seriesDraft},
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('calendar-personal-edit-occurrence')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-personal-edit-occurrence')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('calendar-event-weekly')), findsNothing);
+      expect(find.byKey(const ValueKey('calendar-event-until')), findsNothing);
+      await _enter(tester, 'calendar-event-title', '本周改期');
+      await _enter(tester, 'calendar-event-start-date', '2026-10-13');
+      await _enter(tester, 'calendar-event-start-time', '13:00');
+      await _enter(tester, 'calendar-event-end-date', '2026-10-13');
+      await _enter(tester, 'calendar-event-end-time', '14:00');
+      await _saveEvent(tester);
+
+      final intent = port.intents.single as UpdatePersonalOccurrence;
+      expect(intent.target, occurrence.reference);
+      expect(intent.replacement.title, '本周改期');
+      expect(intent.replacement.start, DateTime.utc(2026, 10, 13, 5));
+      expect(intent.replacement.end, DateTime.utc(2026, 10, 13, 6));
+      expect(intent.replacement.weekly, isFalse);
+      expect(intent.replacement.untilDay, isNull);
+    },
+  );
+
+  testWidgets('a retained replacement remains editable after becoming single', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final occurrence = _occurrence(
+      kind: CalendarKind.personal,
+      id: 32,
+      title: '保留的本次安排',
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [occurrence],
+      personalDrafts: {
+        occurrence.reference.identity: PersonalEventDraft(
+          title: '原始安排',
+          start: DateTime.utc(2026, 10, 5, 1),
+          end: DateTime.utc(2026, 10, 5, 2),
+        ),
+      },
+      replacements: {occurrence.reference.identity},
+    );
+    addTearDown(port.dispose);
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('设置重复'), findsOneWidget);
+    final edit = find.byKey(
+      const ValueKey('calendar-personal-edit-occurrence'),
+    );
+    await tester.ensureVisible(edit);
+    await tester.pumpAndSettle();
+    await tester.tap(edit);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextFormField>(
+            find.byKey(const ValueKey('calendar-event-title')),
+          )
+          .controller!
+          .text,
+      '保留的本次安排',
+    );
+    expect(find.byKey(const ValueKey('calendar-event-weekly')), findsNothing);
+    await _enter(tester, 'calendar-event-title', '再次调整本次安排');
+    await _saveEvent(tester);
+    final intent = port.intents.single as UpdatePersonalOccurrence;
+    expect(intent.target, occurrence.reference);
+    expect(intent.replacement.title, '再次调整本次安排');
+    expect(intent.replacement.start, occurrence.startsAtUtc);
+  });
+
+  testWidgets('exam annotation editor omits attendance and listening fields', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final exam = _occurrence(
+      kind: CalendarKind.exam,
+      id: 44,
+      title: '合成考试安排',
+      attendance: AttendanceDecision.attend,
+      listening: ListeningMode.listening,
+    );
+    final port = _FakeCalendarWorkspacePort(occurrences: [exam]);
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(ValueKey<CalendarReference>(exam.reference)));
+    await tester.pumpAndSettle();
+    expect(find.text('出勤计划'), findsNothing);
+    expect(find.text('听讲方式'), findsNothing);
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('calendar-school-edit-annotation')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-school-edit-annotation')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('calendar-school-attendance')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('calendar-school-listening')),
+      findsNothing,
+    );
+    await _enter(tester, 'calendar-school-note', '只记录个人复习计划');
+    await tester.tap(find.byKey(const ValueKey('calendar-school-save')));
+    await tester.pumpAndSettle();
+
+    final intent = port.intents.single as UpdateSchoolAnnotation;
+    expect(intent.target, exam.reference);
+    expect(intent.note, '只记录个人复习计划');
+    expect(intent.attendance, isNull);
+    expect(intent.listening, isNull);
+  });
+
+  testWidgets('saves an explicit relation using only candidate references', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final personal = _occurrence(
+      kind: CalendarKind.personal,
+      id: 46,
+      title: '个人复习',
+    );
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 47,
+      title: '合成课程候选',
+    );
+    final candidate = CalendarConflict(personal, course);
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [personal, course],
+      conflicts: [candidate],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(ValueKey<CalendarReference>(personal.reference)),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(personal.reference)),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('calendar-relation-edit-course-0')),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-relation-edit-course-0')),
+    );
+    await tester.pumpAndSettle();
+    await _enter(tester, 'calendar-relation-note', '两条安排可以同时存在');
+    await tester.tap(find.byKey(const ValueKey('calendar-relation-save')));
+    await tester.pumpAndSettle();
+
+    final intent = port.intents.single as SaveCalendarRelation;
+    expect(intent.left, personal.reference);
+    expect(intent.right, course.reference);
+    expect(intent.kind, CalendarRelationKind.coexist);
+    expect(intent.note, '两条安排可以同时存在');
+  });
+
+  testWidgets(
+    'series deletion requires confirmation and cancellation writes nothing',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final occurrence = _occurrence(
+        kind: CalendarKind.personal,
+        id: 52,
+        ordinal: 1,
+        title: '需要确认的系列',
+      );
+      final draft = PersonalEventDraft(
+        title: occurrence.title,
+        start: DateTime.utc(2026, 10, 12, 1),
+        end: DateTime.utc(2026, 10, 12, 2),
+        weekly: true,
+      );
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [occurrence],
+        personalDrafts: {occurrence.reference.identity: draft},
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('calendar-personal-delete-series')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-personal-delete-series')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('删除整个个人安排'), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(port.intents, isEmpty);
+
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-personal-delete-series')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-personal-confirm-delete-series')),
+      );
+      await tester.pumpAndSettle();
+      final intent = port.intents.single as DeletePersonalSeries;
+      expect(intent.target, occurrence.reference);
+      expect(intent.confirmed, isTrue);
+    },
+  );
+
+  testWidgets('single-item deletion is confirmed separately from skipping', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final occurrence = _occurrence(
+      kind: CalendarKind.personal,
+      id: 59,
+      title: '单次安排',
+    );
+    final draft = PersonalEventDraft(
+      title: occurrence.title,
+      start: DateTime.utc(2026, 10, 12, 1),
+      end: DateTime.utc(2026, 10, 12, 2),
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [occurrence],
+      personalDrafts: {occurrence.reference.identity: draft},
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('calendar-personal-delete-series')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-personal-delete-series')),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('删除这条个人安排'), findsOneWidget);
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-personal-confirm-delete-single')),
+    );
+    await tester.pumpAndSettle();
+
+    final intent = port.intents.single as DeletePersonalSeries;
+    expect(intent.target, occurrence.reference);
+    expect(intent.confirmed, isTrue);
+    expect(port.intents.whereType<SetPersonalOccurrenceState>(), isEmpty);
+  });
+
+  testWidgets('failed writes show a fixed failure and never a saved receipt', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final occurrence = _occurrence(
+      kind: CalendarKind.personal,
+      id: 67,
+      title: '保存失败安排',
+    );
+    final port = _FakeCalendarWorkspacePort(occurrences: [occurrence]);
+    port.nextFailure = CalendarFailureCode.storageFailed;
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(
+      find.byKey(const ValueKey('calendar-personal-toggle-completed')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-personal-toggle-completed')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(port.intents.single, isA<SetPersonalOccurrenceState>());
+    expect(find.text('本地日程暂时无法完成此操作，请稍后重试。'), findsWidgets);
+    expect(find.text('已保存。'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'a late write receipt from a replaced controller does not update the new page',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final occurrence = _occurrence(
+        kind: CalendarKind.personal,
+        id: 79,
+        title: '旧页面安排',
+      );
+      final first = _FakeCalendarWorkspacePort(occurrences: [occurrence]);
+      final second = _FakeCalendarWorkspacePort();
+      first.executeGate = Completer<void>();
+      addTearDown(first.dispose);
+      addTearDown(second.dispose);
+
+      await tester.pumpWidget(_host(first));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('calendar-personal-toggle-completed')),
+      );
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-personal-toggle-completed')),
+      );
+      await tester.pump();
+      expect(first.intents, hasLength(1));
+
+      await tester.pumpWidget(_host(second));
+      await tester.pumpAndSettle();
+      first.executeGate!.complete();
+      await tester.pumpAndSettle();
+
+      expect(second.intents, isEmpty);
+      expect(find.text('已保存。'), findsNothing);
+      expect(find.text('旧页面安排'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a date picker owned by an old controller cannot change the new view',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final first = _FakeCalendarWorkspacePort();
+      final second = _FakeCalendarWorkspacePort();
+      addTearDown(first.dispose);
+      addTearDown(second.dispose);
+
+      await tester.pumpWidget(_host(first));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-workspace-date-picker')),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsOneWidget);
+
+      await tester.pumpWidget(_host(second));
+      await tester.pumpAndSettle();
+      expect(find.byType(DatePickerDialog), findsNothing);
+      expect(second.view.day, DateTime.utc(2026, 10, 12));
+      expect(second.loadCalls, greaterThan(0));
+    },
+  );
+
+  testWidgets('a create form keeps the context captured when it was opened', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final port = _FakeCalendarWorkspacePort();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    final openedContext = port.view.window!.context;
+    await tester.tap(find.byKey(const ValueKey('calendar-personal-create')));
+    await tester.pumpAndSettle();
+    port.rollContext();
+    await tester.pump();
+
+    await _enter(tester, 'calendar-event-title', '过期上下文安排');
+    await _enter(tester, 'calendar-event-start-date', '2026-10-12');
+    await _enter(tester, 'calendar-event-start-time', '09:30');
+    await _enter(tester, 'calendar-event-end-date', '2026-10-12');
+    await _enter(tester, 'calendar-event-end-time', '10:30');
+    await _saveEvent(tester);
+
+    expect(port.attemptedContexts.single, openedContext);
+    expect(port.intents, isEmpty);
+    expect(find.text('这条日程已更新，请重新选择后再操作。'), findsWidgets);
+    expect(find.text('已保存。'), findsNothing);
+  });
+
+  testWidgets('fits short narrow and wide windows with larger text', (
+    tester,
+  ) async {
+    for (final scenario in const [
+      (size: Size(320, 420), scale: 1.8),
+      (size: Size(600, 560), scale: 1.35),
+      (size: Size(1280, 820), scale: 1.0),
+    ]) {
+      await _setSize(tester, scenario.size);
+      final occurrence = _occurrence(
+        kind: CalendarKind.course,
+        id: scenario.size.width.toInt(),
+        title: List<String>.filled(8, '合成日程标题').join('，'),
+      );
+      final port = _FakeCalendarWorkspacePort(occurrences: [occurrence]);
+      await tester.pumpWidget(_host(port, textScale: scenario.scale));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('calendar-workspace-view-mode')),
+        findsOneWidget,
+      );
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'layout at ${scenario.size}',
+      );
+      if (scenario.size.width == 320) {
+        await tester.ensureVisible(
+          find.byKey(const ValueKey('calendar-workspace-view-mode')),
+        );
+        await tester.tap(find.text('日'));
+        await tester.pumpAndSettle();
+        final item = find.byKey(
+          ValueKey<CalendarReference>(occurrence.reference),
+        );
+        await tester.ensureVisible(item);
+        await tester.pumpAndSettle();
+        await tester.tap(item);
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const ValueKey('calendar-detail-card')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull, reason: 'narrow detail');
+        await tester.tap(find.byKey(const ValueKey('calendar-detail-close')));
+        await tester.pumpAndSettle();
+      }
+      await tester.pumpWidget(const SizedBox.shrink());
+      port.dispose();
+    }
+  });
+}
+
+Widget _host(CalendarWorkspacePort controller, {double textScale = 1}) =>
+    MaterialApp(
+      theme: ThemeData(
+        useMaterial3: true,
+        colorSchemeSeed: const Color(0xFF1F6B45),
+      ),
+      home: Builder(
+        builder: (context) => MediaQuery(
+          data: MediaQuery.of(
+            context,
+          ).copyWith(textScaler: TextScaler.linear(textScale)),
+          child: Scaffold(body: CalendarWorkspacePage(controller: controller)),
+        ),
+      ),
+    );
+
+Future<void> _setSize(WidgetTester tester, Size size) async {
+  addTearDown(() async {
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pumpAndSettle();
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+  tester.view.devicePixelRatio = 1;
+  tester.view.physicalSize = size;
+  await tester.pump();
+}
+
+Future<void> _enter(WidgetTester tester, String key, String value) async {
+  final field = find.byKey(ValueKey(key));
+  await tester.ensureVisible(field);
+  await tester.enterText(field, value);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _saveEvent(WidgetTester tester) async {
+  final save = find.byKey(const ValueKey('calendar-event-save'));
+  await tester.ensureVisible(save);
+  await tester.pumpAndSettle();
+  await tester.tap(save);
+  await tester.pumpAndSettle();
+}
+
+CalendarOccurrence _occurrence({
+  required CalendarKind kind,
+  required int id,
+  int ordinal = 0,
+  String title = '合成事项',
+  DateTime? startsAtUtc,
+  DateTime? endsAtUtc,
+  bool allDay = false,
+  bool hidden = false,
+  bool skipped = false,
+  bool completed = false,
+  AgendaPresence presence = AgendaPresence.observed,
+  AttendanceDecision attendance = AttendanceDecision.undecided,
+  ListeningMode listening = ListeningMode.undecided,
+}) => CalendarOccurrence(
+  reference: CalendarReference(
+    const CalendarContext(
+      owner: 'synthetic-owner',
+      resetEpoch: 1,
+      agendaEpoch: 1,
+    ),
+    CalendarIdentity(kind, id, ordinal: ordinal),
+    1,
+  ),
+  title: title,
+  startsAtUtc: startsAtUtc ?? DateTime.utc(2026, 10, 12, 1),
+  endsAtUtc: endsAtUtc ?? DateTime.utc(2026, 10, 12, 2),
+  allDay: allDay,
+  hidden: hidden,
+  skipped: skipped,
+  completed: completed,
+  presence: presence,
+  attendance: attendance,
+  listening: listening,
+);
+
+DateTime _day(DateTime value) =>
+    DateTime.utc(value.year, value.month, value.day);
+
+DateTime _monday(DateTime value) =>
+    DateTime.utc(value.year, value.month, value.day - (value.weekday - 1));
+
+final class _FakeCalendarWorkspacePort extends ChangeNotifier
+    implements CalendarWorkspacePort {
+  _FakeCalendarWorkspacePort({
+    List<CalendarOccurrence> occurrences = const [],
+    Map<CalendarIdentity, PersonalEventDraft> personalDrafts = const {},
+    List<CalendarConflict> conflicts = const [],
+    Set<CalendarIdentity> replacements = const {},
+  }) : _occurrences = [...occurrences],
+       _conflicts = [...conflicts],
+       _personalDrafts = {...personalDrafts},
+       _replacements = {...replacements},
+       _view = CalendarWorkspaceView(
+         day: DateTime.utc(2026, 10, 12),
+         mode: CalendarViewMode.week,
+         filter: CalendarFilter.all,
+         includeInactive: false,
+         loading: true,
+       );
+
+  final List<CalendarOccurrence> _occurrences;
+  final List<CalendarConflict> _conflicts;
+  final Map<CalendarIdentity, PersonalEventDraft> _personalDrafts;
+  final Set<CalendarIdentity> _replacements;
+  CalendarWorkspaceView _view;
+  final List<CalendarIntent> intents = [];
+  final List<CalendarContext> attemptedContexts = [];
+  CalendarFailureCode? nextFailure;
+  Completer<void>? executeGate;
+  Completer<void>? loadGate;
+  int loadCalls = 0;
+  int selectCalls = 0;
+  int _nextId = 100;
+  int _contextEpoch = 1;
+
+  @override
+  CalendarWorkspaceView get view => _view;
+
+  @override
+  DateTime get today => DateTime.utc(2026, 10, 12);
+
+  @override
+  Future<void> load({
+    DateTime? day,
+    CalendarViewMode? mode,
+    CalendarFilter? filter,
+    bool? includeInactive,
+  }) async {
+    loadCalls++;
+    final gate = loadGate;
+    if (gate != null) await gate.future;
+    final nextDay = _day(day ?? _view.day);
+    final nextMode = mode ?? _view.mode;
+    final nextFilter = filter ?? _view.filter;
+    final include = includeInactive ?? _view.includeInactive;
+    final window = _window(nextDay, nextMode, nextFilter, include);
+    _view = CalendarWorkspaceView(
+      day: nextDay,
+      mode: nextMode,
+      filter: nextFilter,
+      includeInactive: include,
+      window: window,
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> select(CalendarReference? reference) async {
+    selectCalls++;
+    final occurrence = reference == null
+        ? null
+        : _occurrences.cast<CalendarOccurrence?>().firstWhere(
+            (item) => item?.reference == reference,
+            orElse: () => null,
+          );
+    _view = CalendarWorkspaceView(
+      day: _view.day,
+      mode: _view.mode,
+      filter: _view.filter,
+      includeInactive: _view.includeInactive,
+      window: _view.window,
+      detail: occurrence == null
+          ? null
+          : CalendarDetail(
+              occurrence: occurrence,
+              personalDraft: _personalDrafts[occurrence.reference.identity],
+              hasOccurrenceReplacement: _replacements.contains(
+                occurrence.reference.identity,
+              ),
+              relations: const [],
+            ),
+      loading: _view.loading,
+      actionPending: _view.actionPending,
+      sourceBusy: _view.sourceBusy,
+      failure: _view.failure,
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<CalendarWriteReceipt> execute(
+    CalendarIntent intent, {
+    required CalendarContext expectedContext,
+  }) async {
+    attemptedContexts.add(expectedContext);
+    if (expectedContext != _view.window?.context) {
+      throw const CalendarFailure(CalendarFailureCode.staleReference);
+    }
+    intents.add(intent);
+    notifyListeners();
+    final gate = executeGate;
+    if (gate != null) await gate.future;
+    final failure = nextFailure;
+    if (failure != null) {
+      nextFailure = null;
+      throw CalendarFailure(failure);
+    }
+    _apply(intent);
+    final selectedIdentity = _view.detail?.occurrence.reference.identity;
+    _view = CalendarWorkspaceView(
+      day: _view.day,
+      mode: _view.mode,
+      filter: _view.filter,
+      includeInactive: _view.includeInactive,
+      window: _window(
+        _view.day,
+        _view.mode,
+        _view.filter,
+        _view.includeInactive,
+      ),
+      detail: selectedIdentity == null
+          ? null
+          : _detailForIdentity(selectedIdentity),
+    );
+    notifyListeners();
+    return const CalendarWriteReceipt(
+      operationId: 'synthetic-operation',
+      revision: 2,
+      replayed: false,
+    );
+  }
+
+  void rollContext() {
+    _contextEpoch++;
+    final detail = _view.detail;
+    _view = CalendarWorkspaceView(
+      day: _view.day,
+      mode: _view.mode,
+      filter: _view.filter,
+      includeInactive: _view.includeInactive,
+      window: _window(
+        _view.day,
+        _view.mode,
+        _view.filter,
+        _view.includeInactive,
+      ),
+      detail: detail,
+    );
+    notifyListeners();
+  }
+
+  void _apply(CalendarIntent intent) {
+    switch (intent) {
+      case CreatePersonalEvent(:final draft):
+        final identity = CalendarIdentity(CalendarKind.personal, _nextId++);
+        final reference = CalendarReference(
+          const CalendarContext(
+            owner: 'synthetic-owner',
+            resetEpoch: 1,
+            agendaEpoch: 1,
+          ),
+          identity,
+          1,
+        );
+        _occurrences.add(
+          CalendarOccurrence(
+            reference: reference,
+            title: draft.title,
+            startsAtUtc: draft.startsAtUtc,
+            endsAtUtc: draft.endsAtUtc,
+            allDay: draft.allDay,
+            location: draft.location,
+            note: draft.note,
+          ),
+        );
+        _personalDrafts[identity] = draft;
+        break;
+      case UpdatePersonalSeries(:final target, :final draft):
+        _personalDrafts[target.identity] = draft;
+        for (var index = 0; index < _occurrences.length; index++) {
+          final item = _occurrences[index];
+          if (item.reference.identity.kind == CalendarKind.personal &&
+              item.reference.identity.localId == target.identity.localId) {
+            _occurrences[index] = _copyOccurrence(
+              item,
+              title: draft.title,
+              startsAtUtc: draft.startsAtUtc,
+              endsAtUtc: draft.endsAtUtc,
+              allDay: draft.allDay,
+              location: draft.location,
+              note: draft.note,
+            );
+          }
+        }
+        break;
+      case UpdatePersonalOccurrence(:final target, :final replacement):
+        final index = _occurrences.indexWhere(
+          (item) => item.reference.identity == target.identity,
+        );
+        if (index >= 0) {
+          _occurrences[index] = _copyOccurrence(
+            _occurrences[index],
+            title: replacement.title,
+            startsAtUtc: replacement.startsAtUtc,
+            endsAtUtc: replacement.endsAtUtc,
+            allDay: replacement.allDay,
+            location: replacement.location,
+            note: replacement.note,
+          );
+        }
+        break;
+      case SetPersonalOccurrenceState(
+        :final target,
+        :final completed,
+        :final skipped,
+      ):
+        final index = _occurrences.indexWhere(
+          (item) => item.reference.identity == target.identity,
+        );
+        if (index >= 0) {
+          _occurrences[index] = _copyOccurrence(
+            _occurrences[index],
+            completed: completed ?? _occurrences[index].completed,
+            skipped: skipped ?? _occurrences[index].skipped,
+          );
+        }
+        break;
+      case DeletePersonalSeries(:final target):
+        _occurrences.removeWhere(
+          (item) =>
+              item.reference.identity.kind == CalendarKind.personal &&
+              item.reference.identity.localId == target.identity.localId,
+        );
+        _personalDrafts.removeWhere(
+          (identity, _) => identity.localId == target.identity.localId,
+        );
+        break;
+      case UpdateSchoolAnnotation(
+        :final target,
+        :final note,
+        :final attendance,
+        :final listening,
+        :final hidden,
+      ):
+        final index = _occurrences.indexWhere(
+          (item) => item.reference.identity == target.identity,
+        );
+        if (index >= 0) {
+          _occurrences[index] = _copyOccurrence(
+            _occurrences[index],
+            note: note ?? _occurrences[index].note,
+            attendance: attendance ?? _occurrences[index].attendance,
+            listening: listening ?? _occurrences[index].listening,
+            hidden: hidden ?? _occurrences[index].hidden,
+          );
+        }
+        break;
+      case SaveCalendarRelation():
+        break;
+      case DeleteCalendarRelation():
+        break;
+    }
+  }
+
+  CalendarDetail? _detailForIdentity(CalendarIdentity identity) {
+    for (final occurrence in _occurrences) {
+      if (occurrence.reference.identity == identity) {
+        return CalendarDetail(
+          occurrence: occurrence,
+          personalDraft: _personalDrafts[identity],
+          hasOccurrenceReplacement: _replacements.contains(identity),
+          relations: const [],
+        );
+      }
+    }
+    return null;
+  }
+
+  CalendarWindow _window(
+    DateTime day,
+    CalendarViewMode mode,
+    CalendarFilter filter,
+    bool includeInactive,
+  ) {
+    final first = mode == CalendarViewMode.week ? _monday(day) : day;
+    final days = mode == CalendarViewMode.week ? 7 : 1;
+    final end = DateTime.utc(first.year, first.month, first.day + days);
+    final rangeStart = first.subtract(const Duration(hours: 8));
+    final rangeEnd = end.subtract(const Duration(hours: 8));
+    final items = _occurrences
+        .where((occurrence) {
+          if (filter != CalendarFilter.all &&
+              occurrence.reference.identity.kind.name != filter.name) {
+            return false;
+          }
+          if (!includeInactive && (occurrence.hidden || occurrence.skipped)) {
+            return false;
+          }
+          return occurrence.endsAtUtc.isAfter(rangeStart) &&
+              occurrence.startsAtUtc.isBefore(rangeEnd);
+        })
+        .toList(growable: false);
+    final segments = <CalendarDaySegment>[];
+    for (final occurrence in items) {
+      final localStart = occurrence.startsAtUtc.add(const Duration(hours: 8));
+      final localEnd = occurrence.endsAtUtc.add(const Duration(hours: 8));
+      for (var offset = 0; offset < days; offset++) {
+        final date = DateTime.utc(first.year, first.month, first.day + offset);
+        final dayStart = date;
+        final dayEnd = date.add(const Duration(days: 1));
+        if (!localEnd.isAfter(dayStart) || !localStart.isBefore(dayEnd)) {
+          continue;
+        }
+        final clippedStart = localStart.isAfter(dayStart)
+            ? localStart
+            : dayStart;
+        final clippedEnd = localEnd.isBefore(dayEnd) ? localEnd : dayEnd;
+        segments.add(
+          CalendarDaySegment(
+            occurrence: occurrence,
+            day: date,
+            startMinute: (clippedStart.hour * 60 + clippedStart.minute)
+                .toDouble(),
+            endMinute: clippedEnd.isAtSameMomentAs(dayEnd)
+                ? 1440
+                : (clippedEnd.hour * 60 + clippedEnd.minute).toDouble(),
+            continuesBefore: localStart.isBefore(dayStart),
+            continuesAfter: localEnd.isAfter(dayEnd),
+          ),
+        );
+      }
+    }
+    return CalendarWindow(
+      context: _currentContext,
+      revision: 1,
+      query: CalendarQuery(
+        firstDay: first,
+        endDayExclusive: end,
+        filter: filter,
+      ),
+      items: items,
+      segments: segments,
+      conflicts: _conflicts,
+      matched: items.length,
+      truncated: false,
+      conflictsTruncated: false,
+    );
+  }
+
+  CalendarContext get _currentContext => CalendarContext(
+    owner: 'synthetic-owner',
+    resetEpoch: 1,
+    agendaEpoch: _contextEpoch,
+  );
+}
+
+CalendarOccurrence _copyOccurrence(
+  CalendarOccurrence item, {
+  String? title,
+  DateTime? startsAtUtc,
+  DateTime? endsAtUtc,
+  bool? allDay,
+  bool? hidden,
+  bool? skipped,
+  bool? completed,
+  String? location,
+  String? note,
+  AttendanceDecision? attendance,
+  ListeningMode? listening,
+}) => CalendarOccurrence(
+  reference: item.reference,
+  title: title ?? item.title,
+  startsAtUtc: startsAtUtc ?? item.startsAtUtc,
+  endsAtUtc: endsAtUtc ?? item.endsAtUtc,
+  allDay: allDay ?? item.allDay,
+  presence: item.presence,
+  hidden: hidden ?? item.hidden,
+  skipped: skipped ?? item.skipped,
+  completed: completed ?? item.completed,
+  location: location ?? item.location,
+  note: note ?? item.note,
+  attendance: attendance ?? item.attendance,
+  listening: listening ?? item.listening,
+);
