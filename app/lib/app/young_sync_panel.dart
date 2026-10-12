@@ -12,9 +12,17 @@ import '../source/jw_authentication_contract.dart';
 
 /// M2.3 UI for Young's independent activity query and linked-calendar sync.
 final class YoungSyncPanel extends StatefulWidget {
-  const YoungSyncPanel({super.key, required this.controller, this.clock});
+  const YoungSyncPanel({
+    super.key,
+    required this.controller,
+    this.clock,
+    this.productMode = false,
+    this.blockNewActions = false,
+  });
 
   final YoungSyncPort controller;
+  final bool productMode;
+  final bool blockNewActions;
 
   /// Supplies a current instant. The panel converts it to a Beijing date.
   final DateTime Function()? clock;
@@ -56,7 +64,17 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   @override
   void didUpdateWidget(covariant YoungSyncPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller == widget.controller) return;
+    if (oldWidget.controller == widget.controller) {
+      if (widget.productMode &&
+          widget.blockNewActions &&
+          !oldWidget.blockNewActions &&
+          _view.phase == YoungSyncPhase.idle) {
+        _expectedAccountController.clear();
+        _passwordController.clear();
+        _savePassword = false;
+      }
+      return;
+    }
 
     _controllerEpoch++;
     final oldSubscription = _subscription;
@@ -128,7 +146,8 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
       _isIdle &&
       !_hasPendingAction &&
       _pendingHiddenChanges.isEmpty &&
-      !_copyPending;
+      !_copyPending &&
+      !widget.blockNewActions;
 
   bool get _canContinue =>
       _view.phase == YoungSyncPhase.login &&
@@ -152,7 +171,10 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   bool get _canClearSession => _canStart;
 
   bool get _canEditInputs =>
-      _isIdle && !_hasPendingAction && _pendingHiddenChanges.isEmpty;
+      _isIdle &&
+      !_hasPendingAction &&
+      _pendingHiddenChanges.isEmpty &&
+      !widget.blockNewActions;
 
   ({DateTime first, DateTime last})? get _dateRange {
     final first = _parseDate(_firstDayController.text);
@@ -252,11 +274,33 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
 
   Future<void> _clearSession() async {
     if (!_canClearSession) return;
+    if (widget.productMode) {
+      final epoch = _controllerEpoch;
+      final confirmed = await _confirmYoungAction(
+        context,
+        title: '清除二课登录资料？',
+        message: '只清除二课浏览器登录资料。二课账号绑定、本地日程、教务登录资料和教务与二课共用的加密学校密码会保留。',
+        confirmLabel: '清除登录资料',
+      );
+      if (!confirmed || !_isCurrentController(epoch)) return;
+      if (!_canClearSession) return;
+    }
     await _runAction('clearSession', widget.controller.clearSession);
   }
 
   Future<void> _deleteSavedCredential() async {
     if (!_canStart || !(_view.data?.credentialSaved ?? false)) return;
+    if (widget.productMode) {
+      final epoch = _controllerEpoch;
+      final confirmed = await _confirmYoungAction(
+        context,
+        title: '删除保存的学校密码？',
+        message: '这份加密密码由教务和二课共用。删除后，两来源都不能再自动使用它；教务和二课账号绑定、已保存日程及浏览器登录资料会保留。',
+        confirmLabel: '删除密码',
+      );
+      if (!confirmed || !_isCurrentController(epoch)) return;
+      if (!_canStart || !(_view.data?.credentialSaved ?? false)) return;
+    }
     await _runAction(
       'deleteCredential',
       widget.controller.deleteSavedCredential,
@@ -377,13 +421,15 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'M2 二课日程与报名查询',
+                      widget.productMode ? '二课日程与活动' : 'M2 二课日程与报名查询',
                       style: Theme.of(context).textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 8),
-                    const Text(
-                      '个人日历中与活动关联的记录用于日程同步，未关联记录会排除。活动列表只读查询；活动关联不代表已独立验证本人报名成功或取消。',
+                    Text(
+                      widget.productMode
+                          ? '同步二课个人日历中的活动关联记录，或只读查询报名活动。未关联日历记录不会导入；活动关联不单独证明本人报名成功或取消。'
+                          : '个人日历中与活动关联的记录用于日程同步，未关联记录会排除。活动列表只读查询；活动关联不代表已独立验证本人报名成功或取消。',
                     ),
                     const SizedBox(height: 14),
                     _statusCard(context),
@@ -430,6 +476,11 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                       contentPadding: EdgeInsets.zero,
                       controlAffinity: ListTileControlAffinity.leading,
                       title: const Text('成功后加密保存学校密码'),
+                      subtitle: widget.productMode
+                          ? const Text(
+                              '仅在本次身份核验和查询成功后加密保存；学校窗口手动输入的密码不会被读取或保存。',
+                            )
+                          : null,
                       value: _savePassword,
                       onChanged: _canEditInputs
                           ? (value) =>
@@ -437,9 +488,13 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                           : null,
                     ),
                     Text(
-                      _credentialSaved
-                          ? '查询和同步默认自动认证；教务和二课共用这份加密学校密码，本机已保存，可留空使用。清除二课登录资料会保留密码和全部日程。'
-                          : '查询和同步默认自动认证；教务和二课共用一份加密学校密码，未输入密码时可在学校窗口手动登录。清除二课登录资料会保留已保存密码和全部日程。',
+                      widget.productMode
+                          ? _credentialSaved
+                                ? '教务和二课共用此密码；本机已保存且不会回填。清除二课登录资料会保留密码和日程。'
+                                : '教务和二课共用此密码。清除二课登录资料会保留密码和日程。'
+                          : _credentialSaved
+                          ? '教务和二课共用这份加密学校密码；本机已保存，可留空使用。清除二课登录资料会保留密码和日程。'
+                          : '教务和二课共用一份加密学校密码；输入后可选择在本机加密保存，或在学校窗口手动登录。清除二课登录资料会保留已保存密码和日程。',
                     ),
                     const SizedBox(height: 12),
                     _dateInputs(context),
@@ -457,24 +512,28 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                       const SizedBox(height: 10),
                       const Text('已保留二课登录资料，学校仍可能要求重新登录。'),
                     ],
-                    const SizedBox(height: 18),
-                    _localCalendar(context),
+                    if (!widget.productMode) ...[
+                      const SizedBox(height: 18),
+                      _localCalendar(context),
+                    ],
                     const SizedBox(height: 18),
                     _activityResults(context),
-                    const SizedBox(height: 14),
-                    OutlinedButton.icon(
-                      key: const ValueKey('young-sync-copy-summary'),
-                      onPressed: _copyPending ? null : _copySummary,
-                      icon: const Icon(Icons.copy_outlined),
-                      label: Text(_copyPending ? '正在复制摘要' : '复制二课同步摘要'),
-                    ),
-                    if (_copyMessage != null) ...[
-                      const SizedBox(height: 8),
-                      _message(
-                        context,
-                        _copyMessage!,
-                        error: _copyMessageIsError,
+                    if (!widget.productMode) ...[
+                      const SizedBox(height: 14),
+                      OutlinedButton.icon(
+                        key: const ValueKey('young-sync-copy-summary'),
+                        onPressed: _copyPending ? null : _copySummary,
+                        icon: const Icon(Icons.copy_outlined),
+                        label: Text(_copyPending ? '正在复制摘要' : '复制二课同步摘要'),
                       ),
+                      if (_copyMessage != null) ...[
+                        const SizedBox(height: 8),
+                        _message(
+                          context,
+                          _copyMessage!,
+                          error: _copyMessageIsError,
+                        ),
+                      ],
                     ],
                   ],
                 ),
@@ -487,27 +546,39 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   }
 
   Widget _statusCard(BuildContext context) {
-    final messages = <String>[_phaseMessage(_view)];
+    final messages = <String>[
+      widget.productMode ? _productPhaseMessage() : _phaseMessage(_view),
+    ];
     if (_view.identityFailure case final failure?) {
       messages.add(_identityFailureLabel(failure));
     }
     if (_view.credentialFailure case final failure?) {
       messages.add(_credentialFailureMessage(failure));
     }
-    if (_view.collectionReason != null && _view.collectionStage != null) {
+    if (!widget.productMode &&
+        _view.collectionReason != null &&
+        _view.collectionStage != null) {
       messages.add('二课业务读取失败阶段：${_view.collectionStage!.name}。');
     }
-    if (_view.failure case final failure?) {
+    if (_view.failure != null &&
+        !(widget.productMode &&
+            _view.phase == YoungSyncPhase.recovery &&
+            _view.committed)) {
+      final failure = _view.failure!;
       messages.add(
-        _view.committed ? '结果已保存，后续处理未完成，请重试二课收口。' : _failureLabel(failure),
+        _view.committed
+            ? widget.productMode
+                  ? '数据已保存，仍有后续处理待完成。'
+                  : '结果已保存，后续处理未完成，请重试二课收口。'
+            : _failureLabel(failure),
       );
     }
-    if (_view.profileReused == true) {
+    if (!widget.productMode && _view.profileReused == true) {
       messages.add('本次复用了保留的二课登录资料；学校仍可能要求重新登录。');
-    } else if (_view.profileReused == false) {
+    } else if (!widget.productMode && _view.profileReused == false) {
       messages.add('本次使用新的二课登录资料。');
     }
-    if (_view.committed) {
+    if (_view.committed && !widget.productMode) {
       messages.add(
         _view.kind == YoungJobKind.activities
             ? '活动查询已完成；查询结果不会写入日程。'
@@ -542,13 +613,42 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
               Text(_loginPauseMessage(_view.loginPauseReason)),
             ],
           ],
-          if (_view.phase == YoungSyncPhase.recovery && _view.committed) ...[
+          if (!widget.productMode &&
+              _view.phase == YoungSyncPhase.recovery &&
+              _view.committed) ...[
             const SizedBox(height: 6),
             const Text('结果已保存，二课窗口关闭仍待恢复。'),
           ],
         ],
       ),
     );
+  }
+
+  String _productPhaseMessage() {
+    if (_view.phase == YoungSyncPhase.recovery && _view.committed) {
+      return '数据已保存，窗口关闭待恢复。';
+    }
+    if (_view.phase == YoungSyncPhase.recovery) return '二课登录窗口需要恢复。';
+    if (_view.phase == YoungSyncPhase.idle && _view.committed) {
+      return _view.kind == YoungJobKind.activities
+          ? '活动查询已完成；查询结果不会写入日程。'
+          : '二课日程已保存。';
+    }
+    if (_view.automation == YoungAutomationState.manualRequired) {
+      return '请在学校窗口完成所需操作。';
+    }
+    return switch (_view.phase) {
+      YoungSyncPhase.idle =>
+        _accountBound ? '二课账号已绑定，可同步日程或查询活动。' : '首次使用时同步或查询并绑定学校账号。',
+      YoungSyncPhase.opening => '正在打开二课登录窗口。',
+      YoungSyncPhase.login => '二课登录窗口已打开。',
+      YoungSyncPhase.collecting =>
+        _view.kind == YoungJobKind.activities ? '正在查询报名活动。' : '正在同步二课日程。',
+      YoungSyncPhase.closing => '正在关闭二课登录窗口。',
+      YoungSyncPhase.committing => '正在保存二课日程。',
+      YoungSyncPhase.recovery => '二课登录窗口需要恢复。',
+      YoungSyncPhase.closed => '二课登录窗口已关闭。',
+    };
   }
 
   Widget _dateInputs(BuildContext context) => Column(
@@ -634,14 +734,20 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
             key: const ValueKey('young-sync-cancel'),
             onPressed: _cancel,
             icon: const Icon(Icons.stop_circle_outlined),
-            label: Text(_pendingAction == 'cancel' ? '正在取消本次二课作业' : '取消本次二课作业'),
+            label: Text(
+              _pendingAction == 'cancel'
+                  ? '正在取消本次二课作业'
+                  : widget.productMode
+                  ? '取消本次操作'
+                  : '取消本次二课作业',
+            ),
           ),
         if (_view.phase == YoungSyncPhase.recovery)
           FilledButton.icon(
             key: const ValueKey('young-sync-retry-recovery'),
             onPressed: _canRetryRecovery ? _retryRecovery : null,
             icon: const Icon(Icons.refresh),
-            label: const Text('重试二课收口'),
+            label: Text(widget.productMode ? '重试关闭窗口' : '重试二课收口'),
           ),
         if (_isIdle)
           OutlinedButton.icon(
@@ -960,3 +1066,26 @@ DateTime? _parseDate(String value) {
   }
   return parsed;
 }
+
+Future<bool> _confirmYoungAction(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirmLabel,
+}) => showDialog<bool>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: Text(title),
+    content: Text(message),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(false),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.of(context).pop(true),
+        child: Text(confirmLabel),
+      ),
+    ],
+  ),
+).then((confirmed) => confirmed ?? false);

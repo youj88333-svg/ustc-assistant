@@ -16,9 +16,16 @@ import '../source/observation_contract.dart';
 
 /// The user-facing entry point for a complete local JW collection and import.
 final class JwSyncPanel extends StatefulWidget {
-  const JwSyncPanel({super.key, required this.controller});
+  const JwSyncPanel({
+    super.key,
+    required this.controller,
+    this.productMode = false,
+    this.blockNewActions = false,
+  });
 
   final JwSyncPort controller;
+  final bool productMode;
+  final bool blockNewActions;
 
   @override
   State<JwSyncPanel> createState() => _JwSyncPanelState();
@@ -58,7 +65,17 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
   @override
   void didUpdateWidget(covariant JwSyncPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.controller == widget.controller) return;
+    if (oldWidget.controller == widget.controller) {
+      if (widget.productMode &&
+          widget.blockNewActions &&
+          !oldWidget.blockNewActions &&
+          _view.phase == JwSyncPhase.idle) {
+        _accountCodeController.clear();
+        _passwordController.clear();
+        _savePassword = false;
+      }
+      return;
+    }
 
     _controllerEpoch++;
     final oldSubscription = _subscription;
@@ -301,7 +318,11 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
 
   bool get _isLoginReady => _view.phase == JwSyncPhase.login && _view.ready;
 
-  bool get _canOpen => _isIdle && !_hasPendingOperation && !_cancelPending;
+  bool get _canOpen =>
+      _isIdle &&
+      !_hasPendingOperation &&
+      !_cancelPending &&
+      !widget.blockNewActions;
 
   bool get _canStartSync => _canOpen;
 
@@ -339,7 +360,10 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
       !_cancelPending;
 
   bool get _canClearSession =>
-      _isIdle && !_hasPendingOperation && !_cancelPending;
+      _isIdle &&
+      !_hasPendingOperation &&
+      !_cancelPending &&
+      !widget.blockNewActions;
 
   bool get _credentialSaved => _view.data?.credentialSaved ?? false;
 
@@ -356,7 +380,11 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
           !_view.semesters.any((option) => option.id == _activeSyncSemesterId));
 
   bool get _canDeleteSavedCredential =>
-      _isIdle && _credentialSaved && !_hasPendingOperation && !_cancelPending;
+      _isIdle &&
+      _credentialSaved &&
+      !_hasPendingOperation &&
+      !_cancelPending &&
+      !widget.blockNewActions;
 
   bool get _canCopy => !_copyPending;
 
@@ -484,6 +512,17 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
 
   Future<void> _deleteSavedCredential() async {
     if (!_canDeleteSavedCredential) return;
+    if (widget.productMode) {
+      final epoch = _controllerEpoch;
+      final confirmed = await _confirmSourceAction(
+        context,
+        title: '删除保存的学校密码？',
+        message: '这份加密密码由教务和二课共用。删除后，两来源都不能再自动使用它；账号绑定、课表与考试日程、浏览器登录资料会保留。',
+        confirmLabel: '删除密码',
+      );
+      if (!confirmed || !mounted || epoch != _controllerEpoch) return;
+      if (!_canDeleteSavedCredential) return;
+    }
     await _runOperation(
       'deleteSavedCredential',
       widget.controller.deleteSavedCredential,
@@ -582,6 +621,17 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
 
   Future<void> _clearSession() async {
     if (!_canClearSession) return;
+    if (widget.productMode) {
+      final epoch = _controllerEpoch;
+      final confirmed = await _confirmSourceAction(
+        context,
+        title: '清除教务登录资料？',
+        message: '只清除教务浏览器登录资料。教务账号绑定、课表与考试日程，以及教务和二课共用的加密学校密码会保留。',
+        confirmLabel: '清除登录资料',
+      );
+      if (!confirmed || !mounted || epoch != _controllerEpoch) return;
+      if (!_canClearSession) return;
+    }
     await _runOperation(
       'clearSession',
       widget.controller.clearSession,
@@ -661,13 +711,15 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
-                      'M1 教务采集与本地日程',
+                      widget.productMode ? '教务课表与考试' : 'M1 教务采集与本地日程',
                       style: Theme.of(context).textTheme.headlineSmall
                           ?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      '应用会自动进入登录流程并准备学期目录。需要验证码或额外授权时，请在学校窗口完成。来源数据只读，导入结果保存为本地日程。',
+                      widget.productMode
+                          ? '同步所选学期的课表和学校实际返回的考试安排。需要验证码或额外授权时，请在学校窗口完成；学校数据只读，保存后可在日程中查看。'
+                          : '应用会自动进入登录流程并准备学期目录。需要验证码或额外授权时，请在学校窗口完成。来源数据只读，导入结果保存为本地日程。',
                       style: Theme.of(context).textTheme.bodyLarge,
                     ),
                     const SizedBox(height: 16),
@@ -718,7 +770,11 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                         contentPadding: EdgeInsets.zero,
                         controlAffinity: ListTileControlAffinity.leading,
                         title: const Text('在本机加密保存密码'),
-                        subtitle: const Text('仅在本次身份核验与日程导入成功后保存。'),
+                        subtitle: Text(
+                          widget.productMode
+                              ? '仅在本次身份核验与日程导入成功后加密保存；学校窗口手动输入的密码不会被读取或保存。'
+                              : '仅在本次身份核验与日程导入成功后保存。',
+                        ),
                         value: _savePassword,
                         onChanged:
                             _canOpen && _passwordController.text.isNotEmpty
@@ -747,7 +803,9 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                           ),
                         ),
                         Text(
-                          '只删除本机加密密码，保留账号绑定、本地日程和浏览器登录资料。',
+                          widget.productMode
+                              ? '删除后教务和二课都不能再自动使用这份密码；账号绑定、日程和浏览器登录资料会保留。'
+                              : '只删除本机加密密码，保留账号绑定、本地日程和浏览器登录资料。',
                           style: Theme.of(context).textTheme.bodySmall,
                         ),
                       ],
@@ -763,7 +821,15 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                       OutlinedButton.icon(
                         onPressed: _cancel,
                         icon: const Icon(Icons.stop_circle_outlined),
-                        label: Text(_cancelPending ? '正在关闭本次作业' : '关闭本次作业'),
+                        label: Text(
+                          widget.productMode
+                              ? _cancelPending
+                                    ? '正在取消本次同步'
+                                    : '取消本次同步'
+                              : _cancelPending
+                              ? '正在关闭本次作业'
+                              : '关闭本次作业',
+                        ),
                       ),
                     ],
                     if (_actionMessage != null) ...[
@@ -771,15 +837,17 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                       _message(context, _actionMessage!, error: true),
                     ],
                     const SizedBox(height: 18),
-                    _localCounts(context),
-                    const SizedBox(height: 12),
-                    _localSchedule(context),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      onPressed: _canCopy ? _copySafeSummary : null,
-                      icon: const Icon(Icons.copy_outlined),
-                      label: const Text('复制导入脱敏摘要'),
-                    ),
+                    if (!widget.productMode) ...[
+                      _localCounts(context),
+                      const SizedBox(height: 12),
+                      _localSchedule(context),
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _canCopy ? _copySafeSummary : null,
+                        icon: const Icon(Icons.copy_outlined),
+                        label: const Text('复制导入脱敏摘要'),
+                      ),
+                    ],
                   ],
                 ),
               ),
@@ -793,17 +861,22 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
   Widget _operationStatus(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final messages = <String>[
-      _phaseMessage(),
-      if (_view.automation != JwAutomationState.none) _automationMessage(),
+      widget.productMode ? _productPhaseMessage() : _phaseMessage(),
+      if (_view.automation != JwAutomationState.none && !widget.productMode)
+        _automationMessage(),
       if (_view.credentialFailure case final failure?)
         _credentialFailureMessage(failure),
-      if (_view.failure case final failure?) _failureMessage(failure),
-      if (_view.identityFailure case final failure?)
-        _identityFailureMessage(failure),
-      if (_view.sourceFailure case final failure?)
-        _sourceFailureMessage(failure),
-      if (_view.collectionValidation case final failure?)
-        _collectionFailureMessage(failure),
+      if (_view.failure != null &&
+          !(widget.productMode &&
+              _view.phase == JwSyncPhase.recovery &&
+              _view.importCommitted))
+        _failureMessage(_view.failure!),
+      if (_view.identityFailure != null)
+        _identityFailureMessage(_view.identityFailure!),
+      if (!widget.productMode && _view.sourceFailure != null)
+        _sourceFailureMessage(_view.sourceFailure!),
+      if (!widget.productMode && _view.collectionValidation != null)
+        _collectionFailureMessage(_view.collectionValidation!),
     ];
     return Container(
       width: double.infinity,
@@ -834,13 +907,17 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
                 style: Theme.of(context).textTheme.bodyMedium,
               ),
             ),
-          if (_view.phase == JwSyncPhase.recovery && _view.importCommitted) ...[
+          if (!widget.productMode &&
+              _view.phase == JwSyncPhase.recovery &&
+              _view.importCommitted) ...[
             const SizedBox(height: 8),
-            const Text('数据已保存，登录资料仍需恢复'),
-          ] else if (_view.importCommitted) ...[
+            Text(widget.productMode ? '数据已保存，窗口关闭待恢复。' : '数据已保存，登录资料仍需恢复'),
+          ] else if (!widget.productMode && _view.importCommitted) ...[
             const SizedBox(height: 8),
             Text(
-              '本次课表日程：${_view.courseCount}；本次考试日程：${_view.examCount}；本地事务：已提交；登录资料：${_view.profileRetained ? '已保留' : '未保留'}。',
+              widget.productMode
+                  ? '课表与考试日程已保存。'
+                  : '本次课表日程：${_view.courseCount}；本次考试日程：${_view.examCount}；本地事务：已提交；登录资料：${_view.profileRetained ? '已保留' : '未保留'}。',
             ),
           ],
           if (_view.profileRetained) ...[
@@ -851,14 +928,15 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
             const SizedBox(height: 6),
             const Text('本次未观察到考试，保留已有考试记录。'),
           ],
-          if (_view.normalization case final counts?
-              when counts.hasDuplicates) ...[
+          if (!widget.productMode &&
+              _view.normalization?.hasDuplicates == true) ...[
             const SizedBox(height: 6),
             Text(
-              '本次已合并完全一致的重复记录：课表 ${counts.duplicateCourses} 条、考试 ${counts.duplicateExams} 条。日程数按合并后计。',
+              '本次已合并完全一致的重复记录：课表 ${_view.normalization!.duplicateCourses} 条、考试 ${_view.normalization!.duplicateExams} 条。日程数按合并后计。',
             ),
           ],
-          if (_view.phase == JwSyncPhase.recovery &&
+          if (!widget.productMode &&
+              _view.phase == JwSyncPhase.recovery &&
               !_view.importCommitted) ...[
             const SizedBox(height: 8),
             const Text('本次作业需要恢复；请重试收口或认领。'),
@@ -866,6 +944,34 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         ],
       ),
     );
+  }
+
+  String _productPhaseMessage() {
+    if (_view.phase == JwSyncPhase.recovery && _view.importCommitted) {
+      return '数据已保存，窗口关闭待恢复。';
+    }
+    if (_view.phase == JwSyncPhase.recovery) return '教务登录窗口需要恢复。';
+    if (_view.phase == JwSyncPhase.idle && _view.importCommitted) {
+      return '课表与考试日程已保存。';
+    }
+    if (_view.automation == JwAutomationState.manualRequired) {
+      return '请在学校窗口完成所需操作。';
+    }
+    if (_view.automation == JwAutomationState.choosingSemester) {
+      return '学期目录已更新，请选择要同步的学期。';
+    }
+    return switch (_view.phase) {
+      JwSyncPhase.idle =>
+        _view.accountBound ? '教务账号已绑定，可同步课表与考试。' : '首次使用时同步并绑定学校账号。',
+      JwSyncPhase.opening => '正在打开教务登录窗口。',
+      JwSyncPhase.login => '教务登录窗口已打开。',
+      JwSyncPhase.verifying => '正在读取学期目录。',
+      JwSyncPhase.collecting => '正在同步所选学期。',
+      JwSyncPhase.closing => '正在关闭教务登录窗口。',
+      JwSyncPhase.committing => '正在保存课表与考试日程。',
+      JwSyncPhase.recovery => '教务登录窗口需要恢复。',
+      JwSyncPhase.closed => '教务登录窗口已关闭。',
+    };
   }
 
   String _phaseMessage() => switch (_view.phase) {
@@ -916,7 +1022,15 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
           key: const ValueKey('jw-sync-start'),
           onPressed: _canStartSync ? _startSync : null,
           icon: Icon(_view.accountBound ? Icons.sync : Icons.login),
-          label: Text(_view.accountBound ? '自动采集' : '登录并采集'),
+          label: Text(
+            widget.productMode
+                ? _view.accountBound
+                      ? '同步课表与考试'
+                      : '登录并同步课表与考试'
+                : _view.accountBound
+                ? '自动采集'
+                : '登录并采集',
+          ),
         ),
       );
       actions.add(
@@ -933,7 +1047,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
           key: const ValueKey('jw-sync-continue'),
           onPressed: _canContinueSync ? _continueSync : null,
           icon: const Icon(Icons.play_arrow),
-          label: const Text('登录完成，继续采集'),
+          label: Text(widget.productMode ? '登录完成，继续同步' : '登录完成，继续采集'),
         ),
       );
     }
@@ -951,7 +1065,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
           key: const ValueKey('jw-sync-collect-semester'),
           onPressed: _canCollect ? _collect : null,
           icon: const Icon(Icons.download_outlined),
-          label: const Text('采集并导入所选学期'),
+          label: Text(widget.productMode ? '同步所选学期' : '采集并导入所选学期'),
         ),
       );
     }
@@ -960,11 +1074,11 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         FilledButton.icon(
           onPressed: _canRetryRecovery ? _retryRecovery : null,
           icon: const Icon(Icons.refresh),
-          label: const Text('重试收口/认领'),
+          label: Text(widget.productMode ? '重试关闭窗口' : '重试收口/认领'),
         ),
       );
     }
-    actions.add(_manualTools(context));
+    if (!widget.productMode) actions.add(_manualTools(context));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -977,7 +1091,9 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         if (_isIdle) ...[
           const SizedBox(height: 6),
           Text(
-            '清除浏览器登录资料与删除加密保存的密码相互独立；清除登录资料不会删除账号绑定或本地日程。',
+            widget.productMode
+                ? '清除登录资料只影响教务浏览器；密码删除会同时影响教务和二课。'
+                : '清除浏览器登录资料与删除加密保存的密码相互独立；清除登录资料不会删除账号绑定或本地日程。',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ],
@@ -1530,3 +1646,26 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
     JwDataProbeCode.identityChanged => '采集过程中登录身份发生变化。',
   };
 }
+
+Future<bool> _confirmSourceAction(
+  BuildContext context, {
+  required String title,
+  required String message,
+  required String confirmLabel,
+}) => showDialog<bool>(
+  context: context,
+  builder: (context) => AlertDialog(
+    title: Text(title),
+    content: Text(message),
+    actions: [
+      TextButton(
+        onPressed: () => Navigator.of(context).pop(false),
+        child: const Text('取消'),
+      ),
+      FilledButton(
+        onPressed: () => Navigator.of(context).pop(true),
+        child: Text(confirmLabel),
+      ),
+    ],
+  ),
+).then((confirmed) => confirmed ?? false);

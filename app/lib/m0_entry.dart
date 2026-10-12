@@ -3,6 +3,8 @@ import 'dart:ui' show AppExitResponse;
 import 'package:flutter/material.dart';
 
 import 'app/demo_runtime.dart';
+import 'app/product_app.dart';
+import 'app/source_settings_page.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
 import 'app/jw_sync_panel.dart';
@@ -17,6 +19,7 @@ import 'core/contracts.dart';
 
 // This temporary panel is absent from normal product navigation.
 const m3ValidationEnabled = bool.fromEnvironment('USTC_M3_VALIDATION');
+const developmentDiagnosticsEnabled = bool.fromEnvironment('USTC_DIAGNOSTICS');
 
 Future<void> launchM0() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -63,29 +66,60 @@ final class _OwnedAppState extends State<_OwnedApp> {
   }
 
   @override
-  Widget build(BuildContext context) => M0App(
-    controller: widget.runtime.controller,
-    observationPanel: Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) => ProductApp(
+    controller: widget.runtime.shell,
+    settingsBuilder: (context) => SourceSettingsPage(
+      controller: widget.runtime.shell,
+      diagnosticsBuilder: developmentDiagnosticsEnabled || m3ValidationEnabled
+          ? _buildDiagnostics
+          : null,
+    ),
+  );
+
+  Widget _buildDiagnostics(BuildContext context) => SizedBox(
+    height: 600,
+    child: ListView(
       children: [
         if (m3ValidationEnabled) ...[
-          PublicValidationPanel(
-            queries: widget.runtime.publicQueries,
-            knowledge: widget.runtime.knowledge,
+          SizedBox(
+            height: 720,
+            child: PublicValidationPanel(
+              queries: widget.runtime.publicQueries,
+              knowledge: widget.runtime.knowledge,
+            ),
           ),
           const SizedBox(height: 12),
         ],
-        JwSyncPanel(controller: widget.runtime.jwSync),
+        SizedBox(
+          height: 600,
+          child: JwSyncPanel(controller: widget.runtime.jwSync),
+        ),
         const SizedBox(height: 12),
-        YoungSyncPanel(controller: widget.runtime.youngSync),
+        SizedBox(
+          height: 600,
+          child: YoungSyncPanel(controller: widget.runtime.youngSync),
+        ),
         const SizedBox(height: 12),
         ExpansionTile(
           title: const Text('二课观测与契约诊断'),
           children: [
-            YoungObservationPanel(controller: widget.runtime.youngObservation),
-            YoungReadOnlyPanel(observation: widget.runtime.youngObservation),
-            YoungBusinessProbePanel(
-              observation: widget.runtime.youngObservation,
+            SizedBox(
+              height: 560,
+              child: YoungObservationPanel(
+                controller: widget.runtime.youngObservation,
+              ),
+            ),
+            SizedBox(
+              height: 560,
+              child: YoungReadOnlyPanel(
+                observation: widget.runtime.youngObservation,
+              ),
+            ),
+            SizedBox(
+              height: 560,
+              child: YoungBusinessProbePanel(
+                observation: widget.runtime.youngObservation,
+              ),
             ),
           ],
         ),
@@ -93,15 +127,29 @@ final class _OwnedAppState extends State<_OwnedApp> {
         ExpansionTile(
           title: const Text('教务观测与契约诊断'),
           children: [
-            ObservationPanel(controller: widget.runtime.observation),
+            SizedBox(
+              height: 560,
+              child: ObservationPanel(controller: widget.runtime.observation),
+            ),
             const SizedBox(height: 12),
-            JwProbePanel(controller: widget.runtime.observation),
+            SizedBox(
+              height: 560,
+              child: JwProbePanel(controller: widget.runtime.observation),
+            ),
             const SizedBox(height: 12),
-            JwDataProbePanel(
-              probeController: widget.runtime.observation,
-              controller: widget.runtime.observation,
+            SizedBox(
+              height: 560,
+              child: JwDataProbePanel(
+                probeController: widget.runtime.observation,
+                controller: widget.runtime.observation,
+              ),
             ),
           ],
+        ),
+        const SizedBox(height: 12),
+        SizedBox(
+          height: 640,
+          child: M0App(controller: widget.runtime.controller),
         ),
       ],
     ),

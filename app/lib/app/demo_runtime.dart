@@ -22,6 +22,7 @@ import '../platform/windows_jw_credential_protector.dart';
 import '../source/synthetic_source.dart';
 import '../source/observation_contract.dart';
 import 'demo_controller.dart';
+import 'app_shell_controller.dart';
 
 /// Owns the separate demonstration and formal directories. No old asset opens.
 final class DemoRuntime {
@@ -39,6 +40,7 @@ final class DemoRuntime {
     this.youngSync,
     this.publicQueries,
     this.knowledge,
+    this.shell,
   );
 
   final DemoDirectory directory;
@@ -54,6 +56,7 @@ final class DemoRuntime {
   final YoungSyncCoordinator youngSync;
   final PublicQueryCoordinator publicQueries;
   final KnowledgeService knowledge;
+  final AppShellController shell;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -76,6 +79,7 @@ final class DemoRuntime {
     ObservationCoordinator? observation;
     ObservationCoordinator? youngObservation;
     NativeObservationBrowser? browser;
+    AppShellController? shell;
     try {
       jwDirectory = await DemoDirectory.acquire(
         jwDirectoryPath ??
@@ -144,6 +148,18 @@ final class DemoRuntime {
         clock: clock,
       );
       await youngSync.initialize();
+      shell = AppShellController(
+        jw: jwSync,
+        young: youngSync,
+        clock: clock,
+        isGloballyBusy: () => leases.isBusy,
+        extraChanges: [
+          coordinator.changes,
+          observation.changes,
+          youngObservation.changes,
+          publicQueries.changes,
+        ],
+      );
       return DemoRuntime._(
         directory,
         store,
@@ -158,8 +174,10 @@ final class DemoRuntime {
         youngSync,
         publicQueries,
         knowledge,
+        shell,
       );
     } catch (error) {
+      shell?.dispose();
       // Do not release an owner if database/session drain itself fails.
       await coordinator?.close();
       await publicQueries?.close();
@@ -197,6 +215,7 @@ final class DemoRuntime {
     await youngSync.shutdown();
     await browser.dispose();
     if (!_controllerDisposed) {
+      shell.dispose();
       controller.dispose();
       _controllerDisposed = true;
     }
