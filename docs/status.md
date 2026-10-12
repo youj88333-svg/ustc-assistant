@@ -8,7 +8,7 @@
 | M1 | 已关闭，2026-10-10 | JW 身份/只读契约、自动认证/选期、事务与本地日程；[用户验收](milestones/m1/acceptance.md) |
 | M2 | 已关闭，2026-10-11 | Young 活动关联日程和独立报名活动只读查询、全自动及生命周期/连续性；[用户验收](milestones/m2/acceptance.md) |
 | M3 | 已关闭，2026-10-12 | 内部评课/校园查询及首批 7 项长期 Markdown，临时界面可选，无 Agent/工具注册；[关闭依据与保留项](milestones/m3/acceptance.md) |
-| M4 | M4.1 已验收关闭；M4.2 规格已定并开始实施，M4.3–M4.4 未开始 | [任务单](milestones/m4/plan.md#m42-日程与个人安排规格)：日/周、个人事件/重复例外、来源覆盖及重叠解释；[分段验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具，M4 尚未关闭 |
+| M4 | M4.1 已验收关闭；M4.2 工程完成，待用户日常交互验收；M4.3–M4.4 未开始 | [任务单](milestones/m4/plan.md#m42-日程与个人安排规格)：日/周、个人事件/重复例外、来源覆盖及重叠解释；[分段验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具，M4 尚未关闭 |
 | M5 | 后续方向，未定稿 | 用户建议正式构建 Agent；模型/工具/授权/历史及首批范围另行确认 |
 | 后续 | 未排定 | 提醒、移动端及发布按后续阶段确认 |
 
