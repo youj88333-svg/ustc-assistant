@@ -3,6 +3,31 @@ import 'package:flutter/material.dart';
 import '../core/calendar_contract.dart';
 
 const _editorMuted = Color(0xFF66736C);
+const _defaultDeadlineTime = '23:59';
+
+Future<DateTime?> _chooseBeijingDate(
+  BuildContext context,
+  DateTime initialDate,
+) => showDatePicker(
+  context: context,
+  initialDate: DateTime(initialDate.year, initialDate.month, initialDate.day),
+  firstDate: DateTime(1, 1, 1),
+  lastDate: DateTime(9999, 12, 31),
+  initialEntryMode: DatePickerEntryMode.calendar,
+);
+
+Future<TimeOfDay?> _chooseBeijingTime(
+  BuildContext context,
+  TimeOfDay initialTime,
+) => showTimePicker(
+  context: context,
+  initialTime: initialTime,
+  initialEntryMode: TimePickerEntryMode.dial,
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+    child: child ?? const SizedBox.shrink(),
+  ),
+);
 
 Future<TaskDraft?> showTaskEditor(
   BuildContext context, {
@@ -65,7 +90,9 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
       text: beijingDeadline == null ? '' : _dateText(beijingDeadline),
     );
     _deadlineTime = TextEditingController(
-      text: beijingDeadline == null ? '' : _clockText(beijingDeadline),
+      text: beijingDeadline == null
+          ? _defaultDeadlineTime
+          : _clockText(beijingDeadline),
     );
     _estimate = TextEditingController(
       text: draft?.estimatedMinutes?.toString() ?? '',
@@ -193,16 +220,17 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
                         _hasDeadline = value ?? false;
                         if (!_hasDeadline) {
                           _deadlineDay.clear();
-                          _deadlineTime.clear();
+                          _deadlineTime.text = _defaultDeadlineTime;
                         } else if (_deadlineDay.text.trim().isEmpty) {
                           _deadlineDay.text = _dateText(widget.today);
+                          _deadlineTime.text = _defaultDeadlineTime;
                         }
                       });
                     },
                   ),
                   if (_hasDeadline) ...[
                     Text(
-                      '按北京时间填写。时间留空时按当天 23:59 保存。',
+                      '按北京时间选择日期和时间；未另选时，截止时间为当天 23:59。',
                       style: Theme.of(
                         context,
                       ).textTheme.bodySmall?.copyWith(color: _editorMuted),
@@ -214,20 +242,61 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
                           TextField(
                             key: const ValueKey('task-editor-deadline-day'),
                             controller: _deadlineDay,
-                            keyboardType: TextInputType.datetime,
-                            decoration: const InputDecoration(
+                            readOnly: true,
+                            onTap: _pickDeadlineDay,
+                            decoration: InputDecoration(
                               labelText: '截止日期',
-                              hintText: 'YYYY-MM-DD',
+                              hintText: '选择日期',
+                              suffixIcon: IconButton(
+                                key: const ValueKey(
+                                  'task-editor-deadline-day-picker',
+                                ),
+                                tooltip: '选择截止日期',
+                                onPressed: _pickDeadlineDay,
+                                icon: const Icon(Icons.calendar_month_rounded),
+                              ),
                             ),
                           ),
-                          TextField(
-                            key: const ValueKey('task-editor-deadline-time'),
-                            controller: _deadlineTime,
-                            keyboardType: TextInputType.datetime,
-                            decoration: const InputDecoration(
-                              labelText: '时间（可选）',
-                              hintText: 'HH:mm',
-                            ),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              TextField(
+                                key: const ValueKey(
+                                  'task-editor-deadline-time',
+                                ),
+                                controller: _deadlineTime,
+                                readOnly: true,
+                                onTap: _pickDeadlineTime,
+                                decoration: InputDecoration(
+                                  labelText: '截止时间（北京时间）',
+                                  suffixIcon: IconButton(
+                                    key: const ValueKey(
+                                      'task-editor-deadline-time-picker',
+                                    ),
+                                    tooltip: '选择截止时间',
+                                    onPressed: _pickDeadlineTime,
+                                    icon: const Icon(Icons.schedule_rounded),
+                                  ),
+                                ),
+                              ),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  key: const ValueKey(
+                                    'task-editor-deadline-time-clear',
+                                  ),
+                                  onPressed: () => setState(
+                                    () => _deadlineTime.text =
+                                        _defaultDeadlineTime,
+                                  ),
+                                  icon: const Icon(
+                                    Icons.restart_alt_rounded,
+                                    size: 17,
+                                  ),
+                                  label: const Text('恢复默认 23:59'),
+                                ),
+                              ),
+                            ],
                           ),
                         ];
                         if (constraints.maxWidth < 430) {
@@ -240,6 +309,7 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
                           );
                         }
                         return Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Expanded(child: fields[0]),
                             const SizedBox(width: 10),
@@ -307,14 +377,12 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
     if (_hasDeadline) {
       final day = _parseDate(_deadlineDay.text.trim());
       if (day == null) {
-        setState(() => _message = '截止日期请按 YYYY-MM-DD 填写。');
+        setState(() => _message = '请选择有效的截止日期。');
         return;
       }
-      final clock = _deadlineTime.text.trim().isEmpty
-          ? (hour: 23, minute: 59)
-          : _parseClock(_deadlineTime.text.trim());
+      final clock = _parseClock(_deadlineTime.text.trim());
       if (clock == null) {
-        setState(() => _message = '截止时间请按 HH:mm 填写。');
+        setState(() => _message = '请选择有效的截止时间。');
         return;
       }
       deadline = _beijingToUtc(day, clock.hour, clock.minute);
@@ -329,6 +397,24 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
         priority: _priority,
       ),
     );
+  }
+
+  Future<void> _pickDeadlineDay() async {
+    final current = _parseDate(_deadlineDay.text.trim()) ?? widget.today;
+    final picked = await _chooseBeijingDate(context, current);
+    if (!mounted || picked == null) return;
+    setState(() => _deadlineDay.text = _dateText(picked));
+  }
+
+  Future<void> _pickDeadlineTime() async {
+    final current =
+        _parseClock(_deadlineTime.text.trim()) ?? (hour: 23, minute: 59);
+    final picked = await _chooseBeijingTime(
+      context,
+      TimeOfDay(hour: current.hour, minute: current.minute),
+    );
+    if (!mounted || picked == null) return;
+    setState(() => _deadlineTime.text = _clockTextFromTime(picked));
   }
 }
 
@@ -417,7 +503,7 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Text(
-                    '按北京时间填写。计划时间只安排进度，不会自动改变任务或时间块状态。',
+                    '按北京时间选择日期和 24 小时时间。计划时间只安排进度，不会自动改变任务或时间块状态。',
                     style: TextStyle(color: _editorMuted, height: 1.4),
                   ),
                   const SizedBox(height: 12),
@@ -507,17 +593,34 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
         TextField(
           key: ValueKey(dateKey),
           controller: date,
-          keyboardType: TextInputType.datetime,
+          readOnly: true,
+          onTap: () => _pickPlanBlockDate(date),
           decoration: InputDecoration(
             labelText: '$label日期（北京时间）',
-            hintText: 'YYYY-MM-DD',
+            hintText: '选择日期',
+            suffixIcon: IconButton(
+              key: ValueKey('$dateKey-picker'),
+              tooltip: '选择$label日期',
+              onPressed: () => _pickPlanBlockDate(date),
+              icon: const Icon(Icons.calendar_month_rounded),
+            ),
           ),
         ),
         TextField(
           key: ValueKey(timeKey),
           controller: time,
-          keyboardType: TextInputType.datetime,
-          decoration: InputDecoration(labelText: '$label时间', hintText: 'HH:mm'),
+          readOnly: true,
+          onTap: () => _pickPlanBlockTime(time),
+          decoration: InputDecoration(
+            labelText: '$label时间（24 小时制）',
+            hintText: '选择时间',
+            suffixIcon: IconButton(
+              key: ValueKey('$timeKey-picker'),
+              tooltip: '选择$label时间',
+              onPressed: () => _pickPlanBlockTime(time),
+              icon: const Icon(Icons.schedule_rounded),
+            ),
+          ),
         ),
       ];
       if (constraints.maxWidth < 430) {
@@ -535,17 +638,34 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
     },
   );
 
+  Future<void> _pickPlanBlockDate(TextEditingController controller) async {
+    final current = _parseDate(controller.text.trim()) ?? widget.today;
+    final picked = await _chooseBeijingDate(context, current);
+    if (!mounted || picked == null) return;
+    setState(() => controller.text = _dateText(picked));
+  }
+
+  Future<void> _pickPlanBlockTime(TextEditingController controller) async {
+    final current = _parseClock(controller.text.trim()) ?? (hour: 9, minute: 0);
+    final picked = await _chooseBeijingTime(
+      context,
+      TimeOfDay(hour: current.hour, minute: current.minute),
+    );
+    if (!mounted || picked == null) return;
+    setState(() => controller.text = _clockTextFromTime(picked));
+  }
+
   void _save() {
     final startDay = _parseDate(_startDay.text.trim());
     final startClock = _parseClock(_startTime.text.trim());
     final endDay = _parseDate(_endDay.text.trim());
     final endClock = _parseClock(_endTime.text.trim());
     if (startDay == null || endDay == null) {
-      setState(() => _message = '日期请按 YYYY-MM-DD 填写。');
+      setState(() => _message = '请选择有效的开始和结束日期。');
       return;
     }
     if (startClock == null || endClock == null) {
-      setState(() => _message = '时间请按 HH:mm 填写。');
+      setState(() => _message = '请选择有效的开始和结束时间。');
       return;
     }
     if (_location.text.length > 200 || _note.text.length > 4000) {
@@ -610,5 +730,9 @@ String _dateText(DateTime value) =>
     '${value.day.toString().padLeft(2, '0')}';
 
 String _clockText(DateTime value) =>
+    '${value.hour.toString().padLeft(2, '0')}:'
+    '${value.minute.toString().padLeft(2, '0')}';
+
+String _clockTextFromTime(TimeOfDay value) =>
     '${value.hour.toString().padLeft(2, '0')}:'
     '${value.minute.toString().padLeft(2, '0')}';

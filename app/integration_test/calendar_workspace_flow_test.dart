@@ -1253,6 +1253,7 @@ void taskPlanningNativeScenarios() {
         await _enterText(tester, 'task-editor-estimate', '120');
         await _tapKey(tester, 'task-editor-has-deadline');
         await _enterText(tester, 'task-editor-deadline-day', '2026-10-12');
+        await _captureSyntheticUi(tester, 'm43-task-editor');
         await _tapKey(tester, 'task-editor-save');
         var tasks = await _runNative(
           tester,
@@ -1763,6 +1764,69 @@ Future<void> _tapKey(WidgetTester tester, String key) async {
 }
 
 Future<void> _enterText(WidgetTester tester, String key, String value) async {
+  const taskDates = {
+    'task-editor-deadline-day',
+    'plan-block-start-day',
+    'plan-block-end-day',
+  };
+  const taskTimes = {
+    'task-editor-deadline-time',
+    'plan-block-start-time',
+    'plan-block-end-time',
+  };
+  if (taskDates.contains(key)) {
+    await _tapKey(tester, key);
+    final dateDialog = find.byType(DatePickerDialog);
+    expect(dateDialog, findsOneWidget);
+    await _captureSyntheticUi(tester, 'm43-date-picker');
+    // All task scenario dates are in the fixed runtime's October 2026 page.
+    final day = int.parse(value.split('-').last);
+    final dayButton = find.descendant(
+      of: dateDialog,
+      matching: find.text('$day'),
+    );
+    expect(dayButton, findsOneWidget);
+    await tester.tap(dayButton);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: dateDialog,
+        matching: find.widgetWithText(TextButton, '确定'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return;
+  }
+  if (taskTimes.contains(key)) {
+    await _tapKey(tester, key);
+    final timeDialog = find.byType(TimePickerDialog);
+    expect(timeDialog, findsOneWidget);
+    await _captureSyntheticUi(tester, 'm43-time-picker');
+    await tester.tap(
+      find.descendant(
+        of: timeDialog,
+        matching: find.byIcon(Icons.keyboard_outlined),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final numberInputs = find.descendant(
+      of: timeDialog,
+      matching: find.byType(TextField),
+    );
+    expect(numberInputs, findsNWidgets(2));
+    final clock = value.split(':');
+    await tester.enterText(numberInputs.at(0), clock[0]);
+    await tester.enterText(numberInputs.at(1), clock[1]);
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.descendant(
+        of: timeDialog,
+        matching: find.widgetWithText(TextButton, '确定'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    return;
+  }
   final finder = find.byKey(ValueKey<String>(key));
   expect(finder, findsOneWidget, reason: 'Missing input key: $key');
   await tester.ensureVisible(finder);
