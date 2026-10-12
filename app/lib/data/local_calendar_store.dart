@@ -14,6 +14,15 @@ final class LocalCalendarStore implements LocalCalendarPort {
   @override
   Stream<int> get changes => _changes.stream;
 
+  static const _relationDefinition = '''(
+      local_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      left_identity TEXT NOT NULL, right_identity TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('conflict','notConflict','legacyUndecided')),
+      note TEXT NOT NULL CHECK(length(note)<=4000),
+      version INTEGER NOT NULL CHECK(version>0),
+      UNIQUE(left_identity,right_identity)
+    )''';
+
   static const schema = [
     '''CREATE TABLE agenda_state (
       singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -35,14 +44,7 @@ final class LocalCalendarStore implements LocalCalendarPort {
       skipped INTEGER NOT NULL CHECK(skipped IN (0,1)),
       PRIMARY KEY(local_id,ordinal)
     )''',
-    '''CREATE TABLE agenda_relations (
-      local_id INTEGER PRIMARY KEY AUTOINCREMENT,
-      left_identity TEXT NOT NULL, right_identity TEXT NOT NULL,
-      kind TEXT NOT NULL CHECK(kind IN ('coexist','related')),
-      note TEXT NOT NULL CHECK(length(note)<=4000),
-      version INTEGER NOT NULL CHECK(version>0),
-      UNIQUE(left_identity,right_identity)
-    )''',
+    'CREATE TABLE agenda_relations $_relationDefinition',
     '''CREATE TABLE agenda_receipts (
       operation_id TEXT PRIMARY KEY, intent_fingerprint TEXT NOT NULL,
       revision INTEGER NOT NULL CHECK(revision>0),
@@ -59,6 +61,22 @@ final class LocalCalendarStore implements LocalCalendarPort {
     "ALTER TABLE jw_overlays ADD COLUMN listening TEXT NOT NULL DEFAULT 'undecided' CHECK(listening IN ('undecided','listening','selfStudy'))",
     "ALTER TABLE young_overlays ADD COLUMN note TEXT NOT NULL DEFAULT '' CHECK(length(note)<=4000)",
     "ALTER TABLE young_overlays ADD COLUMN attendance TEXT NOT NULL DEFAULT 'undecided' CHECK(attendance IN ('undecided','attend','skip'))",
+  ];
+
+  static const upgradeFrom6 = [
+    'CREATE TABLE agenda_relations_v7 $_relationDefinition',
+    '''INSERT INTO agenda_relations_v7(local_id,left_identity,right_identity,kind,note,version)
+       SELECT local_id,left_identity,right_identity,
+       CASE kind WHEN 'coexist' THEN 'notConflict' WHEN 'related' THEN 'legacyUndecided' ELSE kind END,
+       note,version FROM agenda_relations''',
+    '''INSERT INTO sqlite_sequence(name,seq)
+       SELECT 'agenda_relations_v7',COALESCE((SELECT seq FROM sqlite_sequence WHERE name='agenda_relations'),0)
+       WHERE NOT EXISTS(SELECT 1 FROM sqlite_sequence WHERE name='agenda_relations_v7')''',
+    '''UPDATE sqlite_sequence SET seq=MAX(seq,COALESCE((SELECT seq FROM sqlite_sequence WHERE name='agenda_relations'),0))
+       WHERE name='agenda_relations_v7' ''',
+    'DROP TABLE agenda_relations',
+    'ALTER TABLE agenda_relations_v7 RENAME TO agenda_relations',
+    'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
   ];
 
   Future<T> _serial<T>(Future<T> Function() action) async {
@@ -163,7 +181,22 @@ final class LocalCalendarStore implements LocalCalendarPort {
   @override
   Future<CalendarDetail> detail(CalendarReference reference) => _serial(
     () => _db.transaction(() async {
-      final snapshot = await _snapshot(targets: {reference.identity});
+      var snapshot = await _snapshot(targets: {reference.identity});
+      final related = snapshot.relations
+          .where(
+            (r) =>
+                r.left == reference.identity || r.right == reference.identity,
+          )
+          .toList();
+      if (related.isNotEmpty && !_target(snapshot, reference).allDay) {
+        snapshot = await _snapshot(
+          targets: {
+            reference.identity,
+            for (final relation in related) relation.left,
+            for (final relation in related) relation.right,
+          },
+        );
+      }
       final item = _target(snapshot, reference);
       final series = snapshot.personal.where(
         (s) => s.localId == reference.identity.localId,
@@ -181,12 +214,24 @@ final class LocalCalendarStore implements LocalCalendarPort {
                   override.ordinal == reference.identity.ordinal &&
                   override.replacement != null,
             ),
-        relations: snapshot.relations
-            .where(
-              (r) =>
-                  r.left == reference.identity || r.right == reference.identity,
-            )
-            .toList(),
+        relations: item.allDay
+            ? const []
+            : snapshot.relations
+                  .where(
+                    (r) =>
+                        (r.left == reference.identity ||
+                            r.right == reference.identity) &&
+                        _projection
+                                .occurrence(
+                                  snapshot,
+                                  r.left == reference.identity
+                                      ? r.right
+                                      : r.left,
+                                )
+                                ?.allDay !=
+                            true,
+                  )
+                  .toList(),
       );
       await _guard(reference.context);
       return result;
@@ -541,8 +586,10 @@ final class LocalCalendarStore implements LocalCalendarPort {
         :final right,
         :final existing,
         :final note,
+        :final kind,
       ):
-        if (left.context != context ||
+        if (kind == CalendarRelationKind.legacyUndecided ||
+            left.context != context ||
             right.context != context ||
             left.identity == right.identity ||
             note.length > 4000 ||
@@ -675,8 +722,10 @@ final class LocalCalendarStore implements LocalCalendarPort {
           :final kind,
           :final note,
         ):
-          _target(snapshot, left);
-          _target(snapshot, right);
+          if (_target(snapshot, left).allDay ||
+              _target(snapshot, right).allDay) {
+            throw const CalendarFailure(CalendarFailureCode.invalidInput);
+          }
           final pair = [
             jsonEncode(left.identity.canonical),
             jsonEncode(right.identity.canonical),

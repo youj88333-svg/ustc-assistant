@@ -109,7 +109,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -137,7 +137,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 5 || to != 6) {
+      if (from < 1 || from > 6 || to != 7) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -147,7 +147,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 2) ..._catalogSchema,
           if (from <= 3) ..._youngSchema,
           if (from <= 4) ...PublicStore.schema,
-          ...LocalCalendarStore.schema,
+          if (from <= 5) ...LocalCalendarStore.schema,
+          if (from == 6) ...LocalCalendarStore.upgradeFrom6,
         ]) {
           await customStatement(statement);
         }

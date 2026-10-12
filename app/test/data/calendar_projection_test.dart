@@ -246,7 +246,7 @@ void main() {
         reference: const CalendarRelationReference(_context, 11, 1),
         left: const CalendarIdentity(CalendarKind.course, 1),
         right: const CalendarIdentity(CalendarKind.personal, 1),
-        kind: CalendarRelationKind.coexist,
+        kind: CalendarRelationKind.notConflict,
         note: '合成关系',
       );
       final snapshot = _snapshot(
@@ -313,6 +313,18 @@ void main() {
       );
       expect(defaultView.items, hasLength(4));
       expect(defaultView.conflicts, hasLength(6));
+      expect(
+        defaultView.conflicts.where(
+          (pair) => pair.status == CalendarConflictStatus.notConflict,
+        ),
+        hasLength(1),
+      );
+      expect(
+        defaultView.conflicts.where(
+          (pair) => pair.status == CalendarConflictStatus.conflict,
+        ),
+        hasLength(5),
+      );
 
       final unfiltered = _projection.query(
         snapshot,
@@ -337,6 +349,47 @@ void main() {
       expect(unfiltered.items.first.completed, isTrue);
     },
   );
+
+  test('all-day items remain visible but never create overlap candidates', () {
+    final result = _projection.query(
+      _snapshot(
+        personal: [
+          _series(
+            1,
+            PersonalEventDraft(
+              title: '全天一',
+              start: DateTime.utc(2026, 10, 12),
+              end: DateTime.utc(2026, 10, 13),
+              allDay: true,
+            ),
+          ),
+          _series(
+            2,
+            PersonalEventDraft(
+              title: '全天二',
+              start: DateTime.utc(2026, 10, 12),
+              end: DateTime.utc(2026, 10, 13),
+              allDay: true,
+            ),
+          ),
+          _series(
+            3,
+            _timedDraft(
+              DateTime.utc(2026, 10, 12, 2),
+              DateTime.utc(2026, 10, 12, 3),
+            ),
+          ),
+        ],
+      ),
+      _query(DateTime.utc(2026, 10, 12), DateTime.utc(2026, 10, 13)),
+    );
+    expect(result.items, hasLength(3));
+    expect(
+      result.segments.where((segment) => segment.occurrence.allDay),
+      hasLength(2),
+    );
+    expect(result.conflicts, isEmpty);
+  });
 
   test(
     'hidden and skipped records never create conflicts; touching endpoints do not overlap',

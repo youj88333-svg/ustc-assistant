@@ -242,33 +242,85 @@ void main() {
     expect(intent.listening, isNull);
   });
 
-  testWidgets('saves an explicit relation using only candidate references', (
+  testWidgets(
+    'defaults overlap to conflict and saves candidate references only',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final personal = _occurrence(
+        kind: CalendarKind.personal,
+        id: 46,
+        title: '个人复习',
+      );
+      final course = _occurrence(
+        kind: CalendarKind.course,
+        id: 47,
+        title: '合成课程候选',
+      );
+      final candidate = CalendarConflict(personal, course);
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [personal, course],
+        conflicts: [candidate],
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(ValueKey<CalendarReference>(personal.reference)),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(ValueKey<CalendarReference>(personal.reference)),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('calendar-relation-edit-course-0')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-relation-edit-course-0')),
+      );
+      await tester.pumpAndSettle();
+      final editor = tester
+          .widget<DropdownButtonFormField<CalendarRelationKind>>(
+            find.byKey(const ValueKey('calendar-relation-kind')),
+          );
+      expect(editor.initialValue, CalendarRelationKind.conflict);
+      expect(port.intents, isEmpty);
+      await _enter(tester, 'calendar-relation-note', '两条安排可以同时存在');
+      await tester.tap(find.byKey(const ValueKey('calendar-relation-save')));
+      await tester.pumpAndSettle();
+
+      final intent = port.intents.single as SaveCalendarRelation;
+      expect(intent.left, personal.reference);
+      expect(intent.right, course.reference);
+      expect(intent.kind, CalendarRelationKind.conflict);
+      expect(intent.note, '两条安排可以同时存在');
+    },
+  );
+
+  testWidgets('explicitly saves not-conflict for a time-overlap candidate', (
     tester,
   ) async {
     await _setSize(tester, const Size(1280, 900));
     final personal = _occurrence(
       kind: CalendarKind.personal,
-      id: 46,
-      title: '个人复习',
+      id: 48,
+      title: '个人安排候选',
     );
     final course = _occurrence(
       kind: CalendarKind.course,
-      id: 47,
-      title: '合成课程候选',
+      id: 49,
+      title: '课程候选',
     );
-    final candidate = CalendarConflict(personal, course);
     final port = _FakeCalendarWorkspacePort(
       occurrences: [personal, course],
-      conflicts: [candidate],
+      conflicts: [CalendarConflict(personal, course)],
     );
     addTearDown(port.dispose);
 
     await tester.pumpWidget(_host(port));
     await tester.pumpAndSettle();
-    await tester.ensureVisible(
-      find.byKey(ValueKey<CalendarReference>(personal.reference)),
-    );
-    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(ValueKey<CalendarReference>(personal.reference)),
     );
@@ -276,21 +328,507 @@ void main() {
     await tester.ensureVisible(
       find.byKey(const ValueKey('calendar-relation-edit-course-0')),
     );
-    await tester.pumpAndSettle();
     await tester.tap(
       find.byKey(const ValueKey('calendar-relation-edit-course-0')),
     );
     await tester.pumpAndSettle();
-    await _enter(tester, 'calendar-relation-note', '两条安排可以同时存在');
+    expect(port.intents, isEmpty);
+
+    await tester.tap(find.byKey(const ValueKey('calendar-relation-kind')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('不冲突').last);
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('calendar-relation-save')));
     await tester.pumpAndSettle();
 
     final intent = port.intents.single as SaveCalendarRelation;
     expect(intent.left, personal.reference);
     expect(intent.right, course.reference);
-    expect(intent.kind, CalendarRelationKind.coexist);
-    expect(intent.note, '两条安排可以同时存在');
+    expect(intent.kind, CalendarRelationKind.notConflict);
   });
+
+  testWidgets('reopening an explicit not-conflict keeps that selection', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final personal = _occurrence(
+      kind: CalendarKind.personal,
+      id: 50,
+      title: '个人安排候选',
+    );
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 59,
+      title: '课程候选',
+    );
+    final relation = CalendarRelation(
+      reference: CalendarRelationReference(personal.reference.context, 1, 1),
+      left: personal.reference.identity,
+      right: course.reference.identity,
+      kind: CalendarRelationKind.notConflict,
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [personal, course],
+      conflicts: [CalendarConflict(personal, course, relation: relation)],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('calendar-conflict-browser')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('calendar-conflict-edit-0')));
+    await tester.pumpAndSettle();
+
+    final editor = tester.widget<DropdownButtonFormField<CalendarRelationKind>>(
+      find.byKey(const ValueKey('calendar-relation-kind')),
+    );
+    expect(editor.initialValue, CalendarRelationKind.notConflict);
+    expect(port.intents, isEmpty);
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('all-day entries never open conflict judgement controls', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final allDay = _occurrence(
+      kind: CalendarKind.personal,
+      id: 51,
+      title: '全天个人安排',
+      allDay: true,
+      startsAtUtc: DateTime.utc(2026, 10, 11, 16),
+      endsAtUtc: DateTime.utc(2026, 10, 12, 16),
+    );
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 52,
+      title: '课程候选',
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [allDay, course],
+      conflicts: [CalendarConflict(allDay, course)],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-conflict-browser')),
+      findsNothing,
+    );
+    await tester.tap(find.byKey(ValueKey<CalendarReference>(allDay.reference)));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('calendar-detail-card')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('calendar-relation-edit-course-0')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('calendar-relation-save')), findsNothing);
+  });
+
+  testWidgets('filter menu changes the query and keeps global candidates', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 61,
+      title: '全局课程候选',
+    );
+    final personal = _occurrence(
+      kind: CalendarKind.personal,
+      id: 62,
+      title: '全局个人候选',
+    );
+    final hiddenExam = _occurrence(
+      kind: CalendarKind.exam,
+      id: 63,
+      title: '隐藏考试',
+      hidden: true,
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [course, personal, hiddenExam],
+      conflicts: [CalendarConflict(course, personal)],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('calendar-workspace-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-workspace-filter-exam')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(port.view.filter, CalendarFilter.exam);
+    expect(find.text('隐藏考试'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('calendar-conflict-browser')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('calendar-conflict-browser')));
+    await tester.pumpAndSettle();
+    expect(find.text('全局课程候选'), findsOneWidget);
+    expect(find.text('全局个人候选'), findsOneWidget);
+    await tester.tap(find.text('关闭'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('calendar-workspace-filter')));
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(const ValueKey('calendar-workspace-include-inactive')),
+    );
+    await tester.pumpAndSettle();
+    expect(port.view.includeInactive, isTrue);
+    expect(find.text('隐藏考试'), findsOneWidget);
+  });
+
+  testWidgets('an open old-controller filter menu cannot change the new view', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final first = _FakeCalendarWorkspacePort();
+    final second = _FakeCalendarWorkspacePort();
+    addTearDown(first.dispose);
+    addTearDown(second.dispose);
+
+    await tester.pumpWidget(_host(first));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('calendar-workspace-filter')));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-workspace-filter-course')),
+      findsOneWidget,
+    );
+
+    await tester.pumpWidget(_host(second));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-workspace-filter-course')),
+      findsNothing,
+    );
+    expect(first.view.filter, CalendarFilter.all);
+    expect(second.view.filter, CalendarFilter.all);
+    expect(first.loadCalls, 1);
+    expect(second.loadCalls, 1);
+  });
+
+  testWidgets('title colors stay the same across source, identity, and views', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 71,
+      title: '同名安排',
+      presence: AgendaPresence.missingWithinScope,
+    );
+    final personal = _occurrence(
+      kind: CalendarKind.personal,
+      id: 72,
+      title: '同名安排',
+    );
+    final exam = _occurrence(
+      kind: CalendarKind.exam,
+      id: 73,
+      title: '另一名称',
+      startsAtUtc: DateTime.utc(2026, 10, 12, 3),
+      endsAtUtc: DateTime.utc(2026, 10, 12, 4),
+      presence: AgendaPresence.outsideScope,
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [course, personal, exam],
+      conflicts: [CalendarConflict(course, personal)],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    Color weekFill(CalendarOccurrence occurrence) => tester
+        .widget<Material>(
+          find
+              .ancestor(
+                of: find.byKey(
+                  ValueKey<CalendarReference>(occurrence.reference),
+                ),
+                matching: find.byType(Material),
+              )
+              .first,
+        )
+        .color!;
+
+    final sharedWeekFill = weekFill(course);
+    expect(weekFill(personal), sharedWeekFill);
+    expect(weekFill(exam), isNot(sharedWeekFill));
+    expect(find.byIcon(Icons.error_outline_rounded), findsWidgets);
+    expect(
+      tester.widget<Icon>(find.byIcon(Icons.error_outline_rounded).first).color,
+      const Color(0xFF9B2C2C),
+    );
+    expect(find.text('冲*'), findsNothing);
+    expect(find.text('冲'), findsNothing);
+    expect(find.text('缺'), findsOneWidget);
+    expect(find.text('外'), findsOneWidget);
+
+    await tester.tap(find.text('日'));
+    await tester.pumpAndSettle();
+    Color dayFill(CalendarOccurrence occurrence) => tester
+        .widget<Card>(
+          find
+              .ancestor(
+                of: find.byKey(
+                  ValueKey<CalendarReference>(occurrence.reference),
+                ),
+                matching: find.byType(Card),
+              )
+              .first,
+        )
+        .color!;
+
+    expect(dayFill(course), sharedWeekFill);
+    expect(dayFill(personal), sharedWeekFill);
+    expect(dayFill(exam), weekFill(exam));
+    expect(find.text('默认冲突'), findsWidgets);
+    expect(find.text('来源暂缺，仍保留'), findsOneWidget);
+    expect(find.text('当前不在观察范围'), findsOneWidget);
+  });
+
+  testWidgets(
+    'week blocks show locations when they fit and retain compact locations in tooltips',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 900));
+      final course = _occurrence(
+        kind: CalendarKind.course,
+        id: 301,
+        title: '地点显示演示',
+        location: '教学楼 5304',
+        startsAtUtc: DateTime.utc(2026, 10, 11, 23, 50),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 1, 25),
+      );
+      final short = _occurrence(
+        kind: CalendarKind.personal,
+        id: 302,
+        title: '短时安排',
+        location: '图书馆',
+        startsAtUtc: DateTime.utc(2026, 10, 12, 2, 5),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 2, 10),
+      );
+      final allDay = _occurrence(
+        kind: CalendarKind.personal,
+        id: 303,
+        title: '全天安排',
+        location: '事务大厅',
+        allDay: true,
+        startsAtUtc: DateTime.utc(2026, 10, 11, 16),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 16),
+      );
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [course, short, allDay],
+      );
+      addTearDown(port.dispose);
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+      final courseTile = find.byKey(
+        ValueKey<CalendarReference>(course.reference),
+      );
+      expect(
+        find.descendant(of: courseTile, matching: find.text('教学楼 5304')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('事务大厅'), findsOneWidget);
+      final shortTile = find.byKey(
+        ValueKey<CalendarReference>(short.reference),
+      );
+      final tip = tester.widget<Tooltip>(
+        find.descendant(of: shortTile, matching: find.byType(Tooltip)).first,
+      );
+      expect(tip.message, contains('图书馆'));
+      await tester.tap(find.text('日'));
+      await tester.pumpAndSettle();
+      expect(find.text('教学楼 5304'), findsOneWidget);
+      expect(find.text('图书馆'), findsOneWidget);
+      expect(find.text('事务大厅'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('independent overlap clusters use independent lane widths', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final overlapA = _occurrence(
+      kind: CalendarKind.course,
+      id: 81,
+      title: '并发一',
+    );
+    final overlapB = _occurrence(kind: CalendarKind.exam, id: 82, title: '并发二');
+    final overlapC = _occurrence(
+      kind: CalendarKind.personal,
+      id: 83,
+      title: '并发三',
+    );
+    final isolated = _occurrence(
+      kind: CalendarKind.young,
+      id: 84,
+      title: '独立安排',
+      startsAtUtc: DateTime.utc(2026, 10, 12, 3),
+      endsAtUtc: DateTime.utc(2026, 10, 12, 4),
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [overlapA, overlapB, overlapC, isolated],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    final overlapWidth = tester
+        .getSize(find.byKey(ValueKey<CalendarReference>(overlapA.reference)))
+        .width;
+    final isolatedWidth = tester
+        .getSize(find.byKey(ValueKey<CalendarReference>(isolated.reference)))
+        .width;
+    expect(isolatedWidth, greaterThan(overlapWidth * 2.5));
+  });
+
+  testWidgets('early overflow opens the selected overnight occurrence detail', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final early = List.generate(
+      3,
+      (index) => _occurrence(
+        kind: CalendarKind.personal,
+        id: 91 + index,
+        title: '凌晨安排 ${index + 1}',
+        startsAtUtc: DateTime.utc(2026, 10, 11, 16 + index, 30),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 0, 30),
+      ),
+    );
+    final port = _FakeCalendarWorkspacePort(occurrences: early);
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+    final overflow = find.byKey(
+      const ValueKey('calendar-week-overflow-early-2026-10-12'),
+    );
+    expect(overflow, findsOneWidget);
+    await tester.tap(overflow);
+    await tester.pumpAndSettle();
+    final selected = early.last;
+    await tester.tap(
+      find.byKey(
+        ValueKey(
+          'calendar-overflow-item-personal-${selected.reference.identity.localId}-0',
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(port.view.detail?.occurrence.reference, selected.reference);
+    expect(find.byKey(const ValueKey('calendar-detail-card')), findsOneWidget);
+    expect(find.text(selected.title), findsWidgets);
+  });
+
+  testWidgets('wide week layouts keep the last teaching period in view', (
+    tester,
+  ) async {
+    for (final size in const [Size(1280, 720), Size(1560, 900)]) {
+      await _setSize(tester, size);
+      final occurrence = _occurrence(
+        kind: CalendarKind.course,
+        id: size.width.toInt(),
+        title: '末节测试安排',
+        startsAtUtc: DateTime.utc(2026, 10, 12, 13, 10),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 13, 55),
+      );
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [occurrence, ..._compressedBandOccurrences()],
+      );
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('第13节'), findsOneWidget);
+      for (final key in const [
+        'calendar-workspace-view-mode',
+        'calendar-workspace-prev',
+        'calendar-workspace-next',
+        'calendar-workspace-date-picker',
+        'calendar-workspace-today',
+        'calendar-personal-create',
+      ]) {
+        expect(find.byKey(ValueKey(key)), findsOneWidget);
+      }
+      expect(
+        find.byKey(const ValueKey('calendar-week-period-13')),
+        findsOneWidget,
+      );
+      final scrollable = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('calendar-week-time-scroll')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(scrollable.position.maxScrollExtent, 0);
+      expect(
+        tester
+            .getRect(
+              find.byKey(ValueKey<CalendarReference>(occurrence.reference)),
+            )
+            .bottom,
+        lessThanOrEqualTo(
+          tester
+              .getRect(find.byKey(const ValueKey('calendar-week-time-scroll')))
+              .bottom,
+        ),
+      );
+      expect(tester.takeException(), isNull, reason: 'layout at $size');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pumpAndSettle();
+      port.dispose();
+    }
+  });
+
+  testWidgets(
+    'large text in a short window falls back to bounded axis scrolling',
+    (tester) async {
+      await _setSize(tester, const Size(320, 420));
+      final port = _FakeCalendarWorkspacePort(
+        occurrences: [
+          _occurrence(kind: CalendarKind.course, id: 101, title: '窄窗课程'),
+          ..._compressedBandOccurrences(),
+        ],
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(port, textScale: 1.8));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('第13节'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('calendar-week-time-scroll')),
+        findsOneWidget,
+      );
+      final scrollable = tester.state<ScrollableState>(
+        find
+            .descendant(
+              of: find.byKey(const ValueKey('calendar-week-time-scroll')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
+      expect(scrollable.position.maxScrollExtent, greaterThan(0));
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'series deletion requires confirmation and cancellation writes nothing',
@@ -571,6 +1109,26 @@ void main() {
   });
 }
 
+List<CalendarOccurrence> _compressedBandOccurrences() => [
+  for (var index = 0; index < 3; index++) ...[
+    _occurrence(
+      kind: CalendarKind.personal,
+      id: 201 + index,
+      title: '全天压缩演示 ${index + 1}',
+      allDay: true,
+      startsAtUtc: DateTime.utc(2026, 10, 11, 16),
+      endsAtUtc: DateTime.utc(2026, 10, 12, 16),
+    ),
+    _occurrence(
+      kind: CalendarKind.personal,
+      id: 211 + index,
+      title: '凌晨压缩演示 ${index + 1}',
+      startsAtUtc: DateTime.utc(2026, 10, 11, 17 + index),
+      endsAtUtc: DateTime.utc(2026, 10, 11, 17 + index, 30),
+    ),
+  ],
+];
+
 Widget _host(CalendarWorkspacePort controller, {double textScale = 1}) =>
     MaterialApp(
       theme: ThemeData(
@@ -619,6 +1177,7 @@ CalendarOccurrence _occurrence({
   required int id,
   int ordinal = 0,
   String title = '合成事项',
+  String location = '',
   DateTime? startsAtUtc,
   DateTime? endsAtUtc,
   bool allDay = false,
@@ -639,6 +1198,7 @@ CalendarOccurrence _occurrence({
     1,
   ),
   title: title,
+  location: location,
   startsAtUtc: startsAtUtc ?? DateTime.utc(2026, 10, 12, 1),
   endsAtUtc: endsAtUtc ?? DateTime.utc(2026, 10, 12, 2),
   allDay: allDay,

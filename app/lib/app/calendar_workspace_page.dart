@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
@@ -7,6 +6,7 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import '../core/agenda_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_event_editor.dart';
+import 'calendar_display_style.dart';
 import 'calendar_week_view.dart';
 import 'calendar_workspace_contract.dart';
 
@@ -113,7 +113,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         _heading(context),
-        const SizedBox(height: 12),
+        const SizedBox(height: 5),
         if (_tasksSelected)
           Expanded(child: _tasksPlaceholder(context))
         else ...[
@@ -160,7 +160,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: width < 380
-            ? (height < 560 ? 120 : 220)
+            ? (height < 460 ? 160 : 220)
             : (height < 640 ? 150 : 170),
       ),
       child: SingleChildScrollView(
@@ -170,37 +170,34 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     );
   }
 
-  Widget _heading(BuildContext context) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget _heading(BuildContext context) => Wrap(
+    spacing: 8,
+    runSpacing: 2,
+    crossAxisAlignment: WrapCrossAlignment.center,
     children: [
       Text(
         '日程',
         style: Theme.of(
           context,
-        ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
       ),
-      const SizedBox(height: 10),
-      Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          ChoiceChip(
-            key: const ValueKey('calendar-workspace-tab-schedule'),
-            label: const Text('日程'),
-            selected: !_tasksSelected,
-            onSelected: (selected) {
-              if (selected) setState(() => _tasksSelected = false);
-            },
-          ),
-          ChoiceChip(
-            key: const ValueKey('calendar-workspace-tab-tasks'),
-            label: const Text('任务'),
-            selected: _tasksSelected,
-            onSelected: (selected) {
-              if (selected) setState(() => _tasksSelected = true);
-            },
-          ),
-        ],
+      ChoiceChip(
+        key: const ValueKey('calendar-workspace-tab-schedule'),
+        label: const Text('日程'),
+        selected: !_tasksSelected,
+        visualDensity: VisualDensity.compact,
+        onSelected: (selected) {
+          if (selected) setState(() => _tasksSelected = false);
+        },
+      ),
+      ChoiceChip(
+        key: const ValueKey('calendar-workspace-tab-tasks'),
+        label: const Text('任务'),
+        selected: _tasksSelected,
+        visualDensity: VisualDensity.compact,
+        onSelected: (selected) {
+          if (selected) setState(() => _tasksSelected = true);
+        },
       ),
     ],
   );
@@ -215,7 +212,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             const Icon(Icons.task_alt_rounded, size: 42, color: _green),
             const SizedBox(height: 12),
             Text(
-              '任务安排将在 M4.3 提供',
+              '任务功能尚未开放',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -235,11 +232,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
 
   Widget _toolbar(CalendarWorkspaceView view, double width) {
     final narrow = width < 520;
-    final filterWidth = math.min(190.0, math.max(145.0, width - 28));
+    final port = widget.controller;
+    final generation = _controllerGeneration;
     final day = _dateOnly(view.day);
     return Wrap(
       spacing: 7,
-      runSpacing: 8,
+      runSpacing: 5,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         SegmentedButton<CalendarViewMode>(
@@ -285,48 +283,123 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ),
         TextButton(
           key: const ValueKey('calendar-workspace-today'),
+          style: TextButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.symmetric(horizontal: 7),
+          ),
           onPressed: () =>
               _load(widget.controller, day: _dateOnly(widget.controller.today)),
           child: const Text('今天'),
         ),
-        SizedBox(
-          width: filterWidth,
-          child: InputDecorator(
-            key: const ValueKey('calendar-workspace-filter'),
-            decoration: const InputDecoration(
-              labelText: '来源',
-              contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        PopupMenuButton<_CalendarToolbarAction>(
+          key: const ValueKey('calendar-workspace-filter'),
+          tooltip: _filterTooltip(view),
+          onOpened: () => _trackTransientRouteOpened(generation),
+          onCanceled: () => _trackTransientRouteClosed(generation),
+          onSelected: (action) {
+            _trackTransientRouteClosed(generation);
+            if (!_currentController(port, generation)) return;
+            switch (action) {
+              case _CalendarToolbarAction.allSources:
+                unawaited(_load(port, filter: CalendarFilter.all));
+                break;
+              case _CalendarToolbarAction.courses:
+                unawaited(_load(port, filter: CalendarFilter.course));
+                break;
+              case _CalendarToolbarAction.exams:
+                unawaited(_load(port, filter: CalendarFilter.exam));
+                break;
+              case _CalendarToolbarAction.young:
+                unawaited(_load(port, filter: CalendarFilter.young));
+                break;
+              case _CalendarToolbarAction.personal:
+                unawaited(_load(port, filter: CalendarFilter.personal));
+                break;
+              case _CalendarToolbarAction.toggleInactive:
+                unawaited(
+                  _load(port, includeInactive: !port.view.includeInactive),
+                );
+                break;
+            }
+          },
+          itemBuilder: (context) => [
+            _filterMenuItem(
+              _CalendarToolbarAction.allSources,
+              '全部来源',
+              view.filter == CalendarFilter.all,
+              'calendar-workspace-filter-all',
             ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<CalendarFilter>(
-                value: view.filter,
-                isExpanded: true,
-                items: CalendarFilter.values
-                    .map(
-                      (filter) => DropdownMenuItem(
-                        value: filter,
-                        child: Text(
-                          _filterLabel(filter),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
-                onChanged: (filter) {
-                  if (filter != null) {
-                    _load(widget.controller, filter: filter);
-                  }
-                },
+            _filterMenuItem(
+              _CalendarToolbarAction.courses,
+              '课程',
+              view.filter == CalendarFilter.course,
+              'calendar-workspace-filter-course',
+            ),
+            _filterMenuItem(
+              _CalendarToolbarAction.exams,
+              '考试',
+              view.filter == CalendarFilter.exam,
+              'calendar-workspace-filter-exam',
+            ),
+            _filterMenuItem(
+              _CalendarToolbarAction.young,
+              '二课',
+              view.filter == CalendarFilter.young,
+              'calendar-workspace-filter-young',
+            ),
+            _filterMenuItem(
+              _CalendarToolbarAction.personal,
+              '个人安排',
+              view.filter == CalendarFilter.personal,
+              'calendar-workspace-filter-personal',
+            ),
+            const PopupMenuDivider(height: 8),
+            PopupMenuItem<_CalendarToolbarAction>(
+              key: const ValueKey('calendar-workspace-include-inactive'),
+              value: _CalendarToolbarAction.toggleInactive,
+              child: Row(
+                children: [
+                  Icon(
+                    view.includeInactive
+                        ? Icons.check_box_rounded
+                        : Icons.check_box_outline_blank_rounded,
+                    size: 18,
+                    color: _green,
+                  ),
+                  const SizedBox(width: 9),
+                  const Text('显示隐藏/跳过记录'),
+                ],
               ),
             ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              border: Border.all(color: const Color(0xFFD4DDD7)),
+              borderRadius: BorderRadius.circular(9),
+              color: Colors.white,
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.filter_list_rounded, size: 17),
+                const SizedBox(width: 5),
+                const Text('筛选', style: TextStyle(fontSize: 12)),
+                if (view.filter != CalendarFilter.all || view.includeInactive)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 5),
+                    child: Container(
+                      width: 6,
+                      height: 6,
+                      decoration: const BoxDecoration(
+                        color: _green,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
-        ),
-        FilterChip(
-          key: const ValueKey('calendar-workspace-include-inactive'),
-          label: const Text('显示隐藏/跳过记录'),
-          selected: view.includeInactive,
-          onSelected: (include) =>
-              _load(widget.controller, includeInactive: include),
         ),
         FilledButton.icon(
           key: const ValueKey('calendar-personal-create'),
@@ -347,6 +420,27 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       ],
     );
   }
+
+  PopupMenuItem<_CalendarToolbarAction> _filterMenuItem(
+    _CalendarToolbarAction action,
+    String label,
+    bool selected,
+    String key,
+  ) => PopupMenuItem<_CalendarToolbarAction>(
+    key: ValueKey(key),
+    value: action,
+    child: Row(
+      children: [
+        Icon(
+          selected ? Icons.check_rounded : Icons.circle_outlined,
+          size: 17,
+          color: selected ? _green : const Color(0xFF9AA59E),
+        ),
+        const SizedBox(width: 9),
+        Text(label),
+      ],
+    ),
+  );
 
   Widget _calendarBody(
     BuildContext context,
@@ -378,15 +472,29 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     }
 
     final wideDetail = width >= 1080;
+    final port = widget.controller;
+    final generation = _controllerGeneration;
+    final conflicts = _windowConflicts(window);
     final hasSelected = _selectedReference != null;
     final main = view.mode == CalendarViewMode.week
         ? CalendarWeekView(
             window: window,
-            today: widget.controller.today,
-            onSelect: (occurrence) =>
-                _selectOccurrence(occurrence, showSheet: !wideDetail),
+            today: port.today,
+            onSelect: (occurrence) => _selectOccurrence(
+              occurrence,
+              showSheet: !wideDetail,
+              expectedPort: port,
+              expectedGeneration: generation,
+            ),
+            onOverflow: (heading, occurrences) => _showOverflowList(
+              port,
+              generation,
+              heading,
+              occurrences,
+              showSheet: !wideDetail,
+            ),
           )
-        : _dayList(window, showSheet: !wideDetail);
+        : _dayList(window, showSheet: !wideDetail, conflicts: conflicts);
     final content = window.items.isEmpty
         ? const _EmptyState(
             icon: Icons.event_available_outlined,
@@ -416,8 +524,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (window.conflicts.isNotEmpty)
-                _globalConflictBrowser(window, view),
+              if (conflicts.isNotEmpty)
+                _globalConflictBrowser(conflicts, port, generation, view),
               Expanded(
                 child: wideDetail
                     ? Row(
@@ -447,42 +555,53 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   }
 
   Widget _globalConflictBrowser(
-    CalendarWindow window,
+    List<CalendarConflict> conflicts,
+    CalendarWorkspacePort port,
+    int generation,
     CalendarWorkspaceView view,
-  ) => Card(
-    margin: const EdgeInsets.only(bottom: 8),
-    child: ListTile(
-      key: const ValueKey('calendar-conflict-browser'),
-      leading: const Icon(Icons.compare_arrows_rounded),
-      title: Text('重叠候选（${window.conflicts.length}）'),
-      subtitle: const Text('候选不受来源筛选缩小；是否相关由你判断。'),
-      trailing: const Icon(Icons.chevron_right_rounded),
-      onTap: () => _showConflicts(window, widget.controller, view.canWrite),
+  ) => Align(
+    alignment: Alignment.centerLeft,
+    child: Padding(
+      padding: const EdgeInsets.only(bottom: 5),
+      child: TextButton.icon(
+        key: const ValueKey('calendar-conflict-browser'),
+        onPressed: () =>
+            _showConflicts(conflicts, port, generation, view.canWrite),
+        icon: const Icon(Icons.compare_arrows_rounded, size: 17),
+        label: Text('冲突判定 · ${conflicts.length}'),
+        style: TextButton.styleFrom(
+          minimumSize: const Size(0, 34),
+          padding: const EdgeInsets.symmetric(horizontal: 10),
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
     ),
   );
 
   Future<void> _showConflicts(
-    CalendarWindow window,
+    List<CalendarConflict> conflicts,
     CalendarWorkspacePort port,
+    int generation,
     bool canWrite,
   ) async {
-    final generation = _controllerGeneration;
+    if (!_currentController(port, generation)) return;
     await _withRoute<void>(
       () => showDialog<void>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('重叠候选'),
+          title: const Text('冲突判定'),
           content: ConstrainedBox(
             constraints: BoxConstraints(
+              minWidth: 560,
               maxWidth: 560,
               maxHeight: MediaQuery.sizeOf(context).height * .68,
             ),
             child: ListView.separated(
               shrinkWrap: true,
-              itemCount: window.conflicts.length,
+              itemCount: conflicts.length,
               separatorBuilder: (_, _) => const Divider(height: 16),
               itemBuilder: (context, index) {
-                final conflict = window.conflicts[index];
+                final conflict = conflicts[index];
                 final relation = conflict.relation;
                 return Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -492,17 +611,51 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            '${conflict.left.title}  ·  ${conflict.right.title}',
+                            conflict.left.title,
                             softWrap: true,
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                            style: TextStyle(
+                              color: calendarColorsForTitle(
+                                conflict.left.title,
+                              ).ink,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
-                          const SizedBox(height: 3),
                           Text(
-                            '${_kindLabel(conflict.left.reference.identity.kind)} × '
-                            '${_kindLabel(conflict.right.reference.identity.kind)}'
-                            '${relation == null ? '' : ' · 已说明：${_relationKindLabel(relation.kind)}'}',
+                            '${_kindLabel(conflict.left.reference.identity.kind)} · ${_occurrenceTime(conflict.left)}${_presenceSuffix(conflict.left)}',
+                            softWrap: true,
                             style: const TextStyle(color: _muted, fontSize: 11),
                           ),
+                          const SizedBox(height: 5),
+                          Text(
+                            conflict.right.title,
+                            softWrap: true,
+                            style: TextStyle(
+                              color: calendarColorsForTitle(
+                                conflict.right.title,
+                              ).ink,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          Text(
+                            '${_kindLabel(conflict.right.reference.identity.kind)} · ${_occurrenceTime(conflict.right)}${_presenceSuffix(conflict.right)}',
+                            softWrap: true,
+                            style: const TextStyle(color: _muted, fontSize: 11),
+                          ),
+                          const SizedBox(height: 5),
+                          Text(
+                            '判定：${_conflictSummaryLabel(conflict)}',
+                            style: TextStyle(
+                              color: _conflictStatusColor(conflict.status),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                          if (relation?.kind ==
+                              CalendarRelationKind.legacyUndecided)
+                            const Text(
+                              '旧说明已保留；当前按重叠默认显示冲突。',
+                              style: TextStyle(color: _muted, fontSize: 11),
+                            ),
                         ],
                       ),
                     ),
@@ -515,7 +668,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                               generation == _controllerGeneration
                           ? () => _editRelation(conflict, port)
                           : null,
-                      child: Text(relation == null ? '说明' : '修改'),
+                      child: Text(
+                        conflict.hasExplicitDecision ? '修改判定' : '确认冲突',
+                      ),
                     ),
                   ],
                 );
@@ -533,7 +688,88 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     );
   }
 
-  Widget _dayList(CalendarWindow window, {required bool showSheet}) {
+  Future<void> _showOverflowList(
+    CalendarWorkspacePort port,
+    int generation,
+    String heading,
+    List<CalendarOccurrence> occurrences, {
+    required bool showSheet,
+  }) async {
+    if (!_currentController(port, generation) || occurrences.isEmpty) return;
+    await _withRoute<void>(
+      () => showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text(heading),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              minWidth: 520,
+              maxWidth: 520,
+              maxHeight: MediaQuery.sizeOf(dialogContext).height * .68,
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: occurrences.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final occurrence = occurrences[index];
+                return ListTile(
+                  key: ValueKey(
+                    'calendar-overflow-item-${occurrence.reference.identity.kind.name}-${occurrence.reference.identity.localId}-${occurrence.reference.identity.ordinal}',
+                  ),
+                  contentPadding: EdgeInsets.zero,
+                  title: Text(
+                    occurrence.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: calendarColorsForTitle(occurrence.title).ink,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    '${_kindLabel(occurrence.reference.identity.kind)} · ${_occurrenceTime(occurrence)}'
+                    '${occurrence.location.trim().isEmpty ? '' : ' · ${occurrence.location.trim()}'}'
+                    '${occurrence.presence == AgendaPresence.missingWithinScope ? ' · 来源暂缺，仍保留' : ''}'
+                    '${occurrence.presence == AgendaPresence.outsideScope ? ' · 当前不在观察范围' : ''}',
+                  ),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () {
+                    if (!_currentController(port, generation)) return;
+                    Navigator.of(dialogContext).pop();
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (_currentController(port, generation)) {
+                        unawaited(
+                          _selectOccurrence(
+                            occurrence,
+                            showSheet: showSheet,
+                            expectedPort: port,
+                            expectedGeneration: generation,
+                          ),
+                        );
+                      }
+                    });
+                  },
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _dayList(
+    CalendarWindow window, {
+    required bool showSheet,
+    required List<CalendarConflict> conflicts,
+  }) {
     final items = [...window.items]
       ..sort((left, right) => left.startsAtUtc.compareTo(right.startsAtUtc));
     if (items.isEmpty) {
@@ -547,8 +783,14 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       itemBuilder: (context, index) {
         final occurrence = items[index];
         final selected = occurrence.reference == _selectedReference;
+        final colors = calendarColorsForTitle(occurrence.title);
         return Card(
           clipBehavior: Clip.antiAlias,
+          color: colors.fill,
+          shape: RoundedRectangleBorder(
+            side: BorderSide(color: colors.edge.withValues(alpha: .28)),
+            borderRadius: BorderRadius.circular(12),
+          ),
           child: InkWell(
             key: ValueKey<CalendarReference>(occurrence.reference),
             onTap: () => _selectOccurrence(occurrence, showSheet: showSheet),
@@ -561,7 +803,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     width: 4,
                     height: 56,
                     decoration: BoxDecoration(
-                      color: _kindColor(occurrence.reference.identity.kind),
+                      color: colors.edge,
                       borderRadius: BorderRadius.circular(4),
                     ),
                   ),
@@ -576,7 +818,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                           maxLines: 2,
                           overflow: TextOverflow.ellipsis,
                           style: Theme.of(context).textTheme.titleSmall
-                              ?.copyWith(fontWeight: FontWeight.w700),
+                              ?.copyWith(
+                                color: colors.ink,
+                                fontWeight: FontWeight.w700,
+                              ),
                         ),
                         const SizedBox(height: 5),
                         Text(
@@ -594,7 +839,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                               ),
                               color: const Color(0xFFF0F3F1),
                             ),
-                            ..._stateTags(occurrence),
+                            ..._occurrenceTags(occurrence, conflicts),
                           ],
                         ),
                         if (occurrence.location.trim().isNotEmpty) ...[
@@ -725,6 +970,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           occurrence.title,
           softWrap: true,
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
+            color: calendarColorsForTitle(occurrence.title).ink,
             fontWeight: FontWeight.w700,
             height: 1.35,
           ),
@@ -788,10 +1034,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           _schoolActions(view, detail),
         const SizedBox(height: 18),
         if (conflicts.isNotEmpty) ...[
-          _sectionHeading('重叠候选'),
+          _sectionHeading('冲突判定'),
           const SizedBox(height: 6),
           const Text(
-            '时间重叠只是候选，不代表系统已判断冲突；来源筛选不会缩小这组候选。',
+            '时间重叠只是候选；尚未判断的项目不会预先选定结果。来源筛选不会缩小这组候选。',
             style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 8),
@@ -800,8 +1046,13 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             const SizedBox(height: 8),
           ],
         ],
-        if (detail.relations.isNotEmpty) ...[
-          _sectionHeading('已保存的日程说明'),
+        if (!occurrence.allDay && detail.relations.isNotEmpty) ...[
+          _sectionHeading('已保存的判定说明'),
+          const SizedBox(height: 8),
+          const Text(
+            '已保存的说明会保留；当前是否重叠以本次候选为准。',
+            style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
+          ),
           const SizedBox(height: 8),
           for (final relation in detail.relations) ...[
             _relationCard(view, occurrence, relation),
@@ -1033,6 +1284,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ? conflict.right
         : conflict.left;
     final relation = conflict.relation;
+    final status = conflict.status;
     return Card(
       color: const Color(0xFFF8FAF9),
       child: Padding(
@@ -1043,20 +1295,39 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             Text(
               other.title,
               softWrap: true,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: TextStyle(
+                color: calendarColorsForTitle(other.title).ink,
+                fontWeight: FontWeight.w600,
+              ),
             ),
             const SizedBox(height: 4),
             Text(
-              '${_kindLabel(other.reference.identity.kind)} · ${_occurrenceTime(other)}',
+              '${_kindLabel(other.reference.identity.kind)} · ${_occurrenceTime(other)}${_presenceSuffix(other)}',
               style: const TextStyle(color: _muted, fontSize: 12),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '判定：${_conflictSummaryLabel(conflict)}',
+              style: TextStyle(
+                color: _conflictStatusColor(status),
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
             ),
             if (relation != null) ...[
               const SizedBox(height: 5),
               Text(
-                '已有说明：${_relationKindLabel(relation.kind)}'
+                '${relation.kind == CalendarRelationKind.legacyUndecided ? '旧说明已保留' : '已保存判定：${_relationKindLabel(relation.kind)}'}'
                 '${relation.note.trim().isEmpty ? '' : ' · ${relation.note}'}',
                 softWrap: true,
                 style: const TextStyle(color: _muted, fontSize: 12),
+              ),
+            ],
+            if (relation?.kind == CalendarRelationKind.legacyUndecided) ...[
+              const SizedBox(height: 4),
+              const Text(
+                '旧说明已保留；当前按重叠默认显示冲突。',
+                style: TextStyle(color: _muted, fontSize: 11),
               ),
             ],
             const SizedBox(height: 8),
@@ -1070,7 +1341,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     ? () => _editRelation(conflict, widget.controller)
                     : null,
                 icon: const Icon(Icons.link_rounded),
-                label: Text(relation == null ? '说明两条日程的关系' : '修改关系说明'),
+                label: Text(conflict.hasExplicitDecision ? '修改判定' : '确认判定'),
               ),
             ),
           ],
@@ -1096,7 +1367,14 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              '与另一条${_kindLabel(other.kind)}的说明：${_relationKindLabel(relation.kind)}',
+              relation.kind == CalendarRelationKind.legacyUndecided
+                  ? '旧说明已保留；未保存明确判断'
+                  : '已保存判定：${_relationKindLabel(relation.kind)}',
+            ),
+            const SizedBox(height: 4),
+            Text(
+              '另一条${_kindLabel(other.kind)}安排；当前是否重叠以候选列表为准。',
+              style: const TextStyle(color: _muted, fontSize: 11),
             ),
             if (relation.note.trim().isNotEmpty) ...[
               const SizedBox(height: 5),
@@ -1111,7 +1389,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     ? () => _confirmDeleteRelation(relation, widget.controller)
                     : null,
                 icon: const Icon(Icons.link_off_rounded),
-                label: const Text('删除这条关系说明'),
+                label: const Text('删除这条判定说明'),
               ),
             ),
           ],
@@ -1220,9 +1498,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   Future<void> _selectOccurrence(
     CalendarOccurrence occurrence, {
     required bool showSheet,
+    CalendarWorkspacePort? expectedPort,
+    int? expectedGeneration,
   }) async {
-    final port = widget.controller;
-    final controllerGeneration = _controllerGeneration;
+    final port = expectedPort ?? widget.controller;
+    final controllerGeneration = expectedGeneration ?? _controllerGeneration;
+    if (!_currentController(port, controllerGeneration)) return;
     setState(() {
       _selectedReference = occurrence.reference;
       _notice = null;
@@ -1554,7 +1835,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         builder: (context) => _CalendarRelationEditor(
           controller: port,
           feedback: _actionFeedback,
-          initialKind: existing?.kind ?? CalendarRelationKind.coexist,
+          conflict: conflict,
+          initialKind: existing?.kind == CalendarRelationKind.notConflict
+              ? CalendarRelationKind.notConflict
+              : CalendarRelationKind.conflict,
+          legacyUndecided:
+              existing?.kind == CalendarRelationKind.legacyUndecided,
           initialNote: existing?.note ?? '',
           canSave: () =>
               identical(port, widget.controller) && port.view.canWrite,
@@ -1586,8 +1872,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       () => showDialog<bool>(
         context: context,
         builder: (context) => AlertDialog(
-          title: const Text('删除关系说明？'),
-          content: const Text('删除后将移除这条已保存的日程解释。'),
+          title: const Text('删除判定说明？'),
+          content: const Text('删除后将移除这条已保存的日程判定说明。'),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -1596,7 +1882,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             FilledButton(
               key: const ValueKey('calendar-relation-confirm-delete'),
               onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('删除说明'),
+              child: const Text('删除判定说明'),
             ),
           ],
         ),
@@ -1631,6 +1917,16 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     } else if (_routeDepth > 0) {
       _routeDepth--;
     }
+  }
+
+  void _trackTransientRouteOpened(int controllerGeneration) {
+    if (!mounted || controllerGeneration != _controllerGeneration) return;
+    _routeDepth++;
+  }
+
+  void _trackTransientRouteClosed(int controllerGeneration) {
+    if (!mounted || controllerGeneration != _controllerGeneration) return;
+    if (_routeDepth > 0) _routeDepth--;
   }
 
   Future<void> _dismissRoutes(
@@ -1882,7 +2178,9 @@ final class _CalendarRelationEditor extends StatefulWidget {
   const _CalendarRelationEditor({
     required this.controller,
     required this.feedback,
+    required this.conflict,
     required this.initialKind,
+    required this.legacyUndecided,
     required this.initialNote,
     required this.canSave,
     required this.isCurrent,
@@ -1891,7 +2189,9 @@ final class _CalendarRelationEditor extends StatefulWidget {
 
   final CalendarWorkspacePort controller;
   final ValueListenable<String?> feedback;
+  final CalendarConflict conflict;
   final CalendarRelationKind initialKind;
+  final bool legacyUndecided;
   final String initialNote;
   final bool Function() canSave;
   final bool Function() isCurrent;
@@ -1924,7 +2224,7 @@ final class _CalendarRelationEditorState
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: const Text('说明重叠日程'),
+    title: const Text('冲突判定'),
     content: ConstrainedBox(
       constraints: BoxConstraints(
         maxWidth: 440,
@@ -1935,24 +2235,67 @@ final class _CalendarRelationEditorState
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const Text(
-              '时间重叠只是候选。选择共存或相关，并留下你的说明。',
-              style: TextStyle(color: _muted, height: 1.4),
+            Text(
+              widget.conflict.left.title,
+              style: TextStyle(
+                color: calendarColorsForTitle(widget.conflict.left.title).ink,
+                fontWeight: FontWeight.w700,
+              ),
             ),
+            Text(
+              '${_kindLabel(widget.conflict.left.reference.identity.kind)} · ${_occurrenceTime(widget.conflict.left)}${_presenceSuffix(widget.conflict.left)}',
+              style: const TextStyle(color: _muted, fontSize: 11),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              widget.conflict.right.title,
+              style: TextStyle(
+                color: calendarColorsForTitle(widget.conflict.right.title).ink,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            Text(
+              '${_kindLabel(widget.conflict.right.reference.identity.kind)} · ${_occurrenceTime(widget.conflict.right)}${_presenceSuffix(widget.conflict.right)}',
+              style: const TextStyle(color: _muted, fontSize: 11),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              '当前状态：${_conflictSummaryLabel(widget.conflict)}',
+              style: TextStyle(
+                color: _conflictStatusColor(widget.conflict.status),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (widget.legacyUndecided) ...[
+              const SizedBox(height: 4),
+              const Text(
+                '旧说明已保留；当前按重叠默认显示冲突。可确认冲突或改为不冲突，保存后才记录本次选择。',
+                style: TextStyle(color: _muted, height: 1.4),
+              ),
+            ] else ...[
+              const SizedBox(height: 4),
+              const Text(
+                '当前按时间重叠默认显示冲突；可保留此判定或改为不冲突。保存后才记录本次选择。',
+                style: TextStyle(color: _muted, height: 1.4),
+              ),
+            ],
             const SizedBox(height: 12),
             DropdownButtonFormField<CalendarRelationKind>(
               key: const ValueKey('calendar-relation-kind'),
               initialValue: _kind,
               isExpanded: true,
-              decoration: const InputDecoration(labelText: '关系'),
-              items: CalendarRelationKind.values
-                  .map(
-                    (value) => DropdownMenuItem(
-                      value: value,
-                      child: Text(_relationKindLabel(value)),
-                    ),
-                  )
-                  .toList(growable: false),
+              hint: const Text('请选择'),
+              decoration: const InputDecoration(labelText: '冲突判定'),
+              items: const [
+                DropdownMenuItem(
+                  value: CalendarRelationKind.conflict,
+                  child: Text('冲突'),
+                ),
+                DropdownMenuItem(
+                  value: CalendarRelationKind.notConflict,
+                  child: Text('不冲突'),
+                ),
+              ],
               onChanged: _saving
                   ? null
                   : (value) {
@@ -1999,7 +2342,7 @@ final class _CalendarRelationEditorState
           onPressed: _saving || !widget.canSave() || !widget.isCurrent()
               ? null
               : _save,
-          child: Text(_saving ? '正在保存…' : '保存说明'),
+          child: Text(_saving ? '正在保存…' : '保存判定'),
         ),
       ),
     ],
@@ -2127,9 +2470,16 @@ final class _DetailLine extends StatelessWidget {
 }
 
 final class _SmallTag extends StatelessWidget {
-  const _SmallTag({required this.text, required this.color});
+  const _SmallTag({
+    required this.text,
+    required this.color,
+    this.textColor = _muted,
+    this.icon,
+  });
   final String text;
   final Color color;
+  final Color textColor;
+  final IconData? icon;
 
   @override
   Widget build(BuildContext context) => Container(
@@ -2138,15 +2488,38 @@ final class _SmallTag extends StatelessWidget {
       color: color,
       borderRadius: BorderRadius.circular(8),
     ),
-    child: Text(
-      text,
-      style: const TextStyle(color: _muted, fontSize: 11, height: 1.2),
-    ),
+    child: icon == null
+        ? Text(
+            text,
+            style: TextStyle(color: textColor, fontSize: 11, height: 1.2),
+          )
+        : Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, color: textColor, size: 13),
+              const SizedBox(width: 4),
+              Flexible(
+                child: Text(
+                  text,
+                  style: TextStyle(color: textColor, fontSize: 11, height: 1.2),
+                ),
+              ),
+            ],
+          ),
   );
 }
 
 const _green = Color(0xFF1F6B45);
 const _muted = Color(0xFF66736C);
+
+enum _CalendarToolbarAction {
+  allSources,
+  courses,
+  exams,
+  young,
+  personal,
+  toggleInactive,
+}
 
 PersonalEventDraft _blankDraft(DateTime date) {
   final day = _dateOnly(date);
@@ -2192,6 +2565,18 @@ DateTime _dateOnly(DateTime day) => DateTime.utc(day.year, day.month, day.day);
 String _dateLabel(DateTime day) =>
     '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
 
+String _filterLabel(CalendarFilter filter) => switch (filter) {
+  CalendarFilter.all => '全部来源',
+  CalendarFilter.course => '课程',
+  CalendarFilter.exam => '考试',
+  CalendarFilter.young => '二课',
+  CalendarFilter.personal => '个人安排',
+};
+
+String _filterTooltip(CalendarWorkspaceView view) =>
+    '来源：${_filterLabel(view.filter)}'
+    '${view.includeInactive ? ' · 包含隐藏/跳过' : ''}';
+
 String _rangeLabel(DateTime first) {
   final end = DateTime.utc(first.year, first.month, first.day + 6);
   return '${_shortDate(first)} – ${_shortDate(end)}';
@@ -2216,16 +2601,15 @@ String _occurrenceTime(CalendarOccurrence occurrence) {
   return '$startText – $endText';
 }
 
+String _presenceSuffix(CalendarOccurrence occurrence) =>
+    switch (occurrence.presence) {
+      AgendaPresence.observed => '',
+      AgendaPresence.missingWithinScope => ' · 来源暂缺，仍保留',
+      AgendaPresence.outsideScope => ' · 当前在来源观察范围外',
+    };
+
 String _clockLabel(DateTime time) =>
     '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
-
-String _filterLabel(CalendarFilter filter) => switch (filter) {
-  CalendarFilter.all => '全部来源',
-  CalendarFilter.course => '课程',
-  CalendarFilter.exam => '考试',
-  CalendarFilter.young => '二课',
-  CalendarFilter.personal => '个人安排',
-};
 
 String _kindLabel(CalendarKind kind) => switch (kind) {
   CalendarKind.course => '课程',
@@ -2247,16 +2631,26 @@ String _listeningLabel(ListeningMode mode) => switch (mode) {
 };
 
 String _relationKindLabel(CalendarRelationKind kind) => switch (kind) {
-  CalendarRelationKind.coexist => '共存',
-  CalendarRelationKind.related => '相关',
+  CalendarRelationKind.conflict => '冲突',
+  CalendarRelationKind.notConflict => '不冲突',
+  CalendarRelationKind.legacyUndecided => '旧说明（未保存明确判断）',
 };
 
-Color _kindColor(CalendarKind kind) => switch (kind) {
-  CalendarKind.course => const Color(0xFF3777B8),
-  CalendarKind.exam => const Color(0xFFD47A23),
-  CalendarKind.young => _green,
-  CalendarKind.personal => const Color(0xFF785A9B),
-};
+String _conflictSummaryLabel(CalendarConflict conflict) {
+  if (conflict.status == CalendarConflictStatus.notConflict) {
+    return '已判定不冲突';
+  }
+  if (conflict.hasExplicitDecision) return '已确认冲突';
+  if (conflict.relation?.kind == CalendarRelationKind.legacyUndecided) {
+    return '默认冲突 · 旧说明已保留';
+  }
+  return '默认冲突 · 尚未确认';
+}
+
+Color _conflictStatusColor(CalendarConflictStatus status) =>
+    status == CalendarConflictStatus.conflict
+    ? const Color(0xFF9B2C2C)
+    : const Color(0xFF2F6848);
 
 List<Widget> _stateTags(CalendarOccurrence occurrence) => [
   if (occurrence.presence == AgendaPresence.missingWithinScope)
@@ -2270,6 +2664,66 @@ List<Widget> _stateTags(CalendarOccurrence occurrence) => [
     const _SmallTag(text: '已完成', color: Color(0xFFE4F1E8)),
 ];
 
+List<Widget> _occurrenceTags(
+  CalendarOccurrence occurrence,
+  List<CalendarConflict> conflicts,
+) {
+  final matching = conflicts.where(
+    (conflict) =>
+        conflict.left.reference.identity == occurrence.reference.identity ||
+        conflict.right.reference.identity == occurrence.reference.identity,
+  );
+  final hasConflict = matching.any(
+    (conflict) => conflict.status == CalendarConflictStatus.conflict,
+  );
+  final hasExplicitConflict = matching.any(
+    (conflict) =>
+        conflict.status == CalendarConflictStatus.conflict &&
+        conflict.hasExplicitDecision,
+  );
+  final hasNotConflict = matching.any(
+    (conflict) => conflict.status == CalendarConflictStatus.notConflict,
+  );
+  final hasDefaultConflict = matching.any(
+    (conflict) =>
+        conflict.status == CalendarConflictStatus.conflict &&
+        !conflict.hasExplicitDecision,
+  );
+  final hasLegacy = matching.any(
+    (conflict) =>
+        conflict.relation?.kind == CalendarRelationKind.legacyUndecided,
+  );
+  return [
+    if (hasConflict)
+      Tooltip(
+        message: hasExplicitConflict && hasDefaultConflict
+            ? '含已确认冲突和默认冲突候选'
+            : hasExplicitConflict
+            ? '已确认冲突'
+            : hasLegacy
+            ? '默认按冲突展示；旧说明已保留'
+            : '默认按冲突展示，尚未确认',
+        child: _SmallTag(
+          text: hasExplicitConflict && hasDefaultConflict
+              ? '冲突（含默认）'
+              : hasExplicitConflict
+              ? '已确认冲突'
+              : '默认冲突',
+          color: const Color(0xFFFBEAEA),
+          textColor: const Color(0xFF9B2C2C),
+          icon: Icons.error_outline_rounded,
+        ),
+      ),
+    if (hasNotConflict)
+      const _SmallTag(
+        text: '不冲突',
+        color: Color(0xFFE6F1E9),
+        textColor: Color(0xFF2F6848),
+      ),
+    ..._stateTags(occurrence),
+  ];
+}
+
 List<CalendarConflict> _conflictsFor(
   CalendarWindow? window,
   CalendarOccurrence occurrence,
@@ -2278,11 +2732,20 @@ List<CalendarConflict> _conflictsFor(
   return window.conflicts
       .where(
         (conflict) =>
-            conflict.left.reference.identity == occurrence.reference.identity ||
-            conflict.right.reference.identity == occurrence.reference.identity,
+            !conflict.left.allDay &&
+            !conflict.right.allDay &&
+            (conflict.left.reference.identity ==
+                    occurrence.reference.identity ||
+                conflict.right.reference.identity ==
+                    occurrence.reference.identity),
       )
       .toList(growable: false);
 }
+
+List<CalendarConflict> _windowConflicts(CalendarWindow window) => window
+    .conflicts
+    .where((conflict) => !conflict.left.allDay && !conflict.right.allDay)
+    .toList(growable: false);
 
 String _failureMessage(CalendarFailureCode code) => switch (code) {
   CalendarFailureCode.invalidInput => '输入内容不符合日程要求，请检查日期和字段长度。',

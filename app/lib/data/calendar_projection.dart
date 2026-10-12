@@ -381,7 +381,9 @@ final class CalendarProjection {
     Map<_IdentityPair, CalendarRelation> relations,
   ) {
     final candidates =
-        allWindowItems.where((item) => !item.hidden && !item.skipped).toList()
+        allWindowItems
+            .where((item) => !item.hidden && !item.skipped && !item.allDay)
+            .toList()
           ..sort(_compareOccurrences);
     final active = <CalendarOccurrence>[];
     final conflicts = <CalendarConflict>[];

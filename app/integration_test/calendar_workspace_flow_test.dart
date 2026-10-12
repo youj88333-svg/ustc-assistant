@@ -7,6 +7,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:ustc_assistant_m0/app/calendar_teaching_axis.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
@@ -843,7 +844,7 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(const ValueKey('calendar-relation-kind')));
         await tester.pumpAndSettle();
-        await tester.tap(find.text('相关').last);
+        await tester.tap(find.text('冲突').last);
         await tester.pumpAndSettle();
         await _enterText(tester, 'calendar-relation-note', '同一时段，共存说明');
         await _tapKey(tester, 'calendar-relation-save');
@@ -864,7 +865,7 @@ void main() {
         );
         expect(courseDetail.relations, hasLength(1));
         final relation = courseDetail.relations.single;
-        expect(relation.kind, CalendarRelationKind.related);
+        expect(relation.kind, CalendarRelationKind.conflict);
         expect(relation.reference.version, 1);
         expect(relation.note, '同一时段，共存说明');
         expect(
@@ -1052,6 +1053,147 @@ void main() {
             active.jwStore.readYoungView,
           )).credentialSaved,
           isFalse,
+        );
+      } finally {
+        await _disposeAndClean(tester, workspace, runtimes);
+      }
+    },
+  );
+  testWidgets(
+    'native teaching overview renders dense named events and default conflicts without saving decisions',
+    (tester) async {
+      final workspace = await _createWorkspace();
+      final runtimes = <DemoRuntime>[];
+      try {
+        final runtime = await _openRuntime(tester, workspace);
+        runtimes.add(runtime);
+        final drafts = <PersonalEventDraft>[
+          for (final period in ustcTeachingPeriods)
+            PersonalEventDraft(
+              title: '教学节次演示 ${period.number}',
+              start: _beijingTime(
+                2026,
+                10,
+                12,
+                period.startMinute ~/ 60,
+                period.startMinute % 60,
+              ),
+              end: _beijingTime(
+                2026,
+                10,
+                12,
+                period.endMinute ~/ 60,
+                period.endMinute % 60,
+              ),
+            ),
+          for (final day in [13, 15])
+            PersonalEventDraft(
+              title: '数学分析与线性代数',
+              start: _beijingTime(2026, 10, day, 7, 50),
+              end: _beijingTime(2026, 10, day, 9, 25),
+              location: '合成教室',
+            ),
+          PersonalEventDraft(
+            title: '重叠的课程讨论',
+            start: _beijingTime(2026, 10, 13, 8, 40),
+            end: _beijingTime(2026, 10, 13, 9, 25),
+          ),
+          for (var index = 0; index < 3; index++) ...[
+            PersonalEventDraft(
+              title: '全天安排 ${index + 1}',
+              start: DateTime.utc(2026, 10, 14),
+              end: DateTime.utc(2026, 10, 15),
+              allDay: true,
+            ),
+            PersonalEventDraft(
+              title: '凌晨安排 ${index + 1}',
+              start: _beijingTime(2026, 10, 16, 1 + index),
+              end: _beijingTime(2026, 10, 16, 1 + index, 30),
+            ),
+          ],
+        ];
+        for (final draft in drafts) {
+          final before = await _query(
+            tester,
+            runtime,
+            DateTime.utc(2026, 10, 12),
+            DateTime.utc(2026, 10, 19),
+          );
+          await _commit(
+            tester,
+            runtime,
+            before.context,
+            CreatePersonalEvent(draft),
+          );
+        }
+        await tester.pumpWidget(_productApp(runtime));
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'shell-nav-agenda');
+        await _loadWorkspace(
+          tester,
+          runtime,
+          DateTime.utc(2026, 10, 12),
+          CalendarViewMode.week,
+        );
+        final window = runtime.calendar.view.window!;
+        expect(window.items, hasLength(22));
+        expect(window.conflicts, hasLength(1));
+        expect(window.conflicts.single.status, CalendarConflictStatus.conflict);
+        expect(window.conflicts.single.hasExplicitDecision, isFalse);
+        expect(find.byIcon(Icons.error_outline_rounded), findsNWidgets(2));
+        expect(find.text('合成教室'), findsNWidgets(2));
+        final storedDecisions = await _runNative(
+          tester,
+          () async =>
+              (await runtime.jwStore
+                      .customSelect(
+                        'SELECT COUNT(*) AS count FROM agenda_relations',
+                      )
+                      .getSingle())
+                  .read<int>('count'),
+        );
+        expect(storedDecisions, 0);
+        final period = find.byKey(const ValueKey('calendar-week-period-13'));
+        expect(period, findsOneWidget);
+        final viewport = tester.getRect(
+          find.byKey(const ValueKey('calendar-week-time-scroll')),
+        );
+        final lastPeriod = tester.getRect(period);
+        // If the OS gives the native test a shorter window, bounded scrolling
+        // is allowed; a normal desktop canvas must fit all teaching periods.
+        final desktopSize = tester.getSize(
+          find.byKey(const ValueKey('m42-synthetic-capture')),
+        );
+        if (desktopSize.width >= 1100 && desktopSize.height >= 680) {
+          expect(
+            viewport.height,
+            greaterThanOrEqualTo(CalendarTeachingAxis.fit(0).height),
+          );
+          expect(lastPeriod.bottom, lessThanOrEqualTo(viewport.bottom + 1));
+          expect(
+            tester
+                .state<ScrollableState>(
+                  find.descendant(
+                    of: find.byKey(const ValueKey('calendar-week-time-scroll')),
+                    matching: find.byType(Scrollable),
+                  ),
+                )
+                .position
+                .maxScrollExtent,
+            lessThanOrEqualTo(1),
+          );
+        }
+        await _captureSyntheticUi(tester, 'teaching-overview');
+        await _tapKey(tester, 'calendar-week-overflow-all-day-2026-10-14');
+        final allDay = _oneItem(window, '全天安排 3');
+        await _tapKey(
+          tester,
+          'calendar-overflow-item-personal-${allDay.reference.identity.localId}-0',
+        );
+        expect(runtime.calendar.view.detail!.occurrence.allDay, isTrue);
+        expect(
+          find.byKey(const ValueKey('calendar-relation-save')),
+          findsNothing,
         );
       } finally {
         await _disposeAndClean(tester, workspace, runtimes);

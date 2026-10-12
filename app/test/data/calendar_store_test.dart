@@ -221,7 +221,7 @@ void main() {
         SaveCalendarRelation(
           left: updated.target!,
           right: person.target!,
-          kind: CalendarRelationKind.coexist,
+          kind: CalendarRelationKind.notConflict,
           note: '合成解释',
         ),
       );
@@ -274,7 +274,7 @@ void main() {
       );
       expect(
         (await _window(store)).conflicts.single.relation?.kind,
-        CalendarRelationKind.coexist,
+        CalendarRelationKind.notConflict,
       );
     },
   );
@@ -299,7 +299,7 @@ void main() {
         SaveCalendarRelation(
           left: left.target!,
           right: right.target!,
-          kind: CalendarRelationKind.related,
+          kind: CalendarRelationKind.conflict,
           note: '合成关联',
         ),
       );
@@ -704,7 +704,357 @@ void main() {
   );
 
   test(
-    'schema 5 to 6 preserves original source identity credentials and knowledge',
+    'all-day conversion suppresses decisions without deleting them',
+    () async {
+      final store = await _open();
+      final context = (await _window(store)).context;
+      var left = (await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('定时一')),
+      )).target!;
+      final right = (await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('定时二')),
+      )).target!;
+      expect(
+        (await _window(store)).conflicts.single.status,
+        CalendarConflictStatus.conflict,
+      );
+      expect(
+        (await _window(store)).conflicts.single.hasExplicitDecision,
+        isFalse,
+      );
+      expect(await _count(store, 'agenda_relations'), 0);
+      await _write(
+        store,
+        context,
+        SaveCalendarRelation(
+          left: left,
+          right: right,
+          kind: CalendarRelationKind.conflict,
+          note: '保留判定',
+        ),
+      );
+      expect(
+        (await _window(store)).conflicts.single.status,
+        CalendarConflictStatus.conflict,
+      );
+      left = (await _write(
+        store,
+        context,
+        UpdatePersonalSeries(
+          left,
+          PersonalEventDraft(
+            title: '全天一',
+            start: _day,
+            end: _day.add(const Duration(days: 1)),
+            allDay: true,
+          ),
+        ),
+      )).target!;
+      expect((await _window(store)).items, hasLength(2));
+      expect((await _window(store)).conflicts, isEmpty);
+      expect((await store.localCalendar.detail(left)).relations, isEmpty);
+      expect((await store.localCalendar.detail(right)).relations, isEmpty);
+      await _failure(
+        _write(
+          store,
+          context,
+          SaveCalendarRelation(
+            left: left,
+            right: right,
+            kind: CalendarRelationKind.notConflict,
+            note: '',
+          ),
+        ),
+        CalendarFailureCode.invalidInput,
+      );
+      expect(await _count(store, 'agenda_relations'), 1);
+      left = (await _write(
+        store,
+        context,
+        UpdatePersonalSeries(left, _draft('恢复定时')),
+      )).target!;
+      expect(
+        (await store.localCalendar.detail(left)).relations.single.note,
+        '保留判定',
+      );
+      expect(
+        (await _window(store)).conflicts.single.status,
+        CalendarConflictStatus.conflict,
+      );
+      await _failure(
+        _write(
+          store,
+          context,
+          SaveCalendarRelation(
+            left: left,
+            right: right,
+            kind: CalendarRelationKind.legacyUndecided,
+            note: '',
+          ),
+        ),
+        CalendarFailureCode.invalidInput,
+      );
+    },
+  );
+
+  test(
+    'native schema 6 upgrade retains legacy meaning ids versions and sequence',
+    () async {
+      final file = await _tempFile();
+      var store = await _open(file: file);
+      await _importCourse(store);
+      var window = await _window(store);
+      var course = window.items.single;
+      final annotated = await _write(
+        store,
+        window.context,
+        UpdateSchoolAnnotation(course.reference, note: '合成来源备注', hidden: true),
+      );
+      final left = (await _write(
+        store,
+        window.context,
+        CreatePersonalEvent(_draft('旧记录一')),
+      )).target!;
+      final right = (await _write(
+        store,
+        window.context,
+        CreatePersonalEvent(_draft('旧记录二')),
+      )).target!;
+      await _write(
+        store,
+        window.context,
+        SaveCalendarRelation(
+          left: annotated.target!,
+          right: left,
+          kind: CalendarRelationKind.conflict,
+          note: '原相关说明',
+        ),
+      );
+      await _write(
+        store,
+        window.context,
+        SaveCalendarRelation(
+          left: left,
+          right: right,
+          kind: CalendarRelationKind.notConflict,
+          note: '原共存说明',
+        ),
+      );
+      final oldCommand = await store.localCalendar.prepare(
+        window.context,
+        SetPersonalOccurrenceState(left, skipped: true),
+      );
+      final auditCount = await _count(store, 'agenda_audit');
+      final receipts = await _count(store, 'agenda_receipts');
+      final oldContext = window.context;
+      await store.close();
+      _downgradeRelationsToSynthetic6(file);
+      store = await _open(file: file);
+      window = await _window(store, inactive: true);
+      expect(window.context.agendaEpoch, oldContext.agendaEpoch + 1);
+      expect(
+        (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
+          'user_version',
+        ),
+        7,
+      );
+      course = window.items.singleWhere(
+        (item) => item.reference.identity.kind == CalendarKind.course,
+      );
+      expect(course.hidden, isTrue);
+      expect(course.note, '合成来源备注');
+      expect(course.reference.identity, annotated.target!.identity);
+      expect(course.reference.version, annotated.target!.version);
+      final oldRelated = (await store.localCalendar.detail(
+        course.reference,
+      )).relations.single;
+      expect(oldRelated.reference.localId, 1);
+      expect(oldRelated.reference.version, 1);
+      expect(oldRelated.kind, CalendarRelationKind.legacyUndecided);
+      expect(oldRelated.note, '原相关说明');
+      final localLeft = window.items.singleWhere(
+        (item) => item.reference.identity == left.identity,
+      );
+      final localRight = window.items.singleWhere(
+        (item) => item.reference.identity == right.identity,
+      );
+      expect(
+        (await store.localCalendar.detail(
+          localLeft.reference,
+        )).relations.map((r) => r.kind),
+        contains(CalendarRelationKind.notConflict),
+      );
+      expect(await _count(store, 'agenda_audit'), auditCount);
+      expect(await _count(store, 'agenda_receipts'), receipts);
+      await _failure(
+        store.localCalendar.commit(oldCommand),
+        CalendarFailureCode.staleReference,
+      );
+      final additional = await _write(
+        store,
+        window.context,
+        SaveCalendarRelation(
+          left: course.reference,
+          right: localRight.reference,
+          kind: CalendarRelationKind.conflict,
+          note: '',
+        ),
+      );
+      expect(additional.relation!.localId, 101);
+      await store.close();
+      store = await _open(file: file);
+      expect(await _count(store, 'agenda_relations'), 3);
+      expect(await _count(store, 'agenda_audit'), auditCount + 1);
+      expect(await _count(store, 'agenda_receipts'), receipts + 1);
+    },
+  );
+
+  test(
+    'schema 6 empty relation table preserves its deleted-id high water',
+    () async {
+      final file = await _tempFile();
+      var store = await _open(file: file);
+      final window = await _window(store);
+      final left = (await _write(
+        store,
+        window.context,
+        CreatePersonalEvent(_draft('高水位一')),
+      )).target!;
+      final right = (await _write(
+        store,
+        window.context,
+        CreatePersonalEvent(_draft('高水位二')),
+      )).target!;
+      await _write(
+        store,
+        window.context,
+        SaveCalendarRelation(
+          left: left,
+          right: right,
+          kind: CalendarRelationKind.notConflict,
+          note: '合成删除历史',
+        ),
+      );
+      await store.close();
+      _downgradeRelationsToSynthetic6(file);
+      final raw = sqlite3.sqlite3.open(file.path);
+      try {
+        raw.execute('DELETE FROM agenda_relations');
+      } finally {
+        raw.close();
+      }
+      store = await _open(file: file);
+      final after = await _window(store);
+      expect(await _count(store, 'agenda_relations'), 0);
+      final next = await _write(
+        store,
+        after.context,
+        SaveCalendarRelation(
+          left: after.items[0].reference,
+          right: after.items[1].reference,
+          kind: CalendarRelationKind.conflict,
+          note: '新确认',
+        ),
+      );
+      expect(next.relation!.localId, 101);
+      final epoch = after.context.agendaEpoch;
+      await store.close();
+      store = await _open(file: file);
+      expect((await _window(store)).context.agendaEpoch, epoch);
+    },
+  );
+
+  test(
+    'schema 6 migration collision rolls back original relations and epoch',
+    () async {
+      final file = await _tempFile();
+      var store = await _open(file: file);
+      final context = (await _window(store)).context;
+      final left = (await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('回滚一')),
+      )).target!;
+      final right = (await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('回滚二')),
+      )).target!;
+      await _write(
+        store,
+        context,
+        SaveCalendarRelation(
+          left: left,
+          right: right,
+          kind: CalendarRelationKind.conflict,
+          note: '原始旧说明',
+        ),
+      );
+      await store.close();
+      _downgradeRelationsToSynthetic6(file);
+      var raw = sqlite3.sqlite3.open(file.path);
+      try {
+        raw.execute(
+          'CREATE TABLE agenda_relations_v7 (synthetic_collision TEXT)',
+        );
+      } finally {
+        raw.close();
+      }
+      final failed = JwStore(
+        NativeDatabase(file),
+        ownership: _Owner(),
+        clock: _clock,
+      );
+      addTearDown(failed.close);
+      await expectLater(
+        failed.initialize(),
+        throwsA(
+          isA<AppFailure>().having(
+            (e) => e.code,
+            'failure',
+            FailureCode.storageFailed,
+          ),
+        ),
+      );
+      await failed.close();
+      raw = sqlite3.sqlite3.open(file.path);
+      try {
+        expect(raw.select('PRAGMA user_version').single['user_version'], 6);
+        expect(
+          raw.select('SELECT kind,note FROM agenda_relations').single,
+          containsPair('kind', 'related'),
+        );
+        expect(
+          raw.select('SELECT note FROM agenda_relations').single['note'],
+          '原始旧说明',
+        );
+        expect(
+          raw.select('SELECT epoch FROM agenda_state').single['epoch'],
+          context.agendaEpoch,
+        );
+        raw.execute('DROP TABLE agenda_relations_v7');
+      } finally {
+        raw.close();
+      }
+      store = await _open(file: file);
+      expect(
+        (await _window(store)).conflicts.single.status,
+        CalendarConflictStatus.conflict,
+      );
+      expect(
+        (await _window(store)).conflicts.single.hasExplicitDecision,
+        isFalse,
+      );
+      expect(await _count(store, 'personal_events'), 2);
+    },
+  );
+
+  test(
+    'schema 5 to current preserves original source identity credentials and knowledge',
     () async {
       final file = await _tempFile();
       var store = await _open(file: file);
@@ -767,7 +1117,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        6,
+        7,
       );
     },
   );
@@ -787,6 +1137,35 @@ Future<JwStore> _open({
   addTearDown(store.close);
   await store.initialize();
   return store;
+}
+
+// Construct an explicit synthetic v6 table; never point this helper at an app
+// directory. A high sequence also covers IDs of already removed legacy rows.
+void _downgradeRelationsToSynthetic6(File file) {
+  final raw = sqlite3.sqlite3.open(file.path);
+  try {
+    raw.execute('BEGIN');
+    raw.execute(
+      'ALTER TABLE agenda_relations RENAME TO synthetic_relations_v7',
+    );
+    raw.execute('''CREATE TABLE agenda_relations (
+      local_id INTEGER PRIMARY KEY AUTOINCREMENT,
+      left_identity TEXT NOT NULL,right_identity TEXT NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('coexist','related')),
+      note TEXT NOT NULL CHECK(length(note)<=4000),version INTEGER NOT NULL CHECK(version>0),
+      UNIQUE(left_identity,right_identity))''');
+    raw.execute(
+      "INSERT INTO agenda_relations SELECT local_id,left_identity,right_identity,CASE kind WHEN 'notConflict' THEN 'coexist' ELSE 'related' END,note,version FROM synthetic_relations_v7",
+    );
+    raw.execute(
+      "UPDATE sqlite_sequence SET seq=100 WHERE name='agenda_relations'",
+    );
+    raw.execute('DROP TABLE synthetic_relations_v7');
+    raw.execute('PRAGMA user_version=6');
+    raw.execute('COMMIT');
+  } finally {
+    raw.close();
+  }
 }
 
 Future<File> _tempFile() async {

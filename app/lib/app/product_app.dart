@@ -176,6 +176,9 @@ final class _ProductShellState extends State<_ProductShell> {
         final narrow = width < 760;
         final wide = width >= 1100;
         final destination = _destination;
+        final calendarCanvas =
+            destination == ShellDestination.agenda &&
+            widget.agendaBuilder != null;
         return Scaffold(
           backgroundColor: _canvas,
           appBar: narrow
@@ -211,6 +214,7 @@ final class _ProductShellState extends State<_ProductShell> {
                 if (!narrow)
                   _NavigationPanel(
                     selected: destination,
+                    calendarCanvas: calendarCanvas,
                     mode: wide
                         ? _NavigationMode.expanded
                         : _NavigationMode.rail,
@@ -219,10 +223,26 @@ final class _ProductShellState extends State<_ProductShell> {
                 Expanded(
                   child: Padding(
                     padding: EdgeInsets.fromLTRB(
-                      narrow ? 16 : 28,
-                      narrow ? 12 : 24,
-                      narrow ? 16 : 28,
-                      narrow ? 16 : 24,
+                      calendarCanvas
+                          ? 12
+                          : narrow
+                          ? 16
+                          : 28,
+                      calendarCanvas
+                          ? 8
+                          : narrow
+                          ? 12
+                          : 24,
+                      calendarCanvas
+                          ? 12
+                          : narrow
+                          ? 16
+                          : 28,
+                      calendarCanvas
+                          ? 12
+                          : narrow
+                          ? 16
+                          : 24,
                     ),
                     child: _buildDestination(context, destination, width),
                   ),
@@ -562,15 +582,17 @@ final class _NavigationPanel extends StatelessWidget {
     required this.selected,
     required this.mode,
     required this.onSelected,
+    this.calendarCanvas = false,
   });
 
   final ShellDestination selected;
   final _NavigationMode mode;
   final ValueChanged<ShellDestination> onSelected;
+  final bool calendarCanvas;
 
   bool get _expanded => mode != _NavigationMode.rail;
   double get _width => switch (mode) {
-    _NavigationMode.expanded => 216,
+    _NavigationMode.expanded => calendarCanvas ? 184 : 216,
     _NavigationMode.rail => 72,
     _NavigationMode.drawer => 264,
   };

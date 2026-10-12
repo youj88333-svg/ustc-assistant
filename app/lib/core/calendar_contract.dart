@@ -8,7 +8,9 @@ enum AttendanceDecision { undecided, attend, skip }
 
 enum ListeningMode { undecided, listening, selfStudy }
 
-enum CalendarRelationKind { coexist, related }
+enum CalendarRelationKind { conflict, notConflict, legacyUndecided }
+
+enum CalendarConflictStatus { conflict, notConflict }
 
 enum CalendarFailureCode {
   invalidInput,
@@ -288,6 +290,15 @@ final class CalendarConflict {
   final CalendarOccurrence left;
   final CalendarOccurrence right;
   final CalendarRelation? relation;
+  CalendarConflictStatus get status => switch (relation?.kind) {
+    CalendarRelationKind.conflict => CalendarConflictStatus.conflict,
+    CalendarRelationKind.notConflict => CalendarConflictStatus.notConflict,
+    CalendarRelationKind.legacyUndecided ||
+    null => CalendarConflictStatus.conflict,
+  };
+  bool get hasExplicitDecision =>
+      relation != null &&
+      relation!.kind != CalendarRelationKind.legacyUndecided;
 }
 
 final class CalendarWindow {
