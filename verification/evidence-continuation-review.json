@@ -1,0 +1,75 @@
+{
+  "recorded_utc": "2026-10-09 09:14:06 UTC",
+  "scope": "Windows continuation; loopback synthetic fixtures only",
+  "sdk": "1.0.3967.48",
+  "runtime": "154.0.4258.62",
+  "independent_runs": [
+    {
+      "file": "windows/evidence-connection-allowlist-navigation-independent.json",
+      "exit_code": 1,
+      "utc": "2026-10-09T08:42:38.0084998Z",
+      "counts": {
+        "pass": 18,
+        "info": 5,
+        "fail": 12,
+        "not_run": 1
+      },
+      "deletePending": false,
+      "sha256": "68625ea80bdb1d7e01aeed529c014a0a46d4a7d9b2e47c2bc001d0cb236e7fbc"
+    },
+    {
+      "file": "windows/evidence-connection-allowlist-https-selector-independent.json",
+      "exit_code": 0,
+      "utc": "2026-10-09T09:07:39.3846967Z",
+      "counts": {
+        "info": 31,
+        "pass": 107,
+        "not_run": 1
+      },
+      "deletePending": false,
+      "sha256": "9678a9ad13c47b85e7e970f37b68692edc3aab29fe1d8220dddede33a21bc229"
+    }
+  ],
+  "source_sha256": {
+    "verification/windows/WindowsProbe.cs": "c1abd257f6e48eeb5d876b9b28cacbd1192c922490e3c4c4fa933989e4407991",
+    "verification/windows/run.ps1": "291101333eeb41f3dc05b39bb0ce8e20fe5731b4530358e30b2cef9f180ea497",
+    "verification/https_fixture/fixture.py": "3d3b56c9c27174d7350c0e1ecf4b575d2bf3b8818bdc990b2086819c1f0c31c0"
+  },
+  "fixture_review": {
+    "final_socket_loop": "WindowsSelectorEventLoopPolicy; fixture process only",
+    "control_cases": [
+      "HTTPS GET and certificate fingerprint; stop with stdin open",
+      "stdin EOF",
+      "duplicate control property rejected"
+    ],
+    "control_cases_passed": 3,
+    "fault_boundary_cases_passed": 5,
+    "initial_review_failures": [
+      "Incorrect expected control event; corrected to command",
+      "Stop acknowledged but process exit 3221225477 with BufferedReader shutdown lock classification",
+      "Closed TCP connection probe timed out; not treated as proof of port release",
+      "WebView2 TLS client still triggered Proactor SSL transport callback ConnectionResetError"
+    ],
+    "retained_failed_browser_runs": [
+      "windows/evidence-connection-allowlist-https-independent.json",
+      "windows/evidence-connection-allowlist-https-close-context.json"
+    ],
+    "stderr_empty": true,
+    "temporary_credentials_remaining": 0,
+    "port_rebind_checks": "UDP in all three cases; TCP in no-client EOF and invalid-control cases; separate stop-only TCP/UDP rebind passed"
+  },
+  "final_runtime_inventory": {
+    "partition_directories": 0,
+    "temporary_fixture_pem_files": 0,
+    "active_known_experiment_helpers": 0
+  },
+  "proxy_review": {
+    "http_proxy_loopback_7897_no_credentials": true,
+    "https_proxy_loopback_7897_no_credentials": true,
+    "all_proxy_loopback_7897_no_credentials": true,
+    "daily_proxy_settings_modified": false
+  },
+  "source_school_access": false,
+  "real_credentials_used": false,
+  "disposition": "RTC after subsequent document navigation remains failed; real source entry unavailable; V-01/V-02/V-03 open; no design freeze or product M0"
+}
