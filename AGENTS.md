@@ -3,7 +3,7 @@
 ## 工作区与文档
 
 - 仅在 `E:\107\.worktrees\rewrite\design-reset`、`codex/design-reset` 修改新工程，未经用户要求不推送。`E:\107` 的 minimal 未提交内容和 `rewrite/flutter-native` 参考分支保留，不接管其资产。
-- 唯一导航为 [docs/README.md](docs/README.md)。[状态页](docs/status.md)维护当前阶段；M0–M3 与 M4.1 已验收关闭，M4.2 教务信息补齐已过自动检查、待 Release 替换与用户再次验收；M4.3–M4.4 未开始。默认 Agent，Agent/日程两主页，任务在日程内，设置为辅助入口；M5 才接真实 Agent。M3 公开内部能力无独立产品检索入口或工具注册；main 只读界面参考不转移代码或资产。
+- 唯一导航为 [docs/README.md](docs/README.md)。[状态页](docs/status.md)维护当前阶段；M0–M3 与 M4.1 已验收关闭，M4.2 教务信息补齐工程及正式构建完成、待用户再次验收；M4.3–M4.4 未开始。默认 Agent，Agent/日程两主页，任务在日程内，设置为辅助入口；M5 才接真实 Agent。M3 公开内部能力无独立产品检索入口或工具注册；main 只读界面参考不转移代码或资产。
 - 现行依据为 `docs/architecture/07–12`、`docs/quality/13`、`docs/reviews/14`、[15 工作流](docs/workflow.md)和对应来源参考/已批准决定。旧 `docs/refactor-docs/00–15` 仅是迁移导航，原文在冻结档案，不能采用旧里程碑或旧通过结论。
 - 较大阶段只维护 `docs/milestones/<阶段>/plan.md` 一份任务单；实施/失败/检查写 `records*`，用户验收和关闭写 `acceptance.md`。遵循 [文档维护规则](docs/maintaining.md)，不向设计、AGENTS 或入口追加进展流水。
 - 每份任务规格与子代理提示词显式列出设计依据、已批准修订、接口/不变量、修改范围、依赖及验收条件；冲突交主代理，不照搬历史实现、测试、fixtures、CI 或施工插件。
