@@ -1,6 +1,6 @@
 # USTC Assistant · Windows 应用
 
-新 Flutter 工程包含已验收的 M0 离线演示、M1 教务自动采集与本地日程、M2 二课活动关联日程与活动只读查询，以及待真人验收的 M3 内部公开查询和精选文本知识库。当前范围见 [状态页](../docs/status.md)，历史失败/检查和用户验收见 [阶段索引](../docs/milestones/README.md)。
+新 Flutter 工程包含已验收的 M0 离线演示、M1 教务自动采集与本地日程、M2 二课活动关联日程与活动只读查询，以及待阶段关闭确认的 M3 内部公开查询和精选文本知识库。当前范围见 [状态页](../docs/status.md)，历史失败/检查和用户验收见 [阶段索引](../docs/milestones/README.md)。
 
 ## 启动与构建
 
@@ -54,6 +54,14 @@
 “复制安全验收摘要”输出 public-query-validation-v1，只含状态/固定失败/安全计数，不含关键词、原文、引用值或账号。原文及附件 HTTPS 链接可以复制后由用户打开，应用不下载文件，Markdown 不自动联网加载图片。该入口不是正式产品路由，M3 不接 Agent、模型或工具注册；材料转换工具也不装入应用。
 
 制作资料后，从仓库根运行 `tools/prepare-knowledge-assets.ps1 -Check`，确认校核摘要和固定编译资产一致；需要更新时由维护版本流程重新编译，不允许应用选择任意 URL 或本机路径。
+
+临时面板是可选调试辅助，不要求用户重复点击才能验收内部能力。维护者可明确启动实际随包资料开发核验：
+
+```powershell
+& 'E:\flutter\flutter\bin\flutter.bat' run -d windows --debug --no-pub --target=tool/m3_reviewed_bundle_probe.dart --dart-define=USTC_M3_REVIEWED_BUNDLE_PROBE=true
+```
+
+该程序不显示界面，不访问网络或正式数据库；使用默认资源 Loader、正式服务和独立临时原生库核验全部 7 项的载入、中文检索、全文读取、重放、数据库重开、清库不重建及重载，关闭后删除自建临时根，仅输出安全计数与固定失败阶段。必须显式 opt-in，普通入口与 CI 不运行它；它核验已批准的实际公开文本，不冒充合成测试、政策现行证明或用户体验验收。
 
 ## 取消、清理与恢复
 

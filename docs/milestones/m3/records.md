@@ -6,6 +6,8 @@
 
 用户于 2026-10-12 批准恢复，见 [内部契约与实施](records/04-internal-implementation.md)；上述暂停是历史时点，当前状态以任务单和状态页为准。
 
+三组人工点击交付后，用户认为负担高、意义有限；当前改为根负责证据核验，临时界面可选，见 [验收分工与随包资料核验](records/05-evidence-based-verification.md)。阶段关闭决定仍未作出。
+
 ## 2026-10-11：校园入口与 Agent 边界
 
 用户指定校园首批来源为教务处[通知新闻](https://www.teach.ustc.edu.cn/category/notice)与[学生事务/服务指南](https://www.teach.ustc.edu.cn/category/service/svc-student)，财务处后续接入。用户提出校园内容应按需检索，由 Agent 根据问题调用工具，要求进一步明确存储与职责边界。

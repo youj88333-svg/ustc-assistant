@@ -1,6 +1,6 @@
 # 校园公开信息：教务处与财务处
 
-状态：2026-10-12，内部 public-query-v1 与首批 knowledge-edition-v1 已装配；正式 Dart HTTP 已有限复验公开栏目、文章和教务关键词，用户验收尚未完成。两提供方属于同一逻辑校园来源；通用要求见 [09 K-01/K-03/K-04/K-07](../../architecture/09-contracts.md)，本期范围见 [M3](../../milestones/m3/plan.md)。研究时数量不作为站点常量。
+状态：2026-10-12，内部 public-query-v1 与首批 knowledge-edition-v1 已装配；正式 Dart HTTP 已有限复验公开栏目、文章和教务关键词，实际随包资料末端核验通过，M3 阶段关闭待用户确认。两提供方属于同一逻辑校园来源；通用要求见 [09 K-01/K-03/K-04/K-07](../../architecture/09-contracts.md)，本期范围见 [M3](../../milestones/m3/plan.md)。研究时数量不作为站点常量。
 
 ## 教务处
 
@@ -51,4 +51,4 @@
 
 首批清单为 campus-longterm-2026-10-12-v1，7 项选定长期资料，具体出处/版本/完整选定范围见 [目录](../../../knowledge/catalog-v1.json)与 [任务单](../../milestones/m3/plan.md)。62 页本科学习指南和 38 页财务指南不在首批，通知/年度窗口不入库；校核稿编译为受限 Markdown，原件不打包。C3 保存已接受文本、片段和必要元数据，载入/清库与在线查询分开，中文检索不生成政策答案。
 
-合成/loopback/临时 Windows 检查与根手工公开请求分别记录；当前公开成功样例只证明所测路径，不证明全部页面或政策现行。明确校内 IP 限制后的直连逻辑有回环反例，本轮真实收费页可读但没有再次触发该提示，不能补记真实自动回退通过。用户实际载入、阅读/查询和保留验收仍待完成。具体实验和失败见 [研究记录](../../milestones/m3/records/02-public-materials.md)及 [实现记录](../../milestones/m3/records/04-internal-implementation.md)。
+合成/loopback/临时 Windows 检查与根手工公开请求分别记录；当前公开成功样例只证明所测路径，不证明全部页面或政策现行。明确校内 IP 限制后的直连逻辑有回环反例，本轮真实收费页可读但没有再次触发该提示，不能补记真实自动回退通过。根在独立临时原生库已验实际随包 7 项载入、中文检索/全文读取、重放、重开、清库/重载及真清理；不读正式数据，也不记作用户操作通过。具体实验和失败见 [研究记录](../../milestones/m3/records/02-public-materials.md)、[实现记录](../../milestones/m3/records/04-internal-implementation.md)及 [实际资料核验](../../milestones/m3/records/05-evidence-based-verification.md)。
