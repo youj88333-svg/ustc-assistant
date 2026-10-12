@@ -32,17 +32,32 @@ Astra 两次只读复核，Sol 修复并用故障注入验证：同一材料重�
 
 财务常见问题是公开留言标题列表；本轮内置浏览器只读点击一条及“更多”，两个公开回复入口均返回 404。正式能力因此保持 unavailable，不把问题标题当官方答案，也不转入留言/登录；临时标签均关闭。财务原生 POST 关键词仍未建立固定生产契约，保持 unavailable。
 
-## 根执行检查（进行中）
+## 根执行检查与复验
 
 - `flutter analyze --no-pub`：无问题。
-- `flutter test --no-pub --reporter expanded`：573 通过、1 项平台条件跳过（Windows 上的“非 Windows 凭据保护拒绝”用例）；全部为合成/loopback/临时资产。
+- `flutter test --no-pub --reporter expanded`：首次 573 通过、1 项平台条件跳过（Windows 上的“非 Windows 凭据保护拒绝”用例）；补充实际筛选/学生搜索及连接中断反例后，最终源码 577 通过、同一项跳过。全部为合成/loopback/临时资产。
 - `flutter test integration_test/public_knowledge_flow_test.dart -d windows --no-pub`：Windows 原生 1 项通过，真实临时 native SQLite/目录、合成材料，包含检索/正文、重开保留、双确认清库和不自动重建。
 - 4 个既有 Windows fixture 合并运行：M0 两项通过，后续三文件均在测试加载之前因 Flutter 日志连接退出失败；不能记录为 JW/Young 用例通过。根改为独立进程逐文件复验，结果接续登记。
+- 独立 Windows 进程复验：`jw_sync_flow_test.dart` 6 项、`young_sync_flow_test.dart` 2 项、`young_automation_flow_test.dart` 3 项全部通过。真实 native SQLite/目录/浏览器 fixture 使用合成/loopback/随机临时资产，未访问学校或正式库。
 
 受限 SDK formatter 曾因可执行路径解析失败，改在正常 SDK 执行环境运行；早期测试暴露清库 loading 和取消断言处理器注册时机问题，均修复后复验。正式资料导入与真人关闭仍独立于上述检查。
+
+最终源码再次 `analyze --no-pub` 无问题，默认正式 `build windows --release --no-pub --target=lib/main.dart` 成功；显式加 `--dart-define=USTC_M3_VALIDATION=true` 的临时验收 Release 也成功。包内仅 7 份知识 Markdown 与固定目录，逐文件 SHA-256 和编译源一致，无 PDF/图片原件、MinerU/Token、Python/PowerShell 转换脚本或回环 fixture。首次临时包检查命令因 PowerShell join/比较优先级误报目录不符，核对真实文件列表并修正比较后通过；应用资产没有为此修改。`prepare-knowledge-assets.ps1 -Check` 7 项一致，文档检查和 Git whitespace 检查通过。
+
+## 正式公开通道复验及补修
+
+根执行 `dart run tool/m3_public_probe.dart --public-only`，使用新内存公共上下文，经同一 C2/C1 端口手工核对已批准匿名公开页面；不属于自动测试，不保存原始响应或浏览器资产。课程/教师查询、真实第二页、详情、合法空态、6 个校园栏目及部分文章均分别取得成功证据，财务关键词/FAQ 明确 unavailable。学生事务主集合 74 个可接受条目分 20/20/20/14 续读，另 1 个超出文章范围的条目排除；这只是本轮观察，不写成站点常量。
+
+连续核对保留以下失败：学生集合续页曾 unsafeTarget，原因是解析器接受教师事务链接而请求登记拒绝；根改为共用文章路径登记，先排除范围外候选。学期排序后虽报成功却排除全部点评，实际排序控件携带 term 且早于学期控件；根以真实年份/季节标签确认学期，最后同一课程/学期返回 2 条、报道 2 条、无排除，评分人数与该学期点评计数分别保留。学生事务关键词页是 `main > section > div.list > ul.article-list`，不是无关键词的流程集合或通知 with-tag 列表；两次 sourceSchema 后，根读取真实父节点修正，学生类别/双类别归属、同栏目分页和空态有反例。最终按 `--campus-only` 复验退出 0，关键词第一/第二页分别 14/6 条、各排除 1 条，合法空态为 0。
+
+匿名评课曾间歇 networkFailed，PowerShell 也观察到 TLS EOF；失败会撤销当次来源引用，相关 staleReference 是失败后的拒旧结果。未推断确定的外部根因，没有降低 TLS、改代理环境或借浏览器。为只读 GET 增加一次 Socket/Handshake/HTTP 连接异常重试，沿用原 60 秒/8 次跳转预算与已选直连路线；非成功 HTTP 状态、结构错误、超限及取消不重试。回环验证单次中断恢复、连续中断有界失败、503 不重试及关闭拒旧请求。有限成功不保证未来网络可达，错误形状仍分别报告。
+
+收费页经正式客户端成功，directRetried=false，本轮没有再次触发明确校内 IP 提示；真实自动直连回退保持未观察，回环反例和此前代理/直连正文证据分别保留。财务 FAQ 两个浏览器标签及本轮新建标签均已关闭。三张开发校核临时 PNG 在核验精确目录、文件名与 SHA-256 后删除，归属目录已为空并移除；校核稿/编译文本保留，未碰用户附件。
 
 ## Git 检查点
 
 用户要求在合适节点提交。开始补齐本地文档与工程检查点，并将检查后及时 commit 写入工作流；不重造并不存在的 M0/M1/M2 历史提交，工程初次提交明确包含当前已验收基线与 M3 新能力。仍待真人验收的部分保持未关闭。
 
 文档检查点为 `12ab912`。首次暂存新资料后，cached whitespace 检查发现两处文稿末尾空行，根漏在该提交前处理，随后清理空行并同步校核稿摘要。另将冻结档案、校核稿和编译知识资产设为不做 Git 换行转换，防止重新检出改变摘要；没有改动冻结档案的实际内容，检查工作树与暂存对象的原始字节一致后另提交修复。
+
+字节完整性修复为 `25614b0`。工程检查点 `e2b9ce6` 保存当前已验收 M0/M1/M2 应用与前置诊断基线、M3 内部实现和固定编译工具；提交前 cached whitespace 通过，44 个冻结/校核/编译资料的工作树原始 blob 与暂存对象一致。历史原始空白仅按路径归档属性保留，现行代码/文稿继续检查；构建目录、临时资产、秘密和浏览器资料不入 Git。当前仍待用户通过临时面板核对公开查询、7 项真实材料载入/阅读及连续性，未创建 M3 关闭记录。
