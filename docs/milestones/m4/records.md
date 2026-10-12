@@ -4,3 +4,4 @@
 
 - [M4.1 布局、端口与应用壳](records/01-shell.md)：用户批准边界、默认 Agent/两主页/任务栏目、main 只读界面参考、实现及实际检查。
 - [M4.2 日程与个人安排](records/02-calendar.md)：授权、已定模型/接口、实施、失败修正与实际检查；用户验收另见 [分段验收](acceptance.md)。
+- [M4.2 用户反馈修正](records/03-calendar-feedback.md)：首次验收未通过后的 main 只读研究、官方作息、界面/冲突修正及新检查。
