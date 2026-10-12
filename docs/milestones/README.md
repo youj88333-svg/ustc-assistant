@@ -8,7 +8,7 @@
 | M1 | JW 自动采集与本地日程 | [计划](m1/plan.md) | [记录索引](m1/records.md) | [2026-10-10 关闭](m1/acceptance.md) |
 | M2 | Young 活动关联日程/独立只读查询 | [计划](m2/plan.md) | [记录索引](m2/records.md) | [2026-10-11 关闭](m2/acceptance.md) |
 | M3 | 为未来 Agent 准备内部公开查询与长期 Markdown 知识库 | [任务单](m3/plan.md) | [研究与实现](m3/records.md)，根工程检查、有限公开契约与实际随包资料核验完成，临时界面可选 | [2026-10-12 关闭](m3/acceptance.md) |
-| M4 | Agent 接入前的 Windows 应用可用版 | [任务单](m4/plan.md) | [记录](m4/records.md)，M4.3 已开始，先只读研究 main 的任务/时间规划和撤销；M4.4 未开始 | [M4.1–M4.2 已验收关闭](m4/acceptance.md)，M4 总阶段尚未关闭 |
+| M4 | Agent 接入前的 Windows 应用可用版 | [任务单](m4/plan.md) | [记录](m4/records.md)，M4.3 任务/时间规划与撤销工程、根检查和正式交付完成；M4.4 未开始 | [M4.1–M4.2 已验收关闭](m4/acceptance.md)，M4.3 待体验验收，M4 总阶段尚未关闭 |
 
 M5 拟正式构建 Agent，当前仅为用户提出的后续方向，任务范围与验收尚未定稿；不从 M4 界面空壳或预留接口推断模型/工具已实现。
 
