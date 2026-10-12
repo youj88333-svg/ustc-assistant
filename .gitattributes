@@ -1,0 +1,7 @@
+# Digests bind these reviewed/compiled bytes; never let checkout rewrite them.
+docs/archive/** -text
+knowledge/curated/** -text
+knowledge/samples/** -text
+knowledge/catalog-v1.json -text
+app/assets/knowledge/** -text
+app/lib/data/bundled_knowledge_identity.dart -text
