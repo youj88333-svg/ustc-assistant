@@ -48,6 +48,7 @@ void main() {
       await store.close();
       final raw = sqlite3.sqlite3.open(file.path);
       try {
+        removeTaskTablesForLegacyFixture(raw);
         raw.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
         raw.execute('PRAGMA user_version=7');
       } finally {
@@ -185,7 +186,7 @@ void main() {
       );
       expect(
         (await _window(store)).context.agendaEpoch,
-        context.agendaEpoch + 1,
+        context.agendaEpoch + 2,
       );
     },
   );
@@ -883,7 +884,7 @@ void main() {
         context,
         CreatePersonalEvent(_draft('定时一')),
       )).target!;
-      final right = (await _write(
+      var right = (await _write(
         store,
         context,
         CreatePersonalEvent(_draft('定时二')),
@@ -907,6 +908,13 @@ void main() {
           note: '保留判定',
         ),
       );
+      final afterDecision = await _window(store);
+      left = afterDecision.items
+          .singleWhere((i) => i.reference.identity == left.identity)
+          .reference;
+      right = afterDecision.items
+          .singleWhere((i) => i.reference.identity == right.identity)
+          .reference;
       expect(
         (await _window(store)).conflicts.single.status,
         CalendarConflictStatus.conflict,
@@ -984,7 +992,7 @@ void main() {
         window.context,
         UpdateSchoolAnnotation(course.reference, note: '合成来源备注', hidden: true),
       );
-      final left = (await _write(
+      var left = (await _write(
         store,
         window.context,
         CreatePersonalEvent(_draft('旧记录一')),
@@ -1004,6 +1012,9 @@ void main() {
           note: '原相关说明',
         ),
       );
+      left = (await _window(store, inactive: true)).items
+          .singleWhere((i) => i.reference.identity == left.identity)
+          .reference;
       await _write(
         store,
         window.context,
@@ -1025,12 +1036,12 @@ void main() {
       _downgradeRelationsToSynthetic6(file);
       store = await _open(file: file);
       window = await _window(store, inactive: true);
-      expect(window.context.agendaEpoch, oldContext.agendaEpoch + 1);
+      expect(window.context.agendaEpoch, oldContext.agendaEpoch + 2);
       expect(
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        8,
+        9,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1038,7 +1049,7 @@ void main() {
       expect(course.hidden, isTrue);
       expect(course.note, '合成来源备注');
       expect(course.reference.identity, annotated.target!.identity);
-      expect(course.reference.version, annotated.target!.version);
+      expect(course.reference.version, annotated.target!.version + 1);
       final oldRelated = (await store.localCalendar.detail(
         course.reference,
       )).relations.single;
@@ -1287,7 +1298,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        8,
+        9,
       );
     },
   );
@@ -1315,6 +1326,7 @@ void _downgradeRelationsToSynthetic6(File file) {
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    removeTaskTablesForLegacyFixture(raw);
     raw.execute(
       'ALTER TABLE agenda_relations RENAME TO synthetic_relations_v7',
     );

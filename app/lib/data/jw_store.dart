@@ -28,6 +28,8 @@ import 'calendar_projection.dart';
 part 'young_store_extension.dart';
 part 'public_store.dart';
 part 'local_calendar_store.dart';
+part 'local_task_store.dart';
+part 'calendar_undo_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
 
@@ -110,7 +112,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -126,6 +128,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ..._youngSchema,
         ...PublicStore.schema,
         ...LocalCalendarStore.schema,
+        ...LocalCalendarStore.taskSchema,
       ]) {
         await customStatement(statement);
       }
@@ -138,7 +141,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 7 || to != 8) {
+      if (from < 1 || from > 8 || to != 9) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -150,7 +153,10 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 4) ...PublicStore.schema,
           if (from <= 5) ...LocalCalendarStore.schema,
           if (from == 6) ...LocalCalendarStore.upgradeFrom6,
-          "ALTER TABLE jw_events ADD COLUMN academic_json TEXT CHECK(academic_json IS NULL OR length(academic_json)<=24576)",
+          if (from <= 7)
+            "ALTER TABLE jw_events ADD COLUMN academic_json TEXT CHECK(academic_json IS NULL OR length(academic_json)<=24576)",
+          ...LocalCalendarStore.taskSchema,
+          'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
         ]) {
           await customStatement(statement);
         }

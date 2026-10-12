@@ -2,7 +2,7 @@ part of 'jw_store.dart';
 
 /// Local business uses the same database, transaction queue and owner as the
 /// accepted school/knowledge stores. It never starts a source or reads secrets.
-final class LocalCalendarStore implements LocalCalendarPort {
+final class LocalCalendarStore implements LocalCalendarPort, LocalTaskPort {
   LocalCalendarStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -10,6 +10,17 @@ final class LocalCalendarStore implements LocalCalendarPort {
   bool _closed = false;
   bool _maintenanceRequested = false;
   static const _projection = CalendarProjection();
+
+  static const taskSchema = _taskSchema;
+
+  @override
+  Future<TaskWindow> queryTasks(TaskQuery query) => _queryTasks(query);
+  @override
+  Future<TaskDetail> taskDetail(TaskReference reference) =>
+      _taskDetail(reference);
+  @override
+  Future<CalendarUndoView> queryUndo(CalendarContext context) =>
+      _queryUndo(context);
 
   @override
   Stream<int> get changes => _changes.stream;
@@ -214,6 +225,9 @@ final class LocalCalendarStore implements LocalCalendarPort {
                   override.ordinal == reference.identity.ordinal &&
                   override.replacement != null,
             ),
+        planBlock: reference.identity.kind == CalendarKind.planBlock
+            ? await _blockByRef(reference)
+            : null,
         relations: item.allDay
             ? const []
             : snapshot.relations
@@ -367,6 +381,7 @@ final class LocalCalendarStore implements LocalCalendarPort {
           ),
       ],
       relations: [for (final row in relations) _relation(row, context)],
+      planBlocks: await _blockOccurrences(context, query, targets),
     );
   }
 
@@ -577,7 +592,11 @@ final class LocalCalendarStore implements LocalCalendarPort {
         :final hidden,
       ):
         if (target.context != context ||
-            target.identity.kind == CalendarKind.personal ||
+            ![
+              CalendarKind.course,
+              CalendarKind.exam,
+              CalendarKind.young,
+            ].contains(target.identity.kind) ||
             (note == null &&
                 attendance == null &&
                 listening == null &&
@@ -615,6 +634,45 @@ final class LocalCalendarStore implements LocalCalendarPort {
             target.version <= 0) {
           throw const CalendarFailure(CalendarFailureCode.invalidInput);
         }
+      case CreateTask(:final draft):
+        _validateTaskDraft(draft);
+      case UpdateTask(:final target, :final draft):
+        _validateTaskRef(context, target);
+        _validateTaskDraft(draft);
+      case SetTaskStatus(:final target):
+        _validateTaskRef(context, target);
+      case DeleteTask(:final target, :final confirmed):
+        _validateTaskRef(context, target);
+        if (!confirmed) {
+          throw const CalendarFailure(CalendarFailureCode.invalidInput);
+        }
+      case CreatePlanBlock(:final task, :final draft):
+        _validateTaskRef(context, task);
+        _validateBlockDraft(draft);
+      case UpdatePlanBlock(:final target, :final draft):
+        _validateBlockRef(context, target);
+        _validateBlockDraft(draft);
+      case SetPlanBlockStatus(:final target):
+        _validateBlockRef(context, target);
+      case DeletePlanBlock(:final target, :final confirmed):
+        _validateBlockRef(context, target);
+        if (!confirmed) {
+          throw const CalendarFailure(CalendarFailureCode.invalidInput);
+        }
+      case UndoCalendarWrite(:final target):
+        if (target.context != context ||
+            !RegExp(r'^calendar-undo-[0-9a-f]{32}$').hasMatch(target.undoId)) {
+          throw const CalendarFailure(CalendarFailureCode.invalidInput);
+        }
+    }
+  }
+
+  void _validateBlockRef(CalendarContext context, CalendarReference ref) {
+    validateCalendarIdentity(ref.identity);
+    if (ref.context != context ||
+        ref.identity.kind != CalendarKind.planBlock ||
+        ref.version < 1) {
+      throw const CalendarFailure(CalendarFailureCode.invalidInput);
     }
   }
 
@@ -667,7 +725,21 @@ final class LocalCalendarStore implements LocalCalendarPort {
       final snapshot = await _snapshot(targets: identities);
       CalendarReference? target;
       CalendarRelationReference? relation;
+      TaskReference? task;
+      CalendarUndoReference? undo;
       final intent = command.intent;
+      final originalTarget = switch (intent) {
+        UpdatePersonalSeries(:final target) ||
+        UpdatePersonalOccurrence(:final target) ||
+        SetPersonalOccurrenceState(:final target) ||
+        DeletePersonalSeries(:final target) ||
+        UpdateSchoolAnnotation(:final target) => target,
+        _ => null,
+      };
+      if (originalTarget != null) _target(snapshot, originalTarget);
+      final before = intent is UndoCalendarWrite
+          ? <Object?>[]
+          : await _beforeUndo(intent);
       switch (intent) {
         case CreatePersonalEvent(:final draft):
           if (await _db._count(
@@ -775,10 +847,11 @@ final class LocalCalendarStore implements LocalCalendarPort {
               existing.version + 1,
             );
           }
+          await _touchEndpoints(left.identity, right.identity);
         case DeleteCalendarRelation(:final target):
           final row = await _db
               .customSelect(
-                'SELECT version FROM agenda_relations WHERE local_id=?',
+                'SELECT * FROM agenda_relations WHERE local_id=?',
                 variables: [Variable.withInt(target.localId)],
               )
               .getSingleOrNull();
@@ -789,6 +862,21 @@ final class LocalCalendarStore implements LocalCalendarPort {
             'DELETE FROM agenda_relations WHERE local_id=?',
             [target.localId],
           );
+          await _touchEndpoints(
+            _decodeIdentity(row.read<String>('left_identity')),
+            _decodeIdentity(row.read<String>('right_identity')),
+          );
+        case CreateTask() ||
+            UpdateTask() ||
+            SetTaskStatus() ||
+            DeleteTask() ||
+            CreatePlanBlock() ||
+            UpdatePlanBlock() ||
+            SetPlanBlockStatus() ||
+            DeletePlanBlock():
+          (task, target) = await _applyTask(command);
+        case UndoCalendarWrite(target: final slot):
+          (target, task, relation) = await _applyUndo(slot);
       }
       // Avoid deriving targets from UI: every result refers to the C3-verified
       // identity above. An edit to one occurrence increments the whole series.
@@ -806,6 +894,9 @@ final class LocalCalendarStore implements LocalCalendarPort {
           changedRef.identity,
           changedRef.version + 1,
         );
+      }
+      if (intent is! UndoCalendarWrite) {
+        undo = await _recordUndo(command, before, target, task, relation);
       }
       if (_db.onCalendarCheckpoint != null) await _db.onCalendarCheckpoint!();
       await _guard(command.context);
@@ -826,7 +917,7 @@ final class LocalCalendarStore implements LocalCalendarPort {
         ],
       );
       await _db.customStatement(
-        'INSERT INTO agenda_receipts(operation_id,intent_fingerprint,revision,target_json,relation_json,committed_at) VALUES (?,?,?,?,?,?)',
+        'INSERT INTO agenda_receipts(operation_id,intent_fingerprint,revision,target_json,relation_json,committed_at,task_json,undo_id) VALUES (?,?,?,?,?,?,?,?)',
         [
           command.operationId,
           intentFingerprint,
@@ -838,6 +929,8 @@ final class LocalCalendarStore implements LocalCalendarPort {
               ? null
               : jsonEncode([relation.localId, relation.version]),
           at.microsecondsSinceEpoch,
+          task == null ? null : jsonEncode([task.localId, task.version]),
+          undo?.undoId,
         ],
       );
       await _guard(command.context);
@@ -847,6 +940,8 @@ final class LocalCalendarStore implements LocalCalendarPort {
         replayed: false,
         target: target,
         relation: relation,
+        task: task,
+        undo: undo,
       );
     });
     _prepared.remove(command.operationId);
@@ -965,12 +1060,31 @@ final class LocalCalendarStore implements LocalCalendarPort {
           v[1] as int,
         );
       }
+      final taskText = row.read<String?>('task_json');
+      TaskReference? task;
+      if (taskText != null) {
+        final v = jsonDecode(taskText);
+        if (v is! List ||
+            v.length != 2 ||
+            v[0] is! int ||
+            v[1] is! int ||
+            v[0] <= 0 ||
+            v[1] <= 0) {
+          throw const CalendarFailure(CalendarFailureCode.storageFailed);
+        }
+        task = TaskReference(command.context, v[0] as int, v[1] as int);
+      }
+      final undoId = row.read<String?>('undo_id');
       return CalendarWriteReceipt(
         operationId: command.operationId,
         revision: row.read<int>('revision'),
         replayed: replayed,
         target: target,
         relation: relation,
+        task: task,
+        undo: undoId == null
+            ? null
+            : CalendarUndoReference(command.context, undoId),
       );
     } on Object {
       throw const CalendarFailure(CalendarFailureCode.storageFailed);

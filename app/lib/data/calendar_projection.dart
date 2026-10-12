@@ -34,7 +34,7 @@ final class CalendarProjection {
       }
     }
 
-    for (final item in snapshot.school) {
+    for (final item in [...snapshot.school, ...snapshot.planBlocks]) {
       if (_intersects(item, windowStart, windowEnd)) {
         countCandidate();
         candidates.putIfAbsent(item.reference.identity, () => item);
@@ -136,7 +136,7 @@ final class CalendarProjection {
     validateCalendarIdentity(identity);
     final index = _indexSnapshot(snapshot);
     if (identity.kind != CalendarKind.personal) {
-      for (final item in snapshot.school) {
+      for (final item in [...snapshot.school, ...snapshot.planBlocks]) {
         if (item.reference.identity == identity) return item;
       }
       return null;
@@ -171,13 +171,14 @@ final class CalendarProjection {
 
   _SnapshotIndex _indexSnapshot(CalendarSnapshot snapshot) {
     if (snapshot.school.length > _maxInputRows ||
+        snapshot.planBlocks.length > _maxInputRows ||
         snapshot.personal.length > _maxInputRows ||
         snapshot.overrides.length > _maxInputRows ||
         snapshot.relations.length > _maxInputRows) {
       throw const CalendarFailure(CalendarFailureCode.limitExceeded);
     }
 
-    for (final item in snapshot.school) {
+    for (final item in [...snapshot.school, ...snapshot.planBlocks]) {
       final identity = item.reference.identity;
       validateCalendarIdentity(identity);
       if (identity.kind == CalendarKind.personal ||
@@ -185,6 +186,16 @@ final class CalendarProjection {
           !item.startsAtUtc.isUtc ||
           !item.endsAtUtc.isUtc ||
           !item.endsAtUtc.isAfter(item.startsAtUtc)) {
+        throw const CalendarFailure(CalendarFailureCode.invalidInput);
+      }
+      if (identity.kind == CalendarKind.planBlock &&
+          (item.task == null ||
+              item.taskStatus == null ||
+              item.planBlockStatus == null ||
+              item.task!.context != snapshot.context ||
+              item.task!.version != item.reference.version ||
+              item.task!.localId < 1 ||
+              item.allDay)) {
         throw const CalendarFailure(CalendarFailureCode.invalidInput);
       }
     }
@@ -325,6 +336,8 @@ final class CalendarProjection {
     CalendarFilter.young => item.reference.identity.kind == CalendarKind.young,
     CalendarFilter.personal =>
       item.reference.identity.kind == CalendarKind.personal,
+    CalendarFilter.planBlock =>
+      item.reference.identity.kind == CalendarKind.planBlock,
   };
 
   int _compareOccurrences(CalendarOccurrence left, CalendarOccurrence right) {

@@ -1785,6 +1785,16 @@ final class _FakeCalendarWorkspacePort extends ChangeNotifier
         break;
       case DeleteCalendarRelation():
         break;
+      case CreateTask() ||
+          UpdateTask() ||
+          SetTaskStatus() ||
+          DeleteTask() ||
+          CreatePlanBlock() ||
+          UpdatePlanBlock() ||
+          SetPlanBlockStatus() ||
+          DeletePlanBlock() ||
+          UndoCalendarWrite():
+        throw const CalendarFailure(CalendarFailureCode.invalidInput);
     }
   }
 

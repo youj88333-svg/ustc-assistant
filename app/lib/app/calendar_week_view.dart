@@ -497,7 +497,12 @@ final class CalendarWeekView extends StatelessWidget {
                 final heading = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final status in statusItems)
+                    for (final status
+                        in kind == CalendarKind.planBlock
+                            ? statusItems.take(
+                                constraints.maxWidth >= 160 * textScale ? 2 : 1,
+                              )
+                            : statusItems)
                       Padding(
                         padding: const EdgeInsets.only(right: 2),
                         child: _statusMark(status),
@@ -650,6 +655,70 @@ final class CalendarWeekView extends StatelessWidget {
         color: const Color(0xFF66736C),
       ));
     }
+    if (occurrence.reference.identity.kind == CalendarKind.planBlock) {
+      statuses.add((
+        tooltip: '类别：任务时间块',
+        shortLabel: '块',
+        color: const Color(0xFF66736C),
+      ));
+    }
+    switch (occurrence.planBlockStatus) {
+      case PlanBlockStatus.planned:
+        statuses.add((
+          tooltip: '时间块状态：待执行',
+          shortLabel: '待',
+          color: const Color(0xFF66736C),
+        ));
+        break;
+      case PlanBlockStatus.done:
+        statuses.add((
+          tooltip: '时间块状态：已执行',
+          shortLabel: '完',
+          color: const Color(0xFF2F6848),
+        ));
+        break;
+      case PlanBlockStatus.skipped:
+        statuses.add((
+          tooltip: '时间块状态：已跳过',
+          shortLabel: '跳',
+          color: const Color(0xFF805900),
+        ));
+        break;
+      case null:
+        break;
+    }
+    switch (occurrence.taskStatus) {
+      case TaskStatus.active:
+        statuses.add((
+          tooltip: '关联任务状态：进行中',
+          shortLabel: '任',
+          color: const Color(0xFF2F6848),
+        ));
+        break;
+      case TaskStatus.blocked:
+        statuses.add((
+          tooltip: '关联任务状态：受阻',
+          shortLabel: '阻',
+          color: const Color(0xFF805900),
+        ));
+        break;
+      case TaskStatus.completed:
+        statuses.add((
+          tooltip: '关联任务状态：已完成',
+          shortLabel: '任✓',
+          color: const Color(0xFF2F6848),
+        ));
+        break;
+      case TaskStatus.cancelled:
+        statuses.add((
+          tooltip: '关联任务状态：已取消',
+          shortLabel: '销',
+          color: const Color(0xFF66736C),
+        ));
+        break;
+      case null:
+        break;
+    }
     return statuses;
   }
 
@@ -759,6 +828,12 @@ String _weekTileTooltip(CalendarOccurrence occurrence, String time) {
   final kind = occurrence.reference.identity.kind;
   final lines = <String>[occurrence.title];
   if (!occurrence.allDay) lines.add('时间（北京时间）：$time');
+  if (occurrence.planBlockStatus != null) {
+    lines.add('时间块状态：${_planBlockStatusLabel(occurrence.planBlockStatus!)}');
+  }
+  if (occurrence.taskStatus != null) {
+    lines.add('关联任务状态：${_taskStatusLabel(occurrence.taskStatus!)}');
+  }
   if (!_isJwAcademicKind(kind)) {
     if (occurrence.location.trim().isNotEmpty) {
       lines.add('地点：${occurrence.location.trim()}');
@@ -821,6 +896,19 @@ String _weekTileTooltip(CalendarOccurrence occurrence, String time) {
   }
   return lines.join('\n');
 }
+
+String _planBlockStatusLabel(PlanBlockStatus status) => switch (status) {
+  PlanBlockStatus.planned => '待执行',
+  PlanBlockStatus.done => '已执行',
+  PlanBlockStatus.skipped => '已跳过',
+};
+
+String _taskStatusLabel(TaskStatus status) => switch (status) {
+  TaskStatus.active => '进行中',
+  TaskStatus.blocked => '受阻',
+  TaskStatus.completed => '已完成',
+  TaskStatus.cancelled => '已取消',
+};
 
 String _weekday(int weekday) => switch (weekday) {
   DateTime.monday => '周一',

@@ -22,6 +22,7 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
+  taskPlanningNativeScenarios();
 
   testWidgets(
     'native workspace creates and edits personal events through C5 and retains decisions after reopen',
@@ -937,7 +938,7 @@ void main() {
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
         expect(course.listening, ListeningMode.selfStudy);
-        expect(course.reference.version, 2);
+        expect(course.reference.version, 3);
         expect(
           active.calendar.view.window!.items
               .singleWhere(
@@ -945,7 +946,7 @@ void main() {
               )
               .reference
               .version,
-          2,
+          3,
         );
         expect(_oneItem(window, 'M42 synthetic Young activity').note, isEmpty);
 
@@ -966,7 +967,7 @@ void main() {
         );
         final hiddenCourse = _oneItem(hiddenWindow, 'M42 synthetic course');
         expect(hiddenCourse.hidden, isTrue);
-        expect(hiddenCourse.reference.version, 3);
+        expect(hiddenCourse.reference.version, 4);
         expect(hiddenCourse.presence, AgendaPresence.missingWithinScope);
 
         await _loadWorkspace(
@@ -993,7 +994,7 @@ void main() {
         );
         course = _oneItem(window, 'M42 synthetic course');
         expect(course.hidden, isFalse);
-        expect(course.reference.version, 4);
+        expect(course.reference.version, 5);
         expect(course.presence, AgendaPresence.missingWithinScope);
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
@@ -1055,7 +1056,7 @@ void main() {
         young = _oneItem(window, 'M42 synthetic Young activity');
         expect(course.presence, AgendaPresence.missingWithinScope);
         expect(course.hidden, isFalse);
-        expect(course.reference.version, 4);
+        expect(course.reference.version, 5);
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
         expect(course.listening, ListeningMode.selfStudy);
@@ -1231,12 +1232,299 @@ void main() {
   );
 }
 
+// Uses the same nonce-owned runtime and safe cleanup as the calendar scenarios.
+void taskPlanningNativeScenarios() {
+  testWidgets(
+    'native tasks share calendar writes move blocks and persist one-shot undo after reopen',
+    (tester) async {
+      final workspace = await _createWorkspace();
+      final runtimes = <DemoRuntime>[];
+      try {
+        var active = await _openRuntime(tester, workspace);
+        runtimes.add(active);
+        await tester.pumpWidget(_productApp(active));
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'shell-nav-agenda');
+        await _tapKey(tester, 'calendar-workspace-tab-tasks');
+        await _tapKey(tester, 'task-workspace-create');
+        await _enterText(tester, 'task-editor-title', 'M43 合成课程报告');
+        await _enterText(tester, 'task-editor-description', '核对结构与实验结果。');
+        await _enterText(tester, 'task-editor-note', '先整理提纲，再检查数据单位。');
+        await _enterText(tester, 'task-editor-estimate', '120');
+        await _tapKey(tester, 'task-editor-has-deadline');
+        await _enterText(tester, 'task-editor-deadline-day', '2026-10-12');
+        await _tapKey(tester, 'task-editor-save');
+        var tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        final taskId = tasks.items.single.reference.localId;
+        expect(
+          tasks.items.single.draft.deadlineAtUtc,
+          DateTime.utc(2026, 10, 12, 15, 59),
+        );
+        expect(tasks.items.single.draft.estimatedMinutes, 120);
+        expect(tasks.items.single.status, TaskStatus.active);
+        expect(
+          (await _runNative(tester, active.jwStore.readAuthority)).accountBound,
+          isFalse,
+        );
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'task-tile-$taskId');
+        await _createTaskBlock(
+          tester,
+          day: '2026-10-12',
+          start: '10:00',
+          end: '11:00',
+          location: '合成图书馆讨论室',
+        );
+        await _createTaskBlock(
+          tester,
+          day: '2026-10-13',
+          start: '13:00',
+          end: '14:00',
+          location: '合成自习室',
+        );
+        tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        var detail = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.taskDetail(
+            tasks.items.single.reference,
+          ),
+        );
+        expect(detail.blocks, hasLength(2));
+        expect(detail.blocks.first.awaitingReview(detail.nowUtc), isTrue);
+        expect(detail.task.status, TaskStatus.active);
+        expect(
+          detail.blocks.every((b) => b.status == PlanBlockStatus.planned),
+          isTrue,
+        );
+        final original = detail.blocks.first;
+        await tester.pumpAndSettle();
+        await _captureSyntheticUi(tester, 'm43-task-planning');
+        await _tapKey(tester, 'calendar-workspace-tab-schedule');
+        await _createEvent(
+          tester,
+          title: 'M43 合成重叠个人安排',
+          startDay: '2026-10-12',
+          startTime: '10:30',
+          endDay: '2026-10-12',
+          endTime: '11:30',
+        );
+        var window = await _query(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          DateTime.utc(2026, 10, 19),
+        );
+        expect(
+          window.items.where(
+            (i) => i.reference.identity.kind == CalendarKind.planBlock,
+          ),
+          hasLength(2),
+        );
+        expect(window.conflicts.single.status, CalendarConflictStatus.conflict);
+        expect(window.conflicts.single.left.allDay, isFalse);
+        await tester.pumpAndSettle();
+        await _captureSyntheticUi(tester, 'm43-calendar-blocks');
+        await _tapKey(tester, 'calendar-workspace-tab-tasks');
+        await _tapKey(tester, 'task-tile-$taskId');
+        await _tapKey(
+          tester,
+          'task-block-actions-${original.reference.identity.localId}',
+        );
+        await tester.tap(find.text('移动或编辑'));
+        await tester.pumpAndSettle();
+        await _enterText(tester, 'plan-block-start-time', '15:00');
+        await _enterText(tester, 'plan-block-end-time', '16:00');
+        await _tapKey(tester, 'plan-block-editor-save');
+        tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        detail = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.taskDetail(
+            tasks.items.single.reference,
+          ),
+        );
+        final moved = detail.blocks.singleWhere(
+          (b) => b.reference.identity == original.reference.identity,
+        );
+        expect(moved.draft.startsAtUtc, DateTime.utc(2026, 10, 12, 7));
+        window = await _query(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          DateTime.utc(2026, 10, 19),
+        );
+        expect(window.conflicts, isEmpty);
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'task-workspace-undo');
+        tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        detail = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.taskDetail(
+            tasks.items.single.reference,
+          ),
+        );
+        expect(
+          detail.blocks.first.reference.identity,
+          original.reference.identity,
+        );
+        expect(
+          detail.blocks.first.draft.startsAtUtc,
+          original.draft.startsAtUtc,
+        );
+        expect(
+          detail.blocks.first.reference.version,
+          greaterThan(moved.reference.version),
+        );
+        expect(
+          (await _runNative(
+            tester,
+            () => active.jwStore.localCalendar.queryUndo(tasks.context),
+          )).canUndo,
+          isFalse,
+        );
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'task-detail-actions');
+        await tester.tap(find.text('删除任务…'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('删除任务').last);
+        await tester.pumpAndSettle();
+        window = await _query(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          DateTime.utc(2026, 10, 19),
+        );
+        expect(
+          window.items.where(
+            (i) => i.reference.identity.kind == CalendarKind.planBlock,
+          ),
+          isEmpty,
+        );
+        expect(window.items.single.title, 'M43 合成重叠个人安排');
+        await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pumpAndSettle();
+        await _closeRuntime(tester, active);
+        active = await _openRuntime(tester, workspace);
+        runtimes.add(active);
+        expect(active.calendar.taskView.window!.items, isEmpty);
+        expect(active.calendar.taskView.undo.canUndo, isTrue);
+        await tester.pumpWidget(_productApp(active));
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'shell-nav-agenda');
+        await _tapKey(tester, 'calendar-workspace-tab-tasks');
+        await _tapKey(tester, 'task-workspace-undo');
+        tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        expect(tasks.items.single.reference.localId, taskId);
+        detail = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.taskDetail(
+            tasks.items.single.reference,
+          ),
+        );
+        expect(detail.blocks, hasLength(2));
+        expect(detail.task.draft.note, '先整理提纲，再检查数据单位。');
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'task-tile-$taskId');
+        await _tapKey(tester, 'task-detail-actions');
+        await tester.tap(find.text('设为已完成'));
+        await tester.pumpAndSettle();
+        tasks = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        expect(tasks.items.single.status, TaskStatus.completed);
+        detail = await _runNative(
+          tester,
+          () => active.jwStore.localCalendar.taskDetail(
+            tasks.items.single.reference,
+          ),
+        );
+        expect(
+          detail.blocks.every((b) => b.status == PlanBlockStatus.planned),
+          isTrue,
+        );
+        await _tapKey(tester, 'calendar-workspace-tab-schedule');
+        window = await _query(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          DateTime.utc(2026, 10, 19),
+        );
+        final visibleBlock = window.items.singleWhere(
+          (i) => i.reference.identity == original.reference.identity,
+        );
+        expect(visibleBlock.taskStatus, TaskStatus.completed);
+        await _selectOccurrence(tester, visibleBlock.reference);
+        await _scrollDetailTo(
+          tester,
+          find.byKey(const ValueKey('calendar-plan-block-open-task')),
+        );
+        await _tapKey(tester, 'calendar-plan-block-open-task');
+        expect(active.calendar.taskView.query.filter, TaskFilter.all);
+        expect(
+          active.calendar.taskView.detail!.task.status,
+          TaskStatus.completed,
+        );
+        expect(find.text('时间规划 · 2'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      } finally {
+        await _disposeAndClean(tester, workspace, runtimes);
+      }
+    },
+  );
+}
+
+Future<void> _createTaskBlock(
+  WidgetTester tester, {
+  required String day,
+  required String start,
+  required String end,
+  required String location,
+}) async {
+  await _tapKey(tester, 'task-block-create');
+  await _enterText(tester, 'plan-block-start-day', day);
+  await _enterText(tester, 'plan-block-start-time', start);
+  await _enterText(tester, 'plan-block-end-day', day);
+  await _enterText(tester, 'plan-block-end-time', end);
+  await _enterText(tester, 'plan-block-location', location);
+  await _tapKey(tester, 'plan-block-editor-save');
+}
+
 Widget _productApp(DemoRuntime runtime) => RepaintBoundary(
   key: const ValueKey('m42-synthetic-capture'),
   child: ProductApp(
     controller: runtime.shell,
     settingsBuilder: (_) => const SizedBox.shrink(),
-    agendaBuilder: (_) => CalendarWorkspacePage(controller: runtime.calendar),
+    agendaBuilder: (_) => CalendarWorkspacePage(
+      controller: runtime.calendar,
+      tasks: runtime.calendar,
+    ),
   ),
 );
 

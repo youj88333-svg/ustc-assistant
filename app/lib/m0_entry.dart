@@ -69,8 +69,10 @@ final class _OwnedAppState extends State<_OwnedApp> {
   @override
   Widget build(BuildContext context) => ProductApp(
     controller: widget.runtime.shell,
-    agendaBuilder: (context) =>
-        CalendarWorkspacePage(controller: widget.runtime.calendar),
+    agendaBuilder: (context) => CalendarWorkspacePage(
+      controller: widget.runtime.calendar,
+      tasks: widget.runtime.calendar,
+    ),
     settingsBuilder: (context) => SourceSettingsPage(
       controller: widget.runtime.shell,
       diagnosticsBuilder: developmentDiagnosticsEnabled || m3ValidationEnabled

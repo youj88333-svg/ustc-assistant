@@ -9,12 +9,20 @@ import 'calendar_event_editor.dart';
 import 'calendar_display_style.dart';
 import 'calendar_week_view.dart';
 import 'calendar_workspace_contract.dart';
+import 'task_workspace_contract.dart';
+import 'task_workspace_editor.dart';
+import 'task_workspace_page.dart';
 
 /// M4.2 schedule workspace. All projection and write decisions remain in C3.
 final class CalendarWorkspacePage extends StatefulWidget {
-  const CalendarWorkspacePage({super.key, required this.controller});
+  const CalendarWorkspacePage({
+    super.key,
+    required this.controller,
+    this.tasks,
+  });
 
   final CalendarWorkspacePort controller;
+  final TaskWorkspacePort? tasks;
 
   @override
   State<CalendarWorkspacePage> createState() => _CalendarWorkspacePageState();
@@ -49,7 +57,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   @override
   void didUpdateWidget(covariant CalendarWorkspacePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller)) {
+    if (!identical(oldWidget.controller, widget.controller) ||
+        !identical(oldWidget.tasks, widget.tasks)) {
       _controllerGeneration++;
       _loadGeneration++;
       _actionGeneration++;
@@ -115,7 +124,14 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         _heading(context),
         const SizedBox(height: 5),
         if (_tasksSelected)
-          Expanded(child: _tasksPlaceholder(context))
+          Expanded(
+            child: widget.tasks == null
+                ? _tasksPlaceholder(context)
+                : TaskWorkspacePage(
+                    key: ValueKey<TaskWorkspacePort>(widget.tasks!),
+                    port: widget.tasks!,
+                  ),
+          )
         else ...[
           _toolbarArea(view, width, height),
           if (_notice != null) ...[
@@ -212,7 +228,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             const Icon(Icons.task_alt_rounded, size: 42, color: _green),
             const SizedBox(height: 12),
             Text(
-              '任务功能尚未开放',
+              '任务服务暂不可用',
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
@@ -220,7 +236,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             ),
             const SizedBox(height: 6),
             const Text(
-              '当前可以查看和管理日程。任务及时间规划入口尚未开放。',
+              '任务列表和时间规划当前没有可用的本地业务端口。',
               textAlign: TextAlign.center,
               style: TextStyle(color: _muted, height: 1.5),
             ),
@@ -315,6 +331,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
               case _CalendarToolbarAction.personal:
                 unawaited(_load(port, filter: CalendarFilter.personal));
                 break;
+              case _CalendarToolbarAction.planBlocks:
+                unawaited(_load(port, filter: CalendarFilter.planBlock));
+                break;
               case _CalendarToolbarAction.toggleInactive:
                 unawaited(
                   _load(port, includeInactive: !port.view.includeInactive),
@@ -352,6 +371,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
               '个人安排',
               view.filter == CalendarFilter.personal,
               'calendar-workspace-filter-personal',
+            ),
+            _filterMenuItem(
+              _CalendarToolbarAction.planBlocks,
+              '任务时间块',
+              view.filter == CalendarFilter.planBlock,
+              'calendar-workspace-filter-plan-block',
             ),
             const PopupMenuDivider(height: 8),
             PopupMenuItem<_CalendarToolbarAction>(
@@ -401,6 +426,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             ),
           ),
         ),
+        if (widget.tasks != null) _undoButton(widget.tasks!),
         FilledButton.icon(
           key: const ValueKey('calendar-personal-create'),
           onPressed: view.canWrite && !_actionBusy
@@ -420,6 +446,29 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       ],
     );
   }
+
+  Widget _undoButton(TaskWorkspacePort port) => AnimatedBuilder(
+    animation: port,
+    builder: (context, _) {
+      final taskView = port.taskView;
+      final undo = taskView.undo;
+      final canUndo = undo.canUndo && taskView.canWrite && !_actionBusy;
+      final reason = _undoReason(undo);
+      return Tooltip(
+        message: undo.canUndo ? '撤销最近一次成功的本地修改。' : reason,
+        child: OutlinedButton.icon(
+          key: const ValueKey('calendar-workspace-undo'),
+          onPressed: canUndo ? () => _undoTaskWrite(port, undo) : null,
+          icon: const Icon(Icons.undo_rounded, size: 18),
+          label: Text(undo.canUndo ? '撤销最近修改' : '暂无可撤销写入'),
+          style: OutlinedButton.styleFrom(
+            visualDensity: VisualDensity.compact,
+            foregroundColor: _green,
+          ),
+        ),
+      );
+    },
+  );
 
   PopupMenuItem<_CalendarToolbarAction> _filterMenuItem(
     _CalendarToolbarAction action,
@@ -956,6 +1005,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     final occurrence = detail.occurrence;
     final personal =
         occurrence.reference.identity.kind == CalendarKind.personal;
+    final planBlock =
+        occurrence.reference.identity.kind == CalendarKind.planBlock;
     final conflicts = _conflictsFor(view.window, occurrence);
     return ListView(
       key: const ValueKey('calendar-detail-content'),
@@ -1004,7 +1055,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                 : '这条记录目前不在来源已观察的范围内。',
           ),
         ],
-        if (occurrence.note.trim().isNotEmpty) ...[
+        if (occurrence.note.trim().isNotEmpty && !planBlock) ...[
           const SizedBox(height: 12),
           _DetailLine(
             icon: Icons.notes_rounded,
@@ -1012,9 +1063,26 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             value: occurrence.note,
           ),
         ],
-        if (!personal) ...[
+        if (!personal && !planBlock) ...[
           const SizedBox(height: 12),
           _schoolOverlaySummary(occurrence),
+        ],
+        if (planBlock && detail.planBlock != null) ...[
+          const SizedBox(height: 12),
+          _DetailLine(
+            icon: Icons.task_alt_rounded,
+            label: '关联任务',
+            value:
+                '${detail.planBlock!.taskTitle} · ${_taskStatusLabel(detail.planBlock!.taskStatus)}',
+          ),
+          if (detail.planBlock!.draft.note.trim().isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _DetailLine(
+              icon: Icons.notes_rounded,
+              label: '时间块备注',
+              value: detail.planBlock!.draft.note,
+            ),
+          ],
         ],
         if (personal && detail.personalDraft != null) ...[
           const SizedBox(height: 12),
@@ -1027,6 +1095,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         const SizedBox(height: 18),
         if (personal)
           _personalActions(view, detail)
+        else if (planBlock)
+          _planBlockActions(view, detail)
         else
           _schoolActions(view, detail),
         const SizedBox(height: 18),
@@ -1316,7 +1386,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         if (!isWeekly) ...[
           const SizedBox(height: 8),
           const Text(
-            '删除会移除这条单次安排；跳过与恢复是单独操作。本期没有撤销入口。',
+            '删除会移除这条单次安排；跳过与恢复是单独操作。最近一次成功的本地修改可在工具栏撤销，最多保留 24 小时。',
             style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
           ),
         ],
@@ -1331,6 +1401,267 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       ],
     );
   }
+
+  Widget _planBlockActions(CalendarWorkspaceView view, CalendarDetail detail) {
+    final block = detail.planBlock;
+    final tasks = widget.tasks;
+    if (block == null || tasks == null) {
+      return const _StatusLine(
+        text: '关联的任务时间块详情暂不可用。',
+        icon: Icons.info_outline_rounded,
+      );
+    }
+    final canWrite = view.canWrite && tasks.taskView.canWrite && !_actionBusy;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Wrap(
+          spacing: 7,
+          runSpacing: 7,
+          children: [
+            OutlinedButton.icon(
+              key: const ValueKey('calendar-plan-block-edit'),
+              onPressed: canWrite ? () => _editPlanBlock(block, tasks) : null,
+              icon: const Icon(Icons.edit_calendar_outlined),
+              label: const Text('移动或编辑时间块'),
+            ),
+            PopupMenuButton<PlanBlockStatus>(
+              key: const ValueKey('calendar-plan-block-status'),
+              tooltip: '调整时间块状态',
+              enabled: canWrite,
+              onSelected: (status) => unawaited(
+                _executeTaskWrite(
+                  tasks,
+                  SetPlanBlockStatus(block.reference, status),
+                  block.task.context,
+                ),
+              ),
+              itemBuilder: (context) => [
+                for (final status in PlanBlockStatus.values)
+                  if (status != block.status)
+                    PopupMenuItem(
+                      value: status,
+                      child: Text('设为${_planBlockStatusLabel(status)}'),
+                    ),
+              ],
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+                decoration: BoxDecoration(
+                  border: Border.all(color: const Color(0xFFD4DDD7)),
+                  borderRadius: BorderRadius.circular(9),
+                  color: Colors.white,
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.sync_alt_rounded, size: 17),
+                    SizedBox(width: 5),
+                    Text('设置状态', style: TextStyle(fontSize: 12)),
+                  ],
+                ),
+              ),
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('calendar-plan-block-open-task'),
+              onPressed: () => _openTaskFromPlanBlock(block, tasks),
+              icon: const Icon(Icons.task_alt_rounded),
+              label: const Text('打开关联任务'),
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('calendar-plan-block-delete'),
+              onPressed: canWrite
+                  ? () => _confirmDeletePlanBlock(block, tasks)
+                  : null,
+              icon: const Icon(Icons.delete_outline_rounded),
+              label: const Text('删除时间块'),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        const Text(
+          '任务状态和时间块状态分别由你确认；到时只提示复核，不会自动完成。',
+          style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
+        ),
+        if (!canWrite) ...[
+          const SizedBox(height: 8),
+          Text(
+            tasks.taskView.sourceBusy
+                ? '来源操作进行中，当前暂不能修改时间块。'
+                : _writeBlockedMessage(view),
+            style: const TextStyle(color: _muted, fontSize: 12),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _editPlanBlock(
+    PlanBlockRecord block,
+    TaskWorkspacePort tasks,
+  ) async {
+    final target = block.reference;
+    final expectedContext = target.context;
+    final generation = _controllerGeneration;
+    final draft = await _withRoute<PlanBlockDraft>(
+      () => showPlanBlockEditor(
+        context,
+        heading: '移动或编辑时间块',
+        today: tasks.today,
+        initial: block.draft,
+      ),
+    );
+    if (draft == null || !_currentTaskPort(tasks, generation)) return;
+    await _executeTaskWrite(
+      tasks,
+      UpdatePlanBlock(target, draft),
+      expectedContext,
+    );
+  }
+
+  Future<void> _confirmDeletePlanBlock(
+    PlanBlockRecord block,
+    TaskWorkspacePort tasks,
+  ) async {
+    final target = block.reference;
+    final generation = _controllerGeneration;
+    final confirmed = await _withRoute<bool>(
+      () => showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('删除时间块？'),
+          content: const Text('这只会删除当前时间块，不会改变关联任务的状态。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFF9B2C2C),
+              ),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('删除时间块'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (confirmed != true || !_currentTaskPort(tasks, generation)) return;
+    await _executeTaskWrite(
+      tasks,
+      DeletePlanBlock(target, confirmed: true),
+      target.context,
+    );
+  }
+
+  Future<void> _openTaskFromPlanBlock(
+    PlanBlockRecord block,
+    TaskWorkspacePort tasks,
+  ) async {
+    final generation = _controllerGeneration;
+    try {
+      // Explicit navigation must include completed/cancelled tasks even when
+      // the task list was previously filtered to open work or another title.
+      await tasks.loadTasks(
+        query: TaskQuery(
+          filter: TaskFilter.all,
+          keyword: block.taskTitle,
+          limit: 500,
+        ),
+      );
+      if (!_currentTaskPort(tasks, generation)) return;
+      await tasks.selectTask(block.task);
+      if (!_currentTaskPort(tasks, generation)) return;
+      if (_routeDepth > 0) await _dismissRoutes(_routeDepth);
+      if (!_currentTaskPort(tasks, generation)) return;
+      setState(() {
+        _tasksSelected = true;
+        _notice = null;
+      });
+    } on CalendarFailure catch (failure) {
+      if (_currentTaskPort(tasks, generation)) {
+        setState(() => _notice = _taskFailureMessageForPage(failure.code));
+      }
+    } catch (_) {
+      if (_currentTaskPort(tasks, generation)) {
+        setState(() => _notice = '无法读取关联任务，请稍后重试。');
+      }
+    }
+  }
+
+  Future<void> _undoTaskWrite(
+    TaskWorkspacePort tasks,
+    CalendarUndoView undo,
+  ) async {
+    final target = undo.reference;
+    if (target == null || !undo.canUndo) return;
+    await _executeTaskWrite(
+      tasks,
+      UndoCalendarWrite(target),
+      target.context,
+      successMessage: '已撤销最近一次本地修改。',
+    );
+  }
+
+  Future<bool> _executeTaskWrite(
+    TaskWorkspacePort tasks,
+    CalendarIntent intent,
+    CalendarContext expectedContext, {
+    String successMessage = '已保存。',
+  }) async {
+    final generation = _controllerGeneration;
+    if (!_currentTaskPort(tasks, generation)) return false;
+    if (!tasks.taskView.canWrite || _actionBusy) {
+      final message = tasks.taskView.sourceBusy
+          ? '来源操作进行中，当前暂不能修改任务。'
+          : tasks.taskView.failure == null
+          ? '当前任务数据尚未就绪，暂时不能保存。'
+          : _taskFailureMessageForPage(tasks.taskView.failure!);
+      setState(() => _notice = message);
+      return false;
+    }
+    setState(() {
+      _actionBusy = true;
+      _notice = null;
+    });
+    try {
+      await tasks.executeTask(intent, expectedContext: expectedContext);
+      if (!mounted || !_currentTaskPort(tasks, generation)) return false;
+      setState(() => _notice = successMessage);
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(successMessage)));
+      return true;
+    } on CalendarFailure catch (failure) {
+      if (!mounted || !_currentTaskPort(tasks, generation)) return false;
+      final message = _taskFailureMessageForPage(failure.code);
+      setState(() => _notice = message);
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(SnackBar(content: Text(message)));
+      return false;
+    } catch (_) {
+      if (!mounted || !_currentTaskPort(tasks, generation)) return false;
+      const message = '保存未完成。请检查当前任务状态后重试。';
+      setState(() => _notice = message);
+      ScaffoldMessenger.maybeOf(
+        context,
+      )?.showSnackBar(const SnackBar(content: Text(message)));
+      return false;
+    } finally {
+      if (_currentTaskPort(tasks, generation)) {
+        setState(() => _actionBusy = false);
+      }
+    }
+  }
+
+  bool _currentTaskPort(TaskWorkspacePort tasks, int generation) =>
+      mounted &&
+      identical(widget.tasks, tasks) &&
+      generation == _controllerGeneration;
 
   Widget _schoolActions(CalendarWorkspaceView view, CalendarDetail detail) {
     final occurrence = detail.occurrence;
@@ -1840,7 +2171,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('删除整个个人安排？'),
-          content: const Text('这会删除整组安排和它的例外。本期没有撤销入口。'),
+          content: const Text(
+            '这会删除整组安排和它的例外。最近一次成功的本地修改可从工具栏撤销，最多保留 24 小时；记录已变化时撤销会拒绝。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -1874,7 +2207,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         context: context,
         builder: (context) => AlertDialog(
           title: const Text('删除这条个人安排？'),
-          content: const Text('这会从本地日程移除这条单次安排。本期没有撤销入口。'),
+          content: const Text(
+            '这会从本地日程移除这条单次安排。最近一次成功的本地修改可从工具栏撤销，最多保留 24 小时；记录已变化时撤销会拒绝。',
+          ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(false),
@@ -2661,6 +2996,7 @@ enum _CalendarToolbarAction {
   exams,
   young,
   personal,
+  planBlocks,
   toggleInactive,
 }
 
@@ -2709,15 +3045,16 @@ String _dateLabel(DateTime day) =>
     '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
 
 String _filterLabel(CalendarFilter filter) => switch (filter) {
-  CalendarFilter.all => '全部来源',
+  CalendarFilter.all => '全部类别',
   CalendarFilter.course => '课程',
   CalendarFilter.exam => '考试',
   CalendarFilter.young => '二课',
   CalendarFilter.personal => '个人安排',
+  CalendarFilter.planBlock => '任务时间块',
 };
 
 String _filterTooltip(CalendarWorkspaceView view) =>
-    '来源：${_filterLabel(view.filter)}'
+    '类别：${_filterLabel(view.filter)}'
     '${view.includeInactive ? ' · 包含隐藏/跳过' : ''}';
 
 String _rangeLabel(DateTime first) {
@@ -2759,6 +3096,46 @@ String _kindLabel(CalendarKind kind) => switch (kind) {
   CalendarKind.exam => '考试',
   CalendarKind.young => '二课',
   CalendarKind.personal => '个人安排',
+  CalendarKind.planBlock => '任务时间块',
+};
+
+String _taskStatusLabel(TaskStatus status) => switch (status) {
+  TaskStatus.active => '进行中',
+  TaskStatus.blocked => '受阻',
+  TaskStatus.completed => '已完成',
+  TaskStatus.cancelled => '已取消',
+};
+
+String _planBlockStatusLabel(PlanBlockStatus status) => switch (status) {
+  PlanBlockStatus.planned => '待执行',
+  PlanBlockStatus.done => '已执行',
+  PlanBlockStatus.skipped => '已跳过',
+};
+
+String _undoReason(CalendarUndoView undo) {
+  if (undo.failure == null ||
+      undo.failure == CalendarFailureCode.undoUnavailable) {
+    return '当前没有可撤销的最近一次本地修改。';
+  }
+  if (undo.failure == CalendarFailureCode.undoConflict ||
+      undo.failure == CalendarFailureCode.staleReference) {
+    return '最近一次修改已无法安全撤销。';
+  }
+  return '当前无法撤销最近一次本地修改。';
+}
+
+String _taskFailureMessageForPage(CalendarFailureCode code) => switch (code) {
+  CalendarFailureCode.invalidInput => '输入内容不符合任务或时间块要求，请检查后重试。',
+  CalendarFailureCode.busy => '已有本地或来源操作正在进行，请稍后重试。',
+  CalendarFailureCode.staleReference => '任务或时间块已更新，请重新读取后再操作。',
+  CalendarFailureCode.idempotencyConflict => '这次操作已失效，请重新发起。',
+  CalendarFailureCode.maintenance => '本地维护正在进行，当前暂不能修改任务。',
+  CalendarFailureCode.limitExceeded => '已达到当前数据上限，暂时不能继续添加。',
+  CalendarFailureCode.ownershipLost => '本地数据所有权已变化，请重新读取任务。',
+  CalendarFailureCode.storageFailed => '本地保存失败，已有数据未确认改变。',
+  CalendarFailureCode.closed => '任务服务已关闭，请重新打开页面。',
+  CalendarFailureCode.undoUnavailable => '当前没有可撤销的最近一次本地修改。',
+  CalendarFailureCode.undoConflict => '最近一次修改已无法安全撤销。',
 };
 
 typedef _AcademicFact = ({
@@ -2929,6 +3306,24 @@ Color _conflictStatusColor(CalendarConflictStatus status) =>
     : const Color(0xFF2F6848);
 
 List<Widget> _stateTags(CalendarOccurrence occurrence) => [
+  if (occurrence.planBlockStatus != null)
+    _SmallTag(
+      text: '时间块·${_planBlockStatusLabel(occurrence.planBlockStatus!)}',
+      color: occurrence.planBlockStatus == PlanBlockStatus.done
+          ? const Color(0xFFE4F1E8)
+          : occurrence.planBlockStatus == PlanBlockStatus.skipped
+          ? const Color(0xFFFFF0DA)
+          : const Color(0xFFF0F3F1),
+    ),
+  if (occurrence.taskStatus != null)
+    _SmallTag(
+      text: '任务·${_taskStatusLabel(occurrence.taskStatus!)}',
+      color: occurrence.taskStatus == TaskStatus.completed
+          ? const Color(0xFFE4F1E8)
+          : occurrence.taskStatus == TaskStatus.blocked
+          ? const Color(0xFFFFF0DA)
+          : const Color(0xFFF0F3F1),
+    ),
   if (occurrence.presence == AgendaPresence.missingWithinScope)
     const _SmallTag(text: '来源暂缺，仍保留', color: Color(0xFFFFF0DA)),
   if (occurrence.presence == AgendaPresence.outsideScope)
@@ -3033,6 +3428,8 @@ String _failureMessage(CalendarFailureCode code) => switch (code) {
   CalendarFailureCode.ownershipLost => '应用数据目录状态已变化，请重新打开日程。',
   CalendarFailureCode.storageFailed => '本地日程暂时无法完成此操作，请稍后重试。',
   CalendarFailureCode.closed => '日程服务已关闭，请重新打开页面。',
+  CalendarFailureCode.undoUnavailable => '当前没有可撤销的最近一次本地修改。',
+  CalendarFailureCode.undoConflict => '最近一次修改已无法安全撤销。',
 };
 
 Widget _sectionHeading(String title) => Text(

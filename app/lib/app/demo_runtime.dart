@@ -170,6 +170,7 @@ final class DemoRuntime {
         clock: clock,
       );
       await calendar.load();
+      await calendar.loadTasks();
       return DemoRuntime._(
         directory,
         store,

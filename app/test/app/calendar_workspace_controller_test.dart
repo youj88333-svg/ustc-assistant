@@ -208,6 +208,255 @@ void main() {
   );
 
   test(
+    'task write keeps the shared mutex through both views, undo, and selected details',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final tasks = _Tasks(records: [_taskRecord(_context, 41, '阶段报告')]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.load();
+      await controller.select(data.item.reference);
+      await controller.loadTasks();
+      await controller.selectTask(tasks.records.single.reference);
+
+      final calendarWindow = Completer<CalendarWindow>();
+      final calendarWindowEntered = Completer<void>();
+      final calendarDetail = Completer<CalendarDetail>();
+      final calendarDetailEntered = Completer<void>();
+      data.queryHandler = (_) {
+        calendarWindowEntered.complete();
+        return calendarWindow.future;
+      };
+      data.detailHandler = (_) {
+        calendarDetailEntered.complete();
+        return calendarDetail.future;
+      };
+
+      final taskWindow = Completer<TaskWindow>();
+      final taskWindowEntered = Completer<void>();
+      final taskUndo = Completer<CalendarUndoView>();
+      final taskUndoEntered = Completer<void>();
+      final taskDetail = Completer<TaskDetail>();
+      final taskDetailEntered = Completer<void>();
+      tasks.queryHandler = (_) {
+        taskWindowEntered.complete();
+        return taskWindow.future;
+      };
+      tasks.undoHandler = (_) {
+        taskUndoEntered.complete();
+        return taskUndo.future;
+      };
+      tasks.detailHandler = (_) {
+        taskDetailEntered.complete();
+        return taskDetail.future;
+      };
+      data.commitHandler = (command) async {
+        final prior = tasks.records.single;
+        tasks.records = [
+          _taskRecord(
+            prior.reference.context,
+            prior.reference.localId,
+            prior.draft.title,
+            version: prior.reference.version + 1,
+            status: TaskStatus.completed,
+          ),
+        ];
+        tasks.undoId = 'undo-after-write';
+        return data.receipt(command);
+      };
+
+      final target = tasks.records.single.reference;
+      final writing = controller.executeTask(
+        SetTaskStatus(target, TaskStatus.completed),
+        expectedContext: target.context,
+      );
+      await calendarWindowEntered.future;
+      expect(controller.view.actionPending, isTrue);
+      expect(controller.taskView.actionPending, isTrue);
+      expect(controller.view.canWrite, isFalse);
+      expect(controller.taskView.canWrite, isFalse);
+      await _failure(
+        controller.execute(
+          CreatePersonalEvent(_draft),
+          expectedContext: data.context,
+        ),
+        CalendarFailureCode.busy,
+      );
+      expect(data.prepares, 1);
+      expect(data.commits, 1);
+
+      calendarWindow.complete(data.window(data.lastQuery!));
+      await calendarDetailEntered.future;
+      expect(controller.view.detailLoading, isTrue);
+      expect(controller.view.actionPending, isTrue);
+      calendarDetail.complete(data.detailValue(data.item.reference));
+
+      await taskWindowEntered.future;
+      expect(controller.view.actionPending, isTrue);
+      expect(controller.taskView.actionPending, isTrue);
+      taskWindow.complete(tasks.window(tasks.lastQuery!));
+      await taskUndoEntered.future;
+      taskUndo.complete(
+        CalendarUndoView(
+          reference: CalendarUndoReference(tasks.context, tasks.undoId),
+        ),
+      );
+      await taskDetailEntered.future;
+      expect(controller.taskView.undo.reference?.undoId, 'undo-after-write');
+      expect(controller.taskView.detailLoading, isTrue);
+      expect(controller.view.actionPending, isTrue);
+      await _failure(
+        controller.execute(
+          CreatePersonalEvent(_draft),
+          expectedContext: data.context,
+        ),
+        CalendarFailureCode.busy,
+      );
+
+      taskDetail.complete(tasks.detailValue(tasks.records.single.reference));
+      await writing;
+      expect(controller.view.detail, isNotNull);
+      expect(controller.taskView.detail!.task.status, TaskStatus.completed);
+      expect(controller.taskView.detail!.task.reference.version, 2);
+      expect(controller.view.actionPending, isFalse);
+      expect(controller.taskView.actionPending, isFalse);
+      expect(tasks.queries, 2);
+      expect(tasks.undoQueries, 2);
+    },
+  );
+
+  test(
+    'late Task query and detail reads cannot replace a newer filter or selection',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final oldTask = _taskRecord(_context, 51, '旧筛选任务');
+      final currentTask = _taskRecord(_context, 52, '新筛选任务');
+      final tasks = _Tasks(records: [oldTask, currentTask]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.loadTasks();
+
+      final lateWindow = Completer<TaskWindow>();
+      tasks.queryHandler = (query) => query.keyword == '旧'
+          ? lateWindow.future
+          : Future.value(tasks.window(query, items: [currentTask]));
+      final oldQuery = TaskQuery(filter: TaskFilter.all, keyword: '旧');
+      final currentQuery = TaskQuery(filter: TaskFilter.all, keyword: '新');
+      final oldLoad = controller.loadTasks(query: oldQuery);
+      await controller.loadTasks(query: currentQuery);
+
+      final lateDetail = Completer<TaskDetail>();
+      tasks.detailHandler = (reference) =>
+          reference.localId == oldTask.reference.localId
+          ? lateDetail.future
+          : Future.value(tasks.detailValue(reference));
+      final oldSelection = controller.selectTask(oldTask.reference);
+      await controller.selectTask(currentTask.reference);
+      lateWindow.complete(
+        tasks.window(oldQuery, items: [oldTask], revision: 90),
+      );
+      await oldLoad;
+      lateDetail.complete(tasks.detailValue(oldTask.reference));
+      await oldSelection;
+
+      expect(controller.taskView.query.keyword, '新');
+      expect(controller.taskView.window!.query.keyword, '新');
+      expect(
+        controller.taskView.window!.items.single.reference.localId,
+        currentTask.reference.localId,
+      );
+      expect(
+        controller.taskView.detail!.task.reference.localId,
+        currentTask.reference.localId,
+      );
+    },
+  );
+
+  test(
+    'same Task id after epoch change cannot rebind old selection or creation form',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final tasks = _Tasks(records: [_taskRecord(_context, 61, '任务')]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.loadTasks();
+      final oldReference = tasks.records.single.reference;
+      await controller.selectTask(oldReference);
+      expect(controller.taskView.detail, isNotNull);
+
+      final nextContext = CalendarContext(
+        owner: _context.owner,
+        resetEpoch: _context.resetEpoch + 1,
+        agendaEpoch: _context.agendaEpoch,
+      );
+      data.context = nextContext;
+      tasks.context = nextContext;
+      tasks.records = [
+        _taskRecord(
+          nextContext,
+          oldReference.localId,
+          '新 epoch 的同 ID 任务',
+          version: oldReference.version + 1,
+        ),
+      ];
+      await controller.loadTasks();
+      expect(controller.taskView.window!.context, nextContext);
+      expect(controller.taskView.detail, isNull);
+      expect(tasks.detailReferences.length, 1);
+
+      await controller.selectTask(oldReference);
+      expect(controller.taskView.detail, isNull);
+      expect(controller.taskView.failure, CalendarFailureCode.staleReference);
+      await _failure(
+        controller.executeTask(
+          CreateTask(const TaskDraft(title: '迟到的新建表单')),
+          expectedContext: oldReference.context,
+        ),
+        CalendarFailureCode.staleReference,
+      );
+      expect(data.prepares, 0);
+      expect(tasks.detailReferences.last.context, _context);
+    },
+  );
+
+  test(
+    'source busy and progress stream failure also block Task writes',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final tasks = _Tasks(records: [_taskRecord(_context, 71, '任务')]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.loadTasks();
+
+      shell.busy = true;
+      shell.notifyListeners();
+      expect(controller.taskView.sourceBusy, isTrue);
+      await _failure(
+        controller.executeTask(
+          CreateTask(const TaskDraft(title: '来源忙时新建')),
+          expectedContext: tasks.context,
+        ),
+        CalendarFailureCode.busy,
+      );
+      expect(data.prepares, 0);
+
+      shell.busy = false;
+      shell.notifyListeners();
+      data.signals.addError(StateError('synthetic progress fault'));
+      await Future<void>.delayed(Duration.zero);
+      expect(controller.taskView.failure, CalendarFailureCode.storageFailed);
+      await _failure(
+        controller.executeTask(
+          CreateTask(const TaskDraft(title: '进度流失效时新建')),
+          expectedContext: tasks.context,
+        ),
+        CalendarFailureCode.storageFailed,
+      );
+      expect(data.prepares, 0);
+    },
+  );
+
+  test(
     'disposal never cancels or closes an externally owned business port',
     () async {
       final data = _Data();
@@ -234,10 +483,15 @@ void main() {
   );
 }
 
-CalendarWorkspaceController _controller(_Data data, _Shell shell) {
+CalendarWorkspaceController _controller(
+  _Data data,
+  _Shell shell, {
+  LocalTaskPort? tasks,
+}) {
   final controller = CalendarWorkspaceController(
     calendar: data,
     shell: shell,
+    tasks: tasks,
     clock: FixedClock(DateTime.utc(2026, 10, 12, 1)),
   );
   addTearDown(() async {
@@ -323,6 +577,105 @@ final class _Data implements LocalCalendarPort {
   Future<CalendarWriteReceipt> commit(CalendarCommand command) {
     commits++;
     return commitHandler?.call(command) ?? Future.value(receipt(command));
+  }
+}
+
+TaskRecord _taskRecord(
+  CalendarContext context,
+  int localId,
+  String title, {
+  int version = 1,
+  TaskStatus status = TaskStatus.active,
+}) => TaskRecord(
+  reference: TaskReference(context, localId, version),
+  draft: TaskDraft(title: title),
+  status: status,
+  createdAtUtc: DateTime.utc(2026, 10, 1),
+  updatedAtUtc: DateTime.utc(2026, 10, 12),
+  blockCount: 0,
+);
+
+final class _Tasks implements LocalTaskPort {
+  _Tasks({required List<TaskRecord> records, CalendarContext? context})
+    : records = List.of(records),
+      context = context ?? _context;
+
+  CalendarContext context;
+  List<TaskRecord> records;
+  int queries = 0;
+  int undoQueries = 0;
+  int revision = 1;
+  TaskQuery? lastQuery;
+  String undoId = 'undo-initial';
+  final List<TaskReference> detailReferences = [];
+  Future<TaskWindow> Function(TaskQuery)? queryHandler;
+  Future<TaskDetail> Function(TaskReference)? detailHandler;
+  Future<CalendarUndoView> Function(CalendarContext)? undoHandler;
+
+  TaskWindow window(TaskQuery query, {List<TaskRecord>? items, int? revision}) {
+    final result = items ?? records;
+    return TaskWindow(
+      context: context,
+      revision: revision ?? this.revision,
+      query: query,
+      items: result,
+      matched: result.length,
+      truncated: false,
+    );
+  }
+
+  TaskDetail detailValue(TaskReference reference) {
+    TaskRecord? record;
+    for (final candidate in records) {
+      if (candidate.reference.context == reference.context &&
+          candidate.reference.localId == reference.localId &&
+          candidate.reference.version == reference.version) {
+        record = candidate;
+        break;
+      }
+    }
+    if (record == null) {
+      throw const CalendarFailure(CalendarFailureCode.staleReference);
+    }
+    return TaskDetail(
+      task: record,
+      blocks: const [],
+      nowUtc: DateTime.utc(2026, 10, 12, 1),
+    );
+  }
+
+  @override
+  Future<TaskWindow> queryTasks(TaskQuery query) {
+    queries++;
+    lastQuery = query;
+    return queryHandler?.call(query) ?? Future.value(window(query));
+  }
+
+  @override
+  Future<TaskDetail> taskDetail(TaskReference reference) {
+    detailReferences.add(reference);
+    final handler = detailHandler;
+    if (handler != null) return handler(reference);
+    try {
+      return Future.value(detailValue(reference));
+    } catch (error) {
+      return Future.error(error);
+    }
+  }
+
+  @override
+  Future<CalendarUndoView> queryUndo(CalendarContext context) {
+    undoQueries++;
+    final handler = undoHandler;
+    if (handler != null) return handler(context);
+    if (context != this.context) {
+      return Future.error(
+        const CalendarFailure(CalendarFailureCode.staleReference),
+      );
+    }
+    return Future.value(
+      CalendarUndoView(reference: CalendarUndoReference(context, undoId)),
+    );
   }
 }
 

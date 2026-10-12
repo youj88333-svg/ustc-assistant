@@ -1,9 +1,11 @@
 import 'agenda_contract.dart';
 import 'jw_academic_details.dart';
 
-enum CalendarKind { course, exam, young, personal }
+part 'task_contract.dart';
 
-enum CalendarFilter { all, course, exam, young, personal }
+enum CalendarKind { course, exam, young, personal, planBlock }
+
+enum CalendarFilter { all, course, exam, young, personal, planBlock }
 
 enum AttendanceDecision { undecided, attend, skip }
 
@@ -23,6 +25,8 @@ enum CalendarFailureCode {
   ownershipLost,
   storageFailed,
   closed,
+  undoUnavailable,
+  undoConflict,
 }
 
 final class CalendarFailure implements Exception {
@@ -183,6 +187,9 @@ final class CalendarOccurrence {
     this.note = '',
     this.attendance = AttendanceDecision.undecided,
     this.listening = ListeningMode.undecided,
+    this.task,
+    this.taskStatus,
+    this.planBlockStatus,
   });
   final CalendarReference reference;
   final String title;
@@ -198,6 +205,9 @@ final class CalendarOccurrence {
   final String note;
   final AttendanceDecision attendance;
   final ListeningMode listening;
+  final TaskReference? task;
+  final TaskStatus? taskStatus;
+  final PlanBlockStatus? planBlockStatus;
   @override
   String toString() => 'CalendarOccurrence';
 }
@@ -242,16 +252,19 @@ final class CalendarSnapshot {
     required List<PersonalSeries> personal,
     required List<PersonalOccurrenceOverride> overrides,
     required List<CalendarRelation> relations,
+    List<CalendarOccurrence> planBlocks = const [],
   }) : school = List.unmodifiable(school),
        personal = List.unmodifiable(personal),
        overrides = List.unmodifiable(overrides),
-       relations = List.unmodifiable(relations);
+       relations = List.unmodifiable(relations),
+       planBlocks = List.unmodifiable(planBlocks);
   final CalendarContext context;
   final int revision;
   final List<CalendarOccurrence> school;
   final List<PersonalSeries> personal;
   final List<PersonalOccurrenceOverride> overrides;
   final List<CalendarRelation> relations;
+  final List<CalendarOccurrence> planBlocks;
 }
 
 final class CalendarQuery {
@@ -336,11 +349,13 @@ final class CalendarDetail {
     required this.personalDraft,
     required List<CalendarRelation> relations,
     this.hasOccurrenceReplacement = false,
+    this.planBlock,
   }) : relations = List.unmodifiable(relations);
   final CalendarOccurrence occurrence;
   final PersonalEventDraft? personalDraft;
   final List<CalendarRelation> relations;
   final bool hasOccurrenceReplacement;
+  final PlanBlockRecord? planBlock;
 }
 
 sealed class CalendarIntent {
@@ -470,12 +485,16 @@ final class CalendarWriteReceipt {
     required this.replayed,
     this.target,
     this.relation,
+    this.task,
+    this.undo,
   });
   final String operationId;
   final int revision;
   final bool replayed;
   final CalendarReference? target;
   final CalendarRelationReference? relation;
+  final TaskReference? task;
+  final CalendarUndoReference? undo;
   @override
   String toString() => 'CalendarWriteReceipt';
 }
