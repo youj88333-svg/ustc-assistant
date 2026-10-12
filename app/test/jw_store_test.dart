@@ -6,6 +6,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_import_contract.dart';
@@ -2093,9 +2094,30 @@ JwCollectedArtifact _artifact(
       },
       'diagnostics': diagnostics,
       'snapshot': {
+        'version': jwContractVersion,
         'semesterId': semesterId,
-        'courses': selectedCourses,
-        'exams': exams,
+        'courses': [
+          for (final row in selectedCourses)
+            {
+              ...row,
+              if (!row.containsKey('academicDetails'))
+                'academicDetails': JwAcademicDetails(
+                  lessonId: row['lessonId'] as int,
+                  groupId: row['groupId'] as int,
+                ).toMap(),
+            },
+        ],
+        'exams': [
+          for (final row in exams)
+            {
+              ...row,
+              if (!row.containsKey('academicDetails'))
+                'academicDetails': JwAcademicDetails(
+                  courseCode: row['courseCode'] as String,
+                  examType: row['examType'] as String,
+                ).toMap(),
+            },
+        ],
       },
     }),
     operation: 31,

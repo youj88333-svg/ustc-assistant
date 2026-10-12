@@ -1,3 +1,5 @@
+import 'jw_academic_details.dart';
+
 /// Date-only UTC components represent Beijing calendar dates, not instants.
 DateTime beijingDay(DateTime instant) {
   final shifted = instant.toUtc().add(const Duration(hours: 8));
@@ -51,6 +53,7 @@ final class AgendaItem {
     required this.presence,
     required this.hidden,
     this.location,
+    this.academicDetails,
   });
   final AgendaReference reference;
   final String title;
@@ -59,6 +62,7 @@ final class AgendaItem {
   final AgendaPresence presence;
   final bool hidden;
   final String? location;
+  final JwAcademicDetails? academicDetails;
 
   @override
   String toString() => 'AgendaItem';

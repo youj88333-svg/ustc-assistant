@@ -1,4 +1,5 @@
 import 'agenda_contract.dart';
+import 'jw_academic_details.dart';
 
 enum CalendarKind { course, exam, young, personal }
 
@@ -178,6 +179,7 @@ final class CalendarOccurrence {
     this.skipped = false,
     this.completed = false,
     this.location = '',
+    this.academicDetails,
     this.note = '',
     this.attendance = AttendanceDecision.undecided,
     this.listening = ListeningMode.undecided,
@@ -192,6 +194,7 @@ final class CalendarOccurrence {
   final bool skipped;
   final bool completed;
   final String location;
+  final JwAcademicDetails? academicDetails;
   final String note;
   final AttendanceDecision attendance;
   final ListeningMode listening;

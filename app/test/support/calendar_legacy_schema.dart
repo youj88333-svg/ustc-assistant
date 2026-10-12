@@ -3,6 +3,13 @@ import 'package:sqlite3/sqlite3.dart';
 /// Only for explicitly constructed synthetic legacy database copies. Version
 /// 1-5 did not contain these tables/columns; never call on a user's database.
 void removeCalendarTablesForLegacyFixture(Database database) {
+  final jwColumns = database
+      .select('PRAGMA table_info(jw_events)')
+      .map((row) => row['name'])
+      .toSet();
+  if (jwColumns.contains('academic_json')) {
+    database.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
+  }
   for (final table in const [
     'personal_occurrence_overrides',
     'personal_events',

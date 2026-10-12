@@ -5,6 +5,7 @@ import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/young_work_contract.dart';
@@ -486,6 +487,10 @@ JwCollectedArtifact _jwArtifact(JwJobTicket ticket, JwPartitionRef partition) {
       'startMinute': 540,
       'endMinute': 600,
       'title': 'Synthetic JW course',
+      'academicDetails': JwAcademicDetails(
+        lessonId: 101,
+        groupId: 1101,
+      ).toMap(),
     },
   ];
   final exams = [
@@ -496,6 +501,10 @@ JwCollectedArtifact _jwArtifact(JwJobTicket ticket, JwPartitionRef partition) {
       'startMinute': 540,
       'endMinute': 600,
       'title': 'Synthetic JW exam',
+      'academicDetails': JwAcademicDetails(
+        courseCode: 'SYNTH-101',
+        examType: 'final',
+      ).toMap(),
     },
   ];
   final diagnostics = <String, Object>{
@@ -546,6 +555,7 @@ JwCollectedArtifact _jwArtifact(JwJobTicket ticket, JwPartitionRef partition) {
       },
       'diagnostics': diagnostics,
       'snapshot': {
+        'version': jwContractVersion,
         'semesterId': semesterId,
         'courses': courses,
         'exams': exams,

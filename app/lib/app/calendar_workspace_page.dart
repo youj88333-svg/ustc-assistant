@@ -727,11 +727,14 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                       fontWeight: FontWeight.w600,
                     ),
                   ),
-                  subtitle: Text(
-                    '${_kindLabel(occurrence.reference.identity.kind)} · ${_occurrenceTime(occurrence)}'
-                    '${occurrence.location.trim().isEmpty ? '' : ' · ${occurrence.location.trim()}'}'
-                    '${occurrence.presence == AgendaPresence.missingWithinScope ? ' · 来源暂缺，仍保留' : ''}'
-                    '${occurrence.presence == AgendaPresence.outsideScope ? ' · 当前不在观察范围' : ''}',
+                  subtitle: Tooltip(
+                    message: _overflowAcademicTooltip(occurrence),
+                    child: Text(
+                      '${_kindLabel(occurrence.reference.identity.kind)} · ${_occurrenceTime(occurrence)}'
+                      '${_overflowAcademicSummary(occurrence)}'
+                      '${occurrence.presence == AgendaPresence.missingWithinScope ? ' · 来源暂缺，仍保留' : ''}'
+                      '${occurrence.presence == AgendaPresence.outsideScope ? ' · 当前不在观察范围' : ''}',
+                    ),
                   ),
                   trailing: const Icon(Icons.chevron_right_rounded),
                   onTap: () {
@@ -842,15 +845,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                             ..._occurrenceTags(occurrence, conflicts),
                           ],
                         ),
-                        if (occurrence.location.trim().isNotEmpty) ...[
-                          const SizedBox(height: 5),
-                          Text(
-                            occurrence.location,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: _muted, fontSize: 12),
-                          ),
-                        ],
+                        _dayAcademicSummary(occurrence),
                       ],
                     ),
                   ),
@@ -993,10 +988,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         _DetailLine(
           icon: Icons.place_outlined,
           label: '地点',
-          value: occurrence.location.trim().isEmpty
-              ? '地点未提供'
-              : occurrence.location,
+          value: _locationSummary(occurrence),
         ),
+        if (_isJwAcademic(occurrence)) ...[
+          const SizedBox(height: 12),
+          _academicDetailsPanel(occurrence),
+        ],
         if (occurrence.presence != AgendaPresence.observed) ...[
           const SizedBox(height: 12),
           _DetailLine(
@@ -1037,7 +1034,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           _sectionHeading('冲突判定'),
           const SizedBox(height: 6),
           const Text(
-            '时间重叠只是候选；尚未判断的项目不会预先选定结果。来源筛选不会缩小这组候选。',
+            '时间重叠默认按冲突显示；已保存的不冲突判定优先。来源筛选不会缩小这组候选。',
             style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
           ),
           const SizedBox(height: 8),
@@ -1060,6 +1057,122 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           ],
         ],
       ],
+    );
+  }
+
+  Widget _dayAcademicSummary(CalendarOccurrence occurrence) {
+    final kind = occurrence.reference.identity.kind;
+    if (!_isJwAcademic(occurrence)) {
+      if (occurrence.location.trim().isEmpty) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 5),
+        child: _AcademicFactLine(
+          key: _dayAcademicKey(occurrence, 'location'),
+          label: '地点',
+          value: occurrence.location.trim(),
+          maxLines: 2,
+        ),
+      );
+    }
+
+    final details = occurrence.academicDetails;
+    if (details == null) {
+      return Padding(
+        padding: const EdgeInsets.only(top: 5),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_displayLocation(occurrence).isNotEmpty)
+              _AcademicFactLine(
+                key: _dayAcademicKey(occurrence, 'location'),
+                label: '地点',
+                value: _displayLocation(occurrence),
+                maxLines: 2,
+              ),
+            _AcademicFactLine(
+              key: _dayAcademicKey(occurrence, 'uncollected'),
+              label: '教务信息',
+              value: '尚未采集教务信息，重新同步补充',
+              maxLines: 2,
+            ),
+          ],
+        ),
+      );
+    }
+
+    final location = _displayLocation(occurrence);
+    final teachers = details.teachers.isEmpty
+        ? '本次来源未提供'
+        : details.teachers.join('、');
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _AcademicFactLine(
+            key: _dayAcademicKey(occurrence, 'location'),
+            label: '地点',
+            value: location.isEmpty ? '本次来源未提供' : location,
+            maxLines: 2,
+          ),
+          if (kind == CalendarKind.course || details.teachers.isNotEmpty) ...[
+            const SizedBox(height: 3),
+            _AcademicFactLine(
+              key: _dayAcademicKey(occurrence, 'teachers'),
+              label: '教师',
+              value: teachers,
+              maxLines: 2,
+              tooltipValue: details.teachers.isEmpty ? null : teachers,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _academicDetailsPanel(CalendarOccurrence occurrence) {
+    final facts = _academicFacts(occurrence);
+    if (occurrence.academicDetails == null) {
+      return Container(
+        key: const ValueKey('calendar-academic-details-uncollected'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F7F5),
+          border: Border.all(color: const Color(0xFFE3E9E5)),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: const Text(
+          '尚未采集教务信息，重新同步补充',
+          style: TextStyle(color: _muted, height: 1.4),
+        ),
+      );
+    }
+    return Container(
+      key: const ValueKey('calendar-academic-details-panel'),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8FAF9),
+        border: Border.all(color: const Color(0xFFE3E9E5)),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Text(
+            '已采集的教务信息',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          for (final fact in facts)
+            _AcademicFactLine(
+              key: ValueKey('calendar-academic-${fact.key}'),
+              label: fact.label,
+              value: fact.value,
+              maxLines: fact.key == 'teachers' ? 4 : 2,
+              tooltipValue: fact.tooltipValue,
+            ),
+        ],
+      ),
     );
   }
 
@@ -2469,6 +2582,36 @@ final class _DetailLine extends StatelessWidget {
   );
 }
 
+final class _AcademicFactLine extends StatelessWidget {
+  const _AcademicFactLine({
+    super.key,
+    required this.label,
+    required this.value,
+    this.tooltipValue,
+    this.maxLines = 2,
+  });
+
+  final String label;
+  final String value;
+  final String? tooltipValue;
+  final int maxLines;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+    message: '$label：${tooltipValue ?? value}',
+    child: Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Text(
+        '$label：$value',
+        maxLines: maxLines,
+        overflow: TextOverflow.ellipsis,
+        softWrap: true,
+        style: const TextStyle(color: _muted, fontSize: 12, height: 1.4),
+      ),
+    ),
+  );
+}
+
 final class _SmallTag extends StatelessWidget {
   const _SmallTag({
     required this.text,
@@ -2617,6 +2760,139 @@ String _kindLabel(CalendarKind kind) => switch (kind) {
   CalendarKind.young => '二课',
   CalendarKind.personal => '个人安排',
 };
+
+typedef _AcademicFact = ({
+  String key,
+  String label,
+  String value,
+  String? tooltipValue,
+});
+
+bool _isJwAcademic(CalendarOccurrence occurrence) {
+  final kind = occurrence.reference.identity.kind;
+  return kind == CalendarKind.course || kind == CalendarKind.exam;
+}
+
+String _displayLocation(CalendarOccurrence occurrence) {
+  final location = occurrence.location.trim();
+  if (location.isNotEmpty) return location;
+  return occurrence.academicDetails?.locationLabel.trim() ?? '';
+}
+
+String _locationSummary(CalendarOccurrence occurrence) {
+  final location = _displayLocation(occurrence);
+  if (location.isNotEmpty) return location;
+  if (_isJwAcademic(occurrence)) {
+    return occurrence.academicDetails == null ? '尚未采集地点' : '本次来源未提供';
+  }
+  return '地点未提供';
+}
+
+Key _dayAcademicKey(CalendarOccurrence occurrence, String field) => ValueKey(
+  'calendar-day-academic-${occurrence.reference.identity.kind.name}-'
+  '${occurrence.reference.identity.localId}-${occurrence.reference.identity.ordinal}-$field',
+);
+
+List<_AcademicFact> _academicFacts(CalendarOccurrence occurrence) {
+  final details = occurrence.academicDetails;
+  if (details == null || !_isJwAcademic(occurrence)) return const [];
+  final kind = occurrence.reference.identity.kind;
+  final facts = <_AcademicFact>[];
+  void add(String key, String label, String value) {
+    if (value.isNotEmpty) {
+      facts.add((key: key, label: label, value: value, tooltipValue: null));
+    }
+  }
+
+  final location = _displayLocation(occurrence);
+  add('location', '地点', location.isEmpty ? '本次来源未提供' : location);
+  add('campus', '校区', details.campus);
+  add('building', '楼宇', details.building);
+  add('room', '教室', details.room);
+  add('room-code', '教室代码', details.roomCode);
+  add('custom-place', '补充地点', details.customPlace);
+  if (details.virtual != null) {
+    add('virtual', '虚拟教室', details.virtual! ? '是' : '否');
+  }
+
+  final teachers = details.teachers.join('、');
+  if (kind == CalendarKind.course || details.teachers.isNotEmpty) {
+    facts.add((
+      key: 'teachers',
+      label: '教师',
+      value: teachers.isEmpty ? '本次来源未提供' : teachers,
+      tooltipValue: teachers.isEmpty ? null : teachers,
+    ));
+  }
+
+  if (kind == CalendarKind.course) {
+    add('semester', '学期', details.semesterName);
+  }
+  add('course-code', '课程号', details.courseCode);
+  add('course-type', '课程类别', details.courseType);
+  if (details.weekIndex != null) {
+    add('week-index', '周次序号', details.weekIndex!.toString());
+  }
+  if (details.weekday != null) {
+    add('weekday', '星期序号', details.weekday!.toString());
+  }
+  if (details.periods != null) {
+    add('periods', '节数', details.periods!.toString());
+  }
+  if (details.exerciseClass != null) {
+    add('exercise-class', '习题课', details.exerciseClass! ? '是' : '否');
+  }
+  if (kind == CalendarKind.exam) {
+    add(
+      'exam-type',
+      '考试类型',
+      details.examType.isEmpty ? '本次来源未提供' : details.examType,
+    );
+    add('exam-note', '考试说明', details.examNote);
+  }
+  return facts;
+}
+
+String _overflowAcademicSummary(CalendarOccurrence occurrence) {
+  if (!_isJwAcademic(occurrence)) {
+    final location = occurrence.location.trim();
+    return location.isEmpty ? '' : ' · 地点：$location';
+  }
+  final details = occurrence.academicDetails;
+  if (details == null) {
+    final location = occurrence.location.trim();
+    return ' · 尚未采集教务信息，重新同步补充'
+        '${location.isEmpty ? '' : ' · 地点：$location'}';
+  }
+  final location = _displayLocation(occurrence);
+  final teachers = details.teachers.join('、');
+  return ' · 地点：${location.isEmpty ? '本次来源未提供' : location}'
+      '${occurrence.reference.identity.kind == CalendarKind.course || teachers.isNotEmpty ? ' · 教师：${teachers.isEmpty ? '本次来源未提供' : teachers}' : ''}';
+}
+
+String _overflowAcademicTooltip(CalendarOccurrence occurrence) {
+  final lines = <String>[
+    occurrence.title,
+    '${_kindLabel(occurrence.reference.identity.kind)} · ${_occurrenceTime(occurrence)}',
+  ];
+  if (_isJwAcademic(occurrence)) {
+    if (occurrence.academicDetails == null) {
+      if (occurrence.location.trim().isNotEmpty) {
+        lines.add('地点：${occurrence.location.trim()}');
+      }
+      lines.add('尚未采集教务信息，重新同步补充');
+    } else {
+      lines.addAll(
+        _academicFacts(
+          occurrence,
+        ).map((fact) => '${fact.label}：${fact.tooltipValue ?? fact.value}'),
+      );
+    }
+  } else if (occurrence.location.trim().isNotEmpty) {
+    lines.add('地点：${occurrence.location.trim()}');
+  }
+  return lines.join('\n');
+}
 
 String _attendanceLabel(AttendanceDecision decision) => switch (decision) {
   AttendanceDecision.undecided => '未决定',

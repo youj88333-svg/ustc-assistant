@@ -421,6 +421,8 @@ final class CalendarWeekView extends StatelessWidget {
   }) {
     final occurrence = segment.occurrence;
     final colors = calendarColorsForTitle(occurrence.title);
+    final kind = occurrence.reference.identity.kind;
+    final academic = occurrence.academicDetails;
     final prefix = segment.continuesBefore || clippedAtTeachingStart
         ? '← '
         : '';
@@ -433,6 +435,8 @@ final class CalendarWeekView extends StatelessWidget {
         ? '${_minute(segment.startMinute)}–${_minute(stripEndMinute)}'
               '${segment.endMinute > stripEndMinute ? '…' : ''}'
         : null;
+    final actualTime =
+        '${_minute(segment.startMinute)}–${_minute(segment.endMinute)}';
     final statusItems = _eventStatusItems(occurrence);
     return Material(
       color: colors.fill,
@@ -441,50 +445,64 @@ final class CalendarWeekView extends StatelessWidget {
         key: ValueKey<CalendarReference>(occurrence.reference),
         borderRadius: BorderRadius.circular(strip ? 5 : 7),
         onTap: () => onSelect(occurrence),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(color: colors.edge.withValues(alpha: .55)),
-            borderRadius: BorderRadius.circular(strip ? 5 : 7),
-          ),
-          padding: EdgeInsets.symmetric(
-            horizontal: strip ? 4 : 5,
-            vertical: strip ? 2 : 3,
-          ),
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              final textScale = MediaQuery.textScalerOf(context).scale(1);
-              final showLocation =
-                  !strip &&
-                  location.isNotEmpty &&
-                  constraints.maxHeight >= 34 * textScale;
-              final showTime =
-                  !strip &&
-                  constraints.maxHeight >= (showLocation ? 66 : 48) * textScale;
-              final lineHeight = 16 * textScale;
-              final titleHeight =
-                  constraints.maxHeight -
-                  (showLocation ? 14 * textScale + 2 : 0) -
-                  (showTime ? 14 * textScale + 2 : 0);
-              final titleLines = strip
-                  ? 1
-                  : (titleHeight / lineHeight).floor().clamp(1, 3);
-              final actualTime =
-                  '${_minute(segment.startMinute)}–${_minute(segment.endMinute)}';
-              final heading = Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (final status in statusItems)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 2),
-                      child: _statusMark(status),
-                    ),
-                  Expanded(
-                    child: Tooltip(
-                      message: [
-                        occurrence.title,
-                        if (!occurrence.allDay) actualTime,
-                        if (location.isNotEmpty) location,
-                      ].join('\n'),
+        child: Tooltip(
+          message: _weekTileTooltip(occurrence, actualTime),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: colors.edge.withValues(alpha: .55)),
+              borderRadius: BorderRadius.circular(strip ? 5 : 7),
+            ),
+            padding: EdgeInsets.symmetric(
+              horizontal: strip ? 4 : 5,
+              vertical: strip ? 2 : 3,
+            ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final textScale = MediaQuery.textScalerOf(context).scale(1);
+                final detailLineHeight = 14.0 * textScale + 2;
+                var remainingHeight = constraints.maxHeight - 18 * textScale;
+                final locationAvailable =
+                    location.isNotEmpty ||
+                    (_isJwAcademicKind(kind) && academic != null);
+                final showLocation =
+                    !strip &&
+                    locationAvailable &&
+                    remainingHeight >= detailLineHeight;
+                if (showLocation) remainingHeight -= detailLineHeight;
+                final teacherSummary = academic?.teachers.join('、') ?? '';
+                final teacherAvailable =
+                    academic != null &&
+                    (kind == CalendarKind.course || teacherSummary.isNotEmpty);
+                final showTeachers =
+                    !strip &&
+                    teacherAvailable &&
+                    remainingHeight >= detailLineHeight;
+                if (showTeachers) remainingHeight -= detailLineHeight;
+                final showTime = !strip && remainingHeight >= detailLineHeight;
+                final lineHeight = 16 * textScale;
+                final titleHeight =
+                    constraints.maxHeight -
+                    (showLocation ? detailLineHeight : 0) -
+                    (showTeachers ? detailLineHeight : 0) -
+                    (showTime ? detailLineHeight : 0);
+                final titleLines = strip
+                    ? 1
+                    : (titleHeight / lineHeight).floor().clamp(1, 3);
+                final displayedLocation = location.isNotEmpty
+                    ? location
+                    : '本次来源未提供';
+                final displayedTeachers = teacherSummary.isEmpty
+                    ? '本次来源未提供'
+                    : teacherSummary;
+                final heading = Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (final status in statusItems)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 2),
+                        child: _statusMark(status),
+                      ),
+                    Expanded(
                       child: Text(
                         title,
                         maxLines: titleLines,
@@ -498,54 +516,67 @@ final class CalendarWeekView extends StatelessWidget {
                         ),
                       ),
                     ),
-                  ),
-                  if (time != null &&
-                      constraints.maxWidth >= 100 * textScale) ...[
-                    const SizedBox(width: 3),
-                    Text(
-                      time,
-                      style: TextStyle(
-                        color: colors.ink.withValues(alpha: .82),
-                        fontSize: 8,
+                    if (time != null &&
+                        constraints.maxWidth >= 100 * textScale) ...[
+                      const SizedBox(width: 3),
+                      Text(
+                        time,
+                        style: TextStyle(
+                          color: colors.ink.withValues(alpha: .82),
+                          fontSize: 8,
+                        ),
                       ),
-                    ),
+                    ],
                   ],
-                ],
-              );
-              if (!showTime && !showLocation) return heading;
-              return Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  heading,
-                  if (showLocation) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      location,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colors.ink.withValues(alpha: .82),
-                        fontSize: 10,
-                        height: 1.2,
+                );
+                if (!showTime && !showLocation && !showTeachers) return heading;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    heading,
+                    if (showLocation) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '地点：$displayedLocation',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.ink.withValues(alpha: .82),
+                          fontSize: 10,
+                          height: 1.2,
+                        ),
                       ),
-                    ),
-                  ],
-                  if (showTime) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      actualTime,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(
-                        color: colors.ink.withValues(alpha: .82),
-                        fontSize: 10,
-                        height: 1.2,
+                    ],
+                    if (showTeachers) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '教师：$displayedTeachers',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.ink.withValues(alpha: .82),
+                          fontSize: 10,
+                          height: 1.2,
+                        ),
                       ),
-                    ),
+                    ],
+                    if (showTime) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        actualTime,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: colors.ink.withValues(alpha: .82),
+                          fontSize: 10,
+                          height: 1.2,
+                        ),
+                      ),
+                    ],
                   ],
-                ],
-              );
-            },
+                );
+              },
+            ),
           ),
         ),
       ),
@@ -719,6 +750,76 @@ final class _SegmentLane {
   final CalendarDaySegment segment;
   final int lane;
   final int laneCount;
+}
+
+bool _isJwAcademicKind(CalendarKind kind) =>
+    kind == CalendarKind.course || kind == CalendarKind.exam;
+
+String _weekTileTooltip(CalendarOccurrence occurrence, String time) {
+  final kind = occurrence.reference.identity.kind;
+  final lines = <String>[occurrence.title];
+  if (!occurrence.allDay) lines.add('时间（北京时间）：$time');
+  if (!_isJwAcademicKind(kind)) {
+    if (occurrence.location.trim().isNotEmpty) {
+      lines.add('地点：${occurrence.location.trim()}');
+    }
+    return lines.join('\n');
+  }
+
+  final details = occurrence.academicDetails;
+  if (details == null) {
+    if (occurrence.location.trim().isNotEmpty) {
+      lines.add('地点：${occurrence.location.trim()}');
+    }
+    lines.add('尚未采集教务信息，重新同步补充');
+    return lines.join('\n');
+  }
+
+  final location = occurrence.location.trim().isNotEmpty
+      ? occurrence.location.trim()
+      : details.locationLabel.trim();
+  lines.add('地点：${location.isEmpty ? '本次来源未提供' : location}');
+  for (final entry in [
+    ('校区', details.campus),
+    ('楼宇', details.building),
+    ('教室', details.room),
+    ('教室代码', details.roomCode),
+    ('补充地点', details.customPlace),
+  ]) {
+    if (entry.$2.isNotEmpty) lines.add('${entry.$1}：${entry.$2}');
+  }
+  if (details.virtual != null) {
+    lines.add('虚拟教室：${details.virtual! ? '是' : '否'}');
+  }
+  if (kind == CalendarKind.course || details.teachers.isNotEmpty) {
+    lines.add(
+      '教师：${details.teachers.isEmpty ? '本次来源未提供' : details.teachers.join('、')}',
+    );
+  }
+  if (kind == CalendarKind.course) {
+    if (details.semesterName.isNotEmpty) {
+      lines.add('学期：${details.semesterName}');
+    }
+  }
+  for (final entry in [
+    ('课程号', details.courseCode),
+    ('课程类别', details.courseType),
+  ]) {
+    if (entry.$2.isNotEmpty) lines.add('${entry.$1}：${entry.$2}');
+  }
+  if (details.weekIndex != null) lines.add('周次序号：${details.weekIndex}');
+  if (details.weekday != null) lines.add('星期序号：${details.weekday}');
+  if (details.periods != null) lines.add('节数：${details.periods}');
+  if (details.exerciseClass != null) {
+    lines.add('习题课：${details.exerciseClass! ? '是' : '否'}');
+  }
+  if (kind == CalendarKind.exam) {
+    lines.add(
+      '考试类型：${details.examType.isEmpty ? '本次来源未提供' : details.examType}',
+    );
+    if (details.examNote.isNotEmpty) lines.add('考试说明：${details.examNote}');
+  }
+  return lines.join('\n');
 }
 
 String _weekday(int weekday) => switch (weekday) {

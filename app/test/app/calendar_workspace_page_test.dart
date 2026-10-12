@@ -7,6 +7,7 @@ import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -608,8 +609,14 @@ void main() {
         id: 301,
         title: '地点显示演示',
         location: '教学楼 5304',
+        academicDetails: JwAcademicDetails(
+          campus: '东区',
+          building: '教学楼',
+          room: '5304',
+          teachers: const ['张老师', '王老师'],
+        ),
         startsAtUtc: DateTime.utc(2026, 10, 11, 23, 50),
-        endsAtUtc: DateTime.utc(2026, 10, 12, 1, 25),
+        endsAtUtc: DateTime.utc(2026, 10, 12, 4, 25),
       );
       final short = _occurrence(
         kind: CalendarKind.personal,
@@ -639,6 +646,14 @@ void main() {
       );
       expect(
         find.descendant(of: courseTile, matching: find.text('教学楼 5304')),
+        findsNothing,
+      );
+      expect(
+        find.descendant(of: courseTile, matching: find.text('地点：教学楼 5304')),
+        findsOneWidget,
+      );
+      expect(
+        find.descendant(of: courseTile, matching: find.text('教师：张老师、王老师')),
         findsOneWidget,
       );
       expect(find.textContaining('事务大厅'), findsOneWidget);
@@ -649,14 +664,246 @@ void main() {
         find.descendant(of: shortTile, matching: find.byType(Tooltip)).first,
       );
       expect(tip.message, contains('图书馆'));
+      final courseTip = tester.widget<Tooltip>(
+        find.descendant(of: courseTile, matching: find.byType(Tooltip)).first,
+      );
+      expect(courseTip.message, contains('地点：教学楼 5304'));
+      expect(courseTip.message, contains('教师：张老师、王老师'));
       await tester.tap(find.text('日'));
       await tester.pumpAndSettle();
-      expect(find.text('教学楼 5304'), findsOneWidget);
-      expect(find.text('图书馆'), findsOneWidget);
-      expect(find.text('事务大厅'), findsOneWidget);
+      expect(find.text('地点：教学楼 5304'), findsOneWidget);
+      expect(find.text('地点：图书馆'), findsOneWidget);
+      expect(find.text('地点：事务大厅'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('JW academic details distinguish uncollected from not provided', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final oldCourse = _occurrence(
+      kind: CalendarKind.course,
+      id: 321,
+      title: '旧课程记录',
+    );
+    final oldExam = _occurrence(
+      kind: CalendarKind.exam,
+      id: 326,
+      title: '旧考试记录',
+    );
+    final emptyCourse = _occurrence(
+      kind: CalendarKind.course,
+      id: 322,
+      title: '来源未给字段的课程',
+      academicDetails: JwAcademicDetails(),
+    );
+    final exam = _occurrence(
+      kind: CalendarKind.exam,
+      id: 323,
+      title: '考试字段展示',
+      academicDetails: JwAcademicDetails(
+        building: '东区教学楼',
+        room: '考场 201',
+        examType: '期末考试',
+        examNote: '闭卷，需携带证件',
+      ),
+    );
+    final young = _occurrence(
+      kind: CalendarKind.young,
+      id: 324,
+      title: '二课活动不显示教务提示',
+    );
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [oldCourse, oldExam, emptyCourse, exam, young],
+    );
+    addTearDown(port.dispose);
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(oldCourse.reference)),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-academic-details-uncollected')),
+      findsOneWidget,
+    );
+    expect(find.text('尚未采集教务信息，重新同步补充'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(oldExam.reference)),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-academic-details-uncollected')),
+      findsOneWidget,
+    );
+    expect(find.text('尚未采集教务信息，重新同步补充'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(ValueKey<CalendarReference>(emptyCourse.reference)),
+    );
+    await tester.pumpAndSettle();
+    final detailsPanel = find.byKey(
+      const ValueKey('calendar-academic-details-panel'),
+    );
+    expect(detailsPanel, findsOneWidget);
+    expect(
+      find.descendant(of: detailsPanel, matching: find.text('地点：本次来源未提供')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: detailsPanel, matching: find.text('教师：本次来源未提供')),
+      findsOneWidget,
+    );
+    expect(find.text('尚未采集教务信息，重新同步补充'), findsNothing);
+
+    await tester.tap(find.byKey(ValueKey<CalendarReference>(exam.reference)));
+    await tester.pumpAndSettle();
+    final examPanel = find.byKey(
+      const ValueKey('calendar-academic-details-panel'),
+    );
+    expect(
+      find.descendant(of: examPanel, matching: find.text('考试类型：期末考试')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: examPanel, matching: find.text('考试说明：闭卷，需携带证件')),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(of: examPanel, matching: find.text('地点：本次来源未提供')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(ValueKey<CalendarReference>(young.reference)));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('calendar-academic-details-panel')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(const ValueKey('calendar-academic-details-uncollected')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('course facts and the full multi-teacher list are readable', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 900));
+    final academic = JwAcademicDetails(
+      campus: '东区',
+      building: '教学楼',
+      room: 'A301',
+      roomCode: 'A-301',
+      customPlace: '北侧入口',
+      virtual: false,
+      teachers: const [
+        '王老师（主讲）',
+        '周老师（助教）',
+        '顾老师（长文本教师姓名演示）',
+        '陈老师',
+        '李老师',
+        '赵老师',
+      ],
+      semesterName: '2026 秋季学期',
+      courseCode: 'CS-100',
+      courseType: '专业基础课',
+      lessonId: 42,
+      groupId: 7,
+      weekIndex: 4,
+      weekday: 2,
+      periods: 2,
+      exerciseClass: true,
+    );
+    final course = _occurrence(
+      kind: CalendarKind.course,
+      id: 325,
+      title: '多教师课程',
+      academicDetails: academic,
+    );
+    final port = _FakeCalendarWorkspacePort(occurrences: [course]);
+    addTearDown(port.dispose);
+    await tester.pumpWidget(_host(port));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('日'));
+    await tester.pumpAndSettle();
+    final dayTeacherKey = const ValueKey(
+      'calendar-day-academic-course-325-0-teachers',
+    );
+    expect(find.text('地点：东区 · 教学楼 · A301'), findsOneWidget);
+    final dayTeacher = tester.widget<Text>(
+      find
+          .descendant(
+            of: find.byKey(dayTeacherKey),
+            matching: find.byType(Text),
+          )
+          .first,
+    );
+    expect(dayTeacher.data, '教师：${academic.teachers.join('、')}');
+    expect(dayTeacher.maxLines, 2);
+    final dayTeacherTooltip = tester.widget<Tooltip>(
+      find
+          .descendant(
+            of: find.byKey(dayTeacherKey),
+            matching: find.byType(Tooltip),
+          )
+          .first,
+    );
+    expect(dayTeacherTooltip.message, '教师：${academic.teachers.join('、')}');
+
+    await tester.tap(find.byKey(ValueKey<CalendarReference>(course.reference)));
+    await tester.pumpAndSettle();
+    final panel = find.byKey(const ValueKey('calendar-academic-details-panel'));
+    expect(panel, findsOneWidget);
+    for (final text in [
+      '地点：东区 · 教学楼 · A301',
+      '校区：东区',
+      '楼宇：教学楼',
+      '教室：A301',
+      '教室代码：A-301',
+      '补充地点：北侧入口',
+      '虚拟教室：否',
+      '学期：2026 秋季学期',
+      '课程号：CS-100',
+      '课程类别：专业基础课',
+      '周次序号：4',
+      '星期序号：2',
+      '节数：2',
+      '习题课：是',
+    ]) {
+      expect(
+        find.descendant(of: panel, matching: find.text(text)),
+        findsOneWidget,
+      );
+    }
+    expect(find.textContaining('课程标识'), findsNothing);
+    expect(find.textContaining('教学班标识'), findsNothing);
+    final detailTeacher = tester.widget<Text>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('calendar-academic-teachers')),
+            matching: find.byType(Text),
+          )
+          .first,
+    );
+    expect(detailTeacher.data, '教师：${academic.teachers.join('、')}');
+    expect(detailTeacher.maxLines, 4);
+    final detailTeacherTooltip = tester.widget<Tooltip>(
+      find
+          .descendant(
+            of: find.byKey(const ValueKey('calendar-academic-teachers')),
+            matching: find.byType(Tooltip),
+          )
+          .first,
+    );
+    expect(detailTeacherTooltip.message, '教师：${academic.teachers.join('、')}');
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('independent overlap clusters use independent lane widths', (
     tester,
@@ -700,16 +947,43 @@ void main() {
     tester,
   ) async {
     await _setSize(tester, const Size(1280, 900));
-    final early = List.generate(
-      3,
-      (index) => _occurrence(
-        kind: CalendarKind.personal,
-        id: 91 + index,
-        title: '凌晨安排 ${index + 1}',
-        startsAtUtc: DateTime.utc(2026, 10, 11, 16 + index, 30),
-        endsAtUtc: DateTime.utc(2026, 10, 12, 0, 30),
+    final early = [
+      _occurrence(
+        kind: CalendarKind.course,
+        id: 91,
+        title: '凌晨课程预览',
+        location: '东区教学楼 A301',
+        academicDetails: JwAcademicDetails(
+          campus: '东区',
+          building: '教学楼',
+          room: 'A301',
+          teachers: const ['凌晨教师甲', '凌晨教师乙'],
+        ),
+        startsAtUtc: DateTime.utc(2026, 10, 11, 16, 30),
+        endsAtUtc: DateTime.utc(2026, 10, 11, 22, 30),
       ),
-    );
+      _occurrence(
+        kind: CalendarKind.course,
+        id: 92,
+        title: '凌晨更多课程',
+        location: '西区教学楼 B201',
+        academicDetails: JwAcademicDetails(
+          campus: '西区',
+          building: '教学楼',
+          room: 'B201',
+          teachers: const ['凌晨课程教师'],
+        ),
+        startsAtUtc: DateTime.utc(2026, 10, 11, 17, 30),
+        endsAtUtc: DateTime.utc(2026, 10, 11, 19, 30),
+      ),
+      _occurrence(
+        kind: CalendarKind.personal,
+        id: 93,
+        title: '凌晨安排 3',
+        startsAtUtc: DateTime.utc(2026, 10, 11, 18, 30),
+        endsAtUtc: DateTime.utc(2026, 10, 11, 20, 30),
+      ),
+    ];
     final port = _FakeCalendarWorkspacePort(occurrences: early);
     addTearDown(port.dispose);
 
@@ -719,13 +993,22 @@ void main() {
       const ValueKey('calendar-week-overflow-early-2026-10-12'),
     );
     expect(overflow, findsOneWidget);
+    final earlyTile = find.byKey(
+      ValueKey<CalendarReference>(early.first.reference),
+    );
+    final earlyTooltip = tester.widget<Tooltip>(
+      find.descendant(of: earlyTile, matching: find.byType(Tooltip)).first,
+    );
+    expect(earlyTooltip.message, contains('地点：东区教学楼 A301'));
+    expect(earlyTooltip.message, contains('教师：凌晨教师乙、凌晨教师甲'));
     await tester.tap(overflow);
     await tester.pumpAndSettle();
-    final selected = early.last;
+    expect(find.textContaining('教师：凌晨课程教师'), findsOneWidget);
+    final selected = early[1];
     await tester.tap(
       find.byKey(
         ValueKey(
-          'calendar-overflow-item-personal-${selected.reference.identity.localId}-0',
+          'calendar-overflow-item-course-${selected.reference.identity.localId}-0',
         ),
       ),
     );
@@ -733,6 +1016,10 @@ void main() {
 
     expect(port.view.detail?.occurrence.reference, selected.reference);
     expect(find.byKey(const ValueKey('calendar-detail-card')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('calendar-academic-details-panel')),
+      findsOneWidget,
+    );
     expect(find.text(selected.title), findsWidgets);
   });
 
@@ -804,7 +1091,17 @@ void main() {
       await _setSize(tester, const Size(320, 420));
       final port = _FakeCalendarWorkspacePort(
         occurrences: [
-          _occurrence(kind: CalendarKind.course, id: 101, title: '窄窗课程'),
+          _occurrence(
+            kind: CalendarKind.course,
+            id: 101,
+            title: '窄窗课程',
+            academicDetails: JwAcademicDetails(
+              campus: '东区',
+              building: '教学楼',
+              room: 'A301',
+              teachers: List.generate(24, (index) => '教师长姓名${index + 1}'),
+            ),
+          ),
           ..._compressedBandOccurrences(),
         ],
       );
@@ -1178,6 +1475,7 @@ CalendarOccurrence _occurrence({
   int ordinal = 0,
   String title = '合成事项',
   String location = '',
+  JwAcademicDetails? academicDetails,
   DateTime? startsAtUtc,
   DateTime? endsAtUtc,
   bool allDay = false,
@@ -1199,6 +1497,7 @@ CalendarOccurrence _occurrence({
   ),
   title: title,
   location: location,
+  academicDetails: academicDetails,
   startsAtUtc: startsAtUtc ?? DateTime.utc(2026, 10, 12, 1),
   endsAtUtc: endsAtUtc ?? DateTime.utc(2026, 10, 12, 2),
   allDay: allDay,
@@ -1592,6 +1891,7 @@ CalendarOccurrence _copyOccurrence(
   bool? completed,
   String? location,
   String? note,
+  JwAcademicDetails? academicDetails,
   AttendanceDecision? attendance,
   ListeningMode? listening,
 }) => CalendarOccurrence(
@@ -1605,6 +1905,7 @@ CalendarOccurrence _copyOccurrence(
   skipped: skipped ?? item.skipped,
   completed: completed ?? item.completed,
   location: location ?? item.location,
+  academicDetails: academicDetails ?? item.academicDetails,
   note: note ?? item.note,
   attendance: attendance ?? item.attendance,
   listening: listening ?? item.listening,

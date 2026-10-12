@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'dart:math';
 import 'dart:ui' as ui;
 
@@ -15,6 +16,7 @@ import 'package:ustc_assistant_m0/app/product_app.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
@@ -824,12 +826,27 @@ void main() {
         expect(course.reference.identity.kind, CalendarKind.course);
         expect(young.reference.identity.kind, CalendarKind.young);
         expect(course.hidden, isFalse);
+        expect(course.location, '合成东校区 · 合成教学楼 · 合成教室 5304');
+        expect(course.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
         expect(young.hidden, isFalse);
         await _captureSyntheticUi(tester, 'day');
 
         // Save a relation through the conflict detail UI. Same numeric IDs
         // remain separate because relation identities include their source kind.
         await _selectOccurrence(tester, course.reference);
+        expect(
+          find.byKey(const ValueKey('calendar-academic-details-panel')),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const ValueKey('calendar-academic-details-panel')),
+            matching: find.text('教师：合成教师乙、合成教师甲'),
+          ),
+          findsOneWidget,
+        );
+        await _captureSyntheticUi(tester, 'jw-academic-details');
+        await _scrollDetailTo(tester, find.text('来源当前缺少这条记录，本地日程仍予以保留。'));
         expect(find.text('来源当前缺少这条记录，本地日程仍予以保留。'), findsOneWidget);
         await tester.scrollUntilVisible(
           find.byKey(const ValueKey('calendar-relation-edit-young-0')),
@@ -885,6 +902,10 @@ void main() {
         // The school detail editor changes only the local overlay. Source
         // absence, attendance, listening and note remain independent facts.
         await _selectOccurrence(tester, course.reference);
+        await _scrollDetailTo(
+          tester,
+          find.byKey(const ValueKey('calendar-school-edit-annotation')),
+        );
         await _captureSyntheticUi(tester, 'source-details');
         await _tapKey(tester, 'calendar-school-edit-annotation');
         await tester.pumpAndSettle();
@@ -929,6 +950,10 @@ void main() {
         expect(_oneItem(window, 'M42 synthetic Young activity').note, isEmpty);
 
         await _selectOccurrence(tester, course.reference);
+        await _scrollDetailTo(
+          tester,
+          find.byKey(const ValueKey('calendar-school-toggle-hidden')),
+        );
         await _tapKey(tester, 'calendar-school-toggle-hidden');
         await tester.pumpAndSettle();
         await _closeDetail(tester);
@@ -952,6 +977,10 @@ void main() {
           includeInactive: true,
         );
         await _selectOccurrence(tester, hiddenCourse.reference);
+        await _scrollDetailTo(
+          tester,
+          find.byKey(const ValueKey('calendar-school-toggle-hidden')),
+        );
         await _tapKey(tester, 'calendar-school-toggle-hidden');
         await tester.pumpAndSettle();
         await _closeDetail(tester);
@@ -1141,7 +1170,7 @@ void main() {
         expect(window.conflicts.single.status, CalendarConflictStatus.conflict);
         expect(window.conflicts.single.hasExplicitDecision, isFalse);
         expect(find.byIcon(Icons.error_outline_rounded), findsNWidgets(2));
-        expect(find.text('合成教室'), findsNWidgets(2));
+        expect(find.text('地点：合成教室'), findsNWidgets(2));
         final storedDecisions = await _runNative(
           tester,
           () async =>
@@ -1423,6 +1452,18 @@ Future<void> _closeDetail(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+Future<void> _scrollDetailTo(WidgetTester tester, Finder target) async {
+  await tester.scrollUntilVisible(
+    target,
+    150,
+    scrollable: find.descendant(
+      of: find.byKey(const ValueKey('calendar-detail-content')),
+      matching: find.byType(Scrollable),
+    ),
+  );
+  await tester.pumpAndSettle();
+}
+
 Future<void> _tapKey(WidgetTester tester, String key) async {
   final finder = find.byKey(ValueKey<String>(key));
   expect(finder, findsOneWidget, reason: 'Missing UI key: $key');
@@ -1534,8 +1575,8 @@ Future<void> _seedSyntheticMissingSources(
       ['TEST0001'],
     );
     await runtime.jwStore.customStatement(
-      'INSERT INTO jw_events(external_id,kind,semester_id,title,starts_at,ends_at,presence,version) '
-      'VALUES(?,?,?,?,?,?,?,1)',
+      'INSERT INTO jw_events(external_id,kind,semester_id,title,starts_at,ends_at,presence,academic_json,version) '
+      'VALUES(?,?,?,?,?,?,?,?,1)',
       [
         'm42-synthetic-jw-course',
         'course',
@@ -1544,6 +1585,22 @@ Future<void> _seedSyntheticMissingSources(
         courseStart,
         courseEnd,
         'missingWithinScope',
+        jsonEncode(
+          JwAcademicDetails(
+            lessonId: 11,
+            groupId: 21,
+            campus: '合成东校区',
+            building: '合成教学楼',
+            room: '合成教室 5304',
+            teachers: ['合成教师甲', '合成教师乙'],
+            courseCode: 'SYN-C101',
+            courseType: '合成必修课',
+            semesterName: '合成 2026 秋',
+            weekIndex: 6,
+            weekday: 1,
+            periods: 2,
+          ).toMap(),
+        ),
       ],
     );
     await runtime.jwStore.customStatement(

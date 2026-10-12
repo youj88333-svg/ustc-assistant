@@ -18,6 +18,7 @@ import 'package:ustc_assistant_m0/platform/native_database.dart';
 import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
 import 'package:ustc_assistant_m0/platform/windows_jw_credential_protector.dart';
 import 'package:ustc_assistant_m0/source/jw_collection_failure.dart';
+import 'package:ustc_assistant_m0/source/jw_data_probe_contract.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
 import 'support/jw_sync_fixture.dart';
@@ -236,11 +237,22 @@ void main() {
           expect(course.title, '合成课程');
           expect(course.semesterId, 20261);
           expect(course.presence, JwPresence.observed);
+          expect(
+            course.academicDetails!.locationLabel,
+            '合成东校区 · 合成教学楼 · 合成教室 5304',
+          );
+          expect(course.academicDetails!.teachers, ['合成教师甲']);
+          expect(course.academicDetails!.courseCode, 'SYN-C101.01');
+          expect(course.academicDetails!.weekIndex, 6);
           expect(formatBeijing(course.startsAtUtc), '2026-10-12 08:00');
           expect(formatBeijing(course.endsAtUtc), '2026-10-12 09:50');
           expect(exam.title, '合成考试课程');
           expect(exam.semesterId, isNull);
           expect(exam.presence, JwPresence.observed);
+          expect(exam.academicDetails!.locationLabel, '合成校区 · 合成教学楼 · 合成考场');
+          expect(exam.academicDetails!.examNote, '合成考试说明');
+          expect(exam.academicDetails!.teachers, isEmpty);
+          expect(exam.academicDetails!.semesterName, isEmpty);
           expect(formatBeijing(exam.startsAtUtc), '2026-10-15 09:00');
           expect(formatBeijing(exam.endsAtUtc), '2026-10-15 11:00');
 
@@ -287,6 +299,8 @@ void main() {
             initialProfilePath,
           );
           await _verifyDirectory(first);
+          fixture.courseRoom = '合成教室 5401';
+          fixture.courseTeacher = '合成教师乙';
           await first.coordinator
               .collect(20261)
               .timeout(const Duration(seconds: 75));
@@ -295,6 +309,13 @@ void main() {
           expect(data.importCount, 2);
           expect(data.auditCount, 3);
           expect(_eventById(data, course.localId).hidden, isTrue);
+          expect(
+            _eventById(data, course.localId).academicDetails!.room,
+            '合成教室 5401',
+          );
+          expect(_eventById(data, course.localId).academicDetails!.teachers, [
+            '合成教师乙',
+          ]);
 
           fixture
             ..emptyCourse = true
@@ -374,6 +395,14 @@ void main() {
           expect(persisted.events, hasLength(3));
           expect(persisted.importCount, 4);
           expect(_eventById(persisted, course.localId).hidden, isTrue);
+          expect(
+            _eventById(persisted, course.localId).academicDetails!.room,
+            '合成教室 5401',
+          );
+          expect(
+            _eventById(persisted, course.localId).academicDetails!.teachers,
+            ['合成教师乙'],
+          );
           expect(
             _eventById(persisted, course.localId).presence,
             JwPresence.outsideScope,
@@ -511,12 +540,12 @@ void main() {
   );
 
   testWidgets(
-    'native identical course rows import once and retain their local identity',
+    'native teacher-only duplicate rows import once and retain names and local identity',
     (tester) async {
       await tester.runAsync(() async {
         final fixture = await JwSyncFixture.start();
         fixture
-          ..duplicateSchedule = JwDuplicateScheduleMode.identical
+          ..duplicateSchedule = JwDuplicateScheduleMode.differentTeachers
           ..emptyExams = true;
         final root = await _createTempRoot();
         final harnesses = <_Harness>[];
@@ -563,6 +592,7 @@ void main() {
           expect(firstData.importCount, 1);
           final original = firstData.events.single;
           expect(original.kind, JwEventKind.course);
+          expect(original.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
           expect(formatBeijing(original.startsAtUtc), '2026-10-12 08:00');
           expect(formatBeijing(original.endsAtUtc), '2026-10-12 09:50');
           final permit = (await harness.store.readCommittedPermits()).single;
@@ -617,6 +647,10 @@ void main() {
           final repeatedData = _data(repeated);
           expect(repeatedData.events, hasLength(1));
           expect(repeatedData.events.single.localId, original.localId);
+          expect(repeatedData.events.single.academicDetails!.teachers, [
+            '合成教师乙',
+            '合成教师甲',
+          ]);
           expect(repeatedData.importCount, 2);
           expect(await harness.store.readCommittedPermits(), hasLength(1));
           expect(fixture.acceptedIndexSemesters, [20261, 20261]);
@@ -653,7 +687,10 @@ void main() {
     'native conflicting course rows cannot import despite valid source checks',
     (tester) async {
       await tester.runAsync(() async {
-        for (final mode in [JwDuplicateScheduleMode.differentEnd]) {
+        for (final mode in [
+          JwDuplicateScheduleMode.differentEnd,
+          JwDuplicateScheduleMode.differentRoom,
+        ]) {
           final fixture = await JwSyncFixture.start();
           fixture
             ..duplicateSchedule = mode
@@ -791,6 +828,50 @@ void main() {
       });
     },
   );
+
+  testWidgets('malformed academic fields cannot import or retain a profile', (
+    tester,
+  ) async {
+    await tester.runAsync(() async {
+      final fixture = await JwSyncFixture.start();
+      fixture.malformedAcademicDetails = true;
+      final root = await _createTempRoot();
+      final harnesses = <_Harness>[];
+      try {
+        final harness = await _Harness.create(
+          p.windows.join(root.path, 'owned'),
+          fixture,
+        );
+        harnesses.add(harness);
+        await _openReady(
+          harness,
+          fixture,
+          expectedAccountCode: 'TEST0001',
+          expectedProfileReused: false,
+          expectedPersistentMarker: false,
+          expectedSessionMarker: false,
+        );
+        await _verifyDirectory(harness);
+        await harness.coordinator
+            .collect(20261)
+            .timeout(const Duration(seconds: 75));
+        final view = harness.coordinator.syncView;
+        expect(view.phase, JwSyncPhase.idle);
+        expect(view.importCommitted, isFalse);
+        expect(view.sourceFailure, JwDataProbeCode.datumSchema);
+        expect(view.accountBound, isFalse);
+        expect(view.sessionRetained, isFalse);
+        expect(_data(view).events, isEmpty);
+        expect(_data(view).importCount, 0);
+        expect(await harness.store.readCommittedPermits(), isEmpty);
+        expect(await _partitionEntryNames(harness), isEmpty);
+        expect(view.safeSummary, isNot(contains('invalid-room-object')));
+        _expectSafeSummary(view);
+      } finally {
+        await _cleanup(fixture, root, harnesses);
+      }
+    });
+  });
 
   testWidgets(
     'identity changing during collection cannot commit or retain a profile',

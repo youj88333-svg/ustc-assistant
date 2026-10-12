@@ -9,6 +9,7 @@ import 'package:sqlite3/sqlite3.dart' as sqlite3;
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/source/jw_collection_contract.dart';
@@ -20,6 +21,175 @@ final _day = DateTime.utc(2026, 10, 12);
 final _clock = FixedClock(DateTime.utc(2026, 10, 12, 12));
 
 void main() {
+  test(
+    'schema seven keeps unknown old details and enrichment preserves identity overlays and decisions',
+    () async {
+      final file = await _tempFile();
+      var store = await _open(file: file);
+      await _importCourse(store);
+      var window = await _window(store);
+      var course = window.items.single;
+      await _write(
+        store,
+        window.context,
+        UpdateSchoolAnnotation(
+          course.reference,
+          note: '保留合成备注',
+          hidden: true,
+          attendance: AttendanceDecision.attend,
+          listening: ListeningMode.listening,
+        ),
+      );
+      window = await _window(store, inactive: true);
+      course = window.items.single;
+      final localId = course.reference.identity;
+      final previousVersion = course.reference.version;
+      final importedBefore = (await store.readView()).importCount;
+      await store.close();
+      final raw = sqlite3.sqlite3.open(file.path);
+      try {
+        raw.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
+        raw.execute('PRAGMA user_version=7');
+      } finally {
+        raw.close();
+      }
+      store = await _open(file: file);
+      window = await _window(store, inactive: true);
+      final unknown = window.items.single;
+      expect(unknown.reference.identity, localId);
+      expect(unknown.reference.version, previousVersion);
+      expect(unknown.academicDetails, isNull);
+      expect(unknown.note, '保留合成备注');
+      expect(unknown.hidden, isTrue);
+      expect((await store.readView()).importCount, importedBefore);
+      final details = JwAcademicDetails(
+        lessonId: 81,
+        groupId: 91,
+        semesterName: '合成学期',
+        campus: '合成东区',
+        building: '合成教学楼',
+        room: '5304',
+        teachers: ['合成教师甲', '合成教师乙'],
+        courseCode: 'SYN-C101',
+        courseType: '合成必修课',
+        weekIndex: 6,
+        weekday: 1,
+        periods: 2,
+      );
+      await _importCourse(store, academicDetails: details);
+      window = await _window(store, inactive: true);
+      course = window.items.single;
+      expect(course.reference.identity, localId);
+      expect(course.reference.version, previousVersion + 1);
+      expect(course.location, '合成东区 · 合成教学楼 · 5304');
+      expect(course.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
+      expect(course.hidden, isTrue);
+      expect(course.note, '保留合成备注');
+      expect(course.attendance, AttendanceDecision.attend);
+      expect(course.listening, ListeningMode.listening);
+      await _failure(
+        _write(
+          store,
+          window.context,
+          UpdateSchoolAnnotation(unknown.reference, note: '旧目标不得覆盖'),
+        ),
+        CalendarFailureCode.staleReference,
+      );
+      final enrichedVersion = course.reference.version;
+      await _importCourse(store, academicDetails: details);
+      expect(
+        (await _window(store, inactive: true)).items.single.reference.version,
+        enrichedVersion,
+      );
+      await store.close();
+      store = await _open(file: file);
+      final reopened = (await _window(store, inactive: true)).items.single;
+      expect(reopened.reference.identity, localId);
+      expect(reopened.academicDetails!.toMap(), details.toMap());
+      expect(reopened.hidden, isTrue);
+      expect(reopened.note, '保留合成备注');
+      expect(
+        (await store.readView()).events.single.academicDetails!.toMap(),
+        details.toMap(),
+      );
+    },
+  );
+
+  test(
+    'later metadata upgrade failure rolls back earlier relation conversion and epochs',
+    () async {
+      final file = await _tempFile();
+      var store = await _open(file: file);
+      final context = (await _window(store)).context;
+      final left = await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('合成甲')),
+      );
+      final right = await _write(
+        store,
+        context,
+        CreatePersonalEvent(_draft('合成乙')),
+      );
+      await _write(
+        store,
+        context,
+        SaveCalendarRelation(
+          left: left.target!,
+          right: right.target!,
+          kind: CalendarRelationKind.notConflict,
+          note: '保留旧说明',
+        ),
+      );
+      await store.close();
+      _downgradeRelationsToSynthetic6(file);
+      final raw = sqlite3.sqlite3.open(file.path);
+      try {
+        raw.execute('ALTER TABLE jw_events ADD COLUMN academic_json TEXT');
+      } finally {
+        raw.close();
+      }
+      await expectLater(
+        _open(file: file),
+        throwsA(
+          isA<AppFailure>().having(
+            (e) => e.code,
+            'code',
+            FailureCode.storageFailed,
+          ),
+        ),
+      );
+      final failed = sqlite3.sqlite3.open(file.path);
+      try {
+        expect(failed.select('PRAGMA user_version').single['user_version'], 6);
+        expect(
+          failed.select('SELECT kind,note FROM agenda_relations').single,
+          containsPair('kind', 'coexist'),
+        );
+        expect(
+          failed.select('SELECT note FROM agenda_relations').single['note'],
+          '保留旧说明',
+        );
+        expect(
+          failed.select('SELECT epoch FROM agenda_state').single['epoch'],
+          context.agendaEpoch,
+        );
+        failed.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
+      } finally {
+        failed.close();
+      }
+      store = await _open(file: file);
+      expect(
+        (await _window(store)).conflicts.single.status,
+        CalendarConflictStatus.notConflict,
+      );
+      expect(
+        (await _window(store)).context.agendaEpoch,
+        context.agendaEpoch + 1,
+      );
+    },
+  );
+
   test(
     'personal plans work before school binding and completion is explicit',
     () async {
@@ -860,7 +1030,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        7,
+        8,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1117,7 +1287,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        7,
+        8,
       );
     },
   );
@@ -1161,6 +1331,7 @@ void _downgradeRelationsToSynthetic6(File file) {
       "UPDATE sqlite_sequence SET seq=100 WHERE name='agenda_relations'",
     );
     raw.execute('DROP TABLE synthetic_relations_v7');
+    raw.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
     raw.execute('PRAGMA user_version=6');
     raw.execute('COMMIT');
   } finally {
@@ -1240,6 +1411,7 @@ Future<void> _importCourse(
   String title = '合成课程',
   int endMinute = 600,
   bool empty = false,
+  JwAcademicDetails? academicDetails,
 }) async {
   final ticket = await store.beginJob(expectedAccountCode: 'AB12345');
   final part = JwPartitionRef(
@@ -1303,6 +1475,7 @@ Future<void> _importCourse(
         },
       },
       'snapshot': {
+        'version': jwContractVersion,
         'semesterId': 202610,
         'courses': empty
             ? []
@@ -1314,6 +1487,10 @@ Future<void> _importCourse(
                   'startMinute': 540,
                   'endMinute': endMinute,
                   'title': title,
+                  'academicDetails':
+                      (academicDetails ??
+                              JwAcademicDetails(lessonId: 81, groupId: 91))
+                          .toMap(),
                 },
               ],
         'exams': [],

@@ -277,7 +277,7 @@ final class LocalCalendarStore implements LocalCalendarPort {
     final (youngWhere, youngVariables) = schoolSelection(true);
     final jw = await _db
         .customSelect(
-          'SELECT e.local_id,e.version,e.kind,e.title,e.starts_at,e.ends_at,e.presence,'
+          'SELECT e.local_id,e.version,e.kind,e.title,e.academic_json,e.starts_at,e.ends_at,e.presence,'
           'o.hidden,o.note,o.attendance,o.listening FROM jw_events e '
           'JOIN jw_overlays o ON o.local_id=e.local_id $jwWhere ORDER BY e.local_id LIMIT 5001',
           variables: jwVariables,
@@ -386,6 +386,10 @@ final class LocalCalendarStore implements LocalCalendarPort {
     if (!end.isAfter(start)) {
       throw const CalendarFailure(CalendarFailureCode.storageFailed);
     }
+    final academicJson = young ? null : row.read<String?>('academic_json');
+    final academic = academicJson == null
+        ? null
+        : JwAcademicDetails.decode(academicJson);
     return CalendarOccurrence(
       reference: CalendarReference(
         context,
@@ -395,7 +399,10 @@ final class LocalCalendarStore implements LocalCalendarPort {
       title: row.read<String>('title'),
       startsAtUtc: start,
       endsAtUtc: end,
-      location: young ? row.read<String>('place') : '',
+      location: young
+          ? row.read<String>('place')
+          : academic?.locationLabel ?? '',
+      academicDetails: academic,
       presence: _enum(AgendaPresence.values, row.read<String>('presence')),
       hidden: row.read<int>('hidden') == 1,
       note: row.read<String>('note'),

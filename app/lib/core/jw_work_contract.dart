@@ -1,7 +1,7 @@
 import 'contracts.dart';
 
 const jwSourceKey = 'jw';
-const jwContractVersion = 'jw-course-exam-v1';
+const jwContractVersion = 'jw-course-exam-v2';
 
 enum JwPartitionPurpose { initial, recovery }
 

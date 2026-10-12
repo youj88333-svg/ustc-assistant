@@ -9,6 +9,7 @@ import '../core/contracts.dart';
 import '../core/agenda_contract.dart';
 import '../core/calendar_contract.dart';
 import '../core/calendar_validation.dart';
+import '../core/jw_academic_details.dart';
 import '../core/public_query_contract.dart';
 import '../core/knowledge_contract.dart';
 import '../core/jw_work_contract.dart';
@@ -109,7 +110,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -137,7 +138,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 6 || to != 7) {
+      if (from < 1 || from > 7 || to != 8) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -149,6 +150,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 4) ...PublicStore.schema,
           if (from <= 5) ...LocalCalendarStore.schema,
           if (from == 6) ...LocalCalendarStore.upgradeFrom6,
+          "ALTER TABLE jw_events ADD COLUMN academic_json TEXT CHECK(academic_json IS NULL OR length(academic_json)<=24576)",
         ]) {
           await customStatement(statement);
         }
@@ -924,6 +926,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           event.title.trim().isEmpty ||
           event.title.length > 300 ||
           event.title.trim() != event.title ||
+          event.academicDetails == null ||
           !event.startsAtUtc.isUtc ||
           !event.endsAtUtc.isUtc ||
           !event.startsAtUtc.isBefore(event.endsAtUtc) ||
@@ -978,6 +981,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         'kind': kind.single,
         'semester_id': row.read<int?>('semester_id'),
         'title': row.read<String>('title'),
+        'academic_json': row.read<String?>('academic_json'),
         'starts_at': row.read<int>('starts_at'),
         'ends_at': row.read<int>('ends_at'),
         'presence': presence.single,
@@ -1012,11 +1016,12 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       final desiredPresence = JwPresence.observed;
       final startsAt = draft.startsAtUtc.microsecondsSinceEpoch;
       final endsAt = draft.endsAtUtc.microsecondsSinceEpoch;
+      final academicJson = jsonEncode(draft.academicDetails!.toMap());
       if (old == null) {
         await customStatement(
           'INSERT INTO jw_events '
           '(external_id, kind, semester_id, title, starts_at, ends_at, '
-          'presence, version) VALUES (?, ?, ?, ?, ?, ?, ?, 1)',
+          'presence, academic_json, version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
           [
             draft.externalId,
             draft.kind.name,
@@ -1025,6 +1030,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
             startsAt,
             endsAt,
             desiredPresence.name,
+            academicJson,
           ],
         );
         await noteWrite();
@@ -1039,13 +1045,14 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           old['kind'] != draft.kind ||
           old['semester_id'] != draft.semesterId ||
           old['title'] != draft.title ||
+          old['academic_json'] != academicJson ||
           old['starts_at'] != startsAt ||
           old['ends_at'] != endsAt ||
           old['presence'] != desiredPresence;
       if (changed) {
         await customStatement(
           'UPDATE jw_events SET kind = ?, semester_id = ?, title = ?, '
-          'starts_at = ?, ends_at = ?, presence = ?, version = version + 1 '
+          'starts_at = ?, ends_at = ?, presence = ?, academic_json = ?, version = version + 1 '
           'WHERE local_id = ?',
           [
             draft.kind.name,
@@ -1054,12 +1061,14 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
             startsAt,
             endsAt,
             desiredPresence.name,
+            academicJson,
             old['local_id'],
           ],
         );
         old['kind'] = draft.kind;
         old['semester_id'] = draft.semesterId;
         old['title'] = draft.title;
+        old['academic_json'] = academicJson;
         old['starts_at'] = startsAt;
         old['ends_at'] = endsAt;
         old['presence'] = desiredPresence;
@@ -1251,7 +1260,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     _validateOwner(state.read<String>('owner_id'));
     final rows = await customSelect(
       'SELECT e.local_id, e.version, e.kind, e.semester_id, e.title, e.starts_at, e.ends_at, '
-      'e.presence, o.hidden FROM jw_events e '
+      'e.presence, e.academic_json, o.hidden FROM jw_events e '
       'JOIN jw_overlays o ON o.local_id = e.local_id '
       'ORDER BY e.starts_at, e.external_id, e.local_id',
     ).get();
@@ -1329,6 +1338,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           kind: kind.single,
           semesterId: semesterId,
           title: row.read<String>('title'),
+          academicDetails: row.read<String?>('academic_json') == null
+              ? null
+              : JwAcademicDetails.decode(row.read<String>('academic_json')),
           startsAtUtc: DateTime.fromMicrosecondsSinceEpoch(
             row.read<int>('starts_at'),
             isUtc: true,
@@ -1469,6 +1481,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       kind TEXT NOT NULL CHECK(kind IN ('course','exam')),
       semester_id INTEGER,
       title TEXT NOT NULL,
+      academic_json TEXT CHECK(academic_json IS NULL OR length(academic_json)<=24576),
       starts_at INTEGER NOT NULL,
       ends_at INTEGER NOT NULL,
       presence TEXT NOT NULL CHECK(presence IN

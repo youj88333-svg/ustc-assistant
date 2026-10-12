@@ -1,4 +1,5 @@
 import '../core/jw_work_contract.dart';
+import '../core/jw_academic_details.dart';
 import '../source/jw_probe_contract.dart';
 
 enum JwEventKind { course, exam }
@@ -13,6 +14,7 @@ final class JwEventDraft {
     required this.startsAtUtc,
     required this.endsAtUtc,
     this.semesterId,
+    this.academicDetails,
   });
   final String externalId;
   final JwEventKind kind;
@@ -20,6 +22,7 @@ final class JwEventDraft {
   final DateTime startsAtUtc;
   final DateTime endsAtUtc;
   final int? semesterId;
+  final JwAcademicDetails? academicDetails;
   List<Object?> get canonicalFields => [
     externalId,
     kind.name,
@@ -27,6 +30,7 @@ final class JwEventDraft {
     title,
     startsAtUtc.microsecondsSinceEpoch,
     endsAtUtc.microsecondsSinceEpoch,
+    academicDetails?.toMap(),
   ];
   @override
   String toString() => 'JwEventDraft';
@@ -43,6 +47,7 @@ final class JwStoredEvent {
     required this.presence,
     required this.hidden,
     this.semesterId,
+    this.academicDetails,
   });
   final int localId;
   final int version;
@@ -55,6 +60,7 @@ final class JwStoredEvent {
 
   /// Source-backed course membership; exams have no verified semester label.
   final int? semesterId;
+  final JwAcademicDetails? academicDetails;
   @override
   String toString() => 'JwStoredEvent';
 }

@@ -38,6 +38,8 @@ final class AgendaProjection {
             JwPresence.missingWithinScope => AgendaPresence.missingWithinScope,
           },
           hidden: event.hidden,
+          location: event.academicDetails?.locationLabel,
+          academicDetails: event.academicDetails,
         ),
       for (final event in young?.events ?? const <YoungStoredEvent>[])
         AgendaItem(

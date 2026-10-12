@@ -17,6 +17,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/work_lease.dart';
@@ -1400,6 +1401,7 @@ JwCollectionReply _jwReply({required int operation}) =>
           emptyExams: true,
         ).safeProjection,
         'snapshot': <String, Object?>{
+          'version': jwContractVersion,
           'semesterId': 20261,
           'courses': <Map<String, Object?>>[
             <String, Object?>{
@@ -1409,6 +1411,10 @@ JwCollectionReply _jwReply({required int operation}) =>
               'startMinute': 480,
               'endMinute': 540,
               'title': _jwCourseTitle,
+              'academicDetails': JwAcademicDetails(
+                lessonId: 11,
+                groupId: 21,
+              ).toMap(),
             },
           ],
           'exams': const <Object?>[],

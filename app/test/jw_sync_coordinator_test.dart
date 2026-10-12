@@ -7,6 +7,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/work_lease.dart';
@@ -1213,6 +1214,7 @@ JwCollectionReply _collection(
       ).safeProjection,
     if (failure == null)
       'snapshot': {
+        'version': jwContractVersion,
         'semesterId': semester,
         'courses': [
           {
@@ -1222,6 +1224,10 @@ JwCollectionReply _collection(
             'startMinute': 480,
             'endMinute': 590,
             'title': 'Synthetic course',
+            'academicDetails': JwAcademicDetails(
+              lessonId: 11,
+              groupId: 21,
+            ).toMap(),
           },
           if (duplicateCourseRows)
             {
@@ -1231,6 +1237,10 @@ JwCollectionReply _collection(
               'startMinute': 480,
               'endMinute': 590,
               'title': 'Synthetic course',
+              'academicDetails': JwAcademicDetails(
+                lessonId: 11,
+                groupId: 21,
+              ).toMap(),
             },
         ],
         'exams': [
@@ -1241,6 +1251,10 @@ JwCollectionReply _collection(
             'startMinute': 540,
             'endMinute': 660,
             'title': 'Synthetic exam',
+            'academicDetails': JwAcademicDetails(
+              courseCode: 'SYNTHETIC01',
+              examType: 'Final',
+            ).toMap(),
           },
         ],
       },

@@ -816,6 +816,7 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
     if (state.collecting && state.phase === 'done' && state.code === 'ok' &&
         diagnostic.selfRouteBound && diagnostic.identityStable) {
       const snapshot = record();
+      snapshot.version = 'jw-course-exam-v2';
       snapshot.semesterId = state.semesterId;
       snapshot.courses = state.courses;
       snapshot.exams = state.exams;
@@ -942,6 +943,71 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
     } else return -1;
     return hour <= 23 && minute <= 59 ? hour * 60 + minute : -1;
   };
+  const academicText = (state, owner, key, limit = 200) => {
+    const value = object(owner) ? ownValue(owner, key) : undefined;
+    if (value === undefined || value === null) return '';
+    if (typeof value !== 'string' || value.length > limit ||
+        test(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/, value))
+      dataReject(state, 'datum_schema', 'field_conflict');
+    return clean(value);
+  };
+  const academicInteger = (state, owner, key, maximum) => {
+    let value = ownValue(owner, key);
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value === 'string' && test(/^[1-9][0-9]{0,9}$/, value)) value = number(value);
+    if (!safeInteger(value) || value < 1 || value > maximum)
+      dataReject(state, 'datum_schema', 'field_conflict');
+    return value;
+  };
+  const academicBoolean = (state, owner, key) => {
+    const value = object(owner) ? ownValue(owner, key) : undefined;
+    if (value === undefined || value === null || value === '') return null;
+    if (typeof value !== 'boolean') dataReject(state, 'datum_schema', 'field_conflict');
+    return value;
+  };
+  const emptyAcademic = () => {
+    const value = record();
+    value.version = 'jw-academic-details-v1';
+    value.campus = ''; value.building = ''; value.room = ''; value.roomCode = '';
+    value.customPlace = ''; value.virtual = null; value.teachers = array();
+    value.courseCode = ''; value.courseType = ''; value.semesterName = '';
+    value.lessonId = null; value.groupId = null; value.weekIndex = null;
+    value.weekday = null; value.periods = null; value.exerciseClass = null;
+    value.examType = ''; value.examNote = '';
+    return value;
+  };
+  const courseAcademic = (state, lesson, row, lessonId, groupId) => {
+    const value = emptyAcademic();
+    value.courseCode = academicText(state, lesson, 'code');
+    value.courseType = academicText(state, lesson, 'courseTypeName');
+    value.semesterName = state.semesterName;
+    value.lessonId = lessonId; value.groupId = groupId;
+    value.weekIndex = academicInteger(state, row, 'weekIndex', 256);
+    value.weekday = academicInteger(state, row, 'weekday', 7);
+    value.periods = academicInteger(state, row, 'periods', 32);
+    value.exerciseClass = academicBoolean(state, row, 'exerciseClass');
+    const name = academicText(state, row, 'personName', 100);
+    if (name.length > 0) value.teachers[0] = name;
+    value.customPlace = academicText(state, row, 'customPlace');
+    const room = ownValue(row, 'room');
+    if (room !== undefined && room !== null) {
+      if (!object(room)) dataReject(state, 'datum_schema', 'field_conflict');
+      value.room = academicText(state, room, 'nameZh');
+      value.roomCode = academicText(state, room, 'code');
+      value.virtual = academicBoolean(state, room, 'virtual');
+      const building = ownValue(room, 'building');
+      if (building !== undefined && building !== null) {
+        if (!object(building)) dataReject(state, 'datum_schema', 'field_conflict');
+        value.building = academicText(state, building, 'nameZh');
+        const campus = ownValue(building, 'campus');
+        if (campus !== undefined && campus !== null) {
+          if (!object(campus)) dataReject(state, 'datum_schema', 'field_conflict');
+          value.campus = academicText(state, campus, 'nameZh');
+        }
+      }
+    }
+    return value;
+  };
   const datumProjection = (state, input, requestedIds) => {
     const diagnostic = state.diagnostics;
     const result = object(input) ? ownValue(input, 'result') : undefined;
@@ -958,7 +1024,7 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
     diagnostic.schedules = schedules.length <= 10000 ? schedules.length : 10000;
     if (lessons.length > 10000 || groups.length > 10000 || schedules.length > 10000)
       dataReject(state, 'datum_schema', 'datum_limit');
-    const requested = record(), lessonSet = record(), groupSet = record(), lessonNames = record();
+    const requested = record(), lessonSet = record(), groupSet = record(), lessonNames = record(), lessonFacts = record();
     for (let i = 0; i < requestedIds.length; ++i) requested[requestedIds[i]] = true;
     for (let i = 0; i < lessons.length; ++i) {
       const row = lessons[i];
@@ -971,6 +1037,7 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
         dataReject(state, 'datum_schema', 'lesson_title');
       lessonSet[id] = true;
       lessonNames[id] = name;
+      lessonFacts[id] = row;
     }
     if (lessons.length !== requestedIds.length) dataReject(state, 'datum_schema', 'lesson_set');
     for (let i = 0; i < groups.length; ++i) {
@@ -1005,6 +1072,7 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
         event.lessonId = lessonId; event.groupId = groupId;
         event.date = date; event.startMinute = starts; event.endMinute = ends;
         event.title = lessonNames[lessonId];
+        event.academicDetails = courseAcademic(state, lessonFacts[lessonId], row, lessonId, groupId);
         state.courses[state.courses.length] = event;
       }
     }
@@ -1037,6 +1105,16 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
         event.courseCode = course; event.examType = type; event.title = title;
         event.date = date[1]; event.startMinute = timeMinutes(period[1]);
         event.endMinute = timeMinutes(period[2]);
+        const details = emptyAcademic();
+        details.courseCode = course; details.examType = type;
+        details.room = text(cells[4]); details.building = text(cells[5]);
+        details.campus = text(cells[6]); details.examNote = text(cells[7]);
+        if (details.room.length > 200 || details.building.length > 200 ||
+            details.campus.length > 200 || details.examNote.length > 4000 ||
+            test(/[\u0000-\u0008\u000e-\u001f\u007f-\u009f]/,
+                details.room + details.building + details.campus + details.examNote))
+          dataReject(state, 'exams_schema', 'field_conflict');
+        event.academicDetails = details;
         state.exams[state.exams.length] = event;
       }
     }
@@ -1069,7 +1147,9 @@ inline constexpr wchar_t kJwProbeInstaller[] = LR"JWPROBE(
         const html = await readHtml(state, 'course', '/for-std/course-table/info/' + state.dataId);
         const semesters = courseProjection(html, emptySummary());
         for (let i = 0; i < semesters.length; ++i)
-          if (semesters[i].id === state.semesterId) semesterAccepted = true;
+          if (semesters[i].id === state.semesterId) {
+            semesterAccepted = true; state.semesterName = semesters[i].name;
+          }
         state.diagnostics.semesterAccepted = semesterAccepted;
         if (!semesterAccepted) dataReject(state, 'semester_unknown', 'semester_unknown');
       });

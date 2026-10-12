@@ -2,7 +2,13 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-enum JwDuplicateScheduleMode { none, identical, differentEnd }
+enum JwDuplicateScheduleMode {
+  none,
+  identical,
+  differentEnd,
+  differentTeachers,
+  differentRoom,
+}
 
 final class JwLauncherCookieObservation {
   const JwLauncherCookieObservation({
@@ -26,6 +32,10 @@ final class JwSyncFixture {
   int authenticationSubmissions = 0;
   bool emptyCourse = false;
   bool emptyExams = false;
+  bool omitAcademicDetails = false;
+  bool malformedAcademicDetails = false;
+  String courseRoom = '合成教室 5304';
+  String courseTeacher = '合成教师甲';
   bool hideSpringSemester = false;
   bool identityChangedAfterIndex = false;
   bool pauseIndex = false;
@@ -304,7 +314,12 @@ final class JwSyncFixture {
       jsonEncode({
         'result': {
           'lessonList': [
-            {'id': 11, 'courseName': '合成课程'},
+            {
+              'id': 11,
+              'courseName': '合成课程',
+              if (!omitAcademicDetails) 'code': 'SYN-C101.01',
+              if (!omitAcademicDetails) 'courseTypeName': '合成必修课程',
+            },
           ],
           'scheduleGroupList': [
             {'id': 21, 'lessonId': 11},
@@ -316,6 +331,24 @@ final class JwSyncFixture {
               'date': '2026-10-12',
               'startTime': 800,
               'endTime': 950,
+              if (!omitAcademicDetails) ...{
+                'personName': courseTeacher,
+                'weekIndex': 6,
+                'weekday': 1,
+                'periods': 2,
+                'exerciseClass': false,
+                'room': malformedAcademicDetails
+                    ? 'invalid-room-object'
+                    : {
+                        'nameZh': courseRoom,
+                        'code': 'SYN-R5304',
+                        'virtual': false,
+                        'building': {
+                          'nameZh': '合成教学楼',
+                          'campus': {'nameZh': '合成东校区'},
+                        },
+                      },
+              },
             },
             if (duplicateSchedule != JwDuplicateScheduleMode.none)
               {
@@ -324,9 +357,33 @@ final class JwSyncFixture {
                 'date': '2026-10-12',
                 'startTime': 800,
                 'endTime':
-                    duplicateSchedule == JwDuplicateScheduleMode.identical
-                    ? 950
-                    : 1000,
+                    duplicateSchedule == JwDuplicateScheduleMode.differentEnd
+                    ? 1000
+                    : 950,
+                if (!omitAcademicDetails) ...{
+                  'personName':
+                      duplicateSchedule ==
+                          JwDuplicateScheduleMode.differentTeachers
+                      ? '合成教师乙'
+                      : courseTeacher,
+                  'weekIndex': 6,
+                  'weekday': 1,
+                  'periods': 2,
+                  'exerciseClass': false,
+                  'room': {
+                    'nameZh':
+                        duplicateSchedule ==
+                            JwDuplicateScheduleMode.differentRoom
+                        ? '不同合成教室'
+                        : courseRoom,
+                    'code': 'SYN-R5304',
+                    'virtual': false,
+                    'building': {
+                      'nameZh': '合成教学楼',
+                      'campus': {'nameZh': '合成东校区'},
+                    },
+                  },
+                },
               },
           ],
         },

@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import '../core/contracts.dart';
+import '../core/jw_academic_details.dart';
 import '../core/jw_work_contract.dart';
 import '../data/jw_import_contract.dart';
 import 'jw_collection_failure.dart';
@@ -102,7 +103,13 @@ final class JwCollectionReply {
         _reject(JwCollectionRejectionReason.proofInvalid, diagnostics: d);
       }
       if (snapshot is! Map<String, dynamic> ||
-          !_keys(snapshot, const {'semesterId', 'courses', 'exams'})) {
+          !_keys(snapshot, const {
+            'version',
+            'semesterId',
+            'courses',
+            'exams',
+          }) ||
+          snapshot['version'] != jwContractVersion) {
         _reject(JwCollectionRejectionReason.snapshotShape, diagnostics: d);
       }
       final semesterValue = snapshot['semesterId'];
@@ -123,6 +130,7 @@ final class JwCollectionReply {
       }
       final events = <JwEventDraft>[];
       final seen = <String, JwEventDraft>{};
+      final positions = <String, int>{};
       for (final value in courses) {
         if (value is! Map<String, dynamic> ||
             !_keys(value, const {
@@ -132,6 +140,7 @@ final class JwCollectionReply {
               'startMinute',
               'endMinute',
               'title',
+              'academicDetails',
             })) {
           _reject(JwCollectionRejectionReason.courseFields, diagnostics: d);
         }
@@ -161,10 +170,34 @@ final class JwCollectionReply {
           ),
           startsAtUtc: interval.$1,
           endsAtUtc: interval.$2,
+          academicDetails: _academic(
+            value['academicDetails'],
+            reason: JwCollectionRejectionReason.courseFields,
+            diagnostics: d,
+            lessonId: lesson,
+            groupId: group,
+            weekday: interval.$1.add(const Duration(hours: 8)).weekday,
+          ),
         );
         final previous = seen[key];
         if (previous != null) {
-          if (_sameEvent(previous, draft)) continue;
+          if (_sameEvent(previous, draft, ignoreTeachers: true)) {
+            final merged = JwEventDraft(
+              externalId: previous.externalId,
+              kind: previous.kind,
+              semesterId: previous.semesterId,
+              title: previous.title,
+              startsAtUtc: previous.startsAtUtc,
+              endsAtUtc: previous.endsAtUtc,
+              academicDetails: previous.academicDetails!.withTeachers([
+                ...previous.academicDetails!.teachers,
+                ...draft.academicDetails!.teachers,
+              ]),
+            );
+            seen[key] = merged;
+            events[positions[key]!] = merged;
+            continue;
+          }
           _reject(
             JwCollectionRejectionReason.duplicateCourseKey,
             diagnostics: d,
@@ -172,6 +205,7 @@ final class JwCollectionReply {
           );
         }
         seen[key] = draft;
+        positions[key] = events.length;
         events.add(draft);
       }
       final courseEvents = events.length;
@@ -184,6 +218,7 @@ final class JwCollectionReply {
               'startMinute',
               'endMinute',
               'title',
+              'academicDetails',
             })) {
           _reject(JwCollectionRejectionReason.examFields, diagnostics: d);
         }
@@ -217,6 +252,13 @@ final class JwCollectionReply {
           ),
           startsAtUtc: interval.$1,
           endsAtUtc: interval.$2,
+          academicDetails: _academic(
+            value['academicDetails'],
+            reason: JwCollectionRejectionReason.examFields,
+            diagnostics: d,
+            courseCode: course,
+            examType: type,
+          ),
         );
         final previous = seen[key];
         if (previous != null) {
@@ -258,13 +300,60 @@ final class JwCollectionReply {
   static bool _isPositiveId(Object? value) =>
       value is int && value > 0 && value <= 2147483647;
 
-  static bool _sameEvent(JwEventDraft left, JwEventDraft right) =>
+  static bool _sameEvent(
+    JwEventDraft left,
+    JwEventDraft right, {
+    bool ignoreTeachers = false,
+  }) =>
       left.externalId == right.externalId &&
       left.kind == right.kind &&
       left.semesterId == right.semesterId &&
       left.title == right.title &&
       left.startsAtUtc == right.startsAtUtc &&
-      left.endsAtUtc == right.endsAtUtc;
+      left.endsAtUtc == right.endsAtUtc &&
+      left.academicDetails!.equivalentTo(
+        right.academicDetails!,
+        ignoreTeachers: ignoreTeachers,
+      );
+
+  static JwAcademicDetails _academic(
+    Object? value, {
+    required JwCollectionRejectionReason reason,
+    required JwDataDiagnostics diagnostics,
+    int? lessonId,
+    int? groupId,
+    int? weekday,
+    String? courseCode,
+    String? examType,
+  }) {
+    try {
+      final details = JwAcademicDetails.fromMap(value);
+      if (lessonId != null) {
+        if (details.lessonId != lessonId ||
+            details.groupId != groupId ||
+            details.examType.isNotEmpty ||
+            details.examNote.isNotEmpty ||
+            (details.weekday != null && details.weekday != weekday)) {
+          _reject(reason, diagnostics: diagnostics);
+        }
+      } else if (details.lessonId != null ||
+          details.groupId != null ||
+          details.weekIndex != null ||
+          details.weekday != null ||
+          details.periods != null ||
+          details.exerciseClass != null ||
+          details.teachers.isNotEmpty ||
+          details.courseCode != courseCode ||
+          details.examType != examType ||
+          details.semesterName.isNotEmpty ||
+          details.courseType.isNotEmpty) {
+        _reject(reason, diagnostics: diagnostics);
+      }
+      return details;
+    } on FormatException {
+      _reject(reason, diagnostics: diagnostics);
+    }
+  }
 
   static String _text(
     Object? value,

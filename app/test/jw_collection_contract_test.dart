@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
+import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/source/jw_collection_contract.dart';
 import 'package:ustc_assistant_m0/source/jw_collection_failure.dart';
 import 'package:ustc_assistant_m0/source/jw_data_probe_contract.dart';
@@ -52,6 +53,7 @@ Map<String, Object?> sample({bool empty = false}) => {
     emptyExams: true,
   ).safeProjection,
   'snapshot': {
+    'version': jwContractVersion,
     'semesterId': 20261,
     'courses': empty
         ? []
@@ -63,6 +65,10 @@ Map<String, Object?> sample({bool empty = false}) => {
               'startMinute': 480,
               'endMinute': 590,
               'title': '合成课程',
+              'academicDetails': JwAcademicDetails(
+                lessonId: 11,
+                groupId: 21,
+              ).toMap(),
             },
           ],
     'exams': [],
@@ -71,13 +77,17 @@ Map<String, Object?> sample({bool empty = false}) => {
 
 Map<String, Object?> sampleWithExams({int count = 1}) {
   final root = sample(empty: true);
-  const exam = <String, Object>{
+  final exam = <String, Object>{
     'courseCode': 'SYN101',
     'examType': 'final',
     'date': '2026-12-20',
     'startMinute': 540,
     'endMinute': 660,
     'title': '合成考试',
+    'academicDetails': JwAcademicDetails(
+      courseCode: 'SYN101',
+      examType: 'final',
+    ).toMap(),
   };
   ((root['snapshot'] as Map)['exams'] as List).addAll(
     List<Map<String, Object>>.generate(
@@ -132,6 +142,135 @@ void setExamCount(Map<String, Object?> root, int count) {
 void main() {
   JwCollectionReply decode(Map<String, Object?> root) =>
       JwCollectionReply.decode(jsonEncode(root), operation: 7);
+
+  test(
+    'v2 collects location, teachers and academic facts without exposing raw data',
+    () {
+      final root = sample();
+      final row = ((root['snapshot'] as Map)['courses'] as List).single as Map;
+      row['academicDetails'] = JwAcademicDetails(
+        campus: '合成东校区',
+        building: '合成教学楼',
+        room: '5304',
+        roomCode: 'SYN-R5304',
+        teachers: ['合成教师乙', '合成教师甲'],
+        courseCode: 'SYN101.01',
+        courseType: '合成课程类别',
+        semesterName: '合成秋季学期',
+        lessonId: 11,
+        groupId: 21,
+        weekIndex: 6,
+        weekday: 1,
+        periods: 2,
+        exerciseClass: false,
+      ).toMap();
+      final event = decode(root).events.single;
+      expect(event.academicDetails!.locationLabel, '合成东校区 · 合成教学楼 · 5304');
+      expect(event.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
+      expect(event.academicDetails!.courseCode, 'SYN101.01');
+      expect(event.academicDetails!.weekIndex, 6);
+      expect(event.academicDetails!.semesterName, '合成秋季学期');
+      expect(event.toString(), 'JwEventDraft');
+      expect(
+        decode(root).probe.diagnostics!.safeProjection.toString(),
+        isNot(contains('5304')),
+      );
+    },
+  );
+
+  test(
+    'teacher-only duplicate rows form one stable occurrence with all teachers',
+    () {
+      final root = sample();
+      final rows = (root['snapshot'] as Map)['courses'] as List;
+      final first = rows.single as Map<String, Object>;
+      first['academicDetails'] = JwAcademicDetails(
+        lessonId: 11,
+        groupId: 21,
+        teachers: ['合成教师甲'],
+      ).toMap();
+      rows.add(<String, Object>{
+        ...first,
+        'academicDetails': JwAcademicDetails(
+          lessonId: 11,
+          groupId: 21,
+          teachers: ['合成教师乙'],
+        ).toMap(),
+      });
+      setCourseCount(root, 2);
+      final reply = decode(root);
+      expect(reply.events, hasLength(1));
+      expect(reply.events.single.academicDetails!.teachers, ['合成教师乙', '合成教师甲']);
+      expect(reply.normalization!.duplicateCourses, 1);
+      final identity = reply.events.single.externalId;
+      final facts = reply.events.single.canonicalFields;
+      rows.setAll(0, rows.reversed.toList());
+      expect(decode(root).events.single.externalId, identity);
+      expect(decode(root).events.single.canonicalFields, facts);
+    },
+  );
+
+  test(
+    'same stable key cannot discard changed location or other source facts',
+    () {
+      final root = sample();
+      final rows = (root['snapshot'] as Map)['courses'] as List;
+      rows.add(<String, Object>{
+        ...Map<String, Object>.from(rows.single as Map),
+        'academicDetails': JwAcademicDetails(
+          lessonId: 11,
+          groupId: 21,
+          room: '另一个合成教室',
+        ).toMap(),
+      });
+      setCourseCount(root, 2);
+      expect(
+        () => decode(root),
+        rejection(
+          JwCollectionRejectionReason.duplicateCourseKey,
+          duplicateIdentical: false,
+        ),
+      );
+    },
+  );
+
+  test('v1 and omitted metadata cannot claim complete v2 collection', () {
+    final old = sample();
+    (old['snapshot'] as Map)['version'] = 'jw-course-exam-v1';
+    expect(
+      () => decode(old),
+      rejection(JwCollectionRejectionReason.snapshotShape),
+    );
+    final missing = sample();
+    (((missing['snapshot'] as Map)['courses'] as List).single as Map).remove(
+      'academicDetails',
+    );
+    expect(
+      () => decode(missing),
+      rejection(JwCollectionRejectionReason.courseFields),
+    );
+  });
+
+  test(
+    'observed exam details retain venue and instructions with no inferred semester or teachers',
+    () {
+      final root = sampleWithExams();
+      final row = ((root['snapshot'] as Map)['exams'] as List).single as Map;
+      row['academicDetails'] = JwAcademicDetails(
+        courseCode: 'SYN101',
+        examType: 'final',
+        campus: '合成校区',
+        building: '合成楼',
+        room: '合成考场',
+        examNote: '合成考试说明',
+      ).toMap();
+      final exam = decode(root).events.single;
+      expect(exam.academicDetails!.examNote, '合成考试说明');
+      expect(exam.academicDetails!.locationLabel, '合成校区 · 合成楼 · 合成考场');
+      expect(exam.academicDetails!.semesterName, isEmpty);
+      expect(exam.academicDetails!.teachers, isEmpty);
+    },
+  );
   JwCollectionValidationFailure failureFrom(void Function() action) {
     try {
       action();
@@ -386,6 +525,10 @@ void main() {
       final second = Map<String, Object>.from(first)
         ..['lessonId'] = 12
         ..['groupId'] = 22
+        ..['academicDetails'] = JwAcademicDetails(
+          lessonId: 12,
+          groupId: 22,
+        ).toMap()
         ..['date'] = '2026-10-13'
         ..['startMinute'] = 540
         ..['endMinute'] = 600
@@ -401,6 +544,10 @@ void main() {
       final repeatedSecond = Map<String, Object>.from(repeatedFirst)
         ..['lessonId'] = 12
         ..['groupId'] = 22
+        ..['academicDetails'] = JwAcademicDetails(
+          lessonId: 12,
+          groupId: 22,
+        ).toMap()
         ..['date'] = '2026-10-13'
         ..['startMinute'] = 540
         ..['endMinute'] = 600
@@ -550,6 +697,10 @@ void main() {
     course
       ..['lessonId'] = syntheticLessonId
       ..['groupId'] = syntheticGroupId
+      ..['academicDetails'] = JwAcademicDetails(
+        lessonId: syntheticLessonId,
+        groupId: syntheticGroupId,
+      ).toMap()
       ..['date'] = syntheticDate
       ..['title'] = syntheticCourseTitle;
     duplicateCourse(root);
@@ -561,6 +712,10 @@ void main() {
         'startMinute': 540,
         'endMinute': 660,
         'title': syntheticExamTitle,
+        'academicDetails': JwAcademicDetails(
+          courseCode: syntheticExamCode,
+          examType: 'SYNTHETIC_FINAL',
+        ).toMap(),
       },
       {
         'courseCode': syntheticExamCode,
@@ -569,6 +724,10 @@ void main() {
         'startMinute': 540,
         'endMinute': 660,
         'title': syntheticExamTitle,
+        'academicDetails': JwAcademicDetails(
+          courseCode: syntheticExamCode,
+          examType: 'SYNTHETIC_FINAL',
+        ).toMap(),
       },
     ];
     setExamCount(root, 2);
@@ -629,6 +788,10 @@ void main() {
       row
         ..['lessonId'] = syntheticLessonId
         ..['groupId'] = syntheticGroupId
+        ..['academicDetails'] = JwAcademicDetails(
+          lessonId: syntheticLessonId,
+          groupId: syntheticGroupId,
+        ).toMap()
         ..['date'] = syntheticDate
         ..['title'] = syntheticTitle;
       duplicateCourse(root, duplicateEndMinute: 600);
