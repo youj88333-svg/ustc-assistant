@@ -355,6 +355,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
           if (_db.publicStore._load != null) {
             throw const SettingsFailure(SettingsFailureCode.busy);
           }
+          await _db.agent._beginApplicationMaintenance();
           final current = await _db._state();
           final young = await _db._youngState();
           final public = await _db
@@ -423,6 +424,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
   }
 
   void _invalidateCapabilities() {
+    _db.agent._revoke();
     for (final ticket in [
       ..._db._tickets.values,
       ..._db._youngTickets.values,
@@ -522,6 +524,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
         await _db.customStatement('DELETE FROM $table');
       }
       if (request.kind == MaintenanceKind.reset) {
+        await _db.agent._resetApplication();
         for (final table in _resetTables) {
           await _db.customStatement('DELETE FROM $table');
         }

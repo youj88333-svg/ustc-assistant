@@ -78,14 +78,31 @@ void removeTaskTablesForLegacyFixture(Database database) {
   }
 }
 
-/// A v1-v9 fixture cannot contain v10 settings/maintenance tables. This helper
-/// is only called on explicitly owned synthetic SQLite copies.
+/// A v1-v9 fixture cannot contain v10 settings/maintenance or v11 Agent tables.
+/// This helper is only called on explicitly owned synthetic SQLite copies.
 void removeSettingsTablesForLegacyFixture(Database database) {
+  removeAgentTablesForLegacyFixture(database);
   for (final table in const [
     'app_maintenance_intent',
     'app_settings_receipts',
     'app_settings_audit',
     'app_settings',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
+  }
+}
+
+/// Remove v11 Agent tables from an explicitly constructed synthetic legacy
+/// copy before setting its older user_version.
+void removeAgentTablesForLegacyFixture(Database database) {
+  for (final table in const [
+    'agent_audit',
+    'agent_history_intent',
+    'agent_messages',
+    'agent_runs',
+    'agent_conversations',
+    'agent_config',
+    'agent_state',
   ]) {
     database.execute('DROP TABLE IF EXISTS $table');
   }

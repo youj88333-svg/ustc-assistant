@@ -18,6 +18,7 @@ final class ApplicationMaintenanceCoordinator {
   final WorkLeasePool leases;
   final Future<void> Function(WorkLease) cleanProfiles;
   final Future<void> Function() drainForExit;
+  Future<void> Function()? drainAgent;
   Future<void> Function(MaintenanceKind)? onRefresh;
   final _changes = StreamController<MaintenanceProgress>.broadcast();
   MaintenanceProgress _view = const MaintenanceProgress();
@@ -191,6 +192,9 @@ final class ApplicationMaintenanceCoordinator {
       if (intent == null || _lease?.isHeld != true) {
         throw const SettingsFailure(SettingsFailureCode.invalidIntent);
       }
+      // C3 has already invalidated Agent tickets in the durable intent. Its
+      // separate model channel must be drained before any deletion begins.
+      await drainAgent?.call();
       if (intent.kind == MaintenanceKind.reset) {
         _publish(MaintenancePhase.cleaning);
         await cleanProfiles(_lease!);

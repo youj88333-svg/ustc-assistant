@@ -13,6 +13,8 @@ import 'package:ustc_assistant_m0/core/public_query_contract.dart';
 import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 
+import '../support/calendar_legacy_schema.dart';
+
 final _day = DateTime.utc(2026, 10, 12);
 final _clock = FixedClock(DateTime.utc(2026, 10, 12, 12));
 
@@ -1119,7 +1121,7 @@ void main() {
       store = await _open(file: file);
       raw = sqlite3.sqlite3.open(file.path);
       try {
-        expect(raw.select('PRAGMA user_version').single['user_version'], 10);
+        expect(raw.select('PRAGMA user_version').single['user_version'], 11);
         expect(_legacyFacts(raw), before);
         expect(
           raw
@@ -1555,10 +1557,7 @@ void _makeSyntheticVersionNine(File file) {
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
-    raw.execute('DROP TABLE app_maintenance_intent');
-    raw.execute('DROP TABLE app_settings_receipts');
-    raw.execute('DROP TABLE app_settings_audit');
-    raw.execute('DROP TABLE app_settings');
+    removeSettingsTablesForLegacyFixture(raw);
     raw.execute('PRAGMA user_version=9');
     raw.execute('COMMIT');
   } finally {

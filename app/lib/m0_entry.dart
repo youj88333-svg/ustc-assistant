@@ -8,6 +8,8 @@ import 'app/product_app.dart';
 import 'app/app_settings_page.dart';
 import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
+import 'app/agent_workspace_page.dart';
+import 'app/agent_settings_panel.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
 import 'app/jw_sync_panel.dart';
@@ -94,6 +96,20 @@ final class _OwnedAppState extends State<OwnedApplication> {
       return ProductApp(
         key: ValueKey(view.snapshot?.context.resetEpoch),
         controller: runtime.shell,
+        agentBuilder: (context) => AgentWorkspacePage(
+          controller: runtime.agent,
+          onSettings: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (context) => Scaffold(
+                appBar: AppBar(title: const Text('Agent 设置')),
+                body: Padding(
+                  padding: const EdgeInsets.all(24),
+                  child: AgentSettingsPanel(controller: runtime.agent),
+                ),
+              ),
+            ),
+          ),
+        ),
         agendaBuilder: (context) => CalendarWorkspacePage(
           key: ValueKey(view.snapshot?.context.agendaEpoch),
           controller: runtime.calendar,
@@ -102,6 +118,8 @@ final class _OwnedAppState extends State<OwnedApplication> {
         settingsBuilder: (context) => ApplicationSettingsPage(
           settings: runtime.settings,
           controller: runtime.shell,
+          agentBuilder: (context) =>
+              AgentSettingsPanel(controller: runtime.agent),
           diagnosticsBuilder:
               developmentDiagnosticsEnabled || m3ValidationEnabled
               ? _buildDiagnostics

@@ -16,6 +16,8 @@ import '../core/settings_contract.dart';
 import '../core/jw_work_contract.dart';
 import '../core/jw_credentials.dart';
 import '../core/young_work_contract.dart';
+import '../core/agent_contract.dart';
+import '../core/agent_text.dart';
 import '../source/young_collection_contract.dart';
 import '../source/jw_collection_contract.dart';
 import '../source/jw_probe_contract.dart';
@@ -32,6 +34,7 @@ part 'local_calendar_store.dart';
 part 'local_task_store.dart';
 part 'calendar_undo_store.dart';
 part 'application_settings_store.dart';
+part 'agent_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
 
@@ -83,6 +86,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     this.onKnowledgeCheckpoint,
     this.onCalendarCheckpoint,
     this.onSettingsCheckpoint,
+    this.modelCredentialProtector,
+    this.onAgentCheckpoint,
     this.knowledgeIdentity = bundledKnowledgeIdentity,
     // Keep the public capability names independent of platform internals.
     // ignore: prefer_initializing_formals
@@ -100,6 +105,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   final Future<void> Function()? onCalendarCheckpoint;
   final Future<void> Function()? onSettingsCheckpoint;
   final KnowledgeEditionIdentity knowledgeIdentity;
+  final ModelCredentialProtector? modelCredentialProtector;
+  final Future<void> Function()? onAgentCheckpoint;
+  late final AgentStore agent = AgentStore._(this);
   late final PublicStore publicStore = PublicStore._(this);
   late final LocalCalendarStore localCalendar = LocalCalendarStore._(this);
   late final ApplicationSettingsStore applicationSettings =
@@ -118,7 +126,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -136,6 +144,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...LocalCalendarStore.schema,
         ...LocalCalendarStore.taskSchema,
         ...ApplicationSettingsStore.schema,
+        ...AgentStore.schema,
       ]) {
         await customStatement(statement);
       }
@@ -148,7 +157,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 9 || to != 10) {
+      if (from < 1 || from > 10 || to != 11) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -165,8 +174,10 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 8) ...LocalCalendarStore.taskSchema,
           if (from <= 8)
             'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
-          ...ApplicationSettingsStore.schema,
-          'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
+          if (from <= 9) ...ApplicationSettingsStore.schema,
+          if (from <= 9)
+            'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
+          ...AgentStore.schema,
         ]) {
           await customStatement(statement);
         }
@@ -197,6 +208,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       } on CalendarFailure catch (error) {
         result.completeError(error);
       } on SettingsFailure catch (error) {
+        result.completeError(error);
+      } on AgentFailure catch (error) {
         result.completeError(error);
       } on Object {
         result.completeError(const AppFailure(FailureCode.storageFailed));
@@ -1441,6 +1454,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     await _credentialChanges.close();
     await localCalendar._changes.close();
     await applicationSettings._close();
+    await agent.close();
     await super.close();
   }
 

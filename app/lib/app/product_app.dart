@@ -22,11 +22,13 @@ final class ProductApp extends StatelessWidget {
     required this.controller,
     required this.settingsBuilder,
     this.agendaBuilder,
+    this.agentBuilder,
   });
 
   final AppShellPort controller;
   final WidgetBuilder settingsBuilder;
   final WidgetBuilder? agendaBuilder;
+  final WidgetBuilder? agentBuilder;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -43,6 +45,7 @@ final class ProductApp extends StatelessWidget {
       controller: controller,
       settingsBuilder: settingsBuilder,
       agendaBuilder: agendaBuilder,
+      agentBuilder: agentBuilder,
     ),
   );
 }
@@ -117,11 +120,13 @@ final class _ProductShell extends StatefulWidget {
     required this.controller,
     required this.settingsBuilder,
     this.agendaBuilder,
+    this.agentBuilder,
   });
 
   final AppShellPort controller;
   final WidgetBuilder settingsBuilder;
   final WidgetBuilder? agendaBuilder;
+  final WidgetBuilder? agentBuilder;
 
   @override
   State<_ProductShell> createState() => _ProductShellState();
@@ -270,7 +275,7 @@ final class _ProductShellState extends State<_ProductShell> {
   ) {
     switch (destination) {
       case ShellDestination.agent:
-        return _buildAgentPage(context);
+        return widget.agentBuilder?.call(context) ?? _buildAgentPage(context);
       case ShellDestination.agenda:
         return widget.agendaBuilder?.call(context) ??
             _buildAgendaPage(context, shellWidth);

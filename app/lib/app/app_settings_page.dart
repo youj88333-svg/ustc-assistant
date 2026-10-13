@@ -9,7 +9,7 @@ import 'source_settings_page.dart';
 
 const _settingsMuted = Color(0xFF66736C);
 
-enum _SettingsSection { sources, display, dataPrivacy, about }
+enum _SettingsSection { sources, agent, display, dataPrivacy, about }
 
 /// Formal settings projection for the existing source and local settings ports.
 ///
@@ -21,11 +21,13 @@ final class ApplicationSettingsPage extends StatefulWidget {
     required this.settings,
     required this.controller,
     this.diagnosticsBuilder,
+    this.agentBuilder,
   });
 
   final ApplicationSettingsPort settings;
   final AppShellPort controller;
   final WidgetBuilder? diagnosticsBuilder;
+  final WidgetBuilder? agentBuilder;
 
   @override
   State<ApplicationSettingsPage> createState() =>
@@ -155,6 +157,12 @@ final class _ApplicationSettingsPageState
                   '来源',
                   Icons.school_outlined,
                 ),
+                if (widget.agentBuilder != null)
+                  _sectionChip(
+                    _SettingsSection.agent,
+                    'Agent',
+                    Icons.auto_awesome_outlined,
+                  ),
                 _sectionChip(
                   _SettingsSection.display,
                   '显示',
@@ -179,7 +187,8 @@ final class _ApplicationSettingsPageState
             ],
             if (snapshot != null &&
                 !writable &&
-                _section != _SettingsSection.sources) ...[
+                _section != _SettingsSection.sources &&
+                _section != _SettingsSection.agent) ...[
               const SizedBox(height: 8),
               const _SettingsNotice(message: '本机有操作或恢复正在进行；新的设置操作暂不可用。'),
             ],
@@ -191,6 +200,9 @@ final class _ApplicationSettingsPageState
                   controller: widget.controller,
                   diagnosticsBuilder: widget.diagnosticsBuilder,
                 ),
+                _SettingsSection.agent =>
+                  widget.agentBuilder?.call(context) ??
+                      _loadingSection('模型设置尚未装配。'),
                 _SettingsSection.display => _displaySection(
                   context,
                   preferences,
@@ -589,7 +601,7 @@ final class _ApplicationSettingsPageState
       title: '清空本地资料库？',
       scope:
           '将清理本地资料文本、片段与索引、载入批次和回执，以及当前引用。\n\n'
-          '学校与个人日程、任务、学校密码、账号、目录和来源许可会保留。'
+          '学校与个人日程、任务、学校密码、账号、目录、来源许可、模型 Key 和对话历史会保留。'
           '清理会先排空资料载入；迟到的载入结果不会重新写回。',
       finalTitle: '再次确认清空资料',
       finalAction: '确认清空资料',
@@ -630,13 +642,13 @@ final class _ApplicationSettingsPageState
       scope: isReset
           ? '将删除本应用保存的账号、共享密码、来源目录与成功范围、日程和覆盖、'
                 '个人安排与例外、任务与时间块、关系、撤销状态、资料库、旧审计回执、'
-                '联网同意、显示偏好及本应用正式/观测登记的来源分区。\n\n'
+                '模型 Key、模型配置和对话历史、联网同意、显示偏好及本应用正式/观测登记的来源分区。\n\n'
                 '保留安装文件、数据库容器、目录所有权、单调世代与 ID 高水位及最小恢复账本。'
                 '不会删除旧工程、系统浏览器或任意目录。重置完成后回到默认 Agent，可重新绑定账号。'
           : '将删除教务与二课日程及覆盖、个人安排与例外、任务与时间块、关系、撤销状态，'
                 '以及相关作业、回执和审计记录。\n\n'
                 '账号、共享密码、来源目录与成功学期/日期范围、来源分区与许可、资料库、'
-                '联网同意和显示偏好会保留。清空日程不会删除密码。',
+                '模型 Key、模型配置、对话历史、联网同意和显示偏好会保留。清空日程不会删除密码。',
       finalTitle: isReset ? '再次确认完全重置' : '再次确认清空日程与任务',
       finalAction: isReset ? '确认完全重置' : '确认清空日程与任务',
     );
@@ -771,7 +783,7 @@ final class _ApplicationSettingsPageState
       SizedBox(height: 12),
       _SettingsCard(
         title: 'Agent 状态',
-        child: Text('Agent 尚未接入模型。当前版本不会生成回复、保存对话或注册工具。'),
+        child: Text('可在 Agent 设置中连接学校模型服务，使用对话、停止和本机历史。业务查询、规划及写入功能正在接入。'),
       ),
       SizedBox(height: 12),
       _SettingsCard(

@@ -5,6 +5,10 @@ import 'package:flutter/foundation.dart';
 import '../core/contracts.dart';
 import '../core/work_lease.dart';
 import '../core/settings_contract.dart';
+import '../core/agent_contract.dart';
+import '../agent/agent_coordinator.dart';
+import '../agent/model_gateway_contract.dart';
+import '../agent/ustc_model_gateway.dart';
 import '../data/demo_store.dart';
 import '../data/jw_store.dart';
 import '../data/knowledge_service.dart';
@@ -25,6 +29,7 @@ import '../platform/observation_assets.dart';
 import '../platform/jw_partition_registry.dart';
 import '../platform/young_partition_registry.dart';
 import '../platform/windows_jw_credential_protector.dart';
+import '../platform/windows_model_credential_protector.dart';
 import '../source/synthetic_source.dart';
 import '../source/observation_contract.dart';
 import 'demo_controller.dart';
@@ -32,6 +37,7 @@ import 'app_shell_controller.dart';
 import 'calendar_workspace_controller.dart';
 import 'calendar_workspace_contract.dart';
 import 'application_settings_controller.dart';
+import 'agent_workspace_controller.dart';
 
 /// Owns the separate demonstration and formal directories. No old asset opens.
 final class DemoRuntime {
@@ -53,6 +59,8 @@ final class DemoRuntime {
     this.calendar,
     this.settings,
     this.maintenance,
+    this.agentCoordinator,
+    this.agent,
   );
 
   final DemoDirectory directory;
@@ -72,6 +80,8 @@ final class DemoRuntime {
   final CalendarWorkspaceController calendar;
   final ApplicationSettingsController settings;
   final ApplicationMaintenanceCoordinator maintenance;
+  final AgentCoordinator agentCoordinator;
+  final AgentWorkspaceController agent;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -99,15 +109,18 @@ final class DemoRuntime {
     return bootstrap._assembly.assemble();
   }
 
-  Future<void> close() => _closeFuture ??= _close().catchError((Object error) {
-    settings.resumeAfterFailedExit(shell: shell);
-    _closeFuture = null;
-    throw error;
-  });
+  Future<void> close() =>
+      _closeFuture ??= _close().catchError((Object error) async {
+        await agentCoordinator.resumeAfterFailedExit();
+        settings.resumeAfterFailedExit(shell: shell);
+        _closeFuture = null;
+        throw error;
+      });
 
   Future<void> _close() async {
     final preservingMaintenance = maintenance.view.blocksProduct;
     await settings.shutdown();
+    await agentCoordinator.quiesceForMaintenance();
     await maintenance.close();
     await calendar.shutdown();
     await coordinator.close();
@@ -125,11 +138,13 @@ final class DemoRuntime {
       await youngSync.shutdown();
     }
     await browser.dispose();
+    await agentCoordinator.close();
     if (!_controllerDisposed) {
       calendar.dispose();
       shell.dispose();
       controller.dispose();
       settings.dispose();
+      agent.dispose();
       _controllerDisposed = true;
     }
     await store.close();
@@ -139,6 +154,7 @@ final class DemoRuntime {
   }
 
   Future<void> _refreshAfterMaintenance(MaintenanceKind kind) async {
+    await agentCoordinator.refreshAfterMaintenance();
     publicQueries.refreshAfterMaintenance();
     await jwSync.refreshAfterMaintenance();
     await youngSync.refreshAfterMaintenance();
@@ -171,6 +187,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     required this.settings,
     required this.clock,
     required this.collectionDelay,
+    required this.agentCoordinator,
+    required this.agent,
     this.onActivationCheckpoint,
   });
   final DemoDirectory directory, jwDirectory;
@@ -187,6 +205,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
   final ApplicationSettingsController settings;
   final AppClock clock;
   final Duration collectionDelay;
+  final AgentCoordinator agentCoordinator;
+  final AgentWorkspaceController agent;
   @visibleForTesting
   final Future<void> Function()? onActivationCheckpoint;
   DemoRuntime? _runtime;
@@ -200,12 +220,16 @@ final class RuntimeBootstrap extends ChangeNotifier {
     AppClock clock = const SystemClock(),
     Duration collectionDelay = const Duration(milliseconds: 450),
     Future<void> Function()? onActivationCheckpoint,
+    @visibleForTesting ModelGatewayPort? modelGateway,
+    @visibleForTesting ModelCredentialProtector? modelCredentialProtector,
   }) async {
     final directory = await DemoDirectory.acquire(directoryPath);
     DemoDirectory? formal;
     JwStore? database;
     DemoStore? demo;
     NativeObservationBrowser? browser;
+    AgentCoordinator? agentCoordinator;
+    AgentWorkspaceController? agent;
     try {
       formal = await DemoDirectory.acquire(
         jwDirectoryPath ??
@@ -218,6 +242,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ownership: formal,
         clock: clock,
         credentialProtector: const WindowsJwCredentialProtector(),
+        modelCredentialProtector:
+            modelCredentialProtector ?? const WindowsModelCredentialProtector(),
       );
       demo = DemoStore(
         openDemoDatabase(directory),
@@ -225,6 +251,12 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
       );
       await demo.initialize();
+      agentCoordinator = AgentCoordinator(
+        data: database.agent,
+        gateway: modelGateway ?? UstcModelGateway(),
+        clock: clock,
+      );
+      agent = AgentWorkspaceController(agentCoordinator);
       final leases = WorkLeasePool();
       browser = NativeObservationBrowser();
       final jwRegistry = JwPartitionRegistry(formal);
@@ -252,6 +284,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         cleanProfiles: profiles.clean,
         drainForExit: profiles.drainForExit,
       );
+      maintenance.drainAgent = agentCoordinator.quiesceForMaintenance;
       RuntimeBootstrap? ready;
       final settings = ApplicationSettingsController(
         data: database.applicationSettings,
@@ -288,6 +321,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
         collectionDelay: collectionDelay,
         onActivationCheckpoint: onActivationCheckpoint,
+        agentCoordinator: agentCoordinator,
+        agent: agent,
       );
       ready = bootstrap;
       settings.onRecovered = bootstrap._activate;
@@ -302,6 +337,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
       }
       return bootstrap;
     } catch (error) {
+      await agentCoordinator?.close();
+      agent?.dispose();
       await browser?.dispose();
       await demo?.close();
       await database?.close();
@@ -348,6 +385,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         return;
       }
       await settings.shutdown();
+      await agentCoordinator.quiesceForMaintenance();
       await maintenance.close();
       await _assembly.close();
       await publicQueries.close();
@@ -355,12 +393,15 @@ final class RuntimeBootstrap extends ChangeNotifier {
       await jwRegistry.closeForMaintenanceExit();
       await youngRegistry.closeForMaintenanceExit();
       await browser.dispose();
+      await agentCoordinator.close();
       settings.dispose();
+      agent.dispose();
       await store.close();
       await jwStore.close();
       await jwDirectory.release();
       await directory.release();
     } catch (_) {
+      await agentCoordinator.resumeAfterFailedExit();
       settings.resumeAfterFailedExit();
       _closing = null;
       rethrow;
@@ -374,6 +415,7 @@ final class _RuntimeAssembly {
   _RuntimeAssembly(this.bootstrap);
   final RuntimeBootstrap bootstrap;
   bool _databaseReady = false;
+  bool _agentReady = false;
   bool _observationReady = false,
       _youngObservationReady = false,
       _jwReady = false,
@@ -401,6 +443,13 @@ final class _RuntimeAssembly {
 
   Future<DemoRuntime> assemble() async {
     final b = bootstrap;
+    if (!_agentReady) {
+      // Reconcile history intent and interrupted runs before ordinary sources
+      // or pages are opened. No saved action or model request resumes here.
+      await b.jwStore.agent.initializeAgent();
+      await b.agentCoordinator.initialize();
+      _agentReady = true;
+    }
     if (!_databaseReady) {
       await b.jwStore.initialize();
       _databaseReady = true;
@@ -514,6 +563,8 @@ final class _RuntimeAssembly {
       calendar,
       b.settings,
       b.maintenance,
+      b.agentCoordinator,
+      b.agent,
     );
     b.settings.attachShell(shell);
     b.maintenance.onRefresh = runtime._refreshAfterMaintenance;
