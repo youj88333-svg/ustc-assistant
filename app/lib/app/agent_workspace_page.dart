@@ -7,6 +7,8 @@ import 'package:markdown/markdown.dart' as md;
 
 import 'agent_workspace_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/diagnostics_contract.dart';
+import 'diagnostics_panel.dart';
 
 const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
@@ -20,12 +22,14 @@ final class AgentWorkspacePage extends StatefulWidget {
     required this.onSettings,
     this.pickImages,
     this.onOpenLocalEvidence,
+    this.diagnostics,
   });
 
   final AgentWorkspacePort controller;
   final VoidCallback onSettings;
   final Future<List<AgentImage>> Function()? pickImages;
   final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
+  final DiagnosticsPort? diagnostics;
 
   @override
   State<AgentWorkspacePage> createState() => _AgentWorkspacePageState();
@@ -821,11 +825,22 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             if (_message != null || view.failure != null) ...[
               const SizedBox(height: 8),
               _AgentNotice(
-                message: _message ?? _failureText(view.failure!),
+                message:
+                    view.failure == AgentFailureCode.invalidInput &&
+                        view.parameterIssue != null
+                    ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
+                    : _message ?? _failureText(view.failure!),
                 isError:
                     _messageIsError ||
                     (_message == null && view.failure != null),
               ),
+              if (widget.diagnostics != null && view.failure != null)
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: DiagnosticsExportButton(
+                    diagnostics: widget.diagnostics!,
+                  ),
+                ),
             ],
             const SizedBox(height: 12),
             Expanded(
@@ -1920,7 +1935,12 @@ final class _MessageBubble extends StatelessWidget {
                 ),
               ] else if (message.status != AgentMessageStatus.complete) ...[
                 const SizedBox(height: 4),
-                const Text('没有可显示的回复内容。', style: TextStyle(color: _agentMuted)),
+                Text(
+                  message.status == AgentMessageStatus.failed
+                      ? '本次回复未完成。操作结果以方案卡为准，可导出最近日志排查。'
+                      : '回复已停止。',
+                  style: const TextStyle(color: _agentMuted),
+                ),
               ],
               if (user && message.imageCount > 0) ...[
                 const SizedBox(height: 6),

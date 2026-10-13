@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import '../core/diagnostics_contract.dart';
+import 'diagnostics_panel.dart';
 
 import '../core/contracts.dart';
 import '../data/import_contract.dart';
@@ -53,9 +55,10 @@ class _M0AppState extends State<M0App> {
 }
 
 class M0StartupFailureApp extends StatelessWidget {
-  const M0StartupFailureApp({super.key, required this.code});
+  const M0StartupFailureApp({super.key, required this.code, this.diagnostics});
 
   final FailureCode code;
+  final DiagnosticsPort? diagnostics;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -89,6 +92,11 @@ class M0StartupFailureApp extends StatelessWidget {
                       const Text('应用无法启动。'),
                       const SizedBox(height: 12),
                       Text(_startupFailureMessage(code)),
+                      if (diagnostics != null) ...[
+                        const SizedBox(height: 12),
+                        const Text('导出只包含本次启动错误；已有日志未读取。'),
+                        DiagnosticsExportButton(diagnostics: diagnostics!),
+                      ],
                     ],
                   ),
                 ),

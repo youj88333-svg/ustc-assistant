@@ -8,6 +8,8 @@ import '../core/agent_action_contract.dart';
 import '../core/agent_discussion_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_text.dart';
+import '../core/agent_parameter_issue.dart';
+import '../core/diagnostics_contract.dart';
 import '../core/contracts.dart';
 import 'agent_tool_contract.dart';
 import 'agent_context.dart';
@@ -66,12 +68,18 @@ final class AgentCoordinator {
     this.readTools,
     this.clock = const SystemClock(),
     this.runTimeout = const Duration(seconds: 180),
+    this.diagnostics,
   });
   final AgentDataPort data;
   final ModelGatewayPort gateway;
   final AgentReadToolsPort? readTools;
   final AppClock clock;
   final Duration runTimeout;
+  final DiagnosticsPort? diagnostics;
+  DiagnosticTrace? _diagnosticTrace;
+  int _diagnosticModelCalls = 0, _diagnosticToolCalls = 0;
+  DiagnosticTrace? get diagnosticTrace => _diagnosticTrace;
+  AgentParameterIssue? _parameterIssue;
   final _changes = StreamController<AgentRuntimeView>.broadcast();
   AgentRuntimeView _view = AgentRuntimeView();
   AgentRuntimeView get view => _view;
@@ -89,6 +97,7 @@ final class AgentCoordinator {
   bool _stopping = false, _closed = false;
   AgentRunTicket? _ticket;
   AgentHistoryIntent? _pendingHistory;
+  _OperationDiagnostics? _pendingHistoryDiagnostics;
   Uint8List? _candidateKey;
   Timer? _candidateExpiry;
   String _liveText = '';
@@ -136,8 +145,45 @@ final class AgentCoordinator {
       pendingAction: _interactive?.pendingAction,
       discussionId: _discussionId,
       discussionDraft: _discussionDraft,
+      parameterIssue: _parameterIssue,
     );
     if (!_closed) _changes.add(_view);
+  }
+
+  void _log(
+    DiagnosticEventName name, {
+    DiagnosticStage? stage,
+    DiagnosticTool? tool,
+    DiagnosticOutcome? outcome,
+    DiagnosticCode? code,
+    AgentParameterIssue? issue,
+    int? elapsedMilliseconds,
+    int? count,
+  }) {
+    try {
+      if (name == DiagnosticEventName.modelRequestStarted) {
+        _diagnosticModelCalls++;
+      }
+      if (name == DiagnosticEventName.toolStarted) _diagnosticToolCalls++;
+      diagnostics?.record(
+        DiagnosticEvent(
+          name: name,
+          trace: _diagnosticTrace,
+          stage: stage,
+          phase: diagnosticPhase(_phase.name),
+          tool: tool,
+          outcome: outcome,
+          code: code,
+          issue: issue,
+          elapsedMilliseconds: elapsedMilliseconds,
+          count: count,
+          modelCalls: _diagnosticModelCalls,
+          toolCalls: _diagnosticToolCalls,
+        ),
+      );
+    } catch (_) {
+      // Diagnostic availability cannot turn an accepted C3 write into failure.
+    }
   }
 
   static AgentFailureCode _code(Object error) =>
@@ -206,12 +252,95 @@ final class AgentCoordinator {
     int generation,
   ) async {
     final secret = await _secret(authority, generation);
+    final elapsed = Stopwatch()..start();
     try {
       _current(generation);
       _requests++;
-      return await gateway.listModels(secret);
+      _log(
+        DiagnosticEventName.modelRequestStarted,
+        stage: DiagnosticStage.configuration,
+        outcome: DiagnosticOutcome.started,
+      );
+      final models = await gateway.listModels(secret);
+      _log(
+        DiagnosticEventName.modelRequestFinished,
+        stage: DiagnosticStage.configuration,
+        outcome: DiagnosticOutcome.complete,
+        count: models.length,
+        elapsedMilliseconds: elapsed.elapsedMilliseconds,
+      );
+      return models;
+    } catch (e) {
+      _log(
+        DiagnosticEventName.modelRequestFailed,
+        stage: DiagnosticStage.configuration,
+        outcome: DiagnosticOutcome.failure,
+        code: diagnosticCode(e is AgentFailure ? e.code.name : null),
+        elapsedMilliseconds: elapsed.elapsedMilliseconds,
+      );
+      rethrow;
     } finally {
       secret.revoke();
+    }
+  }
+
+  Stream<ModelEvent> _modelEvents(
+    ModelRequest request,
+    ModelSecretLease secret,
+    int generation,
+  ) async* {
+    _current(generation);
+    final elapsed = Stopwatch()..start();
+    var terminalLogged = false;
+    ModelCompleted? completed;
+    _log(
+      DiagnosticEventName.modelRequestStarted,
+      stage: DiagnosticStage.model,
+      outcome: DiagnosticOutcome.started,
+    );
+    try {
+      _current(generation);
+      await for (final event in gateway.generate(request, secret)) {
+        if (completed != null) {
+          throw const AgentFailure(AgentFailureCode.protocol);
+        }
+        if (event is ModelCompleted) completed = event;
+        yield event;
+      }
+      if (completed == null) {
+        throw const AgentFailure(AgentFailureCode.protocol);
+      }
+      _log(
+        DiagnosticEventName.modelRequestFinished,
+        stage: DiagnosticStage.model,
+        outcome:
+            completed.finishReason == 'stop' ||
+                completed.finishReason == 'tool_calls'
+            ? DiagnosticOutcome.complete
+            : DiagnosticOutcome.interrupted,
+        elapsedMilliseconds: elapsed.elapsedMilliseconds,
+      );
+      terminalLogged = true;
+    } catch (e) {
+      _log(
+        DiagnosticEventName.modelRequestFailed,
+        stage: DiagnosticStage.model,
+        outcome: DiagnosticOutcome.failure,
+        code: diagnosticCode(e is AgentFailure ? e.code.name : null),
+        elapsedMilliseconds: elapsed.elapsedMilliseconds,
+      );
+      terminalLogged = true;
+      rethrow;
+    } finally {
+      if (!terminalLogged) {
+        _log(
+          DiagnosticEventName.modelRequestFailed,
+          stage: DiagnosticStage.model,
+          outcome: DiagnosticOutcome.cancelled,
+          code: DiagnosticCode.cancelled,
+          elapsedMilliseconds: elapsed.elapsedMilliseconds,
+        );
+      }
     }
   }
 
@@ -222,6 +351,9 @@ final class AgentCoordinator {
     if (_conversation != null &&
         !_conversations.any((c) => c.id == _conversation)) {
       _conversation = null;
+      _discussionSelection = null;
+      _discussionId = null;
+      _discussionDraft = null;
     }
     _conversation ??= _conversations.isEmpty ? null : _conversations.first.id;
     final recent = _conversation == null
@@ -283,6 +415,14 @@ final class AgentCoordinator {
     _budgetExpired = false;
     _stopping = false;
     _failure = null;
+    _parameterIssue = null;
+    _diagnosticModelCalls = 0;
+    _diagnosticToolCalls = 0;
+    try {
+      _diagnosticTrace = diagnostics?.newTrace();
+    } catch (_) {
+      _diagnosticTrace = null;
+    }
     _phase = phase;
     final done = Completer<void>();
     _work = done.future;
@@ -295,6 +435,19 @@ final class AgentCoordinator {
           : _stopping
           ? AgentFailureCode.cancelled
           : _code(e);
+      _log(
+        phase == AgentPhase.generating
+            ? DiagnosticEventName.agentRunFailed
+            : DiagnosticEventName.unexpectedFailure,
+        stage: phase == AgentPhase.generating
+            ? DiagnosticStage.tools
+            : DiagnosticStage.configuration,
+        outcome: _stopping
+            ? DiagnosticOutcome.cancelled
+            : DiagnosticOutcome.failure,
+        code: diagnosticCode(_failure?.name),
+        issue: _parameterIssue,
+      );
     } finally {
       if (_phase != AgentPhase.recovery && !_stopping) _ticket = null;
       if (!_closed &&
@@ -314,25 +467,47 @@ final class AgentCoordinator {
     }
   }
 
-  Future<void> loadModels({String key = '', required bool consent}) => _action(
-    AgentPhase.loadingModels,
-    (g) async {
-      if (!consent) throw const AgentFailure(AgentFailureCode.consentRequired);
-      await _refresh();
-      _current(g);
-      _candidate(key);
-      try {
-        _models = await _listModels(_settings!.authority, g);
-        _current(g);
-        if (_models.isEmpty) {
-          throw const AgentFailure(AgentFailureCode.modelRequired);
-        }
-      } catch (_) {
-        _wipeCandidate();
-        rethrow;
-      }
-    },
-  );
+  Future<void> _diagnoseConfiguration(
+    DiagnosticOperation operation,
+    Future<void> Function(_OperationDiagnostics) body,
+  ) async {
+    final diagnostic = _OperationDiagnostics(
+      diagnostics,
+      DiagnosticEventName.modelConfiguration,
+      DiagnosticStage.configuration,
+      operation,
+    );
+    try {
+      await body(diagnostic);
+      diagnostic.finish(failure: _failure);
+    } catch (error) {
+      diagnostic.finish(failure: _code(error));
+      rethrow;
+    }
+  }
+
+  Future<void> loadModels({String key = '', required bool consent}) =>
+      _diagnoseConfiguration(
+        DiagnosticOperation.loadModels,
+        (diagnostic) => _action(AgentPhase.loadingModels, (g) async {
+          if (!consent) {
+            throw const AgentFailure(AgentFailureCode.consentRequired);
+          }
+          await _refresh();
+          _current(g);
+          _candidate(key);
+          try {
+            _models = await _listModels(_settings!.authority, g);
+            _current(g);
+            if (_models.isEmpty) {
+              throw const AgentFailure(AgentFailureCode.modelRequired);
+            }
+          } catch (_) {
+            _wipeCandidate();
+            rethrow;
+          }
+        }),
+      );
 
   Future<({String text, ModelCompleted completed})> _probe(
     ModelRequest request,
@@ -345,7 +520,7 @@ final class AgentCoordinator {
     try {
       _current(g);
       _requests++;
-      await for (final event in gateway.generate(request, secret)) {
+      await for (final event in _modelEvents(request, secret, g)) {
         _current(g);
         switch (event) {
           case ModelTextDelta():
@@ -384,155 +559,162 @@ final class AgentCoordinator {
     String key = '',
     required String modelId,
     required bool consent,
-  }) => _action(AgentPhase.verifying, (g) async {
-    if (!consent) throw const AgentFailure(AgentFailureCode.consentRequired);
-    if (!AgentText.validModelId(modelId)) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
-    }
-    await _refresh();
-    _current(g);
-    _candidate(key);
-    final authority = _settings!.authority;
-    try {
-      final ids = await _listModels(authority, g);
+  }) => _diagnoseConfiguration(
+    DiagnosticOperation.verifyModel,
+    (diagnostic) => _action(AgentPhase.verifying, (g) async {
+      if (!consent) throw const AgentFailure(AgentFailureCode.consentRequired);
+      if (!AgentText.validModelId(modelId)) {
+        throw const AgentFailure(AgentFailureCode.invalidInput);
+      }
+      await _refresh();
       _current(g);
-      _models = ids;
-      if (!ids.contains(modelId)) {
-        throw const AgentFailure(AgentFailureCode.modelRequired);
-      }
-      final textProbe = await _probe(
-        ModelRequest(
-          modelId: modelId,
-          messages: [
-            ModelChatMessage(
-              role: 'user',
-              content: '只回复 USTC_TEXT_PROBE。这是合成文本与流式能力测试。',
-            ),
-          ],
-          maxTokens: 128,
-        ),
-        authority,
-        g,
-      );
-      if (textProbe.text.trim().isEmpty ||
-          textProbe.completed.finishReason != 'stop' ||
-          textProbe.completed.toolCalls.isNotEmpty) {
-        throw const AgentFailure(AgentFailureCode.protocol);
-      }
-      _report = const AgentCapabilityReport(text: true, streaming: true);
-      _publish();
+      _candidate(key);
+      final authority = _settings!.authority;
       try {
-        final toolMessages = [
-          ModelChatMessage(
-            role: 'user',
-            content:
-                '请调用 echo_probe，value 必须是 ustc_probe。收到工具结果后，只回复其 proof 字段。',
-          ),
-        ];
-        final call = await _probe(
-          ModelRequest(
-            modelId: modelId,
-            messages: toolMessages,
-            tools: [_echo],
-            toolChoice: 'echo_probe',
-            maxTokens: 256,
-          ),
-          authority,
-          g,
-        );
-        if (call.completed.finishReason != 'tool_calls' ||
-            call.completed.toolCalls.length != 1) {
-          throw const AgentFailure(AgentFailureCode.protocol);
+        final ids = await _listModels(authority, g);
+        _current(g);
+        _models = ids;
+        if (!ids.contains(modelId)) {
+          throw const AgentFailure(AgentFailureCode.modelRequired);
         }
-        final tool = call.completed.toolCalls.single;
-        final arguments = jsonDecode(tool.argumentsJson);
-        if (tool.name != 'echo_probe' ||
-            arguments is! Map ||
-            arguments.length != 1 ||
-            arguments['value'] != 'ustc_probe') {
-          throw const AgentFailure(AgentFailureCode.protocol);
-        }
-        _report = const AgentCapabilityReport(
-          text: true,
-          streaming: true,
-          toolCall: true,
-        );
-        _publish();
-        final proof =
-            'ustc-result-${Random.secure().nextInt(0x7fffffff).toRadixString(16)}';
-        final result = await _probe(
+        final textProbe = await _probe(
           ModelRequest(
             modelId: modelId,
             messages: [
-              ...toolMessages,
               ModelChatMessage(
-                role: 'assistant',
-                content: call.text.isEmpty ? null : call.text,
-                toolCalls: [tool],
-              ),
-              ModelChatMessage(
-                role: 'tool',
-                toolCallId: tool.id,
-                content: jsonEncode({'value': 'ustc_probe', 'proof': proof}),
+                role: 'user',
+                content: '只回复 USTC_TEXT_PROBE。这是合成文本与流式能力测试。',
               ),
             ],
-            tools: [_echo],
-            toolChoice: 'none',
             maxTokens: 128,
           ),
           authority,
           g,
         );
-        if (result.completed.finishReason != 'stop' ||
-            result.completed.toolCalls.isNotEmpty ||
-            !result.text.contains(proof)) {
+        if (textProbe.text.trim().isEmpty ||
+            textProbe.completed.finishReason != 'stop' ||
+            textProbe.completed.toolCalls.isNotEmpty) {
           throw const AgentFailure(AgentFailureCode.protocol);
         }
-        _report = const AgentCapabilityReport(
-          text: true,
-          streaming: true,
-          toolCall: true,
-          toolResult: true,
-        );
-      } catch (e) {
-        _current(g);
-        final code = _code(e);
-        if (code == AgentFailureCode.unauthorized ||
-            code == AgentFailureCode.forbidden ||
-            code == AgentFailureCode.cancelled ||
-            code == AgentFailureCode.closed) {
-          rethrow;
+        _report = const AgentCapabilityReport(text: true, streaming: true);
+        _publish();
+        try {
+          final toolMessages = [
+            ModelChatMessage(
+              role: 'user',
+              content:
+                  '请调用 echo_probe，value 必须是 ustc_probe。收到工具结果后，只回复其 proof 字段。',
+            ),
+          ];
+          final call = await _probe(
+            ModelRequest(
+              modelId: modelId,
+              messages: toolMessages,
+              tools: [_echo],
+              toolChoice: 'echo_probe',
+              maxTokens: 256,
+            ),
+            authority,
+            g,
+          );
+          if (call.completed.finishReason != 'tool_calls' ||
+              call.completed.toolCalls.length != 1) {
+            throw const AgentFailure(AgentFailureCode.protocol);
+          }
+          final tool = call.completed.toolCalls.single;
+          final arguments = jsonDecode(tool.argumentsJson);
+          if (tool.name != 'echo_probe' ||
+              arguments is! Map ||
+              arguments.length != 1 ||
+              arguments['value'] != 'ustc_probe') {
+            throw const AgentFailure(AgentFailureCode.protocol);
+          }
+          _report = const AgentCapabilityReport(
+            text: true,
+            streaming: true,
+            toolCall: true,
+          );
+          _publish();
+          final proof =
+              'ustc-result-${Random.secure().nextInt(0x7fffffff).toRadixString(16)}';
+          final result = await _probe(
+            ModelRequest(
+              modelId: modelId,
+              messages: [
+                ...toolMessages,
+                ModelChatMessage(
+                  role: 'assistant',
+                  content: call.text.isEmpty ? null : call.text,
+                  toolCalls: [tool],
+                ),
+                ModelChatMessage(
+                  role: 'tool',
+                  toolCallId: tool.id,
+                  content: jsonEncode({'value': 'ustc_probe', 'proof': proof}),
+                ),
+              ],
+              tools: [_echo],
+              toolChoice: 'none',
+              maxTokens: 128,
+            ),
+            authority,
+            g,
+          );
+          if (result.completed.finishReason != 'stop' ||
+              result.completed.toolCalls.isNotEmpty ||
+              !result.text.contains(proof)) {
+            throw const AgentFailure(AgentFailureCode.protocol);
+          }
+          _report = const AgentCapabilityReport(
+            text: true,
+            streaming: true,
+            toolCall: true,
+            toolResult: true,
+          );
+        } catch (e) {
+          _current(g);
+          final code = _code(e);
+          if (code == AgentFailureCode.unauthorized ||
+              code == AgentFailureCode.forbidden ||
+              code == AgentFailureCode.cancelled ||
+              code == AgentFailureCode.closed) {
+            rethrow;
+          }
+          _report = AgentCapabilityReport(
+            text: true,
+            streaming: true,
+            toolCall: _report.toolCall,
+            failure: code,
+          );
         }
-        _report = AgentCapabilityReport(
-          text: true,
-          streaming: true,
-          toolCall: _report.toolCall,
-          failure: code,
-        );
-      }
-      _current(g);
-      final candidate = _candidateKey;
-      final copy = candidate == null ? null : Uint8List.fromList(candidate);
-      try {
-        await data.saveModelConfiguration(
-          authority,
-          modelId: modelId,
-          modelIds: ids,
-          report: _report,
-          consent: true,
-          key: copy,
-        );
+        _current(g);
+        final candidate = _candidateKey;
+        final copy = candidate == null ? null : Uint8List.fromList(candidate);
+        try {
+          await data.saveModelConfiguration(
+            authority,
+            modelId: modelId,
+            modelIds: ids,
+            report: _report,
+            consent: true,
+            key: copy,
+          );
+          diagnostic.markCommitted();
+        } finally {
+          copy?.fillRange(0, copy.length, 0);
+        }
       } finally {
-        copy?.fillRange(0, copy.length, 0);
+        _wipeCandidate();
       }
-    } finally {
-      _wipeCandidate();
-    }
-  });
+    }),
+  );
 
   Future<void> newConversation() => _action(AgentPhase.settling, (g) async {
     _conversation = await data.createConversation();
     _current(g);
+    _discussionSelection = null;
+    _discussionId = null;
+    _discussionDraft = null;
   });
   Future<void> selectConversation(String id) =>
       _action(AgentPhase.settling, (g) async {
@@ -683,10 +865,29 @@ final class AgentCoordinator {
     }
   }
 
-  static bool _restrictLocal(String question) => RegExp(
-    r'(?:不要|别|无需|不用|禁止)(?:查询|读取|查看|访问|查|读|看)(?:我的|本地|个人)?(?:日程|课表|安排|任务)|(?:只|仅)(?:查询|使用|查|用)?(?:公开资料|公开信息|知识库|评课)|only\s+public|do not (?:read|access) my (?:agenda|tasks|calendar)',
-    caseSensitive: false,
-  ).hasMatch(question);
+  static bool _inheritsTopic(String question) =>
+      agentLocalClarification(question) ||
+      RegExp(
+        r'继续|详细|上面|上一|这个|这门|其中|还有|那个|怎么办|more|continue',
+        caseSensitive: false,
+      ).hasMatch(question);
+
+  static bool _restrictLocal(String question, List<AgentMessage> history) =>
+      agentRestrictsPersonalData(question) ||
+      _inheritsTopic(question) &&
+          !agentLocalRequestIntent(question).changes &&
+          !agentLocalRequestIntent(question).planning &&
+          agentRestrictsPersonalData(
+            history
+                    .where(
+                      (m) =>
+                          m.role == AgentMessageRole.user &&
+                          m.status == AgentMessageStatus.complete,
+                    )
+                    .lastOrNull
+                    ?.text ??
+                '',
+          );
 
   List<ModelToolDefinition> _questionTools(
     String question,
@@ -777,10 +978,7 @@ final class AgentCoordinator {
     }
     // A short follow-up can inherit the human's preceding topic, never a tool
     // result's instruction or model-generated argument/URL.
-    if (agentLocalClarification(question) ||
-        RegExp(
-          r'继续|详细|上面|上一|这个|这门|其中|还有|那个|怎么办|more|continue',
-        ).hasMatch(question.toLowerCase())) {
+    if (_inheritsTopic(question)) {
       final previous = history
           .where(
             (m) =>
@@ -803,19 +1001,8 @@ final class AgentCoordinator {
         'request_source_refresh',
       });
     }
-    if (_restrictLocal(question)) {
-      groups.removeAll({
-        'query_agenda',
-        'read_event',
-        'inspect_conflicts',
-        'query_tasks',
-        'read_task',
-        'propose_local_changes',
-        'propose_undo',
-        'find_free_slots',
-        'request_source_refresh',
-        'propose_planning_preferences',
-      });
+    if (_restrictLocal(question, history)) {
+      groups.removeAll(agentPersonalToolNames);
     }
     return readTools!.definitions
         .where((tool) => groups.contains(tool.name))
@@ -879,9 +1066,12 @@ final class AgentCoordinator {
       text,
     );
     _ticket = ticket;
-    final discussionSelection = _restrictLocal(text)
-        ? null
-        : _discussionSelection;
+    _log(
+      DiagnosticEventName.agentRunStarted,
+      outcome: DiagnosticOutcome.started,
+    );
+    final restricted = _restrictLocal(text, history);
+    final discussionSelection = restricted ? null : _discussionSelection;
     _discussionSelection = null;
     _discussionId = null;
     _discussionDraft = null;
@@ -914,6 +1104,9 @@ final class AgentCoordinator {
           ? readTools?.openSession()
           : null;
       _interactive?.bindRun(ticket, text);
+      if (restricted && _toolSession is AgentToolScopeSession) {
+        (_toolSession as AgentToolScopeSession).restrictPersonalData();
+      }
       String? selectedContext;
       if (discussionSelection != null) {
         final selector = _toolSession;
@@ -928,9 +1121,19 @@ final class AgentCoordinator {
         if (_interactive?.waitingForSchool == true) {
           budget.pause();
           _phase = AgentPhase.waitingForSchool;
+          _log(
+            DiagnosticEventName.sourceStage,
+            stage: DiagnosticStage.tools,
+            outcome: DiagnosticOutcome.waitingForSchool,
+          );
         } else if (_phase == AgentPhase.waitingForSchool) {
           budget.resume();
           _phase = AgentPhase.committing;
+          _log(
+            DiagnosticEventName.sourceStage,
+            stage: DiagnosticStage.tools,
+            outcome: DiagnosticOutcome.started,
+          );
         }
         _publish();
       });
@@ -1011,7 +1214,7 @@ final class AgentCoordinator {
           _phase = AgentPhase.generating;
           _activeTool = null;
           _publish();
-          await for (final event in gateway.generate(request, secret)) {
+          await for (final event in _modelEvents(request, secret, g)) {
             await _validateRun(ticket, g);
             switch (event) {
               case ModelTextDelta():
@@ -1105,18 +1308,47 @@ final class AgentCoordinator {
         for (final call in completed.toolCalls) {
           await _validateRun(ticket, g);
           AgentText.requireSafe(call.argumentsJson, maxCharacters: 16384);
-          if (!RegExp(r'^[A-Za-z0-9_-]{1,128}$').hasMatch(call.id) ||
+          if (!modelToolCallIdPattern.hasMatch(call.id) ||
               !callIds.add(call.id)) {
             throw const AgentFailure(AgentFailureCode.protocol);
           }
           if (!seen.add(_canonicalCall(call))) {
-            throw const AgentFailure(AgentFailureCode.resourceLimit);
+            throw AgentFailure(
+              _parameterIssue != null
+                  ? AgentFailureCode.invalidInput
+                  : AgentFailureCode.resourceLimit,
+            );
           }
           _toolCalls++;
           _phase = AgentPhase.executingRead;
           _activeTool = call.name;
           _publish();
+          final toolElapsed = Stopwatch()..start();
+          _log(
+            DiagnosticEventName.toolStarted,
+            stage: DiagnosticStage.tools,
+            tool: diagnosticTool(call.name),
+            outcome: DiagnosticOutcome.started,
+          );
+          void recordResult(AgentToolResult result) {
+            _parameterIssue = result.validation;
+            _log(
+              result.status == 'invalidRequest'
+                  ? DiagnosticEventName.toolRejected
+                  : DiagnosticEventName.toolFinished,
+              stage: DiagnosticStage.tools,
+              tool: diagnosticTool(call.name),
+              outcome: diagnosticOutcome(result.status),
+              code: result.failure == null
+                  ? null
+                  : diagnosticCode(result.failure),
+              issue: result.validation,
+              elapsedMilliseconds: toolElapsed.elapsedMilliseconds,
+            );
+          }
+
           var result = await _toolSession!.execute(call);
+          if (result.status != 'waitingForApproval') recordResult(result);
           if (result.status == 'waitingForApproval') {
             final interactive = _interactive;
             if (interactive == null || interactive.pendingAction == null) {
@@ -1126,6 +1358,12 @@ final class AgentCoordinator {
             final decision = Completer<bool>();
             _approvalDecision = decision;
             _phase = AgentPhase.waitingForApproval;
+            _log(
+              DiagnosticEventName.approvalRequested,
+              stage: DiagnosticStage.approval,
+              tool: diagnosticTool(call.name),
+              outcome: DiagnosticOutcome.waitingForApproval,
+            );
             await _refresh();
             _current(g);
             _publish();
@@ -1134,9 +1372,19 @@ final class AgentCoordinator {
             _current(g);
             budget.resume();
             await _validateRun(ticket, g);
+            _log(
+              DiagnosticEventName.approvalDecided,
+              stage: DiagnosticStage.approval,
+              outcome: approved
+                  ? DiagnosticOutcome.complete
+                  : DiagnosticOutcome.rejected,
+            );
             _phase = AgentPhase.committing;
             _publish();
             result = await interactive.decidePending(approved);
+            // An actual receipt remains a diagnostic fact even if Stop or a
+            // later journal refresh withdraws delivery to the model.
+            recordResult(result);
             await _refresh();
             _current(g);
           }
@@ -1215,7 +1463,7 @@ final class AgentCoordinator {
               result.failure == 'invalidRequest') {
             invalidCalls++;
             if (invalidCalls > 1) {
-              throw const AgentFailure(AgentFailureCode.toolUnavailable);
+              throw const AgentFailure(AgentFailureCode.invalidInput);
             }
           }
         }
@@ -1225,6 +1473,13 @@ final class AgentCoordinator {
       _current(g);
       await _validateRun(ticket, g);
       await data.finishRun(ticket, finalStatus);
+      _log(
+        DiagnosticEventName.agentRunFinished,
+        outcome: finalStatus == AgentMessageStatus.complete
+            ? DiagnosticOutcome.complete
+            : DiagnosticOutcome.interrupted,
+        elapsedMilliseconds: budget.activeMilliseconds,
+      );
     } catch (e) {
       if (!_stopping) {
         try {
@@ -1339,6 +1594,11 @@ final class AgentCoordinator {
   }
 
   Future<void> _stopActive({required bool maintenance}) async {
+    _log(
+      DiagnosticEventName.agentStopRequested,
+      stage: maintenance ? DiagnosticStage.maintenance : DiagnosticStage.tools,
+      outcome: DiagnosticOutcome.cancelled,
+    );
     final work = _work;
     _stopping = true;
     _toolSession?.revoke();
@@ -1413,6 +1673,8 @@ final class AgentCoordinator {
       final pending = _pendingHistory;
       if (pending != null) {
         await data.completeClearHistory(pending);
+        _pendingHistoryDiagnostics?.markCommitted();
+        _pendingHistoryDiagnostics = null;
         _pendingHistory = null;
         _conversation = null;
         _messages = [];
@@ -1440,35 +1702,51 @@ final class AgentCoordinator {
     }
   }
 
-  Future<void> deleteKey({required bool confirmed}) async {
-    if (!confirmed) {
-      _failure = AgentFailureCode.consentRequired;
-      _publish();
-      return;
-    }
-    await stop();
-    await _action(AgentPhase.settling, (g) async {
-      await _refresh();
-      await data.deleteModelKey(_settings!.authority);
-      _current(g);
-    });
-  }
+  Future<void> deleteKey({required bool confirmed}) => _diagnoseConfiguration(
+    DiagnosticOperation.deleteModelKey,
+    (diagnostic) async {
+      if (!confirmed) {
+        _failure = AgentFailureCode.consentRequired;
+        diagnostic.finish(failure: _failure, rejected: true);
+        _publish();
+        return;
+      }
+      await stop();
+      await _action(AgentPhase.settling, (g) async {
+        await _refresh();
+        await data.deleteModelKey(_settings!.authority);
+        diagnostic.markCommitted();
+        _current(g);
+      });
+    },
+  );
 
-  Future<void> setModelConsent(bool consent) async {
-    await stop();
-    await _action(AgentPhase.settling, (g) async {
-      await _refresh();
-      await data.setModelConsent(_settings!.authority, consent);
-      _current(g);
-    });
-  }
+  Future<void> setModelConsent(bool consent) => _diagnoseConfiguration(
+    DiagnosticOperation.changeModelConsent,
+    (diagnostic) async {
+      await stop();
+      await _action(AgentPhase.settling, (g) async {
+        await _refresh();
+        await data.setModelConsent(_settings!.authority, consent);
+        diagnostic.markCommitted();
+        _current(g);
+      });
+    },
+  );
 
   Future<void> clearHistory({
     String? conversationId,
     required bool confirmed,
   }) async {
+    final diagnostic = _OperationDiagnostics(
+      diagnostics,
+      DiagnosticEventName.historyMaintenance,
+      DiagnosticStage.history,
+      DiagnosticOperation.clearHistory,
+    );
     if (!confirmed) {
       _failure = AgentFailureCode.consentRequired;
+      diagnostic.finish(failure: _failure, rejected: true);
       _publish();
       return;
     }
@@ -1484,25 +1762,31 @@ final class AgentCoordinator {
           conversationId: conversationId,
         );
         await data.completeClearHistory(intent);
+        diagnostic.markCommitted();
         _conversations = await data.conversations();
+        diagnostic.finish();
       } catch (e) {
         _failure = _code(e);
+        diagnostic.finish(failure: _failure);
       }
       _publish();
       return;
     }
-    final settings = await data.inspectAgent();
     AgentHistoryIntent? intent;
     try {
+      final settings = await data.inspectAgent();
       intent = await data.beginClearHistory(
         settings.authority,
         conversationId: conversationId,
       );
       _pendingHistory = intent;
+      _pendingHistoryDiagnostics = diagnostic;
       await stop();
       _phase = AgentPhase.settling;
       _publish();
       await data.completeClearHistory(intent);
+      diagnostic.markCommitted();
+      _pendingHistoryDiagnostics = null;
       _pendingHistory = null;
       if (conversationId == null || conversationId == _conversation) {
         _conversation = null;
@@ -1514,8 +1798,10 @@ final class AgentCoordinator {
       _phase = AgentPhase.idle;
       _failure = null;
       await _refresh();
+      diagnostic.finish();
     } catch (e) {
       _failure = _code(e);
+      diagnostic.finish(failure: _failure);
       if (intent != null) _phase = AgentPhase.recovery;
     }
     _publish();
@@ -1534,6 +1820,9 @@ final class AgentCoordinator {
     _failure = null;
     _models = [];
     _conversation = null;
+    _discussionSelection = null;
+    _discussionId = null;
+    _discussionDraft = null;
     await _refresh();
     _report = _settings!.report;
     _publish();
@@ -1611,6 +1900,9 @@ final class AgentCoordinator {
     'vision': 'unverified',
     'registry': agentToolRegistryVersion,
     'promptVersion': agentPromptVersion,
+    if (_diagnosticTrace != null) 'diagnosticTrace': _diagnosticTrace!.value,
+    if (_parameterIssue != null)
+      'parameterValidation': _parameterIssue!.toSafeMap(),
     'lastRun': {
       'activeMs': _lastActiveMs,
       'humanWaitMs': _lastWaitingMs,
@@ -1619,4 +1911,64 @@ final class AgentCoordinator {
       'cost': 'unknown',
     },
   });
+}
+
+/// Configuration/history work gets its own trace, even when an inactive chat
+/// is cleared during another run. Only actual C3 completion marks a commit.
+final class _OperationDiagnostics {
+  _OperationDiagnostics(this.port, this.name, this.stage, this.operation) {
+    try {
+      _trace = port?.newTrace();
+    } catch (_) {
+      /* Diagnostics never prevent an authorized operation. */
+    }
+    _record(DiagnosticOutcome.started);
+  }
+  final DiagnosticsPort? port;
+  final DiagnosticEventName name;
+  final DiagnosticStage stage;
+  final DiagnosticOperation operation;
+  final Stopwatch _elapsed = Stopwatch()..start();
+  DiagnosticTrace? _trace;
+  bool _committed = false, _finished = false;
+
+  void markCommitted() {
+    if (_committed) return;
+    _committed = true;
+    // Recovery may finish a durable history intent after its initial failure.
+    if (_finished) _record(DiagnosticOutcome.committed);
+  }
+
+  void finish({AgentFailureCode? failure, bool rejected = false}) {
+    if (_finished) return;
+    _finished = true;
+    _record(
+      _committed
+          ? DiagnosticOutcome.committed
+          : rejected
+          ? DiagnosticOutcome.rejected
+          : failure == null
+          ? DiagnosticOutcome.complete
+          : DiagnosticOutcome.failure,
+      code: failure == null ? null : diagnosticCode(failure.name),
+    );
+  }
+
+  void _record(DiagnosticOutcome outcome, {DiagnosticCode? code}) {
+    try {
+      port?.record(
+        DiagnosticEvent(
+          name: name,
+          stage: stage,
+          operation: operation,
+          trace: _trace,
+          outcome: outcome,
+          code: code,
+          elapsedMilliseconds: _elapsed.elapsedMilliseconds,
+        ),
+      );
+    } catch (_) {
+      /* Fixed projections only; logging failure does not alter C3 facts. */
+    }
+  }
 }

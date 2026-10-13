@@ -20,6 +20,8 @@ import 'package:ustc_assistant_m0/m0_entry.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 
+import 'support/diagnostic_cleanup.dart';
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
@@ -1208,6 +1210,12 @@ Future<void> _assertKnownDatabaseFiles(
     final name = p.windows.basename(path);
     final type = await FileSystemEntity.type(path, followLinks: false);
     if (allowedFiles.contains(name) && type == FileSystemEntityType.file) {
+      continue;
+    }
+    if (formal &&
+        name == 'diagnostics' &&
+        type == FileSystemEntityType.directory) {
+      await assertKnownFormalDiagnosticsDirectory(directory);
       continue;
     }
     if (emptyRoots.contains(name) && type == FileSystemEntityType.directory) {

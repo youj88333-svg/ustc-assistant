@@ -6,6 +6,9 @@ import '../core/contracts.dart';
 import '../core/work_lease.dart';
 import '../core/settings_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/diagnostics_contract.dart';
+import '../agent/agent_tool_contract.dart';
+import '../agent/agent_system_prompt.dart';
 import '../agent/agent_coordinator.dart';
 import '../agent/agent_read_tools.dart';
 import '../agent/agent_action_tools.dart';
@@ -24,6 +27,7 @@ import '../jobs/public_query_coordinator.dart';
 import '../jobs/application_maintenance_coordinator.dart';
 import '../jobs/application_profile_cleanup.dart';
 import '../platform/demo_directory.dart';
+import '../platform/diagnostic_journal.dart';
 import '../platform/jw_directory_path.dart';
 import '../platform/native_database.dart';
 import '../platform/bundled_knowledge_loader.dart';
@@ -41,6 +45,7 @@ import 'calendar_workspace_controller.dart';
 import 'calendar_workspace_contract.dart';
 import 'application_settings_controller.dart';
 import 'agent_workspace_controller.dart';
+import 'runtime_diagnostics.dart';
 
 /// Owns the separate demonstration and formal directories. No old asset opens.
 final class DemoRuntime {
@@ -64,6 +69,8 @@ final class DemoRuntime {
     this.maintenance,
     this.agentCoordinator,
     this.agent,
+    this.diagnostics,
+    this.diagnosticBindings,
   );
 
   final DemoDirectory directory;
@@ -85,6 +92,8 @@ final class DemoRuntime {
   final ApplicationMaintenanceCoordinator maintenance;
   final AgentCoordinator agentCoordinator;
   final AgentWorkspaceController agent;
+  final DiagnosticsPort diagnostics;
+  final RuntimeDiagnosticBindings diagnosticBindings;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -114,6 +123,16 @@ final class DemoRuntime {
 
   Future<void> close() =>
       _closeFuture ??= _close().catchError((Object error) async {
+        recordDiagnostic(
+          diagnostics,
+          const DiagnosticEvent(
+            name: DiagnosticEventName.applicationFailed,
+            stage: DiagnosticStage.shutdown,
+            outcome: DiagnosticOutcome.recovery,
+            code: DiagnosticCode.cleanupPending,
+          ),
+        );
+        await diagnostics.flush();
         await agentCoordinator.resumeAfterFailedExit();
         settings.resumeAfterFailedExit(shell: shell);
         _closeFuture = null;
@@ -121,6 +140,14 @@ final class DemoRuntime {
       });
 
   Future<void> _close() async {
+    recordDiagnostic(
+      diagnostics,
+      const DiagnosticEvent(
+        name: DiagnosticEventName.applicationClosing,
+        stage: DiagnosticStage.shutdown,
+        outcome: DiagnosticOutcome.started,
+      ),
+    );
     final preservingMaintenance = maintenance.view.blocksProduct;
     await settings.shutdown();
     await agentCoordinator.quiesceForMaintenance();
@@ -152,6 +179,16 @@ final class DemoRuntime {
     }
     await store.close();
     await jwStore.close();
+    await diagnosticBindings.close();
+    recordDiagnostic(
+      diagnostics,
+      const DiagnosticEvent(
+        name: DiagnosticEventName.applicationClosed,
+        stage: DiagnosticStage.shutdown,
+        outcome: DiagnosticOutcome.complete,
+      ),
+    );
+    await diagnostics.close();
     await jwDirectory.release();
     await directory.release();
   }
@@ -168,6 +205,7 @@ final class DemoRuntime {
       resetDay: kind == MaintenanceKind.reset,
     );
     await settings.refreshSettings();
+    await _clearResetDiagnostics(diagnostics, kind);
   }
 }
 
@@ -192,6 +230,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     required this.collectionDelay,
     required this.agentCoordinator,
     required this.agent,
+    required this.diagnostics,
+    required this.diagnosticBindings,
     this.onActivationCheckpoint,
   });
   final DemoDirectory directory, jwDirectory;
@@ -210,6 +250,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
   final Duration collectionDelay;
   final AgentCoordinator agentCoordinator;
   final AgentWorkspaceController agent;
+  final DiagnosticsPort diagnostics;
+  final RuntimeDiagnosticBindings diagnosticBindings;
   @visibleForTesting
   final Future<void> Function()? onActivationCheckpoint;
   DemoRuntime? _runtime;
@@ -233,6 +275,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     NativeObservationBrowser? browser;
     AgentCoordinator? agentCoordinator;
     AgentWorkspaceController? agent;
+    DiagnosticsPort? diagnostics;
+    RuntimeDiagnosticBindings? diagnosticBindings;
     try {
       formal = await DemoDirectory.acquire(
         jwDirectoryPath ??
@@ -240,6 +284,49 @@ final class RuntimeBootstrap extends ChangeNotifier {
                 ? defaultJwDirectoryPath(Platform.environment)
                 : '${directoryPath}_jw'),
       );
+      final ownedFormal = formal;
+      String diagnosticPath = '${ownedFormal.path}\\diagnostics';
+      try {
+        diagnosticPath = ownedFormal.createPlainChildDirectory('diagnostics');
+      } catch (_) {
+        /* Isolated diagnostic failure. */
+      }
+      diagnostics = await DiagnosticJournal.open(
+        directoryPath: diagnosticPath,
+        ensureOwnership: () {
+          ownedFormal.ensureHeld();
+          ownedFormal.checkedChildPath('diagnostics', directory: true);
+        },
+        checkedPath: (filename) {
+          if (!DiagnosticJournal.segmentNames.contains(filename)) {
+            throw const AppFailure(FailureCode.unsafeDirectory);
+          }
+          return ownedFormal.checkedChildPath(
+            'diagnostics\\$filename',
+            directory: false,
+          );
+        },
+        clock: clock,
+        versions: const DiagnosticVersions(
+          application: '0.0.1+0',
+          schema: 13,
+          tools: agentToolRegistryVersion,
+          prompt: agentPromptVersion,
+          revision: String.fromEnvironment(
+            'USTC_BUILD_REVISION',
+            defaultValue: 'unknown',
+          ),
+        ),
+      );
+      recordDiagnostic(
+        diagnostics,
+        const DiagnosticEvent(
+          name: DiagnosticEventName.applicationStart,
+          stage: DiagnosticStage.startup,
+          outcome: DiagnosticOutcome.started,
+        ),
+      );
+      diagnosticBindings = RuntimeDiagnosticBindings(diagnostics);
       database = JwStore(
         openJwDatabase(formal),
         ownership: formal,
@@ -280,6 +367,14 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
         onJobAdmitted: (ticket) => agentSources.bindAdmittedJob(ticket),
       );
+      diagnosticBindings.bindJw(
+        agentJw.syncChanges,
+        parentTrace: () => agentCoordinator?.diagnosticTrace,
+      );
+      diagnosticBindings.bindYoung(
+        agentYoung.syncChanges,
+        parentTrace: () => agentCoordinator?.diagnosticTrace,
+      );
       agentSources = AgentSourceCoordinator(
         store: database,
         jw: agentJw,
@@ -294,6 +389,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         data: database.agent,
         gateway: modelGateway ?? UstcModelGateway(),
         clock: clock,
+        diagnostics: diagnostics,
         readTools: AgentActionTools(
           plans: database.localCalendar,
           calendar: database.localCalendar,
@@ -340,6 +436,11 @@ final class RuntimeBootstrap extends ChangeNotifier {
         drainForExit: profiles.drainForExit,
       );
       maintenance.drainAgent = agentCoordinator.quiesceForMaintenance;
+      // Pending startup reset settles before product assembly installs the
+      // richer refresh callback. It must clear diagnostics on that path too.
+      maintenance.onRefresh = (kind) =>
+          _clearResetDiagnostics(diagnostics!, kind);
+      diagnosticBindings.bindMaintenance(maintenance.changes);
       RuntimeBootstrap? ready;
       final settings = ApplicationSettingsController(
         data: database.applicationSettings,
@@ -378,6 +479,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         onActivationCheckpoint: onActivationCheckpoint,
         agentCoordinator: agentCoordinator,
         agent: agent,
+        diagnostics: diagnostics,
+        diagnosticBindings: diagnosticBindings,
       );
       ready = bootstrap;
       settings.onRecovered = bootstrap._activate;
@@ -392,11 +495,26 @@ final class RuntimeBootstrap extends ChangeNotifier {
       }
       return bootstrap;
     } catch (error) {
+      if (diagnostics != null) {
+        recordDiagnostic(
+          diagnostics,
+          DiagnosticEvent(
+            name: DiagnosticEventName.applicationFailed,
+            stage: DiagnosticStage.startup,
+            outcome: DiagnosticOutcome.failure,
+            code: error is AppFailure
+                ? diagnosticCode(error.code.name)
+                : DiagnosticCode.unknown,
+          ),
+        );
+      }
       await agentCoordinator?.close();
       agent?.dispose();
       await browser?.dispose();
       await demo?.close();
       await database?.close();
+      await diagnosticBindings?.close();
+      await diagnostics?.close();
       await formal?.release();
       await directory.release();
       throw error is AppFailure
@@ -453,15 +571,55 @@ final class RuntimeBootstrap extends ChangeNotifier {
       agent.dispose();
       await store.close();
       await jwStore.close();
+      await diagnosticBindings.close();
+      recordDiagnostic(
+        diagnostics,
+        const DiagnosticEvent(
+          name: DiagnosticEventName.applicationClosed,
+          stage: DiagnosticStage.shutdown,
+          outcome: DiagnosticOutcome.complete,
+        ),
+      );
+      await diagnostics.close();
       await jwDirectory.release();
       await directory.release();
     } catch (_) {
+      recordDiagnostic(
+        diagnostics,
+        const DiagnosticEvent(
+          name: DiagnosticEventName.applicationFailed,
+          stage: DiagnosticStage.shutdown,
+          outcome: DiagnosticOutcome.recovery,
+          code: DiagnosticCode.cleanupPending,
+        ),
+      );
       await agentCoordinator.resumeAfterFailedExit();
       settings.resumeAfterFailedExit();
       _closing = null;
       rethrow;
     }
   }();
+}
+
+Future<void> _clearResetDiagnostics(
+  DiagnosticsPort diagnostics,
+  MaintenanceKind kind,
+) async {
+  if (kind != MaintenanceKind.reset) return;
+  try {
+    await diagnostics.clear();
+  } catch (_) {
+    // The journal reports unavailable; C3 reset is already committed.
+    recordDiagnostic(
+      diagnostics,
+      const DiagnosticEvent(
+        name: DiagnosticEventName.unexpectedFailure,
+        stage: DiagnosticStage.maintenance,
+        outcome: DiagnosticOutcome.failure,
+        code: DiagnosticCode.unavailable,
+      ),
+    );
+  }
 }
 
 /// Failed product assembly keeps each initialized resource. Retrying only
@@ -620,6 +778,18 @@ final class _RuntimeAssembly {
       b.maintenance,
       b.agentCoordinator,
       b.agent,
+      b.diagnostics,
+      b.diagnosticBindings,
+    );
+    b.diagnosticBindings.bindJw(jw.syncChanges);
+    b.diagnosticBindings.bindYoung(young.syncChanges);
+    recordDiagnostic(
+      b.diagnostics,
+      const DiagnosticEvent(
+        name: DiagnosticEventName.applicationReady,
+        stage: DiagnosticStage.activation,
+        outcome: DiagnosticOutcome.complete,
+      ),
     );
     b.settings.attachShell(shell);
     b.maintenance.onRefresh = runtime._refreshAfterMaintenance;

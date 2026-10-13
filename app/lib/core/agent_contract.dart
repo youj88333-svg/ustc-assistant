@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 import 'calendar_contract.dart';
+import 'agent_parameter_issue.dart';
 
 enum AgentFailureCode {
   invalidInput,
@@ -381,6 +382,7 @@ final class AgentRuntimeView {
     this.pendingAction,
     this.discussionId,
     this.discussionDraft,
+    this.parameterIssue,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
        messages = List.unmodifiable(messages);
@@ -398,6 +400,7 @@ final class AgentRuntimeView {
   final int toolCalls, modelCalls;
   final AgentActionView? pendingAction;
   final String? discussionId, discussionDraft;
+  final AgentParameterIssue? parameterIssue;
   bool get busy => phase != AgentPhase.idle && phase != AgentPhase.closed;
   bool get canSend =>
       phase == AgentPhase.idle &&

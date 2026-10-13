@@ -8,10 +8,13 @@ import '../core/agent_evidence.dart';
 import '../core/agent_discussion_contract.dart';
 import '../core/agent_source_contract.dart';
 import '../core/agent_text.dart';
+import '../core/agent_parameter_issue.dart';
 import '../core/calendar_contract.dart';
 import '../core/calendar_validation.dart';
 import '../core/contracts.dart';
 import 'agent_free_slots.dart';
+import 'agent_change_spec.dart';
+import 'agent_request_intent.dart';
 import 'agent_read_tools.dart' show parseAgentActionArguments;
 import 'agent_tool_contract.dart';
 import 'model_gateway_contract.dart';
@@ -70,7 +73,7 @@ final class AgentActionTools implements AgentReadToolsPort {
     ...readTools.definitions,
     _actionTool(
       'propose_local_changes',
-      '准备最多 20 项本地个人日程、任务或时间块变化，由应用等待用户批准。create_personal/create_task 新建无需已有记录引用；修改/删除已有项的引用须来自本轮读取。此工具准备方案，不直接写入。',
+      '准备最多 20 项本地个人日程、任务或时间块变化，由应用等待用户批准。修改/删除已有项的引用须来自本轮读取；此工具不直接写入。$agentChangeGuidance',
       {
         'changes': {
           'type': 'array',
@@ -262,7 +265,8 @@ final class _AgentActionToolSession
         AgentToolSession,
         AgentLocalReferenceSession,
         AgentDiscussionToolSession,
-        AgentInteractiveToolSession {
+        AgentInteractiveToolSession,
+        AgentToolScopeSession {
   _AgentActionToolSession(this._owner, AgentToolSession readSession)
     : _readSession = readSession {
     _sourceChanges = _owner.sources?.changes.listen((_) => _notify());
@@ -273,6 +277,10 @@ final class _AgentActionToolSession
   late final StreamSubscription<void>? _sourceChanges;
   AgentRunTicket? _ticket;
   String? _humanQuestion;
+  bool _personalDataRestricted = false;
+
+  @override
+  void restrictPersonalData() => _personalDataRestricted = true;
   final Map<String, _CachedSlot> _slots = {};
   final Map<String, String> _semesterReferences = {};
   final StreamController<void> _changes = StreamController<void>.broadcast();
@@ -380,6 +388,11 @@ final class _AgentActionToolSession
       if (_contextInvalidated) {
         return _result('stale', failure: 'staleReference');
       }
+      if (agentPersonalToolNames.contains(call.name) &&
+          (_personalDataRestricted ||
+              agentRestrictsPersonalData(_humanQuestion ?? ''))) {
+        return _result('unavailable', failure: 'unavailable');
+      }
       AgentText.requireSafe(call.argumentsJson, maxCharacters: 16384);
       _executing = true;
       if (agentReadToolNames.contains(call.name)) {
@@ -397,7 +410,15 @@ final class _AgentActionToolSession
         return _result('unavailable', failure: 'unavailable');
       }
       await validateDelivery();
-      final args = parseAgentActionArguments(call.argumentsJson);
+      late final Map<String, Object?> args;
+      try {
+        args = parseAgentActionArguments(call.argumentsJson);
+      } on AgentFailure catch (failure) {
+        if (failure.code != AgentFailureCode.invalidInput) rethrow;
+        throw const AgentParameterIssue(
+          reason: AgentParameterReason.malformedArguments,
+        );
+      }
       final result = switch (call.name) {
         'propose_local_changes' => await _proposeLocalChanges(args),
         'propose_undo' => await _proposeUndo(args),
@@ -418,6 +439,19 @@ final class _AgentActionToolSession
         rethrow;
       }
       return result;
+    } on AgentParameterIssue catch (issue) {
+      return AgentToolResult(
+        status: 'invalidRequest',
+        failure: 'invalidRequest',
+        validation: issue,
+        data: {
+          'repair': issue.repairHint,
+          if (issue.action != null)
+            'action_rules': agentChangeSpecs[issue.action]!.describe(
+              issue.action!,
+            ),
+        },
+      );
     } on AgentFailure catch (failure) {
       return _agentFailure(failure);
     } on CalendarFailure catch (failure) {
@@ -885,7 +919,10 @@ final class _AgentActionToolSession
     if (rawChanges is! List<Object?> ||
         rawChanges.isEmpty ||
         rawChanges.length > _actionBudget) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
+      throw const AgentParameterIssue(
+        reason: AgentParameterReason.limitExceeded,
+        field: AgentParameterField.changes,
+      );
     }
     _ensureNoPending();
     if (_changeBudgetUsed + rawChanges.length > _actionBudget) {
@@ -896,12 +933,35 @@ final class _AgentActionToolSession
     final changes = <AgentLocalChange>[];
     final localTaskKeys = <String>{};
     var usesSlot = false;
-    for (final raw in rawChanges) {
+    for (var index = 0; index < rawChanges.length; index++) {
+      final raw = rawChanges[index];
       if (raw is! Map<String, Object?>) {
-        throw const AgentFailure(AgentFailureCode.invalidInput);
+        throw AgentParameterIssue(
+          reason: AgentParameterReason.invalidValue,
+          field: AgentParameterField.changes,
+          changeIndex: index,
+        );
       }
       if (raw['slot_ref'] != null) usesSlot = true;
-      changes.add(await _mapChange(raw, context, revision, localTaskKeys));
+      try {
+        changes.add(await _mapChange(raw, context, revision, localTaskKeys));
+      } on AgentParameterIssue catch (issue) {
+        throw issue.atChange(index, agentChangeType(raw['type']));
+      } on AgentFailure catch (failure) {
+        if (failure.code != AgentFailureCode.invalidInput) rethrow;
+        throw AgentParameterIssue(
+          reason: AgentParameterReason.invalidValue,
+          action: agentChangeType(raw['type']),
+          changeIndex: index,
+        );
+      } on CalendarFailure catch (failure) {
+        if (failure.code != CalendarFailureCode.invalidInput) rethrow;
+        throw AgentParameterIssue(
+          reason: AgentParameterReason.invalidValue,
+          action: agentChangeType(raw['type']),
+          changeIndex: index,
+        );
+      }
     }
     final current = await _owner.plans.readPlanContext();
     if (current.$1 != context || current.$2 != revision) {
@@ -944,30 +1004,32 @@ final class _AgentActionToolSession
     Set<String> localTaskKeys,
   ) async {
     final type = _requiredString(value, 'type', maxLength: 40);
+    final action = agentChangeType(type);
+    if (action == null) {
+      throw const AgentParameterIssue(
+        reason: AgentParameterReason.invalidValue,
+        field: AgentParameterField.type,
+      );
+    }
+    final spec = agentChangeSpecs[action]!;
+    _requireKeys(value, spec.allowedFields, spec.requiredFields);
     switch (type) {
       case 'create_personal':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'title',
-            'start',
-            'end',
-            'all_day',
-            'weekly',
-            'until_day',
-            'location',
-            'note',
-          },
-          const {'type', 'title', 'start', 'end'},
-        );
         final allDay = _optionalBool(value, 'all_day') ?? false;
         final weekly = _optionalBool(value, 'weekly') ?? false;
         final untilDay = _optionalDate(value, 'until_day');
         final draft = PersonalEventDraft(
           title: _requiredText(value, 'title', 200),
-          start: _requiredCalendarValue(value['start'], allDay),
-          end: _requiredCalendarValue(value['end'], allDay),
+          start: _requiredCalendarValue(
+            value['start'],
+            allDay,
+            field: AgentParameterField.start,
+          ),
+          end: _requiredCalendarValue(
+            value['end'],
+            allDay,
+            field: AgentParameterField.end,
+          ),
           allDay: allDay,
           weekly: weekly,
           untilDay: untilDay,
@@ -978,24 +1040,6 @@ final class _AgentActionToolSession
         return AgentCalendarChange(CreatePersonalEvent(draft));
 
       case 'update_personal':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'event_ref',
-            'scope',
-            'title',
-            'start',
-            'end',
-            'all_day',
-            'weekly',
-            'until_day',
-            'clear_until',
-            'location',
-            'note',
-          },
-          const {'type', 'event_ref', 'scope'},
-        );
         final scope = _requiredEnum(value, 'scope', const {
           'series',
           'occurrence',
@@ -1029,8 +1073,16 @@ final class _AgentActionToolSession
           throw const AgentFailure(AgentFailureCode.invalidInput);
         }
         if (startPresent) {
-          final start = _requiredCalendarValue(value['start'], allDay!);
-          final end = _requiredCalendarValue(value['end'], allDay);
+          final start = _requiredCalendarValue(
+            value['start'],
+            allDay!,
+            field: AgentParameterField.start,
+          );
+          final end = _requiredCalendarValue(
+            value['end'],
+            allDay,
+            field: AgentParameterField.end,
+          );
           if (!end.isAfter(start)) {
             throw const AgentFailure(AgentFailureCode.invalidInput);
           }
@@ -1052,10 +1104,18 @@ final class _AgentActionToolSession
           entireSeries: scope == 'series',
           title: _optionalText(value, 'title', 200),
           start: startPresent
-              ? _requiredCalendarValue(value['start'], allDay!)
+              ? _requiredCalendarValue(
+                  value['start'],
+                  allDay!,
+                  field: AgentParameterField.start,
+                )
               : null,
           end: endPresent
-              ? _requiredCalendarValue(value['end'], allDay!)
+              ? _requiredCalendarValue(
+                  value['end'],
+                  allDay!,
+                  field: AgentParameterField.end,
+                )
               : null,
           allDay: allDay,
           weekly: weekly,
@@ -1066,11 +1126,6 @@ final class _AgentActionToolSession
         );
 
       case 'personal_state':
-        _requireKeys(
-          value,
-          const {'type', 'event_ref', 'completed', 'skipped'},
-          const {'type', 'event_ref'},
-        );
         if (!_hasAny(value, const {'completed', 'skipped'})) {
           throw const AgentFailure(AgentFailureCode.invalidInput);
         }
@@ -1092,11 +1147,6 @@ final class _AgentActionToolSession
         );
 
       case 'delete_personal':
-        _requireKeys(
-          value,
-          const {'type', 'event_ref'},
-          const {'type', 'event_ref'},
-        );
         final (target, targetRevision) = await _resolveEvent(
           _requiredString(value, 'event_ref', maxLength: 64),
           context,
@@ -1112,24 +1162,13 @@ final class _AgentActionToolSession
         );
 
       case 'create_task':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'local_key',
-            'title',
-            'description',
-            'note',
-            'deadline',
-            'estimated_minutes',
-            'priority',
-          },
-          const {'type', 'local_key', 'title'},
-        );
         final localKey = _requiredString(value, 'local_key', maxLength: 32);
         if (!RegExp(r'^[a-zA-Z][a-zA-Z0-9_-]{0,31}$').hasMatch(localKey) ||
             !localTaskKeys.add(localKey)) {
-          throw const AgentFailure(AgentFailureCode.invalidInput);
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.duplicateTaskKey,
+            field: AgentParameterField.local_key,
+          );
         }
         return AgentCreateTask(
           localKey,
@@ -1137,22 +1176,6 @@ final class _AgentActionToolSession
         );
 
       case 'update_task':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'task_ref',
-            'title',
-            'description',
-            'note',
-            'deadline',
-            'clear_deadline',
-            'estimated_minutes',
-            'clear_estimate',
-            'priority',
-          },
-          const {'type', 'task_ref'},
-        );
         final (target, targetRevision) = await _resolveTask(
           _requiredString(value, 'task_ref', maxLength: 64),
           context,
@@ -1163,11 +1186,6 @@ final class _AgentActionToolSession
         return patch;
 
       case 'task_state':
-        _requireKeys(
-          value,
-          const {'type', 'task_ref', 'status'},
-          const {'type', 'task_ref', 'status'},
-        );
         final (target, targetRevision) = await _resolveTask(
           _requiredString(value, 'task_ref', maxLength: 64),
           context,
@@ -1189,11 +1207,6 @@ final class _AgentActionToolSession
         );
 
       case 'delete_task':
-        _requireKeys(
-          value,
-          const {'type', 'task_ref'},
-          const {'type', 'task_ref'},
-        );
         final (target, targetRevision) = await _resolveTask(
           _requiredString(value, 'task_ref', maxLength: 64),
           context,
@@ -1203,30 +1216,22 @@ final class _AgentActionToolSession
         return AgentCalendarChange(DeleteTask(target, confirmed: true));
 
       case 'create_block':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'task_ref',
-            'task_key',
-            'start',
-            'end',
-            'slot_ref',
-            'location',
-            'note',
-          },
-          const {'type'},
-        );
         final hasTaskRef = value.containsKey('task_ref');
         final hasTaskKey = value.containsKey('task_key');
         if (hasTaskRef == hasTaskKey) {
-          throw const AgentFailure(AgentFailureCode.invalidInput);
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.missingTaskTarget,
+            field: AgentParameterField.task_key,
+          );
         }
         final draft = await _blockDraft(value);
         if (hasTaskKey) {
           final key = _requiredString(value, 'task_key', maxLength: 32);
           if (!localTaskKeys.contains(key)) {
-            throw const AgentFailure(AgentFailureCode.invalidInput);
+            throw const AgentParameterIssue(
+              reason: AgentParameterReason.unknownTaskKey,
+              field: AgentParameterField.task_key,
+            );
           }
           return AgentDependentBlock(key, draft);
         }
@@ -1239,19 +1244,6 @@ final class _AgentActionToolSession
         return AgentCalendarChange(CreatePlanBlock(task, draft));
 
       case 'update_block':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'event_ref',
-            'start',
-            'end',
-            'slot_ref',
-            'location',
-            'note',
-          },
-          const {'type', 'event_ref'},
-        );
         final (target, targetRevision) = await _resolveEvent(
           _requiredString(value, 'event_ref', maxLength: 64),
           context,
@@ -1275,20 +1267,25 @@ final class _AgentActionToolSession
           target,
           startUtc:
               slot?.startsAtUtc ??
-              (startPresent ? _requiredTimedValue(value['start']) : null),
+              (startPresent
+                  ? _requiredTimedValue(
+                      value['start'],
+                      field: AgentParameterField.start,
+                    )
+                  : null),
           endUtc:
               slot?.endsAtUtc ??
-              (endPresent ? _requiredTimedValue(value['end']) : null),
+              (endPresent
+                  ? _requiredTimedValue(
+                      value['end'],
+                      field: AgentParameterField.end,
+                    )
+                  : null),
           location: _optionalText(value, 'location', 200),
           note: _optionalText(value, 'note', 4000),
         );
 
       case 'block_state':
-        _requireKeys(
-          value,
-          const {'type', 'event_ref', 'status'},
-          const {'type', 'event_ref', 'status'},
-        );
         final (target, targetRevision) = await _resolveEvent(
           _requiredString(value, 'event_ref', maxLength: 64),
           context,
@@ -1312,11 +1309,6 @@ final class _AgentActionToolSession
         );
 
       case 'delete_block':
-        _requireKeys(
-          value,
-          const {'type', 'event_ref'},
-          const {'type', 'event_ref'},
-        );
         final (target, targetRevision) = await _resolveEvent(
           _requiredString(value, 'event_ref', maxLength: 64),
           context,
@@ -1329,18 +1321,6 @@ final class _AgentActionToolSession
         return AgentCalendarChange(DeletePlanBlock(target, confirmed: true));
 
       case 'annotate_school':
-        _requireKeys(
-          value,
-          const {
-            'type',
-            'event_ref',
-            'hidden',
-            'note',
-            'attendance',
-            'listening',
-          },
-          const {'type', 'event_ref'},
-        );
         if (!_hasAny(value, const {
           'hidden',
           'note',
@@ -1394,15 +1374,6 @@ final class _AgentActionToolSession
       case 'set_relation':
       case 'delete_relation':
         final deleting = type == 'delete_relation';
-        _requireKeys(
-          value,
-          deleting
-              ? const {'type', 'left_ref', 'right_ref'}
-              : const {'type', 'left_ref', 'right_ref', 'kind', 'note'},
-          deleting
-              ? const {'type', 'left_ref', 'right_ref'}
-              : const {'type', 'left_ref', 'right_ref', 'kind'},
-        );
         final (left, leftRevision) = await _resolveEvent(
           _requiredString(value, 'left_ref', maxLength: 64),
           context,
@@ -1994,15 +1965,27 @@ final class _AgentActionToolSession
     final endPresent = value.containsKey('end');
     if (slot != null && (startPresent || endPresent) ||
         slot == null && (!startPresent || !endPresent)) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
+      throw AgentParameterIssue(
+        reason: slot != null
+            ? AgentParameterReason.mutuallyExclusive
+            : AgentParameterReason.missingTimeRange,
+        field: AgentParameterField.start,
+      );
     }
-    final start = slot?.startsAtUtc ?? _requiredTimedValue(value['start']);
-    final end = slot?.endsAtUtc ?? _requiredTimedValue(value['end']);
+    final start =
+        slot?.startsAtUtc ??
+        _requiredTimedValue(value['start'], field: AgentParameterField.start);
+    final end =
+        slot?.endsAtUtc ??
+        _requiredTimedValue(value['end'], field: AgentParameterField.end);
     final location = _optionalText(value, 'location', 200) ?? '';
     final note = _optionalText(value, 'note', 4000) ?? '';
     if (!end.isAfter(start) ||
         end.difference(start) > const Duration(days: 366)) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
+      throw const AgentParameterIssue(
+        reason: AgentParameterReason.invalidTimeRange,
+        field: AgentParameterField.end,
+      );
     }
     return PlanBlockDraft(
       startsAtUtc: start,
@@ -2498,9 +2481,19 @@ void _requireKeys(
   Set<String> allowed,
   Set<String> required,
 ) {
-  if (value.keys.any((key) => !allowed.contains(key)) ||
-      !required.every(value.containsKey)) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+  final missing = required.where((key) => !value.containsKey(key)).firstOrNull;
+  if (missing != null) {
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.missingField,
+      field: parameterField(missing),
+    );
+  }
+  final extra = value.keys.where((key) => !allowed.contains(key)).firstOrNull;
+  if (extra != null) {
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.unknownField,
+      field: parameterField(extra),
+    );
   }
 }
 
@@ -2514,7 +2507,10 @@ String _requiredString(
 }) {
   final text = value[key];
   if (text is! String || text.isEmpty || text.length > maxLength) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
   }
   AgentText.requireSafe(text, maxCharacters: maxLength);
   return text;
@@ -2523,7 +2519,10 @@ String _requiredString(
 String _requiredText(Map<String, Object?> value, String key, int maxLength) {
   final text = _requiredString(value, key, maxLength: maxLength);
   if (text.trim().isEmpty) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
   }
   return text;
 }
@@ -2532,7 +2531,10 @@ String? _optionalText(Map<String, Object?> value, String key, int maxLength) {
   if (!value.containsKey(key)) return null;
   final text = value[key];
   if (text is! String || text.length > maxLength) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
   }
   AgentText.requireSafe(text, maxCharacters: maxLength);
   return text;
@@ -2541,7 +2543,12 @@ String? _optionalText(Map<String, Object?> value, String key, int maxLength) {
 bool? _optionalBool(Map<String, Object?> value, String key) {
   if (!value.containsKey(key)) return null;
   final field = value[key];
-  if (field is! bool) throw const AgentFailure(AgentFailureCode.invalidInput);
+  if (field is! bool) {
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
+  }
   return field;
 }
 
@@ -2554,7 +2561,10 @@ int? _optionalInt(
   if (!value.containsKey(key)) return null;
   final field = value[key];
   if (field is! int || field < minimum || field > maximum) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
   }
   return field;
 }
@@ -2587,7 +2597,10 @@ String _requiredEnum(
 ) {
   final result = value[key];
   if (result is! String || !allowed.contains(result)) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw AgentParameterIssue(
+      reason: AgentParameterReason.invalidValue,
+      field: parameterField(key),
+    );
   }
   return result;
 }
@@ -2602,50 +2615,71 @@ String? _optionalEnum(
 }
 
 DateTime _requiredDate(Map<String, Object?> value, String key) {
-  return _parseDate(value[key]);
+  return _parseDate(value[key], field: parameterField(key));
 }
 
 DateTime? _optionalDate(Map<String, Object?> value, String key) {
   if (!value.containsKey(key)) return null;
-  return _parseDate(value[key]);
+  return _parseDate(value[key], field: parameterField(key));
 }
 
-DateTime _parseDate(Object? value) {
-  if (value is! String) throw const AgentFailure(AgentFailureCode.invalidInput);
+DateTime _parseDate(
+  Object? value, {
+  AgentParameterField field = AgentParameterField.arguments,
+}) {
+  final issue = AgentParameterIssue(
+    reason: AgentParameterReason.invalidDate,
+    field: field,
+  );
+  if (value is! String) throw issue;
   final match = RegExp(r'^(\d{4})-(\d{2})-(\d{2})$').firstMatch(value);
-  if (match == null) throw const AgentFailure(AgentFailureCode.invalidInput);
+  if (match == null) throw issue;
   final year = int.parse(match.group(1)!);
   final month = int.parse(match.group(2)!);
   final day = int.parse(match.group(3)!);
   if (year < 1 || year > 9998) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw issue;
   }
   final result = DateTime.utc(year, month, day);
   if (result.year != year ||
       result.month != month ||
       result.day != day ||
       !isCalendarDate(result)) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw issue;
   }
   return result;
 }
 
-DateTime _requiredCalendarValue(Object? value, bool allDay) =>
-    allDay ? _parseDate(value) : _parseTimed(value);
+DateTime _requiredCalendarValue(
+  Object? value,
+  bool allDay, {
+  required AgentParameterField field,
+}) =>
+    allDay ? _parseDate(value, field: field) : _parseTimed(value, field: field);
 
-DateTime _requiredTimedValue(Object? value) => _parseTimed(value);
+DateTime _requiredTimedValue(
+  Object? value, {
+  required AgentParameterField field,
+}) => _parseTimed(value, field: field);
 
 DateTime? _optionalTimed(Map<String, Object?> value, String key) {
   if (!value.containsKey(key)) return null;
-  return _parseTimed(value[key]);
+  return _parseTimed(value[key], field: parameterField(key));
 }
 
-DateTime _parseTimed(Object? value) {
-  if (value is! String) throw const AgentFailure(AgentFailureCode.invalidInput);
+DateTime _parseTimed(
+  Object? value, {
+  AgentParameterField field = AgentParameterField.arguments,
+}) {
+  final issue = AgentParameterIssue(
+    reason: AgentParameterReason.invalidTimestamp,
+    field: field,
+  );
+  if (value is! String) throw issue;
   final match = RegExp(
     r'^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?\+08:00$',
   ).firstMatch(value);
-  if (match == null) throw const AgentFailure(AgentFailureCode.invalidInput);
+  if (match == null) throw issue;
   final year = int.parse(match.group(1)!);
   final month = int.parse(match.group(2)!);
   final day = int.parse(match.group(3)!);
@@ -2653,7 +2687,7 @@ DateTime _parseTimed(Object? value) {
   final minute = int.parse(match.group(5)!);
   final second = int.parse(match.group(6) ?? '0');
   if (year < 1 || year > 9998 || hour > 23 || minute > 59 || second > 59) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw issue;
   }
   final beijing = DateTime.utc(year, month, day, hour, minute, second);
   if (beijing.year != year ||
@@ -2662,7 +2696,7 @@ DateTime _parseTimed(Object? value) {
       beijing.hour != hour ||
       beijing.minute != minute ||
       beijing.second != second) {
-    throw const AgentFailure(AgentFailureCode.invalidInput);
+    throw issue;
   }
   return beijing.subtract(const Duration(hours: 8));
 }

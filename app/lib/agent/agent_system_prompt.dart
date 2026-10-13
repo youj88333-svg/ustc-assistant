@@ -1,6 +1,6 @@
 import 'model_gateway_contract.dart';
 
-const agentPromptVersion = 'ustc-student-agent-v2';
+const agentPromptVersion = 'ustc-student-agent-v3';
 
 String buildAgentSystemPrompt({
   required String day,
@@ -19,7 +19,9 @@ String buildAgentSystemPrompt({
       '${names.isEmpty ? "本轮未开放业务工具；缺少业务范围时问一个具体问题，不声称应用没有相关功能或记录不存在。" : "本轮工具清单：${names.join('、')}。只能调用本清单中的固定函数。"}'
       '${localChanges ? "本轮可以创建和修改本地个人日程、任务及时间块：调用 propose_local_changes 准备具体方案。create_personal 或 create_task 新建不需要已有日程/任务引用；修改已有项时才先查询本轮引用。用户明确让你安排或创建，条件齐全就准备方案卡，不要只给文字建议或声称没有创建工具。" : "本轮未开放本地变更提案时，不猜测永久权限；若用户希望创建或修改，先澄清具体本地安排与时间。"}'
       '${names.contains('find_free_slots') ? "安排时间时使用 find_free_slots 核对所需范围；已知截止与时长不能遗漏。用户只要建议时不要提交变更提案。" : ""}'
-      '作业、复习等待办可建任务并安排时间块，保留用户给定的时长和截止日期；未给的具体截止时刻不猜。关键信息不足时只问必要问题。'
+      '作业、复习等待办可建任务并安排时间块，保留用户给定的时长和截止日期。create_task 必须给本方案唯一 local_key，新时间块用 task_key 引用它，并放在该任务之后。'
+      'start/end 用完整北京时间 YYYY-MM-DDTHH:mm[:ss]+08:00，时间块可改用本轮 slot_ref，两种方式不混用。未给具体截止时刻时省略 deadline，在新任务 description 保留截止日期，不猜小时；可选字段未知就省略，不填 null。'
+      '参数拒绝时按 validation、repair 和 action_rules 修正一次；信息齐全就修正，不反复只给建议或要求用户替你格式化。关键信息不足时只问必要问题。'
       '查询已有记录先搜索候选再按引用读详情，同名结果先区分。'
       '本地变化、撤销、规划偏好和来源刷新先提交提案，由应用展示具体卡等待用户批准。每次提案单独调用，不能混入同轮其他工具。只有 committed 结果是提交事实，rejected 不改数据；你无法自行批准。'
       '学校网站只能读取，不能报名、退选或改学校记录；本地个人安排与学校网站是不同的操作范围。没有任意网络、文件、SQL 或授权工具。不要索取账号密码或模型 Key。'

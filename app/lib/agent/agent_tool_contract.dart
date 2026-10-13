@@ -1,27 +1,51 @@
 import '../core/agent_contract.dart';
+import '../core/agent_parameter_issue.dart';
 import '../core/calendar_contract.dart';
 import '../core/agent_discussion_contract.dart';
 import 'model_gateway_contract.dart';
 
 const agentToolRegistryVersion = 'agent-tools-v2';
 
+const agentPersonalToolNames = {
+  'query_agenda',
+  'read_event',
+  'query_tasks',
+  'read_task',
+  'inspect_conflicts',
+  'propose_local_changes',
+  'propose_undo',
+  'find_free_slots',
+  'propose_planning_preferences',
+  'query_source_options',
+  'request_source_refresh',
+  'query_young_activities',
+};
+
+abstract interface class AgentToolScopeSession {
+  /// App-owned human scope. Can only narrow a bound run, never widen it.
+  void restrictPersonalData();
+}
+
 /// Each result is data, never instructions. No underlying authority is JSON.
 final class AgentToolResult {
   AgentToolResult({
     required this.status,
     this.failure,
+    this.validation,
     Map<String, Object?> data = const {},
     List<String> evidenceIds = const [],
   }) : data = Map.unmodifiable(data),
        evidenceIds = List.unmodifiable(evidenceIds);
   final String status;
   final String? failure;
+  final AgentParameterIssue? validation;
   final Map<String, Object?> data;
   final List<String> evidenceIds;
   Map<String, Object?> toMap() => {
     'version': agentToolRegistryVersion,
     'status': status,
     if (failure != null) 'failure': failure,
+    if (validation != null) 'validation': validation!.toSafeMap(),
     'data': data,
     'evidence': evidenceIds,
     'trust': 'untrusted_source_data',

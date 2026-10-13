@@ -11,7 +11,13 @@ import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
 import 'app/agent_workspace_page.dart';
 import 'app/agent_settings_panel.dart';
+import 'app/diagnostics_panel.dart';
+import 'app/diagnostic_error_hooks.dart';
 import 'platform/agent_image_picker.dart';
+import 'platform/transient_diagnostics.dart';
+import 'core/diagnostics_contract.dart';
+import 'agent/agent_tool_contract.dart';
+import 'agent/agent_system_prompt.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
 import 'app/jw_sync_panel.dart';
@@ -36,11 +42,28 @@ Future<void> launchM0() async {
     final bootstrap = await RuntimeBootstrap.open();
     runApp(OwnedApplication(bootstrap: bootstrap));
   } catch (error) {
-    runApp(
-      M0StartupFailureApp(
-        code: error is AppFailure ? error.code : FailureCode.storageFailed,
+    final code = error is AppFailure ? error.code : FailureCode.storageFailed;
+    final diagnostics = TransientDiagnostics(
+      versions: const DiagnosticVersions(
+        application: '0.0.1+0',
+        schema: 13,
+        tools: agentToolRegistryVersion,
+        prompt: agentPromptVersion,
+        revision: String.fromEnvironment(
+          'USTC_BUILD_REVISION',
+          defaultValue: 'unknown',
+        ),
       ),
     );
+    diagnostics.record(
+      DiagnosticEvent(
+        name: DiagnosticEventName.applicationFailed,
+        stage: DiagnosticStage.startup,
+        outcome: DiagnosticOutcome.failure,
+        code: diagnosticCode(code.name),
+      ),
+    );
+    runApp(M0StartupFailureApp(code: code, diagnostics: diagnostics));
   }
 }
 
@@ -53,6 +76,7 @@ final class OwnedApplication extends StatefulWidget {
 
 final class _OwnedAppState extends State<OwnedApplication> {
   late final AppLifecycleListener _lifecycle;
+  late DiagnosticErrorHooks _diagnosticErrors;
   var _destination = ValueNotifier<ShellDestination>(ShellDestination.agent);
   int? _navigationResetEpoch;
   CalendarReference? _evidenceSelection;
@@ -60,6 +84,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
   @override
   void initState() {
     super.initState();
+    _diagnosticErrors = DiagnosticErrorHooks(widget.bootstrap.diagnostics);
     _lifecycle = AppLifecycleListener(
       onExitRequested: () async {
         try {
@@ -74,9 +99,19 @@ final class _OwnedAppState extends State<OwnedApplication> {
 
   @override
   void dispose() {
+    _diagnosticErrors.dispose();
     _lifecycle.dispose();
     _destination.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(covariant OwnedApplication oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bootstrap, widget.bootstrap)) {
+      _diagnosticErrors.dispose();
+      _diagnosticErrors = DiagnosticErrorHooks(widget.bootstrap.diagnostics);
+    }
   }
 
   @override
@@ -120,6 +155,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
         },
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
+          diagnostics: runtime.diagnostics,
           pickImages: pickAgentImages,
           onOpenLocalEvidence: (evidence) async {
             final navigationEpoch = _navigationResetEpoch;
@@ -191,6 +227,8 @@ final class _OwnedAppState extends State<OwnedApplication> {
           controller: runtime.shell,
           agentBuilder: (context) =>
               AgentSettingsPanel(controller: runtime.agent),
+          logsBuilder: (context) =>
+              DiagnosticsPanel(diagnostics: runtime.diagnostics),
           diagnosticsBuilder:
               developmentDiagnosticsEnabled || m3ValidationEnabled
               ? _buildDiagnostics

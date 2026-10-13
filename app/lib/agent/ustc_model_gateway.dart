@@ -37,7 +37,6 @@ final class UstcModelGateway implements ModelGatewayPort {
   static const String _productionHost = 'api.llm.ustc.edu.cn';
   static final RegExp _modelIdPattern = RegExp(r'^[A-Za-z0-9._:/-]{1,128}$');
   static final RegExp _toolNamePattern = RegExp(r'^[A-Za-z0-9_.-]{1,64}$');
-  static final RegExp _callIdPattern = RegExp(r'^[A-Za-z0-9_.:-]{1,128}$');
   static const int _modelsBodyLimit = 1024 * 1024;
   static const int _streamBodyLimit = 2 * 1024 * 1024;
   static const int _sseLineLimit = 64 * 1024;
@@ -416,7 +415,7 @@ final class UstcModelGateway implements ModelGatewayPort {
       if (message.role == 'tool') {
         final id = message.toolCallId;
         if (id == null ||
-            !_callIdPattern.hasMatch(id) ||
+            !modelToolCallIdPattern.hasMatch(id) ||
             content == null ||
             message.toolCalls.isNotEmpty ||
             !pending.containsKey(id)) {
@@ -461,7 +460,7 @@ final class UstcModelGateway implements ModelGatewayPort {
       if (message.toolCalls.isNotEmpty) {
         final calls = <Map<String, Object?>>[];
         for (final call in message.toolCalls) {
-          if (!_callIdPattern.hasMatch(call.id) ||
+          if (!modelToolCallIdPattern.hasMatch(call.id) ||
               !seenCallIds.add(call.id) ||
               !definitions.containsKey(call.name) ||
               call.argumentsJson.length > _toolArgumentsLimit) {
@@ -894,7 +893,7 @@ final class UstcModelGateway implements ModelGatewayPort {
       final id = assembly.id.toString();
       final name = assembly.name.toString();
       final arguments = assembly.arguments.toString();
-      if (!_callIdPattern.hasMatch(id) ||
+      if (!modelToolCallIdPattern.hasMatch(id) ||
           !ids.add(id) ||
           !_toolNamePattern.hasMatch(name) ||
           !allowedNames.contains(name)) {

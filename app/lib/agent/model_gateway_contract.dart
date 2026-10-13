@@ -1,5 +1,7 @@
 import '../core/agent_contract.dart';
 
+final modelToolCallIdPattern = RegExp(r'^[A-Za-z0-9_.:-]{1,128}$');
+
 final class ModelToolCall {
   const ModelToolCall({
     required this.id,

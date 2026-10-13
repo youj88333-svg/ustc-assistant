@@ -22,12 +22,14 @@ final class ApplicationSettingsPage extends StatefulWidget {
     required this.controller,
     this.diagnosticsBuilder,
     this.agentBuilder,
+    this.logsBuilder,
   });
 
   final ApplicationSettingsPort settings;
   final AppShellPort controller;
   final WidgetBuilder? diagnosticsBuilder;
   final WidgetBuilder? agentBuilder;
+  final WidgetBuilder? logsBuilder;
 
   @override
   State<ApplicationSettingsPage> createState() =>
@@ -364,6 +366,10 @@ final class _ApplicationSettingsPageState
     final counts = snapshot.counts;
     return _sectionScroll(
       children: [
+        if (widget.logsBuilder != null) ...[
+          widget.logsBuilder!.call(context),
+          const SizedBox(height: 12),
+        ],
         _SettingsCard(
           title: '账号与本机凭据',
           subtitle: '此处仅显示是否已登记，不读取账号内容或密码。',

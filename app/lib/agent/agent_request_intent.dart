@@ -43,3 +43,8 @@ bool agentLocalClarification(String question) {
     caseSensitive: false,
   ).hasMatch(question);
 }
+
+bool agentRestrictsPersonalData(String question) => RegExp(
+  r'(?:不要|别|无需|不用|禁止)(?:查询|读取|查看|访问|查|读|看)(?:我的|本地|个人)?(?:日程|课表|安排|任务)|(?:只|仅)(?:查询|使用|查|用)?(?:公开资料|公开信息|知识库|评课)|only\s+public|do not (?:read|access) my (?:agenda|tasks|calendar)',
+  caseSensitive: false,
+).hasMatch(question);

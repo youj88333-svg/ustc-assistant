@@ -18,6 +18,8 @@ import 'package:ustc_assistant_m0/core/young_work_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/platform/observation_assets.dart';
 
+import 'support/diagnostic_cleanup.dart';
+
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
@@ -826,6 +828,12 @@ Future<void> _assertKnownDatabaseFiles(
     final entryName = p.windows.basename(path);
     final type = await FileSystemEntity.type(path, followLinks: false);
     if (allowedFiles.contains(entryName) && type == FileSystemEntityType.file) {
+      continue;
+    }
+    if (formal &&
+        entryName == 'diagnostics' &&
+        type == FileSystemEntityType.directory) {
+      await assertKnownFormalDiagnosticsDirectory(directory);
       continue;
     }
     if (emptyRoots.contains(entryName) &&
