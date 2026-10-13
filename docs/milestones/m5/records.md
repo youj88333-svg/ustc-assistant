@@ -7,3 +7,4 @@
 - [M5.3 本地方案与整组撤销](records/03-local-plans.md)：当前卡批准、原子多动作、依赖/版本、真实提交与撤销事实、schema 13。
 - [M5.4 时间规划与固定来源](records/04-planning-and-sources.md)：有界空闲/截止/偏好、JW/Young 专属作业、自动认证/挑战及源读结果出站复验。
 - [M5.5/M5.6 连续使用与交付](records/05-continuity-and-delivery.md)：安全历史、日程讨论/返回、维护与拒旧，中断/失败修复、根最终全套/Windows/Release。整个 M5 工程完成，统一真人体验待验，尚未关闭。
+- [真人缺陷修订：安排与中文](records/06-intent-and-language.md)：修复真实词序漏选提案/规划、动态能力提示、默认中文及工具过渡文字混入最终回复；根自动检查与修订版真实体验分开，M5 仍未关闭。
