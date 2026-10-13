@@ -2,18 +2,22 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
+import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/m0_entry.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -171,7 +175,12 @@ void main() {
         );
         expect(find.textContaining('合成流式片段'), findsOneWidget);
         expect(firstGateway.chatRequests, hasLength(1));
-        expect(firstGateway.chatRequests.single.tools, isEmpty);
+        expect(
+          firstGateway.chatRequests.single.tools,
+          isEmpty,
+          reason:
+              'A plain chat question does not expose business tool families.',
+        );
         expect(firstGateway.chatRequests.single.toolChoice, isNull);
         await _tapKey(tester, 'agent-stop');
         expect(first.runtime!.agent.view.phase, AgentPhase.idle);
@@ -379,7 +388,8 @@ void main() {
         expect(bootstrap.directory.isHeld, isTrue);
         expect(bootstrap.jwDirectory.isHeld, isTrue);
         expect(gateway.cancelCount, greaterThanOrEqualTo(1));
-        expect(bootstrap.runtime!.agent.view.phase, AgentPhase.idle);
+        expect(bootstrap.runtime!.agent.view.phase, AgentPhase.recovery);
+        expect(bootstrap.runtime!.agent.view.canSend, isFalse);
         expect(bootstrap.runtime!.agent.view.messages, hasLength(2));
         expect(
           bootstrap.runtime!.agent.view.messages.last.status,
@@ -397,8 +407,158 @@ void main() {
       }
     },
   );
+  testWidgets(
+    'readonly business and knowledge evidence plus active image input survive native integration',
+    (tester) async {
+      final workspace = await _createWorkspace();
+      final bootstraps = <RuntimeBootstrap>[];
+      try {
+        final gateway = _SyntheticGateway();
+        final first = await _openBootstrap(tester, workspace, gateway: gateway);
+        bootstraps.add(first);
+        await _configureAgent(tester, first, key: 'm51-synthetic-only-key');
+        await _seedSyntheticPersonalEvent(tester, first.runtime!);
+        await _runNative(tester, first.agent.newConversation);
+        await tester.pumpWidget(_application(first));
+        await tester.pumpAndSettle();
+        gateway.readScenario = 'agenda';
+        await _runNative(tester, () => first.agent.send('M52 合成日程查询'));
+        await tester.pumpAndSettle();
+        expect(first.agent.view.failure, isNull);
+        expect(
+          first.agent.view.messages.last.evidence.single.title,
+          'M51 合成个人安排',
+        );
+        expect(
+          first.agent.view.messages.last.steps.single.tool,
+          'query_agenda',
+        );
+        expect(
+          gateway.chatRequests.last.messages.last.content,
+          contains('2026-10-13T10:00:00+08:00'),
+        );
+        expect(
+          gateway.chatRequests.last.messages.last.content,
+          isNot(contains('仅供本机集成测试')),
+        );
+        expect(
+          find.byKey(
+            ValueKey(
+              'agent-evidence-${first.agent.view.messages.last.evidence.single.id}',
+            ),
+          ),
+          findsOneWidget,
+        );
+
+        await _runNative(tester, () async {
+          final outcome = await first.knowledge.loadBundledEdition();
+          expect(outcome.failure, isNull);
+        });
+        gateway.readScenario = 'knowledge';
+        await _runNative(tester, () => first.agent.send('M52 合成缓考流程查询'));
+        await tester.pumpAndSettle();
+        expect(first.agent.view.failure, isNull);
+        expect(first.agent.view.messages.last.steps.map((s) => s.tool), [
+          'search_knowledge',
+          'read_knowledge',
+        ]);
+        expect(first.agent.view.messages.last.evidence, hasLength(2));
+        expect(
+          first.agent.view.messages.last.evidence.last.articleUrl,
+          startsWith('https://www.teach.ustc.edu.cn/'),
+        );
+
+        final image = await _runNative(tester, () async {
+          final recorder = ui.PictureRecorder();
+          final canvas = Canvas(recorder);
+          canvas.drawRect(
+            const Rect.fromLTWH(0, 0, 8, 8),
+            Paint()..color = Colors.blue,
+          );
+          final picture = recorder.endRecording();
+          final encoded = await picture.toImage(8, 8);
+          try {
+            final bytes = await encoded.toByteData(
+              format: ui.ImageByteFormat.png,
+            );
+            return await normalizeAgentImage(Uint8List.sublistView(bytes!));
+          } finally {
+            encoded.dispose();
+            picture.dispose();
+          }
+        });
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: AgentWorkspacePage(
+                controller: first.agent,
+                onSettings: () {},
+                pickImages: () async => [image],
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _tapKey(tester, 'agent-attach-image');
+        expect(
+          find.byKey(const ValueKey('agent-image-preview-0')),
+          findsOneWidget,
+        );
+        await tester.tap(find.byKey(const ValueKey('agent-send')));
+        await tester.pump();
+        await _pumpUntil(
+          tester,
+          () => first.agent.view.phase == AgentPhase.idle,
+          reason: 'Synthetic image turn did not finish',
+        );
+        await tester.pumpAndSettle();
+        expect(first.agent.view.failure, isNull);
+        expect(
+          first
+              .agent
+              .view
+              .messages[first.agent.view.messages.length - 2]
+              .imageCount,
+          1,
+        );
+        expect(
+          find.byKey(const ValueKey('agent-image-preview-0')),
+          findsNothing,
+        );
+        final beforeMessages = first.agent.view.messages.length;
+        final beforeRequests = gateway.requestCount;
+        await _unmountAndClose(tester, first);
+        final nextGateway = _SyntheticGateway();
+        final reopened = await _openBootstrap(
+          tester,
+          workspace,
+          gateway: nextGateway,
+        );
+        bootstraps.add(reopened);
+        expect(reopened.agent.view.messages, hasLength(beforeMessages));
+        expect(
+          reopened.agent.view.messages.where((m) => m.evidence.isNotEmpty),
+          hasLength(2),
+        );
+        expect(
+          reopened
+              .agent
+              .view
+              .messages[reopened.agent.view.messages.length - 2]
+              .imageCount,
+          1,
+        );
+        expect(nextGateway.requestCount, 0);
+        expect(beforeRequests, greaterThan(0));
+      } finally {
+        await _disposeAndClean(tester, workspace, bootstraps);
+      }
+    },
+  );
 }
 
+// This suite also covers the real C4 -> C3 read adaptation and the native
+// image codec, using synthetic TEMP data and a synthetic model only.
 Future<RuntimeBootstrap> _openBootstrap(
   WidgetTester tester,
   _OwnedWorkspace workspace, {
@@ -540,7 +700,11 @@ Future<void> _tapKey(WidgetTester tester, String key) async {
   final finder = find.byKey(ValueKey<String>(key));
   expect(finder, findsOneWidget, reason: 'Missing UI key: $key');
   await tester.ensureVisible(finder);
-  await tester.pumpAndSettle();
+  if (key == 'agent-stop') {
+    await tester.pump(const Duration(milliseconds: 100));
+  } else {
+    await tester.pumpAndSettle();
+  }
   await tester.tap(finder);
   await tester.pump();
   await tester.pumpAndSettle();
@@ -847,6 +1011,7 @@ final class _SyntheticGateway implements ModelGatewayPort {
   bool holdNextChat = false;
   bool failNextClose = false;
   bool sawSyntheticKey = false;
+  String? readScenario;
   int requestCount = 0;
   int listModelCalls = 0;
   int verificationCalls = 0;
@@ -931,7 +1096,57 @@ final class _SyntheticGateway implements ModelGatewayPort {
     }
 
     chatRequests.add(request);
-    if (request.tools.isNotEmpty || request.toolChoice != null) {
+    if (readScenario != null) {
+      final last = request.messages.last;
+      final oldCall = request.messages
+          .where((m) => m.toolCalls.isNotEmpty)
+          .lastOrNull
+          ?.toolCalls
+          .single;
+      if (last.role == 'user') {
+        final tool = readScenario == 'agenda'
+            ? 'query_agenda'
+            : 'search_knowledge';
+        controller.add(
+          ModelCompleted(
+            finishReason: 'tool_calls',
+            toolCalls: [
+              ModelToolCall(
+                id: 'synthetic-read-1',
+                name: tool,
+                argumentsJson: tool == 'query_agenda'
+                    ? '{"first_day":"2026-10-13","end_day_exclusive":"2026-10-14"}'
+                    : '{"keywords":"缓考","limit":1}',
+              ),
+            ],
+          ),
+        );
+      } else if (oldCall?.name == 'search_knowledge') {
+        final data = (jsonDecode(last.content!) as Map)['data'] as Map;
+        final ref = (data['items'] as List).first['material_ref'];
+        controller.add(
+          ModelCompleted(
+            finishReason: 'tool_calls',
+            toolCalls: [
+              ModelToolCall(
+                id: 'synthetic-read-2',
+                name: 'read_knowledge',
+                argumentsJson: jsonEncode({'material_ref': ref}),
+              ),
+            ],
+          ),
+        );
+      } else {
+        final result = jsonDecode(last.content!) as Map;
+        final id = (result['evidence'] as List).first;
+        controller.add(ModelTextDelta('合成查询完成 [[$id]]'));
+        controller.add(ModelCompleted(finishReason: 'stop'));
+        readScenario = null;
+      }
+      await controller.close();
+      return;
+    }
+    if (request.toolChoice != null) {
       controller.addError(const AgentFailure(AgentFailureCode.toolUnavailable));
       await controller.close();
       return;

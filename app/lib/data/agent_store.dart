@@ -2,7 +2,7 @@ part of 'jw_store.dart';
 
 /// C3 owns encrypted model configuration, safe conversations and lifecycle.
 /// No provider SDK, gateway traffic or Flutter resource is held here.
-final class AgentStore implements AgentDataPort {
+final class AgentStore implements AgentDataPort, AgentRunJournalPort {
   AgentStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -44,6 +44,71 @@ final class AgentStore implements AgentDataPort {
       action TEXT NOT NULL CHECK(action IN ('config','key-delete','history-clear')),
       item_count INTEGER NOT NULL CHECK(item_count>=0), committed_at INTEGER NOT NULL)''',
   ];
+
+  static const upgradeFrom11 = <String>[
+    "ALTER TABLE agent_messages ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]' CHECK(length(evidence_json)<=65536)",
+    "ALTER TABLE agent_messages ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]' CHECK(length(steps_json)<=8192)",
+    'ALTER TABLE agent_messages ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0 CHECK(image_count BETWEEN 0 AND 3)',
+  ];
+
+  @override
+  Future<void> ensureAgentRun(AgentRunTicket ticket) =>
+      _serial(() => _requireTicket(ticket));
+
+  @override
+  Future<void> saveRunJournal(
+    AgentRunTicket ticket, {
+    required List<AgentEvidence> evidence,
+    required List<AgentToolStep> steps,
+    required int imageCount,
+  }) => _serial(
+    () => _db.transaction(() async {
+      await _requireTicket(ticket);
+      if (evidence.length > 64 ||
+          steps.length > 16 ||
+          imageCount < 0 ||
+          imageCount > 3 ||
+          evidence.map((e) => e.id).toSet().length != evidence.length) {
+        throw const AgentFailure(AgentFailureCode.invalidInput);
+      }
+      final encodedEvidence = jsonEncode(
+        evidence.map(agentEvidenceToMap).toList(),
+      );
+      final encodedSteps = jsonEncode(steps.map(agentStepToMap).toList());
+      if (utf8.encode(encodedEvidence).length > 65536 ||
+          utf8.encode(encodedSteps).length > 8192) {
+        throw const AgentFailure(AgentFailureCode.resourceLimit);
+      }
+      final previous = await _db
+          .customSelect(
+            'SELECT evidence_json,steps_json FROM agent_messages WHERE message_id=?',
+            variables: [Variable.withInt(ticket.assistantMessageId)],
+          )
+          .getSingle();
+      await _budget(
+        max(
+          0,
+          utf8.encode(encodedEvidence + encodedSteps).length -
+              utf8
+                  .encode(
+                    previous.read<String>('evidence_json') +
+                        previous.read<String>('steps_json'),
+                  )
+                  .length,
+        ),
+      );
+      await _db.customStatement(
+        'UPDATE agent_messages SET evidence_json=?,steps_json=? WHERE message_id=?',
+        [encodedEvidence, encodedSteps, ticket.assistantMessageId],
+      );
+      await _db.customStatement(
+        "UPDATE agent_messages SET image_count=? WHERE run_id=? AND role='user'",
+        [imageCount, ticket.runId],
+      );
+      await _db.onAgentCheckpoint?.call();
+      _db._ownership.ensureHeld();
+    }),
+  );
 
   @override
   Stream<int> get changes => _changes.stream;
@@ -460,13 +525,24 @@ final class AgentStore implements AgentDataPort {
               r.read<int>('created_at'),
               isUtc: true,
             ),
+            evidence: List.unmodifiable(
+              (jsonDecode(r.read<String>('evidence_json')) as List).map(
+                agentEvidenceFromMap,
+              ),
+            ),
+            steps: List.unmodifiable(
+              (jsonDecode(r.read<String>('steps_json')) as List).map(
+                agentStepFromMap,
+              ),
+            ),
+            imageCount: r.read<int>('image_count'),
           ),
         )
         .toList();
   });
   Future<void> _budget(int extraBytes) async {
     final used = await _db._count(
-      'SELECT COALESCE(SUM(length(CAST(text AS BLOB))),0) AS count FROM agent_messages',
+      'SELECT COALESCE(SUM(length(CAST(text AS BLOB))+length(CAST(evidence_json AS BLOB))+length(CAST(steps_json AS BLOB))),0) AS count FROM agent_messages',
     );
     if (used + extraBytes > 20 * 1024 * 1024) {
       throw const AgentFailure(AgentFailureCode.resourceLimit);

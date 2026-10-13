@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../agent/agent_coordinator.dart';
+import '../core/agent_contract.dart';
 import 'agent_workspace_contract.dart';
 
 /// C5 adapts the pure-Dart C4 projection. Runtime, not a page, owns lifecycle.
@@ -33,7 +34,8 @@ final class AgentWorkspaceController extends ChangeNotifier
   Future<void> selectConversation(String id) =>
       coordinator.selectConversation(id);
   @override
-  Future<void> send(String text) => coordinator.send(text);
+  Future<void> send(String text, {List<AgentImage> images = const []}) =>
+      coordinator.send(text, images: images);
   @override
   Future<void> stop() => coordinator.stop();
   @override

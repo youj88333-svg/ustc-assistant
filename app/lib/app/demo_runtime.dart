@@ -7,6 +7,7 @@ import '../core/work_lease.dart';
 import '../core/settings_contract.dart';
 import '../core/agent_contract.dart';
 import '../agent/agent_coordinator.dart';
+import '../agent/agent_read_tools.dart';
 import '../agent/model_gateway_contract.dart';
 import '../agent/ustc_model_gateway.dart';
 import '../data/demo_store.dart';
@@ -251,13 +252,28 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
       );
       await demo.initialize();
+      final leases = WorkLeasePool();
+      final agentQueries = PublicQueryCoordinator(
+        store: database.publicStore,
+        leases: leases,
+        clock: clock,
+      );
       agentCoordinator = AgentCoordinator(
         data: database.agent,
         gateway: modelGateway ?? UstcModelGateway(),
+        readTools: AgentReadTools(
+          calendar: database.localCalendar,
+          tasks: database.localCalendar,
+          calendarGuard: database.localCalendar,
+          knowledge: database.publicStore,
+          knowledgeGuard: database.publicStore,
+          publicQueries: agentQueries,
+          publicGuard: agentQueries,
+          clock: clock,
+        ),
         clock: clock,
       );
       agent = AgentWorkspaceController(agentCoordinator);
-      final leases = WorkLeasePool();
       browser = NativeObservationBrowser();
       final jwRegistry = JwPartitionRegistry(formal);
       final youngRegistry = YoungPartitionRegistry(formal);

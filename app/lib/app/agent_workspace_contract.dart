@@ -14,7 +14,7 @@ abstract interface class AgentWorkspacePort implements Listenable {
   });
   Future<void> newConversation();
   Future<void> selectConversation(String id);
-  Future<void> send(String text);
+  Future<void> send(String text, {List<AgentImage> images = const []});
   Future<void> stop();
   Future<void> deleteKey({required bool confirmed});
   Future<void> setModelConsent(bool consent);

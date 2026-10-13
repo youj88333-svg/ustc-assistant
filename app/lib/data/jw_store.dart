@@ -17,6 +17,7 @@ import '../core/jw_work_contract.dart';
 import '../core/jw_credentials.dart';
 import '../core/young_work_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_evidence.dart';
 import '../core/agent_text.dart';
 import '../source/young_collection_contract.dart';
 import '../source/jw_collection_contract.dart';
@@ -126,7 +127,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -145,6 +146,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...LocalCalendarStore.taskSchema,
         ...ApplicationSettingsStore.schema,
         ...AgentStore.schema,
+        ...AgentStore.upgradeFrom11,
       ]) {
         await customStatement(statement);
       }
@@ -157,7 +159,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 10 || to != 11) {
+      if (from < 1 || from > 11 || to != 12) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -177,7 +179,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 9) ...ApplicationSettingsStore.schema,
           if (from <= 9)
             'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
-          ...AgentStore.schema,
+          if (from <= 10) ...AgentStore.schema,
+          ...AgentStore.upgradeFrom11,
         ]) {
           await customStatement(statement);
         }

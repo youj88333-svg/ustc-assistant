@@ -510,3 +510,8 @@ abstract interface class LocalCalendarPort {
   );
   Future<CalendarWriteReceipt> commit(CalendarCommand command);
 }
+
+/// Delivery guard for snapshots used outside the calendar page. No mutation.
+abstract interface class CalendarReadGuardPort {
+  Future<void> ensureCalendarRead(CalendarContext context, int revision);
+}

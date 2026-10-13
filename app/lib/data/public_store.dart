@@ -89,13 +89,14 @@ final class _KnowledgeRead {
 
 /// C3 public operations share the canonical database, transaction queue and owner.
 /// No school account is manufactured and no school record is read here.
-final class PublicStore implements KnowledgeReadPort {
+final class PublicStore implements KnowledgeReadPort, PublicResultGuardPort {
   PublicStore._(this._db);
   final JwStore _db;
   final Map<String, PublicJobTicket> _jobs = {};
   final Map<String, _KnowledgePointer> _references = {};
   final Map<String, _KnowledgePage> _pages = {};
   final Map<String, _KnowledgeRead> _reads = {};
+  final _issuedResults = Expando<(_KnowledgeStamp, DateTime)>();
   KnowledgeLoadTicket? _load;
   int _knowledgeGeneration = 0;
   bool _closed = false;
@@ -213,6 +214,7 @@ final class PublicStore implements KnowledgeReadPort {
       _serial(() => _authority(source));
 
   Future<void> ensureAuthority(PublicAuthority expected) => _serial(() async {
+    await _db._guard();
     final current = await _authority(expected.source);
     if (current.owner != expected.owner ||
         current.epoch != expected.epoch ||
@@ -220,6 +222,28 @@ final class PublicStore implements KnowledgeReadPort {
       throw const PublicFailure(PublicFailureCode.staleReference);
     }
   });
+
+  PublicQueryResult _issueResult(
+    PublicQueryResult result,
+    _KnowledgeStamp stamp,
+  ) {
+    _issuedResults[result] = (
+      stamp,
+      _db._clock.nowUtc.add(const Duration(minutes: 10)),
+    );
+    return result;
+  }
+
+  @override
+  Future<void> ensurePublicResult(PublicQueryResult result) =>
+      _serial(() async {
+        await _db._guard();
+        final issued = _issuedResults[result];
+        if (issued == null || !_db._clock.nowUtc.isBefore(issued.$2)) {
+          throw const PublicFailure(PublicFailureCode.staleReference);
+        }
+        await _requireStamp(issued.$1);
+      });
 
   Future<bool> hasIcourseConsent() => _serial(
     () async => (await _knowledgeState()).read<int>('icourse_consent') == 1,
@@ -948,16 +972,19 @@ final class PublicStore implements KnowledgeReadPort {
       }
       await _requireStamp(stamp);
       await _db._guard();
-      return PublicQueryResult(
-        candidates: candidates,
-        next: next,
-        coverage: PublicCoverage(
-          scope: 'acceptedKnowledge',
-          returned: candidates.length,
-          observed: matches.length,
-          totalReported: matches.length,
-          complete: next == null,
+      return _issueResult(
+        PublicQueryResult(
+          candidates: candidates,
+          next: next,
+          coverage: PublicCoverage(
+            scope: 'acceptedKnowledge',
+            returned: candidates.length,
+            observed: matches.length,
+            totalReported: matches.length,
+            complete: next == null,
+          ),
         ),
+        stamp,
       );
     });
   }
@@ -1063,16 +1090,19 @@ final class PublicStore implements KnowledgeReadPort {
         row,
         '${sections.first.read<String>('heading')} · 字符 $offset–$end',
       );
-      return PublicQueryResult(
-        document: PublicDocument(evidence: evidence, markdown: markdown),
-        next: next,
-        coverage: PublicCoverage(
-          scope: 'selectedMaterialSections',
-          returned: markdown.runes.length,
-          observed: runes.length,
-          truncated: offset > 0 || next != null,
-          complete: offset == 0 && next == null,
+      return _issueResult(
+        PublicQueryResult(
+          document: PublicDocument(evidence: evidence, markdown: markdown),
+          next: next,
+          coverage: PublicCoverage(
+            scope: 'selectedMaterialSections',
+            returned: markdown.runes.length,
+            observed: runes.length,
+            truncated: offset > 0 || next != null,
+            complete: offset == 0 && next == null,
+          ),
         ),
+        pointer.stamp,
       );
     });
   }

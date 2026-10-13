@@ -236,6 +236,10 @@ final class UstcModelGateway implements ModelGatewayPort {
       key: key,
       body: body,
     );
+    if (modelRequest.messages.any((m) => m.images.isNotEmpty) &&
+        const {400, 415, 422}.contains(response.statusCode)) {
+      throw const AgentFailure(AgentFailureCode.imageRejected);
+    }
     _checkStatus(response.statusCode);
     final mediaType = response.headers.contentType?.mimeType;
     if (mediaType != null && mediaType != 'text/event-stream') {
@@ -378,7 +382,22 @@ final class UstcModelGateway implements ModelGatewayPort {
     final pending = <String, String>{};
     final seenCallIds = <String>{};
     var promptChars = 0;
+    var imageCount = 0, imageBytes = 0;
     for (final message in request.messages) {
+      if (message.images.isNotEmpty) {
+        if (message.role != 'user') {
+          throw const AgentFailure(AgentFailureCode.invalidInput);
+        }
+        for (final image in message.images) {
+          image.validate();
+          imageCount++;
+          imageBytes += image.bytes.length;
+        }
+        if (imageCount > AgentImage.maximumCount ||
+            imageBytes > AgentImage.maximumTotalBytes) {
+          throw const AgentFailure(AgentFailureCode.resourceLimit);
+        }
+      }
       if (!const {
         'system',
         'user',
@@ -425,6 +444,19 @@ final class UstcModelGateway implements ModelGatewayPort {
       final encoded = <String, Object?>{'role': message.role};
       if (content != null) {
         encoded['content'] = content;
+      }
+      if (message.images.isNotEmpty) {
+        encoded['content'] = [
+          if (content != null) {'type': 'text', 'text': content},
+          for (final image in message.images)
+            {
+              'type': 'image_url',
+              'image_url': {
+                'url': 'data:image/png;base64,${base64Encode(image.bytes)}',
+                'detail': 'auto',
+              },
+            },
+        ];
       }
       if (message.toolCalls.isNotEmpty) {
         final calls = <Map<String, Object?>>[];
@@ -487,7 +519,8 @@ final class UstcModelGateway implements ModelGatewayPort {
     }
     try {
       final encoded = utf8.encode(jsonEncode(body));
-      if (encoded.length > _modelsBodyLimit) {
+      if (encoded.length >
+          (imageCount > 0 ? 10 * 1024 * 1024 : _modelsBodyLimit)) {
         throw const AgentFailure(AgentFailureCode.resourceLimit);
       }
       return encoded;

@@ -609,7 +609,7 @@ void main() {
   );
 
   test(
-    'schema 10 to 11 adds Agent storage while retaining old business and undo facts',
+    'schema 10 to current adds Agent storage while retaining old business and undo facts',
     () async {
       final file = await _temporaryDatabase();
       var store = await _openAt(file);

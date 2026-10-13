@@ -7,12 +7,350 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
+  group('AgentCoordinator M5.2 bounded reads', () {
+    test(
+      'read-session admission failure settles its newly issued C3 run',
+      () async {
+        final tools = _ReadTools()..failOpen = true;
+        final rig = await _rig(configured: true, readTools: tools);
+        await rig.coordinator.send('合成日程问题');
+        expect(rig.coordinator.view.failure, AgentFailureCode.closed);
+        expect(rig.gateway.generations, isEmpty);
+        expect(await _activeRun(rig.store), isNull);
+        expect(
+          rig.coordinator.view.messages.last.status,
+          AgentMessageStatus.failed,
+        );
+      },
+    );
+    test(
+      'ordinary dated class questions expose local agenda while public reviews do not',
+      () async {
+        final tools = _ReadTools()..catalogue = true;
+        final rig = await _rig(configured: true, readTools: tools);
+        for (final question in [
+          '我明天有哪些课？',
+          '明天几点上第一节课？',
+          '明天的课程是什么？',
+          '下午有什么课？',
+        ]) {
+          rig.gateway.enqueueEvents([
+            const ModelTextDelta('合成路由回答'),
+            ModelCompleted(finishReason: 'stop'),
+          ]);
+          await rig.coordinator.send(question);
+          final names = rig.gateway.generations.last.request.tools.map(
+            (t) => t.name,
+          );
+          expect(names, contains('query_agenda'));
+          expect(names, isNot(contains('search_courses')));
+        }
+        await rig.coordinator.newConversation();
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('合成课程评价回答'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+        await rig.coordinator.send('公开课程评价查询');
+        final names = rig.gateway.generations.last.request.tools.map(
+          (t) => t.name,
+        );
+        expect(names, contains('search_courses'));
+        expect(names, isNot(contains('query_agenda')));
+      },
+    );
+
+    test(
+      'an explicit public-only request excludes local reads and follow-up scope',
+      () async {
+        for (final question in ['不要读取我的日程，只查询公开课程评价', '继续说，但只查评课，老师评价怎么样？']) {
+          final tools = _ReadTools()..catalogue = true;
+          final rig = await _rig(configured: true, readTools: tools);
+          rig.gateway.enqueueEvents([
+            const ModelTextDelta('合成日程回答'),
+            ModelCompleted(finishReason: 'stop'),
+          ]);
+          await rig.coordinator.send('我明天有哪些课？');
+          rig.gateway.enqueueEvents([
+            const ModelTextDelta('合成公开回答'),
+            ModelCompleted(finishReason: 'stop'),
+          ]);
+          await rig.coordinator.send(question);
+          final names = rig.gateway.generations.last.request.tools.map(
+            (t) => t.name,
+          );
+          expect(names, contains('search_courses'));
+          expect(names, isNot(contains('query_agenda')));
+        }
+      },
+    );
+
+    test(
+      'storage and cleanup failures end before another model request or tool',
+      () async {
+        for (final failure in [
+          'storageFailed',
+          'cleanupPending',
+          'cancelled',
+          'closed',
+        ]) {
+          final tools = _ReadTools()..resultFailure = failure;
+          final rig = await _rig(configured: true, readTools: tools);
+          rig.gateway.enqueueEvents([_readCall('fatal', '{}')]);
+          await rig.coordinator.send('故障合成日程问题');
+          expect(rig.gateway.generations, hasLength(1));
+          expect(tools.executed, 1);
+          expect(rig.coordinator.view.failure, isNotNull);
+          expect(
+            rig.coordinator.view.messages.last.steps.single.status,
+            'failure',
+          );
+          expect(await _activeRun(rig.store), isNull);
+        }
+      },
+    );
+
+    test(
+      'journal write failure blocks delivery and preserves empty previous journal',
+      () async {
+        var failing = false;
+        final tools = _ReadTools()
+          ..afterExecute = () async {
+            failing = true;
+          };
+        final rig = await _rig(
+          configured: true,
+          readTools: tools,
+          checkpoint: () async {
+            if (failing) throw StateError('synthetic journal checkpoint');
+          },
+        );
+        rig.gateway.enqueueEvents([_readCall('sql', '{}')]);
+        await rig.coordinator.send('事务合成日程问题');
+        expect(rig.gateway.generations, hasLength(1));
+        expect(rig.coordinator.view.failure, AgentFailureCode.storageFailed);
+        expect(rig.coordinator.view.messages.last.evidence, isEmpty);
+        expect(rig.coordinator.view.messages.last.steps, isEmpty);
+        expect(await _activeRun(rig.store), isNull);
+      },
+    );
+    test(
+      'native calls continue with paired results and durable display evidence',
+      () async {
+        final tools = _ReadTools();
+        final rig = await _rig(configured: true, readTools: tools);
+        rig.gateway.enqueueEvents([
+          _readCall('read-1', '{"first_day":"2026-10-13"}'),
+        ]);
+        rig.gateway.enqueue((generation) async {
+          final messages = generation.request.messages;
+          expect(messages.last.role, 'tool');
+          expect(messages.last.toolCallId, 'read-1');
+          expect(
+            messages[messages.length - 2].toolCalls.single.name,
+            'query_agenda',
+          );
+          final result = jsonDecode(messages.last.content!) as Map;
+          expect(result['trust'], 'untrusted_source_data');
+          expect(result['status'], 'success');
+          expect(result['evidence'], ['e_0123456789abcdef']);
+          generation.emit(const ModelTextDelta('查询结果 [[e_0123456789abcdef]]'));
+          generation.emit(ModelCompleted(finishReason: 'stop'));
+          await generation.finish();
+        });
+        await rig.coordinator.send('合成日程问题');
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.businessToolsEnabled, isTrue);
+        expect(rig.coordinator.view.modelCalls, 2);
+        expect(rig.coordinator.view.toolCalls, 1);
+        final messages = rig.coordinator.view.messages;
+        expect(messages.last.status, AgentMessageStatus.complete);
+        expect(messages.last.evidence.single.title, '合成本地窗口');
+        expect(messages.last.steps.single.tool, 'query_agenda');
+        expect(tools.executed, 1);
+        expect(await _activeRun(rig.store), isNull);
+      },
+    );
+
+    test(
+      'a truncated tool call never executes and unknown names never acquire tools',
+      () async {
+        for (final completion in [
+          ModelCompleted(
+            finishReason: 'length',
+            toolCalls: const [
+              ModelToolCall(
+                id: 'half',
+                name: 'query_agenda',
+                argumentsJson: '{}',
+              ),
+            ],
+          ),
+          ModelCompleted(
+            finishReason: 'tool_calls',
+            toolCalls: const [
+              ModelToolCall(
+                id: 'unknown',
+                name: 'execute_sql',
+                argumentsJson: '{}',
+              ),
+            ],
+          ),
+        ]) {
+          final tools = _ReadTools();
+          final rig = await _rig(configured: true, readTools: tools);
+          rig.gateway.enqueueEvents([completion]);
+          await rig.coordinator.send('只读合成问题');
+          expect(
+            rig.coordinator.view.failure,
+            AgentFailureCode.toolUnavailable,
+          );
+          expect(tools.executed, 0);
+          expect(await _activeRun(rig.store), isNull);
+        }
+      },
+    );
+
+    test(
+      'revoking consent after a read prevents delivery and the next model request',
+      () async {
+        final tools = _ReadTools();
+        final rig = await _rig(configured: true, readTools: tools);
+        tools.afterExecute = () async {
+          final settings = await rig.store.agent.inspectAgent();
+          await rig.store.agent.setModelConsent(settings.authority, false);
+        };
+        rig.gateway.enqueueEvents([_readCall('revoked', '{}')]);
+        await rig.coordinator.send('权限撤销合成日程问题');
+        expect(rig.gateway.generations, hasLength(1));
+        expect(rig.coordinator.view.failure, AgentFailureCode.staleContext);
+        expect(rig.coordinator.view.messages.last.text, isEmpty);
+        expect(rig.coordinator.view.messages.last.evidence, isEmpty);
+        expect(await _activeRun(rig.store), isNull);
+      },
+    );
+
+    test('reordered identical arguments stop without another read', () async {
+      final tools = _ReadTools();
+      final rig = await _rig(configured: true, readTools: tools);
+      rig.gateway.enqueueEvents([_readCall('first', '{"a":1,"b":2}')]);
+      rig.gateway.enqueueEvents([_readCall('repeat', '{"b":2,"a":1}')]);
+      await rig.coordinator.send('循环合成日程问题');
+      expect(tools.executed, 1);
+      expect(rig.gateway.generations, hasLength(2));
+      expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
+      expect(await _activeRun(rig.store), isNull);
+    });
+
+    test(
+      'model round budget terminates at eight without new outbound work',
+      () async {
+        final tools = _ReadTools();
+        final rig = await _rig(configured: true, readTools: tools);
+        for (var i = 0; i < 9; i++) {
+          rig.gateway.enqueueEvents([_readCall('step-$i', '{"page":$i}')]);
+        }
+        await rig.coordinator.send('预算合成日程问题');
+        expect(rig.gateway.generations, hasLength(8));
+        expect(tools.executed, 8);
+        expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
+        expect(rig.coordinator.view.messages.last.steps, hasLength(8));
+      },
+    );
+
+    test(
+      'stop revokes an awaited source result and drains only the owned reader',
+      () async {
+        final tools = _ReadTools()..hold = Completer<void>();
+        final rig = await _rig(configured: true, readTools: tools);
+        rig.gateway.enqueueEvents([_readCall('held', '{}')]);
+        final send = rig.coordinator.send('等待来源合成日程问题');
+        await _until(() => tools.executed == 1);
+        expect(rig.coordinator.view.phase, AgentPhase.executingRead);
+        await rig.coordinator.stop();
+        await send;
+        expect(tools.cancelCount, greaterThanOrEqualTo(1));
+        expect(rig.gateway.generations, hasLength(1));
+        expect(rig.coordinator.view.messages.last.evidence, isEmpty);
+        expect(await _activeRun(rig.store), isNull);
+        expect(rig.coordinator.view.phase, AgentPhase.idle);
+      },
+    );
+
+    test(
+      'active-time timeout uses resourceLimit and drains its unfinished read',
+      () async {
+        final tools = _ReadTools()..hold = Completer<void>();
+        final rig = await _rig(
+          configured: true,
+          readTools: tools,
+          runTimeout: const Duration(milliseconds: 100),
+        );
+        rig.gateway.enqueueEvents([_readCall('time', '{}')]);
+        await rig.coordinator.send('超时合成日程问题');
+        await _until(() => rig.coordinator.view.phase == AgentPhase.idle);
+        expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
+        expect(await _activeRun(rig.store), isNull);
+      },
+    );
+
+    test(
+      'selected images are sent once, journal stores only count, and old interpretation is not context',
+      () async {
+        final tools = _ReadTools();
+        final rig = await _rig(configured: true, readTools: tools);
+        final image = AgentImage(
+          Uint8List.fromList(base64Decode(_onePixelPng)),
+        );
+        rig.gateway.enqueue((generation) async {
+          expect(
+            generation.request.messages.last.images.single.bytes,
+            image.bytes,
+          );
+          generation.emit(const ModelTextDelta('合成图片旧描述'));
+          generation.emit(ModelCompleted(finishReason: 'stop'));
+          await generation.finish();
+        });
+        await rig.coordinator.send('', images: [image]);
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.messages.first.imageCount, 1);
+        expect(rig.coordinator.view.messages.first.text, '请根据本次附图回答。');
+        final stored = await rig.store
+            .customSelect('SELECT * FROM agent_messages')
+            .get();
+        expect(
+          jsonEncode(stored.map((row) => row.data).toList()),
+          isNot(contains(_onePixelPng)),
+        );
+        expect(
+          image.bytes,
+          isNot(everyElement(0)),
+          reason: 'C4 does not erase the caller-owned preview',
+        );
+        rig.gateway.enqueue((generation) async {
+          expect(
+            generation.request.messages.any((m) => m.images.isNotEmpty),
+            isFalse,
+          );
+          expect(
+            generation.request.messages.map((m) => m.content).join(),
+            isNot(contains('合成图片旧描述')),
+          );
+          generation.emit(const ModelTextDelta('新的合成回答'));
+          generation.emit(ModelCompleted(finishReason: 'stop'));
+          await generation.finish();
+        });
+        await rig.coordinator.send('新的问题');
+        expect(rig.coordinator.view.failure, isNull);
+      },
+    );
+  });
   group('AgentCoordinator M5.1', () {
     test(
       'verification requires text, fixed echo call, and returned proof',
@@ -588,12 +926,104 @@ void main() {
   });
 }
 
+const _onePixelPng =
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZgdwAAAAASUVORK5CYII=';
+
+ModelCompleted _readCall(String id, String args) => ModelCompleted(
+  finishReason: 'tool_calls',
+  toolCalls: [ModelToolCall(id: id, name: 'query_agenda', argumentsJson: args)],
+);
+
+final class _ReadTools implements AgentReadToolsPort {
+  int executed = 0, cancelCount = 0;
+  Completer<void>? hold;
+  Future<void> Function()? afterExecute;
+  bool catalogue = false;
+  bool failOpen = false;
+  String? resultFailure;
+  @override
+  List<ModelToolDefinition> get definitions => [
+    ModelToolDefinition(
+      name: 'query_agenda',
+      description: '合成只读',
+      parameters: const {'type': 'object'},
+    ),
+    if (catalogue)
+      ModelToolDefinition(
+        name: 'search_courses',
+        description: '合成评课',
+        parameters: const {'type': 'object'},
+      ),
+  ];
+  @override
+  AgentToolSession openSession() {
+    if (failOpen) throw const AgentFailure(AgentFailureCode.closed);
+    return _ReadSession(this);
+  }
+
+  @override
+  Future<void> cancelAndDrain() async {
+    cancelCount++;
+    if (hold?.isCompleted == false) hold!.complete();
+  }
+
+  @override
+  Future<void> close() => cancelAndDrain();
+}
+
+final class _ReadSession implements AgentToolSession {
+  _ReadSession(this.parent);
+  final _ReadTools parent;
+  bool revoked = false;
+  List<AgentEvidence> _evidence = [];
+  @override
+  List<AgentEvidence> get evidence => List.unmodifiable(_evidence);
+  @override
+  Future<AgentToolResult> execute(ModelToolCall call) async {
+    parent.executed++;
+    await parent.hold?.future;
+    if (revoked) throw const AgentFailure(AgentFailureCode.cancelled);
+    await parent.afterExecute?.call();
+    if (parent.resultFailure != null) {
+      return AgentToolResult(status: 'failure', failure: parent.resultFailure);
+    }
+    _evidence = [
+      AgentEvidence(
+        id: 'e_0123456789abcdef',
+        provider: 'local',
+        title: '合成本地窗口',
+        observedAtUtc: DateTime.utc(2026, 10, 13),
+        scope: 'selectedWindow',
+        complete: true,
+      ),
+    ];
+    return AgentToolResult(
+      status: 'success',
+      data: const {'count': 1},
+      evidenceIds: const ['e_0123456789abcdef'],
+    );
+  }
+
+  @override
+  Future<void> validateDelivery() async {
+    if (revoked) throw const AgentFailure(AgentFailureCode.cancelled);
+  }
+
+  @override
+  void revoke() {
+    revoked = true;
+  }
+}
+
 Future<_Rig> _rig({
   bool configured = false,
   String modelId = 'synthetic-chat-model',
   String key = 'synthetic-chat-key',
   _SyntheticProtector? protector,
   AgentDataPort Function(AgentDataPort data)? wrapData,
+  AgentReadToolsPort? readTools,
+  Duration runTimeout = const Duration(seconds: 180),
+  Future<void> Function()? checkpoint,
 }) async {
   final credentialProtector = protector ?? _SyntheticProtector();
   final store = JwStore(
@@ -601,6 +1031,7 @@ Future<_Rig> _rig({
     ownership: _TestOwnership(),
     clock: FixedClock(DateTime.utc(2026, 10, 13, 8)),
     modelCredentialProtector: credentialProtector,
+    onAgentCheckpoint: checkpoint,
   );
   addTearDown(store.close);
   await store.initialize();
@@ -611,7 +1042,12 @@ Future<_Rig> _rig({
       settings.authority,
       modelId: modelId,
       modelIds: [modelId],
-      report: const AgentCapabilityReport(text: true, streaming: true),
+      report: AgentCapabilityReport(
+        text: true,
+        streaming: true,
+        toolCall: readTools != null,
+        toolResult: readTools != null,
+      ),
       consent: true,
       key: Uint8List.fromList(utf8.encode(key)),
     );
@@ -620,6 +1056,8 @@ Future<_Rig> _rig({
   final coordinator = AgentCoordinator(
     data: wrapData?.call(store.agent) ?? store.agent,
     gateway: gateway,
+    readTools: readTools,
+    runTimeout: runTimeout,
     clock: FixedClock(DateTime.utc(2026, 10, 13, 8)),
   );
   addTearDown(coordinator.close);

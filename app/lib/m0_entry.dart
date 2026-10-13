@@ -10,6 +10,7 @@ import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
 import 'app/agent_workspace_page.dart';
 import 'app/agent_settings_panel.dart';
+import 'platform/agent_image_picker.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
 import 'app/jw_sync_panel.dart';
@@ -98,6 +99,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
         controller: runtime.shell,
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
+          pickImages: pickAgentImages,
           onSettings: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (context) => Scaffold(

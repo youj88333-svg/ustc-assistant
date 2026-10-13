@@ -75,7 +75,8 @@ final class _ArticlePage extends _Continuation {
 
 /// C2 is the only online admission point. No model, cookie jar or school
 /// account is involved; every call owns the existing global source lease.
-final class PublicQueryCoordinator implements PublicQueryPort {
+final class PublicQueryCoordinator
+    implements PublicQueryPort, PublicResultGuardPort, PublicReviewReadPort {
   PublicQueryCoordinator({
     required this.store,
     required this.leases,
@@ -102,6 +103,7 @@ final class PublicQueryCoordinator implements PublicQueryPort {
   final _changes = StreamController<PublicJobView>.broadcast();
   final Map<String, _Reference> _references = {};
   final Map<String, _Continuation> _pages = {};
+  final _issuedResults = Expando<(PublicAuthority, DateTime)>();
   PublicJobView _view = const PublicJobView(phase: PublicJobPhase.idle);
   WorkLease? _lease;
   PublicJobTicket? _ticket;
@@ -113,6 +115,16 @@ final class PublicQueryCoordinator implements PublicQueryPort {
   PublicJobView get view => _view;
   @override
   Stream<PublicJobView> get changes => _changes.stream;
+
+  @override
+  Future<void> ensurePublicResult(PublicQueryResult result) async {
+    final issued = _issuedResults[result];
+    if (_closing || issued == null || !clock.nowUtc.isBefore(issued.$2)) {
+      throw const PublicFailure(PublicFailureCode.staleReference);
+    }
+    await store.ensureAuthority(issued.$1);
+    if (_closing) throw const PublicFailure(PublicFailureCode.cancelled);
+  }
 
   void _publish(
     PublicJobPhase phase, {
@@ -269,6 +281,10 @@ final class PublicQueryCoordinator implements PublicQueryPort {
         returned: result.document == null
             ? result.candidates.length
             : result.coverage.returned,
+      );
+      _issuedResults[result] = (
+        ticket.authority,
+        clock.nowUtc.add(const Duration(minutes: 10)),
       );
       return result;
     } on Object catch (error) {
@@ -638,8 +654,10 @@ final class PublicQueryCoordinator implements PublicQueryPort {
     CourseReviewSort sort = CourseReviewSort.upvote,
     int pageSize = 10,
     PublicCursor? cursor,
+    int maxCharacters = 12000,
   }) {
     requirePublicPageSize(pageSize);
+    requirePublicTextRange(0, maxCharacters);
     if (term != null && !RegExp(r'^[0-9]{1,12}$').hasMatch(term)) {
       return Future.error(
         const PublicFailure(PublicFailureCode.invalidRequest),
@@ -653,6 +671,7 @@ final class PublicQueryCoordinator implements PublicQueryPort {
         term,
         sort.name,
         pageSize,
+        maxCharacters,
       ]);
       SourcePublicDocument doc;
       var index = 0, character = 0;
@@ -693,7 +712,7 @@ final class PublicQueryCoordinator implements PublicQueryPort {
       final from = index;
       final fromCharacter = character;
       final reviews = <PublicReview>[];
-      var budget = 12000;
+      var budget = maxCharacters;
       while (index < doc.reviews.length &&
           reviews.length < pageSize &&
           budget > 0) {
@@ -760,6 +779,23 @@ final class PublicQueryCoordinator implements PublicQueryPort {
       );
     });
   }
+
+  @override
+  Future<PublicQueryResult> readCourseSlice(
+    PublicReference reference, {
+    String? term,
+    CourseReviewSort sort = CourseReviewSort.upvote,
+    int pageSize = 5,
+    int maxCharacters = 2400,
+    PublicCursor? cursor,
+  }) => readCourse(
+    reference,
+    term: term,
+    sort: sort,
+    pageSize: pageSize,
+    maxCharacters: maxCharacters,
+    cursor: cursor,
+  );
 
   @override
   Future<PublicQueryResult> readCampusArticle(

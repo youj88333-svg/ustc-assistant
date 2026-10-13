@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,13 +82,213 @@ void main() {
     await tester.pump();
     expect(port.sent, ['帮我整理实验计划']);
     expect(find.byKey(const ValueKey('agent-stop')), findsOneWidget);
-    expect(find.text('正在生成回复'), findsOneWidget);
+    expect(find.text('正在生成回复'), findsWidgets);
 
     await tester.tap(find.byKey(const ValueKey('agent-stop')));
     await tester.pump();
     expect(port.stopCalls, 1);
     port.sendGate!.complete();
     await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('image attachments can be removed and sent without text', (
+    tester,
+  ) async {
+    final port = _configuredPort();
+    addTearDown(port.dispose);
+    final png = _testPng1x1();
+    AgentImage? lastPicked;
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          pickImages: () async {
+            lastPicked = AgentImage(Uint8List.fromList(png));
+            return [lastPicked!];
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await _tap(tester, 'agent-attach-image');
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsOneWidget);
+    expect(find.textContaining('附图 1 张 · 还可选 2 张'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('agent-send')))
+          .onPressed,
+      isNotNull,
+    );
+
+    await _tap(tester, 'agent-image-remove-0');
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+    expect(lastPicked!.bytes.every((byte) => byte == 0), isTrue);
+
+    await _tap(tester, 'agent-attach-image');
+    await _tap(tester, 'agent-send');
+    expect(port.sent, ['请根据本次附图回答。']);
+    expect(port.sentImageCounts, [1]);
+    expect(port.lastSentImages.single.bytes.every((byte) => byte == 0), isTrue);
+    expect(find.textContaining('附图 1 张 · 原图未保留'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a late image pick is wiped when model consent is revoked', (
+    tester,
+  ) async {
+    final port = _configuredPort();
+    addTearDown(port.dispose);
+    final pickGate = Completer<List<AgentImage>>();
+    final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          pickImages: () => pickGate.future,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
+    await tester.pump();
+
+    port.replace(
+      port.view.copyWithForTest(
+        settings: _settings(
+          keySaved: true,
+          consent: false,
+          modelId: 'model-a',
+          report: const AgentCapabilityReport(text: true, streaming: true),
+        ),
+      ),
+    );
+    pickGate.complete([selected]);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+    expect(selected.bytes.every((byte) => byte == 0), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('stopping a run invalidates a pending image pick', (
+    tester,
+  ) async {
+    final port = _configuredPort();
+    addTearDown(port.dispose);
+    final pickGate = Completer<List<AgentImage>>();
+    final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          pickImages: () => pickGate.future,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
+    await tester.pump();
+    port.replace(port.view.copyWithForTest(phase: AgentPhase.executingRead));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('agent-stop')));
+    await tester.pumpAndSettle();
+    expect(port.stopCalls, 1);
+
+    pickGate.complete([selected]);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+    expect(selected.bytes.every((byte) => byte == 0), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('clearing history invalidates a pending image pick', (
+    tester,
+  ) async {
+    final port = _configuredPort();
+    addTearDown(port.dispose);
+    final pickGate = Completer<List<AgentImage>>();
+    final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          pickImages: () => pickGate.future,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('agent-history-menu')));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(find.text('清除全部对话…'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(
+      find.byKey(const ValueKey('agent-history-clear-first-confirm')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.tap(
+      find.byKey(const ValueKey('agent-history-clear-final-confirm')),
+    );
+    await tester.pumpAndSettle();
+
+    pickGate.complete([selected]);
+    await tester.pumpAndSettle();
+    expect(port.clearCalls.single.confirmed, isTrue);
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+    expect(selected.bytes.every((byte) => byte == 0), isTrue);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('a late image pick cannot return after the controller changes', (
+    tester,
+  ) async {
+    final firstPort = _configuredPort();
+    final nextPort = _configuredPort();
+    final portNotifier = ValueNotifier<AgentWorkspacePort>(firstPort);
+    final pickGate = Completer<List<AgentImage>>();
+    final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
+    addTearDown(firstPort.dispose);
+    addTearDown(nextPort.dispose);
+    addTearDown(portNotifier.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ValueListenableBuilder<AgentWorkspacePort>(
+            valueListenable: portNotifier,
+            builder: (context, port, _) => AgentWorkspacePage(
+              controller: port,
+              onSettings: () {},
+              pickImages: () => pickGate.future,
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
+    await tester.pump();
+    portNotifier.value = nextPort;
+    await tester.pumpAndSettle();
+    pickGate.complete([selected]);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+    expect(selected.bytes.every((byte) => byte == 0), isTrue);
     expect(tester.takeException(), isNull);
   });
 
@@ -131,6 +333,131 @@ void main() {
     expect(find.byType(Image), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'shows verified evidence, unverified references, steps, and live counters',
+    (tester) async {
+      final evidence = AgentEvidence(
+        id: 'e_0123456789abcdef',
+        provider: 'teach',
+        title: '本科教学安排',
+        observedAtUtc: DateTime.utc(2026, 10, 13, 2, 30),
+        scope: '指定栏目，返回 1 项',
+        complete: false,
+        articleUrl: 'https://www.teach.ustc.edu.cn/example',
+        publishedOn: '2026-10-10',
+        locator: '正文第 2 段',
+        sourceVersion: '2026-10-13',
+        snippet: '这是一段仅在用户展开后显示的合成出处片段。',
+      );
+      final port = _FakeAgentPort(
+        view: _view(
+          phase: AgentPhase.executingRead,
+          settings: _settings(
+            keySaved: true,
+            consent: true,
+            modelId: 'model-a',
+            report: const AgentCapabilityReport(text: true, streaming: true),
+          ),
+          conversationId: 'conversation-a',
+          conversations: [_conversation('conversation-a', '资料查询')],
+          businessToolsEnabled: true,
+          activeTool: 'query_agenda',
+          toolCalls: 2,
+          modelCalls: 3,
+          messages: [
+            AgentMessage(
+              id: 8,
+              role: AgentMessageRole.assistant,
+              text:
+                  '已读取 [[e_0123456789abcdef]]，另有 [[e_ffffffffffffffff]]。'
+                  '\n\n[外部链接](https://example.invalid) '
+                  '![不加载](https://example.invalid/image.png)',
+              status: AgentMessageStatus.complete,
+              createdAtUtc: DateTime.utc(2026, 10, 13),
+              evidence: [evidence],
+              steps: const [
+                AgentToolStep(tool: 'query_agenda', status: 'success'),
+                AgentToolStep(tool: 'browse_campus', status: 'partial'),
+              ],
+            ),
+          ],
+        ),
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(find.text('正在查询日程'), findsWidgets);
+      expect(find.text('模型请求 3 次 · 工具调用 2 次'), findsOneWidget);
+      expect(find.textContaining('【出处 1】', findRichText: true), findsOneWidget);
+      expect(find.text('e_0123456789abcdef'), findsNothing);
+      expect(find.textContaining('【引用未验证', findRichText: true), findsOneWidget);
+      expect(find.textContaining('历史材料，下轮须重新查询'), findsOneWidget);
+      expect(find.text('日程 · 已完成'), findsOneWidget);
+      expect(find.text('校园公开资料 · 部分结果'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('agent-evidence-copy-e_0123456789abcdef')),
+        findsOneWidget,
+      );
+      expect(find.text('这是一段仅在用户展开后显示的合成出处片段。'), findsNothing);
+      expect(find.textContaining('不加载'), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
+
+      final expand = find.byKey(
+        const ValueKey('agent-evidence-expand-e_0123456789abcdef'),
+      );
+      await tester.ensureVisible(expand);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.tap(expand);
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(find.text('这是一段仅在用户展开后显示的合成出处片段。'), findsOneWidget);
+      port.replace(port.view.copyWithForTest(phase: AgentPhase.idle));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('本次回答读取，下轮须重新查询'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'historical image messages show count without restoring originals',
+    (tester) async {
+      final port = _FakeAgentPort(
+        view: _view(
+          settings: _settings(
+            keySaved: true,
+            consent: true,
+            modelId: 'model-a',
+          ),
+          conversationId: 'conversation-a',
+          conversations: [_conversation('conversation-a', '历史对话')],
+          messages: [
+            AgentMessage(
+              id: 12,
+              role: AgentMessageRole.user,
+              text: '请看附件',
+              status: AgentMessageStatus.complete,
+              createdAtUtc: DateTime.utc(2026, 10, 13),
+              imageCount: 2,
+            ),
+          ],
+        ),
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('附图 2 张 · 原图未保留'), findsOneWidget);
+      expect(find.byType(Image), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'send errors use fixed copy and do not expose exception details',
@@ -406,6 +733,10 @@ AgentWorkspaceView _view({
   AgentCapabilityReport report = const AgentCapabilityReport(),
   bool historyTruncated = false,
   bool pendingKeyProvided = false,
+  bool businessToolsEnabled = false,
+  String? activeTool,
+  int toolCalls = 0,
+  int modelCalls = 0,
 }) => AgentWorkspaceView(
   phase: phase,
   settings: settings,
@@ -417,6 +748,10 @@ AgentWorkspaceView _view({
   report: report,
   historyTruncated: historyTruncated,
   pendingKeyProvided: pendingKeyProvided,
+  businessToolsEnabled: businessToolsEnabled,
+  activeTool: activeTool,
+  toolCalls: toolCalls,
+  modelCalls: modelCalls,
 );
 
 final class _FakeAgentPort extends ChangeNotifier
@@ -428,6 +763,8 @@ final class _FakeAgentPort extends ChangeNotifier
   AgentWorkspaceView get view => _view;
 
   final List<String> sent = [];
+  final List<int> sentImageCounts = [];
+  List<AgentImage> lastSentImages = const [];
   final List<({String key, bool consent})> loadCalls = [];
   final List<({String key, String modelId, bool consent})> verifyCalls = [];
   Completer<void>? sendGate;
@@ -482,8 +819,10 @@ final class _FakeAgentPort extends ChangeNotifier
   }
 
   @override
-  Future<void> send(String text) async {
+  Future<void> send(String text, {List<AgentImage> images = const []}) async {
     sent.add(text);
+    sentImageCounts.add(images.length);
+    lastSentImages = images;
     if (sendError != null) throw sendError!;
     if (sendGate != null) {
       replace(
@@ -558,6 +897,10 @@ extension on AgentWorkspaceView {
     AgentCapabilityReport? report,
     bool? historyTruncated,
     bool? pendingKeyProvided,
+    bool? businessToolsEnabled,
+    String? activeTool,
+    int? toolCalls,
+    int? modelCalls,
   }) => AgentWorkspaceView(
     phase: phase ?? this.phase,
     settings: settings ?? this.settings,
@@ -569,6 +912,10 @@ extension on AgentWorkspaceView {
     report: report ?? this.report,
     historyTruncated: historyTruncated ?? this.historyTruncated,
     pendingKeyProvided: pendingKeyProvided ?? this.pendingKeyProvided,
+    businessToolsEnabled: businessToolsEnabled ?? this.businessToolsEnabled,
+    activeTool: activeTool ?? this.activeTool,
+    toolCalls: toolCalls ?? this.toolCalls,
+    modelCalls: modelCalls ?? this.modelCalls,
   );
 }
 
@@ -602,3 +949,20 @@ Future<void> _tap(WidgetTester tester, String key) async {
 }
 
 AgentWorkspaceView _viewDefault() => AgentWorkspaceView();
+
+_FakeAgentPort _configuredPort() => _FakeAgentPort(
+  view: _view(
+    settings: _settings(
+      keySaved: true,
+      consent: true,
+      modelId: 'model-a',
+      report: const AgentCapabilityReport(text: true, streaming: true),
+    ),
+    conversationId: 'conversation-a',
+    conversations: [_conversation('conversation-a', '当前对话')],
+  ),
+);
+
+Uint8List _testPng1x1() => base64.decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL+XwAAAABJRU5ErkJggg==',
+);

@@ -11,6 +11,40 @@ void main() {
 
   group('PublicStore curated knowledge', () {
     test(
+      'issued empty knowledge result loses delivery authority after clear',
+      () async {
+        final store = await _openStore(_identity(['teach/unused']));
+        final result = await store.publicStore.searchKnowledge('合成无匹配');
+        await store.publicStore.ensurePublicResult(result);
+        await expectLater(
+          store.publicStore.ensurePublicResult(
+            PublicQueryResult(
+              coverage: result.coverage,
+              candidates: result.candidates,
+            ),
+          ),
+          throwsA(
+            isA<PublicFailure>().having(
+              (e) => e.code,
+              'code',
+              PublicFailureCode.staleReference,
+            ),
+          ),
+        );
+        await store.publicStore.clearKnowledge(confirmed: true);
+        await expectLater(
+          store.publicStore.ensurePublicResult(result),
+          throwsA(
+            isA<PublicFailure>().having(
+              (e) => e.code,
+              'code',
+              PublicFailureCode.staleReference,
+            ),
+          ),
+        );
+      },
+    );
+    test(
       'searches Chinese terms and returns bounded reviewed evidence',
       () async {
         final identity = _identity([

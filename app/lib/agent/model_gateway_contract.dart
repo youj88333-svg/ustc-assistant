@@ -17,10 +17,13 @@ final class ModelChatMessage {
     this.content,
     this.toolCallId,
     List<ModelToolCall> toolCalls = const [],
-  }) : toolCalls = List.unmodifiable(toolCalls);
+    List<AgentImage> images = const [],
+  }) : toolCalls = List.unmodifiable(toolCalls),
+       images = List.unmodifiable(images);
   final String role;
   final String? content, toolCallId;
   final List<ModelToolCall> toolCalls;
+  final List<AgentImage> images;
   @override
   String toString() => 'ModelChatMessage';
 }

@@ -2,7 +2,8 @@ part of 'jw_store.dart';
 
 /// Local business uses the same database, transaction queue and owner as the
 /// accepted school/knowledge stores. It never starts a source or reads secrets.
-final class LocalCalendarStore implements LocalCalendarPort, LocalTaskPort {
+final class LocalCalendarStore
+    implements LocalCalendarPort, LocalTaskPort, CalendarReadGuardPort {
   LocalCalendarStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -24,6 +25,16 @@ final class LocalCalendarStore implements LocalCalendarPort, LocalTaskPort {
 
   @override
   Stream<int> get changes => _changes.stream;
+
+  @override
+  Future<void> ensureCalendarRead(CalendarContext context, int revision) =>
+      _serial(() async {
+        await _guard(context);
+        if ((await _agendaState()).read<int>('revision') != revision) {
+          throw const CalendarFailure(CalendarFailureCode.staleReference);
+        }
+        _db._ownership.ensureHeld();
+      });
 
   static const _relationDefinition = '''(
       local_id INTEGER PRIMARY KEY AUTOINCREMENT,

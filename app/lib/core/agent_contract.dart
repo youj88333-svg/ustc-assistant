@@ -23,6 +23,7 @@ enum AgentFailureCode {
   cancelled,
   closed,
   toolUnavailable,
+  imageRejected,
 }
 
 final class AgentFailure implements Exception {
@@ -39,6 +40,7 @@ enum AgentPhase {
   loadingModels,
   verifying,
   generating,
+  executingRead,
   settling,
   recovery,
   maintenance,
@@ -161,14 +163,99 @@ final class AgentMessage {
     required this.text,
     required this.status,
     required this.createdAtUtc,
+    this.evidence = const [],
+    this.steps = const [],
+    this.imageCount = 0,
   });
   final int id;
   final AgentMessageRole role;
   final String text;
   final AgentMessageStatus status;
   final DateTime createdAtUtc;
+  final List<AgentEvidence> evidence;
+  final List<AgentToolStep> steps;
+  final int imageCount;
   @override
   String toString() => 'AgentMessage';
+}
+
+/// Display-only provenance. This never grants a read, cursor or write permit.
+final class AgentEvidence {
+  const AgentEvidence({
+    required this.id,
+    required this.provider,
+    required this.title,
+    required this.observedAtUtc,
+    required this.scope,
+    required this.complete,
+    this.articleUrl,
+    this.materialUrl,
+    this.publishedOn,
+    this.updatedOn,
+    this.revision,
+    this.locator,
+    this.sourceVersion,
+    this.snippet = '',
+    this.applicability = 'unknown',
+  });
+  final String id, provider, title, scope, snippet, applicability;
+  final DateTime observedAtUtc;
+  final bool complete;
+  final String? articleUrl, materialUrl, publishedOn, updatedOn;
+  final String? revision, locator, sourceVersion;
+  @override
+  String toString() => 'AgentEvidence';
+}
+
+final class AgentToolStep {
+  const AgentToolStep({required this.tool, required this.status});
+  final String tool, status;
+  @override
+  String toString() => 'AgentToolStep';
+}
+
+/// Already normalized PNG selected by the human; no paths or remote URLs.
+/// Bytes only live during the current question and are not conversation data.
+final class AgentImage {
+  AgentImage(Uint8List bytes) : bytes = Uint8List.fromList(bytes) {
+    validate();
+  }
+  static const maximumCount = 3;
+  static const maximumBytes = 3 * 1024 * 1024;
+  static const maximumTotalBytes = 6 * 1024 * 1024;
+  final Uint8List bytes;
+  int get width => ByteData.sublistView(bytes, 16, 20).getUint32(0);
+  int get height => ByteData.sublistView(bytes, 20, 24).getUint32(0);
+  void validate() {
+    const header = [137, 80, 78, 71, 13, 10, 26, 10];
+    if (bytes.length < 33 ||
+        bytes.length > maximumBytes ||
+        !List.generate(8, (i) => bytes[i] == header[i]).every((v) => v) ||
+        bytes[12] != 73 ||
+        bytes[13] != 72 ||
+        bytes[14] != 68 ||
+        bytes[15] != 82 ||
+        width < 1 ||
+        height < 1 ||
+        width > 1536 ||
+        height > 1536) {
+      throw const AgentFailure(AgentFailureCode.invalidInput);
+    }
+  }
+
+  @override
+  String toString() => 'AgentImage';
+}
+
+/// Optional journal extension. M5.1-only fakes can still implement DataPort.
+abstract interface class AgentRunJournalPort {
+  Future<void> ensureAgentRun(AgentRunTicket ticket);
+  Future<void> saveRunJournal(
+    AgentRunTicket ticket, {
+    required List<AgentEvidence> evidence,
+    required List<AgentToolStep> steps,
+    required int imageCount,
+  });
 }
 
 final class AgentRunTicket {
@@ -242,6 +329,10 @@ final class AgentRuntimeView {
     this.report = const AgentCapabilityReport(),
     this.historyTruncated = false,
     this.pendingKeyProvided = false,
+    this.businessToolsEnabled = false,
+    this.activeTool,
+    this.toolCalls = 0,
+    this.modelCalls = 0,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
        messages = List.unmodifiable(messages);
@@ -254,6 +345,9 @@ final class AgentRuntimeView {
   final AgentFailureCode? failure;
   final AgentCapabilityReport report;
   final bool historyTruncated, pendingKeyProvided;
+  final bool businessToolsEnabled;
+  final String? activeTool;
+  final int toolCalls, modelCalls;
   bool get busy => phase != AgentPhase.idle && phase != AgentPhase.closed;
   bool get canSend =>
       phase == AgentPhase.idle &&

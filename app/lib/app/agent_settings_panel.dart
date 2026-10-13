@@ -246,7 +246,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
         children: [
           _SettingsCard(
             title: '学校模型服务',
-            subtitle: '服务地址由应用固定管理。此版本只开放普通对话，不启用 Agent 工具。',
+            subtitle: '服务地址由应用固定管理；只读查询按本次问题需要调用。',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -291,7 +291,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                       ),
                       const SizedBox(height: 4),
                       const Text(
-                        '发起模型请求时，本次问题、相关对话历史，以及回答所需的业务字段会按需发送到学校模型服务。只有明确勾选同意后，才会获取模型列表或验证并保存设置。',
+                        '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到学校模型服务。图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。',
                         style: TextStyle(color: _settingsMuted, height: 1.45),
                       ),
                       Material(
@@ -390,7 +390,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           const SizedBox(height: 14),
           _SettingsCard(
             title: '能力状态',
-            subtitle: '验证只发送合成测试文本；工具调用与结果不会执行。M5.2 工具尚未启用。',
+            subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
@@ -530,6 +530,7 @@ String _phaseText(AgentPhase phase) => switch (phase) {
   AgentPhase.loadingModels => '正在获取模型列表…',
   AgentPhase.verifying => '正在验证模型并保存设置…',
   AgentPhase.generating => '正在生成回复…',
+  AgentPhase.executingRead => '正在查询资料…',
   AgentPhase.settling => '正在保存回复…',
   AgentPhase.recovery => '正在恢复本地状态…',
   AgentPhase.maintenance => '本地维护中…',
@@ -538,6 +539,7 @@ String _phaseText(AgentPhase phase) => switch (phase) {
 
 String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
+  AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
   AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
   AgentFailureCode.consentRequired => '请先阅读发送说明并明确勾选同意。',
   AgentFailureCode.keyRequired => '请提供模型 Key，或使用本机已保存的 Key。',
@@ -558,5 +560,5 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.resourceLimit => '模型列表或回复超出当前处理上限。',
   AgentFailureCode.cancelled => '操作已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
-  AgentFailureCode.toolUnavailable => '当前版本尚未启用 Agent 工具。',
+  AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',
 };

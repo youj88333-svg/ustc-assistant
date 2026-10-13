@@ -16,6 +16,80 @@ void main() {
 
   group('PublicQueryCoordinator internal public-query-v1', () {
     test(
+      'delivery accepts only issued results and revocation invalidates an already read page',
+      () async {
+        final harness = await _openHarness();
+        await harness.coordinator.setIcourseConsent(true);
+        final result = await harness.coordinator.searchCourses(
+          '合成课程',
+          pageSize: 1,
+        );
+        await harness.coordinator.ensurePublicResult(result);
+        await expectLater(
+          harness.coordinator.ensurePublicResult(
+            PublicQueryResult(
+              coverage: result.coverage,
+              candidates: result.candidates,
+              next: result.next,
+            ),
+          ),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+        await harness.coordinator.setIcourseConsent(false);
+        await expectLater(
+          harness.coordinator.ensurePublicResult(result),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+      },
+    );
+
+    test(
+      'review slices preserve character positions and reject a changed text budget',
+      () async {
+        final text = List<String>.filled(5001, '评').join();
+        final harness = await _openHarness(
+          parser: _SyntheticParser(reviewText: text),
+        );
+        await harness.coordinator.setIcourseConsent(true);
+        final listing = await harness.coordinator.searchCourses(
+          '合成点评',
+          pageSize: 1,
+        );
+        final ref = listing.candidates.single.reference;
+        var page = await harness.coordinator.readCourseSlice(ref, pageSize: 1);
+        final parts = <String>[page.document!.reviews.single.text];
+        expect(parts.single.runes.length, 2400);
+        await expectLater(
+          harness.coordinator.readCourseSlice(
+            ref,
+            pageSize: 1,
+            maxCharacters: 2399,
+            cursor: page.next,
+          ),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+        final fresh = await harness.coordinator.searchCourses(
+          '合成点评',
+          pageSize: 1,
+        );
+        final freshRef = fresh.candidates.single.reference;
+        page = await harness.coordinator.readCourseSlice(freshRef, pageSize: 1);
+        parts.clear();
+        parts.add(page.document!.reviews.single.text);
+        while (page.next != null) {
+          page = await harness.coordinator.readCourseSlice(
+            freshRef,
+            pageSize: 1,
+            cursor: page.next,
+          );
+          parts.add(page.document!.reviews.single.text);
+        }
+        expect(parts.join(), text);
+        expect(parts.map((part) => part.runes.length), [2400, 2400, 201]);
+        await harness.coordinator.ensurePublicResult(page);
+      },
+    );
+    test(
       'a shared JW lease blocks online lookup while local knowledge stays available',
       () async {
         final harness = await _openHarness();

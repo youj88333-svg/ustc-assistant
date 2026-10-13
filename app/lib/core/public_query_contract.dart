@@ -274,6 +274,25 @@ abstract interface class PublicQueryPort {
   Future<void> close();
 }
 
+/// Validates the exact issued result against current source/knowledge epochs.
+/// Implementations cannot accept a reconstructed result as live authority.
+abstract interface class PublicResultGuardPort {
+  Future<void> ensurePublicResult(PublicQueryResult result);
+}
+
+/// A bounded review slice retains the C2 cursor's exact character position.
+/// The ordinary application read API keeps its existing 12000-character cap.
+abstract interface class PublicReviewReadPort {
+  Future<PublicQueryResult> readCourseSlice(
+    PublicReference reference, {
+    String? term,
+    CourseReviewSort sort = CourseReviewSort.upvote,
+    int pageSize = 5,
+    int maxCharacters = 2400,
+    PublicCursor? cursor,
+  });
+}
+
 String publicKeywords(String value) {
   final normalized = value.trim().replaceAll(RegExp(r'\s+'), ' ');
   if (normalized.isEmpty ||

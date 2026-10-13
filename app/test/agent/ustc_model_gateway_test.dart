@@ -21,6 +21,91 @@ void main() {
     });
 
     test(
+      'active PNG input uses a data URL in user content without another upload endpoint',
+      () async {
+        const png =
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZgdwAAAAASUVORK5CYII=';
+        Map<String, dynamic>? body;
+        await server.start((request) async {
+          expect(request.uri.path, '/v1/chat/completions');
+          body =
+              jsonDecode(await utf8.decoder.bind(request).join())
+                  as Map<String, dynamic>;
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          request.response.write(
+            'data: {"choices":[{"index":0,"delta":{"content":"合成图片描述"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final request = ModelRequest(
+          modelId: 'synthetic-vision',
+          messages: [
+            ModelChatMessage(
+              role: 'user',
+              content: '看图',
+              images: [AgentImage(Uint8List.fromList(base64Decode(png)))],
+            ),
+          ],
+        );
+        final events = await gateway.generate(request, _key()).toList();
+        expect(events.whereType<ModelCompleted>().single.finishReason, 'stop');
+        final content =
+            ((body!['messages'] as List).single as Map)['content'] as List;
+        expect(content.first, {'type': 'text', 'text': '看图'});
+        expect((content[1] as Map)['image_url'], {
+          'url': 'data:image/png;base64,$png',
+          'detail': 'auto',
+        });
+        expect(body!.keys, isNot(contains('files')));
+        await gateway.close();
+      },
+    );
+
+    test(
+      'image rejection is explicit and does not silently resend only text',
+      () async {
+        var requests = 0;
+        await server.start((request) async {
+          requests++;
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = 415;
+          request.response.write('synthetic raw error, never surfaced');
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        const png =
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZgdwAAAAASUVORK5CYII=';
+        await expectLater(
+          gateway
+              .generate(
+                ModelRequest(
+                  modelId: 'synthetic-vision',
+                  messages: [
+                    ModelChatMessage(
+                      role: 'user',
+                      content: '看图',
+                      images: [
+                        AgentImage(Uint8List.fromList(base64Decode(png))),
+                      ],
+                    ),
+                  ],
+                ),
+                _key(),
+              )
+              .toList(),
+          throwsA(_failure(AgentFailureCode.imageRejected)),
+        );
+        expect(requests, 1);
+        await gateway.close();
+      },
+    );
+
+    test(
       'uses the fixed models GET endpoint and wipes its one-use key',
       () async {
         late HttpMethodAndPath seen;
@@ -225,6 +310,7 @@ void main() {
         request.response.headers.contentType = ContentType(
           'text',
           'event-stream',
+          charset: 'utf-8',
         );
         request.response.write(
           'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',

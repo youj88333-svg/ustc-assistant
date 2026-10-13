@@ -7,6 +7,7 @@ import 'package:markdown/markdown.dart' as md;
 
 import 'agent_workspace_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_evidence.dart';
 
 const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
@@ -18,10 +19,12 @@ final class AgentWorkspacePage extends StatefulWidget {
     super.key,
     required this.controller,
     required this.onSettings,
+    this.pickImages,
   });
 
   final AgentWorkspacePort controller;
   final VoidCallback onSettings;
+  final Future<List<AgentImage>> Function()? pickImages;
 
   @override
   State<AgentWorkspacePage> createState() => _AgentWorkspacePageState();
@@ -30,7 +33,14 @@ final class AgentWorkspacePage extends StatefulWidget {
 final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   final TextEditingController _draft = TextEditingController();
   final FocusNode _composerFocus = FocusNode();
+  final List<AgentImage> _draftImages = [];
   int _generation = 0;
+  int _imagePickGeneration = 0;
+  int? _observedHistoryEpoch;
+  int? _observedMessageFingerprint;
+  String? _observedConversationId;
+  bool? _observedConsent;
+  bool _pickingImages = false;
   bool _pending = false;
   bool _sending = false;
   bool _stopping = false;
@@ -41,6 +51,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   @override
   void initState() {
     super.initState();
+    widget.controller.addListener(_onControllerChanged);
+    _rememberControllerView();
     _scheduleRefresh();
   }
 
@@ -48,13 +60,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   void didUpdateWidget(covariant AgentWorkspacePage oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_onControllerChanged);
       _generation++;
+      _clearDraftImages(update: false);
       _pending = false;
       _sending = false;
       _stopping = false;
       _messageIsError = false;
       _message = null;
       _draft.clear();
+      widget.controller.addListener(_onControllerChanged);
+      _rememberControllerView();
       _scheduleRefresh();
     }
   }
@@ -62,13 +78,184 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   @override
   void dispose() {
     _generation++;
+    widget.controller.removeListener(_onControllerChanged);
+    _clearDraftImages(update: false);
     _draft.dispose();
     _composerFocus.dispose();
     super.dispose();
   }
 
   bool _isCurrent(AgentWorkspacePort port, int generation) =>
-      mounted && identical(widget.controller, port) && _generation == generation;
+      mounted &&
+      identical(widget.controller, port) &&
+      _generation == generation;
+
+  int _messageFingerprint(AgentWorkspaceView view) => Object.hashAll(
+    view.messages.map(
+      (message) => Object.hash(
+        message.id,
+        message.role,
+        message.status,
+        message.imageCount,
+        message.text.hashCode,
+      ),
+    ),
+  );
+
+  void _rememberControllerView() {
+    final view = widget.controller.view;
+    _observedHistoryEpoch = view.settings?.authority.historyEpoch;
+    _observedMessageFingerprint = _messageFingerprint(view);
+    _observedConversationId = view.conversationId;
+    _observedConsent = view.settings?.consent;
+  }
+
+  void _onControllerChanged() {
+    if (!mounted) return;
+    final view = widget.controller.view;
+    final historyEpoch = view.settings?.authority.historyEpoch;
+    final messageFingerprint = _messageFingerprint(view);
+    final consent = view.settings?.consent;
+    final invalidated =
+        view.phase == AgentPhase.closed ||
+        view.busy ||
+        !view.canSend ||
+        (consent != null && _observedConsent == true && !consent) ||
+        (historyEpoch != null &&
+            _observedHistoryEpoch != null &&
+            historyEpoch != _observedHistoryEpoch) ||
+        view.conversationId != _observedConversationId ||
+        messageFingerprint != _observedMessageFingerprint;
+    _observedHistoryEpoch = historyEpoch;
+    _observedMessageFingerprint = messageFingerprint;
+    _observedConversationId = view.conversationId;
+    _observedConsent = consent;
+    if (invalidated && (_draftImages.isNotEmpty || _pickingImages)) {
+      _clearDraftImages();
+    }
+  }
+
+  void _clearDraftImages({bool update = true}) {
+    _imagePickGeneration++;
+    _pickingImages = false;
+    final images = List<AgentImage>.of(_draftImages);
+    _draftImages.clear();
+    _releaseImages(images);
+    if (update && mounted) setState(() {});
+  }
+
+  void _releaseImages(List<AgentImage> images) {
+    for (final image in images) {
+      PaintingBinding.instance.imageCache.evict(
+        MemoryImage(image.bytes),
+        includeLive: true,
+      );
+      image.bytes.fillRange(0, image.bytes.length, 0);
+    }
+  }
+
+  Future<void> _pickAgentImages() async {
+    final picker = widget.pickImages;
+    final port = widget.controller;
+    final generation = _generation;
+    final view = port.view;
+    final conversationId = view.conversationId;
+    final historyEpoch = view.settings?.authority.historyEpoch;
+    if (picker == null ||
+        !_isCurrent(port, generation) ||
+        !view.canSend ||
+        view.busy ||
+        conversationId == null ||
+        _sending ||
+        _pickingImages ||
+        _draftImages.length >= AgentImage.maximumCount) {
+      return;
+    }
+    final pickGeneration = ++_imagePickGeneration;
+    setState(() {
+      _pickingImages = true;
+      _message = null;
+      _messageIsError = false;
+    });
+    try {
+      final selected = await picker();
+      if (!_isImagePickCurrent(
+        port,
+        generation,
+        pickGeneration,
+        conversationId,
+        historyEpoch,
+      )) {
+        _releaseImages(selected);
+        return;
+      }
+      if (selected.isEmpty) return;
+      final next = [..._draftImages, ...selected];
+      final totalBytes = next.fold<int>(
+        0,
+        (sum, item) => sum + item.bytes.length,
+      );
+      if (next.length > AgentImage.maximumCount ||
+          totalBytes > AgentImage.maximumTotalBytes) {
+        _releaseImages(selected);
+        setState(() {
+          _message = '附图最多 3 张，规范图片合计不能超过 6 MiB。';
+          _messageIsError = true;
+        });
+        return;
+      }
+      setState(() => _draftImages.addAll(selected));
+    } on AgentFailure catch (failure) {
+      if (_isImagePickCurrent(
+        port,
+        generation,
+        pickGeneration,
+        conversationId,
+        historyEpoch,
+      )) {
+        setState(() {
+          _message = _imageFailureText(failure.code);
+          _messageIsError = true;
+        });
+      }
+    } on Object {
+      if (_isImagePickCurrent(
+        port,
+        generation,
+        pickGeneration,
+        conversationId,
+        historyEpoch,
+      )) {
+        setState(() {
+          _message = '无法读取所选图片，请检查文件后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation) &&
+          _imagePickGeneration == pickGeneration) {
+        setState(() => _pickingImages = false);
+      }
+    }
+  }
+
+  bool _isImagePickCurrent(
+    AgentWorkspacePort port,
+    int generation,
+    int pickGeneration,
+    String conversationId,
+    int? historyEpoch,
+  ) {
+    final view = port.view;
+    return _isCurrent(port, generation) &&
+        _imagePickGeneration == pickGeneration &&
+        !view.busy &&
+        view.phase == AgentPhase.idle &&
+        view.canSend &&
+        view.settings?.consent == true &&
+        view.conversationId == conversationId &&
+        view.settings?.authority.historyEpoch == historyEpoch;
+  }
 
   void _scheduleRefresh() {
     final port = widget.controller;
@@ -130,40 +317,44 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   }
 
   Future<void> _newConversation() async {
-    await _perform(
-      (port) => port.newConversation(),
-      success: '已创建新对话。',
-    );
+    _clearDraftImages();
+    await _perform((port) => port.newConversation(), success: '已创建新对话。');
     if (mounted) setState(() => _showSessions = false);
   }
 
   Future<void> _selectConversation(String id) async {
-    await _perform(
-      (port) => port.selectConversation(id),
-      success: '已切换对话。',
-    );
+    _clearDraftImages();
+    await _perform((port) => port.selectConversation(id), success: '已切换对话。');
     if (mounted) setState(() => _showSessions = false);
   }
 
   Future<void> _send() async {
     final view = widget.controller.view;
-    final text = _draft.text;
+    final draftText = _draft.text;
+    final outgoingImages = List<AgentImage>.unmodifiable(
+      _draftImages.map((image) => AgentImage(image.bytes)),
+    );
+    final text = draftText.trim().isEmpty && outgoingImages.isNotEmpty
+        ? '请根据本次附图回答。'
+        : draftText;
     final conversationId = view.conversationId;
     if (!view.canSend ||
         conversationId == null ||
-        text.trim().isEmpty ||
+        (text.trim().isEmpty && outgoingImages.isEmpty) ||
         _sending) {
+      _releaseImages(outgoingImages);
       return;
     }
     final port = widget.controller;
     final generation = _generation;
+    _clearDraftImages(update: false);
     setState(() {
       _sending = true;
       _message = null;
       _messageIsError = false;
     });
     try {
-      await port.send(text);
+      await port.send(text, images: outgoingImages);
       if (_isCurrent(port, generation)) {
         final failure = port.view.failure;
         if (failure != null) {
@@ -171,7 +362,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             _message = _failureText(failure);
             _messageIsError = true;
           });
-        } else if (_draft.text == text) {
+        } else if (_draft.text == draftText) {
           _draft.clear();
         }
       }
@@ -183,6 +374,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
         });
       }
     } finally {
+      _releaseImages(outgoingImages);
       if (_isCurrent(port, generation)) setState(() => _sending = false);
     }
   }
@@ -191,6 +383,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     final port = widget.controller;
     final generation = _generation;
     if (!_isCurrent(port, generation) || _stopping) return;
+    _clearDraftImages();
     setState(() {
       _stopping = true;
       _message = null;
@@ -260,6 +453,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     if (second != true) return;
     if (!mounted) return;
     if (!_isCurrent(port, generation)) return;
+    _clearDraftImages();
     await _perform(
       (currentPort) => currentPort.clearHistory(
         conversationId: conversationId,
@@ -280,9 +474,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
           (item) => item.id == view.conversationId,
         );
         final title = current.isEmpty ? null : current.first.title;
-        final status = _statusLabel(view.phase);
-        final titleWidth = (constraints.maxWidth - (narrow ? 112 : 260))
-            .clamp(120.0, 520.0);
+        final status = _statusLabel(view);
+        final titleWidth = (constraints.maxWidth - (narrow ? 112 : 260)).clamp(
+          120.0,
+          520.0,
+        );
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -303,7 +499,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                         onPressed: () =>
                             setState(() => _showSessions = !_showSessions),
                         icon: Icon(
-                          _showSessions ? Icons.chat_bubble_outline : Icons.menu_rounded,
+                          _showSessions
+                              ? Icons.chat_bubble_outline
+                              : Icons.menu_rounded,
                         ),
                       ),
                     ConstrainedBox(
@@ -338,10 +536,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                         avatar: const Icon(Icons.more_horiz_rounded, size: 18),
                         label: Text(status),
                       ),
-                    const Chip(
-                      key: ValueKey('agent-capability-chat-only'),
-                      avatar: Icon(Icons.chat_outlined, size: 18),
-                      label: Text('仅聊天 · 工具未接入'),
+                    Chip(
+                      key: const ValueKey('agent-capability-read-tools'),
+                      avatar: Icon(
+                        view.businessToolsEnabled
+                            ? Icons.manage_search_rounded
+                            : Icons.chat_outlined,
+                        size: 18,
+                      ),
+                      label: Text(
+                        view.businessToolsEnabled ? '只读查询可用' : '只读查询未启用',
+                      ),
                     ),
                     IconButton(
                       key: const ValueKey('agent-settings-open'),
@@ -352,7 +557,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                     PopupMenuButton<_HistoryCommand>(
                       key: const ValueKey('agent-history-menu'),
                       tooltip: '对话记录',
-                      enabled: !_pending &&
+                      enabled:
+                          !_pending &&
                           !view.busy &&
                           view.phase != AgentPhase.closed,
                       onSelected: (command) {
@@ -390,7 +596,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
               const SizedBox(height: 8),
               _AgentNotice(
                 message: _message ?? _failureText(view.failure!),
-                isError: _messageIsError || (_message == null && view.failure != null),
+                isError:
+                    _messageIsError ||
+                    (_message == null && view.failure != null),
               ),
             ],
             const SizedBox(height: 12),
@@ -399,10 +607,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   if (!narrow) ...[
-                    SizedBox(
-                      width: 250,
-                      child: _sessionList(view),
-                    ),
+                    SizedBox(width: 250, child: _sessionList(view)),
                     const SizedBox(width: 12),
                   ],
                   Expanded(
@@ -439,10 +644,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
           Expanded(
             child: view.conversations.isEmpty
                 ? const Center(
-                    child: Text(
-                      '还没有对话',
-                      style: TextStyle(color: _agentMuted),
-                    ),
+                    child: Text('还没有对话', style: TextStyle(color: _agentMuted)),
                   )
                 : ListView.builder(
                     key: const ValueKey('agent-conversation-list'),
@@ -466,7 +668,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                             ),
-                            onTap: _pending ||
+                            onTap:
+                                _pending ||
                                     view.busy ||
                                     view.phase == AgentPhase.closed
                                 ? null
@@ -483,15 +686,20 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   );
 
   Widget _conversation(AgentWorkspaceView view) {
-    final configured = view.settings?.keySaved == true &&
+    final configured =
+        view.settings?.keySaved == true &&
         view.settings?.consent == true &&
         view.settings?.modelId != null &&
         view.settings?.report.capability != ModelCapability.unverified;
-    final canSend = view.canSend &&
+    final canSend =
+        view.canSend &&
         view.conversationId != null &&
-        _draft.text.trim().isNotEmpty &&
-        !_sending;
-    final canStop = view.phase == AgentPhase.generating ||
+        (_draft.text.trim().isNotEmpty || _draftImages.isNotEmpty) &&
+        !_sending &&
+        !_pickingImages;
+    final canStop =
+        view.phase == AgentPhase.generating ||
+        view.phase == AgentPhase.executingRead ||
         view.phase == AgentPhase.settling;
 
     return Column(
@@ -510,8 +718,25 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             padding: const EdgeInsets.only(bottom: 8),
             child: _SetupPrompt(onSettings: widget.onSettings),
           ),
+        if (_showRunProgress(view)) ...[
+          const SizedBox(height: 4),
+          _AgentRunProgress(view: view),
+          const SizedBox(height: 8),
+        ],
         _composer(
           enabled: canSend,
+          canPick:
+              view.canSend &&
+              view.conversationId != null &&
+              !_sending &&
+              !_pending &&
+              !_pickingImages &&
+              _draftImages.length < AgentImage.maximumCount &&
+              _draftImages.fold<int>(
+                    0,
+                    (sum, image) => sum + image.bytes.length,
+                  ) <
+                  AgentImage.maximumTotalBytes,
           canStop: canStop,
           busy: view.busy,
         ),
@@ -537,7 +762,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             const SizedBox(height: 8),
             Text(
               configured
-                  ? '新建对话后，你可以向学校模型服务提问。'
+                  ? '可查询日程、任务、知识与公开资料；写入和同步功能后续开放。'
                   : '目前尚未配置可用模型。完成设置后即可开始对话。',
               style: const TextStyle(color: _agentMuted, height: 1.45),
               textAlign: TextAlign.center,
@@ -545,7 +770,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             const SizedBox(height: 14),
             FilledButton.icon(
               key: const ValueKey('agent-empty-new-conversation'),
-              onPressed: _pending ||
+              onPressed:
+                  _pending ||
                       widget.controller.view.busy ||
                       widget.controller.view.phase == AgentPhase.closed
                   ? null
@@ -583,16 +809,30 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
       Expanded(
         child: view.messages.isEmpty
             ? const Center(
-                child: Text('发送一条消息，开始对话。', style: TextStyle(color: _agentMuted)),
+                child: Text(
+                  '发送一条消息，开始对话。',
+                  style: TextStyle(color: _agentMuted),
+                ),
               )
             : ListView.builder(
                 key: const ValueKey('agent-message-list'),
                 padding: const EdgeInsets.all(16),
                 itemCount: view.messages.length,
-                itemBuilder: (context, index) => Padding(
-                  padding: const EdgeInsets.only(bottom: 12),
-                  child: _MessageBubble(message: view.messages[index]),
-                ),
+                itemBuilder: (context, index) {
+                  final message = view.messages[index];
+                  final isCurrentAnswerEvidence =
+                      index == view.messages.length - 1 &&
+                      view.phase == AgentPhase.idle &&
+                      message.role == AgentMessageRole.assistant &&
+                      message.status == AgentMessageStatus.complete;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
+                    child: _MessageBubble(
+                      message: message,
+                      isCurrentAnswerEvidence: isCurrentAnswerEvidence,
+                    ),
+                  );
+                },
               ),
       ),
     ],
@@ -600,81 +840,176 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
 
   Widget _composer({
     required bool enabled,
+    required bool canPick,
     required bool canStop,
     required bool busy,
   }) {
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(
-              child: Focus(
-                onKeyEvent: (node, event) {
-                  if (event is KeyDownEvent &&
-                      event.logicalKey == LogicalKeyboardKey.enter &&
-                      !HardwareKeyboard.instance.isShiftPressed) {
-                    if (enabled) {
-                      unawaited(_send());
-                      return KeyEventResult.handled;
-                    }
-                  }
-                  return KeyEventResult.ignored;
-                },
-                child: TextField(
-                  key: const ValueKey('agent-composer'),
-                  controller: _draft,
-                  focusNode: _composerFocus,
-                  enabled: !busy && !_pending,
-                  minLines: 1,
-                  maxLines: 4,
-                  keyboardType: TextInputType.multiline,
-                  textInputAction: TextInputAction.send,
-                  onChanged: (_) => setState(() {}),
-                  onSubmitted: (_) {
-                    if (enabled) unawaited(_send());
-                  },
-                  decoration: const InputDecoration(
-                    hintText: '输入消息…（Enter 发送，Shift+Enter 换行）',
-                    border: InputBorder.none,
-                    filled: false,
-                    contentPadding: EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 10,
+            if (_draftImages.isNotEmpty) ...[
+              _imageDraftPreview(),
+              const SizedBox(height: 8),
+            ],
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                IconButton(
+                  key: const ValueKey('agent-attach-image'),
+                  tooltip: _pickingImages ? '正在读取图片' : '添加图片',
+                  onPressed: canPick ? _pickAgentImages : null,
+                  icon: _pickingImages
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.add_photo_alternate_outlined),
+                ),
+                Expanded(
+                  child: Focus(
+                    onKeyEvent: (node, event) {
+                      if (event is KeyDownEvent &&
+                          event.logicalKey == LogicalKeyboardKey.enter &&
+                          !HardwareKeyboard.instance.isShiftPressed) {
+                        if (enabled) {
+                          unawaited(_send());
+                          return KeyEventResult.handled;
+                        }
+                      }
+                      return KeyEventResult.ignored;
+                    },
+                    child: TextField(
+                      key: const ValueKey('agent-composer'),
+                      controller: _draft,
+                      focusNode: _composerFocus,
+                      enabled: !busy && !_pending,
+                      minLines: 1,
+                      maxLines: 4,
+                      keyboardType: TextInputType.multiline,
+                      textInputAction: TextInputAction.send,
+                      onChanged: (_) => setState(() {}),
+                      onSubmitted: (_) {
+                        if (enabled) unawaited(_send());
+                      },
+                      decoration: const InputDecoration(
+                        hintText: '输入消息…（Enter 发送，Shift+Enter 换行）',
+                        border: InputBorder.none,
+                        filled: false,
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                      ),
                     ),
                   ),
                 ),
-              ),
+                if (canStop)
+                  IconButton.filledTonal(
+                    key: const ValueKey('agent-stop'),
+                    tooltip: '停止本次运行',
+                    onPressed: _stopping ? null : _stop,
+                    icon: _stopping
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.stop_rounded),
+                  )
+                else
+                  IconButton.filled(
+                    key: const ValueKey('agent-send'),
+                    tooltip: '发送消息',
+                    onPressed: enabled ? _send : null,
+                    icon: _sending
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.arrow_upward_rounded),
+                  ),
+              ],
             ),
-            if (canStop)
-              IconButton.filledTonal(
-                key: const ValueKey('agent-stop'),
-                tooltip: '停止生成',
-                onPressed: _stopping ? null : _stop,
-                icon: _stopping
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.stop_rounded),
-              )
-            else
-              IconButton.filled(
-                key: const ValueKey('agent-send'),
-                tooltip: '发送消息',
-                onPressed: enabled ? _send : null,
-                icon: _sending
-                    ? const SizedBox.square(
-                        dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.arrow_upward_rounded),
-              ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _imageDraftPreview() {
+    final total = _draftImages.fold<int>(
+      0,
+      (sum, image) => sum + image.bytes.length,
+    );
+    final remainingCount = AgentImage.maximumCount - _draftImages.length;
+    final remainingBytes = AgentImage.maximumTotalBytes - total;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (var index = 0; index < _draftImages.length; index++)
+              Stack(
+                key: ValueKey('agent-image-preview-$index'),
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      _draftImages[index].bytes,
+                      width: 68,
+                      height: 68,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      errorBuilder: (context, error, stack) => Container(
+                        width: 68,
+                        height: 68,
+                        color: const Color(0xFFF5F7F6),
+                        alignment: Alignment.center,
+                        child: const Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.broken_image_outlined, size: 20),
+                            Text('预览失败', style: TextStyle(fontSize: 10)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    top: 0,
+                    child: IconButton.filledTonal(
+                      key: ValueKey('agent-image-remove-$index'),
+                      tooltip: '移除附图',
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () => _removeDraftImage(index),
+                      icon: const Icon(Icons.close_rounded, size: 16),
+                    ),
+                  ),
+                ],
+              ),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '附图 ${_draftImages.length} 张 · 还可选 $remainingCount 张 · '
+          '剩余 ${(remainingBytes / (1024 * 1024)).toStringAsFixed(1)} MiB',
+          key: const ValueKey('agent-image-counts'),
+          style: const TextStyle(color: _agentMuted, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  void _removeDraftImage(int index) {
+    if (index < 0 || index >= _draftImages.length) return;
+    final image = _draftImages.removeAt(index);
+    _releaseImages([image]);
+    setState(() {});
   }
 }
 
@@ -723,15 +1058,341 @@ final class _AgentNotice extends StatelessWidget {
   );
 }
 
+bool _showRunProgress(AgentWorkspaceView view) =>
+    view.phase == AgentPhase.generating ||
+    view.phase == AgentPhase.executingRead ||
+    view.phase == AgentPhase.settling;
+
+final class _AgentRunProgress extends StatelessWidget {
+  const _AgentRunProgress({required this.view});
+
+  final AgentWorkspaceView view;
+
+  @override
+  Widget build(BuildContext context) {
+    final active = view.phase == AgentPhase.executingRead
+        ? _toolLabel(view.activeTool)
+        : null;
+    return Container(
+      key: const ValueKey('agent-run-progress'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF5F7F6),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: _agentLine),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const SizedBox.square(
+                dimension: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  active == null ? _statusLabel(view) ?? '处理中' : '正在查询$active',
+                  key: const ValueKey('agent-run-progress-status'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '模型请求 ${view.modelCalls} 次 · 工具调用 ${view.toolCalls} 次',
+            key: const ValueKey('agent-run-progress-counts'),
+            style: const TextStyle(color: _agentMuted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+final class _ToolStepList extends StatelessWidget {
+  const _ToolStepList({required this.steps});
+
+  final List<AgentToolStep> steps;
+
+  @override
+  Widget build(BuildContext context) => Column(
+    key: const ValueKey('agent-tool-steps'),
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const Text('查询步骤', style: TextStyle(color: _agentMuted, fontSize: 12)),
+      const SizedBox(height: 4),
+      Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          for (var index = 0; index < steps.length; index++)
+            Chip(
+              key: ValueKey('agent-tool-step-$index'),
+              visualDensity: VisualDensity.compact,
+              label: Text(
+                '${_toolLabel(steps[index].tool) ?? '只读查询'} · '
+                '${_toolStatusLabel(steps[index].status)}',
+              ),
+            ),
+        ],
+      ),
+    ],
+  );
+}
+
+final class _EvidenceCard extends StatefulWidget {
+  const _EvidenceCard({
+    required this.evidence,
+    required this.historical,
+    required this.number,
+  });
+
+  final AgentEvidence evidence;
+  final int number;
+  final bool historical;
+
+  @override
+  State<_EvidenceCard> createState() => _EvidenceCardState();
+}
+
+final class _EvidenceCardState extends State<_EvidenceCard> {
+  bool _expanded = false;
+
+  Future<void> _copySource(Uri uri) async {
+    try {
+      await Clipboard.setData(ClipboardData(text: uri.toString()));
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('已复制已核验出处链接。')));
+      }
+    } on Object {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('暂时无法复制出处链接。')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final evidence = widget.evidence;
+    final source = _verifiedEvidenceUri(evidence);
+    final dates = [
+      if (evidence.publishedOn != null) '发布 ${evidence.publishedOn}',
+      if (evidence.updatedOn != null) '更新 ${evidence.updatedOn}',
+    ].join(' · ');
+    return Card(
+      key: ValueKey('agent-evidence-${evidence.id}'),
+      margin: EdgeInsets.zero,
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(
+                  Icons.verified_outlined,
+                  size: 18,
+                  color: _agentGreen,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '${_providerLabel(evidence.provider)} · '
+                    '${widget.historical ? '历史材料，下轮须重新查询' : '本次回答读取，下轮须重新查询'}',
+                    style: const TextStyle(
+                      color: _agentMuted,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Text(
+                  '出处 ${widget.number}',
+                  key: ValueKey('agent-evidence-id-${evidence.id}'),
+                  style: const TextStyle(color: _agentMuted, fontSize: 11),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              evidence.title,
+              key: ValueKey('agent-evidence-title-${evidence.id}'),
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              '读取于北京时间 ${_beijingTime(evidence.observedAtUtc)} · '
+              '${evidence.complete ? '覆盖完整' : '覆盖不完整'} · 适用性未核验',
+              style: const TextStyle(color: _agentMuted, fontSize: 12),
+            ),
+            if (dates.isNotEmpty ||
+                evidence.revision != null ||
+                evidence.sourceVersion != null ||
+                evidence.locator != null) ...[
+              const SizedBox(height: 3),
+              Text(
+                [
+                  if (dates.isNotEmpty) dates,
+                  if (evidence.revision != null) '修订 ${evidence.revision}',
+                  if (evidence.sourceVersion != null)
+                    '来源版本 ${evidence.sourceVersion}',
+                  if (evidence.locator != null) '位置 ${evidence.locator}',
+                ].join(' · '),
+                style: const TextStyle(color: _agentMuted, fontSize: 12),
+              ),
+            ],
+            const SizedBox(height: 3),
+            Text(
+              '范围：${evidence.scope}',
+              style: const TextStyle(color: _agentMuted, fontSize: 12),
+            ),
+            if (evidence.snippet.isNotEmpty) ...[
+              const SizedBox(height: 5),
+              TextButton.icon(
+                key: ValueKey('agent-evidence-expand-${evidence.id}'),
+                onPressed: () => setState(() => _expanded = !_expanded),
+                icon: Icon(
+                  _expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  size: 18,
+                ),
+                label: Text(_expanded ? '收起已读取片段' : '展开已读取片段'),
+              ),
+              if (_expanded)
+                Container(
+                  key: ValueKey('agent-evidence-snippet-${evidence.id}'),
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF5F7F6),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(evidence.snippet),
+                ),
+            ],
+            if (source != null)
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: ValueKey('agent-evidence-copy-${evidence.id}'),
+                  onPressed: () => unawaited(_copySource(source)),
+                  icon: const Icon(Icons.copy_rounded, size: 16),
+                  label: const Text('复制已核验出处链接'),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _providerLabel(String provider) => switch (provider) {
+  'local' => '本地资料',
+  'icourse' => '评课公开资料',
+  'teach' => '教务公开资料',
+  'finance' => '财务公开资料',
+  _ => '已核验资料',
+};
+
+Uri? _verifiedEvidenceUri(AgentEvidence evidence) {
+  final value = evidence.articleUrl ?? evidence.materialUrl;
+  if (value == null) return null;
+  final host = switch (evidence.provider) {
+    'icourse' => 'icourse.club',
+    'teach' => 'www.teach.ustc.edu.cn',
+    'finance' => 'finance.ustc.edu.cn',
+    _ => '',
+  };
+  final uri = Uri.tryParse(value);
+  if (host.isEmpty ||
+      uri == null ||
+      uri.host != host ||
+      uri.userInfo.isNotEmpty ||
+      !const {'http', 'https'}.contains(uri.scheme) ||
+      uri.port != (uri.scheme == 'https' ? 443 : 80)) {
+    return null;
+  }
+  return uri;
+}
+
+String _beijingTime(DateTime utc) {
+  final value = utc.toUtc().add(const Duration(hours: 8));
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${value.year}-${two(value.month)}-${two(value.day)} '
+      '${two(value.hour)}:${two(value.minute)}:${two(value.second)}';
+}
+
+String? _toolLabel(String? tool) {
+  if (tool == null || !agentReadToolNames.contains(tool)) return null;
+  return switch (tool) {
+    'query_agenda' => '日程',
+    'read_event' => '日程详情',
+    'query_tasks' => '任务',
+    'read_task' => '任务详情',
+    'inspect_conflicts' => '时间冲突',
+    'search_knowledge' => '知识库',
+    'read_knowledge' => '知识片段',
+    'search_courses' => '课程',
+    'read_course' => '课程详情',
+    'read_reviews' => '评课资料',
+    'browse_campus' => '校园公开资料',
+    'read_campus_article' => '校园文章',
+    _ => null,
+  };
+}
+
+String _toolStatusLabel(String status) => switch (status) {
+  'success' => '已完成',
+  'empty' => '完整空结果',
+  'partial' => '部分结果',
+  'busy' => '来源正忙',
+  'consentRequired' => '需要授权',
+  'unavailable' => '暂不可用',
+  'accessRestricted' => '无法访问',
+  'stale' => '资料已变化',
+  'cancelled' => '已取消',
+  'resourceLimit' => '达到上限',
+  'failure' => '查询失败',
+  'executing' => '查询中',
+  'invalidRequest' => '输入无效',
+  'secretDetected' => '检测到受保护内容',
+  _ => '状态未知',
+};
+
+String _markEvidenceReferences(String text, List<AgentEvidence> evidence) {
+  final known = {
+    for (var i = 0; i < evidence.length; i++) evidence[i].id: i + 1,
+  };
+  return text.replaceAllMapped(RegExp(r'\[\[([^\]\r\n]*)\]\]'), (match) {
+    final id = match.group(1) ?? '';
+    return known.containsKey(id) ? '【出处 ${known[id]}】' : '【引用未验证】';
+  });
+}
+
 final class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({
+    required this.message,
+    required this.isCurrentAnswerEvidence,
+  });
 
   final AgentMessage message;
+  final bool isCurrentAnswerEvidence;
 
   @override
   Widget build(BuildContext context) {
     final user = message.role == AgentMessageRole.user;
-    final text = _boundedMarkdown(message.text);
+    final text = _boundedMarkdown(
+      _markEvidenceReferences(message.text, message.evidence),
+    );
     final status = _messageStatus(message.status);
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
@@ -761,7 +1422,10 @@ final class _MessageBubble extends StatelessWidget {
                   ),
                   if (status != null) ...[
                     const SizedBox(width: 8),
-                    _MessageStatus(label: status, failed: message.status == AgentMessageStatus.failed),
+                    _MessageStatus(
+                      label: status,
+                      failed: message.status == AgentMessageStatus.failed,
+                    ),
                   ],
                 ],
               ),
@@ -780,6 +1444,30 @@ final class _MessageBubble extends StatelessWidget {
               ] else if (message.status != AgentMessageStatus.complete) ...[
                 const SizedBox(height: 4),
                 const Text('没有可显示的回复内容。', style: TextStyle(color: _agentMuted)),
+              ],
+              if (user && message.imageCount > 0) ...[
+                const SizedBox(height: 6),
+                Text(
+                  '附图 ${message.imageCount} 张 · 原图未保留',
+                  key: ValueKey('agent-message-images-${message.id}'),
+                  style: const TextStyle(color: _agentMuted, fontSize: 12),
+                ),
+              ],
+              if (!user && message.steps.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                _ToolStepList(steps: message.steps),
+              ],
+              if (!user && message.evidence.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                for (var index = 0; index < message.evidence.length; index++)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: _EvidenceCard(
+                      evidence: message.evidence[index],
+                      number: index + 1,
+                      historical: !isCurrentAnswerEvidence,
+                    ),
+                  ),
               ],
             ],
           ),
@@ -843,11 +1531,15 @@ String? _messageStatus(AgentMessageStatus status) => switch (status) {
   AgentMessageStatus.failed => '回复失败',
 };
 
-String? _statusLabel(AgentPhase phase) => switch (phase) {
+String? _statusLabel(AgentWorkspaceView view) => switch (view.phase) {
   AgentPhase.idle => null,
   AgentPhase.loadingModels => '正在获取模型',
   AgentPhase.verifying => '正在验证模型',
   AgentPhase.generating => '正在生成回复',
+  AgentPhase.executingRead =>
+    view.activeTool == null
+        ? '正在查询资料'
+        : '正在查询${_toolLabel(view.activeTool) ?? '只读资料'}',
   AgentPhase.settling => '正在保存回复',
   AgentPhase.recovery => '正在恢复状态',
   AgentPhase.maintenance => '本地维护中',
@@ -856,6 +1548,7 @@ String? _statusLabel(AgentPhase phase) => switch (phase) {
 
 String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
+  AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
   AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
   AgentFailureCode.consentRequired => '请先在设置中阅读说明并明确勾选同意。',
   AgentFailureCode.keyRequired => '请先在设置中配置模型 Key。',
@@ -866,15 +1559,22 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.ownershipLost => '本机数据状态已变化，请重新打开 Agent。',
   AgentFailureCode.storageFailed => '本机对话暂时无法保存，请稍后重试。',
   AgentFailureCode.protectionFailed => '本机密钥保护未完成，操作没有保存。',
-  AgentFailureCode.unauthorized || AgentFailureCode.forbidden =>
-    '模型服务未授权此请求，请检查设置。',
+  AgentFailureCode.unauthorized ||
+  AgentFailureCode.forbidden => '模型服务未授权此请求，请检查设置。',
   AgentFailureCode.rateLimited => '模型服务暂时繁忙，请稍后重试。',
-  AgentFailureCode.networkFailed || AgentFailureCode.timeout =>
-    '暂时无法连接模型服务，请检查网络后重试。',
-  AgentFailureCode.protocol || AgentFailureCode.redirectRejected =>
-    '模型服务返回内容无法安全验证。',
+  AgentFailureCode.networkFailed ||
+  AgentFailureCode.timeout => '暂时无法连接模型服务，请检查网络后重试。',
+  AgentFailureCode.protocol ||
+  AgentFailureCode.redirectRejected => '模型服务返回内容无法安全验证。',
   AgentFailureCode.resourceLimit => '回复超出当前处理上限。',
   AgentFailureCode.cancelled => '本次生成已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
-  AgentFailureCode.toolUnavailable => '当前版本尚未启用 Agent 工具。',
+  AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',
+};
+
+String _imageFailureText(AgentFailureCode code) => switch (code) {
+  AgentFailureCode.resourceLimit => '图片数量、尺寸或文件大小超过限制。',
+  AgentFailureCode.invalidInput => '所选图片无法读取，请选择 PNG、JPEG 或 WebP 图片。',
+  AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
+  _ => '无法读取所选图片，请检查文件后重试。',
 };
