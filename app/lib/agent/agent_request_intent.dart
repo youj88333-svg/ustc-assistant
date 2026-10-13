@@ -1,0 +1,45 @@
+/// App-side routing of local capabilities from human text only. This selects
+/// proposal tools, never approval or permission to commit a change.
+final class AgentLocalRequestIntent {
+  const AgentLocalRequestIntent({
+    required this.changes,
+    required this.planning,
+    required this.writesRestricted,
+  });
+  final bool changes, planning, writesRestricted;
+}
+
+AgentLocalRequestIntent agentLocalRequestIntent(String question) {
+  final text = question.toLowerCase();
+  final directChange = RegExp(
+    r'新增|新建|创建|添加|增加|记(?:下|一条|一个)|写(?:入|到|进)|录入|建(?:一个|一条)|保存|修改|更改|编辑|调整|改(?:成|到|为|一下)|移动|挪(?:到|一下)|删除|删掉|隐藏|恢复|完成|跳过|参加|听讲|不冲突|冲突关系|\b(?:create|add|update|move|delete|hide|mark|reschedule)\b',
+  ).hasMatch(text);
+  final schedule = RegExp(r'安排|规划|\b(?:schedule|plan)\b').hasMatch(text);
+  final localContext = RegExp(
+    r'日程|个人安排|任务|复习|作业|时间块|今天|明天|后天|下周|本周|周[一二三四五六日天]|小时|分钟|\b(?:event|task|homework|hour|minute|tomorrow|monday)\b',
+  ).hasMatch(text);
+  final requestedSchedule = RegExp(
+    r'(?:帮我|替我|给我|请).{0,20}(?:安排|规划)|(?:安排|规划)(?:一下|一段|一个|一小时)|\b(?:schedule|plan)\b',
+  ).hasMatch(text);
+  final planning =
+      RegExp(r'空闲|找时间|时间规划|\bfree slots?\b').hasMatch(text) ||
+      schedule && (localContext || requestedSchedule);
+  final noWrite = RegExp(
+    r'(?:不要|不用|无需|先别|暂不|不必).{0,8}(?:新增|新建|创建|添加|增加|保存|写|改|删|提交)|只(?:要|需|想)?(?:查|读|看|建议|分析|解释|展示)|\b(?:read[- ]only|do not (?:create|save|write|change|delete)|only suggest)\b',
+  ).hasMatch(text);
+  return AgentLocalRequestIntent(
+    changes: !noWrite && (directChange || planning),
+    planning: planning,
+    writesRestricted: noWrite,
+  );
+}
+
+/// Clarifying replies may retain the previous human's local request, but an
+/// unrelated new question must not inherit a write capability indefinitely.
+bool agentLocalClarification(String question) {
+  if (question.length > 120) return false;
+  return RegExp(
+    r'继续|上面|上一|这个|那个|按你说的|按这个|那就|^好的?[，。！! ]?$|(?:周[一二三四五六日天]|明天|下周|今天|\d{4}-\d{2}-\d{2}).*(?:点|时|分钟|小时|\d{1,2}:\d{2})|(?:时间|地点|名称|标题)(?:是|改为|用|选)|\b(?:continue|use that|tomorrow|monday)\b',
+    caseSensitive: false,
+  ).hasMatch(question);
+}

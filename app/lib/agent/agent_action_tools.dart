@@ -70,7 +70,7 @@ final class AgentActionTools implements AgentReadToolsPort {
     ...readTools.definitions,
     _actionTool(
       'propose_local_changes',
-      '准备最多 20 项本地日程、任务或时间块变化，返回待确认摘要。引用必须来自本轮读取。',
+      '准备最多 20 项本地个人日程、任务或时间块变化，由应用等待用户批准。create_personal/create_task 新建无需已有记录引用；修改/删除已有项的引用须来自本轮读取。此工具准备方案，不直接写入。',
       {
         'changes': {
           'type': 'array',
