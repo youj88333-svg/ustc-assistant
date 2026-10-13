@@ -1,6 +1,6 @@
 # 学校模型网关契约
 
-这是模型服务出口，不新增一条业务来源。通用秘密、出站、运行和维护要求见 [09](../../architecture/09-contracts.md)；当前交付与实际核验见 [M5.1](../../milestones/m5/records/01-model-entry.md)。
+这是模型服务出口，不新增一条业务来源。通用秘密、出站、运行和维护要求见 [09](../../architecture/09-contracts.md)；模型入口与后续工具/图片的实际核验见 [M5 记录](../../milestones/m5/records.md)。
 
 ## 固定请求
 
@@ -9,11 +9,12 @@
 | 操作 | 契约 |
 |---|---|
 | 获取模型 | `GET /v1/models`，JSON `data[]`，每项有字符串 `id`；去重，最多 256 项、1 MiB；目录不证明该模型支持工具 |
-| 对话/合成验核 | `POST /v1/chat/completions`，`model/messages/stream:true/max_tokens`；验核时才附固定 `tools/tool_choice`，不发送任意附加参数 |
+| 对话/合成验核 | `POST /v1/chat/completions`，`model/messages/stream:true/max_tokens`；能力验核只附 echo_probe，toolReady 的业务运行按当前人类问题附固定只读定义；不接受模型产生的新定义或任意附加参数 |
+| 主动图片 | 仅本轮 user 消息的 `content` 数组，文字及 `image_url:{url:"data:image/png;base64,…",detail:"auto"}`；规范图片最多 3 张/合计 6 MiB，同一固定目标，无远程图片 URL、Files API 或浏览器资产 |
 | 流式输出 | SSE `data:` JSON，单 choice/index 0，累积文本/结构化 `delta.tool_calls`；finish_reason 与 `[DONE]`/正常 EOF 完整成立后才交付工具完成事件 |
 | 计数 | 可选 usage；缺失或 null 表示未知，实际对象中的非负 prompt/completion tokens 才接受。缺计费依据时不声称精确费用 |
 
-Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 ID、角色和工具结果关联均按本地固定格式验证。响应不进入诊断原文；401、403、429、超时、协议错误和资源限制转换为固定失败码。
+Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 ID、角色和工具结果关联均按本地固定格式验证。普通请求体最多 1 MiB，含规范图片时最多 10 MiB；C4 的文本/工具定义/参数/结果另受更严的 26000 UTF-8 字节预算。响应不进入诊断原文；401、403、429、超时、协议错误和资源限制转换为固定失败码。含图请求被 400/415/422 拒绝时显示 imageRejected，不丢图重发为文字。
 
 连接期限 15 秒、读取空闲 20 秒、单请求总期限 60 秒。流解压后最多 2 MiB，单行/事件最多 64 KiB，文本最多 24000 字符，工具参数 16 KiB、单次最多 8 个调用；跨层采用更严上限。EOF 截断、坏 UTF-8/JSON、重复终结、未声明工具、缺/重复/非连续调用标识等拒绝。`length/content_filter/refusal` 与正常 stop 分开，不据部分结果执行工具。
 
@@ -25,4 +26,4 @@ Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 
 
 Key 采用独立模型类型和用途的 DPAPI CurrentUser 保护。配置事务复验 owner/reset/history/config/request 世代；停止推进 requestEpoch，异步保护及 Key 交接中的旧操作不能落库或再注册出站。保存模型的联网同意可撤销/恢复，撤销保留 Key/历史但停止运行并禁新发送。启动恢复历史清理和中断记录，不自动重放请求。
 
-2026-10-13 用户的应用内安全摘要确认实际所选模型为 toolReady，文本、流式、原生调用及结果续答均通过，目录为 12 项；不记录 Key 或推测具体模型 ID。普通聊天/停止体验与视觉能力仍待核对，详见 [真实能力记录](../../milestones/m5/acceptance.md)。接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)。新参数仍按相应合成和真实核验，不从“兼容”推断支持。
+2026-10-13 用户的应用内安全摘要确认实际所选模型为 toolReady，文本、流式、原生调用及结果续答均通过，目录为 12 项；不记录 Key 或推测具体模型 ID。普通聊天/停止体验与视觉能力仍待核对，详见 [真实能力记录](../../milestones/m5/acceptance.md)。接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)，主动图片编码参考 [OpenAI 图像输入](https://developers.openai.com/api/docs/guides/images-vision)。新参数仍按相应合成和真实核验，不从“兼容”推断支持。

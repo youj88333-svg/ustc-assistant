@@ -61,3 +61,5 @@ C5 默认 Agent 接实际对话端口，设置新增 Agent 区，支持模型目
 用户需在新版“设置 → Agent”主动提供 Key、选择目录里的模型并执行合成验核，再复制 `agent-model-validation-v1` 安全能力摘要；只需核对真实流式对话与停止。Key 不通过聊天发送，学校额外授权仍由用户处理。
 
 没有这份实证时，M5.1 只能记工程完成，不能关闭或启用 M5.2 业务工具。M1 非空考试、Young 未观察样本、财务搜索/FAQ 与政策现行性继续按既有登记保留。
+
+2026-10-13 用户已在应用完成验核并提交 toolReady 摘要：目录 12 项，text/streaming/toolCall/toolResult 均 true、failure 为 null、requests 为 5；conversations/messages 均为 0、当时 businessToolsEnabled 为 false。原始安全摘要与证据范围见 [验收页](../acceptance.md)。据此启动 M5.2；普通聊天/停止及后来增加的视觉能力仍未获真人确认，不将本切工程通过改记为阶段关闭。
