@@ -8,6 +8,8 @@ import '../core/settings_contract.dart';
 import '../core/agent_contract.dart';
 import '../agent/agent_coordinator.dart';
 import '../agent/agent_read_tools.dart';
+import '../agent/agent_action_tools.dart';
+import '../jobs/agent_source_coordinator.dart';
 import '../agent/model_gateway_contract.dart';
 import '../agent/ustc_model_gateway.dart';
 import '../data/demo_store.dart';
@@ -258,25 +260,62 @@ final class RuntimeBootstrap extends ChangeNotifier {
         leases: leases,
         clock: clock,
       );
-      agentCoordinator = AgentCoordinator(
-        data: database.agent,
-        gateway: modelGateway ?? UstcModelGateway(),
-        readTools: AgentReadTools(
-          calendar: database.localCalendar,
-          tasks: database.localCalendar,
-          calendarGuard: database.localCalendar,
-          knowledge: database.publicStore,
-          knowledgeGuard: database.publicStore,
-          publicQueries: agentQueries,
-          publicGuard: agentQueries,
-          clock: clock,
-        ),
-        clock: clock,
-      );
-      agent = AgentWorkspaceController(agentCoordinator);
       browser = NativeObservationBrowser();
       final jwRegistry = JwPartitionRegistry(formal);
       final youngRegistry = YoungPartitionRegistry(formal);
+      late final AgentSourceCoordinator agentSources;
+      final agentJw = JwSyncCoordinator(
+        store: database,
+        registry: JwPartitionRegistry(formal),
+        browser: browser,
+        leases: leases,
+        clock: clock,
+        onJobAdmitted: (ticket) => agentSources.bindAdmittedJob(ticket),
+      );
+      final agentYoung = YoungSyncCoordinator(
+        store: database,
+        registry: YoungPartitionRegistry(formal),
+        browser: browser,
+        leases: leases,
+        clock: clock,
+        onJobAdmitted: (ticket) => agentSources.bindAdmittedJob(ticket),
+      );
+      agentSources = AgentSourceCoordinator(
+        store: database,
+        jw: agentJw,
+        young: agentYoung,
+        clock: clock,
+        shutdownSources: () async {
+          await agentJw.shutdownForMaintenanceExit();
+          await agentYoung.shutdownForMaintenanceExit();
+        },
+      );
+      agentCoordinator = AgentCoordinator(
+        data: database.agent,
+        gateway: modelGateway ?? UstcModelGateway(),
+        clock: clock,
+        readTools: AgentActionTools(
+          plans: database.localCalendar,
+          calendar: database.localCalendar,
+          tasks: database.localCalendar,
+          preferences: database.agent,
+          preferenceProposals: database.agent,
+          sources: agentSources,
+          actionRecords: database.agent,
+          clock: clock,
+          readTools: AgentReadTools(
+            calendar: database.localCalendar,
+            tasks: database.localCalendar,
+            calendarGuard: database.localCalendar,
+            knowledge: database.publicStore,
+            knowledgeGuard: database.publicStore,
+            publicQueries: agentQueries,
+            publicGuard: agentQueries,
+            clock: clock,
+          ),
+        ),
+      );
+      agent = AgentWorkspaceController(agentCoordinator);
       final queries = PublicQueryCoordinator(
         store: database.publicStore,
         leases: leases,

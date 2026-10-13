@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'calendar_contract.dart';
 
 enum AgentFailureCode {
   invalidInput,
@@ -41,6 +42,9 @@ enum AgentPhase {
   verifying,
   generating,
   executingRead,
+  waitingForApproval,
+  waitingForSchool,
+  committing,
   settling,
   recovery,
   maintenance,
@@ -166,6 +170,7 @@ final class AgentMessage {
     this.evidence = const [],
     this.steps = const [],
     this.imageCount = 0,
+    this.actions = const [],
   });
   final int id;
   final AgentMessageRole role;
@@ -175,8 +180,33 @@ final class AgentMessage {
   final List<AgentEvidence> evidence;
   final List<AgentToolStep> steps;
   final int imageCount;
+  final List<AgentActionView> actions;
   @override
   String toString() => 'AgentMessage';
+}
+
+enum AgentActionKind { localPlan, undo, sourceRefresh, planningPreferences }
+
+enum AgentActionStatus { proposed, rejected, committed, interrupted, failed }
+
+/// Server-created display record; history confers no approval or live target.
+final class AgentActionView {
+  AgentActionView({
+    required this.id,
+    required this.kind,
+    required this.status,
+    required this.title,
+    required List<String> details,
+    this.committedCount = 0,
+    this.warning = '',
+  }) : details = List.unmodifiable(details);
+  final String id, title, warning;
+  final AgentActionKind kind;
+  final AgentActionStatus status;
+  final List<String> details;
+  final int committedCount;
+  @override
+  String toString() => 'AgentActionView';
 }
 
 /// Display-only provenance. This never grants a read, cursor or write permit.
@@ -197,12 +227,19 @@ final class AgentEvidence {
     this.sourceVersion,
     this.snippet = '',
     this.applicability = 'unknown',
+    this.eventReference,
+    this.taskReference,
   });
   final String id, provider, title, scope, snippet, applicability;
   final DateTime observedAtUtc;
   final bool complete;
   final String? articleUrl, materialUrl, publishedOn, updatedOn;
   final String? revision, locator, sourceVersion;
+
+  /// Local navigation only. Excluded from model result metadata; C3 verifies
+  /// current owner/epochs/versions again before opening business detail.
+  final CalendarReference? eventReference;
+  final TaskReference? taskReference;
   @override
   String toString() => 'AgentEvidence';
 }
@@ -255,6 +292,14 @@ abstract interface class AgentRunJournalPort {
     required List<AgentEvidence> evidence,
     required List<AgentToolStep> steps,
     required int imageCount,
+  });
+}
+
+abstract interface class AgentHistoryPagePort {
+  Future<List<AgentMessage>> messagesBefore(
+    String conversationId,
+    int beforeId, {
+    int limit = 100,
   });
 }
 
@@ -333,6 +378,9 @@ final class AgentRuntimeView {
     this.activeTool,
     this.toolCalls = 0,
     this.modelCalls = 0,
+    this.pendingAction,
+    this.discussionId,
+    this.discussionDraft,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
        messages = List.unmodifiable(messages);
@@ -348,6 +396,8 @@ final class AgentRuntimeView {
   final bool businessToolsEnabled;
   final String? activeTool;
   final int toolCalls, modelCalls;
+  final AgentActionView? pendingAction;
+  final String? discussionId, discussionDraft;
   bool get busy => phase != AgentPhase.idle && phase != AgentPhase.closed;
   bool get canSend =>
       phase == AgentPhase.idle &&

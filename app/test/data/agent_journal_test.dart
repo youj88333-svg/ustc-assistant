@@ -457,7 +457,7 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 12);
+      expect(await _scalar(store, 'PRAGMA user_version'), 13);
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -482,7 +482,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 13);
+    _setSchemaVersion(file, 14);
 
     await expectLater(
       _open(file: file),
@@ -496,7 +496,7 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 13);
+      expect(raw.select('PRAGMA user_version').single['user_version'], 14);
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -676,6 +676,14 @@ Future<void> _rewindMessagesToSchema11(
       );
     }
     raw.execute('PRAGMA user_version=11');
+    for (final table in [
+      'agent_actions',
+      'agenda_plan_receipts',
+      'agenda_plan_audit',
+      'agent_preferences',
+    ]) {
+      raw.execute('DROP TABLE IF EXISTS $table');
+    }
     raw.execute('COMMIT');
   } on Object {
     raw.execute('ROLLBACK');

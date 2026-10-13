@@ -644,6 +644,10 @@ void main() {
       try {
         raw.execute('BEGIN');
         for (final table in [
+          'agent_actions',
+          'agenda_plan_receipts',
+          'agenda_plan_audit',
+          'agent_preferences',
           'agent_audit',
           'agent_history_intent',
           'agent_messages',

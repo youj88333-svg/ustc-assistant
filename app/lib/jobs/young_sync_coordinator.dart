@@ -32,6 +32,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     this.loginWaitTimeout = const Duration(seconds: 90),
     this.businessStability = const Duration(milliseconds: 500),
     this.automaticAuthentication = true,
+    this.onJobAdmitted,
     ObservationTarget? target,
   }) : target = target ?? ObservationTarget.young() {
     _credentialSubscription = store.credentialChanges.listen((_) {
@@ -51,6 +52,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
   final Duration loginWaitTimeout;
   final Duration businessStability;
   final bool automaticAuthentication;
+  final Future<void> Function(YoungJobTicket)? onJobAdmitted;
   SchoolAuthenticationDriver _authentication = SchoolAuthenticationDriver();
   final _changes = StreamController<YoungSyncView>.broadcast();
   late final StreamSubscription<bool> _credentialSubscription;
@@ -309,6 +311,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
           firstDay: firstDay,
           lastDay: lastDay,
         );
+        await onJobAdmitted?.call(_ticket!);
         expectedAccountCode = null;
         if (password != null && password!.isNotEmpty) {
           await store.stageYoungCredentials(

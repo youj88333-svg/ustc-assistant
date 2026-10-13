@@ -2,11 +2,18 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../agent/agent_coordinator.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_action_contract.dart';
+import '../core/agent_discussion_contract.dart';
 import 'agent_workspace_contract.dart';
 
 /// C5 adapts the pure-Dart C4 projection. Runtime, not a page, owns lifecycle.
 final class AgentWorkspaceController extends ChangeNotifier
-    implements AgentWorkspacePort {
+    implements
+        AgentWorkspacePort,
+        AgentActionWorkspacePort,
+        AgentPreferencesWorkspacePort,
+        AgentDiscussionWorkspacePort,
+        AgentHistoryWorkspacePort {
   AgentWorkspaceController(this.coordinator) {
     _subscription = coordinator.changes.listen((_) {
       if (!_disposed) notifyListeners();
@@ -38,6 +45,23 @@ final class AgentWorkspaceController extends ChangeNotifier
       coordinator.send(text, images: images);
   @override
   Future<void> stop() => coordinator.stop();
+  @override
+  Future<void> prepareDiscussion(AgentDiscussionSelection selection) =>
+      coordinator.prepareDiscussion(selection);
+  @override
+  Future<void> loadOlderMessages() => coordinator.loadOlderMessages();
+  @override
+  Future<void> approveAction(String id) => coordinator.approveAction(id);
+  @override
+  Future<void> rejectAction(String id) => coordinator.rejectAction(id);
+  @override
+  Future<void> continueSchool() => coordinator.continueSchool();
+  @override
+  Future<AgentPlanningPreferences> readPlanningPreferences() =>
+      coordinator.readPlanningPreferences();
+  @override
+  Future<void> savePlanningPreferences(AgentPlanningPreferences preferences) =>
+      coordinator.savePlanningPreferences(preferences);
   @override
   Future<void> deleteKey({required bool confirmed}) =>
       coordinator.deleteKey(confirmed: confirmed);

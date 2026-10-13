@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'agent_workspace_contract.dart';
+import '../core/agent_action_contract.dart';
 import '../core/agent_contract.dart';
 
 const _settingsMuted = Color(0xFF66736C);
@@ -232,6 +233,9 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           : null;
       final keySaved = settings?.keySaved ?? false;
       final portBusy = view.busy || view.phase == AgentPhase.closed || _pending;
+      final preferencesPort = widget.controller is AgentPreferencesWorkspacePort
+          ? widget.controller as AgentPreferencesWorkspacePort
+          : null;
       final canLoad =
           !portBusy && consent && (keySaved || _key.text.isNotEmpty);
       final canVerify =
@@ -388,6 +392,14 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
             ),
           ),
           const SizedBox(height: 14),
+          if (preferencesPort != null) ...[
+            _SettingsCard(
+              title: '时间规划偏好',
+              subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
+              child: _PlanningPreferencesEditor(port: preferencesPort),
+            ),
+            const SizedBox(height: 14),
+          ],
           _SettingsCard(
             title: '能力状态',
             subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
@@ -477,6 +489,458 @@ final class _SettingsCard extends StatelessWidget {
   );
 }
 
+final class _PlanningPreferencesEditor extends StatefulWidget {
+  const _PlanningPreferencesEditor({required this.port});
+
+  final AgentPreferencesWorkspacePort port;
+
+  @override
+  State<_PlanningPreferencesEditor> createState() =>
+      _PlanningPreferencesEditorState();
+}
+
+final class _PlanningPreferencesEditorState
+    extends State<_PlanningPreferencesEditor> {
+  AgentPlanningPreferences? _preferences;
+  int _generation = 0;
+  bool _loading = false;
+  bool _saving = false;
+  bool _dirty = false;
+  bool _needsReload = false;
+  String? _error;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_reload());
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlanningPreferencesEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.port, widget.port)) {
+      _generation++;
+      _preferences = null;
+      _loading = false;
+      _saving = false;
+      _dirty = false;
+      _needsReload = false;
+      _error = null;
+      _notice = null;
+      unawaited(_reload());
+    }
+  }
+
+  bool _isCurrent(AgentPreferencesWorkspacePort port, int generation) =>
+      mounted && identical(widget.port, port) && _generation == generation;
+
+  Future<void> _reload() async {
+    if (_loading || _saving) return;
+    final port = widget.port;
+    final generation = ++_generation;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final preferences = await port.readPlanningPreferences();
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _preferences = preferences;
+          _dirty = false;
+          _needsReload = false;
+        });
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _error = '暂时无法读取时间规划偏好，请重试。';
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) setState(() => _loading = false);
+    }
+  }
+
+  void _change({
+    List<int>? weekdays,
+    int? startMinute,
+    int? endMinute,
+    int? blockMinutes,
+    int? breakMinutes,
+    List<(int, int)>? avoid,
+  }) {
+    final current = _preferences;
+    if (current == null || !_canEdit) return;
+    setState(() {
+      _preferences = AgentPlanningPreferences(
+        revision: current.revision,
+        weekdays: weekdays ?? current.weekdays,
+        startMinute: startMinute ?? current.startMinute,
+        endMinute: endMinute ?? current.endMinute,
+        blockMinutes: blockMinutes ?? current.blockMinutes,
+        breakMinutes: breakMinutes ?? current.breakMinutes,
+        avoid: avoid ?? current.avoid,
+      );
+      _dirty = true;
+      _error = null;
+      _notice = null;
+    });
+  }
+
+  bool get _canEdit =>
+      !_loading && !_saving && !_needsReload && _preferences != null;
+
+  String? _validationError(AgentPlanningPreferences preferences) {
+    if (preferences.weekdays.any((day) => day < 1 || day > 7) ||
+        preferences.weekdays.toSet().length != preferences.weekdays.length) {
+      return '请选择有效的星期。';
+    }
+    if (preferences.startMinute < 0 ||
+        preferences.startMinute >= 1440 ||
+        preferences.endMinute < 0 ||
+        preferences.endMinute >= 1440 ||
+        preferences.startMinute >= preferences.endMinute) {
+      return '可安排时间须在同一天内，且结束时间晚于开始时间。';
+    }
+    if (preferences.blockMinutes <= 0 ||
+        preferences.blockMinutes > 1440 ||
+        preferences.breakMinutes < 0 ||
+        preferences.breakMinutes > 1440) {
+      return '学习块和休息间隔请使用有效时长。';
+    }
+    if (preferences.avoid.any(
+      (range) =>
+          range.$1 < 0 ||
+          range.$1 >= 1440 ||
+          range.$2 < 0 ||
+          range.$2 >= 1440 ||
+          range.$1 >= range.$2,
+    )) {
+      return '每日避开时段须有效，且结束时间晚于开始时间。';
+    }
+    return null;
+  }
+
+  String _clock(int minute) {
+    if (minute < 0 || minute >= 1440) return '时间无效';
+    final hour = (minute ~/ 60).toString().padLeft(2, '0');
+    final rest = (minute % 60).toString().padLeft(2, '0');
+    return '$hour:$rest';
+  }
+
+  Future<TimeOfDay?> _pickTime(int minute, String helpText) => showTimePicker(
+    context: context,
+    initialTime: TimeOfDay(
+      hour: minute >= 0 && minute < 1440 ? minute ~/ 60 : 8,
+      minute: minute >= 0 && minute < 1440 ? minute % 60 : 0,
+    ),
+    helpText: helpText,
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+      child: child ?? const SizedBox.shrink(),
+    ),
+  );
+
+  Future<void> _editTime({required bool start}) async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit) return;
+    final picked = await _pickTime(
+      start ? preferences.startMinute : preferences.endMinute,
+      start ? '选择可安排开始时间' : '选择可安排结束时间',
+    );
+    if (!mounted || picked == null) return;
+    final minute = picked.hour * 60 + picked.minute;
+    if (start) {
+      _change(startMinute: minute);
+    } else {
+      _change(endMinute: minute);
+    }
+  }
+
+  Future<void> _addAvoidRange() async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit) return;
+    final start = await _pickTime(12 * 60, '选择避开时段的开始时间');
+    if (!mounted || start == null) return;
+    final end = await _pickTime(
+      start.hour * 60 + start.minute + 60,
+      '选择避开时段的结束时间',
+    );
+    if (!mounted || end == null) return;
+    final startMinute = start.hour * 60 + start.minute;
+    final endMinute = end.hour * 60 + end.minute;
+    if (endMinute <= startMinute) {
+      setState(() => _error = '避开时段的结束时间须晚于开始时间。');
+      return;
+    }
+    _change(avoid: [...preferences.avoid, (startMinute, endMinute)]);
+  }
+
+  Future<void> _save() async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit || !_dirty) return;
+    final validationError = _validationError(preferences);
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+    final port = widget.port;
+    final generation = ++_generation;
+    setState(() {
+      _saving = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await port.savePlanningPreferences(preferences);
+      if (!_isCurrent(port, generation)) return;
+      try {
+        final saved = await port.readPlanningPreferences();
+        if (_isCurrent(port, generation)) {
+          setState(() {
+            _preferences = saved;
+            _dirty = false;
+            _needsReload = false;
+            _notice = '时间规划偏好已保存。';
+          });
+        }
+      } on Object {
+        if (_isCurrent(port, generation)) {
+          setState(() {
+            _dirty = false;
+            _needsReload = true;
+            _error = '保存请求已完成，但无法读取新版本；请重新读取后继续编辑。';
+          });
+        }
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() => _error = '无法确认偏好已保存，请检查当前设置后重试。');
+      }
+    } finally {
+      if (_isCurrent(port, generation)) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preferences = _preferences;
+    final validationError = preferences == null
+        ? null
+        : _validationError(preferences);
+    final canEdit = _canEdit;
+    return Column(
+      key: const ValueKey('agent-planning-preferences-panel'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          '这些条件只在你主动保存后用于规划。',
+          style: TextStyle(color: _settingsMuted),
+        ),
+        if (_loading) ...[
+          const SizedBox(height: 8),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 4),
+          const Text('正在读取当前偏好…', style: TextStyle(color: _settingsMuted)),
+        ],
+        if (preferences != null) ...[
+          const SizedBox(height: 12),
+          const Text('可安排星期', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            children: [
+              for (var day = 1; day <= 7; day++)
+                FilterChip(
+                  key: ValueKey('agent-planning-weekday-$day'),
+                  label: Text(_weekdayLabel(day)),
+                  selected: preferences.weekdays.contains(day),
+                  onSelected: canEdit
+                      ? (selected) {
+                          final weekdays = {...preferences.weekdays};
+                          if (selected) {
+                            weekdays.add(day);
+                          } else {
+                            weekdays.remove(day);
+                          }
+                          _change(weekdays: weekdays.toList()..sort());
+                        }
+                      : null,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('每日可安排时间', style: TextStyle(fontWeight: FontWeight.w600)),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-start-time'),
+                onPressed: canEdit ? () => _editTime(start: true) : null,
+                icon: const Icon(Icons.schedule_rounded, size: 17),
+                label: Text('开始 ${_clock(preferences.startMinute)}'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-end-time'),
+                onPressed: canEdit ? () => _editTime(start: false) : null,
+                icon: const Icon(Icons.schedule_rounded, size: 17),
+                label: Text('结束 ${_clock(preferences.endMinute)}'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            key: const ValueKey('agent-planning-block-minutes'),
+            initialValue: preferences.blockMinutes,
+            decoration: const InputDecoration(labelText: '每个学习块'),
+            items: _durationOptions(preferences.blockMinutes)
+                .map(
+                  (minutes) => DropdownMenuItem(
+                    value: minutes,
+                    child: Text('$minutes 分钟'),
+                  ),
+                )
+                .toList(),
+            onChanged: canEdit
+                ? (value) {
+                    if (value != null) _change(blockMinutes: value);
+                  }
+                : null,
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            key: const ValueKey('agent-planning-break-minutes'),
+            initialValue: preferences.breakMinutes,
+            decoration: const InputDecoration(labelText: '学习块之间休息'),
+            items:
+                _durationOptions(
+                      preferences.breakMinutes,
+                      options: const [0, 5, 10, 15, 20, 30],
+                    )
+                    .map(
+                      (minutes) => DropdownMenuItem(
+                        value: minutes,
+                        child: Text('$minutes 分钟'),
+                      ),
+                    )
+                    .toList(),
+            onChanged: canEdit
+                ? (value) {
+                    if (value != null) _change(breakMinutes: value);
+                  }
+                : null,
+          ),
+          const SizedBox(height: 10),
+          const Text('每日避开时段', style: TextStyle(fontWeight: FontWeight.w600)),
+          for (var index = 0; index < preferences.avoid.length; index++)
+            Row(
+              key: ValueKey('agent-planning-avoid-$index'),
+              children: [
+                Expanded(
+                  child: Text(
+                    '${_clock(preferences.avoid[index].$1)}–'
+                    '${_clock(preferences.avoid[index].$2)}',
+                  ),
+                ),
+                IconButton(
+                  key: ValueKey('agent-planning-avoid-remove-$index'),
+                  tooltip: '移除此时段',
+                  onPressed: canEdit
+                      ? () {
+                          final avoid = [...preferences.avoid]..removeAt(index);
+                          _change(avoid: avoid);
+                        }
+                      : null,
+                  icon: const Icon(Icons.remove_circle_outline_rounded),
+                ),
+              ],
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('agent-planning-add-avoid'),
+              onPressed: canEdit ? _addAvoidRange : null,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('添加避开时段'),
+            ),
+          ),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _error!,
+            key: const ValueKey('agent-planning-error'),
+            style: const TextStyle(color: Color(0xFF9B2C2C)),
+          ),
+        ],
+        if (_notice != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _notice!,
+            key: const ValueKey('agent-planning-notice'),
+            style: const TextStyle(color: _settingsGreen),
+          ),
+        ],
+        if (validationError != null && _error == null) ...[
+          const SizedBox(height: 8),
+          Text(
+            validationError,
+            key: const ValueKey('agent-planning-validation'),
+            style: const TextStyle(color: Color(0xFF805500)),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            if (_error != null || preferences == null)
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-reload'),
+                onPressed: _loading || _saving ? null : _reload,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('重新读取'),
+              ),
+            FilledButton.icon(
+              key: const ValueKey('agent-planning-save'),
+              onPressed: canEdit && _dirty && validationError == null
+                  ? _save
+                  : null,
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('保存偏好'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+String _weekdayLabel(int day) => switch (day) {
+  1 => '周一',
+  2 => '周二',
+  3 => '周三',
+  4 => '周四',
+  5 => '周五',
+  6 => '周六',
+  7 => '周日',
+  _ => '未知',
+};
+
+List<int> _durationOptions(
+  int current, {
+  List<int> options = const [15, 25, 30, 45, 60, 90, 120, 180],
+}) => ({...options, current}.toList()..sort());
+
 final class _CapabilityChip extends StatelessWidget {
   const _CapabilityChip({required this.label, required this.enabled});
 
@@ -531,6 +995,9 @@ String _phaseText(AgentPhase phase) => switch (phase) {
   AgentPhase.verifying => '正在验证模型并保存设置…',
   AgentPhase.generating => '正在生成回复…',
   AgentPhase.executingRead => '正在查询资料…',
+  AgentPhase.waitingForApproval => '等待你批准方案…',
+  AgentPhase.waitingForSchool => '等待你在学校页面继续…',
+  AgentPhase.committing => '正在提交本地修改…',
   AgentPhase.settling => '正在保存回复…',
   AgentPhase.recovery => '正在恢复本地状态…',
   AgentPhase.maintenance => '本地维护中…',

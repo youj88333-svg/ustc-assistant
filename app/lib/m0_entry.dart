@@ -5,6 +5,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app/demo_runtime.dart';
 import 'app/product_app.dart';
+import 'app/app_shell_contract.dart';
 import 'app/app_settings_page.dart';
 import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
@@ -22,6 +23,8 @@ import 'app/young_business_probe_panel.dart';
 import 'app/young_sync_panel.dart';
 import 'app/public_validation_panel.dart';
 import 'core/contracts.dart';
+import 'core/calendar_contract.dart';
+import 'core/agenda_contract.dart';
 
 // This temporary panel is absent from normal product navigation.
 const m3ValidationEnabled = bool.fromEnvironment('USTC_M3_VALIDATION');
@@ -50,6 +53,10 @@ final class OwnedApplication extends StatefulWidget {
 
 final class _OwnedAppState extends State<OwnedApplication> {
   late final AppLifecycleListener _lifecycle;
+  var _destination = ValueNotifier<ShellDestination>(ShellDestination.agent);
+  int? _navigationResetEpoch;
+  CalendarReference? _evidenceSelection;
+  bool _evidenceTasks = false;
   @override
   void initState() {
     super.initState();
@@ -68,6 +75,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
   @override
   void dispose() {
     _lifecycle.dispose();
+    _destination.dispose();
     super.dispose();
   }
 
@@ -94,12 +102,63 @@ final class _OwnedAppState extends State<OwnedApplication> {
           home: MaintenanceRecoveryPage(settings: bootstrap.settings),
         );
       }
+      final resetEpoch = view.snapshot?.context.resetEpoch;
+      if (_navigationResetEpoch != null &&
+          resetEpoch != _navigationResetEpoch) {
+        _destination.dispose();
+        _destination = ValueNotifier<ShellDestination>(ShellDestination.agent);
+        _evidenceSelection = null;
+        _evidenceTasks = false;
+      }
+      _navigationResetEpoch = resetEpoch;
       return ProductApp(
         key: ValueKey(view.snapshot?.context.resetEpoch),
         controller: runtime.shell,
+        destination: _destination,
+        onDestinationChanged: (next) {
+          if (_destination.value != next) _destination.value = next;
+        },
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
           pickImages: pickAgentImages,
+          onOpenLocalEvidence: (evidence) async {
+            final navigationEpoch = _navigationResetEpoch;
+            try {
+              if (evidence.eventReference != null) {
+                final detail = await runtime.jwStore.localCalendar.detail(
+                  evidence.eventReference!,
+                );
+                await runtime.calendar.load(
+                  day: beijingDay(detail.occurrence.startsAtUtc),
+                  filter: CalendarFilter.all,
+                  includeInactive: true,
+                );
+                if (mounted && _navigationResetEpoch == navigationEpoch) {
+                  _evidenceSelection = detail.occurrence.reference;
+                  _evidenceTasks = false;
+                }
+              } else if (evidence.taskReference != null) {
+                final detail = await runtime.jwStore.localCalendar.taskDetail(
+                  evidence.taskReference!,
+                );
+                await runtime.calendar.loadTasks();
+                await runtime.calendar.selectTask(detail.task.reference);
+                if (mounted && _navigationResetEpoch == navigationEpoch) {
+                  _evidenceSelection = null;
+                  _evidenceTasks = true;
+                }
+              }
+              if (mounted && _navigationResetEpoch == navigationEpoch) {
+                _destination.value = ShellDestination.agenda;
+              }
+            } catch (_) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('这条历史引用已变化，请重新查询当前日程或任务。')),
+                );
+              }
+            }
+          },
           onSettings: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (context) => Scaffold(
@@ -116,6 +175,16 @@ final class _OwnedAppState extends State<OwnedApplication> {
           key: ValueKey(view.snapshot?.context.agendaEpoch),
           controller: runtime.calendar,
           tasks: runtime.calendar,
+          initialTasks: _evidenceTasks,
+          initialSelection: _evidenceSelection,
+          onInitialNavigationConsumed: () {
+            _evidenceSelection = null;
+            _evidenceTasks = false;
+          },
+          onDiscuss: (selection) async {
+            await runtime.agent.prepareDiscussion(selection);
+            if (mounted) _destination.value = ShellDestination.agent;
+          },
         ),
         settingsBuilder: (context) => ApplicationSettingsPage(
           settings: runtime.settings,

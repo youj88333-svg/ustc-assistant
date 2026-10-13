@@ -1,7 +1,29 @@
 import 'package:flutter/foundation.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_action_contract.dart';
+import '../core/agent_discussion_contract.dart';
+
+/// C5 human buttons only. None of these methods are a model-callable tool.
+abstract interface class AgentActionWorkspacePort {
+  Future<void> approveAction(String actionId);
+  Future<void> rejectAction(String actionId);
+  Future<void> continueSchool();
+}
+
+abstract interface class AgentPreferencesWorkspacePort {
+  Future<AgentPlanningPreferences> readPlanningPreferences();
+  Future<void> savePlanningPreferences(AgentPlanningPreferences preferences);
+}
 
 typedef AgentWorkspaceView = AgentRuntimeView;
+
+abstract interface class AgentDiscussionWorkspacePort {
+  Future<void> prepareDiscussion(AgentDiscussionSelection selection);
+}
+
+abstract interface class AgentHistoryWorkspacePort {
+  Future<void> loadOlderMessages();
+}
 
 abstract interface class AgentWorkspacePort implements Listenable {
   AgentWorkspaceView get view;

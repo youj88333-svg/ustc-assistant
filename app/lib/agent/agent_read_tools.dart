@@ -10,6 +10,7 @@ import '../core/contracts.dart';
 import '../core/knowledge_contract.dart';
 import '../core/public_query_contract.dart';
 import 'agent_tool_contract.dart';
+import '../core/agent_discussion_contract.dart';
 import 'model_gateway_contract.dart';
 
 const _maxListSize = 20;
@@ -351,6 +352,8 @@ final class AgentReadTools implements AgentReadToolsPort {
     String? locator,
     String? sourceVersion,
     String snippet = '',
+    CalendarReference? eventReference,
+    TaskReference? taskReference,
   }) => _validatedEvidence(
     id: id,
     provider: provider,
@@ -366,6 +369,8 @@ final class AgentReadTools implements AgentReadToolsPort {
     locator: locator,
     sourceVersion: sourceVersion,
     snippet: snippet,
+    eventReference: eventReference,
+    taskReference: taskReference,
   );
 
   @override
@@ -391,7 +396,11 @@ final class AgentReadTools implements AgentReadToolsPort {
   }
 }
 
-final class _AgentToolSession implements AgentToolSession {
+final class _AgentToolSession
+    implements
+        AgentToolSession,
+        AgentLocalReferenceSession,
+        AgentDiscussionToolSession {
   _AgentToolSession(this._owner);
   final AgentReadTools _owner;
   final Map<String, _EventRef> _eventRefs = {};
@@ -407,6 +416,73 @@ final class _AgentToolSession implements AgentToolSession {
 
   @override
   List<AgentEvidence> get evidence => List.unmodifiable(_evidence);
+  @override
+  Future<String> selectForDiscussion(AgentDiscussionSelection selection) async {
+    _ensureActive();
+    final token = _newToken('r_');
+    if (selection.event != null) {
+      final detail = await _owner.calendar.detail(selection.event!);
+      final first = beijingDay(detail.occurrence.startsAtUtc);
+      final window = await _owner.calendar.query(
+        CalendarQuery(
+          firstDay: first,
+          endDayExclusive: first.add(const Duration(days: 1)),
+          includeHidden: true,
+          includeSkipped: true,
+        ),
+      );
+      await _owner.calendar.detail(selection.event!);
+      await _ensureCalendar(window.context, window.revision);
+      _eventRefs[token] = _EventRef(
+        detail.occurrence.reference,
+        window.context,
+        window.revision,
+        _expiry(),
+      );
+      _localSnapshots.add(_LocalSnapshot(window.context, window.revision));
+      return '用户从日程页选中 event_ref=$token；先用read_event核对详情。此选择不是批准。';
+    }
+    if (selection.task != null) {
+      final detail = await _owner.tasks.taskDetail(selection.task!);
+      final context = detail.task.reference.context;
+      final window = await _owner.tasks.queryTasks(const TaskQuery(limit: 1));
+      await _owner.tasks.taskDetail(selection.task!);
+      await _ensureCalendar(context, window.revision);
+      _taskRefs[token] = _TaskRef(
+        detail.task.reference,
+        context,
+        window.revision,
+        _expiry(),
+      );
+      _localSnapshots.add(_LocalSnapshot(context, window.revision));
+      return '用户从任务页选中 task_ref=$token；先用read_task核对详情。此选择不是批准。';
+    }
+    throw const AgentFailure(AgentFailureCode.invalidInput);
+  }
+
+  @override
+  Future<(CalendarReference, int)> resolveEventReference(String token) async {
+    _ensureActive();
+    _prune();
+    final issued = _eventRefs[token];
+    if (issued == null) {
+      throw const CalendarFailure(CalendarFailureCode.staleReference);
+    }
+    await _ensureCalendar(issued.context, issued.revision);
+    return (issued.reference, issued.revision);
+  }
+
+  @override
+  Future<(TaskReference, int)> resolveTaskReference(String token) async {
+    _ensureActive();
+    _prune();
+    final issued = _taskRefs[token];
+    if (issued == null) {
+      throw const CalendarFailure(CalendarFailureCode.staleReference);
+    }
+    await _ensureCalendar(issued.context, issued.revision);
+    return (issued.reference, issued.revision);
+  }
 
   int get _referenceCount =>
       _eventRefs.length +
@@ -617,6 +693,8 @@ final class _AgentToolSession implements AgentToolSession {
     required String locator,
     required String snippet,
     required bool complete,
+    CalendarReference? eventReference,
+    TaskReference? taskReference,
   }) => _owner._evidence(
     id: _randomHex('e_', 16),
     provider: 'local',
@@ -626,6 +704,8 @@ final class _AgentToolSession implements AgentToolSession {
     complete: complete,
     locator: locator,
     snippet: _clipRunes(snippet, 400),
+    eventReference: eventReference,
+    taskReference: taskReference,
   );
 
   AgentEvidence _publicEvidence({
@@ -728,6 +808,7 @@ final class _AgentToolSession implements AgentToolSession {
       locator: token,
       snippet: '${item.title}；$timeText；地点：$location$teacherText',
       complete: complete,
+      eventReference: item.reference,
     );
   }
 
@@ -901,6 +982,7 @@ final class _AgentToolSession implements AgentToolSession {
       });
       final ev = _localEvidence(
         title: task.draft.title,
+        taskReference: task.reference,
         scope: '本地任务列表',
         locator: token,
         snippet:
@@ -964,6 +1046,7 @@ final class _AgentToolSession implements AgentToolSession {
         : _beijingDateTime(task.draft.deadlineAtUtc!);
     final evidence = _localEvidence(
       title: task.draft.title,
+      taskReference: task.reference,
       scope: '本地任务详情',
       locator: token,
       snippet:
@@ -2338,6 +2421,8 @@ AgentEvidence _validatedEvidence({
   String? locator,
   String? sourceVersion,
   String snippet = '',
+  CalendarReference? eventReference,
+  TaskReference? taskReference,
 }) {
   final value = AgentEvidence(
     id: id,
@@ -2355,6 +2440,8 @@ AgentEvidence _validatedEvidence({
     sourceVersion: sourceVersion,
     snippet: snippet,
     applicability: 'unknown',
+    eventReference: eventReference,
+    taskReference: taskReference,
   );
   agentEvidenceToMap(value);
   return value;
@@ -2431,9 +2518,21 @@ const _toolRequiredFields = <String, Set<String>>{
   'read_campus_article': {'article_ref'},
 };
 
+/// Reuses the closed JSON parser for the bounded action adapter. No duplicate
+/// keys or deeply nested model arguments are accepted.
+Map<String, Object?> parseAgentActionArguments(String source) {
+  AgentText.requireSafe(source, maxCharacters: 16384);
+  final value = _StrictJsonParser(source, maxNodes: 768).parse();
+  if (value is! Map<String, Object?>) {
+    throw const AgentFailure(AgentFailureCode.invalidInput);
+  }
+  return value;
+}
+
 final class _StrictJsonParser {
-  _StrictJsonParser(this.source);
+  _StrictJsonParser(this.source, {this.maxNodes = 256});
   final String source;
+  final int maxNodes;
   int _offset = 0;
   int _nodes = 0;
 
@@ -2446,7 +2545,7 @@ final class _StrictJsonParser {
   }
 
   Object? _value(int depth) {
-    if (depth > 8 || ++_nodes > 256) _invalid();
+    if (depth > 8 || ++_nodes > maxNodes) _invalid();
     _space();
     if (_offset >= source.length) _invalid();
     return switch (source.codeUnitAt(_offset)) {

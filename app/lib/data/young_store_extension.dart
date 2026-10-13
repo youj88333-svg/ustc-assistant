@@ -503,6 +503,12 @@ extension YoungStoreOperations on JwStore {
         await _commitSchoolCredentials(ticket, at);
         await onYoungCheckpoint?.call(YoungStoreCheckpoint.beforeCommit);
         await _requireYoungCurrent(ticket, allowCommitted: true);
+        if (ticket.stamp.kind == YoungJobKind.calendar) {
+          await customStatement(
+            'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+          );
+        }
+        await agent._commitSourceAction(ticket, count);
         return YoungCompletionReceipt(
           operationId: ticket.stamp.jobId,
           kind: ticket.stamp.kind,
@@ -512,6 +518,14 @@ extension YoungStoreOperations on JwStore {
         );
       });
       succeeded = true;
+      if (!receipt.replayed) {
+        if (receipt.kind == YoungJobKind.calendar) {
+          localCalendar._signal(
+            (await localCalendar._agendaState()).read<int>('revision'),
+          );
+        }
+        agent._signal();
+      }
       if (!receipt.replayed &&
           ticket._saveCredential &&
           ticket._pendingCredential != null) {

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_display_style.dart';
 import 'task_workspace_contract.dart';
@@ -14,9 +15,10 @@ const _line = Color(0xFFE3E9E5);
 
 /// Task and PlanBlock UI. The port owns reads, writes, busy state and refresh.
 final class TaskWorkspacePage extends StatefulWidget {
-  const TaskWorkspacePage({super.key, required this.port});
+  const TaskWorkspacePage({super.key, required this.port, this.onDiscuss});
 
   final TaskWorkspacePort port;
+  final ValueChanged<AgentDiscussionSelection>? onDiscuss;
 
   @override
   State<TaskWorkspacePage> createState() => _TaskWorkspacePageState();
@@ -510,6 +512,23 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
               padding: const EdgeInsets.fromLTRB(15, 12, 15, 16),
               children: [
                 _taskDetailHeader(view, detail),
+                if (widget.onDiscuss != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('task-detail-discuss'),
+                      onPressed: () => widget.onDiscuss!(
+                        AgentDiscussionSelection.task(detail.task.reference),
+                      ),
+                      icon: const Icon(
+                        Icons.chat_bubble_outline_rounded,
+                        size: 18,
+                      ),
+                      label: const Text('交给 Agent 讨论'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 11),
                 Wrap(
                   spacing: 6,

@@ -455,6 +455,8 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
     'personal_events',
     'agenda_receipts',
     'agenda_audit',
+    'agenda_plan_receipts',
+    'agenda_plan_audit',
     'jw_overlays',
     'jw_events',
     'jw_imports',

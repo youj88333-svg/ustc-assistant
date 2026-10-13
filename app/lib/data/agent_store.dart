@@ -2,12 +2,147 @@ part of 'jw_store.dart';
 
 /// C3 owns encrypted model configuration, safe conversations and lifecycle.
 /// No provider SDK, gateway traffic or Flutter resource is held here.
-final class AgentStore implements AgentDataPort, AgentRunJournalPort {
+final class AgentStore
+    implements
+        AgentDataPort,
+        AgentRunJournalPort,
+        AgentHistoryPagePort,
+        AgentPreferencesPort,
+        AgentActionRecordPort,
+        AgentSourceApprovalPort,
+        AgentPreferencesProposalPort {
   AgentStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
   final Set<ModelSecretLease> _secrets = {};
   final Map<String, AgentRunTicket> _tickets = {};
+  final _actionPermits = Expando<AgentRunTicket>();
+  final _preferencePermits =
+      Expando<(AgentRunTicket, AgentPlanningPreferences)>();
+  final _revokedActionRuns = <String>{};
+  final _sourceActions = Expando<(AgentRunTicket, AgentActionView)>();
+  final _sourceApprovals = Expando<AgentRunTicket>();
+  Future<void> ensureYoungAgentDelivery(
+    AgentRunTicket ticket,
+    YoungJobTicket sourceTicket,
+  ) => _serial(() async {
+    await _requireTicket(ticket);
+    await _db._requireYoungCurrent(sourceTicket, allowCommitted: true);
+    final binding = _sourceActions[sourceTicket];
+    final receipt = await _db
+        .customSelect(
+          'SELECT item_count FROM young_receipts WHERE job_id=?',
+          variables: [Variable.withString(sourceTicket.stamp.jobId)],
+        )
+        .getSingleOrNull();
+    if (binding == null ||
+        !identical(binding.$1, ticket) ||
+        sourceTicket.stamp.kind != YoungJobKind.activities ||
+        receipt == null) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _requireTicket(ticket);
+  });
+  @override
+  Future<void> approveSourceAction(
+    AgentRunTicket ticket,
+    AgentActionView record,
+  ) => _serial(() async {
+    await _ensureSourceRecord(ticket, record);
+    _sourceApprovals[record] = ticket;
+  });
+  Future<void> ensureSourceApproval(
+    AgentRunTicket ticket,
+    AgentActionView record,
+  ) => _serial(() async {
+    await _ensureSourceRecord(ticket, record);
+    if (!identical(_sourceApprovals[record], ticket)) {
+      throw const AgentFailure(AgentFailureCode.consentRequired);
+    }
+  });
+  Future<void> _ensureSourceRecord(
+    AgentRunTicket ticket,
+    AgentActionView record,
+  ) async {
+    await _requireTicket(ticket);
+    if (!identical(_actionPermits[record], ticket) ||
+        record.kind != AgentActionKind.sourceRefresh ||
+        _revokedActionRuns.contains(ticket.runId)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    final row = await _db
+        .customSelect(
+          'SELECT status FROM agent_actions WHERE action_id=?',
+          variables: [Variable.withString(record.id)],
+        )
+        .getSingleOrNull();
+    if (row?.read<String>('status') != 'proposed') {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+  }
+
+  /// Bind only the actual C3 job ticket admitted by this C2 instance.
+  Future<void> bindSourceAction(
+    AgentRunTicket ticket,
+    AgentActionView record,
+    Object sourceTicket,
+  ) => _serial(() async {
+    if (!identical(_actionPermits[record], ticket) ||
+        record.kind != AgentActionKind.sourceRefresh) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _requireTicket(ticket);
+    if (_revokedActionRuns.contains(ticket.runId)) {
+      throw const AgentFailure(AgentFailureCode.cancelled);
+    }
+    if (sourceTicket is JwJobTicket) {
+      if (!identical(_sourceApprovals[record], ticket)) {
+        throw const AgentFailure(AgentFailureCode.consentRequired);
+      }
+      await _db._requireCurrent(sourceTicket);
+    } else if (sourceTicket is YoungJobTicket) {
+      if (sourceTicket.stamp.kind == YoungJobKind.calendar &&
+          !identical(_sourceApprovals[record], ticket)) {
+        throw const AgentFailure(AgentFailureCode.consentRequired);
+      }
+      await _db._requireYoungCurrent(sourceTicket);
+    } else {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    _sourceActions[sourceTicket] = (ticket, record);
+  });
+
+  Future<void> _commitSourceAction(Object sourceTicket, int count) async {
+    final binding = _sourceActions[sourceTicket];
+    if (binding == null) return;
+    await _requireTicket(binding.$1);
+    if (_revokedActionRuns.contains(binding.$1.runId)) {
+      throw const AgentFailure(AgentFailureCode.cancelled);
+    }
+    final current = await _db
+        .customSelect(
+          'SELECT status FROM agent_actions WHERE action_id=?',
+          variables: [Variable.withString(binding.$2.id)],
+        )
+        .getSingleOrNull();
+    if (current?.read<String>('status') != 'proposed') {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _saveAction(
+      binding.$1,
+      _actionWith(binding.$2, AgentActionStatus.committed, count: count),
+    );
+    await _db.customStatement(
+      "INSERT INTO agenda_plan_audit(action,item_count,committed_at) VALUES ('source',?,?)",
+      [count, _db._clock.nowUtc.microsecondsSinceEpoch],
+    );
+    await _db.onAgentCheckpoint?.call();
+    await _requireTicket(binding.$1);
+    if (_revokedActionRuns.contains(binding.$1.runId)) {
+      throw const AgentFailure(AgentFailureCode.cancelled);
+    }
+  }
+
   bool _closed = false;
   int _sequence = 0;
 
@@ -50,6 +185,84 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
     "ALTER TABLE agent_messages ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]' CHECK(length(steps_json)<=8192)",
     'ALTER TABLE agent_messages ADD COLUMN image_count INTEGER NOT NULL DEFAULT 0 CHECK(image_count BETWEEN 0 AND 3)',
   ];
+
+  @override
+  Future<AgentPlanningPreferences> readPlanningPreferences() =>
+      _readPlanningPreferences();
+  @override
+  Future<void> savePlanningPreferences(AgentPlanningPreferences expected) =>
+      _savePlanningPreferences(expected);
+  @override
+  Future<AgentActionView> preparePreferencesPlan(
+    AgentRunTicket ticket,
+    AgentPlanningPreferences preferences,
+  ) => _preparePreferencesPlan(ticket, preferences);
+  @override
+  Future<void> commitPreferencesPlan(
+    AgentRunTicket ticket,
+    AgentActionView record,
+  ) => _commitPreferencesPlan(ticket, record);
+  @override
+  Future<void> rejectPreferencesPlan(
+    AgentRunTicket ticket,
+    AgentActionView record,
+  ) => _rejectPreferencesPlan(ticket, record);
+  @override
+  Future<AgentActionView> prepareActionRecord(
+    AgentRunTicket ticket,
+    AgentActionKind kind,
+    String title,
+    List<String> details, {
+    String warning = '',
+  }) => _serial(() async {
+    final view = AgentActionView(
+      id: JwStore._randomHexId('agent-action-'),
+      kind: kind,
+      status: AgentActionStatus.proposed,
+      title: title,
+      details: details,
+      warning: warning,
+    );
+    await _db.transaction(() async {
+      await _requireTicket(ticket);
+      await _saveAction(ticket, view);
+    });
+    _actionPermits[view] = ticket;
+    _signal();
+    return view;
+  });
+  @override
+  Future<void> settleActionRecord(
+    AgentRunTicket ticket,
+    AgentActionView record,
+    AgentActionStatus status, {
+    int committedCount = 0,
+  }) => _serial(() async {
+    if (!identical(_actionPermits[record], ticket) ||
+        status == AgentActionStatus.proposed ||
+        status == AgentActionStatus.committed) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _db.transaction(() async {
+      await _requireTicket(ticket);
+      final current = await _db
+          .customSelect(
+            'SELECT status FROM agent_actions WHERE action_id=?',
+            variables: [Variable.withString(record.id)],
+          )
+          .getSingleOrNull();
+      if (current?.read<String>('status') == 'committed') return;
+      if (current?.read<String>('status') != 'proposed') {
+        throw const AgentFailure(AgentFailureCode.staleContext);
+      }
+      _sourceApprovals[record] = null;
+      await _saveAction(
+        ticket,
+        _actionWith(record, status, count: committedCount),
+      );
+    });
+    _signal();
+  });
 
   @override
   Future<void> ensureAgentRun(AgentRunTicket ticket) =>
@@ -121,6 +334,9 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
       secret.revoke();
     }
     _secrets.clear();
+    for (final ticket in _tickets.values) {
+      _revokedActionRuns.add(ticket.runId);
+    }
     _tickets.clear();
   }
 
@@ -135,6 +351,8 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
         FailureCode.ownerConflict => AgentFailureCode.ownershipLost,
         FailureCode.cleanupPending => AgentFailureCode.maintenance,
         FailureCode.busy => AgentFailureCode.busy,
+        FailureCode.staleResult => AgentFailureCode.staleContext,
+        FailureCode.cancelled => AgentFailureCode.cancelled,
         _ => AgentFailureCode.storageFailed,
       });
     }
@@ -190,6 +408,10 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
     );
     await _db.customStatement(
       "UPDATE agent_runs SET status='$status' WHERE status='active'$where",
+      variables,
+    );
+    await _db.customStatement(
+      "UPDATE agent_actions SET status='interrupted' WHERE status='proposed' AND run_id IN (SELECT run_id FROM agent_runs WHERE status='$status'$where)",
       variables,
     );
     final active = (await _state()).read<String?>('active_run');
@@ -504,45 +726,72 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
     return id;
   });
   @override
-  Future<List<AgentMessage>> messages(
+  Future<List<AgentMessage>> messages(String conversationId) =>
+      _serial(() => _messagesPage(conversationId));
+  @override
+  Future<List<AgentMessage>> messagesBefore(
     String conversationId,
-  ) => _serial(() async {
+    int beforeId, {
+    int limit = 100,
+  }) => _serial(
+    () => _messagesPage(conversationId, beforeId: beforeId, limit: limit),
+  );
+  Future<List<AgentMessage>> _messagesPage(
+    String conversationId, {
+    int? beforeId,
+    int limit = 100,
+  }) async {
     await _db._guard();
+    if (beforeId != null && beforeId < 1 || limit < 1 || limit > 100) {
+      throw const AgentFailure(AgentFailureCode.invalidInput);
+    }
     final rows = await _db
         .customSelect(
-          'SELECT * FROM (SELECT * FROM agent_messages WHERE conversation_id=? ORDER BY message_id DESC LIMIT 100) ORDER BY message_id',
-          variables: [Variable.withString(conversationId)],
+          'SELECT * FROM (SELECT * FROM agent_messages WHERE conversation_id=? ${beforeId == null ? "" : "AND message_id<?"} ORDER BY message_id DESC LIMIT ?) ORDER BY message_id',
+          variables: [
+            Variable.withString(conversationId),
+            if (beforeId != null) Variable.withInt(beforeId),
+            Variable.withInt(limit),
+          ],
         )
         .get();
-    return rows
-        .map(
-          (r) => AgentMessage(
-            id: r.read<int>('message_id'),
-            role: AgentMessageRole.values.byName(r.read<String>('role')),
-            text: r.read<String>('text'),
-            status: AgentMessageStatus.values.byName(r.read<String>('status')),
-            createdAtUtc: DateTime.fromMicrosecondsSinceEpoch(
-              r.read<int>('created_at'),
-              isUtc: true,
-            ),
-            evidence: List.unmodifiable(
-              (jsonDecode(r.read<String>('evidence_json')) as List).map(
-                agentEvidenceFromMap,
+    return Future.wait(
+      rows
+          .map(
+            (r) async => AgentMessage(
+              id: r.read<int>('message_id'),
+              role: AgentMessageRole.values.byName(r.read<String>('role')),
+              text: r.read<String>('text'),
+              status: AgentMessageStatus.values.byName(
+                r.read<String>('status'),
               ),
-            ),
-            steps: List.unmodifiable(
-              (jsonDecode(r.read<String>('steps_json')) as List).map(
-                agentStepFromMap,
+              createdAtUtc: DateTime.fromMicrosecondsSinceEpoch(
+                r.read<int>('created_at'),
+                isUtc: true,
               ),
+              evidence: List.unmodifiable(
+                (jsonDecode(r.read<String>('evidence_json')) as List).map(
+                  agentEvidenceFromMap,
+                ),
+              ),
+              steps: List.unmodifiable(
+                (jsonDecode(r.read<String>('steps_json')) as List).map(
+                  agentStepFromMap,
+                ),
+              ),
+              imageCount: r.read<int>('image_count'),
+              actions: r.read<String>('role') == 'assistant'
+                  ? await _actionViews(r.read<String>('run_id'))
+                  : [],
             ),
-            imageCount: r.read<int>('image_count'),
-          ),
-        )
-        .toList();
-  });
+          )
+          .toList(),
+    );
+  }
+
   Future<void> _budget(int extraBytes) async {
     final used = await _db._count(
-      'SELECT COALESCE(SUM(length(CAST(text AS BLOB))+length(CAST(evidence_json AS BLOB))+length(CAST(steps_json AS BLOB))),0) AS count FROM agent_messages',
+      'SELECT (SELECT COALESCE(SUM(length(CAST(text AS BLOB))+length(CAST(evidence_json AS BLOB))+length(CAST(steps_json AS BLOB))),0) FROM agent_messages)+(SELECT COALESCE(SUM(length(CAST(details_json AS BLOB))+length(CAST(title AS BLOB))+length(CAST(warning AS BLOB))),0) FROM agent_actions) AS count',
     );
     if (used + extraBytes > 20 * 1024 * 1024) {
       throw const AgentFailure(AgentFailureCode.resourceLimit);
@@ -638,6 +887,7 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
       );
     });
     _tickets[ticket.runId] = ticket;
+    _revokedActionRuns.clear();
     _signal();
     return ticket;
   });
@@ -692,29 +942,36 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
     }),
   );
   @override
-  Future<void> finishRun(AgentRunTicket ticket, AgentMessageStatus status) =>
-      _serial(() async {
-        if (status == AgentMessageStatus.streaming) {
-          throw const AgentFailure(AgentFailureCode.invalidInput);
-        }
-        await _db.transaction(() async {
-          await _requireTicket(ticket);
-          await _db.customStatement(
-            'UPDATE agent_messages SET status=? WHERE message_id=?',
-            [status.name, ticket.assistantMessageId],
-          );
-          await _db.customStatement(
-            'UPDATE agent_runs SET status=? WHERE run_id=?',
-            [status.name, ticket.runId],
-          );
-          await _db.customStatement(
-            'UPDATE agent_state SET active_run=NULL WHERE singleton=1',
-          );
-          _db._ownership.ensureHeld();
-        });
-        _tickets.remove(ticket.runId);
-        _signal();
-      });
+  Future<void> finishRun(
+    AgentRunTicket ticket,
+    AgentMessageStatus status,
+  ) => _serial(() async {
+    if (status == AgentMessageStatus.streaming) {
+      throw const AgentFailure(AgentFailureCode.invalidInput);
+    }
+    await _db.transaction(() async {
+      await _requireTicket(ticket);
+      await _db.customStatement(
+        'UPDATE agent_messages SET status=? WHERE message_id=?',
+        [status.name, ticket.assistantMessageId],
+      );
+      await _db.customStatement(
+        'UPDATE agent_runs SET status=? WHERE run_id=?',
+        [status.name, ticket.runId],
+      );
+      await _db.customStatement(
+        'UPDATE agent_state SET active_run=NULL WHERE singleton=1',
+      );
+      await _db.customStatement(
+        "UPDATE agent_actions SET status='interrupted' WHERE run_id=? AND status='proposed'",
+        [ticket.runId],
+      );
+      _db._ownership.ensureHeld();
+    });
+    _tickets.remove(ticket.runId);
+    _revokedActionRuns.remove(ticket.runId);
+    _signal();
+  });
   @override
   Future<void> cancelRun(AgentRunTicket ticket) => _serial(() async {
     await _db.transaction(() async {
@@ -730,9 +987,14 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
       await _db.customStatement(
         'UPDATE agent_state SET active_run=NULL,run_generation=run_generation+1 WHERE singleton=1',
       );
+      await _db.customStatement(
+        "UPDATE agent_actions SET status='interrupted' WHERE run_id=? AND status='proposed'",
+        [ticket.runId],
+      );
       _db._ownership.ensureHeld();
     });
     _tickets.remove(ticket.runId);
+    _revokedActionRuns.remove(ticket.runId);
     _signal();
   });
   @override
@@ -796,6 +1058,10 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
                 )
                 .getSingle())
             .read<int>('count');
+    await _db.customStatement(
+      'DELETE FROM agent_actions WHERE run_id IN (SELECT run_id FROM agent_runs$where)',
+      args,
+    );
     for (final table in [
       'agent_messages',
       'agent_runs',
@@ -840,6 +1106,7 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
 
   Future<void> _resetApplication() async {
     for (final table in [
+      'agent_actions',
       'agent_messages',
       'agent_runs',
       'agent_conversations',
@@ -849,6 +1116,9 @@ final class AgentStore implements AgentDataPort, AgentRunJournalPort {
     ]) {
       await _db.customStatement('DELETE FROM $table');
     }
+    await _db.customStatement(
+      "UPDATE agent_preferences SET revision=revision+1,value_json='[[1,2,3,4,5,6,7],420,1439,60,10,[]]' WHERE singleton=1",
+    );
     await _db.customStatement(
       'UPDATE agent_state SET history_epoch=history_epoch+1,config_revision=config_revision+1,request_epoch=request_epoch+1,run_generation=run_generation+1,active_run=NULL WHERE singleton=1',
     );

@@ -3,16 +3,61 @@ part of 'jw_store.dart';
 /// Local business uses the same database, transaction queue and owner as the
 /// accepted school/knowledge stores. It never starts a source or reads secrets.
 final class LocalCalendarStore
-    implements LocalCalendarPort, LocalTaskPort, CalendarReadGuardPort {
+    implements
+        LocalCalendarPort,
+        LocalTaskPort,
+        CalendarReadGuardPort,
+        AgentLocalPlanPort {
   LocalCalendarStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
   final _prepared = <String, String>{};
+  final _agentPlans = <String, _PreparedAgentPlan>{};
+  final _agentApprovals = Expando<_PreparedAgentPlan>();
   bool _closed = false;
   bool _maintenanceRequested = false;
   static const _projection = CalendarProjection();
 
   static const taskSchema = _taskSchema;
+
+  @override
+  Future<(CalendarContext, int)> readPlanContext() => _serial(
+    () async =>
+        (await _context(), (await _agendaState()).read<int>('revision')),
+  );
+  @override
+  Future<AgentLocalPlan> prepareLocalPlan(
+    AgentRunTicket ticket,
+    CalendarContext context,
+    int revision,
+    List<AgentLocalChange> changes, {
+    bool requireFree = false,
+    int? preferencesRevision,
+  }) => _prepareAgentPlan(
+    ticket,
+    context,
+    revision,
+    changes,
+    requireFree: requireFree,
+    preferencesRevision: preferencesRevision,
+  );
+  @override
+  Future<AgentPlanApproval> approveLocalPlan(AgentLocalPlan plan) =>
+      _approveAgentPlan(plan);
+  @override
+  Future<void> rejectLocalPlan(AgentLocalPlan plan) => _rejectAgentPlan(plan);
+  @override
+  Future<AgentLocalPlanReceipt> commitLocalPlan(AgentPlanApproval approval) =>
+      _commitAgentPlan(approval);
+  @override
+  void revokeLocalPlans(AgentRunTicket ticket) {
+    if (identical(_db.agent._tickets[ticket.runId], ticket)) {
+      _db.agent._revokedActionRuns.add(ticket.runId);
+    }
+    for (final prepared in _agentPlans.values) {
+      if (identical(prepared.plan.ticket, ticket)) prepared.revoked = true;
+    }
+  }
 
   @override
   Future<TaskWindow> queryTasks(TaskQuery query) => _queryTasks(query);
@@ -148,6 +193,9 @@ final class LocalCalendarStore
   void _invalidateMemory() {
     _closed = true;
     _prepared.clear();
+    for (final prepared in _agentPlans.values) {
+      prepared.revoked = true;
+    }
   }
 
   /// Internal maintenance entry for the later C5 maintenance workflow. It
@@ -156,6 +204,9 @@ final class LocalCalendarStore
   Future<CalendarContext> beginMaintenance() {
     _maintenanceRequested = true;
     _prepared.clear();
+    for (final prepared in _agentPlans.values) {
+      prepared.revoked = true;
+    }
     return _serial(() async {
       final result = await _db.transaction(() async {
         final state = await _agendaState();
@@ -688,277 +739,301 @@ final class LocalCalendarStore
   }
 
   @override
-  Future<CalendarWriteReceipt> commit(
-    CalendarCommand command,
-  ) => _serial(() async {
-    final receipt = await _db.transaction(() async {
+  Future<CalendarWriteReceipt> commit(CalendarCommand command) =>
+      _serial(() async {
+        final receipt = await _db.transaction(() => _commitBody(command));
+        _prepared.remove(command.operationId);
+        if (!receipt.replayed) _signal(receipt.revision);
+        return receipt;
+      });
+
+  /// Internal transaction body; batch caller owns the one outer transaction,
+  /// approval, receipt, revision, undo slot and post-commit notification.
+  Future<CalendarWriteReceipt> _commitBody(
+    CalendarCommand command, {
+    bool batch = false,
+    void Function(Map<String, dynamic>)? captureUndo,
+  }) async {
+    await _guard(command.context);
+    _validateIntent(command.context, command.intent);
+    if (!RegExp(
+      r'^calendar-local-[0-9a-f]{32}$',
+    ).hasMatch(command.operationId)) {
+      throw const CalendarFailure(CalendarFailureCode.invalidInput);
+    }
+    final intentFingerprint = _fingerprint(command);
+    final prior = batch
+        ? null
+        : await _db
+              .customSelect(
+                'SELECT * FROM agenda_receipts WHERE operation_id=?',
+                variables: [Variable.withString(command.operationId)],
+              )
+              .getSingleOrNull();
+    if (prior != null) {
+      if (prior.read<String>('intent_fingerprint') != intentFingerprint) {
+        throw const CalendarFailure(CalendarFailureCode.idempotencyConflict);
+      }
       await _guard(command.context);
-      _validateIntent(command.context, command.intent);
-      if (!RegExp(
-        r'^calendar-local-[0-9a-f]{32}$',
-      ).hasMatch(command.operationId)) {
-        throw const CalendarFailure(CalendarFailureCode.invalidInput);
-      }
-      final intentFingerprint = _fingerprint(command);
-      final prior = await _db
-          .customSelect(
-            'SELECT * FROM agenda_receipts WHERE operation_id=?',
-            variables: [Variable.withString(command.operationId)],
-          )
-          .getSingleOrNull();
-      if (prior != null) {
-        if (prior.read<String>('intent_fingerprint') != intentFingerprint) {
-          throw const CalendarFailure(CalendarFailureCode.idempotencyConflict);
+      return _receipt(prior, command, replayed: true);
+    }
+    final issued = _prepared[command.operationId];
+    if (!batch && (issued == null || issued != intentFingerprint)) {
+      throw CalendarFailure(
+        issued == null
+            ? CalendarFailureCode.staleReference
+            : CalendarFailureCode.idempotencyConflict,
+      );
+    }
+    final identities = switch (command.intent) {
+      UpdatePersonalSeries(:final target) ||
+      UpdatePersonalOccurrence(:final target) ||
+      SetPersonalOccurrenceState(:final target) ||
+      DeletePersonalSeries(:final target) ||
+      UpdateSchoolAnnotation(:final target) => {target.identity},
+      SaveCalendarRelation(:final left, :final right) => {
+        left.identity,
+        right.identity,
+      },
+      _ => <CalendarIdentity>{},
+    };
+    final snapshot = await _snapshot(targets: identities);
+    CalendarReference? target;
+    CalendarRelationReference? relation;
+    TaskReference? task;
+    CalendarUndoReference? undo;
+    final intent = command.intent;
+    final originalTarget = switch (intent) {
+      UpdatePersonalSeries(:final target) ||
+      UpdatePersonalOccurrence(:final target) ||
+      SetPersonalOccurrenceState(:final target) ||
+      DeletePersonalSeries(:final target) ||
+      UpdateSchoolAnnotation(:final target) => target,
+      _ => null,
+    };
+    if (originalTarget != null) _target(snapshot, originalTarget);
+    final before = intent is UndoCalendarWrite
+        ? <Object?>[]
+        : await _beforeUndo(intent);
+    switch (intent) {
+      case CreatePersonalEvent(:final draft):
+        if (await _db._count(
+              'SELECT COUNT(*) AS count FROM personal_events WHERE deleted=0',
+            ) >=
+            5000) {
+          throw const CalendarFailure(CalendarFailureCode.limitExceeded);
         }
-        await _guard(command.context);
-        return _receipt(prior, command, replayed: true);
-      }
-      final issued = _prepared[command.operationId];
-      if (issued == null || issued != intentFingerprint) {
-        throw CalendarFailure(
-          issued == null
-              ? CalendarFailureCode.staleReference
-              : CalendarFailureCode.idempotencyConflict,
+        await _db.customStatement(
+          'INSERT INTO personal_events(version,draft_json,deleted) VALUES (1,?,0)',
+          [jsonEncode(draft.canonical)],
         );
-      }
-      final identities = switch (command.intent) {
-        UpdatePersonalSeries(:final target) ||
-        UpdatePersonalOccurrence(:final target) ||
-        SetPersonalOccurrenceState(:final target) ||
-        DeletePersonalSeries(:final target) ||
-        UpdateSchoolAnnotation(:final target) => {target.identity},
-        SaveCalendarRelation(:final left, :final right) => {
-          left.identity,
-          right.identity,
-        },
-        _ => <CalendarIdentity>{},
-      };
-      final snapshot = await _snapshot(targets: identities);
-      CalendarReference? target;
-      CalendarRelationReference? relation;
-      TaskReference? task;
-      CalendarUndoReference? undo;
-      final intent = command.intent;
-      final originalTarget = switch (intent) {
-        UpdatePersonalSeries(:final target) ||
-        UpdatePersonalOccurrence(:final target) ||
-        SetPersonalOccurrenceState(:final target) ||
-        DeletePersonalSeries(:final target) ||
-        UpdateSchoolAnnotation(:final target) => target,
-        _ => null,
-      };
-      if (originalTarget != null) _target(snapshot, originalTarget);
-      final before = intent is UndoCalendarWrite
-          ? <Object?>[]
-          : await _beforeUndo(intent);
-      switch (intent) {
-        case CreatePersonalEvent(:final draft):
-          if (await _db._count(
-                'SELECT COUNT(*) AS count FROM personal_events WHERE deleted=0',
-              ) >=
-              5000) {
+        final id =
+            (await _db
+                    .customSelect('SELECT last_insert_rowid() AS id')
+                    .getSingle())
+                .read<int>('id');
+        target = CalendarReference(
+          command.context,
+          CalendarIdentity(CalendarKind.personal, id),
+          1,
+        );
+      case UpdatePersonalSeries(:final target, :final draft):
+        _target(snapshot, target);
+        await _db.customStatement(
+          'UPDATE personal_events SET draft_json=?,version=version+1 WHERE local_id=?',
+          [jsonEncode(draft.canonical), target.identity.localId],
+        );
+      case UpdatePersonalOccurrence(:final target, :final replacement):
+        _target(snapshot, target);
+        await _writeOverride(target.identity, replacement: replacement);
+      case SetPersonalOccurrenceState(
+        :final target,
+        :final completed,
+        :final skipped,
+      ):
+        _target(snapshot, target);
+        await _writeOverride(
+          target.identity,
+          completed: completed,
+          skipped: skipped,
+        );
+      case DeletePersonalSeries(:final target):
+        _target(snapshot, target);
+        await _db.customStatement(
+          'UPDATE personal_events SET deleted=1,version=version+1 WHERE local_id=?',
+          [target.identity.localId],
+        );
+      case UpdateSchoolAnnotation(:final target):
+        final current = _target(snapshot, target);
+        if (await _db._account() == null) {
+          throw const CalendarFailure(CalendarFailureCode.staleReference);
+        }
+        await _updateSchool(current, intent);
+      case SaveCalendarRelation(
+        :final left,
+        :final right,
+        :final existing,
+        :final kind,
+        :final note,
+      ):
+        if (_target(snapshot, left).allDay || _target(snapshot, right).allDay) {
+          throw const CalendarFailure(CalendarFailureCode.invalidInput);
+        }
+        final pair = [
+          jsonEncode(left.identity.canonical),
+          jsonEncode(right.identity.canonical),
+        ]..sort();
+        final priorRelation = await _db
+            .customSelect(
+              'SELECT * FROM agenda_relations WHERE left_identity=? AND right_identity=?',
+              variables: pair.map(Variable.withString).toList(),
+            )
+            .getSingleOrNull();
+        if (existing == null && priorRelation != null ||
+            existing != null &&
+                (priorRelation == null ||
+                    priorRelation.read<int>('local_id') != existing.localId ||
+                    priorRelation.read<int>('version') != existing.version)) {
+          throw const CalendarFailure(CalendarFailureCode.staleReference);
+        }
+        if (existing == null) {
+          if (snapshot.relations.length >= 5000) {
             throw const CalendarFailure(CalendarFailureCode.limitExceeded);
           }
           await _db.customStatement(
-            'INSERT INTO personal_events(version,draft_json,deleted) VALUES (1,?,0)',
-            [jsonEncode(draft.canonical)],
+            'INSERT INTO agenda_relations(left_identity,right_identity,kind,note,version) VALUES (?,?,?,?,1)',
+            [...pair, kind.name, note],
           );
           final id =
               (await _db
                       .customSelect('SELECT last_insert_rowid() AS id')
                       .getSingle())
                   .read<int>('id');
-          target = CalendarReference(
+          relation = CalendarRelationReference(command.context, id, 1);
+        } else {
+          await _db.customStatement(
+            'UPDATE agenda_relations SET kind=?,note=?,version=version+1 WHERE local_id=?',
+            [kind.name, note, existing.localId],
+          );
+          relation = CalendarRelationReference(
             command.context,
-            CalendarIdentity(CalendarKind.personal, id),
-            1,
+            existing.localId,
+            existing.version + 1,
           );
-        case UpdatePersonalSeries(:final target, :final draft):
-          _target(snapshot, target);
-          await _db.customStatement(
-            'UPDATE personal_events SET draft_json=?,version=version+1 WHERE local_id=?',
-            [jsonEncode(draft.canonical), target.identity.localId],
-          );
-        case UpdatePersonalOccurrence(:final target, :final replacement):
-          _target(snapshot, target);
-          await _writeOverride(target.identity, replacement: replacement);
-        case SetPersonalOccurrenceState(
-          :final target,
-          :final completed,
-          :final skipped,
-        ):
-          _target(snapshot, target);
-          await _writeOverride(
-            target.identity,
-            completed: completed,
-            skipped: skipped,
-          );
-        case DeletePersonalSeries(:final target):
-          _target(snapshot, target);
-          await _db.customStatement(
-            'UPDATE personal_events SET deleted=1,version=version+1 WHERE local_id=?',
-            [target.identity.localId],
-          );
-        case UpdateSchoolAnnotation(:final target):
-          final current = _target(snapshot, target);
-          if (await _db._account() == null) {
-            throw const CalendarFailure(CalendarFailureCode.staleReference);
-          }
-          await _updateSchool(current, intent);
-        case SaveCalendarRelation(
-          :final left,
-          :final right,
-          :final existing,
-          :final kind,
-          :final note,
-        ):
-          if (_target(snapshot, left).allDay ||
-              _target(snapshot, right).allDay) {
-            throw const CalendarFailure(CalendarFailureCode.invalidInput);
-          }
-          final pair = [
-            jsonEncode(left.identity.canonical),
-            jsonEncode(right.identity.canonical),
-          ]..sort();
-          final priorRelation = await _db
-              .customSelect(
-                'SELECT * FROM agenda_relations WHERE left_identity=? AND right_identity=?',
-                variables: pair.map(Variable.withString).toList(),
-              )
-              .getSingleOrNull();
-          if (existing == null && priorRelation != null ||
-              existing != null &&
-                  (priorRelation == null ||
-                      priorRelation.read<int>('local_id') != existing.localId ||
-                      priorRelation.read<int>('version') != existing.version)) {
-            throw const CalendarFailure(CalendarFailureCode.staleReference);
-          }
-          if (existing == null) {
-            if (snapshot.relations.length >= 5000) {
-              throw const CalendarFailure(CalendarFailureCode.limitExceeded);
-            }
-            await _db.customStatement(
-              'INSERT INTO agenda_relations(left_identity,right_identity,kind,note,version) VALUES (?,?,?,?,1)',
-              [...pair, kind.name, note],
-            );
-            final id =
-                (await _db
-                        .customSelect('SELECT last_insert_rowid() AS id')
-                        .getSingle())
-                    .read<int>('id');
-            relation = CalendarRelationReference(command.context, id, 1);
-          } else {
-            await _db.customStatement(
-              'UPDATE agenda_relations SET kind=?,note=?,version=version+1 WHERE local_id=?',
-              [kind.name, note, existing.localId],
-            );
-            relation = CalendarRelationReference(
-              command.context,
-              existing.localId,
-              existing.version + 1,
-            );
-          }
-          await _touchEndpoints(left.identity, right.identity);
-        case DeleteCalendarRelation(:final target):
-          final row = await _db
-              .customSelect(
-                'SELECT * FROM agenda_relations WHERE local_id=?',
-                variables: [Variable.withInt(target.localId)],
-              )
-              .getSingleOrNull();
-          if (row == null || row.read<int>('version') != target.version) {
-            throw const CalendarFailure(CalendarFailureCode.staleReference);
-          }
-          await _db.customStatement(
-            'DELETE FROM agenda_relations WHERE local_id=?',
-            [target.localId],
-          );
-          await _touchEndpoints(
-            _decodeIdentity(row.read<String>('left_identity')),
-            _decodeIdentity(row.read<String>('right_identity')),
-          );
-        case CreateTask() ||
-            UpdateTask() ||
-            SetTaskStatus() ||
-            DeleteTask() ||
-            CreatePlanBlock() ||
-            UpdatePlanBlock() ||
-            SetPlanBlockStatus() ||
-            DeletePlanBlock():
-          (task, target) = await _applyTask(command);
-        case UndoCalendarWrite(target: final slot):
-          (target, task, relation) = await _applyUndo(slot);
-      }
-      // Avoid deriving targets from UI: every result refers to the C3-verified
-      // identity above. An edit to one occurrence increments the whole series.
-      final changedRef = switch (intent) {
-        UpdatePersonalSeries(:final target) ||
-        UpdatePersonalOccurrence(:final target) ||
-        SetPersonalOccurrenceState(:final target) ||
-        DeletePersonalSeries(:final target) ||
-        UpdateSchoolAnnotation(:final target) => target,
-        _ => null,
-      };
-      if (changedRef != null) {
-        target = CalendarReference(
-          command.context,
-          changedRef.identity,
-          changedRef.version + 1,
+        }
+        await _touchEndpoints(left.identity, right.identity);
+      case DeleteCalendarRelation(:final target):
+        final row = await _db
+            .customSelect(
+              'SELECT * FROM agenda_relations WHERE local_id=?',
+              variables: [Variable.withInt(target.localId)],
+            )
+            .getSingleOrNull();
+        if (row == null || row.read<int>('version') != target.version) {
+          throw const CalendarFailure(CalendarFailureCode.staleReference);
+        }
+        await _db.customStatement(
+          'DELETE FROM agenda_relations WHERE local_id=?',
+          [target.localId],
         );
-      }
-      if (intent is! UndoCalendarWrite) {
+        await _touchEndpoints(
+          _decodeIdentity(row.read<String>('left_identity')),
+          _decodeIdentity(row.read<String>('right_identity')),
+        );
+      case CreateTask() ||
+          UpdateTask() ||
+          SetTaskStatus() ||
+          DeleteTask() ||
+          CreatePlanBlock() ||
+          UpdatePlanBlock() ||
+          SetPlanBlockStatus() ||
+          DeletePlanBlock():
+        (task, target) = await _applyTask(command);
+      case UndoCalendarWrite(target: final slot):
+        (target, task, relation) = await _applyUndo(slot);
+    }
+    // Avoid deriving targets from UI: every result refers to the C3-verified
+    // identity above. An edit to one occurrence increments the whole series.
+    final changedRef = switch (intent) {
+      UpdatePersonalSeries(:final target) ||
+      UpdatePersonalOccurrence(:final target) ||
+      SetPersonalOccurrenceState(:final target) ||
+      DeletePersonalSeries(:final target) ||
+      UpdateSchoolAnnotation(:final target) => target,
+      _ => null,
+    };
+    if (changedRef != null) {
+      target = CalendarReference(
+        command.context,
+        changedRef.identity,
+        changedRef.version + 1,
+      );
+    }
+    if (intent is! UndoCalendarWrite) {
+      if (batch) {
+        captureUndo?.call(
+          await _buildUndoPayload(command, before, target, task, relation),
+        );
+      } else {
         undo = await _recordUndo(command, before, target, task, relation);
       }
-      if (_db.onCalendarCheckpoint != null) await _db.onCalendarCheckpoint!();
-      await _guard(command.context);
-      final at = _db._clock.nowUtc;
-      if (!at.isUtc) {
-        throw const CalendarFailure(CalendarFailureCode.storageFailed);
-      }
-      await _db.customStatement(
-        'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
-      );
-      final revision = (await _agendaState()).read<int>('revision');
-      await _db.customStatement(
-        'INSERT INTO agenda_audit(action,item_count,committed_at) VALUES (?,?,?)',
-        [
-          intent.canonical.first as String,
-          intent is SaveCalendarRelation ? 2 : 1,
-          at.microsecondsSinceEpoch,
-        ],
-      );
-      await _db.customStatement(
-        'INSERT INTO agenda_receipts(operation_id,intent_fingerprint,revision,target_json,relation_json,committed_at,task_json,undo_id) VALUES (?,?,?,?,?,?,?,?)',
-        [
-          command.operationId,
-          intentFingerprint,
-          revision,
-          target == null
-              ? null
-              : jsonEncode([...target.identity.canonical, target.version]),
-          relation == null
-              ? null
-              : jsonEncode([relation.localId, relation.version]),
-          at.microsecondsSinceEpoch,
-          task == null ? null : jsonEncode([task.localId, task.version]),
-          undo?.undoId,
-        ],
-      );
-      await _guard(command.context);
+    }
+    if (_db.onCalendarCheckpoint != null) await _db.onCalendarCheckpoint!();
+    await _guard(command.context);
+    final at = _db._clock.nowUtc;
+    if (!at.isUtc) {
+      throw const CalendarFailure(CalendarFailureCode.storageFailed);
+    }
+    if (batch) {
       return CalendarWriteReceipt(
         operationId: command.operationId,
-        revision: revision,
+        revision: (await _agendaState()).read<int>('revision'),
         replayed: false,
         target: target,
         relation: relation,
         task: task,
-        undo: undo,
       );
-    });
-    _prepared.remove(command.operationId);
-    if (!receipt.replayed) _signal(receipt.revision);
-    return receipt;
-  });
+    }
+    await _db.customStatement(
+      'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+    );
+    final revision = (await _agendaState()).read<int>('revision');
+    await _db.customStatement(
+      'INSERT INTO agenda_audit(action,item_count,committed_at) VALUES (?,?,?)',
+      [
+        intent.canonical.first as String,
+        intent is SaveCalendarRelation ? 2 : 1,
+        at.microsecondsSinceEpoch,
+      ],
+    );
+    await _db.customStatement(
+      'INSERT INTO agenda_receipts(operation_id,intent_fingerprint,revision,target_json,relation_json,committed_at,task_json,undo_id) VALUES (?,?,?,?,?,?,?,?)',
+      [
+        command.operationId,
+        intentFingerprint,
+        revision,
+        target == null
+            ? null
+            : jsonEncode([...target.identity.canonical, target.version]),
+        relation == null
+            ? null
+            : jsonEncode([relation.localId, relation.version]),
+        at.microsecondsSinceEpoch,
+        task == null ? null : jsonEncode([task.localId, task.version]),
+        undo?.undoId,
+      ],
+    );
+    await _guard(command.context);
+    return CalendarWriteReceipt(
+      operationId: command.operationId,
+      revision: revision,
+      replayed: false,
+      target: target,
+      relation: relation,
+      task: task,
+      undo: undo,
+    );
+  }
 
   Future<void> _writeOverride(
     CalendarIdentity identity, {

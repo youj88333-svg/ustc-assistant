@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 
 import '../core/agenda_contract.dart';
+import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_event_editor.dart';
 import 'calendar_display_style.dart';
@@ -19,10 +20,18 @@ final class CalendarWorkspacePage extends StatefulWidget {
     super.key,
     required this.controller,
     this.tasks,
+    this.onDiscuss,
+    this.initialTasks = false,
+    this.initialSelection,
+    this.onInitialNavigationConsumed,
   });
 
   final CalendarWorkspacePort controller;
   final TaskWorkspacePort? tasks;
+  final ValueChanged<AgentDiscussionSelection>? onDiscuss;
+  final bool initialTasks;
+  final CalendarReference? initialSelection;
+  final VoidCallback? onInitialNavigationConsumed;
 
   @override
   State<CalendarWorkspacePage> createState() => _CalendarWorkspacePageState();
@@ -37,6 +46,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   int _controllerGeneration = 0;
   int _loadGeneration = 0;
   int _actionGeneration = 0;
+  int _selectionGeneration = 0;
+  bool _hasPendingInitialNavigation = false;
+  bool _initialNavigationConsumed = false;
+  bool _initialTasksWasConsumed = false;
   int _routeDepth = 0;
   NavigatorState? _navigator;
 
@@ -49,21 +62,40 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   @override
   void initState() {
     super.initState();
+    _tasksSelected = widget.initialTasks;
+    _hasPendingInitialNavigation =
+        widget.initialTasks || widget.initialSelection != null;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) unawaited(_load(widget.controller));
+      if (mounted) {
+        unawaited(
+          _load(widget.controller, initialSelection: widget.initialSelection),
+        );
+        _consumeInitialTasksNavigationIfReady();
+      }
     });
   }
 
   @override
   void didUpdateWidget(covariant CalendarWorkspacePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller) ||
-        !identical(oldWidget.tasks, widget.tasks)) {
+    final portsChanged =
+        !identical(oldWidget.controller, widget.controller) ||
+        !identical(oldWidget.tasks, widget.tasks);
+    final selectionChanged =
+        oldWidget.initialSelection != widget.initialSelection;
+    final initialTasksChanged = oldWidget.initialTasks != widget.initialTasks;
+    if (portsChanged) {
       _controllerGeneration++;
       _loadGeneration++;
       _actionGeneration++;
+      _selectionGeneration++;
+      _hasPendingInitialNavigation =
+          widget.initialTasks || widget.initialSelection != null;
+      _initialNavigationConsumed = false;
+      _initialTasksWasConsumed = false;
       final routesToClose = _routeDepth;
       _routeDepth = 0;
+      _tasksSelected = widget.initialTasks;
       _selectedReference = null;
       _notice = null;
       _actionFeedback.value = null;
@@ -72,8 +104,65 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         if (mounted) unawaited(_dismissRoutes(routesToClose));
       });
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_load(widget.controller));
+        if (mounted) {
+          unawaited(
+            _load(widget.controller, initialSelection: widget.initialSelection),
+          );
+          _consumeInitialTasksNavigationIfReady();
+        }
       });
+      return;
+    }
+    if (selectionChanged || initialTasksChanged) {
+      _selectionGeneration++;
+      final clearingConsumedTaskIntent =
+          oldWidget.initialTasks &&
+          !widget.initialTasks &&
+          _initialTasksWasConsumed;
+      final newInitialSelection =
+          selectionChanged && widget.initialSelection != null;
+      final newInitialTaskIntent = initialTasksChanged && widget.initialTasks;
+      if (newInitialSelection || newInitialTaskIntent) {
+        _hasPendingInitialNavigation = true;
+        _initialNavigationConsumed = false;
+        _initialTasksWasConsumed = false;
+      } else if (selectionChanged || initialTasksChanged) {
+        _hasPendingInitialNavigation = false;
+      }
+      if (newInitialSelection) {
+        _tasksSelected = false;
+      } else if (newInitialTaskIntent) {
+        _tasksSelected = widget.initialTasks;
+      } else if (initialTasksChanged &&
+          !clearingConsumedTaskIntent &&
+          !widget.initialTasks) {
+        _tasksSelected = false;
+      }
+      if (newInitialSelection) {
+        final selection = widget.initialSelection!;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted || widget.initialSelection != selection) return;
+          final view = widget.controller.view;
+          if (view.window != null && !view.loading) {
+            final selectionGeneration = ++_selectionGeneration;
+            unawaited(
+              _applyInitialSelection(
+                widget.controller,
+                _controllerGeneration,
+                _loadGeneration,
+                selectionGeneration,
+                selection,
+              ),
+            );
+          } else {
+            unawaited(_load(widget.controller, initialSelection: selection));
+          }
+        });
+      } else if (newInitialTaskIntent && widget.initialSelection == null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _consumeInitialTasksNavigationIfReady();
+        });
+      }
     }
   }
 
@@ -93,6 +182,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     _controllerGeneration++;
     _loadGeneration++;
     _actionGeneration++;
+    _selectionGeneration++;
     _selectedReference = null;
     _notice = null;
     _actionFeedback.dispose();
@@ -130,6 +220,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                 : TaskWorkspacePage(
                     key: ValueKey<TaskWorkspacePort>(widget.tasks!),
                     port: widget.tasks!,
+                    onDiscuss: widget.onDiscuss,
                   ),
           )
         else ...[
@@ -203,7 +294,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         selected: !_tasksSelected,
         visualDensity: VisualDensity.compact,
         onSelected: (selected) {
-          if (selected) setState(() => _tasksSelected = false);
+          if (selected && _tasksSelected) {
+            _selectionGeneration++;
+            setState(() => _tasksSelected = false);
+          }
         },
       ),
       ChoiceChip(
@@ -212,7 +306,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         selected: _tasksSelected,
         visualDensity: VisualDensity.compact,
         onSelected: (selected) {
-          if (selected) setState(() => _tasksSelected = true);
+          if (selected && !_tasksSelected) {
+            _selectionGeneration++;
+            setState(() => _tasksSelected = true);
+          }
         },
       ),
     ],
@@ -1023,6 +1120,20 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ),
         const SizedBox(height: 12),
         Wrap(spacing: 6, runSpacing: 6, children: _stateTags(occurrence)),
+        if (widget.onDiscuss != null) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('calendar-detail-discuss'),
+              onPressed: () => widget.onDiscuss!(
+                AgentDiscussionSelection.event(occurrence.reference),
+              ),
+              icon: const Icon(Icons.chat_bubble_outline_rounded, size: 18),
+              label: const Text('交给 Agent 讨论'),
+            ),
+          ),
+        ],
         const SizedBox(height: 14),
         _DetailLine(
           icon: Icons.schedule_rounded,
@@ -1900,10 +2011,12 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     CalendarViewMode? mode,
     CalendarFilter? filter,
     bool? includeInactive,
+    CalendarReference? initialSelection,
   }) async {
     if (!mounted || !identical(port, widget.controller)) return;
     final controllerGeneration = _controllerGeneration;
     final loadGeneration = ++_loadGeneration;
+    final selectionGeneration = ++_selectionGeneration;
     setState(() {
       _selectedReference = null;
       _notice = null;
@@ -1926,16 +2039,104 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         filter: filter,
         includeInactive: includeInactive,
       );
+      if (!_current(port, controllerGeneration, loadGeneration)) return;
+      if (initialSelection != null) {
+        await _applyInitialSelection(
+          port,
+          controllerGeneration,
+          loadGeneration,
+          selectionGeneration,
+          initialSelection,
+        );
+      }
     } on CalendarFailure catch (failure) {
       if (_current(port, controllerGeneration, loadGeneration)) {
         setState(() => _notice = _failureMessage(failure.code));
+        if (initialSelection != null) {
+          _consumeInitialNavigation(expectedSelection: initialSelection);
+        }
       }
     } catch (_) {
       if (_current(port, controllerGeneration, loadGeneration)) {
         setState(
           () => _notice = _failureMessage(CalendarFailureCode.storageFailed),
         );
+        if (initialSelection != null) {
+          _consumeInitialNavigation(expectedSelection: initialSelection);
+        }
       }
+    }
+  }
+
+  void _consumeInitialTasksNavigationIfReady() {
+    if (!widget.initialTasks || widget.initialSelection != null) return;
+    _consumeInitialNavigation();
+  }
+
+  void _consumeInitialNavigation({CalendarReference? expectedSelection}) {
+    if (!_hasPendingInitialNavigation || _initialNavigationConsumed) return;
+    if (expectedSelection != null &&
+        widget.initialSelection != expectedSelection) {
+      return;
+    }
+    _initialNavigationConsumed = true;
+    _hasPendingInitialNavigation = false;
+    if (widget.initialTasks && widget.initialSelection == null) {
+      _initialTasksWasConsumed = true;
+    }
+    widget.onInitialNavigationConsumed?.call();
+  }
+
+  Future<void> _applyInitialSelection(
+    CalendarWorkspacePort port,
+    int controllerGeneration,
+    int loadGeneration,
+    int selectionGeneration,
+    CalendarReference reference,
+  ) async {
+    bool isCurrentRequest() =>
+        _current(port, controllerGeneration, loadGeneration) &&
+        selectionGeneration == _selectionGeneration &&
+        widget.initialSelection == reference;
+
+    if (!isCurrentRequest()) return;
+    if (port.view.window == null ||
+        port.view.window!.context != reference.context) {
+      setState(() {
+        _selectedReference = null;
+        _notice = '这条日程已更新或当前未能验证，请重新查询后再选择。';
+      });
+      _consumeInitialNavigation(expectedSelection: reference);
+      return;
+    }
+    try {
+      await port.select(reference);
+    } on Object {
+      if (!isCurrentRequest()) return;
+      setState(() {
+        _selectedReference = null;
+        _notice = '这条日程已更新或当前未能验证，请重新查询后再选择。';
+      });
+      _consumeInitialNavigation(expectedSelection: reference);
+      return;
+    }
+    if (!isCurrentRequest()) return;
+    if (port.view.detail?.occurrence.reference != reference) {
+      setState(() {
+        _selectedReference = null;
+        _notice = '这条日程已更新或当前未能验证，请重新查询后再选择。';
+      });
+      _consumeInitialNavigation(expectedSelection: reference);
+      return;
+    }
+    setState(() {
+      _selectedReference = reference;
+      _notice = null;
+    });
+    _consumeInitialNavigation(expectedSelection: reference);
+    if (!mounted) return;
+    if (MediaQuery.sizeOf(context).width < 1080) {
+      await _showDetailSheet(port);
     }
   }
 
@@ -1948,6 +2149,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     final port = expectedPort ?? widget.controller;
     final controllerGeneration = expectedGeneration ?? _controllerGeneration;
     if (!_currentController(port, controllerGeneration)) return;
+    final selectionGeneration = ++_selectionGeneration;
     setState(() {
       _selectedReference = occurrence.reference;
       _notice = null;
@@ -1967,23 +2169,28 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       }
       return;
     }
-    if (!_currentController(port, controllerGeneration)) return;
+    if (!_currentController(port, controllerGeneration) ||
+        selectionGeneration != _selectionGeneration) {
+      return;
+    }
     if (showSheet) {
-      await _withRoute<void>(
-        () => showModalBottomSheet<void>(
-          context: context,
-          isScrollControlled: true,
-          useSafeArea: true,
-          backgroundColor: Colors.transparent,
-          builder: (_) => AnimatedBuilder(
-            animation: port,
-            builder: (context, _) =>
-                _detailPanel(context, port.view, compact: true),
-          ),
-        ),
-      );
+      await _showDetailSheet(port);
     }
   }
+
+  Future<void> _showDetailSheet(CalendarWorkspacePort port) => _withRoute<void>(
+    () => showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => AnimatedBuilder(
+        animation: port,
+        builder: (context, _) =>
+            _detailPanel(context, port.view, compact: true),
+      ),
+    ),
+  );
 
   Future<bool> _execute(
     CalendarIntent intent,
@@ -2391,6 +2598,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   }
 
   void _forgetSelection(CalendarWorkspacePort port) {
+    _selectionGeneration++;
     _selectedReference = null;
     if (mounted) setState(() {});
     unawaited(port.select(null).catchError((Object _) {}));

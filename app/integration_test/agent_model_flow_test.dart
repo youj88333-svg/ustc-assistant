@@ -11,6 +11,7 @@ import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
+import 'package:ustc_assistant_m0/app/agent_workspace_controller.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
@@ -447,6 +448,15 @@ void main() {
               'agent-evidence-${first.agent.view.messages.last.evidence.single.id}',
             ),
           ),
+          findsNothing,
+        );
+        final message = first.agent.view.messages.last;
+        await _tapKey(
+          tester,
+          'agent-query-details-toggle-${first.agent.view.conversationId}:${message.id}',
+        );
+        expect(
+          find.byKey(ValueKey('agent-evidence-${message.evidence.single.id}')),
           findsOneWidget,
         );
 
@@ -550,6 +560,221 @@ void main() {
         );
         expect(nextGateway.requestCount, 0);
         expect(beforeRequests, greaterThan(0));
+      } finally {
+        await _disposeAndClean(tester, workspace, bootstraps);
+      }
+    },
+  );
+
+  testWidgets(
+    'native local plan reject, atomic commit, group undo, and restart stay bound to current cards',
+    (tester) async {
+      final workspace = await _createWorkspace();
+      final bootstraps = <RuntimeBootstrap>[];
+      try {
+        final gateway = _SyntheticGateway()..scriptLocalActions = true;
+        final first = await _openBootstrap(tester, workspace, gateway: gateway);
+        bootstraps.add(first);
+        await _configureAgent(tester, first, key: 'm51-synthetic-only-key');
+        await _runNative(tester, first.runtime!.agent.newConversation);
+        await tester.pumpWidget(_application(first));
+        await tester.pumpAndSettle();
+
+        final localCalendar = first.runtime!.jwStore.localCalendar;
+        Future<TaskWindow> tasks() => _runNative(
+          tester,
+          () =>
+              localCalendar.queryTasks(const TaskQuery(filter: TaskFilter.all)),
+        );
+        expect((await tasks()).items, isEmpty);
+
+        final rejectedRun = await _sendUntilApproval(
+          tester,
+          first.agent,
+          '创建M5合成学习任务，并于2026-10-13 14:00至16:00安排两个连续时间块，各一小时，避开冲突。',
+        );
+        final rejectedProposal = first.agent.view.pendingAction!;
+        final rejectedId = rejectedProposal.id;
+        expect(rejectedProposal.kind, AgentActionKind.localPlan);
+        expect(rejectedProposal.status, AgentActionStatus.proposed);
+        expect(gateway.actionCalls.single.name, 'propose_local_changes');
+        expect(
+          gateway.actionCalls.single.argumentsJson,
+          isNot(contains('approved')),
+        );
+        expect(
+          find.byKey(ValueKey('agent-action-reject-$rejectedId')),
+          findsOneWidget,
+        );
+
+        expect(
+          await _tapCurrentAction(tester, first.agent, approve: false),
+          rejectedId,
+        );
+        await _runNative(tester, () => rejectedRun.completion);
+        await tester.pumpAndSettle();
+        expect(first.agent.view.phase, AgentPhase.idle);
+        expect(first.agent.view.failure, isNull);
+        expect((await tasks()).items, isEmpty);
+        final rejectedHistory = first.agent.view.messages
+            .expand((message) => message.actions)
+            .singleWhere((action) => action.id == rejectedId);
+        expect(rejectedHistory.status, AgentActionStatus.rejected);
+        expect(
+          find.byKey(ValueKey('agent-action-approve-$rejectedId')),
+          findsNothing,
+        );
+
+        final acceptedRun = await _sendUntilApproval(
+          tester,
+          first.agent,
+          '请再次创建M5合成学习任务，并于2026-10-13 14:00至16:00安排两个连续时间块，各一小时，避开冲突。',
+        );
+        final acceptedProposal = first.agent.view.pendingAction!;
+        final acceptedId = acceptedProposal.id;
+        expect(acceptedId, isNot(rejectedId));
+        expect(acceptedProposal.kind, AgentActionKind.localPlan);
+        expect((await tasks()).items, isEmpty);
+        expect(
+          gateway.actionCalls[1].argumentsJson,
+          isNot(contains('approved')),
+        );
+        expect(
+          find.byKey(ValueKey('agent-action-approve-$acceptedId')),
+          findsOneWidget,
+        );
+
+        expect(
+          await _tapCurrentAction(tester, first.agent, approve: true),
+          acceptedId,
+        );
+        await _runNative(tester, () => acceptedRun.completion);
+        await tester.pumpAndSettle();
+        await _scrollAgentToLatest(tester);
+        expect(first.agent.view.phase, AgentPhase.idle);
+        expect(first.agent.view.failure, isNull);
+        final committedPlan = first.agent.view.messages
+            .expand((message) => message.actions)
+            .singleWhere((action) => action.id == acceptedId);
+        expect(committedPlan.status, AgentActionStatus.committed);
+        expect(committedPlan.committedCount, 3);
+        expect(
+          find.byKey(ValueKey('agent-action-committed-$acceptedId')),
+          findsOneWidget,
+        );
+
+        final committedTasks = (await tasks()).items;
+        expect(committedTasks, hasLength(1));
+        expect(committedTasks.single.draft.title, 'M5合成学习任务');
+        expect(committedTasks.single.blockCount, 2);
+        final committedDetail = await _runNative(
+          tester,
+          () => localCalendar.taskDetail(committedTasks.single.reference),
+        );
+        expect(committedDetail.blocks, hasLength(2));
+        expect(
+          committedDetail.blocks
+              .map((block) => block.draft.startsAtUtc)
+              .toSet(),
+          {DateTime.utc(2026, 10, 13, 6), DateTime.utc(2026, 10, 13, 7)},
+        );
+        expect(
+          committedDetail.blocks.map((block) => block.draft.endsAtUtc).toSet(),
+          {DateTime.utc(2026, 10, 13, 7), DateTime.utc(2026, 10, 13, 8)},
+        );
+
+        final undoRun = await _sendUntilApproval(
+          tester,
+          first.agent,
+          '请撤销这次创建的M5合成学习任务和两个时间块。',
+        );
+        final undoProposal = first.agent.view.pendingAction!;
+        final undoId = undoProposal.id;
+        expect(undoProposal.kind, AgentActionKind.undo);
+        expect(undoProposal.status, AgentActionStatus.proposed);
+        expect(gateway.actionCalls.last.name, 'propose_undo');
+        expect(gateway.actionCalls.last.argumentsJson, '{}');
+        expect(
+          find.byKey(ValueKey('agent-action-approve-$undoId')),
+          findsOneWidget,
+        );
+
+        expect(
+          await _tapCurrentAction(tester, first.agent, approve: true),
+          undoId,
+        );
+        await _runNative(tester, () => undoRun.completion);
+        await tester.pumpAndSettle();
+        await _scrollAgentToLatest(tester);
+        expect(first.agent.view.phase, AgentPhase.idle);
+        expect(first.agent.view.failure, isNull);
+        expect((await tasks()).items, isEmpty);
+        final committedUndo = first.agent.view.messages
+            .expand((message) => message.actions)
+            .singleWhere((action) => action.id == undoId);
+        expect(committedUndo.status, AgentActionStatus.committed);
+        expect(committedUndo.committedCount, 1);
+        expect(
+          find.byKey(ValueKey('agent-action-committed-$undoId')),
+          findsOneWidget,
+        );
+
+        await _unmountAndClose(tester, first);
+        final reopenedGateway = _SyntheticGateway();
+        final reopened = await _openBootstrap(
+          tester,
+          workspace,
+          gateway: reopenedGateway,
+        );
+        bootstraps.add(reopened);
+        expect(reopened.runtime, isNotNull);
+        expect(reopened.agent.view.phase, AgentPhase.idle);
+        expect(reopened.agent.view.pendingAction, isNull);
+        expect(reopenedGateway.requestCount, 0);
+        final reopenedTasks = await _runNative(
+          tester,
+          () => reopened.runtime!.jwStore.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          ),
+        );
+        expect(reopenedTasks.items, isEmpty);
+        final persistedActions = reopened.agent.view.messages
+            .expand((message) => message.actions)
+            .toList();
+        expect(
+          persistedActions.any(
+            (action) =>
+                action.id == acceptedId &&
+                action.status == AgentActionStatus.committed &&
+                action.committedCount == 3,
+          ),
+          isTrue,
+        );
+        expect(
+          persistedActions.any(
+            (action) =>
+                action.id == undoId &&
+                action.kind == AgentActionKind.undo &&
+                action.status == AgentActionStatus.committed,
+          ),
+          isTrue,
+        );
+
+        await tester.pumpWidget(_application(reopened));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(seconds: 1));
+        await _scrollAgentToLatest(tester);
+        expect(reopenedGateway.requestCount, 0);
+        expect(reopened.agent.view.phase, AgentPhase.idle);
+        expect(find.byKey(const ValueKey('agent-stop')), findsNothing);
+        expect(
+          find.byKey(ValueKey('agent-action-status-$undoId')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(ValueKey('agent-action-approve-$undoId')),
+          findsNothing,
+        );
       } finally {
         await _disposeAndClean(tester, workspace, bootstraps);
       }
@@ -730,6 +955,73 @@ Future<void> _pumpUntil(
       fail(reason);
     }
     await tester.pump(const Duration(milliseconds: 20));
+  }
+}
+
+Future<void> _scrollAgentToLatest(WidgetTester tester) async {
+  final list = find.byKey(const ValueKey('agent-message-list'));
+  if (list.evaluate().isEmpty) return;
+  await tester.drag(list, const Offset(0, -4000));
+  await tester.pumpAndSettle();
+}
+
+Future<_PendingAgentRun> _sendUntilApproval(
+  WidgetTester tester,
+  AgentWorkspaceController agent,
+  String question,
+) async {
+  late Future<void> completion;
+  await tester.runAsync(() async {
+    completion = agent.send(question);
+    await _waitNativeUntil(
+      () =>
+          agent.view.phase == AgentPhase.waitingForApproval ||
+          (agent.view.phase == AgentPhase.idle && agent.view.failure != null),
+      reason:
+          'Synthetic plan did not reach approval: '
+          'phase=${agent.view.phase}, failure=${agent.view.failure}',
+    );
+  });
+  await tester.pumpAndSettle();
+  expect(
+    agent.view.phase,
+    AgentPhase.waitingForApproval,
+    reason: 'A native proposal must wait for an application decision.',
+  );
+  return _PendingAgentRun(completion);
+}
+
+Future<String> _tapCurrentAction(
+  WidgetTester tester,
+  AgentWorkspaceController agent, {
+  required bool approve,
+}) async {
+  expect(agent.view.phase, AgentPhase.waitingForApproval);
+  final action = agent.view.pendingAction;
+  expect(action, isNotNull);
+  final actionId = action!.id;
+  final button = find.byKey(
+    ValueKey('agent-action-${approve ? 'approve' : 'reject'}-$actionId'),
+  );
+  expect(button, findsOneWidget);
+  await tester.ensureVisible(button);
+  await tester.pumpAndSettle();
+  expect(agent.view.pendingAction?.id, actionId);
+  await tester.tap(button);
+  await tester.pump();
+  return actionId;
+}
+
+Future<void> _waitNativeUntil(
+  bool Function() condition, {
+  required String reason,
+}) async {
+  final watch = Stopwatch()..start();
+  while (!condition()) {
+    if (watch.elapsed > const Duration(seconds: 20)) {
+      throw StateError(reason);
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
   }
 }
 
@@ -1002,6 +1294,11 @@ final class _OwnedWorkspace {
   final String prefix, nonce, markerName, demoPath, formalPath;
 }
 
+final class _PendingAgentRun {
+  const _PendingAgentRun(this.completion);
+  final Future<void> completion;
+}
+
 final class _SyntheticGateway implements ModelGatewayPort {
   static const modelId = 'synthetic-chat-model';
 
@@ -1011,6 +1308,9 @@ final class _SyntheticGateway implements ModelGatewayPort {
   bool holdNextChat = false;
   bool failNextClose = false;
   bool sawSyntheticKey = false;
+  bool scriptLocalActions = false;
+  int _actionCallSerial = 0;
+  final List<ModelToolCall> actionCalls = [];
   String? readScenario;
   int requestCount = 0;
   int listModelCalls = 0;
@@ -1096,6 +1396,67 @@ final class _SyntheticGateway implements ModelGatewayPort {
     }
 
     chatRequests.add(request);
+    if (scriptLocalActions) {
+      final last = request.messages.last;
+      if (last.role == 'user') {
+        final undo = (last.content ?? '').contains('撤销');
+        final name = undo ? 'propose_undo' : 'propose_local_changes';
+        if (!request.tools.any((tool) => tool.name == name)) {
+          controller.addError(
+            const AgentFailure(AgentFailureCode.toolUnavailable),
+          );
+          await controller.close();
+          return;
+        }
+        final call = ModelToolCall(
+          id: 'synthetic-action-${++_actionCallSerial}',
+          name: name,
+          argumentsJson: undo
+              ? '{}'
+              : jsonEncode({
+                  'changes': [
+                    {
+                      'type': 'create_task',
+                      'local_key': 'm56-study',
+                      'title': 'M5合成学习任务',
+                      'estimated_minutes': 120,
+                    },
+                    {
+                      'type': 'create_block',
+                      'task_key': 'm56-study',
+                      'start': '2026-10-13T14:00+08:00',
+                      'end': '2026-10-13T15:00+08:00',
+                    },
+                    {
+                      'type': 'create_block',
+                      'task_key': 'm56-study',
+                      'start': '2026-10-13T15:00+08:00',
+                      'end': '2026-10-13T16:00+08:00',
+                    },
+                  ],
+                }),
+        );
+        actionCalls.add(call);
+        controller.add(
+          ModelCompleted(finishReason: 'tool_calls', toolCalls: [call]),
+        );
+      } else if (last.role == 'tool') {
+        final result = jsonDecode(last.content!) as Map<String, Object?>;
+        final status = result['status'];
+        controller.add(
+          ModelTextDelta(status == 'committed' ? '合成方案已按实际回执完成。' : '合成方案已拒绝。'),
+        );
+        controller.add(ModelCompleted(finishReason: 'stop'));
+      } else {
+        controller.addError(
+          const AgentFailure(AgentFailureCode.toolUnavailable),
+        );
+        await controller.close();
+        return;
+      }
+      await controller.close();
+      return;
+    }
     if (readScenario != null) {
       final last = request.messages.last;
       final oldCall = request.messages

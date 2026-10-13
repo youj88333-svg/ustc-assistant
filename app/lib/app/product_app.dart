@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -23,12 +24,16 @@ final class ProductApp extends StatelessWidget {
     required this.settingsBuilder,
     this.agendaBuilder,
     this.agentBuilder,
+    this.destination,
+    this.onDestinationChanged,
   });
 
   final AppShellPort controller;
   final WidgetBuilder settingsBuilder;
   final WidgetBuilder? agendaBuilder;
   final WidgetBuilder? agentBuilder;
+  final ValueListenable<ShellDestination>? destination;
+  final ValueChanged<ShellDestination>? onDestinationChanged;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -46,6 +51,8 @@ final class ProductApp extends StatelessWidget {
       settingsBuilder: settingsBuilder,
       agendaBuilder: agendaBuilder,
       agentBuilder: agentBuilder,
+      destination: destination,
+      onDestinationChanged: onDestinationChanged,
     ),
   );
 }
@@ -121,12 +128,16 @@ final class _ProductShell extends StatefulWidget {
     required this.settingsBuilder,
     this.agendaBuilder,
     this.agentBuilder,
+    this.destination,
+    this.onDestinationChanged,
   });
 
   final AppShellPort controller;
   final WidgetBuilder settingsBuilder;
   final WidgetBuilder? agendaBuilder;
   final WidgetBuilder? agentBuilder;
+  final ValueListenable<ShellDestination>? destination;
+  final ValueChanged<ShellDestination>? onDestinationChanged;
 
   @override
   State<_ProductShell> createState() => _ProductShellState();
@@ -145,12 +156,29 @@ final class _ProductShellState extends State<_ProductShell> {
   bool _detailSheetOpen = false;
   int _detailSheetGeneration = 0;
 
+  @override
+  void initState() {
+    super.initState();
+    _destination = widget.destination?.value ?? ShellDestination.agent;
+    widget.destination?.addListener(_onExternalDestinationChanged);
+  }
+
   DateTime get _activeDay =>
       _selectedDay ?? calendarDay(widget.controller.today);
 
   @override
   void didUpdateWidget(covariant _ProductShell oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.destination, widget.destination)) {
+      oldWidget.destination?.removeListener(_onExternalDestinationChanged);
+      widget.destination?.addListener(_onExternalDestinationChanged);
+      final next = widget.destination?.value;
+      if (next != null && next != _destination) {
+        _destination = next;
+        _selectedReference = null;
+        _actionMessage = null;
+      }
+    }
     if (!identical(oldWidget.controller, widget.controller)) {
       // A port is externally owned. Drop only shell-local selection and stale
       // completion callbacks; source work keeps running on its original port.
@@ -170,6 +198,18 @@ final class _ProductShellState extends State<_ProductShell> {
         });
       }
     }
+  }
+
+  @override
+  void dispose() {
+    widget.destination?.removeListener(_onExternalDestinationChanged);
+    super.dispose();
+  }
+
+  void _onExternalDestinationChanged() {
+    final next = widget.destination?.value;
+    if (next == null || next == _destination) return;
+    _selectDestination(next);
   }
 
   @override
@@ -266,6 +306,7 @@ final class _ProductShellState extends State<_ProductShell> {
       _selectedReference = null;
       _actionMessage = null;
     });
+    widget.onDestinationChanged?.call(next);
   }
 
   Widget _buildDestination(

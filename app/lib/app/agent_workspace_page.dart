@@ -7,7 +7,6 @@ import 'package:markdown/markdown.dart' as md;
 
 import 'agent_workspace_contract.dart';
 import '../core/agent_contract.dart';
-import '../core/agent_evidence.dart';
 
 const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
@@ -20,11 +19,13 @@ final class AgentWorkspacePage extends StatefulWidget {
     required this.controller,
     required this.onSettings,
     this.pickImages,
+    this.onOpenLocalEvidence,
   });
 
   final AgentWorkspacePort controller;
   final VoidCallback onSettings;
   final Future<List<AgentImage>> Function()? pickImages;
+  final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
 
   @override
   State<AgentWorkspacePage> createState() => _AgentWorkspacePageState();
@@ -39,14 +40,23 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   int? _observedHistoryEpoch;
   int? _observedMessageFingerprint;
   String? _observedConversationId;
+  String? _observedDiscussionId;
   bool? _observedConsent;
+  bool _draftEditedByUser = false;
+  bool _loadingOlderMessages = false;
   bool _pickingImages = false;
   bool _pending = false;
   bool _sending = false;
   bool _stopping = false;
+  bool _actionPending = false;
+  bool _schoolContinuationPending = false;
+  bool _schoolContinuationSubmitted = false;
   bool _showSessions = false;
   bool _messageIsError = false;
+  String? _actionPendingId;
+  String? _submittedActionId;
   String? _message;
+  final Set<String> _expandedQueryDetails = {};
 
   @override
   void initState() {
@@ -66,9 +76,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
       _pending = false;
       _sending = false;
       _stopping = false;
+      _actionPending = false;
+      _schoolContinuationPending = false;
+      _schoolContinuationSubmitted = false;
+      _loadingOlderMessages = false;
+      _actionPendingId = null;
+      _submittedActionId = null;
       _messageIsError = false;
       _message = null;
+      _expandedQueryDetails.clear();
       _draft.clear();
+      _draftEditedByUser = false;
       widget.controller.addListener(_onControllerChanged);
       _rememberControllerView();
       _scheduleRefresh();
@@ -107,7 +125,12 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     _observedHistoryEpoch = view.settings?.authority.historyEpoch;
     _observedMessageFingerprint = _messageFingerprint(view);
     _observedConversationId = view.conversationId;
+    _observedDiscussionId = view.discussionId;
     _observedConsent = view.settings?.consent;
+    final draft = view.discussionDraft;
+    if (view.discussionId != null && draft != null && !_draftEditedByUser) {
+      _setDiscussionDraft(draft);
+    }
   }
 
   void _onControllerChanged() {
@@ -116,23 +139,46 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     final historyEpoch = view.settings?.authority.historyEpoch;
     final messageFingerprint = _messageFingerprint(view);
     final consent = view.settings?.consent;
+    final discussionChanged = view.discussionId != _observedDiscussionId;
+    final historyChanged =
+        historyEpoch != null &&
+        _observedHistoryEpoch != null &&
+        historyEpoch != _observedHistoryEpoch;
     final invalidated =
         view.phase == AgentPhase.closed ||
         view.busy ||
         !view.canSend ||
         (consent != null && _observedConsent == true && !consent) ||
-        (historyEpoch != null &&
-            _observedHistoryEpoch != null &&
-            historyEpoch != _observedHistoryEpoch) ||
+        historyChanged ||
         view.conversationId != _observedConversationId ||
         messageFingerprint != _observedMessageFingerprint;
+    if (historyChanged) _expandedQueryDetails.clear();
+    if (view.phase != AgentPhase.waitingForSchool) {
+      _schoolContinuationSubmitted = false;
+    }
     _observedHistoryEpoch = historyEpoch;
     _observedMessageFingerprint = messageFingerprint;
     _observedConversationId = view.conversationId;
+    _observedDiscussionId = view.discussionId;
     _observedConsent = consent;
+    final discussionDraft = view.discussionDraft;
+    if (discussionChanged &&
+        !historyChanged &&
+        view.discussionId != null &&
+        discussionDraft != null &&
+        !_draftEditedByUser) {
+      _setDiscussionDraft(discussionDraft);
+    }
     if (invalidated && (_draftImages.isNotEmpty || _pickingImages)) {
       _clearDraftImages();
     }
+  }
+
+  void _setDiscussionDraft(String value) {
+    _draft.value = TextEditingValue(
+      text: value,
+      selection: TextSelection.collapsed(offset: value.length),
+    );
   }
 
   void _clearDraftImages({bool update = true}) {
@@ -364,6 +410,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
           });
         } else if (_draft.text == draftText) {
           _draft.clear();
+          _draftEditedByUser = false;
         }
       }
     } on Object {
@@ -401,6 +448,185 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     } finally {
       if (_isCurrent(port, generation)) setState(() => _stopping = false);
     }
+  }
+
+  Future<void> _handleAction(String actionId, {required bool approve}) async {
+    final port = widget.controller;
+    if (port is! AgentActionWorkspacePort) return;
+    final actionPort = port as AgentActionWorkspacePort;
+    final current = port.view.pendingAction;
+    if (_actionPending ||
+        _submittedActionId == actionId ||
+        port.view.phase != AgentPhase.waitingForApproval ||
+        current == null ||
+        current.id != actionId ||
+        current.status != AgentActionStatus.proposed) {
+      return;
+    }
+    final generation = _generation;
+    setState(() {
+      _actionPending = true;
+      _actionPendingId = actionId;
+      _message = null;
+      _messageIsError = false;
+    });
+    try {
+      if (approve) {
+        await actionPort.approveAction(actionId);
+      } else {
+        await actionPort.rejectAction(actionId);
+      }
+      if (_isCurrent(port, generation) &&
+          _actionPendingId == actionId &&
+          port.view.pendingAction?.id == actionId) {
+        setState(() => _submittedActionId = actionId);
+      }
+    } on Object {
+      if (_isCurrent(port, generation) && _actionPendingId == actionId) {
+        setState(() {
+          _message = approve
+              ? '批准操作暂未完成，请检查当前方案状态后重试。'
+              : '拒绝操作暂未完成，请检查当前方案状态后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation) && _actionPendingId == actionId) {
+        setState(() {
+          _actionPending = false;
+          _actionPendingId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _continueSchool() async {
+    final port = widget.controller;
+    if (port is! AgentActionWorkspacePort) return;
+    final actionPort = port as AgentActionWorkspacePort;
+    if (_schoolContinuationPending ||
+        _schoolContinuationSubmitted ||
+        port.view.phase != AgentPhase.waitingForSchool) {
+      return;
+    }
+    final generation = _generation;
+    setState(() {
+      _schoolContinuationPending = true;
+      _message = null;
+      _messageIsError = false;
+    });
+    try {
+      await actionPort.continueSchool();
+      if (_isCurrent(port, generation) &&
+          port.view.phase == AgentPhase.waitingForSchool) {
+        setState(() => _schoolContinuationSubmitted = true);
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '继续学校流程暂未完成，请检查当前页面状态后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) {
+        setState(() => _schoolContinuationPending = false);
+      }
+    }
+  }
+
+  Future<void> _loadOlderMessages() async {
+    final port = widget.controller;
+    if (port is! AgentHistoryWorkspacePort) return;
+    final historyPort = port as AgentHistoryWorkspacePort;
+    if (_loadingOlderMessages ||
+        port.view.busy ||
+        !port.view.historyTruncated) {
+      return;
+    }
+    final generation = _generation;
+    setState(() => _loadingOlderMessages = true);
+    try {
+      await historyPort.loadOlderMessages();
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '暂时无法载入更早对话，请稍后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) {
+        setState(() => _loadingOlderMessages = false);
+      }
+    }
+  }
+
+  Widget _actionCard(AgentActionView action, AgentWorkspaceView view) {
+    final isCurrent = view.pendingAction?.id == action.id;
+    final isWaitingForApproval =
+        isCurrent &&
+        view.phase == AgentPhase.waitingForApproval &&
+        action.status == AgentActionStatus.proposed;
+    final isCommitting = isCurrent && view.phase == AgentPhase.committing;
+    final portAvailable = widget.controller is AgentActionWorkspacePort;
+    final canAct =
+        isWaitingForApproval &&
+        portAvailable &&
+        !_actionPending &&
+        _submittedActionId != action.id;
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: _AgentActionCard(
+        action: action,
+        isHistorical: !isCurrent,
+        statusOverride: isCommitting ? '正在提交' : null,
+        requestPending: _actionPending && _actionPendingId == action.id,
+        requestSubmitted: isCurrent && _submittedActionId == action.id,
+        onApprove: canAct
+            ? () => unawaited(_handleAction(action.id, approve: true))
+            : null,
+        onReject: canAct
+            ? () => unawaited(_handleAction(action.id, approve: false))
+            : null,
+      ),
+    );
+  }
+
+  Widget _schoolContinuationControls(AgentWorkspaceView view) {
+    final portAvailable = widget.controller is AgentActionWorkspacePort;
+    final waiting = view.phase == AgentPhase.waitingForSchool;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 10,
+        runSpacing: 6,
+        children: [
+          Text(
+            portAvailable ? '学校页面需要你确认后才能继续。' : '正在等待学校页面操作。',
+            style: const TextStyle(color: _agentMuted),
+          ),
+          FilledButton.tonalIcon(
+            key: const ValueKey('agent-school-continue'),
+            onPressed:
+                waiting &&
+                    portAvailable &&
+                    !_schoolContinuationPending &&
+                    !_schoolContinuationSubmitted
+                ? _continueSchool
+                : null,
+            icon: _schoolContinuationPending
+                ? const SizedBox.square(
+                    dimension: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.play_arrow_rounded),
+            label: Text(_schoolContinuationSubmitted ? '已请求继续' : '继续学校流程'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _clearHistory({String? conversationId}) async {
@@ -700,6 +926,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     final canStop =
         view.phase == AgentPhase.generating ||
         view.phase == AgentPhase.executingRead ||
+        view.phase == AgentPhase.waitingForApproval ||
+        view.phase == AgentPhase.waitingForSchool ||
+        view.phase == AgentPhase.committing ||
         view.phase == AgentPhase.settling;
 
     return Column(
@@ -718,6 +947,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
             padding: const EdgeInsets.only(bottom: 8),
             child: _SetupPrompt(onSettings: widget.onSettings),
           ),
+        if (view.phase == AgentPhase.waitingForSchool)
+          _schoolContinuationControls(view),
         if (_showRunProgress(view)) ...[
           const SizedBox(height: 4),
           _AgentRunProgress(view: view),
@@ -796,30 +1027,63 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   Widget _messages(AgentWorkspaceView view) => Column(
     children: [
       if (view.historyTruncated)
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              '当前只展示最近一部分对话内容。',
-              style: TextStyle(color: _agentMuted, fontSize: 12),
-            ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Text(
+                  '当前只展示最近一部分对话内容。',
+                  style: TextStyle(color: _agentMuted, fontSize: 12),
+                ),
+              ),
+              if (widget.controller is AgentHistoryWorkspacePort) ...[
+                const SizedBox(width: 8),
+                TextButton.icon(
+                  key: const ValueKey('agent-history-load-older'),
+                  onPressed: view.busy || _loadingOlderMessages
+                      ? null
+                      : _loadOlderMessages,
+                  icon: _loadingOlderMessages
+                      ? const SizedBox.square(
+                          dimension: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.history_rounded, size: 17),
+                  label: Text(_loadingOlderMessages ? '正在载入' : '载入更早消息'),
+                ),
+              ],
+            ],
           ),
+        ),
+      if (view.pendingAction != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: _actionCard(view.pendingAction!, view),
         ),
       Expanded(
         child: view.messages.isEmpty
-            ? const Center(
-                child: Text(
-                  '发送一条消息，开始对话。',
-                  style: TextStyle(color: _agentMuted),
-                ),
-              )
+            ? view.pendingAction != null
+                  ? const SizedBox.shrink()
+                  : const Center(
+                      child: Text(
+                        '发送一条消息，开始对话。',
+                        style: TextStyle(color: _agentMuted),
+                      ),
+                    )
             : ListView.builder(
                 key: const ValueKey('agent-message-list'),
                 padding: const EdgeInsets.all(16),
                 itemCount: view.messages.length,
                 itemBuilder: (context, index) {
                   final message = view.messages[index];
+                  final detailsKey =
+                      '${view.conversationId ?? 'no-conversation'}:${message.id}';
+                  final actionCards = [
+                    for (final storedAction in message.actions)
+                      if (view.pendingAction?.id != storedAction.id)
+                        _actionCard(storedAction, view),
+                  ];
                   final isCurrentAnswerEvidence =
                       index == view.messages.length - 1 &&
                       view.phase == AgentPhase.idle &&
@@ -830,6 +1094,19 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                     child: _MessageBubble(
                       message: message,
                       isCurrentAnswerEvidence: isCurrentAnswerEvidence,
+                      queryDetailsKey: detailsKey,
+                      queryDetailsExpanded: _expandedQueryDetails.contains(
+                        detailsKey,
+                      ),
+                      actionCards: actionCards,
+                      onOpenLocalEvidence: widget.onOpenLocalEvidence,
+                      onToggleQueryDetails: () {
+                        setState(() {
+                          if (!_expandedQueryDetails.add(detailsKey)) {
+                            _expandedQueryDetails.remove(detailsKey);
+                          }
+                        });
+                      },
                     ),
                   );
                 },
@@ -890,7 +1167,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                       maxLines: 4,
                       keyboardType: TextInputType.multiline,
                       textInputAction: TextInputAction.send,
-                      onChanged: (_) => setState(() {}),
+                      onChanged: (_) {
+                        _draftEditedByUser = true;
+                        setState(() {});
+                      },
                       onSubmitted: (_) {
                         if (enabled) unawaited(_send());
                       },
@@ -1061,6 +1341,7 @@ final class _AgentNotice extends StatelessWidget {
 bool _showRunProgress(AgentWorkspaceView view) =>
     view.phase == AgentPhase.generating ||
     view.phase == AgentPhase.executingRead ||
+    view.phase == AgentPhase.committing ||
     view.phase == AgentPhase.settling;
 
 final class _AgentRunProgress extends StatelessWidget {
@@ -1147,15 +1428,174 @@ final class _EvidenceCard extends StatefulWidget {
     required this.evidence,
     required this.historical,
     required this.number,
+    this.onOpenLocalEvidence,
   });
 
   final AgentEvidence evidence;
   final int number;
   final bool historical;
+  final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
 
   @override
   State<_EvidenceCard> createState() => _EvidenceCardState();
 }
+
+final class _AgentActionCard extends StatelessWidget {
+  const _AgentActionCard({
+    required this.action,
+    required this.isHistorical,
+    required this.requestPending,
+    required this.requestSubmitted,
+    this.statusOverride,
+    this.onApprove,
+    this.onReject,
+  });
+
+  final AgentActionView action;
+  final bool isHistorical;
+  final bool requestPending;
+  final bool requestSubmitted;
+  final String? statusOverride;
+  final VoidCallback? onApprove;
+  final VoidCallback? onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final canRespond = onApprove != null || onReject != null;
+    return Card(
+      key: ValueKey('agent-action-${action.id}'),
+      margin: EdgeInsets.zero,
+      color: Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.fact_check_outlined,
+                  size: 19,
+                  color: _agentGreen,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        action.title,
+                        key: ValueKey('agent-action-title-${action.id}'),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_actionKindLabel(action.kind)} · '
+                        '${statusOverride ?? _actionStatusLabel(action.status)}'
+                        '${isHistorical ? ' · 历史记录' : ''}',
+                        key: ValueKey('agent-action-status-${action.id}'),
+                        style: const TextStyle(
+                          color: _agentMuted,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            if (action.details.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              for (final detail in action.details)
+                if (detail.trim().isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 3),
+                    child: Text('• $detail'),
+                  ),
+            ],
+            if (action.warning.trim().isNotEmpty) ...[
+              const SizedBox(height: 6),
+              Container(
+                key: ValueKey('agent-action-warning-${action.id}'),
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF5E8),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  action.warning,
+                  style: const TextStyle(color: Color(0xFF805500)),
+                ),
+              ),
+            ],
+            if (action.status == AgentActionStatus.committed ||
+                action.committedCount > 0) ...[
+              const SizedBox(height: 6),
+              Text(
+                '本地实际提交 ${action.committedCount} 项',
+                key: ValueKey('agent-action-committed-${action.id}'),
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+            ],
+            if (isHistorical) ...[
+              const SizedBox(height: 6),
+              const Text(
+                '这是历史记录，不提供再次批准操作。',
+                style: TextStyle(color: _agentMuted, fontSize: 12),
+              ),
+            ],
+            if (requestPending || requestSubmitted) ...[
+              const SizedBox(height: 6),
+              Text(
+                requestPending ? '正在提交你的决定…' : '操作已送出，等待本地状态更新。',
+                key: ValueKey('agent-action-request-state-${action.id}'),
+                style: const TextStyle(color: _agentMuted, fontSize: 12),
+              ),
+            ],
+            if (canRespond) ...[
+              const SizedBox(height: 8),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  FilledButton.icon(
+                    key: ValueKey('agent-action-approve-${action.id}'),
+                    onPressed: onApprove,
+                    icon: const Icon(Icons.check_rounded, size: 18),
+                    label: const Text('批准并提交'),
+                  ),
+                  OutlinedButton.icon(
+                    key: ValueKey('agent-action-reject-${action.id}'),
+                    onPressed: onReject,
+                    icon: const Icon(Icons.close_rounded, size: 18),
+                    label: const Text('拒绝'),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _actionKindLabel(AgentActionKind kind) => switch (kind) {
+  AgentActionKind.localPlan => '本地修改方案',
+  AgentActionKind.undo => '撤销本地修改',
+  AgentActionKind.sourceRefresh => '学校来源刷新',
+  AgentActionKind.planningPreferences => '时间规划偏好',
+};
+
+String _actionStatusLabel(AgentActionStatus status) => switch (status) {
+  AgentActionStatus.proposed => '待批准',
+  AgentActionStatus.rejected => '已拒绝',
+  AgentActionStatus.committed => '已提交',
+  AgentActionStatus.interrupted => '已中断',
+  AgentActionStatus.failed => '未完成',
+};
 
 final class _EvidenceCardState extends State<_EvidenceCard> {
   bool _expanded = false;
@@ -1278,6 +1718,21 @@ final class _EvidenceCardState extends State<_EvidenceCard> {
                   child: Text(evidence.snippet),
                 ),
             ],
+            if (widget.onOpenLocalEvidence != null &&
+                evidence.provider == 'local' &&
+                ((evidence.eventReference != null) !=
+                    (evidence.taskReference != null)))
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  key: ValueKey('agent-evidence-open-local-${evidence.id}'),
+                  onPressed: () => widget.onOpenLocalEvidence?.call(evidence),
+                  icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                  label: Text(
+                    evidence.eventReference != null ? '在日程中查看' : '在任务中查看',
+                  ),
+                ),
+              ),
             if (source != null)
               Align(
                 alignment: Alignment.centerLeft,
@@ -1332,7 +1787,7 @@ String _beijingTime(DateTime utc) {
 }
 
 String? _toolLabel(String? tool) {
-  if (tool == null || !agentReadToolNames.contains(tool)) return null;
+  if (tool == null) return null;
   return switch (tool) {
     'query_agenda' => '日程',
     'read_event' => '日程详情',
@@ -1346,6 +1801,13 @@ String? _toolLabel(String? tool) {
     'read_reviews' => '评课资料',
     'browse_campus' => '校园公开资料',
     'read_campus_article' => '校园文章',
+    'propose_local_changes' => '准备本地修改方案',
+    'propose_undo' => '准备撤销方案',
+    'find_free_slots' => '查找空闲时段',
+    'query_source_options' => '查看来源刷新范围',
+    'request_source_refresh' => '请求学校来源刷新',
+    'query_young_activities' => '查询二课活动',
+    'propose_planning_preferences' => '准备时间偏好方案',
     _ => null,
   };
 }
@@ -1365,6 +1827,10 @@ String _toolStatusLabel(String status) => switch (status) {
   'executing' => '查询中',
   'invalidRequest' => '输入无效',
   'secretDetected' => '检测到受保护内容',
+  'waitingForApproval' => '等待批准',
+  'waitingForSchool' => '等待学校操作',
+  'committed' => '已提交',
+  'rejected' => '已拒绝',
   _ => '状态未知',
 };
 
@@ -1382,10 +1848,20 @@ final class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.isCurrentAnswerEvidence,
+    required this.queryDetailsKey,
+    required this.queryDetailsExpanded,
+    required this.onToggleQueryDetails,
+    required this.actionCards,
+    this.onOpenLocalEvidence,
   });
 
   final AgentMessage message;
   final bool isCurrentAnswerEvidence;
+  final String queryDetailsKey;
+  final bool queryDetailsExpanded;
+  final VoidCallback onToggleQueryDetails;
+  final List<Widget> actionCards;
+  final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
 
   @override
   Widget build(BuildContext context) {
@@ -1409,28 +1885,29 @@ final class _MessageBubble extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    user ? '你' : 'Agent',
-                    style: const TextStyle(
-                      color: _agentMuted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
+              if (!user)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Agent',
+                      style: TextStyle(
+                        color: _agentMuted,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  if (status != null) ...[
-                    const SizedBox(width: 8),
-                    _MessageStatus(
-                      label: status,
-                      failed: message.status == AgentMessageStatus.failed,
-                    ),
+                    if (status != null) ...[
+                      const SizedBox(width: 8),
+                      _MessageStatus(
+                        label: status,
+                        failed: message.status == AgentMessageStatus.failed,
+                      ),
+                    ],
                   ],
-                ],
-              ),
+                ),
               if (text.isNotEmpty) ...[
-                const SizedBox(height: 5),
+                if (!user) const SizedBox(height: 5),
                 MarkdownBody(
                   data: text,
                   softLineBreak: true,
@@ -1453,22 +1930,47 @@ final class _MessageBubble extends StatelessWidget {
                   style: const TextStyle(color: _agentMuted, fontSize: 12),
                 ),
               ],
-              if (!user && message.steps.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                _ToolStepList(steps: message.steps),
-              ],
-              if (!user && message.evidence.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                for (var index = 0; index < message.evidence.length; index++)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 6),
-                    child: _EvidenceCard(
-                      evidence: message.evidence[index],
-                      number: index + 1,
-                      historical: !isCurrentAnswerEvidence,
-                    ),
+              if (!user &&
+                  (message.steps.isNotEmpty ||
+                      message.evidence.isNotEmpty)) ...[
+                if (text.isNotEmpty) const SizedBox(height: 6),
+                TextButton.icon(
+                  key: ValueKey('agent-query-details-toggle-$queryDetailsKey'),
+                  onPressed: onToggleQueryDetails,
+                  style: TextButton.styleFrom(
+                    padding: EdgeInsets.zero,
+                    minimumSize: const Size(0, 32),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
+                  icon: Icon(
+                    queryDetailsExpanded
+                        ? Icons.expand_less_rounded
+                        : Icons.expand_more_rounded,
+                    size: 18,
+                  ),
+                  label: Text(
+                    '查询详情 · ${message.steps.length} 个步骤 · '
+                    '${message.evidence.length} 处出处',
+                  ),
+                ),
+                if (queryDetailsExpanded) ...[
+                  if (message.steps.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    _ToolStepList(steps: message.steps),
+                  ],
+                  for (var index = 0; index < message.evidence.length; index++)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: _EvidenceCard(
+                        evidence: message.evidence[index],
+                        number: index + 1,
+                        historical: !isCurrentAnswerEvidence,
+                        onOpenLocalEvidence: onOpenLocalEvidence,
+                      ),
+                    ),
+                ],
               ],
+              ...actionCards,
             ],
           ),
         ),
@@ -1540,6 +2042,9 @@ String? _statusLabel(AgentWorkspaceView view) => switch (view.phase) {
     view.activeTool == null
         ? '正在查询资料'
         : '正在查询${_toolLabel(view.activeTool) ?? '只读资料'}',
+  AgentPhase.waitingForApproval => '等待你批准方案',
+  AgentPhase.waitingForSchool => '等待你在学校页面继续',
+  AgentPhase.committing => '正在提交本地修改',
   AgentPhase.settling => '正在保存回复',
   AgentPhase.recovery => '正在恢复状态',
   AgentPhase.maintenance => '本地维护中',

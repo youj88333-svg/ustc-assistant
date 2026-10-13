@@ -17,6 +17,7 @@ import '../core/jw_work_contract.dart';
 import '../core/jw_credentials.dart';
 import '../core/young_work_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_action_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_text.dart';
 import '../source/young_collection_contract.dart';
@@ -28,6 +29,7 @@ import 'young_import_contract.dart';
 import 'knowledge_markdown.dart';
 import 'bundled_knowledge_identity.dart';
 import 'calendar_projection.dart';
+import 'agent_plan_preview.dart';
 
 part 'young_store_extension.dart';
 part 'public_store.dart';
@@ -36,6 +38,7 @@ part 'local_task_store.dart';
 part 'calendar_undo_store.dart';
 part 'application_settings_store.dart';
 part 'agent_store.dart';
+part 'agent_plan_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
 
@@ -127,7 +130,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -147,6 +150,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...ApplicationSettingsStore.schema,
         ...AgentStore.schema,
         ...AgentStore.upgradeFrom11,
+        ..._agentActionSchema,
       ]) {
         await customStatement(statement);
       }
@@ -159,7 +163,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 11 || to != 12) {
+      if (from < 1 || from > 12 || to != 13) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -180,7 +184,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 9)
             'UPDATE agenda_state SET epoch=epoch+1,revision=revision+1 WHERE singleton=1',
           if (from <= 10) ...AgentStore.schema,
-          ...AgentStore.upgradeFrom11,
+          if (from <= 11) ...AgentStore.upgradeFrom11,
+          ..._agentActionSchema,
         ]) {
           await customStatement(statement);
         }
@@ -918,6 +923,13 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         await _guard();
         await onCheckpoint?.call(JwImportCheckpoint.beforeCommit);
         await _requireCurrent(ticket, allowCommitted: true);
+        await customStatement(
+          'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+        );
+        await agent._commitSourceAction(
+          ticket,
+          artifact.courseCount + artifact.examCount,
+        );
         return JwImportReceipt(
           operationId: ticket.stamp.jobId,
           courseCount: artifact.courseCount,
@@ -927,6 +939,12 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         );
       });
       succeeded = true;
+      if (!receipt.replayed) {
+        localCalendar._signal(
+          (await localCalendar._agendaState()).read<int>('revision'),
+        );
+        agent._signal();
+      }
       if (!receipt.replayed &&
           ticket._saveCredential &&
           ticket._pendingCredential != null) {

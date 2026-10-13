@@ -31,6 +31,7 @@ final class JwSyncCoordinator implements JwSyncPort {
     this.clock = const SystemClock(),
     this.loginWaitTimeout = const Duration(seconds: 90),
     this.automationPollInterval = const Duration(milliseconds: 400),
+    this.onJobAdmitted,
     ObservationTarget? target,
   }) : target = target ?? ObservationTarget.jw() {
     _credentialSubscription = store.credentialChanges.listen((_) {
@@ -45,6 +46,7 @@ final class JwSyncCoordinator implements JwSyncPort {
   final ObservationTarget target;
   final Duration loginWaitTimeout;
   final Duration automationPollInterval;
+  final Future<void> Function(JwJobTicket)? onJobAdmitted;
   final _changes = StreamController<JwSyncView>.broadcast();
   late final StreamSubscription<bool> _credentialSubscription;
   JwSyncView _view = JwSyncView();
@@ -301,6 +303,7 @@ final class JwSyncCoordinator implements JwSyncPort {
         _ticket = await store.beginJob(
           expectedAccountCode: expectedAccountCode,
         );
+        await onJobAdmitted?.call(_ticket!);
         if (savePassword && (password?.isEmpty ?? true)) {
           throw const JwCredentialException(
             JwCredentialFailure.invalidCredential,

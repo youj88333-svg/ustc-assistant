@@ -209,6 +209,17 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     CalendarReference? target,
     TaskReference? task,
     CalendarRelationReference? relation,
+  ) async => _storeUndoPayload(
+    command.context,
+    await _buildUndoPayload(command, before, target, task, relation),
+  );
+
+  Future<Map<String, dynamic>> _buildUndoPayload(
+    CalendarCommand command,
+    List<Object?> before,
+    CalendarReference? target,
+    TaskReference? task,
+    CalendarRelationReference? relation,
   ) async {
     final action = command.intent.canonical.first as String;
     final keys = <(String, int)>{};
@@ -240,7 +251,7 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       guards.add([key.$1, key.$2, await _aggregateVersion(key)]);
     }
     final context = command.context;
-    final payload = jsonEncode({
+    final payload = <String, dynamic>{
       'v': 1,
       'action': action,
       'context': [context.owner, context.resetEpoch, context.agendaEpoch],
@@ -249,8 +260,115 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       'task': task?.localId,
       'guards': guards,
       'relation': relationPost,
-    });
-    if (utf8.encode(payload).length > 65536) {
+    };
+    if (utf8.encode(jsonEncode(payload)).length > 65536) {
+      throw const CalendarFailure(CalendarFailureCode.limitExceeded);
+    }
+    return payload;
+  }
+
+  Future<CalendarUndoReference> _recordGroupUndo(
+    CalendarContext context,
+    List<Map<String, dynamic>> steps,
+  ) async {
+    if (steps.isEmpty || steps.length > 20) {
+      throw const CalendarFailure(CalendarFailureCode.limitExceeded);
+    }
+    final normalizedSteps = <Map<String, dynamic>>[];
+    final aggregateKeys = <(String, int)>{};
+    final relationPairs = <(String, String)>{};
+    for (final step in steps) {
+      final decoded = _decodeUndo(jsonEncode(step));
+      if (decoded['v'] != 1) {
+        throw const CalendarFailure(CalendarFailureCode.storageFailed);
+      }
+      final stepContext = decoded['context'] as List;
+      if (stepContext[0] != context.owner ||
+          stepContext[1] != context.resetEpoch ||
+          stepContext[2] != context.agendaEpoch) {
+        throw const CalendarFailure(CalendarFailureCode.staleReference);
+      }
+      normalizedSteps.add(decoded);
+      for (final guard in decoded['guards'] as List) {
+        aggregateKeys.add((guard[0] as String, guard[1] as int));
+      }
+      final relation = decoded['relation'] as List?;
+      if (relation != null) {
+        relationPairs.add(
+          _normalizedRelationPair(relation[2] as String, relation[3] as String),
+        );
+      }
+    }
+
+    final sortedKeys = aggregateKeys.toList()
+      ..sort((left, right) {
+        final kind = left.$1.compareTo(right.$1);
+        return kind != 0 ? kind : left.$2.compareTo(right.$2);
+      });
+    final guards = <List<Object>>[
+      for (final key in sortedKeys)
+        [key.$1, key.$2, await _aggregateVersion(key)],
+    ];
+    final sortedPairs = relationPairs.toList()
+      ..sort((left, right) {
+        final first = left.$1.compareTo(right.$1);
+        return first != 0 ? first : left.$2.compareTo(right.$2);
+      });
+    final relations = <Map<String, Object?>>[
+      for (final pair in sortedPairs) await _relationGuard(pair),
+    ];
+    final payload = <String, dynamic>{
+      'v': 2,
+      'action': 'agent-plan',
+      'context': [context.owner, context.resetEpoch, context.agendaEpoch],
+      'steps': normalizedSteps,
+      'guards': guards,
+      'relations': relations,
+    };
+    // Validate both the versioned shape and the final database guards before
+    // replacing the shared slot.
+    final decoded = _decodeUndo(jsonEncode(payload));
+    await _checkGroupUndo(decoded);
+    return _storeUndoPayload(context, payload);
+  }
+
+  Future<Map<String, Object?>> _relationGuard((String, String) pair) async {
+    final rows = await _db
+        .customSelect(
+          'SELECT local_id,version FROM agenda_relations WHERE left_identity=? AND right_identity=?',
+          variables: [
+            Variable.withString(pair.$1),
+            Variable.withString(pair.$2),
+          ],
+        )
+        .get();
+    if (rows.length > 1) {
+      throw const CalendarFailure(CalendarFailureCode.storageFailed);
+    }
+    if (rows.isEmpty) {
+      return {
+        'left': pair.$1,
+        'right': pair.$2,
+        'present': false,
+        'localId': null,
+        'version': null,
+      };
+    }
+    return {
+      'left': pair.$1,
+      'right': pair.$2,
+      'present': true,
+      'localId': rows.single.read<int>('local_id'),
+      'version': rows.single.read<int>('version'),
+    };
+  }
+
+  Future<CalendarUndoReference> _storeUndoPayload(
+    CalendarContext context,
+    Map<String, dynamic> payload,
+  ) async {
+    final encoded = jsonEncode(payload);
+    if (utf8.encode(encoded).length > 65536) {
       throw const CalendarFailure(CalendarFailureCode.limitExceeded);
     }
     final id = JwStore._randomHexId('calendar-undo-');
@@ -262,7 +380,7 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       'INSERT INTO agenda_undo(singleton,undo_id,payload,created_at,expires_at) VALUES (1,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET undo_id=excluded.undo_id,payload=excluded.payload,created_at=excluded.created_at,expires_at=excluded.expires_at',
       [
         id,
-        payload,
+        encoded,
         now.microsecondsSinceEpoch,
         now.add(const Duration(hours: 24)).microsecondsSinceEpoch,
       ],
@@ -274,6 +392,9 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     try {
       if (utf8.encode(encoded).length > 65536) throw const FormatException();
       final value = jsonDecode(encoded);
+      if (value is Map<String, dynamic> && value['v'] == 2) {
+        return _decodeUndoV2(value);
+      }
       const fields = {
         'v',
         'action',
@@ -402,6 +523,152 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     }
   }
 
+  Map<String, dynamic> _decodeUndoV2(Map<String, dynamic> value) {
+    try {
+      const fields = {'v', 'action', 'context', 'steps', 'guards', 'relations'};
+      final context = value['context'];
+      final steps = value['steps'];
+      final guards = value['guards'];
+      final relations = value['relations'];
+      if (value.length != fields.length ||
+          !value.keys.toSet().containsAll(fields) ||
+          value['v'] != 2 ||
+          value['action'] != 'agent-plan' ||
+          context is! List ||
+          context.length != 3 ||
+          context[0] is! String ||
+          context[1] is! int ||
+          context[2] is! int ||
+          steps is! List ||
+          steps.isEmpty ||
+          steps.length > 20 ||
+          guards is! List ||
+          guards.isEmpty ||
+          guards.length > 40 ||
+          relations is! List ||
+          relations.length > 20) {
+        throw const FormatException();
+      }
+
+      final aggregateKeys = <(String, int)>{};
+      final relationPairs = <(String, String)>{};
+      final relationIdsByPair = <(String, String), Set<int>>{};
+      for (final step in steps) {
+        if (step is! Map<String, dynamic>) throw const FormatException();
+        final decodedStep = _decodeUndo(jsonEncode(step));
+        if (decodedStep['v'] != 1) throw const FormatException();
+        final stepContext = decodedStep['context'] as List;
+        if (stepContext[0] != context[0] ||
+            stepContext[1] != context[1] ||
+            stepContext[2] != context[2]) {
+          throw const FormatException();
+        }
+        for (final guard in decodedStep['guards'] as List) {
+          aggregateKeys.add((guard[0] as String, guard[1] as int));
+        }
+        final relation = decodedStep['relation'] as List?;
+        if (relation != null) {
+          final pair = _normalizedRelationPair(
+            relation[2] as String,
+            relation[3] as String,
+          );
+          relationPairs.add(pair);
+          relationIdsByPair
+              .putIfAbsent(pair, () => <int>{})
+              .add(relation[0] as int);
+        }
+      }
+      if (relationIdsByPair.values.any((ids) => ids.length != 1)) {
+        throw const FormatException();
+      }
+
+      final actualAggregateKeys = <(String, int)>{};
+      for (final guard in guards) {
+        if (guard is! List ||
+            guard.length != 3 ||
+            guard[0] is! String ||
+            guard[1] is! int ||
+            guard[1] <= 0 ||
+            guard[2] is! int ||
+            guard[2] <= 0) {
+          throw const FormatException();
+        }
+        final kind = guard[0] as String;
+        _aggregateTable(kind);
+        if (!actualAggregateKeys.add((kind, guard[1] as int))) {
+          throw const FormatException();
+        }
+      }
+      if (actualAggregateKeys.length != aggregateKeys.length ||
+          !actualAggregateKeys.containsAll(aggregateKeys)) {
+        throw const FormatException();
+      }
+
+      final actualRelationPairs = <(String, String)>{};
+      final relationIds = <int>{};
+      for (final relation in relations) {
+        if (relation is! Map<String, dynamic> ||
+            relation.length != 5 ||
+            !relation.keys.toSet().containsAll({
+              'left',
+              'right',
+              'present',
+              'localId',
+              'version',
+            }) ||
+            relation['left'] is! String ||
+            relation['right'] is! String ||
+            relation['present'] is! bool) {
+          throw const FormatException();
+        }
+        final left = relation['left'] as String;
+        final right = relation['right'] as String;
+        final pair = _normalizedRelationPair(left, right);
+        if (pair.$1 != left ||
+            pair.$2 != right ||
+            !actualRelationPairs.add(pair)) {
+          throw const FormatException();
+        }
+        final present = relation['present'] as bool;
+        final localId = relation['localId'];
+        final version = relation['version'];
+        if (present) {
+          if (localId is! int ||
+              localId <= 0 ||
+              version is! int ||
+              version <= 0 ||
+              !relationIds.add(localId) ||
+              relationIdsByPair[pair]?.single != localId) {
+            throw const FormatException();
+          }
+        } else if (localId != null || version != null) {
+          throw const FormatException();
+        }
+      }
+      if (actualRelationPairs.length != relationPairs.length ||
+          !actualRelationPairs.containsAll(relationPairs)) {
+        throw const FormatException();
+      }
+      return value;
+    } on Object {
+      throw const CalendarFailure(CalendarFailureCode.storageFailed);
+    }
+  }
+
+  (String, String) _normalizedRelationPair(String left, String right) {
+    final leftIdentity = _decodeIdentity(left);
+    final rightIdentity = _decodeIdentity(right);
+    final canonicalLeft = jsonEncode(leftIdentity.canonical);
+    final canonicalRight = jsonEncode(rightIdentity.canonical);
+    if (canonicalLeft != left ||
+        canonicalRight != right ||
+        canonicalLeft == canonicalRight) {
+      throw const CalendarFailure(CalendarFailureCode.storageFailed);
+    }
+    final pair = [canonicalLeft, canonicalRight]..sort();
+    return (pair[0], pair[1]);
+  }
+
   Future<void> _checkUndo(
     QueryRow row,
     Map<String, dynamic> payload,
@@ -417,6 +684,10 @@ extension _CalendarUndoStorage on LocalCalendarStore {
         _db._clock.nowUtc.microsecondsSinceEpoch >=
             row.read<int>('expires_at')) {
       throw const CalendarFailure(CalendarFailureCode.undoUnavailable);
+    }
+    if (payload['v'] == 2) {
+      await _checkGroupUndo(payload);
+      return;
     }
     final expected = <(String, int)>{};
     if (payload['relation'] != null) {
@@ -474,6 +745,87 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     }
   }
 
+  Future<void> _checkGroupUndo(Map<String, dynamic> payload) async {
+    for (final guard in payload['guards'] as List) {
+      final key = (guard[0] as String, guard[1] as int);
+      if (await _aggregateVersion(key) != guard[2]) {
+        throw const CalendarFailure(CalendarFailureCode.undoConflict);
+      }
+    }
+    for (final relation in payload['relations'] as List) {
+      final left = relation['left'] as String;
+      final right = relation['right'] as String;
+      final present = relation['present'] as bool;
+      final localId = relation['localId'] as int?;
+      final version = relation['version'] as int?;
+      final expectedIds = _groupRelationIds(payload, (left, right));
+      if (expectedIds.length != 1 || present && expectedIds.single != localId) {
+        throw const CalendarFailure(CalendarFailureCode.storageFailed);
+      }
+      final rows = present
+          ? await _db
+                .customSelect(
+                  'SELECT * FROM agenda_relations WHERE local_id=? OR (left_identity=? AND right_identity=?)',
+                  variables: [
+                    Variable.withInt(localId!),
+                    Variable.withString(left),
+                    Variable.withString(right),
+                  ],
+                )
+                .get()
+          : await _db
+                .customSelect(
+                  'SELECT * FROM agenda_relations WHERE left_identity=? AND right_identity=?',
+                  variables: [
+                    Variable.withString(left),
+                    Variable.withString(right),
+                  ],
+                )
+                .get();
+      if (!present) {
+        if (rows.isNotEmpty) {
+          throw const CalendarFailure(CalendarFailureCode.undoConflict);
+        }
+        for (final id in expectedIds) {
+          final byId = await _db
+              .customSelect(
+                'SELECT local_id FROM agenda_relations WHERE local_id=?',
+                variables: [Variable.withInt(id)],
+              )
+              .get();
+          if (byId.isNotEmpty) {
+            throw const CalendarFailure(CalendarFailureCode.undoConflict);
+          }
+        }
+      } else if (rows.length != 1 ||
+          rows.single.read<int>('local_id') != localId ||
+          rows.single.read<int>('version') != version ||
+          rows.single.read<String>('left_identity') != left ||
+          rows.single.read<String>('right_identity') != right) {
+        throw const CalendarFailure(CalendarFailureCode.undoConflict);
+      }
+    }
+  }
+
+  Set<int> _groupRelationIds(
+    Map<String, dynamic> payload,
+    (String, String) pair,
+  ) {
+    final ids = <int>{};
+    for (final step in payload['steps'] as List) {
+      final relation = (step as Map<String, dynamic>)['relation'] as List?;
+      if (relation == null) continue;
+      if (_normalizedRelationPair(
+            relation[2] as String,
+            relation[3] as String,
+          ) ==
+          pair) {
+        ids.add(relation[0] as int);
+      }
+    }
+    return ids;
+  }
+
   Future<CalendarUndoView> _queryUndo(CalendarContext context) => _serial(
     () => _db.transaction(() async {
       await _guard(context);
@@ -512,6 +864,127 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     }
     final p = _decodeUndo(row.read<String>('payload'));
     await _checkUndo(row, p, reference.context);
+    if (p['v'] == 1) {
+      final result = await _applyUndoPayload(p, reference.context);
+      await _consumeUndo(reference.undoId);
+      return result;
+    }
+
+    CalendarIdentity? finalIdentity;
+    int? finalTaskId;
+    (String, String)? finalRelationPair;
+    final steps = p['steps'] as List;
+    for (final value in steps.reversed) {
+      final step = await _rebaseUndoStep(value as Map<String, dynamic>);
+      await _applyUndoPayload(step, reference.context);
+      if (step['target'] != null) {
+        finalIdentity = _decodeIdentity(jsonEncode(step['target']));
+      }
+      if (step['task'] != null) finalTaskId = step['task'] as int;
+      final relation = step['relation'] as List?;
+      if (relation != null) {
+        finalRelationPair = _normalizedRelationPair(
+          relation[2] as String,
+          relation[3] as String,
+        );
+      }
+    }
+
+    final target = finalIdentity == null
+        ? null
+        : CalendarReference(
+            reference.context,
+            finalIdentity,
+            await _aggregateVersion(await _aggregateKey(finalIdentity)),
+          );
+    final task = finalTaskId == null
+        ? null
+        : TaskReference(
+            reference.context,
+            finalTaskId,
+            await _aggregateVersion(('task', finalTaskId)),
+          );
+    CalendarRelationReference? relation;
+    if (finalRelationPair != null) {
+      final relationRows = await _db
+          .customSelect(
+            'SELECT local_id,version FROM agenda_relations WHERE left_identity=? AND right_identity=?',
+            variables: [
+              Variable.withString(finalRelationPair.$1),
+              Variable.withString(finalRelationPair.$2),
+            ],
+          )
+          .get();
+      if (relationRows.length > 1) {
+        throw const CalendarFailure(CalendarFailureCode.storageFailed);
+      }
+      if (relationRows.isNotEmpty) {
+        relation = CalendarRelationReference(
+          reference.context,
+          relationRows.single.read<int>('local_id'),
+          relationRows.single.read<int>('version'),
+        );
+      }
+    }
+    await _consumeUndo(reference.undoId);
+    return (target, task, relation);
+  }
+
+  Future<void> _consumeUndo(String undoId) async {
+    await _db.customStatement(
+      'DELETE FROM agenda_undo WHERE singleton=1 AND undo_id=?',
+      [undoId],
+    );
+  }
+
+  Future<Map<String, dynamic>> _rebaseUndoStep(
+    Map<String, dynamic> original,
+  ) async {
+    final value = jsonDecode(jsonEncode(original)) as Map<String, dynamic>;
+    final guards = <List<Object>>[];
+    for (final guard in value['guards'] as List) {
+      final key = (guard[0] as String, guard[1] as int);
+      guards.add([key.$1, key.$2, await _aggregateVersion(key)]);
+    }
+    value['guards'] = guards;
+
+    final relation = value['relation'] as List?;
+    if (relation != null) {
+      final relationId = relation[0] as int;
+      final pair = _normalizedRelationPair(
+        relation[2] as String,
+        relation[3] as String,
+      );
+      final rows = await _db
+          .customSelect(
+            'SELECT * FROM agenda_relations WHERE local_id=? OR (left_identity=? AND right_identity=?)',
+            variables: [
+              Variable.withInt(relationId),
+              Variable.withString(pair.$1),
+              Variable.withString(pair.$2),
+            ],
+          )
+          .get();
+      if (value['action'] == 'remove-relation') {
+        if (rows.isNotEmpty) {
+          throw const CalendarFailure(CalendarFailureCode.undoConflict);
+        }
+      } else {
+        if (rows.length != 1 ||
+            rows.single.read<int>('local_id') != relationId ||
+            rows.single.read<String>('left_identity') != pair.$1 ||
+            rows.single.read<String>('right_identity') != pair.$2) {
+          throw const CalendarFailure(CalendarFailureCode.undoConflict);
+        }
+        relation[1] = rows.single.read<int>('version');
+        value['relation'] = relation;
+      }
+    }
+    return _decodeUndo(jsonEncode(value));
+  }
+
+  Future<(CalendarReference?, TaskReference?, CalendarRelationReference?)>
+  _applyUndoPayload(Map<String, dynamic> p, CalendarContext context) async {
     final action = p['action'] as String;
     final b = p['before'] as List;
     final identity = p['target'] == null
@@ -641,7 +1114,7 @@ extension _CalendarUndoStorage on LocalCalendarStore {
               [b[3] as String, b[4] as String, r![0]],
             );
             relation = CalendarRelationReference(
-              reference.context,
+              context,
               r[0] as int,
               (r[1] as int) + 1,
             );
@@ -659,7 +1132,7 @@ extension _CalendarUndoStorage on LocalCalendarStore {
             ],
           );
           relation = CalendarRelationReference(
-            reference.context,
+            context,
             b[0] as int,
             (b[5] as int) + 2,
           );
@@ -675,21 +1148,17 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       for (final g in p['guards'] as List) (g[0] as String, g[1] as int),
     ];
     await _touchAggregates(keys);
-    await _db.customStatement(
-      'DELETE FROM agenda_undo WHERE singleton=1 AND undo_id=?',
-      [reference.undoId],
-    );
     final target = identity == null
         ? null
         : CalendarReference(
-            reference.context,
+            context,
             identity,
             await _aggregateVersion(await _aggregateKey(identity)),
           );
     final task = taskId == null
         ? null
         : TaskReference(
-            reference.context,
+            context,
             taskId,
             await _aggregateVersion(('task', taskId)),
           );
