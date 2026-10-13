@@ -9,7 +9,7 @@
 | M2 | 已关闭，2026-10-11 | Young 活动关联日程和独立报名活动只读查询、全自动及生命周期/连续性；[用户验收](milestones/m2/acceptance.md) |
 | M3 | 已关闭，2026-10-12 | 内部评课/校园查询及首批 7 项长期 Markdown，临时界面可选，无 Agent/工具注册；[关闭依据与保留项](milestones/m3/acceptance.md) |
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
-| M5 | 总方案已批准，M5.1 实施中 | [唯一任务单](milestones/m5/plan.md)：学校模型、受控查询/引用、本地批准写、有界规划、历史与维护；按 M5.1–M5.6 实施，[批准记录](milestones/m5/acceptance.md)。真实能力与产品验收尚未通过 |
+| M5 | 总方案已批准；M5.1 工程完成，待真实模型核验 | [唯一任务单](milestones/m5/plan.md)：按 M5.1–M5.6 交付学校模型、受控查询/引用、批准写和规划；[M5.1 工程记录](milestones/m5/records/01-model-entry.md)、[批准记录](milestones/m5/acceptance.md)。业务工具尚未启用，真实能力与产品验收未通过 |
 | 后续 | 未排定 | 提醒、移动端及发布按后续阶段确认 |
 
 ## 已批准范围与待验证

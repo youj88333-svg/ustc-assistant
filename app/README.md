@@ -2,7 +2,7 @@
 
 新 Flutter 工程包含已关闭的 M0 离线演示、M1 教务自动采集与本地日程、M2 二课活动关联日程与活动只读查询，以及 M3 内部公开查询和精选文本知识库；M3 的关闭不表示 Agent 接入或正式公开查询用户入口已交付。当前范围见 [状态页](../docs/status.md)，历史失败/检查和用户关闭见 [阶段索引](../docs/milestones/README.md)。
 
-应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内，设置为侧边栏底部辅助入口。M4.2 加入日/周视图与个人安排，M4.3 加入任务、手工时间块和受控撤销；Agent 输入/发送仍待 M5 接入。
+应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内，设置为侧边栏底部辅助入口。M4.2 加入日/周视图与个人安排，M4.3 加入任务、手工时间块和受控撤销，M4.4 加入设置与维护。M5.1 接入模型配置和基本对话；业务查询、方案批准写和规划按后续切片接入，当前不会执行业务工具。
 
 ## 启动与构建
 
@@ -22,6 +22,16 @@
 ```
 
 启动 `build/windows/x64/runner/Release/ustc_assistant_m0.exe`；分发保留整个 Release 目录的 DLL、`data/` 和资源。集成测试可能替换该目录中的测试助手，测试后再构建正式入口。
+
+## 模型配置与对话
+
+进入“设置 → Agent”或 Agent 页的“去设置”。Key 只在应用里主动输入，不在聊天正文中提供。勾选发送同意，点击“获取模型”，从学校服务返回的目录选择模型，再点击“验证并保存”；获取目录后 Key 输入清空，但本次候选 Key 最多在内存保留三分钟供验证，超时或停止后清除。验证使用合成问题和固定 echo_probe，不读取业务数据；只通过文本与流式时标记 chatOnly，完成工具调用和工具结果续答才标记 toolReady。
+
+学校网关固定为 `https://api.llm.ustc.edu.cn/v1`，无自定义地址。模型 Key 采用独立用途的 Windows DPAPI CurrentUser 保护，与学校密码分开。已保存后可留空；取消发送同意会立即撤销授权并停止相关运行，Key/历史继续保留，重新勾选可恢复授权。删除 Key 需确认，保留其他数据。
+
+回到 Agent 页，新建或选择对话后发送问题，回复逐步显示；“停止”保留已经安全保存的片段并标注中断状态。当前仅提供基本对话，尚不能读取日程、查询公开资料或保存安排。会话保留在本机，重启不自动续跑；清当前或全部历史需两次确认，不占学校来源通道。超过输入、回复、历史容量或检测到可识别秘密时拒绝本次操作。此检测不承诺发现所有秘密，历史也不作为有效业务批准。
+
+“复制安全能力摘要”只包含阶段、能力布尔值、固定失败码和计数，不含 Key、模型名称、问题或回复。真实模型能力仍需使用自己的 Key 在应用核验；工程测试通过不替代学校网关实证。清日程/资料库保留模型 Key、配置与历史，整应用重置一并删除。
 
 ## 教务日常采集
 
@@ -99,7 +109,7 @@
 
 ## 目录与诊断
 
-正式根为 `%USERPROFILE%/.ustc-assistant/local_v1`，业务库文件名为 `jw.sqlite`，当前 schema v9，增量保留 JW/Young 和公开知识表、个人安排/例外、来源覆盖及本地操作回执；7→8 增添教务学术详情，8→9 添加任务、时间块和最近一次受控撤销，作废旧上下文而不补造历史撤销。旧教务行保持未知，后续同步补充。关系类型升级保留原 ID/说明，旧共存转不冲突，旧相关不推断为用户确认。学期目录、成功范围及受保护凭据与对应成功事务保存；保护机制为 Windows DPAPI CurrentUser，不承诺跨用户/设备解密，不宣称整个数据库加密。
+正式根为 `%USERPROFILE%/.ustc-assistant/local_v1`，业务库文件名为 `jw.sqlite`，当前 schema v11，增量保留 JW/Young 和公开知识表、个人安排/例外、来源覆盖及本地操作回执；7→8 增添教务学术详情，8→9 添加任务、时间块和最近一次受控撤销，9→10 添加显示设置与维护恢复，10→11 添加独立模型配置、受保护 Key、会话/运行与历史清理账本。旧上下文按迁移规则作废而不补造历史撤销或模型批准。旧教务行保持未知，后续同步补充。关系类型升级保留原 ID/说明，旧共存转不冲突，旧相关不推断为用户确认。学期目录、成功范围及受保护凭据与对应成功事务保存；保护机制为 Windows DPAPI CurrentUser，不承诺跨用户/设备解密，不宣称整个数据库加密。
 
 独立离线演示根为 `%TEMP%/ustc_assistant_m0_demo_v1`。普通构建不显示旧演示与观测面板；需要时以 `--dart-define=USTC_DIAGNOSTICS=true` 构建后在设置内展开“开发诊断”。演示的正常/重放、取消、失败和恢复只操作合成数据。目录排他保护第二实例，勿手动修改或清理使用中的数据库/分区。
 
@@ -117,6 +127,8 @@
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/public_knowledge_flow_test.dart -d windows --no-pub
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/app_shell_flow_test.dart -d windows --no-pub
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/calendar_workspace_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/settings_maintenance_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/agent_model_flow_test.dart -d windows --no-pub
 ```
 
 按变更选择相关原生套件，里程碑关闭前完成全套相关检查和正式构建。所有自动检查只使用合成/loopback/随机临时资产，不访问学校或正式库。原生 HTTPS fixture 可用 Conda basic310 的 OpenSSL 或 `USTC_TEST_OPENSSL`，不写系统信任；既有测试助手只终止其自建进程并清理自身已排空目录。实际命令与结果记阶段记录，不在本帮助中积累轮次。

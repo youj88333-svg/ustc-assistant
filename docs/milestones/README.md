@@ -9,7 +9,7 @@
 | M2 | Young 活动关联日程/独立只读查询 | [计划](m2/plan.md) | [记录索引](m2/records.md) | [2026-10-11 关闭](m2/acceptance.md) |
 | M3 | 为未来 Agent 准备内部公开查询与长期 Markdown 知识库 | [任务单](m3/plan.md) | [研究与实现](m3/records.md)，根工程检查、有限公开契约与实际随包资料核验完成，临时界面可选 | [2026-10-12 关闭](m3/acceptance.md) |
 | M4 | Agent 接入前的 Windows 应用可用版 | [任务单](m4/plan.md) | [记录](m4/records.md)，四个子阶段工程检查完成 | [M4.1–M4.4 及 M4 总体已验收关闭](m4/acceptance.md)，2026-10-13 |
-| M5 | 学生事务 Agent 与受控运行环境 | [详细任务单](m5/plan.md) | M5.1 实施中 | [总方案已批准](m5/acceptance.md)，尚未验收关闭 |
+| M5 | 学生事务 Agent 与受控运行环境 | [详细任务单](m5/plan.md) | M5.1 工程完成，待真实模型核验 | [批准记录](m5/acceptance.md)、[工程记录](m5/records.md)，尚未验收关闭 |
 
 M5 的批准范围、接口、分切片和验收条件统一见任务单，实际工程与真人结论分开记录；不从 M4 界面空壳、开源研究或批准推断模型/工具已实现。
 
