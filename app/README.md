@@ -21,6 +21,8 @@
 & 'E:\flutter\flutter\bin\flutter.bat' build windows --release --no-pub --target=lib/main.dart
 ```
 
+交付构建可附加 `--dart-define=USTC_BUILD_REVISION=<本地代码提交的40位SHA>`，诊断事件会保留该构建来源；未提供时明确记为 unknown，不推断当前 Git 状态。
+
 启动 `build/windows/x64/runner/Release/ustc_assistant_m0.exe`；分发保留整个 Release 目录的 DLL、`data/` 和资源。集成测试可能替换该目录中的测试助手，测试后再构建正式入口。
 
 ## 模型配置与对话
@@ -121,11 +123,23 @@
 
 ## 目录与诊断
 
-正式根为 `%USERPROFILE%/.ustc-assistant/local_v1`，业务库文件名为 `jw.sqlite`，当前 schema v12，增量保留 JW/Young 和公开知识表、个人安排/例外、来源覆盖及本地操作回执；7→8 增添教务学术详情，8→9 添加任务、时间块和最近一次受控撤销，9→10 添加显示设置与维护恢复，10→11 添加独立模型配置、受保护 Key、会话/运行与历史清理账本，11→12 添加有界出处、查询步骤和图片数量。旧上下文按迁移规则作废而不补造历史撤销或模型批准。旧教务行保持未知，后续同步补充。关系类型升级保留原 ID/说明，旧共存转不冲突，旧相关不推断为用户确认。学期目录、成功范围及受保护凭据与对应成功事务保存；保护机制为 Windows DPAPI CurrentUser，不承诺跨用户/设备解密，不宣称整个数据库加密。
+正式根为 `%USERPROFILE%/.ustc-assistant/local_v1`，业务库文件名为 `jw.sqlite`，当前 schema v13，增量保留 JW/Young 和公开知识表、个人安排/例外、来源覆盖及本地操作回执；7→8 增添教务学术详情，8→9 添加任务、时间块和最近一次受控撤销，9→10 添加显示设置与维护恢复，10→11 添加独立模型配置、受保护 Key、会话/运行与历史清理账本，11→12 添加有界出处、查询步骤和图片数量，12→13 添加 Agent 方案/批准与整组撤销事实。旧上下文按迁移规则作废而不补造历史撤销或模型批准。旧教务行保持未知，后续同步补充。关系类型升级保留原 ID/说明，旧共存转不冲突，旧相关不推断为用户确认。学期目录、成功范围及受保护凭据与对应成功事务保存；保护机制为 Windows DPAPI CurrentUser，不承诺跨用户/设备解密，不宣称整个数据库加密。
 
 独立离线演示根为 `%TEMP%/ustc_assistant_m0_demo_v1`。普通构建不显示旧演示与观测面板；需要时以 `--dart-define=USTC_DIAGNOSTICS=true` 构建后在设置内展开“开发诊断”。演示的正常/重放、取消、失败和恢复只操作合成数据。目录排他保护第二实例，勿手动修改或清理使用中的数据库/分区。
 
 开发诊断的“复制导入脱敏摘要”生成 `jw-import-v1`，“复制二课同步摘要”生成 `young-import-v1`，用于反馈固定状态/失败阶段、安全计数、密码存在及分区保留/复用标志；不发送账号、密码、原文或日程明细。候选摘要不授予生产许可；正常日程和来源设置不展示内部摘要或阶段编号。
+
+正式版运行日志在“设置 → 数据与隐私 → 运行诊断”中导出；Agent 错误提示也提供“导出最近日志”。选择保存位置后生成 JSON，再由你主动发送给维护者；取消不写文件，应用不自动上传。启动失败页可导出本次内存错误，明确不包含既有日志，不能安全访问目录时不会读取旧文件。
+
+日志仅保存版本、随机运行关联、阶段、工具名称、失败码、参数拒绝字段、耗时和计数，不保存提问/回复、工具参数值/原始响应、账号、Key/密码、图片、浏览器资料、URL 或用户路径。固定日志文件总上限 1 MiB，打开、记录或导出时淘汰超过 7 天的事件；一次导出最近最多 1000 条，覆盖不足、丢弃和坏行会明确标记。清除日志需两次确认，仅清诊断，日程、任务、历史和凭据保留；完全重置包含日志。
+
+维护者收到安全 JSON 后可离线汇总失败轨迹，无需访问用户业务库：
+
+```powershell
+& 'E:\flutter\flutter\bin\cache\dart-sdk\bin\dart.exe' run tool/diagnostics_summary.dart 'C:\path\USTC-Assistant-diagnostics.json'
+```
+
+该工具只读取所指定的有界安全诊断包，输出版本、失败字段和实际提交阶段；未知异常只保留类别。日志用于构造同版本合成复现，不能恢复用户私人原文或保证重播原业务。
 
 ## 开发检查
 
@@ -141,6 +155,7 @@
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/calendar_workspace_flow_test.dart -d windows --no-pub
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/settings_maintenance_flow_test.dart -d windows --no-pub
 & 'E:\flutter\flutter\bin\flutter.bat' test integration_test/agent_model_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/diagnostics_flow_test.dart -d windows --no-pub
 ```
 
 按变更选择相关原生套件，里程碑关闭前完成全套相关检查和正式构建。所有自动检查只使用合成/loopback/随机临时资产，不访问学校或正式库。原生 HTTPS fixture 可用 Conda basic310 的 OpenSSL 或 `USTC_TEST_OPENSSL`，不写系统信任；既有测试助手只终止其自建进程并清理自身已排空目录。实际命令与结果记阶段记录，不在本帮助中积累轮次。
