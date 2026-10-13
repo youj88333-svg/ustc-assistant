@@ -25,4 +25,4 @@ Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 
 
 Key 采用独立模型类型和用途的 DPAPI CurrentUser 保护。配置事务复验 owner/reset/history/config/request 世代；停止推进 requestEpoch，异步保护及 Key 交接中的旧操作不能落库或再注册出站。保存模型的联网同意可撤销/恢复，撤销保留 Key/历史但停止运行并禁新发送。启动恢复历史清理和中断记录，不自动重放请求。
 
-真实 Key/模型能力目前尚未核验。接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)。实际参数兼容性仍需应用内最小合成测试，不从“兼容”推断支持。
+2026-10-13 用户的应用内安全摘要确认实际所选模型为 toolReady，文本、流式、原生调用及结果续答均通过，目录为 12 项；不记录 Key 或推测具体模型 ID。普通聊天/停止体验与视觉能力仍待核对，详见 [真实能力记录](../../milestones/m5/acceptance.md)。接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)。新参数仍按相应合成和真实核验，不从“兼容”推断支持。
