@@ -4,3 +4,6 @@
 
 - [M5.1 模型入口与最短对话](records/01-model-entry.md)：固定网关、独立 Key 保护、配置/运行/历史世代、Agent 页面、维护与退出集成；用户已核验真实 toolReady，普通聊天/停止体验待核对。
 - [M5.2 只读工具与主动图片](records/02-read-tools-and-images.md)：固定查询、受控引用/正文续读、出处和历史、主动图片、运行限额、迁移与跨层收口；真实问答/视觉效果待核对。
+- [M5.3 本地方案与整组撤销](records/03-local-plans.md)：当前卡批准、原子多动作、依赖/版本、真实提交与撤销事实、schema 13。
+- [M5.4 时间规划与固定来源](records/04-planning-and-sources.md)：有界空闲/截止/偏好、JW/Young 专属作业、自动认证/挑战及源读结果出站复验。
+- [M5.5/M5.6 连续使用与交付](records/05-continuity-and-delivery.md)：安全历史、日程讨论/返回、维护与拒旧，中断/失败修复、根最终全套/Windows/Release。整个 M5 工程完成，统一真人体验待验，尚未关闭。
