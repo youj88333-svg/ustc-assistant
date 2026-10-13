@@ -225,14 +225,17 @@ final class PublicStore implements KnowledgeReadPort {
     () async => (await _knowledgeState()).read<int>('icourse_consent') == 1,
   );
 
-  Future<void> setIcourseConsent(bool allowed) {
-    for (final ticket in _jobs.values.where(
-      (t) => t.authority.source == PublicSource.icourse,
-    )) {
-      ticket.cancelled = true;
-    }
-    return _serial(
+  Future<void> setIcourseConsent(
+    bool allowed, {
+    SettingsContext? expectedSettingsContext,
+  }) async {
+    await _serial(
       () => _db.transaction(() async {
+        if (expectedSettingsContext != null) {
+          await _db.applicationSettings._requireContext(
+            expectedSettingsContext,
+          );
+        }
         await _db.customStatement(
           'UPDATE knowledge_state SET icourse_consent=? WHERE singleton=1',
           [allowed ? 1 : 0],
@@ -243,6 +246,11 @@ final class PublicStore implements KnowledgeReadPort {
         await _db._guard();
       }),
     );
+    for (final ticket in _jobs.values.where(
+      (t) => t.authority.source == PublicSource.icourse,
+    )) {
+      ticket.cancelled = true;
+    }
   }
 
   Future<PublicJobTicket> beginPublicJob(PublicSource source) =>
@@ -753,13 +761,26 @@ final class PublicStore implements KnowledgeReadPort {
     });
   }
 
-  Future<void> clearKnowledge({required bool confirmed}) async {
+  Future<void> clearKnowledge({
+    required bool confirmed,
+    SettingsContext? expectedSettingsContext,
+  }) async {
     if (!confirmed) throw const PublicFailure(PublicFailureCode.invalidRequest);
+    if (expectedSettingsContext != null) {
+      await _serial(
+        () => _db.applicationSettings._requireContext(expectedSettingsContext),
+      );
+    }
     _load?.cancelled = true;
     _knowledgeGeneration++;
     await _serial(() async {
       _load?.cancelled = true;
       await _db.transaction(() async {
+        if (expectedSettingsContext != null) {
+          await _db.applicationSettings._requireContext(
+            expectedSettingsContext,
+          );
+        }
         final count = await _db._count(
           'SELECT COUNT(*) AS count FROM knowledge_materials',
         );

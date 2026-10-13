@@ -230,11 +230,18 @@ void main() {
 
         final pending = service.loadBundledEdition();
         await entered.future;
-        await service.clearKnowledge(confirmed: true);
+        var cleared = false;
+        final clearing = service
+            .clearKnowledge(confirmed: true)
+            .then((_) => cleared = true);
+        await Future<void>.delayed(Duration.zero);
+        expect(cleared, isFalse);
         edition.complete(
           _edition(identity, [_material('teach-one', '迟到的合成指南', '不得恢复清理内容。')]),
         );
         final outcome = await pending;
+        await clearing;
+        expect(cleared, isTrue);
 
         expect(outcome.state, KnowledgeLoadState.cancelled);
         expect((await service.inspectKnowledge()).materialCount, 0);

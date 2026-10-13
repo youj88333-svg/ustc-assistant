@@ -2,6 +2,7 @@ import 'dart:async';
 
 import '../core/knowledge_contract.dart';
 import '../core/public_query_contract.dart';
+import '../core/settings_contract.dart';
 import 'jw_store.dart';
 
 typedef KnowledgeEditionLoader = Future<KnowledgeEdition> Function();
@@ -19,7 +20,9 @@ final class KnowledgeService implements KnowledgePort {
   final Duration assetTimeout;
   Future<void>? _work;
   KnowledgeLoadTicket? _ticket;
-  bool _cancelled = false, _closing = false;
+  bool _cancelled = false, _closing = false, _clearing = false;
+
+  bool get isLoading => _work != null;
 
   void _open() {
     if (_closing) throw const PublicFailure(PublicFailureCode.closed);
@@ -78,7 +81,9 @@ final class KnowledgeService implements KnowledgePort {
   @override
   Future<KnowledgeLoadOutcome> loadBundledEdition() async {
     _open();
-    if (_work != null) throw const PublicFailure(PublicFailureCode.busy);
+    if (_work != null || _clearing) {
+      throw const PublicFailure(PublicFailureCode.busy);
+    }
     final done = Completer<void>();
     _work = done.future;
     _cancelled = false;
@@ -168,11 +173,34 @@ final class KnowledgeService implements KnowledgePort {
   }
 
   @override
-  Future<void> clearKnowledge({required bool confirmed}) async {
+  Future<void> clearKnowledge({
+    required bool confirmed,
+    SettingsContext? expectedSettingsContext,
+  }) async {
     _open();
     if (!confirmed) throw const PublicFailure(PublicFailureCode.invalidRequest);
-    _cancelled = true;
-    await store.clearKnowledge(confirmed: true);
+    if (_clearing) throw const PublicFailure(PublicFailureCode.busy);
+    _clearing = true;
+    try {
+      // Persist invalidation before awaiting the bounded asset batch. A late
+      // loader cannot accept data, and the product reports done only on drain.
+      await store.clearKnowledge(
+        confirmed: true,
+        expectedSettingsContext: expectedSettingsContext,
+      );
+      _cancelled = true;
+      await _work;
+      if (_ticket != null) {
+        await store.finishKnowledgeLoad(
+          _ticket!,
+          KnowledgeLoadState.cancelled,
+          failure: PublicFailureCode.cancelled,
+        );
+        _ticket = null;
+      }
+    } finally {
+      _clearing = false;
+    }
   }
 
   Future<void> close() async {

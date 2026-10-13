@@ -38,7 +38,7 @@ final class ProductApp extends StatelessWidget {
       GlobalWidgetsLocalizations.delegate,
       GlobalCupertinoLocalizations.delegate,
     ],
-    theme: _productTheme,
+    theme: productTheme,
     home: _ProductShell(
       controller: controller,
       settingsBuilder: settingsBuilder,
@@ -47,7 +47,7 @@ final class ProductApp extends StatelessWidget {
   );
 }
 
-final ThemeData _productTheme = ThemeData(
+final ThemeData productTheme = ThemeData(
   useMaterial3: true,
   colorScheme:
       ColorScheme.fromSeed(

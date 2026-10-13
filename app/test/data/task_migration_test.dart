@@ -103,14 +103,14 @@ void main() {
               .single['n'],
           0,
         );
-        expect(after.select('PRAGMA user_version').single['user_version'], 9);
+        expect(after.select('PRAGMA user_version').single['user_version'], 10);
       } finally {
         after.close();
       }
       final window = await _window(store);
       expect(window.context.owner, context.owner);
       expect(window.context.resetEpoch, context.resetEpoch);
-      expect(window.context.agendaEpoch, context.agendaEpoch + 1);
+      expect(window.context.agendaEpoch, context.agendaEpoch + 2);
       expect(
         (await store.localCalendar.queryUndo(window.context)).reference,
         isNull,
@@ -238,7 +238,7 @@ void main() {
       expect((await _window(store)).items.single.title, '迁移保留');
       expect(
         (await _window(store)).context.agendaEpoch,
-        context.agendaEpoch + 1,
+        context.agendaEpoch + 2,
       );
     },
   );

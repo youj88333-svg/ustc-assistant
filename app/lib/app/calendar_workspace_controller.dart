@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../core/agenda_contract.dart';
 import '../core/calendar_contract.dart';
 import '../core/contracts.dart';
+import '../core/settings_contract.dart';
 import 'app_shell_contract.dart';
 import 'calendar_workspace_contract.dart';
 import 'task_workspace_contract.dart';
@@ -111,6 +112,41 @@ final class CalendarWorkspaceController extends ChangeNotifier
     if (!_disposed) notifyListeners();
   }
 
+  Future<void> resetAfterMaintenance(
+    DisplayPreferences preferences, {
+    required bool resetDay,
+  }) async {
+    ++_queryGeneration;
+    ++_detailGeneration;
+    ++_taskQueryGeneration;
+    ++_taskDetailGeneration;
+    _selected = null;
+    _detail = null;
+    _selectedTask = null;
+    _taskDetail = null;
+    _window = null;
+    _taskWindow = null;
+    _undo = const CalendarUndoView();
+    _taskQuery = const TaskQuery();
+    if (resetDay) {
+      _day = today;
+      _filter = CalendarFilter.all;
+    }
+    await load(
+      mode: preferences.calendarView == DefaultCalendarView.week
+          ? CalendarViewMode.week
+          : CalendarViewMode.day,
+      includeInactive: preferences.includeInactive,
+    );
+    await loadTasks();
+    if (view.failure != null ||
+        view.window == null ||
+        taskView.failure != null ||
+        taskView.window == null) {
+      throw const SettingsFailure(SettingsFailureCode.storageFailed);
+    }
+  }
+
   void _progressFailed() {
     if (_closing || _disposed) return;
     _progressUnavailable = true;
@@ -205,7 +241,8 @@ final class CalendarWorkspaceController extends ChangeNotifier
     if (reference == null) return;
     try {
       final detail = await tasks!.taskDetail(reference);
-      if (!_taskCurrent(queryGeneration) || generation != _taskDetailGeneration) {
+      if (!_taskCurrent(queryGeneration) ||
+          generation != _taskDetailGeneration) {
         return;
       }
       _taskDetail = detail;
@@ -213,7 +250,8 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _taskFailure = null;
       _notify();
     } catch (error) {
-      if (!_taskCurrent(queryGeneration) || generation != _taskDetailGeneration) {
+      if (!_taskCurrent(queryGeneration) ||
+          generation != _taskDetailGeneration) {
         return;
       }
       _taskDetailLoading = false;

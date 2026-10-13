@@ -34,8 +34,9 @@ void removeCalendarTablesForLegacyFixture(Database database) {
   }
 }
 
-/// Remove only v9 additions from an owned synthetic copy to construct v6-v8.
+/// Remove v9 and later additions from an owned synthetic copy to construct v6-v8.
 void removeTaskTablesForLegacyFixture(Database database) {
+  removeSettingsTablesForLegacyFixture(database);
   for (final table in const [
     'local_plan_blocks',
     'local_tasks',
@@ -74,5 +75,18 @@ void removeTaskTablesForLegacyFixture(Database database) {
     );
     database.execute('DROP TABLE agenda_audit');
     database.execute('ALTER TABLE synthetic_audit_v8 RENAME TO agenda_audit');
+  }
+}
+
+/// A v1-v9 fixture cannot contain v10 settings/maintenance tables. This helper
+/// is only called on explicitly owned synthetic SQLite copies.
+void removeSettingsTablesForLegacyFixture(Database database) {
+  for (final table in const [
+    'app_maintenance_intent',
+    'app_settings_receipts',
+    'app_settings_audit',
+    'app_settings',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }

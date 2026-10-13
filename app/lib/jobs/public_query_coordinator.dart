@@ -5,6 +5,7 @@ import 'dart:math';
 
 import '../core/contracts.dart';
 import '../core/public_query_contract.dart';
+import '../core/settings_contract.dart';
 import '../core/work_lease.dart';
 import '../data/jw_store.dart';
 import '../source/public_html_parser.dart';
@@ -131,16 +132,36 @@ final class PublicQueryCoordinator implements PublicQueryPort {
   @override
   Future<bool> hasIcourseConsent() => store.hasIcourseConsent();
   @override
-  Future<void> setIcourseConsent(bool allowed) async {
+  Future<void> setIcourseConsent(
+    bool allowed, {
+    SettingsContext? expectedSettingsContext,
+  }) async {
     if (_closing) throw const PublicFailure(PublicFailureCode.closed);
     if (_ticket?.authority.source == PublicSource.icourse) await cancel();
-    await store.setIcourseConsent(allowed);
+    await store.setIcourseConsent(
+      allowed,
+      expectedSettingsContext: expectedSettingsContext,
+    );
     _forget(PublicSource.icourse);
   }
 
   void _forget(PublicSource source) {
     _references.removeWhere((_, r) => r.authority.source == source);
     _pages.removeWhere((_, p) => p.authority.source == source);
+  }
+
+  void refreshAfterMaintenance() {
+    if (_closing ||
+        _lease != null ||
+        _work != null ||
+        _session != null ||
+        _ticket != null) {
+      throw const PublicFailure(PublicFailureCode.busy);
+    }
+    _references.clear();
+    _pages.clear();
+    _view = const PublicJobView(phase: PublicJobPhase.idle);
+    _changes.add(_view);
   }
 
   String _nonce() => List.generate(

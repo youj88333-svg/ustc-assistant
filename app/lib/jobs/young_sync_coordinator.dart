@@ -835,6 +835,50 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     });
   }
 
+  Future<void> refreshAfterMaintenance() async {
+    if (_closing ||
+        _view.phase != YoungSyncPhase.idle ||
+        _lease != null ||
+        _work != null) {
+      throw const AppFailure(FailureCode.busy);
+    }
+    final data = await store.readYoungView();
+    final permits = await store.readYoungPermits();
+    _publish(
+      YoungSyncPhase.idle,
+      data: data,
+      accountBound: data.accountBound,
+      profileRetained: permits.isNotEmpty,
+      ready: false,
+      committed: false,
+      activities: const [],
+      clearProfileReuse: true,
+      clearError: true,
+      clearNormalization: true,
+      clearLoginReason: true,
+    );
+  }
+
+  Future<void> shutdownForMaintenanceExit() async {
+    if (_view.phase == YoungSyncPhase.closed) {
+      return;
+    }
+    if (_work != null ||
+        _ticket != null ||
+        (_view.phase != YoungSyncPhase.idle &&
+            _view.phase != YoungSyncPhase.recovery)) {
+      throw const AppFailure(FailureCode.cleanupPending);
+    }
+    await _disposeInner();
+    _lease?.release();
+    _lease = null;
+    await registry.closeForMaintenanceExit();
+    _closing = true;
+    await _credentialSubscription.cancel();
+    _publish(YoungSyncPhase.closed, activities: const []);
+    await _changes.close();
+  }
+
   Future<void> shutdown() => _shutdown ??= () async {
     try {
       _closing = true;

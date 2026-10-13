@@ -426,6 +426,17 @@ final class JwPartitionRegistry {
     }
   }
 
+  /// Caller has proved all native resources drained. Keep persistent deletion
+  /// metadata for next startup, without forcing a failed disk clear to finish.
+  Future<void> closeForMaintenanceExit() async {
+    if (_closed) {
+      return;
+    }
+    await _exclusive(() async {
+      _closed = true;
+    });
+  }
+
   Future<void> close() async {
     if (_closed) return;
     await _exclusive(() async {

@@ -441,6 +441,15 @@ final class YoungPartitionRegistry {
     }
   }
 
+  Future<void> closeForMaintenanceExit() async {
+    if (_closed) {
+      return;
+    }
+    await _exclusive(() async {
+      _closed = true;
+    });
+  }
+
   Future<void> close() async {
     if (_closed) return;
     await _exclusive(() async {

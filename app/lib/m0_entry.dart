@@ -1,10 +1,12 @@
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app/demo_runtime.dart';
 import 'app/product_app.dart';
-import 'app/source_settings_page.dart';
+import 'app/app_settings_page.dart';
+import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
 import 'app/jw_data_probe_panel.dart';
 import 'app/jw_probe_panel.dart';
@@ -25,8 +27,8 @@ const developmentDiagnosticsEnabled = bool.fromEnvironment('USTC_DIAGNOSTICS');
 Future<void> launchM0() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
-    final runtime = await DemoRuntime.open();
-    runApp(_OwnedApp(runtime: runtime));
+    final bootstrap = await RuntimeBootstrap.open();
+    runApp(OwnedApplication(bootstrap: bootstrap));
   } catch (error) {
     runApp(
       M0StartupFailureApp(
@@ -36,14 +38,14 @@ Future<void> launchM0() async {
   }
 }
 
-final class _OwnedApp extends StatefulWidget {
-  const _OwnedApp({required this.runtime});
-  final DemoRuntime runtime;
+final class OwnedApplication extends StatefulWidget {
+  const OwnedApplication({super.key, required this.bootstrap});
+  final RuntimeBootstrap bootstrap;
   @override
-  State<_OwnedApp> createState() => _OwnedAppState();
+  State<OwnedApplication> createState() => _OwnedAppState();
 }
 
-final class _OwnedAppState extends State<_OwnedApp> {
+final class _OwnedAppState extends State<OwnedApplication> {
   late final AppLifecycleListener _lifecycle;
   @override
   void initState() {
@@ -51,7 +53,7 @@ final class _OwnedAppState extends State<_OwnedApp> {
     _lifecycle = AppLifecycleListener(
       onExitRequested: () async {
         try {
-          await widget.runtime.close();
+          await widget.bootstrap.close();
           return AppExitResponse.exit;
         } catch (_) {
           return AppExitResponse.cancel;
@@ -67,19 +69,49 @@ final class _OwnedAppState extends State<_OwnedApp> {
   }
 
   @override
-  Widget build(BuildContext context) => ProductApp(
-    controller: widget.runtime.shell,
-    agendaBuilder: (context) => CalendarWorkspacePage(
-      controller: widget.runtime.calendar,
-      tasks: widget.runtime.calendar,
-    ),
-    settingsBuilder: (context) => SourceSettingsPage(
-      controller: widget.runtime.shell,
-      diagnosticsBuilder: developmentDiagnosticsEnabled || m3ValidationEnabled
-          ? _buildDiagnostics
-          : null,
-    ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: Listenable.merge([widget.bootstrap, widget.bootstrap.settings]),
+    builder: (context, _) {
+      final bootstrap = widget.bootstrap;
+      final runtime = bootstrap.runtime;
+      final view = bootstrap.settings.settingsView;
+      if (runtime == null || view.maintenance.blocksProduct) {
+        // The product subtree and its routes are withdrawn during maintenance;
+        // old forms cannot remain attached to the next agenda/reset epoch.
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
+          locale: const Locale('zh', 'CN'),
+          supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
+          localizationsDelegates: const [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          theme: productTheme,
+          home: MaintenanceRecoveryPage(settings: bootstrap.settings),
+        );
+      }
+      return ProductApp(
+        key: ValueKey(view.snapshot?.context.resetEpoch),
+        controller: runtime.shell,
+        agendaBuilder: (context) => CalendarWorkspacePage(
+          key: ValueKey(view.snapshot?.context.agendaEpoch),
+          controller: runtime.calendar,
+          tasks: runtime.calendar,
+        ),
+        settingsBuilder: (context) => ApplicationSettingsPage(
+          settings: runtime.settings,
+          controller: runtime.shell,
+          diagnosticsBuilder:
+              developmentDiagnosticsEnabled || m3ValidationEnabled
+              ? _buildDiagnostics
+              : null,
+        ),
+      );
+    },
   );
+
+  DemoRuntime get _runtime => widget.bootstrap.runtime!;
 
   Widget _buildDiagnostics(BuildContext context) => SizedBox(
     height: 600,
@@ -89,20 +121,17 @@ final class _OwnedAppState extends State<_OwnedApp> {
           SizedBox(
             height: 720,
             child: PublicValidationPanel(
-              queries: widget.runtime.publicQueries,
-              knowledge: widget.runtime.knowledge,
+              queries: _runtime.publicQueries,
+              knowledge: _runtime.knowledge,
             ),
           ),
           const SizedBox(height: 12),
         ],
-        SizedBox(
-          height: 600,
-          child: JwSyncPanel(controller: widget.runtime.jwSync),
-        ),
+        SizedBox(height: 600, child: JwSyncPanel(controller: _runtime.jwSync)),
         const SizedBox(height: 12),
         SizedBox(
           height: 600,
-          child: YoungSyncPanel(controller: widget.runtime.youngSync),
+          child: YoungSyncPanel(controller: _runtime.youngSync),
         ),
         const SizedBox(height: 12),
         ExpansionTile(
@@ -111,19 +140,17 @@ final class _OwnedAppState extends State<_OwnedApp> {
             SizedBox(
               height: 560,
               child: YoungObservationPanel(
-                controller: widget.runtime.youngObservation,
+                controller: _runtime.youngObservation,
               ),
             ),
             SizedBox(
               height: 560,
-              child: YoungReadOnlyPanel(
-                observation: widget.runtime.youngObservation,
-              ),
+              child: YoungReadOnlyPanel(observation: _runtime.youngObservation),
             ),
             SizedBox(
               height: 560,
               child: YoungBusinessProbePanel(
-                observation: widget.runtime.youngObservation,
+                observation: _runtime.youngObservation,
               ),
             ),
           ],
@@ -134,28 +161,25 @@ final class _OwnedAppState extends State<_OwnedApp> {
           children: [
             SizedBox(
               height: 560,
-              child: ObservationPanel(controller: widget.runtime.observation),
+              child: ObservationPanel(controller: _runtime.observation),
             ),
             const SizedBox(height: 12),
             SizedBox(
               height: 560,
-              child: JwProbePanel(controller: widget.runtime.observation),
+              child: JwProbePanel(controller: _runtime.observation),
             ),
             const SizedBox(height: 12),
             SizedBox(
               height: 560,
               child: JwDataProbePanel(
-                probeController: widget.runtime.observation,
-                controller: widget.runtime.observation,
+                probeController: _runtime.observation,
+                controller: _runtime.observation,
               ),
             ),
           ],
         ),
         const SizedBox(height: 12),
-        SizedBox(
-          height: 640,
-          child: M0App(controller: widget.runtime.controller),
-        ),
+        SizedBox(height: 640, child: M0App(controller: _runtime.controller)),
       ],
     ),
   );

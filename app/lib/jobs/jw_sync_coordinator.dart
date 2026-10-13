@@ -784,6 +784,58 @@ final class JwSyncCoordinator implements JwSyncPort {
     });
   }
 
+  /// Local refresh after the total maintenance runner committed and drained.
+  /// It does not acquire another source lease or navigate a school page.
+  Future<void> refreshAfterMaintenance() async {
+    if (_closing ||
+        _view.phase != JwSyncPhase.idle ||
+        _lease != null ||
+        _work != null) {
+      throw const AppFailure(FailureCode.busy);
+    }
+    final data = await store.readView();
+    final permits = await store.readCommittedPermits();
+    _publish(
+      JwSyncPhase.idle,
+      data: data,
+      accountBound: data.accountBound,
+      sessionRetained: permits.isNotEmpty,
+      ready: false,
+      importCommitted: false,
+      courseCount: data.courseCount,
+      examCount: data.examCount,
+      semesters: const [],
+      clearProfileReuse: true,
+      clearError: true,
+      clearNormalization: true,
+      clearLoginReason: true,
+    );
+  }
+
+  /// No source work was admitted during the persistent maintenance barrier.
+  /// Native maintenance helpers are drained by the runner before this call.
+  Future<void> shutdownForMaintenanceExit() async {
+    if (_view.phase == JwSyncPhase.closed) {
+      return;
+    }
+    if (_work != null ||
+        _ticket != null ||
+        (_view.phase != JwSyncPhase.idle &&
+            _view.phase != JwSyncPhase.recovery)) {
+      throw const AppFailure(FailureCode.cleanupPending);
+    }
+    // Partial startup can retain a recovery-only environment. Prove its drain,
+    // then leave disk ledgers for next startup rather than infer deletion.
+    await _disposeInner();
+    _lease?.release();
+    _lease = null;
+    await registry.closeForMaintenanceExit();
+    _closing = true;
+    await _credentialSubscription.cancel();
+    _publish(JwSyncPhase.closed);
+    await _changes.close();
+  }
+
   Future<void> shutdown() => _shutdown ??= () async {
     _closing = true;
     try {

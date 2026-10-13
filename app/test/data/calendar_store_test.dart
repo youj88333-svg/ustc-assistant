@@ -186,7 +186,7 @@ void main() {
       );
       expect(
         (await _window(store)).context.agendaEpoch,
-        context.agendaEpoch + 2,
+        context.agendaEpoch + 3,
       );
     },
   );
@@ -1036,12 +1036,12 @@ void main() {
       _downgradeRelationsToSynthetic6(file);
       store = await _open(file: file);
       window = await _window(store, inactive: true);
-      expect(window.context.agendaEpoch, oldContext.agendaEpoch + 2);
+      expect(window.context.agendaEpoch, oldContext.agendaEpoch + 3);
       expect(
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        9,
+        10,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1298,7 +1298,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        9,
+        10,
       );
     },
   );
