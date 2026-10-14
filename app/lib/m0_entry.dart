@@ -156,6 +156,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
           diagnostics: runtime.diagnostics,
+          speechInput: runtime.speechInput,
           pickImages: pickAgentImages,
           onOpenLocalEvidence: (evidence) async {
             final navigationEpoch = _navigationResetEpoch;

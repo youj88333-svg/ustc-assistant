@@ -7,6 +7,7 @@ import '../core/work_lease.dart';
 import '../core/settings_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
+import '../core/speech_input_contract.dart';
 import '../agent/agent_tool_contract.dart';
 import '../agent/agent_system_prompt.dart';
 import '../agent/agent_coordinator.dart';
@@ -37,6 +38,9 @@ import '../platform/jw_partition_registry.dart';
 import '../platform/young_partition_registry.dart';
 import '../platform/windows_jw_credential_protector.dart';
 import '../platform/windows_model_credential_protector.dart';
+import '../platform/offline_speech_input.dart';
+import '../platform/speech_audio_recorder.dart';
+import '../platform/sense_voice_recognizer.dart';
 import '../source/synthetic_source.dart';
 import '../source/observation_contract.dart';
 import 'demo_controller.dart';
@@ -71,6 +75,7 @@ final class DemoRuntime {
     this.agent,
     this.diagnostics,
     this.diagnosticBindings,
+    this.speechInput,
   );
 
   final DemoDirectory directory;
@@ -94,6 +99,7 @@ final class DemoRuntime {
   final AgentWorkspaceController agent;
   final DiagnosticsPort diagnostics;
   final RuntimeDiagnosticBindings diagnosticBindings;
+  final SpeechInputPort speechInput;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -150,6 +156,7 @@ final class DemoRuntime {
     );
     final preservingMaintenance = maintenance.view.blocksProduct;
     await settings.shutdown();
+    await speechInput.close();
     await agentCoordinator.quiesceForMaintenance();
     await maintenance.close();
     await calendar.shutdown();
@@ -232,6 +239,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
     required this.agent,
     required this.diagnostics,
     required this.diagnosticBindings,
+    required this.speechInput,
     this.onActivationCheckpoint,
   });
   final DemoDirectory directory, jwDirectory;
@@ -252,6 +260,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
   final AgentWorkspaceController agent;
   final DiagnosticsPort diagnostics;
   final RuntimeDiagnosticBindings diagnosticBindings;
+  final SpeechInputPort speechInput;
   @visibleForTesting
   final Future<void> Function()? onActivationCheckpoint;
   DemoRuntime? _runtime;
@@ -267,6 +276,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
     Future<void> Function()? onActivationCheckpoint,
     @visibleForTesting ModelGatewayPort? modelGateway,
     @visibleForTesting ModelCredentialProtector? modelCredentialProtector,
+    @visibleForTesting SpeechInputPort? speechInput,
   }) async {
     final directory = await DemoDirectory.acquire(directoryPath);
     DemoDirectory? formal;
@@ -327,6 +337,11 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ),
       );
       diagnosticBindings = RuntimeDiagnosticBindings(diagnostics);
+      speechInput ??= OfflineSpeechInput(
+        recorder: SpeechAudioRecorder(),
+        recognizer: SenseVoiceRecognizer(),
+        diagnostics: diagnostics,
+      );
       database = JwStore(
         openJwDatabase(formal),
         ownership: formal,
@@ -435,7 +450,11 @@ final class RuntimeBootstrap extends ChangeNotifier {
         cleanProfiles: profiles.clean,
         drainForExit: profiles.drainForExit,
       );
-      maintenance.drainAgent = agentCoordinator.quiesceForMaintenance;
+      final ownedSpeech = speechInput;
+      maintenance.drainAgent = () async {
+        await ownedSpeech.cancel();
+        await agentCoordinator!.quiesceForMaintenance();
+      };
       // Pending startup reset settles before product assembly installs the
       // richer refresh callback. It must clear diagnostics on that path too.
       maintenance.onRefresh = (kind) =>
@@ -481,6 +500,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         agent: agent,
         diagnostics: diagnostics,
         diagnosticBindings: diagnosticBindings,
+        speechInput: speechInput,
       );
       ready = bootstrap;
       settings.onRecovered = bootstrap._activate;
@@ -508,6 +528,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
           ),
         );
       }
+      await speechInput?.close();
       await agentCoordinator?.close();
       agent?.dispose();
       await browser?.dispose();
@@ -558,6 +579,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         return;
       }
       await settings.shutdown();
+      await speechInput.close();
       await agentCoordinator.quiesceForMaintenance();
       await maintenance.close();
       await _assembly.close();
@@ -780,6 +802,7 @@ final class _RuntimeAssembly {
       b.agent,
       b.diagnostics,
       b.diagnosticBindings,
+      b.speechInput,
     );
     b.diagnosticBindings.bindJw(jw.syncChanges);
     b.diagnosticBindings.bindYoung(young.syncChanges);

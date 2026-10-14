@@ -49,6 +49,7 @@ enum DiagnosticEventName {
   unexpectedFailure,
   logsExported,
   logsCleared,
+  speechInputStage,
 }
 
 enum DiagnosticTool {
@@ -195,6 +196,14 @@ enum DiagnosticCode {
   contextLost,
   compiledScript,
   preparationTimedOut,
+  permissionDenied,
+  microphoneUnavailable,
+  modelUnavailable,
+  invalidAudio,
+  noSpeech,
+  tooShort,
+  recognitionFailed,
+  cleanupFailed,
   unknown,
 }
 
@@ -213,6 +222,7 @@ enum DiagnosticStage {
   publicQuery,
   ui,
   export,
+  speechInput,
 }
 
 enum DiagnosticPhase {
@@ -235,6 +245,10 @@ enum DiagnosticPhase {
   waitingForSchool,
   settling,
   maintenance,
+  recording,
+  stopping,
+  recognizing,
+  cancelling,
 }
 
 final class DiagnosticVersions {

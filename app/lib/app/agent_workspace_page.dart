@@ -8,6 +8,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'agent_workspace_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
+import '../core/speech_input_contract.dart';
 import 'diagnostics_panel.dart';
 
 const _agentGreen = Color(0xFF1F6B45);
@@ -23,6 +24,7 @@ final class AgentWorkspacePage extends StatefulWidget {
     this.pickImages,
     this.onOpenLocalEvidence,
     this.diagnostics,
+    this.speechInput,
   });
 
   final AgentWorkspacePort controller;
@@ -31,15 +33,21 @@ final class AgentWorkspacePage extends StatefulWidget {
   final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
   final DiagnosticsPort? diagnostics;
 
+  /// Optional caller-owned local speech input. This page only cancels it.
+  final SpeechInputPort? speechInput;
+
   @override
   State<AgentWorkspacePage> createState() => _AgentWorkspacePageState();
 }
 
-final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
+final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
+    with WidgetsBindingObserver {
   final TextEditingController _draft = TextEditingController();
   final FocusNode _composerFocus = FocusNode();
   final List<AgentImage> _draftImages = [];
   int _generation = 0;
+  int _draftRevision = 0;
+  int _speechStreamGeneration = 0;
   int _imagePickGeneration = 0;
   int? _observedHistoryEpoch;
   int? _observedMessageFingerprint;
@@ -60,12 +68,23 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   String? _actionPendingId;
   String? _submittedActionId;
   String? _message;
+  String? _speechFallbackError;
+  SpeechInputPort? _speechPort;
+  SpeechInputView _speechView = const SpeechInputView();
+  StreamSubscription<SpeechInputView>? _speechSubscription;
+  _SpeechDraftAnchor? _speechAnchor;
+  TextEditingValue _lastDraftValue = TextEditingValue.empty;
+  bool _speechCommandPending = false;
   final Set<String> _expandedQueryDetails = {};
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _lastDraftValue = _draft.value;
+    _draft.addListener(_onDraftValueChanged);
     widget.controller.addListener(_onControllerChanged);
+    _bindSpeechInput(widget.speechInput);
     _rememberControllerView();
     _scheduleRefresh();
   }
@@ -73,7 +92,21 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   @override
   void didUpdateWidget(covariant AgentWorkspacePage oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller)) {
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    final speechPortChanged = !identical(
+      oldWidget.speechInput,
+      widget.speechInput,
+    );
+    if (speechPortChanged) {
+      _unbindSpeechInput(cancel: true);
+      _bindSpeechInput(widget.speechInput);
+    } else if (controllerChanged) {
+      _invalidateSpeech(cancel: true);
+    }
+    if (controllerChanged) {
       oldWidget.controller.removeListener(_onControllerChanged);
       _generation++;
       _clearDraftImages(update: false);
@@ -88,6 +121,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
       _submittedActionId = null;
       _messageIsError = false;
       _message = null;
+      _speechFallbackError = null;
       _expandedQueryDetails.clear();
       _draft.clear();
       _draftEditedByUser = false;
@@ -100,11 +134,24 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   @override
   void dispose() {
     _generation++;
+    WidgetsBinding.instance.removeObserver(this);
+    _unbindSpeechInput(cancel: true);
     widget.controller.removeListener(_onControllerChanged);
     _clearDraftImages(update: false);
+    _draft.removeListener(_onDraftValueChanged);
     _draft.dispose();
     _composerFocus.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _invalidateSpeech(cancel: true);
+    }
   }
 
   bool _isCurrent(AgentWorkspacePort port, int generation) =>
@@ -141,6 +188,15 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     if (!mounted) return;
     final view = widget.controller.view;
     final historyEpoch = view.settings?.authority.historyEpoch;
+    final speechAnchor = _speechAnchor;
+    if (speechAnchor != null &&
+        (!identical(speechAnchor.controller, widget.controller) ||
+            speechAnchor.generation != _generation ||
+            view.phase != AgentPhase.idle ||
+            view.conversationId != speechAnchor.conversationId ||
+            historyEpoch != speechAnchor.historyEpoch)) {
+      _invalidateSpeech(cancel: true);
+    }
     final messageFingerprint = _messageFingerprint(view);
     final consent = view.settings?.consent;
     final discussionChanged = view.discussionId != _observedDiscussionId;
@@ -176,6 +232,221 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     if (invalidated && (_draftImages.isNotEmpty || _pickingImages)) {
       _clearDraftImages();
     }
+  }
+
+  void _bindSpeechInput(SpeechInputPort? port) {
+    _speechPort = port;
+    _speechView = port?.view ?? const SpeechInputView();
+    if (port == null) return;
+    final streamGeneration = ++_speechStreamGeneration;
+    _speechSubscription = port.changes.listen(
+      (next) => _onSpeechViewChanged(port, streamGeneration, next),
+      onError: (Object _) {
+        if (!mounted ||
+            streamGeneration != _speechStreamGeneration ||
+            !identical(_speechPort, port)) {
+          return;
+        }
+        _speechAnchor = null;
+        _speechFallbackError = '语音输入暂时不可用，可继续键盘输入。';
+        setState(() {});
+      },
+    );
+  }
+
+  void _unbindSpeechInput({required bool cancel}) {
+    final port = _speechPort;
+    final shouldCancel =
+        _speechAnchor != null || (port != null && port.view.busy);
+    _speechAnchor = null;
+    _speechCommandPending = false;
+    ++_speechStreamGeneration;
+    _speechSubscription?.cancel();
+    _speechSubscription = null;
+    _speechPort = null;
+    _speechView = const SpeechInputView();
+    _speechFallbackError = null;
+    if (cancel && shouldCancel && port != null) {
+      unawaited(_safeCancelSpeech(port));
+    }
+  }
+
+  void _onSpeechViewChanged(
+    SpeechInputPort port,
+    int streamGeneration,
+    SpeechInputView next,
+  ) {
+    if (!mounted ||
+        streamGeneration != _speechStreamGeneration ||
+        !identical(_speechPort, port)) {
+      return;
+    }
+    _speechView = next;
+    final transcript = next.transcript;
+    final anchor = _speechAnchor;
+    if (transcript != null && anchor != null) {
+      if (_speechResultIsCurrent(port, anchor, transcript)) {
+        final text = transcript.text.trim();
+        if (text.isNotEmpty && text.length <= speechMaximumTextCharacters) {
+          final original = anchor.draftValue;
+          final selection = original.selection;
+          final start = selection.isValid
+              ? selection.start.clamp(0, original.text.length)
+              : original.text.length;
+          final end = selection.isValid
+              ? selection.end.clamp(start, original.text.length)
+              : start;
+          final inserted = original.text.replaceRange(start, end, text);
+          _speechAnchor = null;
+          _draft.value = TextEditingValue(
+            text: inserted,
+            selection: TextSelection.collapsed(offset: start + text.length),
+          );
+          _draftEditedByUser = true;
+          _speechFallbackError = null;
+        } else if (text.length > speechMaximumTextCharacters) {
+          _speechAnchor = null;
+          _speechFallbackError = '听写结果超过长度限制，可分段录入。';
+        } else {
+          _speechAnchor = null;
+        }
+      } else {
+        _speechAnchor = null;
+        if (next.busy) unawaited(_safeCancelSpeech(port));
+      }
+    } else if (next.phase == SpeechInputPhase.idle && next.failure != null) {
+      _speechAnchor = null;
+    }
+    setState(() {});
+  }
+
+  bool _speechResultIsCurrent(
+    SpeechInputPort port,
+    _SpeechDraftAnchor anchor,
+    SpeechTranscript transcript,
+  ) {
+    final view = widget.controller.view;
+    return identical(_speechPort, port) &&
+        identical(widget.controller, anchor.controller) &&
+        anchor.generation == _generation &&
+        anchor.speechRevision == transcript.revision &&
+        port.view.revision == transcript.revision &&
+        port.view.phase == SpeechInputPhase.idle &&
+        anchor.draftRevision == _draftRevision &&
+        _draft.value == anchor.draftValue &&
+        _speechView.phase == SpeechInputPhase.idle &&
+        view.phase == AgentPhase.idle &&
+        view.conversationId == anchor.conversationId &&
+        view.settings?.authority.historyEpoch == anchor.historyEpoch;
+  }
+
+  void _onDraftValueChanged() {
+    final value = _draft.value;
+    if (value == _lastDraftValue) return;
+    _lastDraftValue = value;
+    _draftRevision++;
+    if (_speechAnchor != null) _invalidateSpeech(cancel: true);
+  }
+
+  void _invalidateSpeech({
+    required bool cancel,
+    bool update = true,
+    SpeechInputPort? port,
+  }) {
+    final target = port ?? _speechPort;
+    final hadAnchor = _speechAnchor != null;
+    _speechAnchor = null;
+    _speechCommandPending = false;
+    if (cancel && target != null && (hadAnchor || target.view.busy)) {
+      unawaited(_safeCancelSpeech(target));
+    }
+    if (update && mounted) setState(() {});
+  }
+
+  Future<void> _safeCancelSpeech(SpeechInputPort port) async {
+    try {
+      await port.cancel();
+    } on Object {
+      // The fixed UI status is sufficient; private audio/text is never shown.
+    }
+  }
+
+  Future<void> _startSpeech() async {
+    final port = _speechPort;
+    if (port == null ||
+        port.view.busy ||
+        _pending ||
+        _sending ||
+        _pickingImages) {
+      return;
+    }
+    final view = widget.controller.view;
+    final conversationId = view.conversationId;
+    if (view.phase != AgentPhase.idle || conversationId == null) return;
+    final generation = _generation;
+    final speechRevision = port.view.revision + 1;
+    final anchor = _SpeechDraftAnchor(
+      controller: widget.controller,
+      generation: generation,
+      conversationId: conversationId,
+      historyEpoch: view.settings?.authority.historyEpoch,
+      draftRevision: _draftRevision,
+      draftValue: _draft.value,
+      speechRevision: speechRevision,
+    );
+    _speechAnchor = anchor;
+    _speechFallbackError = null;
+    setState(() {});
+    try {
+      await port.start();
+      if (mounted && identical(_speechPort, port)) {
+        _onSpeechViewChanged(port, _speechStreamGeneration, port.view);
+      }
+    } on Object {
+      if (_speechResultAnchorIsCurrent(port, anchor)) {
+        _speechAnchor = null;
+        _speechFallbackError = '无法开始语音输入，请检查麦克风权限后重试。';
+        setState(() {});
+      }
+      await _safeCancelSpeech(port);
+    }
+  }
+
+  bool _speechResultAnchorIsCurrent(
+    SpeechInputPort port,
+    _SpeechDraftAnchor anchor,
+  ) =>
+      identical(_speechPort, port) &&
+      identical(_speechAnchor, anchor) &&
+      identical(widget.controller, anchor.controller) &&
+      anchor.generation == _generation;
+
+  Future<void> _finishSpeech() async {
+    final port = _speechPort;
+    if (port == null ||
+        port.view.phase != SpeechInputPhase.recording ||
+        _speechCommandPending) {
+      return;
+    }
+    _speechCommandPending = true;
+    setState(() {});
+    try {
+      await port.finish();
+    } on Object {
+      if (identical(_speechPort, port) && mounted) {
+        _speechFallbackError = '无法完成语音识别，可继续键盘输入。';
+      }
+    } finally {
+      if (identical(_speechPort, port) && mounted) {
+        _speechCommandPending = false;
+        _onSpeechViewChanged(port, _speechStreamGeneration, port.view);
+      }
+    }
+  }
+
+  Future<void> _cancelSpeechFromButton() async {
+    _speechFallbackError = null;
+    _invalidateSpeech(cancel: true);
   }
 
   void _setDiscussionDraft(String value) {
@@ -215,6 +486,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
         !_isCurrent(port, generation) ||
         !view.canSend ||
         view.busy ||
+        _speechView.busy ||
         conversationId == null ||
         _sending ||
         _pickingImages ||
@@ -367,12 +639,14 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
   }
 
   Future<void> _newConversation() async {
+    _invalidateSpeech(cancel: true);
     _clearDraftImages();
     await _perform((port) => port.newConversation(), success: '已创建新对话。');
     if (mounted) setState(() => _showSessions = false);
   }
 
   Future<void> _selectConversation(String id) async {
+    _invalidateSpeech(cancel: true);
     _clearDraftImages();
     await _perform((port) => port.selectConversation(id), success: '已切换对话。');
     if (mounted) setState(() => _showSessions = false);
@@ -391,7 +665,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     if (!view.canSend ||
         conversationId == null ||
         (text.trim().isEmpty && outgoingImages.isEmpty) ||
-        _sending) {
+        _sending ||
+        _speechView.busy) {
       _releaseImages(outgoingImages);
       return;
     }
@@ -683,6 +958,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     if (second != true) return;
     if (!mounted) return;
     if (!_isCurrent(port, generation)) return;
+    _invalidateSpeech(cancel: true);
     _clearDraftImages();
     await _perform(
       (currentPort) => currentPort.clearHistory(
@@ -937,7 +1213,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
         view.conversationId != null &&
         (_draft.text.trim().isNotEmpty || _draftImages.isNotEmpty) &&
         !_sending &&
-        !_pickingImages;
+        !_pickingImages &&
+        !_speechView.busy;
+    final speechVisible =
+        widget.speechInput != null && view.conversationId != null;
+    final canStartSpeech =
+        speechVisible &&
+        view.phase == AgentPhase.idle &&
+        !_pending &&
+        !_sending &&
+        !_pickingImages &&
+        _speechView.phase == SpeechInputPhase.idle;
     final canStop =
         view.phase == AgentPhase.generating ||
         view.phase == AgentPhase.executingRead ||
@@ -978,6 +1264,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
               !_pending &&
               !_pickingImages &&
               _draftImages.length < AgentImage.maximumCount &&
+              !_speechView.busy &&
               _draftImages.fold<int>(
                     0,
                     (sum, image) => sum + image.bytes.length,
@@ -985,6 +1272,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                   AgentImage.maximumTotalBytes,
           canStop: canStop,
           busy: view.busy,
+          speechVisible: speechVisible,
+          canStartSpeech: canStartSpeech,
+          speechView: _speechView,
         ),
       ],
     );
@@ -1135,6 +1425,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
     required bool canPick,
     required bool canStop,
     required bool busy,
+    required bool speechVisible,
+    required bool canStartSpeech,
+    required SpeechInputView speechView,
   }) {
     return Card(
       child: Padding(
@@ -1160,6 +1453,31 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                         )
                       : const Icon(Icons.add_photo_alternate_outlined),
                 ),
+                if (speechVisible)
+                  IconButton(
+                    key: const ValueKey('agent-speech-toggle'),
+                    tooltip: speechView.phase == SpeechInputPhase.recording
+                        ? '停止并识别'
+                        : '本地语音输入',
+                    onPressed: speechView.phase == SpeechInputPhase.recording
+                        ? (_speechCommandPending ? null : _finishSpeech)
+                        : canStartSpeech
+                        ? _startSpeech
+                        : null,
+                    icon: speechView.phase == SpeechInputPhase.recording
+                        ? const Icon(Icons.stop_circle_outlined)
+                        : speechView.phase == SpeechInputPhase.preparing ||
+                              speechView.phase == SpeechInputPhase.stopping ||
+                              speechView.phase ==
+                                  SpeechInputPhase.recognizing ||
+                              speechView.phase == SpeechInputPhase.cancelling ||
+                              speechView.phase == SpeechInputPhase.recovery
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.mic_none_rounded),
+                  ),
                 Expanded(
                   child: Focus(
                     onKeyEvent: (node, event) {
@@ -1227,6 +1545,43 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage> {
                   ),
               ],
             ),
+            if (_speechView.busy ||
+                _speechView.failure != null ||
+                _speechView.phase == SpeechInputPhase.closed ||
+                _speechFallbackError != null) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _speechFallbackError ?? _speechStatusText(_speechView),
+                      key: const ValueKey('agent-speech-status'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color:
+                            _speechView.failure != null ||
+                                _speechFallbackError != null
+                            ? const Color(0xFF9B2C2C)
+                            : _agentMuted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ),
+                  if (_speechView.busy)
+                    TextButton(
+                      key: const ValueKey('agent-speech-cancel'),
+                      onPressed: _cancelSpeechFromButton,
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 32),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('取消'),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
       ),
@@ -2103,3 +2458,64 @@ String _imageFailureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
   _ => '无法读取所选图片，请检查文件后重试。',
 };
+
+String _speechStatusText(SpeechInputView view) {
+  final failure = view.failure;
+  if (failure != null) {
+    return switch (failure) {
+      SpeechInputFailureCode.unsupportedPlatform => '此设备暂不支持语音输入。',
+      SpeechInputFailureCode.permissionDenied => '未获得麦克风权限，可继续键盘输入。',
+      SpeechInputFailureCode.microphoneUnavailable => '麦克风不可用，请检查设备后重试。',
+      SpeechInputFailureCode.modelUnavailable => '本地语音模型未准备好，可继续键盘输入。',
+      SpeechInputFailureCode.invalidAudio => '录音数据无效，请重试。',
+      SpeechInputFailureCode.noSpeech => '没有听到可识别的语音。',
+      SpeechInputFailureCode.tooShort => '录音过短，请再说一会儿。',
+      SpeechInputFailureCode.resourceLimit => '录音超过上限，请缩短后重试。',
+      SpeechInputFailureCode.recognitionFailed => '识别失败，可重试或继续键盘输入。',
+      SpeechInputFailureCode.cleanupFailed => '语音资源正在恢复，请稍后重试。',
+      SpeechInputFailureCode.busy => '语音输入正在处理中，请稍后。',
+      SpeechInputFailureCode.closed => '语音输入已关闭。',
+    };
+  }
+  return switch (view.phase) {
+    SpeechInputPhase.idle => '',
+    SpeechInputPhase.preparing => '正在准备语音输入…',
+    SpeechInputPhase.recording =>
+      '正在录音 · ${_formatSpeechElapsed(view.elapsedMilliseconds)} / 00:30',
+    SpeechInputPhase.stopping =>
+      view.elapsedMilliseconds > 0
+          ? '正在结束录音 · ${_formatSpeechElapsed(view.elapsedMilliseconds)}'
+          : '正在结束录音…',
+    SpeechInputPhase.recognizing => '正在识别…',
+    SpeechInputPhase.cancelling => '正在取消语音输入…',
+    SpeechInputPhase.recovery => '语音资源正在收口，请稍后重试。',
+    SpeechInputPhase.closed => '语音输入已关闭。',
+  };
+}
+
+String _formatSpeechElapsed(int milliseconds) {
+  final seconds = milliseconds.clamp(0, speechMaximumSeconds * 1000) ~/ 1000;
+  final minutesPart = (seconds ~/ 60).toString().padLeft(2, '0');
+  final secondsPart = (seconds % 60).toString().padLeft(2, '0');
+  return '$minutesPart:$secondsPart';
+}
+
+final class _SpeechDraftAnchor {
+  const _SpeechDraftAnchor({
+    required this.controller,
+    required this.generation,
+    required this.conversationId,
+    required this.historyEpoch,
+    required this.draftRevision,
+    required this.draftValue,
+    required this.speechRevision,
+  });
+
+  final AgentWorkspacePort controller;
+  final int generation;
+  final String conversationId;
+  final int? historyEpoch;
+  final int draftRevision;
+  final TextEditingValue draftValue;
+  final int speechRevision;
+}
