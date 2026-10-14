@@ -20,7 +20,7 @@
 | C4 通常 6 对、8000 字符；旧问题摘要最多 12 条/2000 字符；带图用户回合按结构内容排除整对 | [agent_context.dart](../../../../app/lib/agent/agent_context.dart)、`agent_coordinator.dart:1195–1236` | 基于字符/对数裁剪，没有按目标模型实际容量装配；图的语义连续性与原图持久化应分开 |
 | 含工具/出处/操作的助手原文被固定状态取代 | `agent_context.dart:93–153` | 具体目标、候选和助手提问不保留；原人类请求保留不能补齐这些信息 |
 | compact 输入主要是用户文字与旧摘要 | `agent_context.dart:63–89`、`agent_coordinator.dart:1779` | 未覆盖完整的已查事实、候选选择及未解决问题 |
-| 短答列表未含 approve；寻找原请求和注册工具各有不同回溯逻辑 | [agent_request_intent.dart](../../../../app/lib/agent/agent_request_intent.dart)、`agent_coordinator.dart:898–950,1019–1137` | approve 后的“继续”可能把 approve 本身当原业务主题 |
+| 短答列表未含 approve；寻找原请求和注册工具各有不同回溯逻辑 | 调查提交 `6793291` 中的 `agent_request_intent.dart`（M5.9 已移除）、`agent_coordinator.dart:898–950,1019–1137` | approve 后的“继续”可能把 approve 本身当原业务主题 |
 | 固定生产工具总数 19：12 读取＋4 本地规划/提案＋3 来源协调 | [agent_read_tools.dart](../../../../app/lib/agent/agent_read_tools.dart):191、[agent_action_tools.dart](../../../../app/lib/agent/agent_action_tools.dart):73、`demo_runtime.dart:403` | 工具数量不是权限类别数量；组装仍要求 toolReady，问句会再裁清单 |
 | 22 个按工具/类别的持久许可，没有目标 TTL | [agent_permission_contract.dart](../../../../app/lib/core/agent_permission_contract.dart)、[agent_permission_store.dart](../../../../app/lib/data/agent_permission_store.dart):29–172 | 已有许可可免本卡确认，但无法绕过 C4 问句裁工具；撤销/重授与事务证明独立有效 |
 | 备注需要指定字段/读取动词；任务正文另要求“任务/task”等词 | `agent_read_tools.dart:423–458,932,1067` | “给我备注”“看看这份作业内容”等词面可能漏判；当前许可布尔在读取 session 范围，并非严格一次单目标消费 |

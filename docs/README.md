@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M4 已验收关闭，[M5](milestones/m5/plan.md)原工程及单点修订有根检查证据，但真实上下文体验仍未通过；最新 [§23 上下文/权限重构提案](milestones/m5/plan.md#23-m59-上下文与执行权限重构提案待批准)尚待批准，未修改应用。真实 toolReady 已核验，M5 尚未关闭。具体边界与未观察项见 [状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M4 已验收关闭。[M5 §23 上下文/权限重构](milestones/m5/plan.md#23-m59-上下文与执行权限重构已批准)已完成工程、根全套/Windows 检查及正式构建，证据见[记录 12](milestones/m5/records/12-context-and-permission-implementation.md)。真实 toolReady 已核验，修订版真实模型续接与集中体验待验，语音识别失败仍保留；M5 尚未关闭。具体边界与未观察项见 [状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
