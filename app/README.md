@@ -43,6 +43,30 @@
 
 点击输入区“附图”主动选择 PNG/JPEG/WebP，预览后可移除、随问题发送，或只发图片。最多 3 张；原文件单张 10 MiB、1600 万像素，规范处理后长边 1536、单张 3 MiB/合计 6 MiB。去元数据后的 PNG 只发到同一固定模型网关，历史只保存图片数量，原图不保留；应用不自动截图、抓远端图片或上传任意文件。模型拒绝图片时明确失败，实际看图效果取决于所选模型，不能从 toolReady 推断视觉能力。
 
+### 本地中文听写（Windows）
+
+在已有对话且输入框可编辑时，点击麦克风才按需准备随包的 SenseVoiceSmall INT8 模型并申请录音；再次点击停止后在本机 CPU 上识别。目标时长为 3–15 秒，最短 0.5 秒，30 秒硬截止后自动停止。输入为 16 kHz、单声道 PCM16，录音缓冲仅驻留内存且不超过 960000 字节；模型按需加载，推理在独立 isolate 中运行。它不需要 Agent Key，不经过学校或模型网关，也没有持续监听、语音回复或 Agent 麦克风工具。
+
+识别结果只插入录音开始时捕获的草稿光标位置，保留已有文字和已选图片；你可以继续修改，再自行点击发送。听写不会自动发送或批准操作，只有主动发送后才按现有对话历史规则处理。取消会先撤销本轮转写的交付并等待后台工作排空；编辑草稿、切换对话/历史、离开页面、应用进入后台或维护模式都会使迟到结果失效。录音结束、取消或退出时尽力清除短暂缓冲，但不承诺运行时副本绝对抹除。应用不保存录音文件、不上传音频或自动下载模型；诊断仅保留固定阶段/失败码、计数和耗时，不含声音、转写文字或设备名。
+
+录音依赖固定为 `record 7.1.2`，本地推理依赖固定为 `sherpa_onnx 1.13.8`；SenseVoice 模型约 228 MiB，不进 Git，开发时按仓库流程准备并校验，发布时随应用分发。缺少模型时键盘输入仍可用。SDK 与模型权重许可分别处理，来源及随包许可见 [`resources/speech/NOTICE.txt`](resources/speech/NOTICE.txt)。Windows 的 `record.hasPermission=true` 只表示插件报告的权限状态，并不证明真实麦克风可用；录音失败时检查 Windows 系统麦克风权限。本阶段不声明 Android/iOS 支持。数据库 schema 仍为 13，无迁移。
+
+开发者可从仓库根目录核对模型资产：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-speech-assets.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-speech-assets.ps1 -Check
+```
+
+默认准备命令首次获取固定公开模型，之后复用校验通过的缓存；`-Check` 只核验。开发者可用 `tools/prepare-synthetic-speech.ps1` 在 ignored build 内生成固定中文测试 WAV，使用本机中文 TTS，不打开麦克风。发行时保留整个 Release 目录及 `data/speech/sensevoice`，不能只拷贝 exe。
+
+Windows 合成 WAV 原生链路验核先按 [M5.8 记录](../docs/milestones/m5/records/08-local-speech-input.md)准备固定合成素材，再从 `app` 目录运行。测试不会打开真实麦克风；`USTC_SPEECH_TEST_WAV` 必须是绝对 WAV 路径：
+
+```powershell
+$speechTestWav = [System.IO.Path]::GetFullPath('build\m58-probe\synthetic.wav')
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/speech_input_flow_test.dart -d windows --no-pub "--dart-define=USTC_SPEECH_TEST_WAV=$speechTestWav"
+```
+
 会话保留在本机，可“载入更早消息”；重启不自动续跑，未完成方案显示中断，已提交卡保留历史事实。旧工具事实和图像描述不作当前行动上下文，新一轮重新查询。清当前或全部历史需两次确认，不占学校来源通道，旧查询及引用同时失效；清业务保留 Agent 历史/模型配置/偏好，完全重置包含它们。输入、回复、结果、轮数/时间和历史均有界，识别到可见秘密时拒绝本次操作；此检测不承诺发现所有秘密，也不做图片 OCR 秘密检测。历史不作为有效业务批准。
 
 “复制安全能力摘要”只包含阶段、能力布尔值、固定失败码、模型/工具/图片请求、会话计数、提示词/工具版本、实际主动/人工等待时间和可用 usage，不含 Key、模型名称、问题或回复。缺少 token/费用字段保持未知。2026-10-13 用户已核验所选模型 toolReady，真实问答、规划、来源衔接和视觉体验统一待验。清日程/资料库保留模型 Key、配置、偏好与明确的历史内容，活业务引用失效；整应用重置一并删除。当前库 schema 13 增量保留旧来源、目录、秘密、个人安排/任务、知识和界面设置。
