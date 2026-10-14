@@ -18,7 +18,6 @@ using Result = flutter::MethodResult<Value>;
 using Channel = flutter::MethodChannel<Value>;
 
 constexpr char kChannelName[] = "ustc_assistant/default_audio_input";
-constexpr char kMethodName[] = "getDefaultInputId";
 constexpr char kFailureCode[] = "microphoneUnavailable";
 constexpr char kFailureMessage[] = "Microphone unavailable.";
 constexpr std::size_t kMaximumEndpointIdLength = 1024;
@@ -82,11 +81,15 @@ struct DefaultAudioInputBridge::Impl {
     channel->SetMethodCallHandler(
         [](const flutter::MethodCall<Value>& call,
            std::unique_ptr<Result> result) {
-          if (call.method_name() != kMethodName) {
+          const auto disposition =
+              default_audio_input_internal::ClassifyCall(call);
+          if (disposition ==
+              default_audio_input_internal::CallDisposition::kUnknownMethod) {
             result->NotImplemented();
             return;
           }
-          if (call.arguments() != nullptr) {
+          if (disposition != default_audio_input_internal::CallDisposition::
+                                 kGetDefaultInputId) {
             ReturnUnavailable(std::move(result));
             return;
           }

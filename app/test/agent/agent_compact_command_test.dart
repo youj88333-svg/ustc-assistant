@@ -142,6 +142,60 @@ void main() {
   );
 
   test(
+    'affirmation after compact and restart retains intent and control state without old tool facts',
+    () async {
+      const question = '请把今天下午课程的本地出勤计划改为不参加';
+      final file = await _temporaryDatabase();
+      var store = await _open(file: file);
+      final configured = await _configure(store);
+      final primary = await store.agent.ensurePrimaryConversation();
+      await _writeStructuredHistory(
+        store,
+        configured.authority,
+        primary,
+        question: question,
+        answer: 'synthetic-old-course-detail-marker。确认这样做吗？',
+      );
+      var gateway = _SyntheticGateway();
+      var coordinator = await _coordinator(store, gateway);
+      gateway.enqueueEvents([
+        const ModelTextDelta('用户想把下午课程的本地出勤计划改为不参加。'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await coordinator.send('/compact');
+      expect(coordinator.view.failure, isNull);
+      expect(coordinator.view.contextCompacted, isTrue);
+      await coordinator.close();
+      await store.close();
+
+      store = await _open(file: file);
+      gateway = _SyntheticGateway();
+      coordinator = await _coordinator(store, gateway);
+      gateway.enqueueEvents([
+        const ModelTextDelta('我会先重新核对下午课程，再准备具体方案。'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await coordinator.send('对的');
+      expect(coordinator.view.failure, isNull);
+      final request = gateway.requests.single;
+      expect(request.messages.last.content, contains(question));
+      expect(
+        request.messages.last.content,
+        contains('原请求收到于北京时间 2026-10-13T16:00:00.000+08:00'),
+      );
+      expect(request.messages.last.content, contains('用户本次补充：对的'));
+      final text = _requestText(request);
+      expect(text, contains('助手曾询问是否继续按用户原请求准备方案'));
+      expect(text, contains('上一轮没有本地操作方案卡或提交回执'));
+      expect(text, contains('需要重新查询目标'));
+      expect(text, isNot(contains('synthetic-old-course-detail-marker')));
+      expect(text, isNot(contains('old-evidence-marker')));
+      expect(text, isNot(contains('e_0123456789abcdef')));
+      expect(coordinator.view.pendingAction, isNull);
+    },
+  );
+
+  test(
     'stop while compact generation is pending leaves history and summary intact',
     () async {
       final store = await _open();
@@ -280,10 +334,10 @@ Future<void> _writeHistory(
 Future<void> _writeStructuredHistory(
   JwStore store,
   AgentAuthority authority,
-  String conversationId,
-) async {
-  const question = 'linear algebra study intent marker';
-  const answer = 'old assistant fabricated fact marker';
+  String conversationId, {
+  String question = 'linear algebra study intent marker',
+  String answer = 'old assistant fabricated fact marker',
+}) async {
   final ticket = await store.agent.beginRun(
     authority,
     conversationId,

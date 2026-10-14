@@ -16,130 +16,255 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/jobs/public_query_coordinator.dart';
 
 final _now = DateTime.utc(2026, 10, 14, 4);
-final _clock = FixedClock(_now);
 final _modelKey = Uint8List.fromList(
   'synthetic-feedback-journey-key'.codeUnits,
 );
 
 void main() {
+  for (final affirmative in const ['对的', '可以', '是的', '没错']) {
+    test(
+      'dated attendance request carries "$affirmative" into a fresh query without replaying committed work',
+      () => _runAttendanceJourney(
+        affirmative: affirmative,
+        approve: true,
+        advanceToNextDay: affirmative == '对的',
+      ),
+    );
+  }
   test(
-    'dated attendance request reads the real local course, remembers approval, and changes only its local annotation',
-    () async {
-      final rig = await _open();
-      final sourceBefore = await _jwEvent(rig.store);
-      final overlayBefore = await _jwOverlay(rig.store);
-      expect(sourceBefore['title'], '合成周三下午课程');
-      expect(overlayBefore['attendance'], 'attend');
-      expect(overlayBefore['note'], 'synthetic-private-note-marker');
-
-      await rig.coordinator.send('我今天心情不好，下午的课不想去了');
-      final firstRequest = rig.gateway.requests.first;
-      expect(firstRequest.toolChoice, 'query_agenda');
-      expect(_toolNames(firstRequest), contains('query_agenda'));
-      expect(rig.gateway.requests, hasLength(3));
-      expect(rig.gateway.requests[1].toolChoice, 'query_agenda');
-      expect(_agendaResult(rig.gateway.requests[2])['items'], hasLength(1));
-      expect(
-        _agendaResult(rig.gateway.requests[2])['items'].single['title'],
-        '合成周三下午课程',
-      );
-      expect(
-        rig.gateway.requests
-            .expand((request) => request.messages)
-            .where((message) => message.content != null)
-            .map((message) => message.content)
-            .join('\n'),
-        isNot(contains('synthetic-private-note-marker')),
-      );
-      final firstMessages = await rig.store.agent.messages(
-        rig.coordinator.view.conversationId!,
-      );
-      expect(firstMessages.map((message) => message.role), [
-        AgentMessageRole.user,
-        AgentMessageRole.assistant,
-      ]);
-      expect(
-        firstMessages.map((message) => message.text).join('\n'),
-        isNot(contains('今天下午没有课')),
-      );
-      expect(
-        firstMessages.map((message) => message.text).join('\n'),
-        isNot(contains('{"entries":[]}')),
-      );
-      expect(firstMessages.last.text, contains('合成课程'));
-      expect(firstMessages.last.steps.map((step) => step.tool), [
-        'query_agenda',
-      ]);
-      expect(firstMessages.last.steps.single.status, 'success');
-      final followUp = rig.coordinator.send('可以');
-      await _until(
-        () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
-      );
-      expect(rig.gateway.requests, hasLength(5));
-      final inheritedRequest = rig.gateway.requests[3];
-      expect(
-        _toolNames(inheritedRequest),
-        containsAll(['query_agenda', 'propose_local_changes']),
-      );
-      expect(inheritedRequest.toolChoice, 'query_agenda');
-      expect(_agendaResult(rig.gateway.requests[4])['items'], hasLength(1));
-
-      final card = rig.coordinator.view.pendingAction!;
-      expect(card.kind, AgentActionKind.localPlan);
-      expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
-      expect(await _jwOverlay(rig.store), overlayBefore);
-      await rig.coordinator.approveAndRememberAction(card.id);
-      await followUp.timeout(const Duration(seconds: 3));
-
-      expect(await _count(rig.store, 'agenda_plan_receipts'), 1);
-      final grants = await rig.coordinator.readActionPermissions();
-      expect(grants, hasLength(1));
-      expect(grants.single.category, AgentPermissionCategory.attendance);
-      expect(grants.single.category.tool, 'propose_local_changes');
-
-      final sourceAfter = await _jwEvent(rig.store);
-      final overlayAfter = await _jwOverlay(rig.store);
-      expect(await _count(rig.store, 'jw_events'), 1);
-      expect(_withoutVersion(sourceAfter), _withoutVersion(sourceBefore));
-      expect(sourceAfter['version'], (sourceBefore['version'] as int) + 1);
-      expect(overlayAfter['attendance'], 'skip');
-      expect(overlayAfter['hidden'], overlayBefore['hidden']);
-      expect(overlayAfter['note'], overlayBefore['note']);
-      expect(overlayAfter['listening'], overlayBefore['listening']);
-      final completed = await rig.store.agent.messages(
-        rig.coordinator.view.conversationId!,
-      );
-      expect(completed.last.text, contains('出勤计划'));
-      expect(completed.last.status, AgentMessageStatus.complete);
-      expect(
-        completed.last.actions.single.authorization,
-        AgentActionAuthorization.confirmed,
-      );
-      expect(
-        (await rig.store.agent.readActionPermissions()).single.category,
-        AgentPermissionCategory.attendance,
-      );
-      await rig.coordinator
-          .send('请把今天下午的课程出勤计划改为参加')
-          .timeout(const Duration(seconds: 3));
-      expect(rig.coordinator.view.failure, isNull);
-      expect((await _jwOverlay(rig.store))['attendance'], 'attend');
-      final automatic = (await rig.store.agent.messages(
-        rig.coordinator.view.conversationId!,
-      )).last;
-      expect(
-        automatic.actions.single.authorization,
-        AgentActionAuthorization.remembered,
-      );
-    },
+    'rejected attendance proposal followed by affirmation does not propose or write again',
+    () => _runAttendanceJourney(
+      affirmative: '对的',
+      approve: false,
+      advanceToNextDay: true,
+    ),
   );
 }
 
-Future<_Rig> _open() async {
+Future<void> _runAttendanceJourney({
+  required String affirmative,
+  required bool approve,
+  required bool advanceToNextDay,
+}) async {
+  final clock = _MutableClock(_now);
+  final rig = await _open(clock: clock);
+  final sourceBefore = await _jwEvent(rig.store);
+  final overlayBefore = await _jwOverlay(rig.store);
+  expect(sourceBefore['title'], '合成周三下午课程');
+  expect(overlayBefore['attendance'], 'attend');
+  expect(overlayBefore['note'], 'synthetic-private-note-marker');
+
+  const originalQuestion = '今天我心情不好，下午的课不想上了';
+  await rig.coordinator.send(originalQuestion);
+  final firstRequest = rig.gateway.requests.first;
+  expect(firstRequest.toolChoice, 'query_agenda');
+  expect(
+    _toolNames(firstRequest),
+    containsAll(['query_agenda', 'propose_local_changes']),
+  );
+  expect(_lastUserContent(firstRequest), originalQuestion);
+  expect(rig.gateway.requests, hasLength(3));
+  expect(rig.gateway.requests[1].toolChoice, 'query_agenda');
+  expect(_agendaResult(rig.gateway.requests[2])['items'], hasLength(1));
+  expect(
+    _agendaResult(rig.gateway.requests[2])['items'].single['title'],
+    '合成周三下午课程',
+  );
+  expect(
+    rig.gateway.requests
+        .expand((request) => request.messages)
+        .where((message) => message.content != null)
+        .map((message) => message.content)
+        .join('\n'),
+    isNot(contains('synthetic-private-note-marker')),
+  );
+  final firstMessages = await rig.store.agent.messages(
+    rig.coordinator.view.conversationId!,
+  );
+  expect(firstMessages.map((message) => message.role), [
+    AgentMessageRole.user,
+    AgentMessageRole.assistant,
+  ]);
+  expect(firstMessages.first.createdAtUtc, _now);
+  expect(
+    firstMessages.map((message) => message.text).join('\n'),
+    isNot(contains('今天下午没有课')),
+  );
+  expect(
+    firstMessages.map((message) => message.text).join('\n'),
+    isNot(contains('{"entries":[]}')),
+  );
+  expect(firstMessages.last.text, contains('合成课程'));
+  expect(firstMessages.last.steps.map((step) => step.tool), ['query_agenda']);
+  expect(firstMessages.last.steps.single.status, 'success');
+  if (advanceToNextDay) {
+    clock.nowUtc = DateTime.utc(2026, 10, 15, 4);
+  }
+  final followUp = rig.coordinator.send(affirmative);
+  await _until(
+    () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+  );
+  expect(rig.gateway.requests, hasLength(5));
+  final inheritedRequest = rig.gateway.requests[3];
+  expect(
+    _toolNames(inheritedRequest),
+    containsAll(['query_agenda', 'propose_local_changes']),
+  );
+  expect(inheritedRequest.toolChoice, 'query_agenda');
+  expect(_lastUserContent(inheritedRequest), contains(originalQuestion));
+  expect(
+    _lastUserContent(inheritedRequest),
+    contains('原请求收到于北京时间 2026-10-14T12:00:00.000+08:00'),
+  );
+  expect(_lastUserContent(inheritedRequest), contains('用户本次补充：$affirmative'));
+  final inheritedSystem = _systemContent(inheritedRequest);
+  expect(
+    inheritedSystem,
+    contains('当前北京时间日期为 ${advanceToNextDay ? '2026-10-15' : '2026-10-14'}'),
+  );
+  expect(
+    inheritedSystem,
+    contains(
+      '本次问题收到时间为 ${advanceToNextDay ? '2026-10-15' : '2026-10-14'}T12:00:00.000+08:00',
+    ),
+  );
+  final inheritedRequestText = _requestText(inheritedRequest);
+  expect(inheritedRequestText, contains('旧结果未携带；需要重新查询目标'));
+  expect(inheritedRequestText, isNot(contains('合成周三下午课程')));
+  expect(inheritedRequestText, isNot(contains('今天下午有一节合成课程')));
+  expect(
+    inheritedRequestText,
+    isNot(contains('synthetic-private-note-marker')),
+  );
+  expect(
+    inheritedRequestText,
+    isNot(contains(_queriedEventRef(rig.gateway.requests[2]))),
+  );
+  expect(rig.gateway.queryWindows, hasLength(2));
+  expect(rig.gateway.queryWindows.last, {
+    'first_day': '2026-10-14',
+    'end_day_exclusive': '2026-10-15',
+  });
+  expect(_agendaResult(rig.gateway.requests[4])['items'], hasLength(1));
+  expect(
+    _agendaResult(rig.gateway.requests[4])['items'].single['title'],
+    '合成周三下午课程',
+  );
+
+  final card = rig.coordinator.view.pendingAction!;
+  expect(card.kind, AgentActionKind.localPlan);
+  expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+  expect(await _jwOverlay(rig.store), overlayBefore);
+  if (approve) {
+    await rig.coordinator.approveAndRememberAction(card.id);
+  } else {
+    await rig.coordinator.rejectAction(card.id);
+  }
+  await followUp.timeout(const Duration(seconds: 3));
+  expect(
+    _lastToolStatus(rig.gateway.requests[5]),
+    approve ? 'committed' : 'rejected',
+  );
+
+  expect(await _count(rig.store, 'agenda_plan_receipts'), approve ? 1 : 0);
+  final grants = await rig.coordinator.readActionPermissions();
+  expect(grants, hasLength(approve ? 1 : 0));
+  if (approve) {
+    expect(grants.single.category, AgentPermissionCategory.attendance);
+    expect(grants.single.category.tool, 'propose_local_changes');
+  }
+
+  final sourceAfter = await _jwEvent(rig.store);
+  final overlayAfterDecision = await _jwOverlay(rig.store);
+  expect(await _count(rig.store, 'jw_events'), 1);
+  if (approve) {
+    expect(_withoutVersion(sourceAfter), _withoutVersion(sourceBefore));
+    expect(sourceAfter['version'], (sourceBefore['version'] as int) + 1);
+    expect(overlayAfterDecision['attendance'], 'skip');
+    expect(overlayAfterDecision['hidden'], overlayBefore['hidden']);
+    expect(overlayAfterDecision['note'], overlayBefore['note']);
+    expect(overlayAfterDecision['listening'], overlayBefore['listening']);
+  } else {
+    expect(sourceAfter, sourceBefore);
+    expect(overlayAfterDecision, overlayBefore);
+  }
+  final completed = await rig.store.agent.messages(
+    rig.coordinator.view.conversationId!,
+  );
+  expect(completed.last.status, AgentMessageStatus.complete);
+  expect(
+    completed.last.actions.single.status,
+    approve ? AgentActionStatus.committed : AgentActionStatus.rejected,
+  );
+  if (approve) {
+    expect(completed.last.text, contains('出勤计划'));
+    expect(
+      completed.last.actions.single.authorization,
+      AgentActionAuthorization.confirmed,
+    );
+    expect(
+      (await rig.store.agent.readActionPermissions()).single.category,
+      AgentPermissionCategory.attendance,
+    );
+  } else {
+    expect(completed.last.text, contains('方案已拒绝'));
+    expect(completed.last.text, contains('没有修改出勤计划'));
+    expect(
+      completed.last.actions.single.authorization,
+      isNot(AgentActionAuthorization.remembered),
+    );
+  }
+  final requestCountAfterCommit = rig.gateway.requests.length;
+  await rig.coordinator.send(affirmative).timeout(const Duration(seconds: 3));
+  expect(rig.gateway.requests, hasLength(requestCountAfterCommit + 1));
+  expect(_lastUserContent(rig.gateway.requests.last), affirmative);
+  expect(
+    _toolNames(
+      rig.gateway.requests.last,
+    ).where((name) => name.startsWith('propose_')),
+    isEmpty,
+  );
+  expect(rig.coordinator.view.pendingAction, isNull);
+  expect(await _count(rig.store, 'agenda_plan_receipts'), approve ? 1 : 0);
+  expect(await _jwOverlay(rig.store), overlayAfterDecision);
+  if (approve && !advanceToNextDay) {
+    await rig.coordinator
+        .send('请把今天下午的课程出勤计划改为参加')
+        .timeout(const Duration(seconds: 3));
+    expect(rig.coordinator.view.failure, isNull);
+    expect((await _jwOverlay(rig.store))['attendance'], 'attend');
+    final automatic = (await rig.store.agent.messages(
+      rig.coordinator.view.conversationId!,
+    )).last;
+    expect(
+      automatic.actions.single.authorization,
+      AgentActionAuthorization.remembered,
+    );
+  } else if (!approve) {
+    await rig.coordinator.send('/clear').timeout(const Duration(seconds: 3));
+    expect(
+      await rig.store.agent.messages(rig.coordinator.view.conversationId!),
+      isEmpty,
+    );
+    await rig.coordinator.send(affirmative).timeout(const Duration(seconds: 3));
+    final clearedRequest = rig.gateway.requests.last;
+    expect(_lastUserContent(clearedRequest), affirmative);
+    expect(_requestText(clearedRequest), isNot(contains(originalQuestion)));
+    expect(
+      _toolNames(clearedRequest).where((name) => name.startsWith('propose_')),
+      isEmpty,
+    );
+    expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+    expect(await _jwOverlay(rig.store), overlayAfterDecision);
+  }
+}
+
+Future<_Rig> _open({AppClock? clock}) async {
+  final effectiveClock = clock ?? FixedClock(_now);
   final store = JwStore(
     NativeDatabase.memory(),
     ownership: _TestOwnership(),
-    clock: _clock,
+    clock: effectiveClock,
     modelCredentialProtector: _SyntheticProtector(),
   );
   addTearDown(store.close);
@@ -164,7 +289,7 @@ Future<_Rig> _open() async {
   final publicQueries = PublicQueryCoordinator(
     store: store.publicStore,
     leases: WorkLeasePool(),
-    clock: _clock,
+    clock: effectiveClock,
     sessionFactory: (source) => throw StateError('synthetic network disabled'),
   );
   final readTools = AgentReadTools(
@@ -175,7 +300,7 @@ Future<_Rig> _open() async {
     knowledgeGuard: store.publicStore,
     publicQueries: publicQueries,
     publicGuard: publicQueries,
-    clock: _clock,
+    clock: effectiveClock,
   );
   final actionTools = AgentActionTools(
     readTools: readTools,
@@ -185,14 +310,14 @@ Future<_Rig> _open() async {
     preferences: store.agent,
     preferenceProposals: store.agent,
     actionRecords: store.agent,
-    clock: _clock,
+    clock: effectiveClock,
   );
   final gateway = _FeedbackJourneyGateway();
   final coordinator = AgentCoordinator(
     data: store.agent,
     gateway: gateway,
     readTools: actionTools,
-    clock: _clock,
+    clock: effectiveClock,
   );
   addTearDown(coordinator.close);
   await coordinator.initialize();
@@ -237,6 +362,35 @@ Map<String, Object?> _withoutVersion(Map<String, Object?> row) => {
 
 Set<String> _toolNames(ModelRequest request) =>
     request.tools.map((tool) => tool.name).toSet();
+
+String _lastUserContent(ModelRequest request) {
+  final messages = request.messages
+      .where((message) => message.role == 'user' && message.content != null)
+      .toList();
+  if (messages.isEmpty) {
+    throw StateError('No user content was present in the model request.');
+  }
+  return messages.last.content!;
+}
+
+String _systemContent(ModelRequest request) =>
+    request.messages.firstWhere((message) => message.role == 'system').content!;
+
+String _requestText(ModelRequest request) => request.messages
+    .where((message) => message.content != null)
+    .map((message) => message.content)
+    .join('\n');
+
+String _lastToolStatus(ModelRequest request) {
+  final toolMessages = request.messages
+      .where((message) => message.role == 'tool' && message.content != null)
+      .toList();
+  if (toolMessages.isEmpty) {
+    throw StateError('No completed tool result was present in the request.');
+  }
+  final result = jsonDecode(toolMessages.last.content!) as Map<String, dynamic>;
+  return result['status'] as String;
+}
 
 Map<String, dynamic> _agendaResult(ModelRequest request) {
   final toolMessages = request.messages.where(
@@ -283,9 +437,18 @@ final class _Rig {
   final AgentCoordinator coordinator;
 }
 
+final class _MutableClock implements AppClock {
+  _MutableClock(this.nowUtc);
+
+  @override
+  DateTime nowUtc;
+}
+
 final class _FeedbackJourneyGateway implements ModelGatewayPort {
   final List<ModelRequest> requests = [];
+  final List<Map<String, String>> queryWindows = [];
   bool _closed = false;
+  String? _decisionStatus;
 
   @override
   Future<List<String>> listModels(ModelSecretLease secret) async {
@@ -308,10 +471,15 @@ final class _FeedbackJourneyGateway implements ModelGatewayPort {
       3 => _answer('今天下午有一节合成课程。要我把个人出勤计划设为不参加吗？'),
       4 => _query('feedback-query-confirmation'),
       5 => _proposal(request),
-      6 => _answer('我已把这节课的个人出勤计划设为不参加，学校课程记录保持原样。'),
-      7 => _query('feedback-query-automatic'),
-      8 => _proposal(request, attendance: 'attend'),
-      9 => _answer('出勤计划已恢复为参加。'),
+      6 => _answer(_decisionAnswer(request)),
+      7 => _answer('你可以直接告诉我想调整的安排。'),
+      8 =>
+        _decisionStatus == 'committed' &&
+                request.tools.any((tool) => tool.name == 'query_agenda')
+            ? _query('feedback-query-automatic')
+            : _answer('需要新的安排时请告诉我具体日期和内容。'),
+      9 => _proposal(request, attendance: 'attend'),
+      10 => _answer('出勤计划已恢复为参加。'),
       _ => throw StateError('Unexpected model request ${requests.length}.'),
     };
     return Stream<ModelEvent>.fromIterable(events);
@@ -322,22 +490,34 @@ final class _FeedbackJourneyGateway implements ModelGatewayPort {
     ModelCompleted(finishReason: 'stop'),
   ];
 
-  List<ModelEvent> _query(String id) => [
-    ModelCompleted(
-      finishReason: 'tool_calls',
-      toolCalls: [
-        ModelToolCall(
-          id: id,
-          name: 'query_agenda',
-          argumentsJson: jsonEncode({
-            'first_day': '2026-10-14',
-            'end_day_exclusive': '2026-10-15',
-            'include_skipped': true,
-          }),
-        ),
-      ],
-    ),
-  ];
+  List<ModelEvent> _query(String id) {
+    const window = {
+      'first_day': '2026-10-14',
+      'end_day_exclusive': '2026-10-15',
+    };
+    queryWindows.add(window);
+    return [
+      ModelCompleted(
+        finishReason: 'tool_calls',
+        toolCalls: [
+          ModelToolCall(
+            id: id,
+            name: 'query_agenda',
+            argumentsJson: jsonEncode({...window, 'include_skipped': true}),
+          ),
+        ],
+      ),
+    ];
+  }
+
+  String _decisionAnswer(ModelRequest request) {
+    _decisionStatus = _lastToolStatus(request);
+    return switch (_decisionStatus) {
+      'committed' => '我已把这节课的个人出勤计划设为不参加，学校课程记录保持原样。',
+      'rejected' => '方案已拒绝，没有修改出勤计划。',
+      final status => throw StateError('Unexpected decision status $status.'),
+    };
+  }
 
   List<ModelEvent> _proposal(
     ModelRequest request, {

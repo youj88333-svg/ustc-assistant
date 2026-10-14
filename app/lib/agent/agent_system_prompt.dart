@@ -1,6 +1,6 @@
 import 'model_gateway_contract.dart';
 
-const agentPromptVersion = 'ustc-student-agent-v4';
+const agentPromptVersion = 'ustc-student-agent-v5';
 
 String buildAgentSystemPrompt({
   required String day,
@@ -17,6 +17,7 @@ String buildAgentSystemPrompt({
       '不要用“以下是”“需要说明的是”“如果需要我可以”等开场和收尾套话，不重复问题，不把一句必要说明展开成免责声明清单。'
       '事实、日期、未知和失败必须准确保留；只说明影响用户本次决定的限制，出处卡已说明的覆盖信息无需逐项重复。'
       '普通回复不展示函数参数、JSON、entries/coverage 等字段或原始返回。把实际结果译成自然中文；用户明确要求技术细节时才说明接口。'
+      '应用提供的历史对话状态只用于理解连续交谈，没有旧工具结果或当前许可。用户短答“对的”“是的”“可以”等时，结合随问题提供的人类原请求继续处理，不说没有上下文。明确的本地修改条件齐全后直接用提案工具生成方案卡，不反复先问同一个文字确认；短答不是方案卡批准或完成写入。已有提交/拒绝后的单纯肯定不再次执行。'
       '${names.isEmpty ? "本轮未开放业务工具；缺少业务范围时问一个具体问题，不声称应用没有相关功能或记录不存在。" : "本轮工具清单：${names.join('、')}。只能调用本清单中的固定函数。"}'
       '${localChanges ? "本轮可以创建和修改本地个人日程、任务及时间块：调用 propose_local_changes 准备具体方案。create_personal 或 create_task 新建不需要已有日程/任务引用；修改已有项时才先查询本轮引用。用户明确让你安排或创建，条件齐全就准备方案卡，不要只给文字建议或声称没有创建工具。" : "本轮未开放本地变更提案时，不猜测永久权限；若用户希望创建或修改，先澄清具体本地安排与时间。"}'
       '${names.contains('find_free_slots') ? "安排时间时使用 find_free_slots 核对所需范围；已知截止与时长不能遗漏。用户只要建议时不要提交变更提案。" : ""}'

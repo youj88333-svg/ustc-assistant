@@ -45,3 +45,20 @@ target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Opt-in pure codec regression. It serializes synthetic method calls and never
+# instantiates the audio bridge or accesses Windows audio devices.
+add_executable(default_audio_input_codec_test EXCLUDE_FROM_ALL
+  "default_audio_input_codec_test.cpp"
+)
+apply_standard_settings(default_audio_input_codec_test)
+target_compile_definitions(default_audio_input_codec_test PRIVATE "NOMINMAX")
+target_include_directories(default_audio_input_codec_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(default_audio_input_codec_test PRIVATE flutter_wrapper_plugin)
+
+add_custom_target(run_default_audio_input_codec_test
+  COMMAND "$<TARGET_FILE:default_audio_input_codec_test>"
+  DEPENDS default_audio_input_codec_test
+  WORKING_DIRECTORY "$<TARGET_FILE_DIR:default_audio_input_codec_test>"
+  VERBATIM
+)

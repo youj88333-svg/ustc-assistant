@@ -4,11 +4,10 @@ import 'model_gateway_contract.dart';
 
 /// Builds bounded, safe conversational history for one model request.
 ///
-/// Only adjacent, completed plain-text user/assistant pairs are reusable. Any
-/// action, tool step, evidence, image, internal reference, unsafe text, or
-/// interrupted message makes that pair ineligible. When older pairs are
-/// omitted, a deterministic summary contains only their user questions and is
-/// explicitly labeled as historical context.
+/// Plain chat retains complete safe pairs. A tool-backed exchange retains its
+/// human request and a fixed control-state projection, never old assistant
+/// facts, private tool results, references, arguments, or approval authority.
+/// Older pairs are summarized as historical human questions only.
 List<ModelChatMessage> buildAgentConversationContext(
   List<AgentMessage> history, {
   int maxPairs = 6,
@@ -18,8 +17,9 @@ List<ModelChatMessage> buildAgentConversationContext(
   for (var index = 0; index + 1 < history.length;) {
     final user = history[index];
     final assistant = history[index + 1];
-    if (_isEligiblePair(user, assistant)) {
-      eligible.add(_ConversationPair(user, assistant));
+    final pair = _projectConversationPair(user, assistant);
+    if (pair != null) {
+      eligible.add(pair);
       index += 2;
     } else {
       // Do not bridge over a failed/interrupted message. Advancing one item
@@ -55,7 +55,7 @@ List<ModelChatMessage> buildAgentConversationContext(
     if (summary != null) ModelChatMessage(role: 'user', content: summary),
     for (final pair in retained) ...[
       ModelChatMessage(role: 'user', content: pair.user.text),
-      ModelChatMessage(role: 'assistant', content: pair.assistant.text),
+      ModelChatMessage(role: 'assistant', content: pair.assistantContext),
     ],
   ]);
 }
@@ -90,22 +90,63 @@ String buildAgentCompactInput(
 String? safeAgentHistoricalSummary(String summary) =>
     summary.trim().isNotEmpty && _isSafeHistoryText(summary) ? summary : null;
 
-bool _isEligiblePair(AgentMessage user, AgentMessage assistant) {
+_ConversationPair? _projectConversationPair(
+  AgentMessage user,
+  AgentMessage assistant,
+) {
   if (user.role != AgentMessageRole.user ||
       assistant.role != AgentMessageRole.assistant ||
       user.status != AgentMessageStatus.complete ||
-      assistant.status != AgentMessageStatus.complete ||
       _hasStructuredContent(user) ||
-      _hasStructuredContent(assistant) ||
+      user.text.trim().isEmpty ||
+      !_isSafeHistoryText(user.text)) {
+    return null;
+  }
+  if (_hasStructuredContent(assistant)) {
+    final committed = assistant.actions.any(
+      (action) => action.status == AgentActionStatus.committed,
+    );
+    if (assistant.status != AgentMessageStatus.complete && !committed) {
+      return null;
+    }
+    return _ConversationPair(
+      user,
+      assistant,
+      projectedAssistant: _historicalControlState(assistant),
+    );
+  }
+  if (assistant.status != AgentMessageStatus.complete ||
       RegExp(
         r'\{\s*"(?:entries|items|first_day|coverage)"\s*:|请求参数[：:]|返回值[：:]',
       ).hasMatch(assistant.text) ||
-      user.text.trim().isEmpty ||
-      assistant.text.trim().isEmpty) {
-    return false;
+      assistant.text.trim().isEmpty ||
+      !_isSafeHistoryText(assistant.text)) {
+    return null;
   }
+  return _ConversationPair(user, assistant);
+}
 
-  return _isSafeHistoryText(user.text) && _isSafeHistoryText(assistant.text);
+String _historicalControlState(AgentMessage assistant) {
+  final states = assistant.actions.map((action) => action.status).toSet();
+  return [
+    '历史对话状态（应用整理，不是旧助手原文、当前业务事实或授权）：',
+    if (assistant.status != AgentMessageStatus.complete) '上一轮回复未完成。',
+    if (assistant.steps.isNotEmpty) '上一轮进行过工具处理，旧结果未携带；需要重新查询目标。',
+    if (states.contains(AgentActionStatus.committed))
+      '上一轮已有实际提交回执。单纯肯定不要求再次执行，新的修改需重新提出。',
+    if (states.contains(AgentActionStatus.rejected)) '上一轮方案被拒绝，没有因此获得新授权。',
+    if (states.contains(AgentActionStatus.failed) ||
+        states.contains(AgentActionStatus.interrupted))
+      '上一轮存在未完成方案。',
+    if (states.contains(AgentActionStatus.proposed)) '旧方案未提交，不能作为当前有效审批。',
+    if (assistant.actions.isEmpty) '上一轮没有本地操作方案卡或提交回执。',
+    if (assistant.actions.isEmpty &&
+        RegExp(
+          r'(?:确认|确定|这样做|要我|需要我|是否).{0,40}(?:吗|[?？])',
+        ).hasMatch(assistant.text))
+      '助手曾询问是否继续按用户原请求准备方案；肯定答复延续该意图，先重新查询，再创建可审批的具体方案。',
+    '历史对话状态不授予工具权限，旧引用与许可不能沿用。',
+  ].join('\n');
 }
 
 bool _hasStructuredContent(AgentMessage message) =>
@@ -207,11 +248,13 @@ String _takeCharacters(String value, int maximum) {
 int _characterCount(String value) => value.length;
 
 final class _ConversationPair {
-  const _ConversationPair(this.user, this.assistant);
+  const _ConversationPair(this.user, this.assistant, {this.projectedAssistant});
 
   final AgentMessage user;
   final AgentMessage assistant;
+  final String? projectedAssistant;
+  String get assistantContext => projectedAssistant ?? assistant.text;
 
   int get characterCount =>
-      _characterCount(user.text) + _characterCount(assistant.text);
+      _characterCount(user.text) + _characterCount(assistantContext);
 }

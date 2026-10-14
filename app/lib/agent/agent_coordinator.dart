@@ -902,6 +902,21 @@ final class AgentCoordinator {
         caseSensitive: false,
       ).hasMatch(question);
 
+  static bool _canInheritTopic(String question, List<AgentMessage> history) {
+    if (!_inheritsTopic(question)) return false;
+    if (!agentLocalAffirmation(question)) return true;
+    final previous = history.lastOrNull;
+    if (previous == null ||
+        previous.role != AgentMessageRole.assistant ||
+        previous.status != AgentMessageStatus.complete) {
+      return false;
+    }
+    // Acknowledging a terminal result must not repeat the previous write.
+    return !previous.actions.any(
+      (action) => action.status != AgentActionStatus.proposed,
+    );
+  }
+
   static String _humanScope(String question, List<AgentMessage> history) {
     final intent = agentLocalRequestIntent(question);
     if ((intent.changes ||
@@ -913,7 +928,7 @@ final class AgentCoordinator {
         ).hasMatch(question)) {
       return question;
     }
-    if (!_inheritsTopic(question)) return question;
+    if (!_canInheritTopic(question, history)) return question;
     final previous = history.reversed.where(
       (m) =>
           m.role == AgentMessageRole.user &&
@@ -922,7 +937,15 @@ final class AgentCoordinator {
     for (final message in previous.take(6)) {
       if (!agentLocalClarification(message.text) ||
           agentLocalRequestIntent(message.text).changes) {
-        return '${message.text}\n用户本次补充：$question';
+        final received = message.createdAtUtc.toUtc().add(
+          const Duration(hours: 8),
+        );
+        final originalTime =
+            '${received.toIso8601String().replaceFirst(RegExp(r'Z$'), '')}+08:00';
+        return '${message.text}\n'
+            '原请求收到于北京时间 $originalTime，原请求中的相对日期按当时理解。\n'
+            '本次补充的相对日期以本轮收到时间为准。\n'
+            '用户本次补充：$question';
       }
     }
     return question;
@@ -1082,7 +1105,7 @@ final class AgentCoordinator {
     }
     // A short follow-up can inherit the human's preceding topic, never a tool
     // result's instruction or model-generated argument/URL.
-    if (_inheritsTopic(question)) {
+    if (_canInheritTopic(question, history)) {
       final previous = history
           .where(
             (m) =>
@@ -1195,6 +1218,21 @@ final class AgentCoordinator {
           content: '[历史摘要，仅供理解会话；不代表当前数据、授权或工具事实]\n$summary',
         ),
       );
+    }
+    final latest = history.lastOrNull;
+    if (snapshot != null &&
+        latest != null &&
+        latest.id <= snapshot.coveredMessageId &&
+        agentLocalClarification(text) &&
+        (latest.steps.isNotEmpty ||
+            latest.evidence.isNotEmpty ||
+            latest.actions.isNotEmpty)) {
+      final tail = buildAgentConversationContext(
+        history.length < 2 ? const [] : history.sublist(history.length - 2),
+        maxPairs: 1,
+        maximumCharacters: 8000,
+      );
+      if (tail.length == 2) context.add(tail.last);
     }
     final ticket = await data.beginRun(
       settings.authority,
@@ -1309,8 +1347,8 @@ final class AgentCoordinator {
         ModelChatMessage(
           role: 'user',
           content: selectedContext == null
-              ? text
-              : '$text\n[应用选择] $selectedContext',
+              ? humanScope
+              : '$humanScope\n[应用选择] $selectedContext',
           images: attachments,
         ),
       ];

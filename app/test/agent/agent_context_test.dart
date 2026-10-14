@@ -44,71 +44,250 @@ void main() {
       },
     );
 
-    test('does not bridge interruptions or structured messages', () {
-      final history = [
-        _message(1, AgentMessageRole.user, '未配对的问题'),
-        _message(
-          2,
-          AgentMessageRole.assistant,
-          '中断的回答',
-          status: AgentMessageStatus.interrupted,
-        ),
-        _message(3, AgentMessageRole.user, '含步骤的问题'),
-        _message(
-          4,
-          AgentMessageRole.assistant,
-          '含步骤的回答',
-          steps: const [AgentToolStep(tool: 'query_agenda', status: 'ok')],
-        ),
-        _message(5, AgentMessageRole.assistant, '孤立的助手消息'),
-        _message(6, AgentMessageRole.user, '后续完整问题'),
-        _message(7, AgentMessageRole.assistant, '后续完整回答'),
-      ];
+    test(
+      'does not bridge interruptions, but projects safe tool-backed intent',
+      () {
+        final history = [
+          _message(1, AgentMessageRole.user, '未配对的问题'),
+          _message(
+            2,
+            AgentMessageRole.assistant,
+            '中断的回答',
+            status: AgentMessageStatus.interrupted,
+          ),
+          _message(3, AgentMessageRole.user, '含步骤的问题'),
+          _message(
+            4,
+            AgentMessageRole.assistant,
+            '含步骤的回答',
+            steps: const [AgentToolStep(tool: 'query_agenda', status: 'ok')],
+          ),
+          _message(5, AgentMessageRole.assistant, '孤立的助手消息'),
+          _message(6, AgentMessageRole.user, '后续完整问题'),
+          _message(7, AgentMessageRole.assistant, '后续完整回答'),
+        ];
 
-      final context = buildAgentConversationContext(history);
+        final context = buildAgentConversationContext(history);
 
-      expect(context, hasLength(2));
-      expect(context[0].content, '后续完整问题');
-      expect(context[1].content, '后续完整回答');
-    });
+        expect(context, hasLength(4));
+        expect(context[0].content, '含步骤的问题');
+        expect(
+          context[1].content,
+          startsWith('历史对话状态（应用整理，不是旧助手原文、当前业务事实或授权）：'),
+        );
+        expect(context[1].content, contains('旧结果未携带；需要重新查询目标'));
+        expect(context[1].content, isNot(contains('含步骤的回答')));
+        expect(context[2].content, '后续完整问题');
+        expect(context[3].content, '后续完整回答');
+      },
+    );
 
-    test('drops pairs containing actions, steps, evidence, or images', () {
-      final evidence = AgentEvidence(
-        id: 'safe-synthetic-evidence',
-        provider: 'local',
-        title: 'Synthetic title',
-        observedAtUtc: DateTime.utc(2026, 10, 13),
-        scope: 'synthetic scope',
-        complete: true,
-      );
-      final action = AgentActionView(
-        id: 'synthetic-action',
-        kind: AgentActionKind.localPlan,
-        status: AgentActionStatus.rejected,
-        title: 'Synthetic action',
-        details: const ['synthetic detail'],
-      );
-      final history = [
-        _message(1, AgentMessageRole.user, '带动作的问题'),
-        _message(2, AgentMessageRole.assistant, '带动作的回答', actions: [action]),
-        _message(3, AgentMessageRole.user, '带出处的问题', evidence: [evidence]),
-        _message(4, AgentMessageRole.assistant, '带出处的回答'),
-        _message(5, AgentMessageRole.user, '带图片的问题', imageCount: 1),
-        _message(6, AgentMessageRole.assistant, '带图片的回答'),
-        _message(7, AgentMessageRole.user, '纯文本问题'),
-        _message(8, AgentMessageRole.assistant, '纯文本回答'),
-      ];
+    test(
+      'retains tool-backed human intent without old facts or private fields',
+      () {
+        const oldReference = 'r_0123456789abcdef0123456789abcdef';
+        const oldUrl = 'https://example.invalid/private-history?item=synthetic';
+        final evidence = AgentEvidence(
+          id: oldReference,
+          provider: 'local',
+          title: '旧合成课程引用标题',
+          observedAtUtc: DateTime.utc(2026, 10, 13),
+          scope: 'synthetic-private-note-marker',
+          complete: true,
+          articleUrl: oldUrl,
+          locator: 'private locator marker',
+          snippet: 'private evidence body marker',
+        );
+        final action = AgentActionView(
+          id: 'synthetic-action',
+          kind: AgentActionKind.localPlan,
+          status: AgentActionStatus.committed,
+          title: '旧操作卡标题 marker',
+          details: const [
+            '旧方案正文 marker',
+            'synthetic-private-note-marker',
+            oldReference,
+          ],
+          warning: 'private action warning marker',
+          authorization: AgentActionAuthorization.remembered,
+          committedCount: 1,
+        );
+        final history = [
+          _message(1, AgentMessageRole.user, '今天我心情不好，下午的课不想上了'),
+          _message(
+            2,
+            AgentMessageRole.assistant,
+            '旧助手事实：下午有旧合成课程；private assistant body marker。$oldUrl',
+            actions: [action],
+            steps: const [
+              AgentToolStep(tool: 'query_agenda', status: 'success'),
+              AgentToolStep(tool: 'propose_local_changes', status: 'committed'),
+            ],
+            evidence: [evidence],
+          ),
+          _message(3, AgentMessageRole.user, '带出处的问题'),
+          _message(
+            4,
+            AgentMessageRole.assistant,
+            '旧出处助手正文 marker',
+            evidence: [evidence],
+          ),
+          _message(5, AgentMessageRole.user, '带图片的问题', imageCount: 1),
+          _message(6, AgentMessageRole.assistant, '带图片的回答'),
+          _message(7, AgentMessageRole.user, '纯文本问题'),
+          _message(8, AgentMessageRole.assistant, '纯文本回答'),
+        ];
 
-      final context = buildAgentConversationContext(history, maxPairs: 0);
+        final context = buildAgentConversationContext(history, maxPairs: 3);
 
-      expect(context, hasLength(1));
-      expect(context.single.content, contains('纯文本问题'));
-      expect(context.single.content, isNot(contains('带动作')));
-      expect(context.single.content, isNot(contains('带出处')));
-      expect(context.single.content, isNot(contains('带图片')));
-      expect(context.single.content, isNot(contains('Synthetic action')));
-      expect(context.single.content, isNot(contains('Synthetic title')));
-    });
+        expect(context, hasLength(6));
+        expect(context[0].content, '今天我心情不好，下午的课不想上了');
+        expect(
+          context[1].content,
+          startsWith('历史对话状态（应用整理，不是旧助手原文、当前业务事实或授权）：'),
+        );
+        expect(context[2].content, '带出处的问题');
+        expect(context[3].content, contains('历史对话状态'));
+        expect(context[4].content, '纯文本问题');
+        expect(context[5].content, '纯文本回答');
+        expect(context[1].content, contains('上一轮已有实际提交回执'));
+        expect(context[1].content, contains('单纯肯定不要求再次执行'));
+        final allContent = _content(context).join('\n');
+        for (final privateValue in [
+          '旧助手事实',
+          'private assistant body marker',
+          '旧合成课程引用标题',
+          'synthetic-private-note-marker',
+          oldReference,
+          oldUrl,
+          'private locator marker',
+          'private evidence body marker',
+          '旧操作卡标题 marker',
+          '旧方案正文 marker',
+          'private action warning marker',
+          'remembered',
+          'query_agenda',
+          'propose_local_changes',
+          '带图片的问题',
+        ]) {
+          expect(
+            allContent,
+            isNot(contains(privateValue)),
+            reason: privateValue,
+          );
+        }
+      },
+    );
+
+    test(
+      'tool-backed history records whether the assistant asked to continue',
+      () {
+        const oldCourse = '旧合成课程标题 marker';
+        final history = [
+          _message(1, AgentMessageRole.user, '今天下午的课我不想上了'),
+          _message(
+            2,
+            AgentMessageRole.assistant,
+            '$oldCourse 有课，要我把个人出勤计划设为不参加吗？',
+            steps: const [
+              AgentToolStep(tool: 'query_agenda', status: 'success'),
+            ],
+          ),
+        ];
+
+        final context = buildAgentConversationContext(history);
+
+        expect(context, hasLength(2));
+        expect(context[0].content, '今天下午的课我不想上了');
+        expect(context[1].content, contains('助手曾询问是否继续按用户原请求准备方案'));
+        expect(context[1].content, isNot(contains(oldCourse)));
+        expect(context[1].content, isNot(contains('要我把个人出勤计划')));
+      },
+    );
+
+    test(
+      'tool-backed state projection distinguishes rejected, failed, and proposed actions',
+      () {
+        AgentActionView action(String id, AgentActionStatus status) =>
+            AgentActionView(
+              id: id,
+              kind: AgentActionKind.localPlan,
+              status: status,
+              title: '$id private title',
+              details: ['$id private details'],
+            );
+        final history = [
+          _message(1, AgentMessageRole.user, '被拒方案的问题'),
+          _message(
+            2,
+            AgentMessageRole.assistant,
+            '被拒方案旧正文 marker',
+            actions: [action('rejected', AgentActionStatus.rejected)],
+          ),
+          _message(3, AgentMessageRole.user, '失败方案的问题'),
+          _message(
+            4,
+            AgentMessageRole.assistant,
+            '失败方案旧正文 marker',
+            actions: [action('failed', AgentActionStatus.failed)],
+          ),
+          _message(5, AgentMessageRole.user, '待处理方案的问题'),
+          _message(
+            6,
+            AgentMessageRole.assistant,
+            '待处理方案旧正文 marker',
+            actions: [action('proposed', AgentActionStatus.proposed)],
+          ),
+        ];
+
+        final context = buildAgentConversationContext(history);
+
+        expect(context, hasLength(6));
+        expect(context[1].content, contains('上一轮方案被拒绝，没有因此获得新授权'));
+        expect(context[3].content, contains('上一轮存在未完成方案'));
+        expect(context[5].content, contains('旧方案未提交，不能作为当前有效审批'));
+        final allContent = _content(context).join('\n');
+        expect(allContent, isNot(contains('旧正文 marker')));
+        expect(allContent, isNot(contains('private title')));
+        expect(allContent, isNot(contains('private details')));
+      },
+    );
+
+    test(
+      'failed final reply preserves committed status without old assistant text',
+      () {
+        final committed = AgentActionView(
+          id: 'synthetic-committed-action',
+          kind: AgentActionKind.localPlan,
+          status: AgentActionStatus.committed,
+          title: 'committed private title marker',
+          details: const ['committed private detail marker'],
+          committedCount: 1,
+        );
+        final history = [
+          _message(1, AgentMessageRole.user, '把今天下午的课设为不参加'),
+          _message(
+            2,
+            AgentMessageRole.assistant,
+            '旧助手正文：已经修改旧合成课程；应从历史中排除。',
+            status: AgentMessageStatus.failed,
+            actions: [committed],
+          ),
+        ];
+
+        final context = buildAgentConversationContext(history);
+
+        expect(context, hasLength(2));
+        expect(context[0].content, '把今天下午的课设为不参加');
+        expect(context[1].content, contains('上一轮回复未完成'));
+        expect(context[1].content, contains('上一轮已有实际提交回执'));
+        expect(_content(context).join('\n'), isNot(contains('旧助手正文')));
+        expect(
+          _content(context).join('\n'),
+          isNot(contains('committed private')),
+        );
+      },
+    );
 
     test('summary omits historical assistant facts and approval metadata', () {
       final action = AgentActionView(
@@ -135,7 +314,7 @@ void main() {
       expect(context.single.content, isNot(contains('旧业务事实')));
       expect(context.single.content, isNot(contains('A101')));
       expect(context.single.content, isNot(contains('Already committed')));
-      expect(context.single.content, isNot(contains('旧批准的问题')));
+      expect(context.single.content, contains('旧批准的问题'));
       expect(context.single.content, isNot(contains('附图里是什么')));
     });
 
