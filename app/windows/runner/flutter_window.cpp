@@ -8,6 +8,7 @@ FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
 FlutterWindow::~FlutterWindow() {
+  default_audio_input_bridge_.reset();
   observation_bridge_.reset();
 }
 
@@ -27,6 +28,8 @@ bool FlutterWindow::OnCreate() {
     return false;
   }
   RegisterPlugins(flutter_controller_->engine());
+  default_audio_input_bridge_ = std::make_unique<DefaultAudioInputBridge>(
+      flutter_controller_->engine()->messenger());
   observation_bridge_ = std::make_unique<ObservationBridge>(
       flutter_controller_->engine()->messenger(), GetHandle());
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
@@ -44,6 +47,7 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  default_audio_input_bridge_.reset();
   observation_bridge_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;

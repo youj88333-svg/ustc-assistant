@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import '../core/agent_action_contract.dart';
+import '../core/agent_permission_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_discussion_contract.dart';
@@ -198,6 +199,7 @@ final class AgentActionTools implements AgentReadToolsPort {
 sealed class _PendingAgentDecision {
   const _PendingAgentDecision();
   AgentActionView get view;
+  AgentRunTicket get ticket;
   String get title;
   int get count;
 }
@@ -211,10 +213,13 @@ final class _PendingLocalPlan extends _PendingAgentDecision {
   final int count;
   @override
   AgentActionView get view => plan.view;
+  @override
+  AgentRunTicket get ticket => plan.ticket;
 }
 
 final class _PendingPreferences extends _PendingAgentDecision {
   const _PendingPreferences(this.ticket, this.record, this.title);
+  @override
   final AgentRunTicket ticket;
   final AgentActionView record;
   @override
@@ -232,6 +237,7 @@ final class _PendingSourceRefresh extends _PendingAgentDecision {
     this.request,
     this.title,
   );
+  @override
   final AgentRunTicket ticket;
   final AgentActionView record;
   final AgentSourceRequest request;
@@ -266,6 +272,7 @@ final class _AgentActionToolSession
         AgentLocalReferenceSession,
         AgentDiscussionToolSession,
         AgentInteractiveToolSession,
+        AgentRememberedToolSession,
         AgentToolScopeSession {
   _AgentActionToolSession(this._owner, AgentToolSession readSession)
     : _readSession = readSession {
@@ -325,6 +332,12 @@ final class _AgentActionToolSession
     }
     _ticket = ticket;
     _humanQuestion = humanQuestion;
+    final reader = _readSession;
+    if (reader is AgentPersonalReadScopeSession) {
+      (reader as AgentPersonalReadScopeSession).bindHumanReadScope(
+        humanQuestion,
+      );
+    }
   }
 
   @override
@@ -588,13 +601,20 @@ final class _AgentActionToolSession
 
     final ticket = _requireTicket();
     final records = _requireActionRecords();
-    final record = await records.prepareActionRecord(
-      ticket,
-      AgentActionKind.sourceRefresh,
-      title,
-      details,
-      warning: '批准后才会启动本来源刷新。',
-    );
+    final record = records is AgentRecordPermissionPort
+        ? await (records as AgentRecordPermissionPort).prepareSourceAction(
+            ticket,
+            request,
+            title,
+            details,
+          )
+        : await records.prepareActionRecord(
+            ticket,
+            AgentActionKind.sourceRefresh,
+            title,
+            details,
+            warning: '批准后才会启动本来源刷新。',
+          );
     if (_revoked) {
       await _settleSourceRecord(ticket, record, AgentActionStatus.interrupted);
       throw const AgentFailure(AgentFailureCode.cancelled);
@@ -1709,7 +1729,17 @@ final class _AgentActionToolSession
     try {
       if (pending is _PendingLocalPlan) {
         if (approved) {
-          final approval = await _owner.plans.approveLocalPlan(pending.plan);
+          final permissions = _owner.plans;
+          final approval =
+              _automaticApproval ??
+              (permissions is AgentLocalPermissionPort
+                  ? (await (permissions as AgentLocalPermissionPort)
+                        .authorizeLocalPlan(
+                          pending.plan,
+                          mode: AgentAuthorizationMode.confirmed,
+                          remember: _rememberDecision,
+                        ))!
+                  : await _owner.plans.approveLocalPlan(pending.plan));
           _ensureStillPending(pending);
           final receipt = await _owner.plans.commitLocalPlan(approval);
           if (identical(_pending, pending)) _pending = null;
@@ -1743,7 +1773,16 @@ final class _AgentActionToolSession
         }
         await validateDelivery();
         final approvalPort = _owner.actionRecords;
-        if (approvalPort is AgentSourceApprovalPort) {
+        if (!_automaticRecord && approvalPort is AgentRecordPermissionPort) {
+          await (approvalPort as AgentRecordPermissionPort).authorizeAction(
+            pending.ticket,
+            pending.record,
+            mode: AgentAuthorizationMode.confirmed,
+            remember: _rememberDecision,
+          );
+          _ensureStillPending(pending);
+        } else if (!_automaticRecord &&
+            approvalPort is AgentSourceApprovalPort) {
           await (approvalPort as AgentSourceApprovalPort).approveSourceAction(
             pending.ticket,
             pending.record,
@@ -1813,6 +1852,16 @@ final class _AgentActionToolSession
 
       final preferencesPending = pending as _PendingPreferences;
       if (approved) {
+        final permissionPort = _owner.preferenceProposals;
+        if (!_automaticRecord && permissionPort is AgentRecordPermissionPort) {
+          await (permissionPort as AgentRecordPermissionPort).authorizeAction(
+            preferencesPending.ticket,
+            preferencesPending.record,
+            mode: AgentAuthorizationMode.confirmed,
+            remember: _rememberDecision,
+          );
+          _ensureStillPending(pending);
+        }
         await _owner.preferenceProposals.commitPreferencesPlan(
           preferencesPending.ticket,
           preferencesPending.record,
@@ -1857,7 +1906,57 @@ final class _AgentActionToolSession
       return _result('failure', failure: 'storageFailed');
     } finally {
       _decisionInFlight = false;
+      _automaticApproval = null;
+      _automaticRecord = false;
       _notify();
+    }
+  }
+
+  AgentPlanApproval? _automaticApproval;
+  bool _automaticRecord = false, _rememberDecision = false;
+  @override
+  Future<AgentToolResult?> tryRememberedDecision() async {
+    _ensureActive();
+    final pending = _pending;
+    if (pending == null || _decisionInFlight) return null;
+    if (pending is _PendingLocalPlan) {
+      final permissions = _owner.plans;
+      if (permissions is! AgentLocalPermissionPort) return null;
+      final approval = await (permissions as AgentLocalPermissionPort)
+          .authorizeLocalPlan(
+            pending.plan,
+            mode: AgentAuthorizationMode.remembered,
+          );
+      _ensureStillPending(pending);
+      if (approval == null) return null;
+      _automaticApproval = approval;
+    } else {
+      final record = pending is _PendingPreferences
+          ? pending.record
+          : (pending as _PendingSourceRefresh).record;
+      final permissions = pending is _PendingPreferences
+          ? _owner.preferenceProposals
+          : _owner.actionRecords;
+      if (permissions is! AgentRecordPermissionPort) return null;
+      final authorized = await permissions.authorizeAction(
+        pending.ticket,
+        record,
+        mode: AgentAuthorizationMode.remembered,
+      );
+      _ensureStillPending(pending);
+      if (!authorized) return null;
+      _automaticRecord = true;
+    }
+    return decidePending(true);
+  }
+
+  @override
+  Future<AgentToolResult> approveAndRememberPending() async {
+    _rememberDecision = true;
+    try {
+      return await decidePending(true);
+    } finally {
+      _rememberDecision = false;
     }
   }
 
@@ -1871,6 +1970,11 @@ final class _AgentActionToolSession
     _contextInvalidated = true;
     try {
       _readSession = _owner.readTools.openSession();
+      if (_readSession is AgentPersonalReadScopeSession) {
+        (_readSession as AgentPersonalReadScopeSession).bindHumanReadScope(
+          _humanQuestion ?? '',
+        );
+      }
       _readerUnavailable = false;
     } on Object {
       _readerUnavailable = true;

@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/agenda_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_display_style.dart';
+import 'calendar_task_band.dart';
 import 'calendar_teaching_axis.dart';
 
 final class CalendarWeekView extends StatelessWidget {
@@ -12,15 +13,25 @@ final class CalendarWeekView extends StatelessWidget {
     super.key,
     required this.window,
     required this.today,
+    required this.tasks,
+    required this.nowUtc,
     required this.onSelect,
     required this.onOverflow,
+    required this.onSelectTask,
+    required this.onOpenUnscheduledTasks,
+    required this.onTaskOverflow,
   });
 
   final CalendarWindow window;
   final DateTime today;
+  final List<TaskRecord> tasks;
+  final DateTime nowUtc;
   final ValueChanged<CalendarOccurrence> onSelect;
   final void Function(String heading, List<CalendarOccurrence> occurrences)
   onOverflow;
+  final ValueChanged<TaskRecord> onSelectTask;
+  final VoidCallback onOpenUnscheduledTasks;
+  final void Function(DateTime day, List<TaskRecord> tasks) onTaskOverflow;
 
   static const double _timeGutter = 62;
   static const double _minimumDayWidth = 124;
@@ -49,10 +60,16 @@ final class CalendarWeekView extends StatelessWidget {
         final textScale = MediaQuery.textScalerOf(context).scale(1);
         final allDay = _segmentsByDay(days, allDay: true);
         final earlyMorning = _segmentsByDay(days, earlyMorning: true);
+        final taskProjection = projectCalendarTasks(
+          tasks: tasks,
+          days: days,
+          nowUtc: nowUtc,
+        );
         final showAllDay = allDay.values.any((segments) => segments.isNotEmpty);
         final showEarly = earlyMorning.values.any(
           (segments) => segments.isNotEmpty,
         );
+        final showTasks = taskProjection.hasVisibleTasks;
         final compact = availableHeight < 480 || textScale > 1.45;
         final bandLimit = compact
             ? math.min(72.0, availableHeight * .18).toDouble()
@@ -61,13 +78,17 @@ final class CalendarWeekView extends StatelessWidget {
             ? _bandHeight(textScale, bandLimit)
             : 0.0;
         final earlyHeight = showEarly ? _bandHeight(textScale, bandLimit) : 0.0;
-        final separatorHeight = showAllDay || showEarly ? 5.0 : 0.0;
+        final taskHeight = showTasks ? _taskBandHeight(textScale) : 0.0;
+        final separatorHeight = showAllDay || showEarly || showTasks
+            ? 5.0
+            : 0.0;
         final axisAvailable = math
             .max(
               0,
               availableHeight -
                   _headingHeight -
                   allDayHeight -
+                  taskHeight -
                   earlyHeight -
                   separatorHeight,
             )
@@ -95,6 +116,18 @@ final class CalendarWeekView extends StatelessWidget {
                     height: allDayHeight,
                     label: '全天',
                     textScale: textScale,
+                  ),
+                if (showTasks)
+                  CalendarTaskBand(
+                    days: days,
+                    tasks: tasks,
+                    nowUtc: nowUtc,
+                    height: taskHeight,
+                    gutterWidth: _timeGutter,
+                    dayWidth: dayWidth,
+                    onSelectTask: onSelectTask,
+                    onOpenUnscheduledTasks: onOpenUnscheduledTasks,
+                    onOverflow: onTaskOverflow,
                   ),
                 if (showEarly)
                   _compactBand(
@@ -170,6 +203,9 @@ final class CalendarWeekView extends StatelessWidget {
 
   double _bandHeight(double textScale, double maximum) =>
       math.min(28 * textScale.clamp(1, 2), maximum).toDouble();
+
+  double _taskBandHeight(double textScale) =>
+      math.min(38 * textScale.clamp(1, 2), 72).toDouble();
 
   Widget _compactBand(
     List<DateTime> days,

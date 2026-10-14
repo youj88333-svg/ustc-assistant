@@ -21,54 +21,126 @@ void main() {
     'C4 selects write and planning tools from both deadline word orders',
     () async {
       final rig = await _open();
-      final cases = <(String, Set<String>)>[
-        (
-          '下周二交测试作业，请帮我下周一安排一个小时复习',
-          {'propose_local_changes', 'find_free_slots'},
-        ),
-        (
-          '请帮我下周一安排一个小时复习，下周二交测试作业',
-          {'propose_local_changes', 'find_free_slots'},
-        ),
-        ('请新建一个下周一13点到14点的日程用于测试', {'propose_local_changes'}),
-        ('请写入日程：下周一13点到14点测试', {'propose_local_changes'}),
+      final planningQuestions = [
+        '下周二交测试作业，请帮我下周一安排一个小时复习',
+        '请帮我下周一安排一个小时复习，下周二交测试作业',
       ];
+      for (var index = 0; index < planningQuestions.length; index++) {
+        final question = planningQuestions[index];
+        final firstRequest = rig.gateway.generations.length;
+        rig.gateway.enqueueEvents([
+          ..._toolCall(_freeSlotsCall('free-$index')),
+        ]);
+        rig.gateway.enqueue((generation) async {
+          final toolResult = _lastToolResult(generation.request);
+          expect(toolResult['status'], 'success');
+          final data = toolResult['data'] as Map<String, dynamic>;
+          final candidates = data['candidates'] as List<dynamic>;
+          expect(candidates, isNotEmpty);
+          final slot =
+              (candidates.first as Map<String, dynamic>)['slot_ref'] as String;
+          generation.emit(
+            ModelCompleted(
+              finishReason: 'tool_calls',
+              toolCalls: [_taskAndSlotProposal('planned-$index', slot)],
+            ),
+          );
+          await generation.finish();
+        });
+        rig.gateway.enqueueEvents(_answer('方案已拒绝，没有写入日程。'));
 
-      for (final (question, required) in cases) {
-        rig.gateway.enqueueEvents(_answer('收到。'));
-        await rig.coordinator.send(question);
-        final names = _toolNames(rig.gateway.generations.last.request);
-        expect(names, containsAll(required), reason: question);
+        final sending = rig.coordinator.send(question);
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final request = rig.gateway.generations[firstRequest].request;
+        expect(request.toolChoice, 'find_free_slots', reason: question);
+        expect(
+          _toolNames(request),
+          containsAll({'find_free_slots', 'propose_local_changes'}),
+          reason: question,
+        );
+        final proposalRequest =
+            rig.gateway.generations[firstRequest + 1].request;
+        expect(proposalRequest.toolChoice, isNull);
+        expect(
+          _lastToolResult(proposalRequest)['status'],
+          'success',
+          reason: question,
+        );
+        final pending = rig.coordinator.view.pendingAction!;
+        expect(pending.status, AgentActionStatus.proposed, reason: question);
+        expect(rig.coordinator.view.toolCalls, 2, reason: question);
+        await rig.coordinator.rejectAction(pending.id);
+        await sending.timeout(const Duration(seconds: 3));
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+      }
+
+      final directQuestions = ['请新建一个下周一13点到14点的日程用于测试', '请写入日程：下周一13点到14点测试'];
+      for (var index = 0; index < directQuestions.length; index++) {
+        final firstRequest = rig.gateway.generations.length;
+        rig.gateway.enqueueEvents([
+          ..._toolCall(_personalProposal('direct-$index')),
+        ]);
+        rig.gateway.enqueueEvents(_answer('方案已拒绝，没有写入日程。'));
+        final sending = rig.coordinator.send(directQuestions[index]);
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final request = rig.gateway.generations[firstRequest].request;
+        expect(request.toolChoice, isNull);
+        expect(_toolNames(request), contains('propose_local_changes'));
+        final pending = rig.coordinator.view.pendingAction!;
+        expect(pending.status, AgentActionStatus.proposed);
+        await rig.coordinator.rejectAction(pending.id);
+        await sending.timeout(const Duration(seconds: 3));
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
       }
     },
   );
 
   test(
-    'clarification keeps one request; new ordinary and public topics do not',
+    'local clarifications retain planning tools; new ordinary and public topics do not',
     () async {
       final rig = await _open();
 
+      rig.gateway.enqueueEvents([
+        ..._toolCall(_freeSlotsCall('clarification-first')),
+      ]);
       rig.gateway.enqueueEvents(_answer('我会先核对可用时间。'));
       await rig.coordinator.send('请帮我安排下周一的一小时复习');
       expect(
-        _toolNames(rig.gateway.generations.last.request),
+        rig.gateway.generations.first.request.toolChoice,
+        'find_free_slots',
+      );
+      expect(
+        _toolNames(rig.gateway.generations.first.request),
         contains('propose_local_changes'),
       );
 
+      final clarificationRequest = rig.gateway.generations.length;
+      rig.gateway.enqueueEvents([
+        ..._toolCall(
+          _freeSlotsCall(
+            'clarification-second',
+            startMinute: 780,
+            endMinute: 840,
+          ),
+        ),
+      ]);
       rig.gateway.enqueueEvents(_answer('已按这个时间考虑。'));
       await rig.coordinator.send('下周一13点到14点');
-      final clarificationTools = _toolNames(
-        rig.gateway.generations.last.request,
-      );
+      final clarification =
+          rig.gateway.generations[clarificationRequest].request;
+      final clarificationTools = _toolNames(clarification);
+      expect(clarification.toolChoice, 'find_free_slots');
       expect(clarificationTools, contains('propose_local_changes'));
       expect(clarificationTools, contains('find_free_slots'));
+      expect(rig.coordinator.view.toolCalls, 1);
 
       rig.gateway.enqueueEvents(_answer('我可以协助查询和整理信息。'));
       await rig.coordinator.send('你能帮我做什么？');
-      expect(
-        _toolNames(rig.gateway.generations.last.request),
-        isNot(contains('propose_local_changes')),
-      );
+      expect(_toolNames(rig.gateway.generations.last.request), isEmpty);
 
       rig.gateway.enqueueEvents(_answer('请查看学校公开的办理说明。'));
       await rig.coordinator.send('只查公开资料，USTC 学费缴纳流程是什么？');
@@ -82,27 +154,37 @@ void main() {
         isTrue,
       );
 
-      rig.gateway.enqueueEvents(_answer('下周一有几个可选时段。'));
+      final suggestionRequest = rig.gateway.generations.length;
+      rig.gateway.enqueueEvents([..._toolCall(_freeSlotsCall('suggestion'))]);
+      rig.gateway.enqueueEvents(_answer('可以考虑查询到的时段。'));
       await rig.coordinator.send('只给我建议，帮我找下周一空闲的一小时，不用保存');
-      final suggestionTools = _toolNames(rig.gateway.generations.last.request);
+      final suggestion = rig.gateway.generations[suggestionRequest].request;
+      final suggestionTools = _toolNames(suggestion);
       expect(suggestionTools, isNot(contains('propose_local_changes')));
       expect(suggestionTools, contains('find_free_slots'));
+      expect(suggestion.toolChoice, 'find_free_slots');
+      expect(rig.coordinator.view.toolCalls, 1);
     },
   );
 
   test(
-    'ordinary chat has no tools and old assistant self-description grants none',
+    'ordinary history cannot override the current local tool registry',
     () async {
       final rig = await _open();
 
-      rig.gateway.enqueueEvents(_answer('I cannot create events.'));
+      rig.gateway.enqueueEvents(_answer('我无法创建日程。'));
       await rig.coordinator.send('你好');
       expect(rig.gateway.generations.last.request.tools, isEmpty);
 
-      rig.gateway.enqueueEvents(_answer('已准备本地安排方案。'));
-      await rig.coordinator.send('请创建下周一13点到14点的复习日程');
+      rig.gateway.enqueueEvents(_toolCall(_personalProposal('history-write')));
+      rig.gateway.enqueueEvents(_answer('方案已拒绝，没有写入日程。'));
+      final sending = rig.coordinator.send('请创建下周一13点到14点的复习日程');
+      await _until(
+        () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+      );
       final request = rig.gateway.generations.last.request;
       expect(_toolNames(request), contains('propose_local_changes'));
+      expect(request.toolChoice, isNull);
       final prompt = request.messages
           .firstWhere((message) => message.role == 'system')
           .content!;
@@ -111,11 +193,13 @@ void main() {
       expect(
         request.messages.any(
           (message) =>
-              message.role == 'assistant' &&
-              message.content == 'I cannot create events.',
+              message.role == 'assistant' && message.content == '我无法创建日程。',
         ),
         isTrue,
       );
+      final pending = rig.coordinator.view.pendingAction!;
+      await rig.coordinator.rejectAction(pending.id);
+      await sending.timeout(const Duration(seconds: 3));
     },
   );
 
@@ -131,6 +215,7 @@ void main() {
       await _until(
         () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
       );
+      expect(rig.gateway.generations.first.request.toolChoice, isNull);
       final rejectedId = rig.coordinator.view.pendingAction!.id;
       expect(
         rig.coordinator.view.pendingAction!.status,
@@ -149,6 +234,7 @@ void main() {
       await _until(
         () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
       );
+      expect(rig.gateway.generations.last.request.toolChoice, isNull);
       final currentId = rig.coordinator.view.pendingAction!.id;
       expect(currentId, isNot(rejectedId));
       expect(await _mondayItems(rig, monday), isEmpty);
@@ -170,7 +256,7 @@ void main() {
   );
 
   test(
-    'tool transition prose is checkpointed then removed from final history, while tool protocol stays complete',
+    'tool transition prose is deferred, used in tool protocol, then removed from final history',
     () async {
       final rig = await _open();
       final transition = List.filled(
@@ -184,16 +270,14 @@ void main() {
       final first = rig.gateway.generations.single;
       await first.started.future.timeout(const Duration(seconds: 2));
       first.emit(ModelTextDelta(transition));
-      await _untilAsync(() async {
-        final conversation = rig.coordinator.view.conversationId;
-        if (conversation == null) return false;
-        final messages = await rig.store.agent.messages(conversation);
-        return messages.any(
-          (message) =>
-              message.role == AgentMessageRole.assistant &&
-              message.text == transition,
-        );
-      });
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      final conversation = rig.coordinator.view.conversationId!;
+      final beforeRead = await rig.store.agent.messages(conversation);
+      expect(
+        beforeRead.map((message) => message.text).join('\n'),
+        isNot(contains(transition)),
+        reason: 'transition prose is deferred until an actual local read call',
+      );
 
       rig.gateway.enqueueEvents(_answer('明天没有已记录的日程。'));
       first.emit(
@@ -213,6 +297,8 @@ void main() {
       await send.timeout(const Duration(seconds: 3));
 
       final followupRequest = rig.gateway.generations[1].request;
+      expect(rig.gateway.generations.first.request.toolChoice, 'query_agenda');
+      expect(followupRequest.toolChoice, isNull);
       final assistantRound = followupRequest.messages.firstWhere(
         (message) =>
             message.role == 'assistant' && message.toolCalls.isNotEmpty,
@@ -225,7 +311,6 @@ void main() {
       );
       expect((jsonDecode(toolResult.content!) as Map)['status'], 'empty');
 
-      final conversation = rig.coordinator.view.conversationId!;
       final persisted = await rig.store.agent.messages(conversation);
       expect(persisted.last.status, AgentMessageStatus.complete);
       expect(persisted.last.text, '明天没有已记录的日程。');
@@ -233,6 +318,31 @@ void main() {
         persisted.map((message) => message.text).join('\n'),
         isNot(contains(transition)),
       );
+    },
+  );
+
+  test('ordinary replies correct English or parameter dumps once', () async {
+    final rig = await _open();
+    rig.gateway.enqueueEvents(
+      _answer("I'll help you. 请求参数：{\"start\":\"synthetic\"}"),
+    );
+    rig.gateway.enqueueEvents(_answer('可以，直接告诉我需要处理的事情。'));
+    await rig.coordinator.send('你好');
+    expect(rig.coordinator.view.failure, isNull);
+    expect(rig.coordinator.view.messages.last.text, '可以，直接告诉我需要处理的事情。');
+    expect(rig.gateway.generations, hasLength(2));
+  });
+
+  test(
+    'a repeated parameter dump fails without preserving the fabricated reply',
+    () async {
+      final rig = await _open();
+      rig.gateway.enqueueEvents(_answer('请求参数：{"start":"synthetic"}'));
+      rig.gateway.enqueueEvents(_answer('返回值：{"entries":[]}'));
+      await rig.coordinator.send('你好');
+      expect(rig.coordinator.view.failure, AgentFailureCode.protocol);
+      expect(rig.coordinator.view.messages.last.text, isEmpty);
+      expect(rig.gateway.generations, hasLength(2));
     },
   );
 
@@ -341,6 +451,35 @@ ModelToolCall _personalProposal([String id = 'personal-write']) =>
       }),
     );
 
+ModelToolCall _freeSlotsCall(String id, {int? startMinute, int? endMinute}) =>
+    ModelToolCall(
+      id: id,
+      name: 'find_free_slots',
+      argumentsJson: jsonEncode({
+        'first_day': '2026-10-19',
+        'end_day_exclusive': '2026-10-20',
+        'block_minutes': 60,
+        'start_minute': ?startMinute,
+        'end_minute': ?endMinute,
+      }),
+    );
+
+ModelToolCall _taskAndSlotProposal(String id, String slot) => ModelToolCall(
+  id: id,
+  name: 'propose_local_changes',
+  argumentsJson: jsonEncode({
+    'changes': [
+      {
+        'type': 'create_task',
+        'local_key': 'review-task-$id',
+        'title': '测试作业复习',
+        'description': '截止日期：下周二。',
+      },
+      {'type': 'create_block', 'task_key': 'review-task-$id', 'slot_ref': slot},
+    ],
+  }),
+);
+
 List<ModelEvent> _answer(String text) => [
   ModelTextDelta(text),
   ModelCompleted(finishReason: 'stop'),
@@ -349,6 +488,14 @@ List<ModelEvent> _answer(String text) => [
 List<ModelEvent> _toolCall(ModelToolCall call) => [
   ModelCompleted(finishReason: 'tool_calls', toolCalls: [call]),
 ];
+
+Map<String, dynamic> _lastToolResult(ModelRequest request) =>
+    jsonDecode(
+          request.messages
+              .lastWhere((message) => message.role == 'tool')
+              .content!,
+        )
+        as Map<String, dynamic>;
 
 Future<List<CalendarOccurrence>> _mondayItems(
   _Rig rig,
@@ -375,16 +522,6 @@ Future<void> _until(bool Function() condition) async {
   }
 }
 
-Future<void> _untilAsync(Future<bool> Function() condition) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 3));
-  while (!await condition()) {
-    if (DateTime.now().isAfter(deadline)) {
-      throw TimeoutException('Synthetic Agent state was not reached.');
-    }
-    await Future<void>.delayed(const Duration(milliseconds: 1));
-  }
-}
-
 final class _Rig {
   const _Rig(this.store, this.gateway, this.coordinator);
   final JwStore store;
@@ -396,6 +533,9 @@ final class _SyntheticGateway implements ModelGatewayPort {
   final Queue<Future<void> Function(_SyntheticGeneration)> _scripts = Queue();
   final List<_SyntheticGeneration> generations = [];
   bool _closed = false;
+
+  void enqueue(Future<void> Function(_SyntheticGeneration) script) =>
+      _scripts.add(script);
 
   void enqueueEvents(List<ModelEvent> events) {
     _scripts.add((generation) async {

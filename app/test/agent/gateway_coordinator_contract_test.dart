@@ -126,8 +126,12 @@ void main() {
       final queryRequest = service.chatBodies[3];
       final queryTools = _toolNames(queryRequest);
       expect(queryTools, contains('query_tasks'));
-      expect(queryRequest, isNot(contains('tool_choice')));
+      expect(
+        (queryRequest['tool_choice'] as Map<String, dynamic>)['function'],
+        {'name': 'query_tasks'},
+      );
       final resultRequest = service.chatBodies[4];
+      expect(resultRequest, isNot(contains('tool_choice')));
       final queryMessages = resultRequest['messages'] as List<dynamic>;
       final queryAssistant = queryMessages
           .whereType<Map<String, dynamic>>()
@@ -152,7 +156,6 @@ void main() {
       expect(returnedTasks, hasLength(1));
       expect((returnedTasks.single as Map)['title'], '网关集成合成任务');
 
-      await coordinator.newConversation();
       service.duplicateNextTaskCall = true;
       final executionsBeforeDuplicate = readTools.executeCount;
       await coordinator
@@ -164,6 +167,11 @@ void main() {
       expect(coordinator.view.messages.last.text, isEmpty);
       expect(readTools.executeCount, executionsBeforeDuplicate);
       expect(service.chatBodies, hasLength(6));
+      expect(
+        (service.chatBodies.last['tool_choice']
+            as Map<String, dynamic>)['function'],
+        {'name': 'query_tasks'},
+      );
       expect(service.failures, isEmpty);
       expect(await _activeRun(store), isNull);
     },

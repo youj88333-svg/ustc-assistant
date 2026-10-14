@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:record/record.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
@@ -18,6 +19,7 @@ import 'package:ustc_assistant_m0/m0_entry.dart';
 import 'package:ustc_assistant_m0/platform/offline_speech_input.dart';
 import 'package:ustc_assistant_m0/platform/sense_voice_recognizer.dart';
 import 'package:ustc_assistant_m0/platform/speech_model_bundle.dart';
+import 'package:ustc_assistant_m0/platform/speech_audio_recorder.dart';
 
 import 'support/diagnostic_cleanup.dart';
 
@@ -30,16 +32,21 @@ void main() {
   WidgetController.hitTestWarningShouldBeFatal = true;
 
   testWidgets(
-    'strict synthetic WAV flows through OfflineSpeechInput and local SenseVoice',
+    'synthetic PCM crosses the production recorder adapter, stop tail, and local SenseVoice',
     (tester) async {
       expect(Platform.isWindows, isTrue, reason: 'Windows integration only.');
       final fixture = await _loadWavFixture(tester);
-      final recorder = _WavStreamRecorder(fixture.pcm);
+      final recorder = _WavStreamBackend(fixture.pcm);
+      final capture = SpeechAudioRecorder(
+        backendFactory: () => recorder,
+        inputDeviceResolver: () async =>
+            const InputDevice(id: 'synthetic-default-input', label: '系统默认输入'),
+      );
       final recognizer = _TimedRecognizer(
         SenseVoiceRecognizer(bundle: SpeechModelBundle()),
       );
       final input = OfflineSpeechInput(
-        recorder: recorder,
+        recorder: capture,
         recognizer: recognizer,
       );
       try {
@@ -65,17 +72,15 @@ void main() {
           final transcript = input.view.transcript?.text ?? '';
           expect(input.view.phase, SpeechInputPhase.idle);
           expect(transcript.isNotEmpty, isTrue);
-          if (pass == 0) {
-            final containsExpectedWords =
-                transcript.contains('明天') &&
-                transcript.contains('图书馆') &&
-                transcript.contains('小时');
-            expect(
-              containsExpectedWords,
-              isTrue,
-              reason: 'Local recognition missed a fixed synthetic target word.',
-            );
-          }
+          final containsExpectedWords =
+              transcript.contains('明天') &&
+              transcript.contains('图书馆') &&
+              transcript.contains('小时');
+          expect(
+            containsExpectedWords,
+            isTrue,
+            reason: 'Local recognition missed a fixed synthetic target word.',
+          );
         }
 
         expect(recorder.startCalls, 2);
@@ -117,17 +122,14 @@ void main() {
         expect(identical(first.speechInput, firstSpeech), isTrue);
         expect(identical(runtime.speechInput, firstSpeech), isTrue);
         expect(runtime.agent.view.settings!.keySaved, isFalse);
-        expect(runtime.jwStore.schemaVersion, 13);
+        expect(runtime.jwStore.schemaVersion, 14);
 
         await tester.pumpWidget(OwnedApplication(bootstrap: first));
         await tester.pumpAndSettle();
         final createConversation = find.byKey(
           const ValueKey('agent-empty-new-conversation'),
         );
-        expect(createConversation, findsOneWidget);
-        await tester.ensureVisible(createConversation);
-        await tester.tap(createConversation);
-        await tester.pumpAndSettle();
+        expect(createConversation, findsNothing);
         expect(runtime.agent.view.conversationId, isNotNull);
         expect(gateway.requestCount, 0);
 
@@ -198,7 +200,7 @@ void main() {
         );
         bootstraps.add(reopened);
         final reopenedRuntime = reopened.runtime!;
-        expect(reopenedRuntime.jwStore.schemaVersion, 13);
+        expect(reopenedRuntime.jwStore.schemaVersion, 14);
         expect(reopenedRuntime.agent.view.messages, isEmpty);
         expect(
           reopenedRuntime.calendar.view.window!.items.any(
@@ -258,9 +260,7 @@ void main() {
         final createConversation = find.byKey(
           const ValueKey('agent-empty-new-conversation'),
         );
-        expect(createConversation, findsOneWidget);
-        await tester.tap(createConversation);
-        await tester.pumpAndSettle();
+        expect(createConversation, findsNothing);
         expect(runtime.agent.view.conversationId, isNotNull);
 
         final speechToggle = find.byKey(const ValueKey('agent-speech-toggle'));
@@ -722,18 +722,23 @@ final class _WavFixture {
   final Uint8List pcm;
 }
 
-final class _WavStreamRecorder implements SpeechRecorderPort {
-  _WavStreamRecorder(this.pcm);
+final class _WavStreamBackend implements SpeechAudioRecorderBackend {
+  _WavStreamBackend(this.pcm);
   final Uint8List pcm;
   StreamController<Uint8List>? _active;
+  int? _tailOffset;
   bool _closed = false;
   int startCalls = 0, stopCalls = 0, filesWritten = 0;
 
   @override
-  Future<bool> hasPermission() async => true;
+  Future<bool> hasPermission({required bool request}) async => true;
 
   @override
-  Future<Stream<Uint8List>> start() async {
+  Future<Stream<Uint8List>> startStream(RecordConfig config) async {
+    expect(config.encoder, AudioEncoder.pcm16bits);
+    expect(config.sampleRate, speechSampleRate);
+    expect(config.numChannels, 1);
+    expect(config.device!.id, 'synthetic-default-input');
     if (_closed || _active != null) {
       throw const SpeechInputFailure(
         SpeechInputFailureCode.microphoneUnavailable,
@@ -742,6 +747,7 @@ final class _WavStreamRecorder implements SpeechRecorderPort {
     startCalls++;
     final controller = StreamController<Uint8List>(sync: true);
     _active = controller;
+    _tailOffset = null;
     return controller.stream;
   }
 
@@ -752,11 +758,13 @@ final class _WavStreamRecorder implements SpeechRecorderPort {
         SpeechInputFailureCode.microphoneUnavailable,
       );
     }
-    const chunkSize = 4096;
-    for (var offset = 0; offset < pcm.length; offset += chunkSize) {
-      final end = min(offset + chunkSize, pcm.length);
+    const chunkSize = 4095;
+    final bodyEnd = pcm.length - 127;
+    for (var offset = 0; offset < bodyEnd; offset += chunkSize) {
+      final end = min(offset + chunkSize, bodyEnd);
       controller.add(Uint8List.sublistView(pcm, offset, end));
     }
+    _tailOffset = bodyEnd;
   }
 
   @override
@@ -764,11 +772,16 @@ final class _WavStreamRecorder implements SpeechRecorderPort {
     stopCalls++;
     final controller = _active;
     _active = null;
+    final tail = _tailOffset;
+    _tailOffset = null;
+    if (controller != null && tail != null) {
+      controller.add(Uint8List.sublistView(pcm, tail));
+    }
     await controller?.close();
   }
 
   @override
-  Future<void> close() async {
+  Future<void> dispose() async {
     if (_closed) return;
     if (_active != null) await stop();
     _closed = true;

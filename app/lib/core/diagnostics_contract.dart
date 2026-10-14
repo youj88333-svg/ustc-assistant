@@ -240,6 +240,7 @@ enum DiagnosticPhase {
   refreshing,
   loadingModels,
   generating,
+  compacting,
   executingRead,
   waitingForApproval,
   waitingForSchool,

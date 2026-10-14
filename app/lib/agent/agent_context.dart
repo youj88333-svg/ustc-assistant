@@ -60,6 +60,36 @@ List<ModelChatMessage> buildAgentConversationContext(
   ]);
 }
 
+/// Compression receives user intent and safe plain chat, never prior tool data,
+/// action permissions, identifiers, images, or old business evidence.
+String buildAgentCompactInput(
+  List<AgentMessage> history, {
+  String summary = '',
+}) {
+  final rows = <String>[];
+  var used = 0;
+  for (final message in history.reversed) {
+    if (message.role != AgentMessageRole.user ||
+        message.status != AgentMessageStatus.complete ||
+        message.imageCount != 0 ||
+        !_isSafeHistoryText(message.text)) {
+      continue;
+    }
+    final row = _takeCharacters(message.text.trim(), 1200);
+    if (used + row.length > 14000) break;
+    rows.add(row);
+    used += row.length;
+  }
+  return [
+    if (summary.isNotEmpty && _isSafeHistoryText(summary))
+      '旧摘要（仅历史）:\n$summary',
+    ...rows.reversed.map((row) => '用户曾说：$row'),
+  ].join('\n');
+}
+
+String? safeAgentHistoricalSummary(String summary) =>
+    summary.trim().isNotEmpty && _isSafeHistoryText(summary) ? summary : null;
+
 bool _isEligiblePair(AgentMessage user, AgentMessage assistant) {
   if (user.role != AgentMessageRole.user ||
       assistant.role != AgentMessageRole.assistant ||
@@ -67,6 +97,9 @@ bool _isEligiblePair(AgentMessage user, AgentMessage assistant) {
       assistant.status != AgentMessageStatus.complete ||
       _hasStructuredContent(user) ||
       _hasStructuredContent(assistant) ||
+      RegExp(
+        r'\{\s*"(?:entries|items|first_day|coverage)"\s*:|请求参数[：:]|返回值[：:]',
+      ).hasMatch(assistant.text) ||
       user.text.trim().isEmpty ||
       assistant.text.trim().isEmpty) {
     return false;

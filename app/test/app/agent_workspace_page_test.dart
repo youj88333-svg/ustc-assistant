@@ -9,6 +9,7 @@ import 'package:ustc_assistant_m0/app/agent_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_permission_contract.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -44,9 +45,177 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('agent-settings-open')));
     expect(settingsOpened, isTrue);
+    await _enter(tester, 'agent-composer', '可以先输入草稿');
+    expect(_textField(tester, 'agent-composer').controller?.text, '可以先输入草稿');
+    expect(find.byKey(const ValueKey('agent-new-conversation')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-conversation-list')), findsNothing);
     expect(port.sent, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('/clear is a local command and preserves the primary history', (
+    tester,
+  ) async {
+    final port = _FakeConversationCommandsPort(
+      view: _view(
+        conversationId: 'conversation-a',
+        conversations: [_conversation('conversation-a', '主对话')],
+        messages: [
+          AgentMessage(
+            id: 1,
+            role: AgentMessageRole.user,
+            text: '保留在本机历史的数据',
+            status: AgentMessageStatus.complete,
+            createdAtUtc: DateTime.utc(2026, 10, 13),
+          ),
+        ],
+      ),
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(
+      _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('保留在本机历史的数据'), findsOneWidget);
+
+    await _enter(tester, 'agent-composer', '  /clear  ');
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('agent-send')))
+          .onPressed,
+      isNotNull,
+    );
+    await _tap(tester, 'agent-send');
+
+    expect(port.clearConversationCalls, 1);
+    expect(port.clearCalls, isEmpty);
+    expect(port.sent, isEmpty);
+    expect(port.view.conversationId, 'conversation-a');
+    expect(port.view.messages, isEmpty);
+    expect(_textField(tester, 'agent-composer').controller?.text, isEmpty);
+    expect(find.textContaining('原历史记录仍保留'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('/compact stays local and can be stopped while running', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1000, 900));
+    final port = _FakeConversationCommandsPort(view: _configuredView());
+    port.compactGate = Completer<void>();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(
+      _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+    );
+    await tester.pumpAndSettle();
+    await _enter(tester, 'agent-composer', ' /compact ');
+    await tester.tap(find.byKey(const ValueKey('agent-send')));
+    await tester.pump();
+
+    expect(port.compactCalls, 1);
+    expect(port.sent, isEmpty);
+    expect(find.byKey(const ValueKey('agent-stop')), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(find.byKey(const ValueKey('agent-run-progress-status')))
+          .data,
+      '正在整理上下文',
+    );
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('agent-stop')))
+          .onPressed,
+      isNotNull,
+    );
+    final stop = find.byKey(const ValueKey('agent-stop'));
+    await tester.ensureVisible(stop);
+    await tester.pump();
+    await tester.tap(stop);
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(port.stopCalls, 1);
+    expect(port.view.contextCompacted, isFalse);
+    expect(find.textContaining('整理未确认完成'), findsOneWidget);
+    expect(_textField(tester, 'agent-composer').controller?.text, ' /compact ');
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'confirmed compact feedback preserves the complete chat history',
+    (tester) async {
+      final originalMessage = AgentMessage(
+        id: 1,
+        role: AgentMessageRole.user,
+        text: '完整历史继续保留',
+        status: AgentMessageStatus.complete,
+        createdAtUtc: DateTime.utc(2026, 10, 13),
+      );
+      final port = _FakeConversationCommandsPort(
+        view: _configuredView().copyWithForTest(messages: [originalMessage]),
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+      );
+      await tester.pumpAndSettle();
+      await _enter(tester, 'agent-composer', ' /compact ');
+      await _tap(tester, 'agent-send');
+
+      expect(port.compactCalls, 1);
+      expect(port.sent, isEmpty);
+      expect(port.view.contextCompacted, isTrue);
+      expect(port.view.messages.single.text, '完整历史继续保留');
+      expect(find.text('上下文已整理，完整聊天记录仍保留。'), findsOneWidget);
+      expect(_textField(tester, 'agent-composer').controller?.text, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'local commands reject images and unknown slash text stays ordinary',
+    (tester) async {
+      final commandPort = _FakeConversationCommandsPort(
+        view: _configuredView(),
+      );
+      final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
+      addTearDown(commandPort.dispose);
+      await tester.pumpWidget(
+        _host(
+          AgentWorkspacePage(
+            controller: commandPort,
+            onSettings: () {},
+            pickImages: () async => [selected],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _tap(tester, 'agent-attach-image');
+      await _enter(tester, 'agent-composer', '/compact');
+      await _tap(tester, 'agent-send');
+      expect(commandPort.compactCalls, 0);
+      expect(commandPort.sent, isEmpty);
+      expect(find.text('本地命令不能附带图片；请先移除附图再执行。'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('agent-image-preview-0')),
+        findsOneWidget,
+      );
+
+      final plainPort = _FakeAgentPort(view: _configuredView());
+      addTearDown(plainPort.dispose);
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: plainPort, onSettings: () {})),
+      );
+      await tester.pumpAndSettle();
+      await _enter(tester, 'agent-composer', '/not-a-local-command');
+      await _tap(tester, 'agent-send');
+      expect(plainPort.sent, ['/not-a-local-command']);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('canSend submits and a generating request can be stopped', (
     tester,
@@ -195,9 +364,23 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(
+          const ValueKey('agent-query-details-toggle-conversation-a:100'),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('agent-action-plan-history')),
+        findsNothing,
+      );
+      expect(find.text('本地实际提交 2 项'), findsNothing);
+      await _tap(tester, 'agent-query-details-toggle-conversation-a:100');
       expect(find.textContaining('已提交 · 历史记录'), findsOneWidget);
       expect(find.text('本地实际提交 2 项'), findsOneWidget);
       expect(find.text('这是历史记录，不提供再次批准操作。'), findsOneWidget);
+      expect(find.textContaining('本次确认'), findsNothing);
+      expect(find.textContaining('已保存授权'), findsNothing);
       expect(
         find.byKey(const ValueKey('agent-action-approve-plan-history')),
         findsNothing,
@@ -220,6 +403,48 @@ void main() {
       await _tap(tester, 'agent-action-reject-plan-next');
       expect(port.rejectedActionIds, ['plan-next']);
       expect(port.approvedActionIds, ['plan-current']);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets(
+    'remembered approval is optional and scoped to the current card',
+    (tester) async {
+      final proposal = _action(
+        id: 'plan-remembered',
+        kind: AgentActionKind.localPlan,
+        status: AgentActionStatus.proposed,
+        title: '创建一个任务',
+        details: const ['操作类别：创建任务。'],
+      );
+      final port = _FakePermissionAgentPort(
+        view: _view(
+          phase: AgentPhase.waitingForApproval,
+          settings: _settings(
+            keySaved: true,
+            consent: true,
+            modelId: 'model-a',
+          ),
+          conversationId: 'conversation-a',
+          pendingAction: proposal,
+        ),
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+      );
+      await tester.pumpAndSettle();
+      final remember = find.byKey(
+        const ValueKey('agent-action-remember-plan-remembered'),
+      );
+      expect(remember, findsOneWidget);
+      expect(tester.widget<CheckboxListTile>(remember).value, isFalse);
+      expect(find.textContaining('本卡涉及的固定工具和操作类别'), findsOneWidget);
+      await _tap(tester, 'agent-action-remember-plan-remembered');
+      await _tap(tester, 'agent-action-approve-plan-remembered');
+      expect(port.rememberedApprovalIds, ['plan-remembered']);
+      expect(port.approvedActionIds, isEmpty);
       expect(tester.takeException(), isNull);
     },
   );
@@ -441,6 +666,7 @@ void main() {
       AgentPhase.waitingForApproval: '等待你批准方案…',
       AgentPhase.waitingForSchool: '等待你在学校页面继续…',
       AgentPhase.committing: '正在提交本地修改…',
+      AgentPhase.compacting: '正在整理对话上下文…',
     };
     for (final entry in expected.entries) {
       port.replace(port.view.copyWithForTest(phase: entry.key));
@@ -562,50 +788,6 @@ void main() {
 
     pickGate.complete([selected]);
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
-    expect(selected.bytes.every((byte) => byte == 0), isTrue);
-    expect(tester.takeException(), isNull);
-  });
-
-  testWidgets('clearing history invalidates a pending image pick', (
-    tester,
-  ) async {
-    final port = _configuredPort();
-    addTearDown(port.dispose);
-    final pickGate = Completer<List<AgentImage>>();
-    final selected = AgentImage(Uint8List.fromList(_testPng1x1()));
-
-    await tester.pumpWidget(
-      _host(
-        AgentWorkspacePage(
-          controller: port,
-          onSettings: () {},
-          pickImages: () => pickGate.future,
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
-    await tester.pump();
-    await tester.tap(find.byKey(const ValueKey('agent-history-menu')));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(find.text('清除全部对话…'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(
-      find.byKey(const ValueKey('agent-history-clear-first-confirm')),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-    await tester.tap(
-      find.byKey(const ValueKey('agent-history-clear-final-confirm')),
-    );
-    await tester.pumpAndSettle();
-
-    pickGate.complete([selected]);
-    await tester.pumpAndSettle();
-    expect(port.clearCalls.single.confirmed, isTrue);
     expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
     expect(selected.bytes.every((byte) => byte == 0), isTrue);
     expect(tester.takeException(), isNull);
@@ -757,7 +939,7 @@ void main() {
       expect(find.textContaining('【出处 1】', findRichText: true), findsOneWidget);
       expect(find.text('e_0123456789abcdef'), findsNothing);
       expect(find.textContaining('【引用未验证', findRichText: true), findsOneWidget);
-      expect(find.text('查询详情 · 2 个步骤 · 1 处出处'), findsOneWidget);
+      expect(find.text('处理详情 · 2 个步骤 · 1 处出处 · 0 项操作'), findsOneWidget);
       expect(find.textContaining('历史材料，下轮须重新查询'), findsNothing);
       expect(find.text('本科教学安排'), findsNothing);
       expect(find.textContaining('位置 正文第 2 段'), findsNothing);
@@ -820,8 +1002,9 @@ void main() {
   );
 
   testWidgets(
-    'query details expand independently per message and conversation',
+    'query and action details expand independently per message in the single chat',
     (tester) async {
+      await _setSize(tester, const Size(1000, 1100));
       AgentEvidence evidence(String id, String title) => AgentEvidence(
         id: id,
         provider: 'teach',
@@ -836,6 +1019,7 @@ void main() {
         required String text,
         required String tool,
         required AgentEvidence evidence,
+        required List<AgentActionView> actions,
       }) => AgentMessage(
         id: id,
         role: AgentMessageRole.assistant,
@@ -844,6 +1028,7 @@ void main() {
         createdAtUtc: DateTime.utc(2026, 10, 13),
         evidence: [evidence],
         steps: [AgentToolStep(tool: tool, status: 'success')],
+        actions: actions,
       );
 
       final firstAnswer = answer(
@@ -851,18 +1036,32 @@ void main() {
         text: '第一条回答保持可见。',
         tool: 'query_agenda',
         evidence: evidence('e_0123456789abc001', '第一条出处'),
+        actions: [
+          _action(
+            id: 'confirmed-history',
+            kind: AgentActionKind.localPlan,
+            status: AgentActionStatus.committed,
+            title: '第一条处理记录',
+            authorization: AgentActionAuthorization.confirmed,
+            committedCount: 1,
+          ),
+        ],
       );
       final secondAnswer = answer(
         id: 21,
         text: '第二条回答保持可见。',
         tool: 'browse_campus',
         evidence: evidence('e_0123456789abc002', '第二条出处'),
-      );
-      final otherConversationAnswer = answer(
-        id: 20,
-        text: '另一个会话的回答。',
-        tool: 'search_knowledge',
-        evidence: evidence('e_0123456789abc003', '另一个会话的出处'),
+        actions: [
+          _action(
+            id: 'remembered-history',
+            kind: AgentActionKind.localPlan,
+            status: AgentActionStatus.committed,
+            title: '第二条处理记录',
+            authorization: AgentActionAuthorization.remembered,
+            committedCount: 1,
+          ),
+        ],
       );
       final port = _FakeAgentPort(
         view: _view(
@@ -890,35 +1089,38 @@ void main() {
       expect(find.text('第二条回答保持可见。'), findsOneWidget);
       expect(find.text('第一条出处'), findsNothing);
       expect(find.text('第二条出处'), findsNothing);
-      final firstDetails = find.byKey(
-        const ValueKey('agent-query-details-toggle-conversation-a:20'),
-      );
-      await tester.tap(firstDetails);
+      expect(find.text('第一条处理记录'), findsNothing);
+      expect(find.text('第二条处理记录'), findsNothing);
+      expect(find.textContaining('本次确认'), findsNothing);
+      expect(find.textContaining('已保存授权'), findsNothing);
+      await _tap(tester, 'agent-query-details-toggle-conversation-a:20');
       await tester.pumpAndSettle();
       expect(find.text('第一条出处'), findsOneWidget);
       expect(find.text('第二条出处'), findsNothing);
+      expect(find.text('第一条处理记录'), findsOneWidget);
+      expect(find.text('第二条处理记录'), findsNothing);
+      expect(find.textContaining('本次确认'), findsOneWidget);
+      expect(find.textContaining('已保存授权'), findsNothing);
       expect(find.text('日程 · 已完成'), findsOneWidget);
       expect(find.text('校园公开资料 · 已完成'), findsNothing);
-
-      port.replace(
-        port.view.copyWithForTest(
-          conversationId: 'conversation-b',
-          messages: [otherConversationAnswer],
-        ),
-      );
-      await tester.pumpAndSettle();
-      expect(find.text('另一个会话的回答。'), findsOneWidget);
-      expect(find.text('另一个会话的出处'), findsNothing);
-
-      port.replace(
-        port.view.copyWithForTest(
-          conversationId: 'conversation-a',
-          messages: [firstAnswer, secondAnswer],
-        ),
-      );
+      await _tap(tester, 'agent-query-details-toggle-conversation-a:21');
       await tester.pumpAndSettle();
       expect(find.text('第一条出处'), findsOneWidget);
-      expect(find.text('第二条出处'), findsNothing);
+      expect(find.text('第二条出处'), findsOneWidget);
+      expect(find.text('第一条处理记录'), findsOneWidget);
+      expect(find.text('第二条处理记录'), findsOneWidget);
+      expect(find.textContaining('本次确认'), findsOneWidget);
+      expect(find.textContaining('已保存授权'), findsOneWidget);
+      expect(find.text('日程 · 已完成'), findsOneWidget);
+      expect(find.text('校园公开资料 · 已完成'), findsOneWidget);
+      await _tap(tester, 'agent-query-details-toggle-conversation-a:20');
+      await tester.pumpAndSettle();
+      expect(find.text('第一条出处'), findsNothing);
+      expect(find.text('第二条出处'), findsOneWidget);
+      expect(find.text('第一条处理记录'), findsNothing);
+      expect(find.text('第二条处理记录'), findsOneWidget);
+      expect(find.textContaining('本次确认'), findsNothing);
+      expect(find.textContaining('已保存授权'), findsOneWidget);
       expect(tester.takeException(), isNull);
     },
   );
@@ -1085,51 +1287,6 @@ void main() {
   );
 
   testWidgets(
-    'clearing history does not continue after the page is unmounted',
-    (tester) async {
-      final port = _FakeAgentPort(
-        view: _view(
-          conversations: [_conversation('conversation-a', '当前对话')],
-          conversationId: 'conversation-a',
-        ),
-      );
-      final pageVisible = ValueNotifier(true);
-      addTearDown(port.dispose);
-      addTearDown(pageVisible.dispose);
-
-      await tester.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ValueListenableBuilder<bool>(
-              valueListenable: pageVisible,
-              builder: (context, visible, _) => visible
-                  ? AgentWorkspacePage(controller: port, onSettings: () {})
-                  : const SizedBox.shrink(),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const ValueKey('agent-history-menu')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.text('清除当前对话…'));
-      await tester.pumpAndSettle();
-      expect(find.text('清除当前对话？'), findsOneWidget);
-
-      pageVisible.value = false;
-      await tester.pump();
-      await tester.tap(
-        find.byKey(const ValueKey('agent-history-clear-first-confirm')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(find.text('再确认一次'), findsNothing);
-      expect(port.clearCalls, isEmpty);
-      expect(tester.takeException(), isNull);
-    },
-  );
-
-  testWidgets(
     'saved model consent can be revoked and renewed without deleting its key',
     (tester) async {
       final port = _FakeAgentPort(
@@ -1153,10 +1310,124 @@ void main() {
       expect(port.consentCalls, [false, true]);
       expect(port.view.canSend, isTrue);
       expect(port.deleteKeyCalls, 0);
+      expect(
+        find.byKey(const ValueKey('agent-permissions-empty')),
+        findsNothing,
+      );
     },
   );
 
-  testWidgets('narrow chat and settings layouts remain within the viewport', (
+  testWidgets(
+    'remembered action permissions can be read and revoked one by one',
+    (tester) async {
+      final remembered = AgentPermissionReference(
+        AgentPermissionCategory.createTask,
+        7,
+      );
+      final port = _FakePermissionAgentPort(
+        view: _view(
+          settings: _settings(
+            keySaved: true,
+            consent: true,
+            modelId: 'model-a',
+          ),
+        ),
+        actionPermissions: [remembered],
+      );
+      addTearDown(port.dispose);
+
+      await tester.pumpWidget(_host(AgentSettingsPanel(controller: port)));
+      await tester.pumpAndSettle();
+      expect(find.text('创建任务'), findsOneWidget);
+      expect(port.permissionReadCalls, 1);
+
+      await _tap(tester, 'agent-settings-delete-key');
+      await _tap(tester, 'agent-settings-delete-key-confirm');
+      expect(port.deleteKeyCalls, 1);
+      expect(port.actionPermissions, [remembered]);
+      expect(find.text('创建任务'), findsOneWidget);
+
+      await _tap(tester, 'agent-permission-revoke-createTask:7');
+      expect(port.revokedPermissions, [remembered]);
+      expect(port.actionPermissions, isEmpty);
+      expect(
+        find.byKey(const ValueKey('agent-permissions-empty')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('permission list reports a bounded read failure and can retry', (
+    tester,
+  ) async {
+    final port = _FakePermissionAgentPort()
+      ..permissionReadError = StateError('private detail');
+    addTearDown(port.dispose);
+    await tester.pumpWidget(_host(AgentSettingsPanel(controller: port)));
+    await tester.pumpAndSettle();
+
+    expect(find.text('无法读取已记住的操作授权，请重试。'), findsOneWidget);
+    expect(find.textContaining('private detail'), findsNothing);
+    await _tap(tester, 'agent-permissions-reload');
+    expect(port.permissionReadCalls, 2);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'late permission reads are ignored after port swap and disposal',
+    (tester) async {
+      final delayed = _FakePermissionAgentPort();
+      final replacement = _FakePermissionAgentPort(
+        actionPermissions: [
+          const AgentPermissionReference(AgentPermissionCategory.updateTask, 2),
+        ],
+      );
+      delayed.permissionReadGate = Completer<List<AgentPermissionReference>>();
+      final currentPort = ValueNotifier<AgentWorkspacePort>(delayed);
+      addTearDown(delayed.dispose);
+      addTearDown(replacement.dispose);
+      addTearDown(currentPort.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: ValueListenableBuilder<AgentWorkspacePort>(
+              valueListenable: currentPort,
+              builder: (context, port, _) =>
+                  AgentSettingsPanel(controller: port),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      currentPort.value = replacement;
+      await tester.pump();
+      await tester.pumpAndSettle();
+      expect(find.text('修改任务'), findsOneWidget);
+
+      delayed.permissionReadGate!.complete([
+        const AgentPermissionReference(AgentPermissionCategory.createTask, 1),
+      ]);
+      await tester.pumpAndSettle();
+      expect(find.text('创建任务'), findsNothing);
+      expect(find.text('修改任务'), findsOneWidget);
+
+      final disposed = _FakePermissionAgentPort();
+      disposed.permissionReadGate = Completer<List<AgentPermissionReference>>();
+      await tester.pumpWidget(_host(AgentSettingsPanel(controller: disposed)));
+      await tester.pump();
+      await tester.pumpWidget(const SizedBox.shrink());
+      disposed.permissionReadGate!.complete([
+        const AgentPermissionReference(AgentPermissionCategory.createTask, 3),
+      ]);
+      await tester.pump();
+      expect(tester.takeException(), isNull);
+      disposed.dispose();
+    },
+  );
+
+  testWidgets('narrow single chat and settings fit within the viewport', (
     tester,
   ) async {
     await _setSize(tester, const Size(360, 720));
@@ -1176,11 +1447,10 @@ void main() {
       _host(AgentWorkspacePage(controller: port, onSettings: () {})),
     );
     await tester.pumpAndSettle();
-    await _tap(tester, 'agent-sessions-toggle');
-    expect(
-      find.byKey(const ValueKey('agent-conversation-list')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('agent-conversation-list')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-new-conversation')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-history-menu')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-composer')), findsOneWidget);
     expect(tester.takeException(), isNull);
 
     await tester.pumpWidget(_host(AgentSettingsPanel(controller: port)));
@@ -1240,6 +1510,7 @@ AgentWorkspaceView _view({
   int toolCalls = 0,
   int modelCalls = 0,
   AgentActionView? pendingAction,
+  bool contextCompacted = false,
 }) => AgentWorkspaceView(
   phase: phase,
   settings: settings,
@@ -1256,6 +1527,7 @@ AgentWorkspaceView _view({
   toolCalls: toolCalls,
   modelCalls: modelCalls,
   pendingAction: pendingAction,
+  contextCompacted: contextCompacted,
 );
 
 AgentActionView _action({
@@ -1263,6 +1535,7 @@ AgentActionView _action({
   required AgentActionKind kind,
   required AgentActionStatus status,
   required String title,
+  AgentActionAuthorization authorization = AgentActionAuthorization.legacy,
   List<String> details = const [],
   int committedCount = 0,
   String warning = '',
@@ -1272,6 +1545,7 @@ AgentActionView _action({
   status: status,
   title: title,
   details: details,
+  authorization: authorization,
   committedCount: committedCount,
   warning: warning,
 );
@@ -1433,6 +1707,101 @@ final class _FakeActionAgentPort extends _FakeAgentPort
   }
 }
 
+final class _FakeConversationCommandsPort extends _FakeActionAgentPort
+    implements AgentConversationCommandsWorkspacePort {
+  _FakeConversationCommandsPort({super.view});
+
+  int compactCalls = 0;
+  int clearConversationCalls = 0;
+  Completer<void>? compactGate;
+  bool _compactStopped = false;
+
+  @override
+  Future<void> compactConversation() async {
+    compactCalls++;
+    _compactStopped = false;
+    replace(
+      view.copyWithForTest(
+        phase: AgentPhase.compacting,
+        contextCompacted: false,
+      ),
+    );
+    final gate = compactGate;
+    if (gate != null) await gate.future;
+    replace(
+      view.copyWithForTest(
+        phase: AgentPhase.idle,
+        contextCompacted: !_compactStopped,
+      ),
+    );
+  }
+
+  @override
+  Future<void> clearConversation() async {
+    clearConversationCalls++;
+    replace(
+      view.copyWithForTest(
+        phase: AgentPhase.idle,
+        messages: const [],
+        clearPendingAction: true,
+        contextCompacted: false,
+      ),
+    );
+  }
+
+  @override
+  Future<void> stop() async {
+    stopCalls++;
+    if (view.phase == AgentPhase.compacting) {
+      _compactStopped = true;
+      final gate = compactGate;
+      if (gate != null && !gate.isCompleted) gate.complete();
+    }
+    replace(view.copyWithForTest(phase: AgentPhase.idle));
+  }
+}
+
+final class _FakePermissionAgentPort extends _FakeActionAgentPort
+    implements AgentPermissionWorkspacePort {
+  _FakePermissionAgentPort({
+    super.view,
+    List<AgentPermissionReference> actionPermissions = const [],
+  }) : actionPermissions = [...actionPermissions];
+
+  final List<AgentPermissionReference> actionPermissions;
+  final List<AgentPermissionReference> revokedPermissions = [];
+  final List<String> rememberedApprovalIds = [];
+  int permissionReadCalls = 0;
+  Completer<List<AgentPermissionReference>>? permissionReadGate;
+  Object? permissionReadError;
+
+  @override
+  Future<void> approveAndRememberAction(String actionId) async {
+    rememberedApprovalIds.add(actionId);
+  }
+
+  @override
+  Future<List<AgentPermissionReference>> readActionPermissions() async {
+    permissionReadCalls++;
+    if (permissionReadError != null) throw permissionReadError!;
+    final gate = permissionReadGate;
+    if (gate != null) return gate.future;
+    return List.unmodifiable(actionPermissions);
+  }
+
+  @override
+  Future<void> revokeActionPermission(
+    AgentPermissionReference reference,
+  ) async {
+    revokedPermissions.add(reference);
+    actionPermissions.removeWhere(
+      (item) =>
+          item.category == reference.category &&
+          item.revision == reference.revision,
+    );
+  }
+}
+
 final class _FakePreferencesAgentPort extends _FakeActionAgentPort
     implements AgentPreferencesWorkspacePort {
   _FakePreferencesAgentPort({super.view});
@@ -1470,6 +1839,7 @@ extension on AgentWorkspaceView {
     int? toolCalls,
     int? modelCalls,
     AgentActionView? pendingAction,
+    bool? contextCompacted,
     bool clearPendingAction = false,
   }) => AgentWorkspaceView(
     phase: phase ?? this.phase,
@@ -1489,11 +1859,15 @@ extension on AgentWorkspaceView {
     pendingAction: clearPendingAction
         ? null
         : pendingAction ?? this.pendingAction,
+    contextCompacted: contextCompacted ?? this.contextCompacted,
   );
 }
 
 TextField _keyField(WidgetTester tester) =>
-    tester.widget(find.byKey(const ValueKey('agent-settings-key')));
+    tester.widget<TextField>(find.byKey(const ValueKey('agent-settings-key')));
+
+TextField _textField(WidgetTester tester, String key) =>
+    tester.widget<TextField>(find.byKey(ValueKey(key)));
 
 ButtonStyleButton _button(WidgetTester tester, String key) =>
     tester.widget(find.byKey(ValueKey(key)));
@@ -1542,18 +1916,18 @@ Future<void> _tap(WidgetTester tester, String key) async {
 
 AgentWorkspaceView _viewDefault() => AgentWorkspaceView();
 
-_FakeAgentPort _configuredPort() => _FakeAgentPort(
-  view: _view(
-    settings: _settings(
-      keySaved: true,
-      consent: true,
-      modelId: 'model-a',
-      report: const AgentCapabilityReport(text: true, streaming: true),
-    ),
-    conversationId: 'conversation-a',
-    conversations: [_conversation('conversation-a', '当前对话')],
+AgentWorkspaceView _configuredView() => _view(
+  settings: _settings(
+    keySaved: true,
+    consent: true,
+    modelId: 'model-a',
+    report: const AgentCapabilityReport(text: true, streaming: true),
   ),
+  conversationId: 'conversation-a',
+  conversations: [_conversation('conversation-a', '当前对话')],
 );
+
+_FakeAgentPort _configuredPort() => _FakeAgentPort(view: _configuredView());
 
 Uint8List _testPng1x1() => base64.decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL+XwAAAABJRU5ErkJggg==',

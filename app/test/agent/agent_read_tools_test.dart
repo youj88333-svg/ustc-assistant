@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
+import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
@@ -35,6 +36,89 @@ const _blockReference = CalendarReference(
 final _now = DateTime.utc(2026, 10, 13, 1);
 
 void main() {
+  test('notes are selected-only and require current human scope', () async {
+    final rig = _Rig(
+      calendar: _FakeCalendar(items: [_event(note: 'selected-note-sentinel')]),
+    );
+    final session = rig.tools.openSession();
+    final listed = await session.execute(
+      _call(
+        'query_agenda',
+        '{"first_day":"2026-10-13","end_day_exclusive":"2026-10-14"}',
+      ),
+    );
+    final row = (listed.data['items'] as List).single as Map;
+    expect(row['attendance'], 'undecided');
+    expect(row['listening'], 'undecided');
+    expect(
+      jsonEncode(listed.toMap()),
+      isNot(contains('selected-note-sentinel')),
+    );
+    final args = jsonEncode({
+      'event_ref': row['event_ref'],
+      'include_note': true,
+    });
+    final rejected = await session.execute(_call('read_event', args));
+    expect(rejected.failure, 'consentRequired');
+    (session as AgentPersonalReadScopeSession).bindHumanReadScope('请读这条日程的备注');
+    final accepted = await session.execute(_call('read_event', args));
+    expect(accepted.data['note'], 'selected-note-sentinel');
+    expect(
+      jsonEncode(session.evidence.map((e) => e.snippet).toList()),
+      isNot(contains('selected-note-sentinel')),
+    );
+    final other = rig.tools.openSession();
+    expect((await other.execute(_call('read_event', args))).status, 'stale');
+  });
+
+  test('task body and note are opt-in for a currently selected task', () async {
+    final rig = _Rig(
+      tasks: _FakeTasks(
+        task: _task(
+          description: 'task-body-sentinel',
+          note: 'task-note-sentinel',
+        ),
+      ),
+    );
+    final session = rig.tools.openSession();
+    final listed = await session.execute(_call('query_tasks', '{}'));
+    final row = (listed.data['items'] as List).single as Map;
+    expect(jsonEncode(listed.toMap()), isNot(contains('task-note-sentinel')));
+    final args = jsonEncode({
+      'task_ref': row['task_ref'],
+      'include_details': true,
+    });
+    expect(
+      (await session.execute(_call('read_task', args))).failure,
+      'consentRequired',
+    );
+    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
+      '读这个任务的正文和备注',
+    );
+    final accepted = await session.execute(_call('read_task', args));
+    expect(accepted.data['description'], 'task-body-sentinel');
+    expect(accepted.data['note'], 'task-note-sentinel');
+    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
+      '请查看任务的正文，不要读备注',
+    );
+    final bodyOnly = await session.execute(_call('read_task', args));
+    expect(bodyOnly.data['description'], 'task-body-sentinel');
+    expect(bodyOnly.data.containsKey('note'), isFalse);
+    expect(jsonEncode(bodyOnly.toMap()), isNot(contains('task-note-sentinel')));
+    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
+      '请看任务的备注，不要读取正文',
+    );
+    final noteOnly = await session.execute(_call('read_task', args));
+    expect(noteOnly.data['note'], 'task-note-sentinel');
+    expect(noteOnly.data.containsKey('description'), isFalse);
+    for (final question in ['不要读取备注或任务正文', '不读任务备注', '把任务备注改成待复习']) {
+      (session as AgentPersonalReadScopeSession).bindHumanReadScope(question);
+      final denied = await session.execute(_call('read_task', args));
+      expect(denied.failure, 'consentRequired', reason: question);
+      expect(denied.data, isEmpty);
+    }
+  });
+
   group('AgentReadTools fixed registry and validation', () {
     test(
       'exposes exactly twelve closed schemas and rejects unknown tools',

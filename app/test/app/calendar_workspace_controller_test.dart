@@ -8,6 +8,7 @@ import 'package:ustc_assistant_m0/app/calendar_workspace_controller.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_port.dart';
 import 'package:ustc_assistant_m0/jobs/young_sync_port.dart';
 
@@ -41,6 +42,107 @@ void main() {
       expect(controller.view.mode, CalendarViewMode.week);
       expect(controller.view.canWrite, isTrue);
       expect(shell.view.accountBound, isFalse);
+    },
+  );
+
+  test(
+    'calendar all-task projection leaves task-page filter and selection intact',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final active = _taskRecord(_context, 31, '保留筛选');
+      final completed = _taskRecord(
+        _context,
+        32,
+        '已经完成的任务',
+        status: TaskStatus.completed,
+      );
+      final tasks = _Tasks(records: [active, completed]);
+      final controller = _controller(data, shell, tasks: tasks);
+      final query = TaskQuery(
+        filter: TaskFilter.active,
+        keyword: '保留',
+        limit: 7,
+      );
+      await controller.loadTasks(query: query);
+      await controller.selectTask(active.reference);
+      final taskWindow = controller.taskView.window;
+      final taskDetail = controller.taskView.detail;
+
+      await controller.loadCalendarTasks();
+
+      expect(tasks.lastQuery!.filter, TaskFilter.all);
+      expect(tasks.lastQuery!.limit, 500);
+      expect(controller.calendarTasks!.items, [active, completed]);
+      expect(controller.calendarTasks!.query.filter, TaskFilter.all);
+      expect(controller.taskView.query, same(query));
+      expect(controller.taskView.window, same(taskWindow));
+      expect(controller.taskView.detail, same(taskDetail));
+      expect(controller.nowUtc, DateTime.utc(2026, 10, 12, 1));
+      expect(controller.calendarTasksLoading, isFalse);
+      expect(controller.calendarTasksFailure, isNull);
+    },
+  );
+
+  test(
+    'calendar projection reports failure and truncation independently',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final task = _taskRecord(_context, 33, '合成任务');
+      final tasks = _Tasks(records: [task]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.loadTasks();
+      tasks.queryHandler = (_) => Future.error(
+        const CalendarFailure(CalendarFailureCode.ownershipLost),
+      );
+
+      await controller.loadCalendarTasks();
+      expect(controller.calendarTasks, isNull);
+      expect(
+        controller.calendarTasksFailure,
+        CalendarFailureCode.ownershipLost,
+      );
+      expect(controller.taskView.failure, isNull);
+
+      tasks.queryHandler = (query) async => TaskWindow(
+        context: tasks.context,
+        revision: tasks.revision,
+        query: query,
+        items: [task],
+        matched: 501,
+        truncated: true,
+      );
+      await controller.loadCalendarTasks();
+      expect(controller.calendarTasksFailure, isNull);
+      expect(controller.calendarTasks!.truncated, isTrue);
+      expect(controller.calendarTasks!.matched, 501);
+      expect(controller.taskView.failure, isNull);
+    },
+  );
+
+  test(
+    'maintenance reopen refreshes the independent all-task projection',
+    () async {
+      final data = _Data();
+      final shell = _Shell();
+      final task = _taskRecord(_context, 34, '重开后任务');
+      final tasks = _Tasks(records: [task]);
+      final controller = _controller(data, shell, tasks: tasks);
+      await controller.loadCalendarTasks();
+      final oldProjection = controller.calendarTasks;
+      tasks.queries = 0;
+
+      await controller.resetAfterMaintenance(
+        const DisplayPreferences(calendarView: DefaultCalendarView.day),
+        resetDay: false,
+      );
+
+      expect(tasks.queries, 2);
+      expect(controller.calendarTasks, isNot(same(oldProjection)));
+      expect(controller.calendarTasks!.items, [task]);
+      expect(controller.calendarTasks!.query.filter, TaskFilter.all);
+      expect(controller.view.mode, CalendarViewMode.day);
     },
   );
 
@@ -234,11 +336,17 @@ void main() {
 
       final taskWindow = Completer<TaskWindow>();
       final taskWindowEntered = Completer<void>();
+      final calendarTasksWindow = Completer<TaskWindow>();
+      final calendarTasksWindowEntered = Completer<void>();
       final taskUndo = Completer<CalendarUndoView>();
       final taskUndoEntered = Completer<void>();
       final taskDetail = Completer<TaskDetail>();
       final taskDetailEntered = Completer<void>();
-      tasks.queryHandler = (_) {
+      tasks.queryHandler = (query) {
+        if (query.filter == TaskFilter.all && query.limit == 500) {
+          calendarTasksWindowEntered.complete();
+          return calendarTasksWindow.future;
+        }
         taskWindowEntered.complete();
         return taskWindow.future;
       };
@@ -314,14 +422,32 @@ void main() {
       );
 
       taskDetail.complete(tasks.detailValue(tasks.records.single.reference));
+      await calendarTasksWindowEntered.future;
+      expect(controller.view.actionPending, isTrue);
+      expect(controller.taskView.actionPending, isTrue);
+      await _failure(
+        controller.execute(
+          CreatePersonalEvent(_draft),
+          expectedContext: data.context,
+        ),
+        CalendarFailureCode.busy,
+      );
+      calendarTasksWindow.complete(
+        tasks.window(const TaskQuery(filter: TaskFilter.all, limit: 500)),
+      );
       await writing;
       expect(controller.view.detail, isNotNull);
       expect(controller.taskView.detail!.task.status, TaskStatus.completed);
       expect(controller.taskView.detail!.task.reference.version, 2);
       expect(controller.view.actionPending, isFalse);
       expect(controller.taskView.actionPending, isFalse);
-      expect(tasks.queries, 2);
+      expect(tasks.queries, 3);
       expect(tasks.undoQueries, 2);
+      expect(
+        controller.calendarTasks!.items.single.status,
+        TaskStatus.completed,
+      );
+      expect(controller.calendarTasks!.query.filter, TaskFilter.all);
     },
   );
 

@@ -7,7 +7,8 @@ final class LocalCalendarStore
         LocalCalendarPort,
         LocalTaskPort,
         CalendarReadGuardPort,
-        AgentLocalPlanPort {
+        AgentLocalPlanPort,
+        AgentLocalPermissionPort {
   LocalCalendarStore._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -44,6 +45,12 @@ final class LocalCalendarStore
   @override
   Future<AgentPlanApproval> approveLocalPlan(AgentLocalPlan plan) =>
       _approveAgentPlan(plan);
+  @override
+  Future<AgentPlanApproval?> authorizeLocalPlan(
+    AgentLocalPlan plan, {
+    required AgentAuthorizationMode mode,
+    bool remember = false,
+  }) => _authorizeAgentPlan(plan, mode: mode, remember: remember);
   @override
   Future<void> rejectLocalPlan(AgentLocalPlan plan) => _rejectAgentPlan(plan);
   @override

@@ -44,3 +44,15 @@ abstract interface class TaskWorkspacePort implements Listenable {
     required CalendarContext expectedContext,
   });
 }
+
+/// An independent all-task projection for the calendar's task band.
+///
+/// Keeping this port separate from [TaskWorkspacePort.taskView] means calendar
+/// browsing cannot replace the task page's filter or selected task.
+abstract interface class CalendarTaskWorkspacePort implements Listenable {
+  TaskWindow? get calendarTasks;
+  DateTime get nowUtc;
+  bool get calendarTasksLoading;
+  CalendarFailureCode? get calendarTasksFailure;
+  Future<void> loadCalendarTasks();
+}

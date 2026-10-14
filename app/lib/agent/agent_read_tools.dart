@@ -204,8 +204,11 @@ final class AgentReadTools implements AgentReadToolsPort {
     ),
     _tool(
       'read_event',
-      '读取本轮查询签发的单个日程详情，不读取私人备注。',
-      {'event_ref': _stringSchema(maxLength: 64)},
+      '读取本轮查询签发的日程和本地出勤、听讲计划；用户明确询问备注时才可设 include_note 读取单项备注。',
+      {
+        'event_ref': _stringSchema(maxLength: 64),
+        'include_note': _boolSchema(),
+      },
       required: const ['event_ref'],
     ),
     _tool('query_tasks', '按状态和标题关键词查询本地任务，不返回任务正文或备注。', {
@@ -215,8 +218,11 @@ final class AgentReadTools implements AgentReadToolsPort {
     }),
     _tool(
       'read_task',
-      '读取本轮查询签发的任务状态与有界时间块，不读取正文或备注。',
-      {'task_ref': _stringSchema(maxLength: 64)},
+      '读取任务状态与有界时间块；用户明确询问任务正文或备注时可设 include_details，只返回本轮请求的私人字段。',
+      {
+        'task_ref': _stringSchema(maxLength: 64),
+        'include_details': _boolSchema(),
+      },
       required: const ['task_ref'],
     ),
     _tool(
@@ -400,6 +406,7 @@ final class _AgentToolSession
     implements
         AgentToolSession,
         AgentLocalReferenceSession,
+        AgentPersonalReadScopeSession,
         AgentDiscussionToolSession {
   _AgentToolSession(this._owner);
   final AgentReadTools _owner;
@@ -413,6 +420,36 @@ final class _AgentToolSession
   final List<_PublicSnapshot> _publicSnapshots = [];
   bool _revoked = false;
   bool _executing = false;
+  bool _notesRequested = false;
+  bool _taskDescriptionRequested = false;
+  bool get _taskDetailsRequested =>
+      _notesRequested || _taskDescriptionRequested;
+  @override
+  void bindHumanReadScope(String question) {
+    _ensureActive();
+    _notesRequested = _asksForPrivateField(question, r'备注|笔记|\bnotes?\b');
+    _taskDescriptionRequested =
+        RegExp(r'任务|\btask\b', caseSensitive: false).hasMatch(question) &&
+        _asksForPrivateField(question, r'正文|内容|描述|\bdescription\b');
+  }
+
+  static bool _asksForPrivateField(String question, String field) {
+    const denied =
+        r'不要|不用|无需|禁止|不能|不准|不许|不(?:读|看|查|访问|发送|显示|公开)|别|勿|do not|don\x27t|never';
+    const span = r'[^，,。.!！;；\r\n]';
+    if (RegExp(
+      '(?:$denied)$span{0,24}(?:$field)|(?:$field)$span{0,12}(?:$denied)',
+      caseSensitive: false,
+    ).hasMatch(question)) {
+      return false;
+    }
+    const reading =
+        r'读|看|查|显示|告诉我|说说|解释|有没有|是什么|写了|写的|记了|记的|what|read|show|check|view|tell';
+    return RegExp(
+      '(?:$reading)$span{0,32}(?:$field)|(?:$field)$span{0,16}(?:$reading|有哪些|是什么|吗|呢|[？?])',
+      caseSensitive: false,
+    ).hasMatch(question);
+  }
 
   @override
   List<AgentEvidence> get evidence => List.unmodifiable(_evidence);
@@ -772,6 +809,8 @@ final class _AgentToolSession
       },
       'hidden': item.hidden,
       'skipped': item.skipped,
+      'attendance': item.attendance.name,
+      'listening': item.listening.name,
       'completed': item.completed,
       'location': location,
       'teachers': details?.teachers,
@@ -904,6 +943,16 @@ final class _AgentToolSession
     final item = detail.occurrence;
     final data = _occurrenceData(item, eventToken: token);
     data['has_occurrence_replacement'] = detail.hasOccurrenceReplacement;
+    if (_boolArg(args, 'include_note', fallback: false)) {
+      if (!_notesRequested) {
+        return _owner._emptyPending(
+          status: 'consentRequired',
+          failure: 'consentRequired',
+        );
+      }
+      AgentText.requireSafe(item.note, maxCharacters: 4000);
+      data['note'] = _clipRunes(item.note, 2000);
+    }
     data['related_decisions'] = detail.relations
         .map((relation) => relation.kind.name)
         .toList();
@@ -1027,6 +1076,21 @@ final class _AgentToolSession
     _ensureActive();
     await _ensureCalendar(issued.context, issued.revision);
     final task = detail.task;
+    final includeDetails = _boolArg(args, 'include_details', fallback: false);
+    if (includeDetails) {
+      if (!_taskDetailsRequested) {
+        return _owner._emptyPending(
+          status: 'consentRequired',
+          failure: 'consentRequired',
+        );
+      }
+      if (_taskDescriptionRequested) {
+        AgentText.requireSafe(task.draft.description, maxCharacters: 8000);
+      }
+      if (_notesRequested) {
+        AgentText.requireSafe(task.draft.note, maxCharacters: 4000);
+      }
+    }
     final allBlocks = detail.blocks;
     final blocks = allBlocks
         .take(_maxListSize)
@@ -1064,6 +1128,15 @@ final class _AgentToolSession
         'estimated_minutes': task.draft.estimatedMinutes,
         'block_count': task.blockCount,
         'blocks': blocks,
+        if (includeDetails) ...{
+          if (_taskDescriptionRequested)
+            'description': _clipRunes(task.draft.description, 800),
+          if (_notesRequested) 'note': _clipRunes(task.draft.note, 800),
+          'private_details_truncated':
+              _taskDescriptionRequested &&
+                  task.draft.description.runes.length > 800 ||
+              _notesRequested && task.draft.note.runes.length > 800,
+        },
         'coverage': _localCoverage(
           scope: '本地任务详情时间块',
           returned: blocks.length,
@@ -2481,9 +2554,9 @@ const _toolArgumentFields = <String, Set<String>>{
     'include_skipped',
     'limit',
   },
-  'read_event': {'event_ref'},
+  'read_event': {'event_ref', 'include_note'},
   'query_tasks': {'filter', 'keywords', 'limit'},
-  'read_task': {'task_ref'},
+  'read_task': {'task_ref', 'include_details'},
   'inspect_conflicts': {'first_day', 'end_day_exclusive', 'filter', 'limit'},
   'search_knowledge': {'keywords', 'provider', 'topic', 'limit', 'cursor'},
   'read_knowledge': {

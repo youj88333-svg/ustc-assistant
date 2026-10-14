@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_page.dart';
+import 'package:ustc_assistant_m0/app/task_workspace_contract.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
@@ -1404,6 +1405,148 @@ void main() {
       port.dispose();
     }
   });
+
+  testWidgets(
+    'task-only dates remain visible in the independent calendar band',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 820));
+      final calendar = _FakeCalendarWorkspacePort();
+      final task = _calendarTask(
+        801,
+        '仅有任务日',
+        deadline: DateTime.utc(2026, 10, 12, 3),
+      );
+      final tasks = _FakeCalendarTaskPort(
+        records: [task],
+        nowUtc: DateTime.utc(2026, 10, 12, 2),
+      );
+      addTearDown(calendar.dispose);
+      addTearDown(tasks.dispose);
+
+      await tester.pumpWidget(_host(calendar, tasks: tasks));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('calendar-task-band')), findsOneWidget);
+      expect(find.text('该日期范围暂无日程'), findsNothing);
+      expect(find.text('仅有任务日'), findsOneWidget);
+      expect(tasks.calendarQueries, 1);
+      final warning = tester.widget<Icon>(
+        find.byKey(const ValueKey('calendar-task-warning-801')),
+      );
+      expect(warning.color, const Color(0xFFB77900));
+
+      await tester.tap(
+        find.byKey(const ValueKey('calendar-task-2026-10-12-801')),
+      );
+      await tester.pumpAndSettle();
+      expect(tasks.selectedReferences.last!.localId, 801);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const ValueKey('task-detail-title')))
+            .data,
+        '仅有任务日',
+      );
+      expect(
+        find.byKey(const ValueKey('task-workspace-detail-card')),
+        findsOneWidget,
+      );
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('calendar task band reports a truncated all-task projection', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1280, 820));
+    final calendar = _FakeCalendarWorkspacePort();
+    final tasks = _FakeCalendarTaskPort(
+      records: [_calendarTask(805, '截断演示任务')],
+      matched: 501,
+      truncated: true,
+    );
+    addTearDown(calendar.dispose);
+    addTearDown(tasks.dispose);
+
+    await tester.pumpWidget(_host(calendar, tasks: tasks));
+    await tester.pumpAndSettle();
+
+    expect(find.text('日历任务栏仅显示前 1 项，共匹配 501 项。'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('calendar-task-unscheduled')),
+      findsOneWidget,
+    );
+    await tester.tap(find.byKey(const ValueKey('calendar-task-unscheduled')));
+    await tester.pumpAndSettle();
+    expect(find.text('截断演示任务'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+    'unscheduled entry opens the task page without assigning a date',
+    (tester) async {
+      await _setSize(tester, const Size(1280, 820));
+      final calendar = _FakeCalendarWorkspacePort();
+      final task = _calendarTask(802, '无截止任务');
+      final tasks = _FakeCalendarTaskPort(records: [task]);
+      addTearDown(calendar.dispose);
+      addTearDown(tasks.dispose);
+
+      await tester.pumpWidget(_host(calendar, tasks: tasks));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('calendar-task-unscheduled')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const ValueKey('calendar-task-2026-10-12-802')),
+        findsNothing,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('calendar-task-unscheduled')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('task-workspace-list')), findsOneWidget);
+      expect(tasks.taskView.query.filter, TaskFilter.all);
+      expect(tasks.taskView.query.keyword, isEmpty);
+      expect(tasks.selectedReferences.last, isNull);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
+  testWidgets('calendar task band handles narrow viewport and large text', (
+    tester,
+  ) async {
+    for (final scenario in const [
+      (size: Size(320, 560), scale: 2.0),
+      (size: Size(560, 560), scale: 1.45),
+    ]) {
+      await _setSize(tester, scenario.size);
+      final calendar = _FakeCalendarWorkspacePort();
+      final tasks = _FakeCalendarTaskPort(
+        records: [
+          _calendarTask(
+            803,
+            '较长任务名称在小屏下需要压缩展示',
+            deadline: DateTime.utc(2026, 10, 12, 3),
+          ),
+          _calendarTask(804, '无截止任务'),
+        ],
+      );
+      await tester.pumpWidget(
+        _host(calendar, tasks: tasks, textScale: scenario.scale),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('calendar-task-band')), findsOneWidget);
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'layout at ${scenario.size}',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      calendar.dispose();
+      tasks.dispose();
+    }
+  });
 }
 
 List<CalendarOccurrence> _compressedBandOccurrences() => [
@@ -1426,21 +1569,31 @@ List<CalendarOccurrence> _compressedBandOccurrences() => [
   ],
 ];
 
-Widget _host(CalendarWorkspacePort controller, {double textScale = 1}) =>
-    MaterialApp(
-      theme: ThemeData(
-        useMaterial3: true,
-        colorSchemeSeed: const Color(0xFF1F6B45),
-      ),
-      home: Builder(
-        builder: (context) => MediaQuery(
-          data: MediaQuery.of(
-            context,
-          ).copyWith(textScaler: TextScaler.linear(textScale)),
-          child: Scaffold(body: CalendarWorkspacePage(controller: controller)),
+Widget _host(
+  CalendarWorkspacePort controller, {
+  TaskWorkspacePort? tasks,
+  DateTime? calendarTaskNowUtc,
+  double textScale = 1,
+}) => MaterialApp(
+  theme: ThemeData(
+    useMaterial3: true,
+    colorSchemeSeed: const Color(0xFF1F6B45),
+  ),
+  home: Builder(
+    builder: (context) => MediaQuery(
+      data: MediaQuery.of(
+        context,
+      ).copyWith(textScaler: TextScaler.linear(textScale)),
+      child: Scaffold(
+        body: CalendarWorkspacePage(
+          controller: controller,
+          tasks: tasks,
+          calendarTaskNowUtc: calendarTaskNowUtc,
         ),
       ),
-    );
+    ),
+  ),
+);
 
 Future<void> _setSize(WidgetTester tester, Size size) async {
   addTearDown(() async {
@@ -1920,3 +2073,145 @@ CalendarOccurrence _copyOccurrence(
   attendance: attendance ?? item.attendance,
   listening: listening ?? item.listening,
 );
+
+const _taskContext = CalendarContext(
+  owner: 'synthetic-task-owner',
+  resetEpoch: 1,
+  agendaEpoch: 1,
+);
+
+TaskRecord _calendarTask(
+  int id,
+  String title, {
+  DateTime? deadline,
+  TaskStatus status = TaskStatus.active,
+}) => TaskRecord(
+  reference: TaskReference(_taskContext, id, 1),
+  draft: TaskDraft(title: title, deadlineAtUtc: deadline),
+  status: status,
+  createdAtUtc: DateTime.utc(2026, 10, 1),
+  updatedAtUtc: DateTime.utc(2026, 10, 12),
+  blockCount: 0,
+);
+
+final class _FakeCalendarTaskPort extends ChangeNotifier
+    implements TaskWorkspacePort, CalendarTaskWorkspacePort {
+  _FakeCalendarTaskPort({
+    required this.records,
+    DateTime? nowUtc,
+    this.matched,
+    this.truncated = false,
+  }) : nowUtc = nowUtc ?? DateTime.utc(2026, 10, 12, 2) {
+    _taskWindow = _window(const TaskQuery());
+    _calendarTasks = _window(
+      const TaskQuery(filter: TaskFilter.all, limit: 500),
+      matched: matched,
+      truncated: truncated,
+    );
+  }
+
+  final List<TaskRecord> records;
+  @override
+  final DateTime nowUtc;
+  final int? matched;
+  final bool truncated;
+  TaskWindow? _calendarTasks;
+  TaskWindow? _taskWindow;
+  TaskDetail? _detail;
+  TaskQuery _query = const TaskQuery();
+  bool _calendarTasksLoading = false;
+  CalendarFailureCode? _calendarTasksFailure;
+  final List<TaskReference?> selectedReferences = [];
+  int calendarQueries = 0;
+
+  @override
+  TaskWindow? get calendarTasks => _calendarTasks;
+  @override
+  bool get calendarTasksLoading => _calendarTasksLoading;
+  @override
+  CalendarFailureCode? get calendarTasksFailure => _calendarTasksFailure;
+  @override
+  TaskWorkspaceView get taskView =>
+      TaskWorkspaceView(window: _taskWindow, detail: _detail, query: _query);
+  @override
+  DateTime get today => beijingDay(nowUtc);
+
+  TaskWindow _window(
+    TaskQuery query, {
+    List<TaskRecord>? items,
+    int? matched,
+    bool truncated = false,
+  }) {
+    final rows = items ?? records;
+    return TaskWindow(
+      context: _taskContext,
+      revision: 1,
+      query: query,
+      items: rows,
+      matched: matched ?? rows.length,
+      truncated: truncated,
+    );
+  }
+
+  @override
+  Future<void> loadCalendarTasks() async {
+    calendarQueries++;
+    _calendarTasksLoading = true;
+    notifyListeners();
+    await Future<void>.delayed(Duration.zero);
+    _calendarTasks = _window(
+      const TaskQuery(filter: TaskFilter.all, limit: 500),
+      matched: matched,
+      truncated: truncated,
+    );
+    _calendarTasksLoading = false;
+    notifyListeners();
+  }
+
+  @override
+  Future<void> loadTasks({TaskQuery? query}) async {
+    _query = query ?? _query;
+    final matching = records
+        .where((task) {
+          final statusMatches = switch (_query.filter) {
+            TaskFilter.all => true,
+            TaskFilter.open =>
+              task.status == TaskStatus.active ||
+                  task.status == TaskStatus.blocked,
+            _ => task.status.name == _query.filter.name,
+          };
+          return statusMatches &&
+              task.draft.title.toLowerCase().contains(
+                _query.keyword.toLowerCase(),
+              );
+        })
+        .take(_query.limit)
+        .toList();
+    _taskWindow = _window(_query, items: matching);
+    notifyListeners();
+  }
+
+  @override
+  Future<void> selectTask(TaskReference? reference) async {
+    selectedReferences.add(reference);
+    if (reference == null) {
+      _detail = null;
+    } else {
+      final selected = records.where(
+        (task) =>
+            task.reference.localId == reference.localId &&
+            task.reference.context == reference.context,
+      );
+      _detail = selected.isEmpty
+          ? null
+          : TaskDetail(task: selected.first, blocks: const [], nowUtc: nowUtc);
+    }
+    notifyListeners();
+  }
+
+  @override
+  Future<CalendarWriteReceipt> executeTask(
+    CalendarIntent intent, {
+    required CalendarContext expectedContext,
+  }) async => throw UnimplementedError();
+}

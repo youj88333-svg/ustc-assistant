@@ -658,6 +658,7 @@ void main() {
         ]) {
           raw.execute('DROP TABLE $table');
         }
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('PRAGMA user_version=10');
         raw.execute('COMMIT');
       } finally {
@@ -717,10 +718,34 @@ Future<JwStore> _openWithExecutor(
     modelCredentialProtector: protector ?? _SyntheticProtector(),
     onAgentCheckpoint: checkpoint,
   );
+  try {
+    await store.initialize();
+    await store.agent.initializeAgent();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
-  await store.initialize();
-  await store.agent.initializeAgent();
   return store;
+}
+
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
+  }
 }
 
 Future<AgentSettingsSnapshot> _configure(JwStore store) async {

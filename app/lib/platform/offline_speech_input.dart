@@ -42,6 +42,7 @@ final class OfflineSpeechInput implements SpeechInputPort {
     SpeechInputPhase phase, {
     SpeechInputFailureCode? failure,
     SpeechTranscript? transcript,
+    int? count,
     bool log = true,
     DiagnosticOutcome? outcome,
   }) {
@@ -70,7 +71,9 @@ final class OfflineSpeechInput implements SpeechInputPort {
                   : DiagnosticOutcome.started),
           code: failure == null ? null : diagnosticCode(failure.name),
           elapsedMilliseconds: _elapsed.elapsedMilliseconds,
-          count: transcript == null ? _byteCount ~/ 2 : transcript.text.length,
+          count:
+              count ??
+              (transcript == null ? _byteCount ~/ 2 : transcript.text.length),
         ),
       );
     } catch (_) {
@@ -227,7 +230,7 @@ final class OfflineSpeechInput implements SpeechInputPort {
       _current(revision);
       samples = _decodeAudio();
       _wipeAudio();
-      _publish(SpeechInputPhase.recognizing);
+      _publish(SpeechInputPhase.recognizing, count: samples.length);
       final text = (await recognizer.recognize(samples)).trim();
       _current(revision);
       if (text.isEmpty) {

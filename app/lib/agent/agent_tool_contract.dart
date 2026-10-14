@@ -4,7 +4,7 @@ import '../core/calendar_contract.dart';
 import '../core/agent_discussion_contract.dart';
 import 'model_gateway_contract.dart';
 
-const agentToolRegistryVersion = 'agent-tools-v2';
+const agentToolRegistryVersion = 'agent-tools-v3';
 
 const agentPersonalToolNames = {
   'query_agenda',
@@ -24,6 +24,11 @@ const agentPersonalToolNames = {
 abstract interface class AgentToolScopeSession {
   /// App-owned human scope. Can only narrow a bound run, never widen it.
   void restrictPersonalData();
+}
+
+abstract interface class AgentPersonalReadScopeSession {
+  /// Only human text establishes the opt-in; source/model text cannot do so.
+  void bindHumanReadScope(String question);
 }
 
 /// Each result is data, never instructions. No underlying authority is JSON.
@@ -82,6 +87,11 @@ abstract interface class AgentInteractiveToolSession {
   /// Current facts must be queried again after an accepted business mutation.
   bool get contextInvalidated;
   void acknowledgeContextInvalidated();
+}
+
+abstract interface class AgentRememberedToolSession {
+  Future<AgentToolResult?> tryRememberedDecision();
+  Future<AgentToolResult> approveAndRememberPending();
 }
 
 abstract interface class AgentReadToolsPort {

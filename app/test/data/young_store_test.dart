@@ -941,7 +941,12 @@ Future<JwStore> _openDatabase(
     clock: FixedClock(DateTime.utc(2026, 10, 11, 12)),
     onYoungCheckpoint: onYoungCheckpoint,
   );
-  await store.initialize();
+  try {
+    await store.initialize();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
   return store;
 }
@@ -1208,6 +1213,7 @@ void _setSyntheticSchemaVersion(File file, int version) {
   final database = sqlite3.sqlite3.open(file.path);
   try {
     removeCalendarTablesForLegacyFixture(database);
+    _removeSchema14AgentObjectsForLegacyFixture(database);
     for (final table in [
       'knowledge_load_items',
       'knowledge_sections',
@@ -1243,6 +1249,25 @@ void _setSyntheticSchemaVersion(File file, int version) {
     database.execute('PRAGMA user_version = $version');
   } finally {
     database.close();
+  }
+}
+
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
   }
 }
 

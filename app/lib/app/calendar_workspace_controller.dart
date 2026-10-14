@@ -13,7 +13,10 @@ import 'task_workspace_contract.dart';
 /// C5 selection and notification adapter only. Every effective occurrence,
 /// overlap and write result comes from C3, including sources loaded during sync.
 final class CalendarWorkspaceController extends ChangeNotifier
-    implements CalendarWorkspacePort, TaskWorkspacePort {
+    implements
+        CalendarWorkspacePort,
+        TaskWorkspacePort,
+        CalendarTaskWorkspacePort {
   CalendarWorkspaceController({
     required this.calendar,
     required this.shell,
@@ -68,6 +71,10 @@ final class CalendarWorkspaceController extends ChangeNotifier
   bool _taskDetailLoading = false;
   int _taskQueryGeneration = 0;
   int _taskDetailGeneration = 0;
+  TaskWindow? _calendarTasks;
+  bool _calendarTasksLoading = false;
+  CalendarFailureCode? _calendarTasksFailure;
+  int _calendarTasksGeneration = 0;
 
   @override
   TaskWorkspaceView get taskView => TaskWorkspaceView(
@@ -88,6 +95,18 @@ final class CalendarWorkspaceController extends ChangeNotifier
 
   @override
   DateTime get today => beijingDay(clock.nowUtc);
+
+  @override
+  DateTime get nowUtc => clock.nowUtc.toUtc();
+
+  @override
+  TaskWindow? get calendarTasks => _calendarTasks;
+
+  @override
+  bool get calendarTasksLoading => _calendarTasksLoading;
+
+  @override
+  CalendarFailureCode? get calendarTasksFailure => _calendarTasksFailure;
 
   @override
   CalendarWorkspaceView get view => CalendarWorkspaceView(
@@ -120,12 +139,16 @@ final class CalendarWorkspaceController extends ChangeNotifier
     ++_detailGeneration;
     ++_taskQueryGeneration;
     ++_taskDetailGeneration;
+    ++_calendarTasksGeneration;
     _selected = null;
     _detail = null;
     _selectedTask = null;
     _taskDetail = null;
     _window = null;
     _taskWindow = null;
+    _calendarTasks = null;
+    _calendarTasksLoading = false;
+    _calendarTasksFailure = null;
     _undo = const CalendarUndoView();
     _taskQuery = const TaskQuery();
     if (resetDay) {
@@ -139,10 +162,13 @@ final class CalendarWorkspaceController extends ChangeNotifier
       includeInactive: preferences.includeInactive,
     );
     await loadTasks();
+    await loadCalendarTasks();
     if (view.failure != null ||
         view.window == null ||
         taskView.failure != null ||
-        taskView.window == null) {
+        taskView.window == null ||
+        calendarTasksFailure != null ||
+        calendarTasks == null) {
       throw const SettingsFailure(SettingsFailureCode.storageFailed);
     }
   }
@@ -176,8 +202,46 @@ final class CalendarWorkspaceController extends ChangeNotifier
 
   Future<void> _refreshAll() async {
     await load();
-    if (tasks != null && !_closing && !_disposed) await loadTasks();
+    if (tasks != null && !_closing && !_disposed) {
+      await loadTasks();
+      await loadCalendarTasks();
+    }
   }
+
+  @override
+  Future<void> loadCalendarTasks() async {
+    if (_closing || _disposed) return;
+    final generation = ++_calendarTasksGeneration;
+    if (tasks == null) {
+      _calendarTasks = null;
+      _calendarTasksLoading = false;
+      _calendarTasksFailure = CalendarFailureCode.storageFailed;
+      _notify();
+      return;
+    }
+    _calendarTasksLoading = true;
+    _calendarTasksFailure = null;
+    _notify();
+    try {
+      final result = await tasks!.queryTasks(
+        const TaskQuery(filter: TaskFilter.all, limit: 500),
+      );
+      if (!_calendarTasksCurrent(generation)) return;
+      _calendarTasks = result;
+      _calendarTasksLoading = false;
+      _calendarTasksFailure = null;
+      _notify();
+    } catch (error) {
+      if (!_calendarTasksCurrent(generation)) return;
+      _calendarTasks = null;
+      _calendarTasksLoading = false;
+      _calendarTasksFailure = _code(error);
+      _notify();
+    }
+  }
+
+  bool _calendarTasksCurrent(int generation) =>
+      !_closing && !_disposed && generation == _calendarTasksGeneration;
 
   bool _taskCurrent(int generation) =>
       !_closing && !_disposed && generation == _taskQueryGeneration;
@@ -438,6 +502,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
     ++_detailGeneration;
     ++_taskQueryGeneration;
     ++_taskDetailGeneration;
+    ++_calendarTasksGeneration;
     shell.removeListener(_sourceChanged);
     await _subscription.cancel();
     await _activeAction;
@@ -453,6 +518,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
     ++_detailGeneration;
     ++_taskQueryGeneration;
     ++_taskDetailGeneration;
+    ++_calendarTasksGeneration;
     shell.removeListener(_sourceChanged);
     unawaited(_subscription.cancel());
     super.dispose();

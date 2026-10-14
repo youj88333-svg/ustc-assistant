@@ -63,7 +63,6 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   bool _actionPending = false;
   bool _schoolContinuationPending = false;
   bool _schoolContinuationSubmitted = false;
-  bool _showSessions = false;
   bool _messageIsError = false;
   String? _actionPendingId;
   String? _submittedActionId;
@@ -76,6 +75,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   TextEditingValue _lastDraftValue = TextEditingValue.empty;
   bool _speechCommandPending = false;
   final Set<String> _expandedQueryDetails = {};
+  final Map<String, bool> _rememberActionChoices = {};
+  String? _observedPendingActionId;
+  bool _observedContextCompacted = false;
 
   @override
   void initState() {
@@ -123,6 +125,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       _message = null;
       _speechFallbackError = null;
       _expandedQueryDetails.clear();
+      _rememberActionChoices.clear();
       _draft.clear();
       _draftEditedByUser = false;
       widget.controller.addListener(_onControllerChanged);
@@ -177,6 +180,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _observedMessageFingerprint = _messageFingerprint(view);
     _observedConversationId = view.conversationId;
     _observedDiscussionId = view.discussionId;
+    _observedPendingActionId = view.pendingAction?.id;
+    _observedContextCompacted = view.contextCompacted;
     _observedConsent = view.settings?.consent;
     final draft = view.discussionDraft;
     if (view.discussionId != null && draft != null && !_draftEditedByUser) {
@@ -200,6 +205,14 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     final messageFingerprint = _messageFingerprint(view);
     final consent = view.settings?.consent;
     final discussionChanged = view.discussionId != _observedDiscussionId;
+    final pendingActionId = view.pendingAction?.id;
+    if (pendingActionId != _observedPendingActionId) {
+      final previousActionId = _observedPendingActionId;
+      if (previousActionId != null) {
+        _rememberActionChoices.remove(previousActionId);
+      }
+      _observedPendingActionId = pendingActionId;
+    }
     final historyChanged =
         historyEpoch != null &&
         _observedHistoryEpoch != null &&
@@ -213,6 +226,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         view.conversationId != _observedConversationId ||
         messageFingerprint != _observedMessageFingerprint;
     if (historyChanged) _expandedQueryDetails.clear();
+    if (view.contextCompacted && !_observedContextCompacted) {
+      _message = '上下文已整理，完整聊天记录仍保留。';
+      _messageIsError = false;
+    }
+    _observedContextCompacted = view.contextCompacted;
     if (view.phase != AgentPhase.waitingForSchool) {
       _schoolContinuationSubmitted = false;
     }
@@ -600,17 +618,28 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     }
   }
 
-  Future<void> _perform(
-    Future<void> Function(AgentWorkspacePort port) action, {
-    required String success,
-  }) async {
+  Future<void> _runConversationCommand({required bool compact}) async {
     final port = widget.controller;
-    final generation = _generation;
-    if (!_isCurrent(port, generation) ||
+    if (port is! AgentConversationCommandsWorkspacePort ||
         _pending ||
-        port.view.busy ||
+        _sending ||
         port.view.phase == AgentPhase.closed) {
+      if (mounted) {
+        setState(() {
+          _message = '当前页面暂时无法执行本地对话命令。';
+          _messageIsError = true;
+        });
+      }
       return;
+    }
+    if (compact && port.view.busy) return;
+    final generation = _generation;
+    final submittedText = _draft.text;
+    if (!compact) {
+      _invalidateSpeech(cancel: true);
+      _draft.clear();
+      _draftEditedByUser = false;
+      _clearDraftImages(update: false);
     }
     setState(() {
       _pending = true;
@@ -618,18 +647,40 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       _messageIsError = false;
     });
     try {
-      await action(port);
+      if (compact) {
+        await (port as AgentConversationCommandsWorkspacePort)
+            .compactConversation();
+      } else {
+        await (port as AgentConversationCommandsWorkspacePort)
+            .clearConversation();
+      }
       if (_isCurrent(port, generation)) {
         final failure = port.view.failure;
+        final compacted = port.view.contextCompacted;
         setState(() {
-          _message = failure == null ? success : _failureText(failure);
-          _messageIsError = failure != null;
+          _message = failure != null
+              ? _failureText(failure)
+              : compact
+              ? compacted
+                    ? '上下文已整理，完整聊天记录仍保留。'
+                    : '上下文整理未确认完成；现有对话内容保持不变。'
+              : '当前对话已清空，原历史记录仍保留。';
+          _messageIsError = failure != null || (compact && !compacted);
+          if (compact &&
+              failure == null &&
+              compacted &&
+              _draft.text == submittedText) {
+            _draft.clear();
+            _draftEditedByUser = false;
+          }
         });
       }
     } on Object {
       if (_isCurrent(port, generation)) {
         setState(() {
-          _message = '操作暂未完成，请稍后重试。';
+          _message = port.view.failure == null
+              ? '本地对话命令暂未完成，请稍后重试。'
+              : _failureText(port.view.failure!);
           _messageIsError = true;
         });
       }
@@ -638,23 +689,24 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     }
   }
 
-  Future<void> _newConversation() async {
-    _invalidateSpeech(cancel: true);
-    _clearDraftImages();
-    await _perform((port) => port.newConversation(), success: '已创建新对话。');
-    if (mounted) setState(() => _showSessions = false);
-  }
-
-  Future<void> _selectConversation(String id) async {
-    _invalidateSpeech(cancel: true);
-    _clearDraftImages();
-    await _perform((port) => port.selectConversation(id), success: '已切换对话。');
-    if (mounted) setState(() => _showSessions = false);
-  }
-
   Future<void> _send() async {
-    final view = widget.controller.view;
     final draftText = _draft.text;
+    final command = draftText.trim();
+    final isCompact = command == '/compact';
+    final isClear = command == '/clear';
+    if (isCompact || isClear) {
+      if (_draftImages.isNotEmpty) {
+        setState(() {
+          _message = '本地命令不能附带图片；请先移除附图再执行。';
+          _messageIsError = true;
+        });
+        return;
+      }
+      await _runConversationCommand(compact: isCompact);
+      return;
+    }
+
+    final view = widget.controller.view;
     final outgoingImages = List<AgentImage>.unmodifiable(
       _draftImages.map((image) => AgentImage(image.bytes)),
     );
@@ -751,7 +803,14 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     });
     try {
       if (approve) {
-        await actionPort.approveAction(actionId);
+        final permissionPort = widget.controller;
+        if (_rememberActionChoices[actionId] == true &&
+            permissionPort is AgentPermissionWorkspacePort) {
+          await (permissionPort as AgentPermissionWorkspacePort)
+              .approveAndRememberAction(actionId);
+        } else {
+          await actionPort.approveAction(actionId);
+        }
       } else {
         await actionPort.rejectAction(actionId);
       }
@@ -862,6 +921,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         statusOverride: isCommitting ? '正在提交' : null,
         requestPending: _actionPending && _actionPendingId == action.id,
         requestSubmitted: isCurrent && _submittedActionId == action.id,
+        rememberApproval:
+            isCurrent &&
+            _rememberActionChoices[action.id] == true &&
+            widget.controller is AgentPermissionWorkspacePort,
+        onRememberChanged:
+            isCurrent &&
+                canAct &&
+                widget.controller is AgentPermissionWorkspacePort
+            ? (remember) =>
+                  setState(() => _rememberActionChoices[action.id] = remember)
+            : null,
         onApprove: canAct
             ? () => unawaited(_handleAction(action.id, approve: true))
             : null,
@@ -908,299 +978,105 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     );
   }
 
-  Future<void> _clearHistory({String? conversationId}) async {
-    final port = widget.controller;
-    final generation = _generation;
-    final all = conversationId == null;
-    final first = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(all ? '清除全部 Agent 对话？' : '清除当前对话？'),
-        content: Text(
-          all
-              ? '这会删除本机保存的全部 Agent 对话历史。学校账号密码、业务数据和模型 Key 会保留。'
-              : '这会删除当前 Agent 对话历史。学校账号密码、业务数据和模型 Key 会保留。',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            key: const ValueKey('agent-history-clear-first-confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('继续'),
-          ),
-        ],
-      ),
-    );
-    if (first != true) return;
-    if (!mounted) return;
-    if (!_isCurrent(port, generation)) return;
-    final second = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('再确认一次'),
-        content: const Text('对话历史清除后无法恢复。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('返回'),
-          ),
-          FilledButton(
-            key: const ValueKey('agent-history-clear-final-confirm'),
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('确认清除'),
-          ),
-        ],
-      ),
-    );
-    if (second != true) return;
-    if (!mounted) return;
-    if (!_isCurrent(port, generation)) return;
-    _invalidateSpeech(cancel: true);
-    _clearDraftImages();
-    await _perform(
-      (currentPort) => currentPort.clearHistory(
-        conversationId: conversationId,
-        confirmed: true,
-      ),
-      success: all ? '已清除全部 Agent 对话历史。' : '已清除当前 Agent 对话历史。',
-    );
-  }
-
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller,
-    builder: (context, _) => LayoutBuilder(
-      builder: (context, constraints) {
-        final narrow = constraints.maxWidth < 760;
-        final view = widget.controller.view;
-        final current = view.conversations.where(
-          (item) => item.id == view.conversationId,
-        );
-        final title = current.isEmpty ? null : current.first.title;
-        final status = _statusLabel(view);
-        final titleWidth = (constraints.maxWidth - (narrow ? 112 : 260)).clamp(
-          120.0,
-          520.0,
-        );
-
-        return Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (narrow)
-                      IconButton(
-                        key: const ValueKey('agent-sessions-toggle'),
-                        tooltip: _showSessions ? '返回对话' : '查看对话列表',
-                        onPressed: () =>
-                            setState(() => _showSessions = !_showSessions),
-                        icon: Icon(
-                          _showSessions
-                              ? Icons.chat_bubble_outline
-                              : Icons.menu_rounded,
-                        ),
-                      ),
-                    ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: titleWidth),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title == null || title.isEmpty ? 'Agent' : title,
-                            key: const ValueKey('agent-page-title'),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: Theme.of(context).textTheme.headlineSmall
-                                ?.copyWith(fontWeight: FontWeight.w700),
-                          ),
-                          const Text(
-                            '你的校园事务助手',
-                            style: TextStyle(color: _agentMuted),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    if (status != null)
-                      Chip(
-                        key: const ValueKey('agent-phase'),
-                        avatar: const Icon(Icons.more_horiz_rounded, size: 18),
-                        label: Text(status),
-                      ),
-                    Chip(
-                      key: const ValueKey('agent-capability-read-tools'),
-                      avatar: Icon(
-                        view.businessToolsEnabled
-                            ? Icons.manage_search_rounded
-                            : Icons.chat_outlined,
-                        size: 18,
-                      ),
-                      label: Text(
-                        view.businessToolsEnabled ? '只读查询可用' : '只读查询未启用',
-                      ),
-                    ),
-                    IconButton(
-                      key: const ValueKey('agent-settings-open'),
-                      tooltip: 'Agent 设置',
-                      onPressed: widget.onSettings,
-                      icon: const Icon(Icons.settings_outlined),
-                    ),
-                    PopupMenuButton<_HistoryCommand>(
-                      key: const ValueKey('agent-history-menu'),
-                      tooltip: '对话记录',
-                      enabled:
-                          !_pending &&
-                          !view.busy &&
-                          view.phase != AgentPhase.closed,
-                      onSelected: (command) {
-                        switch (command) {
-                          case _HistoryCommand.current:
-                            if (view.conversationId != null) {
-                              unawaited(
-                                _clearHistory(
-                                  conversationId: view.conversationId,
-                                ),
-                              );
-                            }
-                          case _HistoryCommand.all:
-                            unawaited(_clearHistory());
-                        }
-                      },
-                      itemBuilder: (context) => [
-                        PopupMenuItem(
-                          value: _HistoryCommand.current,
-                          enabled: view.conversationId != null,
-                          child: const Text('清除当前对话…'),
-                        ),
-                        const PopupMenuItem(
-                          value: _HistoryCommand.all,
-                          child: Text('清除全部对话…'),
-                        ),
-                      ],
-                      icon: const Icon(Icons.delete_sweep_outlined),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-            if (_message != null || view.failure != null) ...[
-              const SizedBox(height: 8),
-              _AgentNotice(
-                message:
-                    view.failure == AgentFailureCode.invalidInput &&
-                        view.parameterIssue != null
-                    ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
-                    : _message ?? _failureText(view.failure!),
-                isError:
-                    _messageIsError ||
-                    (_message == null && view.failure != null),
-              ),
-              if (widget.diagnostics != null && view.failure != null)
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: DiagnosticsExportButton(
-                    diagnostics: widget.diagnostics!,
-                  ),
-                ),
-            ],
-            const SizedBox(height: 12),
-            Expanded(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
+    builder: (context, _) {
+      final view = widget.controller.view;
+      final status = _statusLabel(view);
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 12,
+            runSpacing: 8,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (!narrow) ...[
-                    SizedBox(width: 250, child: _sessionList(view)),
-                    const SizedBox(width: 12),
-                  ],
-                  Expanded(
-                    child: narrow && _showSessions
-                        ? _sessionList(view)
-                        : _conversation(view),
+                  Text(
+                    'Agent',
+                    key: const ValueKey('agent-page-title'),
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const Text('你的校园事务助手', style: TextStyle(color: _agentMuted)),
+                ],
+              ),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (status != null)
+                    Chip(
+                      key: const ValueKey('agent-phase'),
+                      avatar: const Icon(Icons.more_horiz_rounded, size: 18),
+                      label: Text(status),
+                    ),
+                  Chip(
+                    key: const ValueKey('agent-capability-read-tools'),
+                    avatar: Icon(
+                      view.businessToolsEnabled
+                          ? Icons.manage_search_rounded
+                          : Icons.chat_outlined,
+                      size: 18,
+                    ),
+                    label: Text(
+                      view.businessToolsEnabled ? '只读查询可用' : '只读查询未启用',
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('agent-settings-open'),
+                    tooltip: 'Agent 设置',
+                    onPressed: widget.onSettings,
+                    icon: const Icon(Icons.settings_outlined),
                   ),
                 ],
               ),
+            ],
+          ),
+          if (_message != null || view.failure != null) ...[
+            const SizedBox(height: 8),
+            _AgentNotice(
+              message:
+                  view.failure == AgentFailureCode.invalidInput &&
+                      view.parameterIssue != null
+                  ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
+                  : _message ?? _failureText(view.failure!),
+              isError:
+                  _messageIsError || (_message == null && view.failure != null),
             ),
+            if (widget.diagnostics != null && view.failure != null)
+              Align(
+                alignment: Alignment.centerRight,
+                child: DiagnosticsExportButton(
+                  diagnostics: widget.diagnostics!,
+                ),
+              ),
           ],
-        );
-      },
-    ),
+          const SizedBox(height: 12),
+          Expanded(child: _conversation(view)),
+        ],
+      );
+    },
   );
 
-  Widget _sessionList(AgentWorkspaceView view) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          FilledButton.icon(
-            key: const ValueKey('agent-new-conversation'),
-            onPressed: _pending || view.busy || view.phase == AgentPhase.closed
-                ? null
-                : _newConversation,
-            icon: const Icon(Icons.add_rounded),
-            label: const Text('新建对话'),
-          ),
-          const SizedBox(height: 10),
-          const Text('对话', style: TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 6),
-          Expanded(
-            child: view.conversations.isEmpty
-                ? const Center(
-                    child: Text('还没有对话', style: TextStyle(color: _agentMuted)),
-                  )
-                : ListView.builder(
-                    key: const ValueKey('agent-conversation-list'),
-                    itemCount: view.conversations.length,
-                    itemBuilder: (context, index) {
-                      final item = view.conversations[index];
-                      final selected = item.id == view.conversationId;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 4),
-                        child: Material(
-                          color: selected
-                              ? const Color(0xFFE7F1EA)
-                              : Colors.transparent,
-                          borderRadius: BorderRadius.circular(10),
-                          child: ListTile(
-                            key: ValueKey('agent-conversation-$index'),
-                            dense: true,
-                            selected: selected,
-                            title: Text(
-                              item.title.isEmpty ? '新对话' : item.title,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            onTap:
-                                _pending ||
-                                    view.busy ||
-                                    view.phase == AgentPhase.closed
-                                ? null
-                                : () => _selectConversation(item.id),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-          ),
-        ],
-      ),
-    ),
-  );
+  bool _canSubmit(AgentWorkspaceView view) {
+    if (_sending || _pending || _pickingImages || _speechView.busy) {
+      return false;
+    }
+    if (view.phase != AgentPhase.idle) return false;
+    final command = _draft.text.trim();
+    if (command == '/clear' || command == '/compact') {
+      return widget.controller is AgentConversationCommandsWorkspacePort;
+    }
+    return view.canSend &&
+        view.conversationId != null &&
+        (command.isNotEmpty || _draftImages.isNotEmpty);
+  }
 
   Widget _conversation(AgentWorkspaceView view) {
     final configured =
@@ -1208,13 +1084,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         view.settings?.consent == true &&
         view.settings?.modelId != null &&
         view.settings?.report.capability != ModelCapability.unverified;
-    final canSend =
-        view.canSend &&
-        view.conversationId != null &&
-        (_draft.text.trim().isNotEmpty || _draftImages.isNotEmpty) &&
-        !_sending &&
-        !_pickingImages &&
-        !_speechView.busy;
+    final canSend = _canSubmit(view);
     final speechVisible =
         widget.speechInput != null && view.conversationId != null;
     final canStartSpeech =
@@ -1226,6 +1096,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         _speechView.phase == SpeechInputPhase.idle;
     final canStop =
         view.phase == AgentPhase.generating ||
+        view.phase == AgentPhase.compacting ||
         view.phase == AgentPhase.executingRead ||
         view.phase == AgentPhase.waitingForApproval ||
         view.phase == AgentPhase.waitingForSchool ||
@@ -1291,30 +1162,19 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             const Icon(Icons.forum_outlined, size: 42, color: _agentGreen),
             const SizedBox(height: 12),
             Text(
-              configured ? '开始一段新的对话' : '先完成模型设置',
+              configured ? '开始主对话' : '先完成模型设置',
               style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
               configured
-                  ? '可查询日程、任务、知识与公开资料；写入和同步功能后续开放。'
+                  ? '输入消息即可开始；可查询日程、任务、知识与公开资料，写入和同步功能后续开放。'
                   : '目前尚未配置可用模型。完成设置后即可开始对话。',
               style: const TextStyle(color: _agentMuted, height: 1.45),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 14),
-            FilledButton.icon(
-              key: const ValueKey('agent-empty-new-conversation'),
-              onPressed:
-                  _pending ||
-                      widget.controller.view.busy ||
-                      widget.controller.view.phase == AgentPhase.closed
-                  ? null
-                  : _newConversation,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('新建对话'),
-            ),
             if (!configured) ...[
               const SizedBox(height: 8),
               TextButton.icon(
@@ -1403,6 +1263,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       queryDetailsExpanded: _expandedQueryDetails.contains(
                         detailsKey,
                       ),
+                      actionCount: actionCards.length,
                       actionCards: actionCards,
                       onOpenLocalEvidence: widget.onOpenLocalEvidence,
                       onToggleQueryDetails: () {
@@ -1545,6 +1406,12 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                   ),
               ],
             ),
+            const SizedBox(height: 4),
+            const Text(
+              '本地命令：/compact 整理上下文；/clear 清空当前聊天并保留历史。',
+              key: ValueKey('agent-command-hint'),
+              style: TextStyle(color: _agentMuted, fontSize: 12),
+            ),
             if (_speechView.busy ||
                 _speechView.failure != null ||
                 _speechView.phase == SpeechInputPhase.closed ||
@@ -1663,8 +1530,6 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   }
 }
 
-enum _HistoryCommand { current, all }
-
 final class _SetupPrompt extends StatelessWidget {
   const _SetupPrompt({required this.onSettings});
 
@@ -1710,6 +1575,7 @@ final class _AgentNotice extends StatelessWidget {
 
 bool _showRunProgress(AgentWorkspaceView view) =>
     view.phase == AgentPhase.generating ||
+    view.phase == AgentPhase.compacting ||
     view.phase == AgentPhase.executingRead ||
     view.phase == AgentPhase.committing ||
     view.phase == AgentPhase.settling;
@@ -1816,6 +1682,8 @@ final class _AgentActionCard extends StatelessWidget {
     required this.isHistorical,
     required this.requestPending,
     required this.requestSubmitted,
+    required this.rememberApproval,
+    this.onRememberChanged,
     this.statusOverride,
     this.onApprove,
     this.onReject,
@@ -1825,6 +1693,8 @@ final class _AgentActionCard extends StatelessWidget {
   final bool isHistorical;
   final bool requestPending;
   final bool requestSubmitted;
+  final bool rememberApproval;
+  final ValueChanged<bool>? onRememberChanged;
   final String? statusOverride;
   final VoidCallback? onApprove;
   final VoidCallback? onReject;
@@ -1832,6 +1702,14 @@ final class _AgentActionCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final canRespond = onApprove != null || onReject != null;
+    final authorizationLabel =
+        isHistorical && action.status == AgentActionStatus.committed
+        ? switch (action.authorization) {
+            AgentActionAuthorization.legacy => null,
+            AgentActionAuthorization.confirmed => '本次确认',
+            AgentActionAuthorization.remembered => '已保存授权',
+          }
+        : null;
     return Card(
       key: ValueKey('agent-action-${action.id}'),
       margin: EdgeInsets.zero,
@@ -1863,7 +1741,8 @@ final class _AgentActionCard extends StatelessWidget {
                       Text(
                         '${_actionKindLabel(action.kind)} · '
                         '${statusOverride ?? _actionStatusLabel(action.status)}'
-                        '${isHistorical ? ' · 历史记录' : ''}',
+                        '${isHistorical ? ' · 历史记录' : ''}'
+                        '${authorizationLabel == null ? '' : ' · $authorizationLabel'}',
                         key: ValueKey('agent-action-status-${action.id}'),
                         style: const TextStyle(
                           color: _agentMuted,
@@ -1922,6 +1801,20 @@ final class _AgentActionCard extends StatelessWidget {
                 requestPending ? '正在提交你的决定…' : '操作已送出，等待本地状态更新。',
                 key: ValueKey('agent-action-request-state-${action.id}'),
                 style: const TextStyle(color: _agentMuted, fontSize: 12),
+              ),
+            ],
+            if (onRememberChanged != null) ...[
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                key: ValueKey('agent-action-remember-${action.id}'),
+                value: rememberApproval,
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                title: const Text('以后不再确认此类操作'),
+                subtitle: const Text('只适用于本卡涉及的固定工具和操作类别；模型不能新增或扩大权限，可在设置中撤销。'),
+                onChanged: (value) {
+                  if (value != null) onRememberChanged?.call(value);
+                },
               ),
             ],
             if (canRespond) ...[
@@ -2221,6 +2114,7 @@ final class _MessageBubble extends StatelessWidget {
     required this.queryDetailsKey,
     required this.queryDetailsExpanded,
     required this.onToggleQueryDetails,
+    required this.actionCount,
     required this.actionCards,
     this.onOpenLocalEvidence,
   });
@@ -2230,6 +2124,7 @@ final class _MessageBubble extends StatelessWidget {
   final String queryDetailsKey;
   final bool queryDetailsExpanded;
   final VoidCallback onToggleQueryDetails;
+  final int actionCount;
   final List<Widget> actionCards;
   final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
 
@@ -2307,7 +2202,8 @@ final class _MessageBubble extends StatelessWidget {
               ],
               if (!user &&
                   (message.steps.isNotEmpty ||
-                      message.evidence.isNotEmpty)) ...[
+                      message.evidence.isNotEmpty ||
+                      actionCards.isNotEmpty)) ...[
                 if (text.isNotEmpty) const SizedBox(height: 6),
                 TextButton.icon(
                   key: ValueKey('agent-query-details-toggle-$queryDetailsKey'),
@@ -2324,8 +2220,8 @@ final class _MessageBubble extends StatelessWidget {
                     size: 18,
                   ),
                   label: Text(
-                    '查询详情 · ${message.steps.length} 个步骤 · '
-                    '${message.evidence.length} 处出处',
+                    '处理详情 · ${message.steps.length} 个步骤 · '
+                    '${message.evidence.length} 处出处 · $actionCount 项操作',
                   ),
                 ),
                 if (queryDetailsExpanded) ...[
@@ -2343,9 +2239,9 @@ final class _MessageBubble extends StatelessWidget {
                         onOpenLocalEvidence: onOpenLocalEvidence,
                       ),
                     ),
+                  ...actionCards,
                 ],
               ],
-              ...actionCards,
             ],
           ),
         ),
@@ -2413,6 +2309,7 @@ String? _statusLabel(AgentWorkspaceView view) => switch (view.phase) {
   AgentPhase.loadingModels => '正在获取模型',
   AgentPhase.verifying => '正在验证模型',
   AgentPhase.generating => '正在生成回复',
+  AgentPhase.compacting => '正在整理上下文',
   AgentPhase.executingRead =>
     view.activeTool == null
         ? '正在查询资料'

@@ -8,6 +8,7 @@ import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_event_editor.dart';
 import 'calendar_display_style.dart';
+import 'calendar_task_band.dart';
 import 'calendar_week_view.dart';
 import 'calendar_workspace_contract.dart';
 import 'task_workspace_contract.dart';
@@ -20,6 +21,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
     super.key,
     required this.controller,
     this.tasks,
+    this.calendarTaskNowUtc,
     this.onDiscuss,
     this.initialTasks = false,
     this.initialSelection,
@@ -28,6 +30,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
 
   final CalendarWorkspacePort controller;
   final TaskWorkspacePort? tasks;
+  final DateTime? calendarTaskNowUtc;
   final ValueChanged<AgentDiscussionSelection>? onDiscuss;
   final bool initialTasks;
   final CalendarReference? initialSelection;
@@ -43,6 +46,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   String? _notice;
   final ValueNotifier<String?> _actionFeedback = ValueNotifier(null);
   bool _actionBusy = false;
+  bool _calendarTaskLoadFailed = false;
   int _controllerGeneration = 0;
   int _loadGeneration = 0;
   int _actionGeneration = 0;
@@ -70,6 +74,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         unawaited(
           _load(widget.controller, initialSelection: widget.initialSelection),
         );
+        unawaited(_loadCalendarTaskProjection());
         _consumeInitialTasksNavigationIfReady();
       }
     });
@@ -96,6 +101,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       final routesToClose = _routeDepth;
       _routeDepth = 0;
       _tasksSelected = widget.initialTasks;
+      _calendarTaskLoadFailed = false;
       _selectedReference = null;
       _notice = null;
       _actionFeedback.value = null;
@@ -108,6 +114,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           unawaited(
             _load(widget.controller, initialSelection: widget.initialSelection),
           );
+          unawaited(_loadCalendarTaskProjection());
           _consumeInitialTasksNavigationIfReady();
         }
       });
@@ -191,7 +198,11 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller,
+    animation: Listenable.merge([
+      widget.controller,
+      if (widget.tasks != null && !identical(widget.tasks, widget.controller))
+        widget.tasks!,
+    ]),
     builder: (context, _) => LayoutBuilder(
       builder: (context, constraints) => _buildWorkspace(
         context,
@@ -621,11 +632,21 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     final port = widget.controller;
     final generation = _controllerGeneration;
     final conflicts = _windowConflicts(window);
+    final taskWindow = _calendarTaskWindow;
+    final taskDays = _calendarDays(window);
+    final taskNowUtc = _calendarTasksNowUtc;
+    final taskProjection = projectCalendarTasks(
+      tasks: taskWindow?.items ?? const [],
+      days: taskDays,
+      nowUtc: taskNowUtc,
+    );
     final hasSelected = _selectedReference != null;
     final main = view.mode == CalendarViewMode.week
         ? CalendarWeekView(
             window: window,
             today: port.today,
+            tasks: taskWindow?.items ?? const [],
+            nowUtc: taskNowUtc,
             onSelect: (occurrence) => _selectOccurrence(
               occurrence,
               showSheet: !wideDetail,
@@ -639,9 +660,34 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
               occurrences,
               showSheet: !wideDetail,
             ),
+            onSelectTask: _openCalendarTask,
+            onOpenUnscheduledTasks: _openUnscheduledTasks,
+            onTaskOverflow: _showCalendarTaskOverflow,
           )
-        : _dayList(window, showSheet: !wideDetail, conflicts: conflicts);
-    final content = window.items.isEmpty
+        : Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (taskProjection.hasVisibleTasks)
+                CalendarTaskBand(
+                  days: taskDays,
+                  tasks: taskWindow?.items ?? const [],
+                  nowUtc: taskNowUtc,
+                  height: _dayTaskBandHeight(context),
+                  gutterWidth: 62,
+                  onSelectTask: _openCalendarTask,
+                  onOpenUnscheduledTasks: _openUnscheduledTasks,
+                  onOverflow: _showCalendarTaskOverflow,
+                ),
+              Expanded(
+                child: _dayList(
+                  window,
+                  showSheet: !wideDetail,
+                  conflicts: conflicts,
+                ),
+              ),
+            ],
+          );
+    final content = window.items.isEmpty && !taskProjection.hasVisibleTasks
         ? const _EmptyState(
             icon: Icons.event_available_outlined,
             title: '该日期范围暂无日程',
@@ -664,7 +710,38 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             icon: Icons.warning_amber_rounded,
           ),
         ],
-        if (window.truncated || window.conflictsTruncated)
+        if (widget.tasks is CalendarTaskWorkspacePort &&
+            (widget.tasks as CalendarTaskWorkspacePort).calendarTasksLoading)
+          const _StatusLine(
+            text: '正在读取独立任务栏。',
+            icon: Icons.hourglass_empty_rounded,
+          ),
+        if (widget.tasks is CalendarTaskWorkspacePort &&
+            ((widget.tasks as CalendarTaskWorkspacePort).calendarTasksFailure !=
+                    null ||
+                _calendarTaskLoadFailed))
+          _StatusLine(
+            text:
+                '任务栏读取失败：${_taskFailureMessageForPage((widget.tasks as CalendarTaskWorkspacePort).calendarTasksFailure ?? CalendarFailureCode.storageFailed)}',
+            icon: Icons.sync_problem_rounded,
+          ),
+        if (taskWindow?.truncated ?? false)
+          _StatusLine(
+            text:
+                '日历任务栏仅显示前 ${taskWindow!.items.length} 项，'
+                '共匹配 ${taskWindow.matched} 项。',
+            icon: Icons.warning_amber_rounded,
+          ),
+        if (window.truncated ||
+            window.conflictsTruncated ||
+            taskWindow?.truncated == true ||
+            (widget.tasks is CalendarTaskWorkspacePort &&
+                ((widget.tasks as CalendarTaskWorkspacePort)
+                        .calendarTasksLoading ||
+                    (widget.tasks as CalendarTaskWorkspacePort)
+                            .calendarTasksFailure !=
+                        null)) ||
+            _calendarTaskLoadFailed)
           const SizedBox(height: 8),
         Expanded(
           child: Column(
@@ -698,6 +775,192 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ),
       ],
     );
+  }
+
+  TaskWindow? get _calendarTaskWindow {
+    final tasks = widget.tasks;
+    if (tasks is CalendarTaskWorkspacePort) {
+      return (tasks as CalendarTaskWorkspacePort).calendarTasks;
+    }
+    return tasks?.taskView.window;
+  }
+
+  DateTime get _calendarTasksNowUtc {
+    final fixed = widget.calendarTaskNowUtc;
+    if (fixed != null) return fixed.toUtc();
+    final tasks = widget.tasks;
+    if (tasks is CalendarTaskWorkspacePort) {
+      return (tasks as CalendarTaskWorkspacePort).nowUtc.toUtc();
+    }
+    final detailNow = tasks?.taskView.detail?.nowUtc;
+    if (detailNow != null) return detailNow.toUtc();
+    final today = widget.controller.today;
+    return DateTime.utc(
+      today.year,
+      today.month,
+      today.day,
+    ).subtract(const Duration(hours: 8));
+  }
+
+  List<DateTime> _calendarDays(CalendarWindow window) {
+    final first = calendarDay(window.query.firstDay);
+    final lastExclusive = calendarDay(window.query.endDayExclusive);
+    final count = lastExclusive.difference(first).inDays.clamp(1, 7).toInt();
+    return List.generate(
+      count,
+      (index) => DateTime.utc(first.year, first.month, first.day + index),
+    );
+  }
+
+  double _dayTaskBandHeight(BuildContext context) {
+    final scale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.8);
+    return (38 * scale).clamp(38.0, 68.0).toDouble();
+  }
+
+  Future<void> _loadCalendarTaskProjection() async {
+    final tasks = widget.tasks;
+    if (tasks is! CalendarTaskWorkspacePort) return;
+    final generation = _controllerGeneration;
+    if (mounted) setState(() => _calendarTaskLoadFailed = false);
+    try {
+      await (tasks as CalendarTaskWorkspacePort).loadCalendarTasks();
+    } catch (_) {
+      if (mounted &&
+          generation == _controllerGeneration &&
+          identical(widget.tasks, tasks)) {
+        setState(() => _calendarTaskLoadFailed = true);
+      }
+    }
+  }
+
+  Future<void> _showCalendarTaskOverflow(
+    DateTime day,
+    List<TaskRecord> tasks,
+  ) async {
+    if (tasks.isEmpty || widget.tasks == null) return;
+    final selected = await _withRoute<TaskRecord>(
+      () => showDialog<TaskRecord>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: Text('任务 · ${_dateLabel(day)}'),
+          content: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: 440,
+              maxHeight: MediaQuery.sizeOf(dialogContext).height * .68,
+            ),
+            child: ListView.separated(
+              shrinkWrap: true,
+              itemCount: tasks.length,
+              separatorBuilder: (_, _) => const Divider(height: 1),
+              itemBuilder: (context, index) {
+                final task = tasks[index];
+                final deadline = task.draft.deadlineAtUtc;
+                final warning = calendarTaskDeadlineWarning(
+                  task,
+                  _calendarTasksNowUtc,
+                );
+                return ListTile(
+                  key: ValueKey(
+                    'calendar-task-overflow-${task.reference.localId}',
+                  ),
+                  contentPadding: EdgeInsets.zero,
+                  leading: warning == CalendarTaskDeadlineWarning.none
+                      ? const Icon(Icons.task_alt_rounded, color: _green)
+                      : Icon(
+                          Icons.error_outline_rounded,
+                          color: warning == CalendarTaskDeadlineWarning.overdue
+                              ? const Color(0xFF9B2C2C)
+                              : const Color(0xFFB77900),
+                        ),
+                  title: Text(
+                    task.draft.title,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: calendarColorsForTitle(task.draft.title).ink,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  subtitle: Text(
+                    deadline == null
+                        ? '${_taskStatusLabel(task.status)} · 无截止'
+                        : '${warning == CalendarTaskDeadlineWarning.overdue
+                              ? '已过截止 · '
+                              : warning == CalendarTaskDeadlineWarning.dueToday
+                              ? '今天截止 · '
+                              : ''}${_beijingDateTimeLabel(deadline)}',
+                  ),
+                  onTap: () => Navigator.of(dialogContext).pop(task),
+                );
+              },
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('关闭'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (selected != null) await _openCalendarTask(selected);
+  }
+
+  Future<void> _openCalendarTask(TaskRecord task) =>
+      _openCalendarTasks(task: task);
+
+  Future<void> _openUnscheduledTasks() => _openCalendarTasks();
+
+  Future<void> _openCalendarTasks({TaskRecord? task}) async {
+    final tasks = widget.tasks;
+    if (tasks == null) return;
+    final generation = _controllerGeneration;
+    try {
+      await tasks.loadTasks(
+        query: TaskQuery(
+          filter: TaskFilter.all,
+          keyword: task == null
+              ? ''
+              : task.draft.title.length <= 200
+              ? task.draft.title
+              : task.draft.title.substring(0, 200),
+          limit: 500,
+        ),
+      );
+      if (!_currentTaskPort(tasks, generation)) return;
+      if (task == null) {
+        await tasks.selectTask(null);
+      } else {
+        final window = tasks.taskView.window;
+        final current = window?.items.where(
+          (item) => item.reference.localId == task.reference.localId,
+        );
+        if (window == null ||
+            window.context != task.reference.context ||
+            current == null ||
+            current.isEmpty) {
+          setState(() => _notice = '这项任务已更新，请刷新后重新选择。');
+          return;
+        }
+        await tasks.selectTask(current.first.reference);
+      }
+      if (!_currentTaskPort(tasks, generation)) return;
+      if (_routeDepth > 0) await _dismissRoutes(_routeDepth);
+      if (!_currentTaskPort(tasks, generation)) return;
+      setState(() {
+        _tasksSelected = true;
+        _notice = null;
+      });
+    } on CalendarFailure catch (failure) {
+      if (_currentTaskPort(tasks, generation)) {
+        setState(() => _notice = _taskFailureMessageForPage(failure.code));
+      }
+    } catch (_) {
+      if (_currentTaskPort(tasks, generation)) {
+        setState(() => _notice = '无法读取任务，请稍后重试。');
+      }
+    }
   }
 
   Widget _globalConflictBrowser(
@@ -3251,6 +3514,11 @@ DateTime _dateOnly(DateTime day) => DateTime.utc(day.year, day.month, day.day);
 
 String _dateLabel(DateTime day) =>
     '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+String _beijingDateTimeLabel(DateTime utc) {
+  final value = utc.toUtc().add(const Duration(hours: 8));
+  return '${_dateLabel(value)} ${_clockLabel(value)}';
+}
 
 String _filterLabel(CalendarFilter filter) => switch (filter) {
   CalendarFilter.all => '全部类别',

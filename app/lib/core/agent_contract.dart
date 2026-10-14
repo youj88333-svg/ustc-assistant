@@ -42,6 +42,7 @@ enum AgentPhase {
   loadingModels,
   verifying,
   generating,
+  compacting,
   executingRead,
   waitingForApproval,
   waitingForSchool,
@@ -190,6 +191,8 @@ enum AgentActionKind { localPlan, undo, sourceRefresh, planningPreferences }
 
 enum AgentActionStatus { proposed, rejected, committed, interrupted, failed }
 
+enum AgentActionAuthorization { legacy, confirmed, remembered }
+
 /// Server-created display record; history confers no approval or live target.
 final class AgentActionView {
   AgentActionView({
@@ -200,10 +203,12 @@ final class AgentActionView {
     required List<String> details,
     this.committedCount = 0,
     this.warning = '',
+    this.authorization = AgentActionAuthorization.legacy,
   }) : details = List.unmodifiable(details);
   final String id, title, warning;
   final AgentActionKind kind;
   final AgentActionStatus status;
+  final AgentActionAuthorization authorization;
   final List<String> details;
   final int committedCount;
   @override
@@ -383,6 +388,7 @@ final class AgentRuntimeView {
     this.discussionId,
     this.discussionDraft,
     this.parameterIssue,
+    this.contextCompacted = false,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
        messages = List.unmodifiable(messages);
@@ -401,6 +407,7 @@ final class AgentRuntimeView {
   final AgentActionView? pendingAction;
   final String? discussionId, discussionDraft;
   final AgentParameterIssue? parameterIssue;
+  final bool contextCompacted;
   bool get busy => phase != AgentPhase.idle && phase != AgentPhase.closed;
   bool get canSend =>
       phase == AgentPhase.idle &&

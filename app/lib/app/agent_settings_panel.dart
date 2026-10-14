@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'agent_workspace_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_permission_contract.dart';
 
 const _settingsMuted = Color(0xFF66736C);
 const _settingsGreen = Color(0xFF1F6B45);
@@ -29,11 +30,18 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
   bool _messageIsError = false;
   bool? _consentDraft;
   String? _message;
+  int _permissionGeneration = 0;
+  int _permissionOperation = 0;
+  bool _permissionsLoading = false;
+  List<AgentPermissionReference> _actionPermissions = const [];
+  String? _permissionsError;
+  String? _revokingPermissionKey;
 
   @override
   void initState() {
     super.initState();
     _scheduleRefresh();
+    _schedulePermissionRead();
   }
 
   @override
@@ -47,13 +55,22 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       _messageIsError = false;
       _message = null;
       _key.clear();
+      _permissionGeneration++;
+      _permissionOperation++;
+      _permissionsLoading = false;
+      _actionPermissions = const [];
+      _permissionsError = null;
+      _revokingPermissionKey = null;
       _scheduleRefresh();
+      _schedulePermissionRead();
     }
   }
 
   @override
   void dispose() {
     _generation++;
+    _permissionGeneration++;
+    _permissionOperation++;
     _key.clear();
     _key.dispose();
     super.dispose();
@@ -71,6 +88,147 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       mounted &&
       identical(widget.controller, port) &&
       _generation == generation;
+
+  void _schedulePermissionRead() {
+    final port = widget.controller;
+    if (port is! AgentPermissionWorkspacePort) return;
+    final permissionPort = port as AgentPermissionWorkspacePort;
+    final generation = _permissionGeneration;
+    scheduleMicrotask(() {
+      if (_isCurrentPermissionPort(port, generation)) {
+        unawaited(_readActionPermissions(permissionPort, generation));
+      }
+    });
+  }
+
+  bool _isCurrentPermissionPort(AgentWorkspacePort port, int generation) =>
+      mounted &&
+      identical(widget.controller, port) &&
+      _permissionGeneration == generation &&
+      port is AgentPermissionWorkspacePort;
+
+  bool _isCurrentPermissionOperation(
+    AgentPermissionWorkspacePort port,
+    AgentWorkspacePort owner,
+    int generation,
+    int operation,
+  ) =>
+      _isCurrentPermissionPort(owner, generation) &&
+      identical(widget.controller, port) &&
+      _permissionOperation == operation;
+
+  Future<void> _readActionPermissions(
+    AgentPermissionWorkspacePort permissionPort,
+    int generation,
+  ) async {
+    final owner = widget.controller;
+    if (!_isCurrentPermissionPort(owner, generation) ||
+        owner is! AgentPermissionWorkspacePort ||
+        !identical(owner, permissionPort) ||
+        _revokingPermissionKey != null) {
+      return;
+    }
+    final operation = ++_permissionOperation;
+    setState(() {
+      _permissionsLoading = true;
+      _permissionsError = null;
+    });
+    try {
+      final permissions = await permissionPort.readActionPermissions();
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _actionPermissions = List.unmodifiable(permissions));
+      }
+    } on Object {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() {
+          _actionPermissions = const [];
+          _permissionsError = '无法读取已记住的操作授权，请重试。';
+        });
+      }
+    } finally {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _permissionsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _revokeActionPermission(
+    AgentPermissionReference reference,
+  ) async {
+    final owner = widget.controller;
+    if (owner is! AgentPermissionWorkspacePort ||
+        _permissionsLoading ||
+        _revokingPermissionKey != null) {
+      return;
+    }
+    final permissionPort = owner as AgentPermissionWorkspacePort;
+    final generation = _permissionGeneration;
+    final operation = ++_permissionOperation;
+    final key = _permissionKey(reference);
+    setState(() {
+      _revokingPermissionKey = key;
+      _permissionsError = null;
+    });
+    try {
+      await permissionPort.revokeActionPermission(reference);
+      if (!_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        return;
+      }
+      final permissions = await permissionPort.readActionPermissions();
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _actionPermissions = List.unmodifiable(permissions));
+      }
+    } on Object {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() {
+          _actionPermissions = const [];
+          _permissionsError = '无法确认授权状态，请重新读取后继续。';
+        });
+      }
+    } finally {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _revokingPermissionKey = null);
+      }
+    }
+  }
+
+  String _permissionKey(AgentPermissionReference reference) =>
+      '${reference.category.name}:${reference.revision}';
 
   Future<void> _refresh(AgentWorkspacePort port, int generation) async {
     try {
@@ -236,6 +394,9 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       final preferencesPort = widget.controller is AgentPreferencesWorkspacePort
           ? widget.controller as AgentPreferencesWorkspacePort
           : null;
+      final permissionPort = widget.controller is AgentPermissionWorkspacePort
+          ? widget.controller as AgentPermissionWorkspacePort
+          : null;
       final canLoad =
           !portBusy && consent && (keySaved || _key.text.isNotEmpty);
       final canVerify =
@@ -397,6 +558,117 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
               title: '时间规划偏好',
               subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
               child: _PlanningPreferencesEditor(port: preferencesPort),
+            ),
+            const SizedBox(height: 14),
+          ],
+          if (permissionPort != null) ...[
+            _SettingsCard(
+              title: '已记住的操作授权',
+              subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_permissionsLoading) ...[
+                    const LinearProgressIndicator(),
+                    const SizedBox(height: 8),
+                    const Text(
+                      '正在读取授权…',
+                      style: TextStyle(color: _settingsMuted),
+                    ),
+                  ],
+                  if (_permissionsError != null) ...[
+                    Text(
+                      _permissionsError!,
+                      key: const ValueKey('agent-permissions-error'),
+                      style: const TextStyle(color: Color(0xFF9B2C2C)),
+                    ),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('agent-permissions-reload'),
+                        onPressed:
+                            _permissionsLoading ||
+                                _revokingPermissionKey != null
+                            ? null
+                            : () => unawaited(
+                                _readActionPermissions(
+                                  permissionPort,
+                                  _permissionGeneration,
+                                ),
+                              ),
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('重新读取'),
+                      ),
+                    ),
+                  ] else if (!_permissionsLoading &&
+                      _actionPermissions.isEmpty) ...[
+                    const Text(
+                      '尚未记住任何操作授权。',
+                      key: ValueKey('agent-permissions-empty'),
+                      style: TextStyle(color: _settingsMuted),
+                    ),
+                  ],
+                  for (final reference in _actionPermissions)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.verified_user_outlined,
+                            color: _settingsGreen,
+                            size: 19,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              reference.category.label,
+                              key: ValueKey(
+                                'agent-permission-${_permissionKey(reference)}',
+                              ),
+                            ),
+                          ),
+                          TextButton(
+                            key: ValueKey(
+                              'agent-permission-revoke-${_permissionKey(reference)}',
+                            ),
+                            onPressed:
+                                _permissionsLoading ||
+                                    _revokingPermissionKey != null
+                                ? null
+                                : () => unawaited(
+                                    _revokeActionPermission(reference),
+                                  ),
+                            child: Text(
+                              _revokingPermissionKey ==
+                                      _permissionKey(reference)
+                                  ? '正在撤销…'
+                                  : '撤销',
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (_permissionsError == null)
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        key: const ValueKey('agent-permissions-refresh'),
+                        onPressed:
+                            _permissionsLoading ||
+                                _revokingPermissionKey != null
+                            ? null
+                            : () => unawaited(
+                                _readActionPermissions(
+                                  permissionPort,
+                                  _permissionGeneration,
+                                ),
+                              ),
+                        icon: const Icon(Icons.refresh_rounded),
+                        label: const Text('刷新授权列表'),
+                      ),
+                    ),
+                ],
+              ),
             ),
             const SizedBox(height: 14),
           ],
@@ -994,6 +1266,7 @@ String _phaseText(AgentPhase phase) => switch (phase) {
   AgentPhase.loadingModels => '正在获取模型列表…',
   AgentPhase.verifying => '正在验证模型并保存设置…',
   AgentPhase.generating => '正在生成回复…',
+  AgentPhase.compacting => '正在整理对话上下文…',
   AgentPhase.executingRead => '正在查询资料…',
   AgentPhase.waitingForApproval => '等待你批准方案…',
   AgentPhase.waitingForSchool => '等待你在学校页面继续…',

@@ -457,7 +457,7 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 13);
+      expect(await _scalar(store, 'PRAGMA user_version'), 14);
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -482,7 +482,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 14);
+    _setSchemaVersion(file, 15);
 
     await expectLater(
       _open(file: file),
@@ -496,7 +496,7 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 14);
+      expect(raw.select('PRAGMA user_version').single['user_version'], 15);
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -557,9 +557,14 @@ Future<JwStore> _open({File? file, Future<void> Function()? checkpoint}) async {
     modelCredentialProtector: _SyntheticProtector(),
     onAgentCheckpoint: checkpoint,
   );
+  try {
+    await store.initialize();
+    await store.agent.initializeAgent();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
-  await store.initialize();
-  await store.agent.initializeAgent();
   return store;
 }
 
@@ -684,12 +689,32 @@ Future<void> _rewindMessagesToSchema11(
     ]) {
       raw.execute('DROP TABLE IF EXISTS $table');
     }
+    _removeSchema14AgentObjectsForLegacyFixture(raw);
     raw.execute('COMMIT');
   } on Object {
     raw.execute('ROLLBACK');
     rethrow;
   } finally {
     raw.close();
+  }
+}
+
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
   }
 }
 

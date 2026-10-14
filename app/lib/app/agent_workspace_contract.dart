@@ -2,6 +2,18 @@ import 'package:flutter/foundation.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_discussion_contract.dart';
+import '../core/agent_permission_contract.dart';
+
+abstract interface class AgentConversationCommandsWorkspacePort {
+  Future<void> compactConversation();
+  Future<void> clearConversation();
+}
+
+abstract interface class AgentPermissionWorkspacePort {
+  Future<void> approveAndRememberAction(String actionId);
+  Future<List<AgentPermissionReference>> readActionPermissions();
+  Future<void> revokeActionPermission(AgentPermissionReference reference);
+}
 
 /// C5 human buttons only. None of these methods are a model-callable tool.
 abstract interface class AgentActionWorkspacePort {

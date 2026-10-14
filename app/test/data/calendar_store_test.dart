@@ -49,6 +49,7 @@ void main() {
       final raw = sqlite3.sqlite3.open(file.path);
       try {
         removeTaskTablesForLegacyFixture(raw);
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
         raw.execute('PRAGMA user_version=7');
       } finally {
@@ -812,6 +813,7 @@ void main() {
       var raw = sqlite3.sqlite3.open(file.path);
       try {
         removeCalendarTablesForLegacyFixture(raw);
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('CREATE TABLE agenda_relations(synthetic_marker INTEGER)');
         raw.execute('PRAGMA user_version=5');
       } finally {
@@ -1041,7 +1043,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        13,
+        14,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1263,6 +1265,7 @@ void main() {
       final raw = sqlite3.sqlite3.open(file.path);
       try {
         removeCalendarTablesForLegacyFixture(raw);
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('PRAGMA user_version=5');
       } finally {
         raw.close();
@@ -1298,7 +1301,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        13,
+        14,
       );
     },
   );
@@ -1315,8 +1318,13 @@ Future<JwStore> _open({
     clock: _clock,
     onCalendarCheckpoint: checkpoint,
   );
+  try {
+    await store.initialize();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
-  await store.initialize();
   return store;
 }
 
@@ -1327,6 +1335,7 @@ void _downgradeRelationsToSynthetic6(File file) {
   try {
     raw.execute('BEGIN');
     removeTaskTablesForLegacyFixture(raw);
+    _removeSchema14AgentObjectsForLegacyFixture(raw);
     raw.execute(
       'ALTER TABLE agenda_relations RENAME TO synthetic_relations_v7',
     );
@@ -1348,6 +1357,25 @@ void _downgradeRelationsToSynthetic6(File file) {
     raw.execute('COMMIT');
   } finally {
     raw.close();
+  }
+}
+
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
   }
 }
 

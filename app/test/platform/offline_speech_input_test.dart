@@ -492,6 +492,12 @@ void main() {
         expect(encoded, isNot(contains(sentinel)));
       }
       expect(harness.diagnostics.events, isNotEmpty);
+      expect(
+        harness.diagnostics.events
+            .where((event) => event.phase == DiagnosticPhase.recognizing)
+            .map((event) => event.count),
+        [speechMinimumSamples, speechMinimumSamples],
+      );
       for (final event in harness.diagnostics.events) {
         expect(event.name, DiagnosticEventName.speechInputStage);
         expect(event.stage, DiagnosticStage.speechInput);

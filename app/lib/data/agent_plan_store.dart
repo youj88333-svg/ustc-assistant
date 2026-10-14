@@ -462,16 +462,33 @@ extension _AgentPlanStorage on LocalCalendarStore {
   });
 
   Future<AgentPlanApproval> _approveAgentPlan(AgentLocalPlan plan) =>
-      _serial(() async {
-        final prepared = _agentPlans[plan.id];
-        if (prepared == null || !identical(prepared.plan, plan)) {
-          throw const AgentFailure(AgentFailureCode.staleContext);
-        }
-        await _verifyAgentPlan(prepared);
-        final approval = AgentPlanApproval(plan);
-        _agentApprovals[approval] = prepared;
-        return approval;
-      });
+      _authorizeAgentPlan(
+        plan,
+        mode: AgentAuthorizationMode.confirmed,
+      ).then((approval) => approval!);
+
+  Future<AgentPlanApproval?> _authorizeAgentPlan(
+    AgentLocalPlan plan, {
+    required AgentAuthorizationMode mode,
+    bool remember = false,
+  }) => _serial(() async {
+    final prepared = _agentPlans[plan.id];
+    if (prepared == null || !identical(prepared.plan, plan)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _verifyAgentPlan(prepared);
+    final proof = await _db.agent._permissions.issue(
+      plan.ticket,
+      _planPermissionCategories(plan),
+      mode,
+      remember,
+    );
+    if (proof == null) return null;
+    final approval = AgentPlanApproval(plan);
+    _agentApprovals[approval] = prepared;
+    _db.agent._permissions.local[approval] = proof;
+    return approval;
+  });
 
   Future<void> _rejectAgentPlan(AgentLocalPlan plan) => _serial(() async {
     final prepared = _agentPlans[plan.id];
@@ -512,6 +529,11 @@ extension _AgentPlanStorage on LocalCalendarStore {
         return _agentPlanReceipt(prior, plan, true);
       }
       await _verifyAgentPlan(prepared);
+      final permission = _db.agent._permissions.local[approval];
+      if (permission == null) {
+        throw const AgentFailure(AgentFailureCode.consentRequired);
+      }
+      await _db.agent._permissions.validate(permission);
       // Verify every external baseline before rebasing any internal sequence.
       for (final change in plan.changes) {
         final normalized = await _normalizeAgentChange(plan.context, change);
@@ -576,6 +598,8 @@ extension _AgentPlanStorage on LocalCalendarStore {
       }
       await _db.onAgentCheckpoint?.call();
       await _verifyAgentPlan(prepared);
+      await _db.agent._permissions.validate(permission);
+      await _db.agent._permissions.persist(permission);
       await _db.customStatement(
         'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
       );
@@ -588,6 +612,9 @@ extension _AgentPlanStorage on LocalCalendarStore {
         plan.view,
         AgentActionStatus.committed,
         count: plan.changes.length,
+        authorization: permission.mode == AgentAuthorizationMode.remembered
+            ? AgentActionAuthorization.remembered
+            : AgentActionAuthorization.confirmed,
       );
       await _db.agent._saveAction(plan.ticket, view);
       await _db.customStatement(
@@ -612,6 +639,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
       );
       // After the mutation our expected revision is intentionally +1.
       await _verifyAgentPlan(prepared, revision: false);
+      await _db.agent._permissions.validate(permission);
       return AgentLocalPlanReceipt(
         planId: plan.id,
         revision: revision,
@@ -1163,6 +1191,7 @@ AgentActionView _actionWith(
   AgentActionView view,
   AgentActionStatus status, {
   int count = 0,
+  AgentActionAuthorization? authorization,
 }) => AgentActionView(
   id: view.id,
   kind: view.kind,
@@ -1171,6 +1200,7 @@ AgentActionView _actionWith(
   details: view.details,
   warning: view.warning,
   committedCount: count,
+  authorization: authorization ?? view.authorization,
 );
 Map<String, Object?> _actionMap(AgentActionView v) => {
   'id': v.id,
@@ -1180,6 +1210,7 @@ Map<String, Object?> _actionMap(AgentActionView v) => {
   'details': v.details,
   'warning': v.warning,
   'count': v.committedCount,
+  'authorization': v.authorization.name,
 };
 AgentActionView _actionFromMap(Object? value) {
   if (value is! Map ||
@@ -1191,8 +1222,9 @@ AgentActionView _actionFromMap(Object? value) {
         'details',
         'warning',
         'count',
+        'authorization',
       }).isNotEmpty ||
-      value.length != 7 ||
+      value.length != 7 && value.length != 8 ||
       value['details'] is! List ||
       (value['details'] as List).length > 20 ||
       value['count'] is! int) {
@@ -1206,6 +1238,9 @@ AgentActionView _actionFromMap(Object? value) {
     details: (value['details'] as List).cast<String>(),
     warning: value['warning'] as String,
     committedCount: value['count'] as int,
+    authorization: AgentActionAuthorization.values.byName(
+      value['authorization'] as String? ?? 'legacy',
+    ),
   );
   _validateActionView(v);
   return v;
@@ -1294,6 +1329,10 @@ extension _AgentActionStorage on AgentStore {
           prior?.read<String>('status') != 'proposed') {
         throw const AgentFailure(AgentFailureCode.cancelled);
       }
+      await _permissions.validateAction(record);
+      if (_permissions.actions[record] == null) {
+        throw const AgentFailure(AgentFailureCode.consentRequired);
+      }
       final p = permit.$2;
       final row = await _db
           .customSelect(
@@ -1309,7 +1348,16 @@ extension _AgentActionStorage on AgentStore {
       );
       await _saveAction(
         ticket,
-        _actionWith(record, AgentActionStatus.committed, count: 1),
+        _actionWith(
+          record,
+          AgentActionStatus.committed,
+          count: 1,
+          authorization:
+              _permissions.actions[record]?.mode ==
+                  AgentAuthorizationMode.remembered
+              ? AgentActionAuthorization.remembered
+              : AgentActionAuthorization.confirmed,
+        ),
       );
       await _db.customStatement(
         "INSERT INTO agenda_plan_audit(action,item_count,committed_at) VALUES ('preferences',1,?)",
@@ -1317,6 +1365,11 @@ extension _AgentActionStorage on AgentStore {
       );
       await _db.onAgentCheckpoint?.call();
       await _requireTicket(ticket);
+      final permission = _permissions.actions[record];
+      if (permission != null) {
+        await _permissions.validate(permission);
+        await _permissions.persist(permission);
+      }
       if (_revokedActionRuns.contains(ticket.runId)) {
         throw const AgentFailure(AgentFailureCode.cancelled);
       }
@@ -1433,7 +1486,7 @@ extension _AgentActionStorage on AgentStore {
       ),
     );
     await _db.customStatement(
-      'INSERT INTO agent_actions VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(action_id) DO UPDATE SET status=excluded.status,details_json=excluded.details_json,committed_count=excluded.committed_count',
+      'INSERT INTO agent_actions (action_id,run_id,kind,status,title,details_json,warning,committed_count,created_at,authorization) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(action_id) DO UPDATE SET status=excluded.status,details_json=excluded.details_json,committed_count=excluded.committed_count,authorization=excluded.authorization',
       [
         view.id,
         ticket.runId,
@@ -1444,6 +1497,7 @@ extension _AgentActionStorage on AgentStore {
         view.warning,
         view.committedCount,
         _db._clock.nowUtc.microsecondsSinceEpoch,
+        view.authorization.name,
       ],
     );
   }
@@ -1468,6 +1522,7 @@ extension _AgentActionStorage on AgentStore {
             'details': jsonDecode(r.read<String>('details_json')),
             'warning': r.read<String>('warning'),
             'count': r.read<int>('committed_count'),
+            'authorization': r.read<String>('authorization'),
           }),
         )
         .toList();

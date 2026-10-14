@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:record/record.dart';
 
 import '../core/speech_input_contract.dart';
+import 'windows_speech_input_device.dart';
 
 /// Narrow seam for the pinned recorder plugin. Tests inject a synthetic backend
 /// so they never construct a platform recorder or open a microphone.
@@ -16,14 +17,22 @@ abstract interface class SpeechAudioRecorderBackend {
 
 typedef SpeechAudioRecorderBackendFactory =
     SpeechAudioRecorderBackend Function();
+typedef SpeechInputDeviceResolver = Future<InputDevice?> Function();
 
 /// Adapts record's in-memory stream API to the app's fixed PCM contract.
 ///
 /// Constructing this port does not create a plugin recorder. The recorder is
 /// created on the first explicit permission check or start call.
 final class SpeechAudioRecorder implements SpeechRecorderPort {
-  SpeechAudioRecorder({SpeechAudioRecorderBackendFactory? backendFactory})
-    : _backendFactory = backendFactory ?? _RecordBackend.new;
+  SpeechAudioRecorder({
+    SpeechAudioRecorderBackendFactory? backendFactory,
+    SpeechInputDeviceResolver? inputDeviceResolver,
+  }) : _backendFactory = backendFactory ?? _RecordBackend.new,
+       _inputDeviceResolver =
+           inputDeviceResolver ??
+           (backendFactory == null
+               ? resolveSpeechInputDevice
+               : () async => null);
 
   static const RecordConfig _recordConfig = RecordConfig(
     encoder: AudioEncoder.pcm16bits,
@@ -32,6 +41,7 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
   );
 
   final SpeechAudioRecorderBackendFactory _backendFactory;
+  final SpeechInputDeviceResolver _inputDeviceResolver;
   SpeechAudioRecorderBackend? _backend;
   Future<bool>? _permissionOperation;
   bool? _permissionGranted;
@@ -130,10 +140,24 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
       );
     }
 
+    final InputDevice? device;
+    try {
+      device = await _inputDeviceResolver();
+    } on Object {
+      throw const SpeechInputFailure(
+        SpeechInputFailureCode.microphoneUnavailable,
+      );
+    }
+    if (_stopRequested || _closing) {
+      return _RecorderSession()..stream = const Stream<Uint8List>.empty();
+    }
+
     _captureMayBeActive = true;
     final Stream<Uint8List> source;
     try {
-      source = await backend.startStream(_recordConfig);
+      source = await backend.startStream(
+        _recordConfig.copyWith(device: (value: device)),
+      );
     } on Object {
       await _cleanUpFailedStart(backend);
       throw const SpeechInputFailure(
@@ -212,15 +236,18 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
       _needsStop = true;
       throw const SpeechInputFailure(SpeechInputFailureCode.cleanupFailed);
     }
-    if (session != null) session.forwarding = false;
 
     try {
+      // Windows posts captured PCM chunks asynchronously. Keep forwarding
+      // while the platform stop call is in flight so queued chunks are kept.
       await backend.stop();
     } on Object {
+      if (session != null) session.forwarding = false;
       _needsStop = true;
       throw const SpeechInputFailure(SpeechInputFailureCode.cleanupFailed);
     }
 
+    if (session != null) session.forwarding = false;
     _session = null;
     _captureMayBeActive = false;
     _needsStop = false;

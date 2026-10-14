@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import 'package:ustc_assistant_m0/core/speech_input_contract.dart';
 import 'package:ustc_assistant_m0/platform/sense_voice_recognizer.dart';
 import 'package:ustc_assistant_m0/platform/speech_model_bundle.dart';
@@ -38,6 +39,23 @@ void main() {
       await recognizer.close();
     },
   );
+
+  test('fixed recognizer configuration selects Chinese SenseVoice on CPU', () {
+    final bundle = SpeechModelBundle(
+      executableDirectory: r'C:\synthetic-speech-root',
+    );
+    final sherpa.OfflineRecognizerConfig config =
+        buildSenseVoiceRecognizerConfig(bundle);
+
+    expect(config.feat.sampleRate, speechSampleRate);
+    expect(config.model.senseVoice.model, bundle.modelPath);
+    expect(config.model.senseVoice.language, 'zh');
+    expect(config.model.senseVoice.useInverseTextNormalization, isTrue);
+    expect(config.model.tokens, bundle.tokensPath);
+    expect(config.model.provider, 'cpu');
+    expect(config.model.numThreads, 2);
+    expect(config.model.debug, isFalse);
+  });
 
   test('closing an unused recognizer is lazy, final and idempotent', () async {
     final recognizer = SenseVoiceRecognizer();

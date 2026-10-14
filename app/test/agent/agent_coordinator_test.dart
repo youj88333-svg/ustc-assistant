@@ -35,24 +35,34 @@ void main() {
       () async {
         final tools = _ReadTools()..catalogue = true;
         final rig = await _rig(configured: true, readTools: tools);
-        for (final question in [
-          '我明天有哪些课？',
-          '明天几点上第一节课？',
-          '明天的课程是什么？',
-          '下午有什么课？',
+        var index = 0;
+        for (final (question, firstDay, endDay) in [
+          ('我明天有哪些课？', '2026-10-14', '2026-10-15'),
+          ('明天几点上第一节课？', '2026-10-14', '2026-10-15'),
+          ('明天的课程是什么？', '2026-10-14', '2026-10-15'),
+          ('下午有什么课？', '2026-10-13', '2026-10-14'),
         ]) {
+          final firstRequest = rig.gateway.generations.length;
+          rig.gateway.enqueueEvents([
+            _readCall(
+              'dated-$index',
+              jsonEncode({'first_day': firstDay, 'end_day_exclusive': endDay}),
+            ),
+          ]);
           rig.gateway.enqueueEvents([
             const ModelTextDelta('合成路由回答'),
             ModelCompleted(finishReason: 'stop'),
           ]);
           await rig.coordinator.send(question);
-          final names = rig.gateway.generations.last.request.tools.map(
-            (t) => t.name,
-          );
+          final request = rig.gateway.generations[firstRequest].request;
+          final names = request.tools.map((t) => t.name);
           expect(names, contains('query_agenda'));
           expect(names, isNot(contains('search_courses')));
+          expect(request.toolChoice, 'query_agenda');
+          expect(rig.gateway.generations, hasLength(firstRequest + 2));
+          expect(tools.executed, index + 1);
+          index++;
         }
-        await rig.coordinator.newConversation();
         rig.gateway.enqueueEvents([
           const ModelTextDelta('合成课程评价回答'),
           ModelCompleted(finishReason: 'stop'),
@@ -73,12 +83,23 @@ void main() {
           final tools = _ReadTools()..catalogue = true;
           final rig = await _rig(configured: true, readTools: tools);
           rig.gateway.enqueueEvents([
-            const ModelTextDelta('合成日程回答'),
+            _readCall(
+              'local-agenda',
+              '{"first_day":"2026-10-14","end_day_exclusive":"2026-10-15"}',
+            ),
+          ]);
+          rig.gateway.enqueueEvents([
+            const ModelTextDelta('已完成本地日程核对。'),
             ModelCompleted(finishReason: 'stop'),
           ]);
           await rig.coordinator.send('我明天有哪些课？');
+          expect(
+            rig.gateway.generations.first.request.toolChoice,
+            'query_agenda',
+          );
+          expect(tools.executed, 1);
           rig.gateway.enqueueEvents([
-            const ModelTextDelta('合成公开回答'),
+            const ModelTextDelta('我会按要求只查公开评课。'),
             ModelCompleted(finishReason: 'stop'),
           ]);
           await rig.coordinator.send(question);
@@ -500,7 +521,7 @@ void main() {
 
     test('complete streaming chat sends only safe completed history', () async {
       final rig = await _rig(configured: true);
-      final conversation = await rig.store.agent.createConversation();
+      final conversation = rig.coordinator.view.conversationId!;
       final settings = await rig.store.agent.inspectAgent();
       await _completeRun(
         rig.store,
@@ -516,7 +537,6 @@ void main() {
       );
       await rig.store.agent.saveAssistant(partial, '必须从上下文排除的部分回答');
       await rig.store.agent.finishRun(partial, AgentMessageStatus.interrupted);
-      await rig.coordinator.selectConversation(conversation);
       rig.gateway.enqueueEvents([
         const ModelTextDelta('新的'),
         const ModelTextDelta('回答'),
@@ -545,8 +565,7 @@ void main() {
       'incomplete stream records the partial answer and reports the gateway failure',
       () async {
         final rig = await _rig(configured: true);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         rig.gateway.enqueue((call) async {
           call.emit(const ModelTextDelta('已收到的部分回答'));
           await call.fail(const AgentFailure(AgentFailureCode.rateLimited));
@@ -575,7 +594,15 @@ void main() {
         expect(rig.gateway.requestCount, 0);
         expect(await _count(rig.store, 'agent_messages'), messagesBefore);
         expect(await _count(rig.store, 'agent_runs'), runsBefore);
-        expect(rig.coordinator.view.conversations, isEmpty);
+        expect(rig.coordinator.view.conversations, hasLength(1));
+        expect(
+          rig.coordinator.view.conversations.single.id,
+          rig.coordinator.view.conversationId,
+        );
+        expect(
+          await rig.store.agent.messages(rig.coordinator.view.conversationId!),
+          isEmpty,
+        );
       },
     );
 
@@ -606,8 +633,7 @@ void main() {
       'stop cancels the active stream, rejects late output, and permits a new run',
       () async {
         final rig = await _rig(configured: true);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         final firstSend = rig.coordinator.send('第一轮问题');
         final first = await rig.gateway.nextGeneration();
         await first.started.future.timeout(const Duration(seconds: 2));
@@ -648,8 +674,7 @@ void main() {
       () async {
         final dataGate = _PausingAgentData();
         final rig = await _rig(configured: true, wrapData: dataGate.attach);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         final beginPause = _Pause();
         dataGate.pauseBeginRun = beginPause;
 
@@ -795,8 +820,7 @@ void main() {
       () async {
         final dataGate = _PausingAgentData();
         final rig = await _rig(configured: true, wrapData: dataGate.attach);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         final leasePause = _Pause();
         dataGate.pauseLease = leasePause;
 
@@ -842,8 +866,7 @@ void main() {
       'clear history persists intent, drains the model, and cannot revive its old output',
       () async {
         final rig = await _rig(configured: true);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         final send = rig.coordinator.send('清理历史前的问题');
         final generation = await rig.gateway.nextGeneration();
         await generation.started.future.timeout(const Duration(seconds: 2));
@@ -861,10 +884,16 @@ void main() {
 
         expect(generation.isClosed, isTrue);
         expect(generation.emit(const ModelTextDelta('清理后的迟到内容')), isFalse);
-        expect(await rig.store.agent.conversations(), isEmpty);
+        final clearedConversation = rig.coordinator.view.conversationId;
+        expect(clearedConversation, isNotNull);
+        expect(await rig.store.agent.conversations(), hasLength(1));
+        expect(
+          (await rig.store.agent.conversations()).single.id,
+          clearedConversation,
+        );
         expect(await rig.store.agent.messages(conversation), isEmpty);
+        expect(await rig.store.agent.messages(clearedConversation!), isEmpty);
         expect(rig.coordinator.view.messages, isEmpty);
-        expect(rig.coordinator.view.conversationId, isNull);
       },
     );
 
@@ -872,8 +901,7 @@ void main() {
       'persistent C3 maintenance intent can quiesce the Agent channel without read deadlock',
       () async {
         final rig = await _rig(configured: true);
-        final conversation = await rig.store.agent.createConversation();
-        await rig.coordinator.selectConversation(conversation);
+        final conversation = rig.coordinator.view.conversationId!;
         final send = rig.coordinator.send('维护前的问题');
         final generation = await rig.gateway.nextGeneration();
         await generation.started.future.timeout(const Duration(seconds: 2));
@@ -1036,6 +1064,7 @@ Future<_Rig> _rig({
   addTearDown(store.close);
   await store.initialize();
   await store.agent.initializeAgent();
+  await store.agent.ensurePrimaryConversation();
   if (configured) {
     final settings = await store.agent.inspectAgent();
     await store.agent.saveModelConfiguration(

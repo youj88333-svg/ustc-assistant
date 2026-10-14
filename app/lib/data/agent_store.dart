@@ -7,12 +7,100 @@ final class AgentStore
         AgentDataPort,
         AgentRunJournalPort,
         AgentHistoryPagePort,
+        AgentConversationControlPort,
+        AgentPermissionManagementPort,
+        AgentRecordPermissionPort,
         AgentPreferencesPort,
         AgentActionRecordPort,
         AgentSourceApprovalPort,
         AgentPreferencesProposalPort {
   AgentStore._(this._db);
   final JwStore _db;
+  late final _chat = _AgentChatState(this);
+  @override
+  void revokeConversationContext() => _chat.invalidate();
+  late final _permissions = _AgentPermissionState(this);
+  final _sourceRequests = Expando<AgentSourceRequest>();
+  @override
+  Future<List<AgentPermissionReference>> readActionPermissions() =>
+      _permissions.read();
+  @override
+  Future<void> revokeActionPermission(AgentPermissionReference reference) =>
+      _permissions.revoke(reference);
+  @override
+  Future<AgentActionView> prepareSourceAction(
+    AgentRunTicket ticket,
+    AgentSourceRequest request,
+    String title,
+    List<String> details,
+  ) async {
+    final record = await prepareActionRecord(
+      ticket,
+      AgentActionKind.sourceRefresh,
+      title,
+      details,
+    );
+    _sourceRequests[record] = request;
+    return record;
+  }
+
+  @override
+  Future<bool> authorizeAction(
+    AgentRunTicket ticket,
+    AgentActionView action, {
+    required AgentAuthorizationMode mode,
+    bool remember = false,
+  }) => _serial(() async {
+    await _requireTicket(ticket);
+    if (!identical(_actionPermits[action], ticket) &&
+        !identical(_preferencePermits[action]?.$1, ticket)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    final request = _sourceRequests[action];
+    final categories = action.kind == AgentActionKind.planningPreferences
+        ? const [AgentPermissionCategory.preferences]
+        : request == null
+        ? null
+        : [
+            request.source == AgentRefreshSource.jw
+                ? AgentPermissionCategory.refreshJw
+                : AgentPermissionCategory.refreshYoung,
+          ];
+    if (categories == null) {
+      if (mode == AgentAuthorizationMode.remembered || remember) {
+        throw const AgentFailure(AgentFailureCode.invalidInput);
+      }
+      await _ensureSourceRecord(ticket, action);
+      _sourceApprovals[action] = ticket;
+      return true;
+    }
+    final proof = await _permissions.issue(ticket, categories, mode, remember);
+    if (proof == null) return false;
+    await _db.transaction(() async {
+      await _requireTicket(ticket);
+      if (action.kind == AgentActionKind.sourceRefresh) {
+        await _ensureSourceRecord(ticket, action);
+        await _permissions.validate(proof);
+        if (remember) await _permissions.persist(proof);
+      }
+      await _permissions.validate(proof);
+      _db._ownership.ensureHeld();
+    });
+    _permissions.actions[action] = proof;
+    if (action.kind == AgentActionKind.sourceRefresh) {
+      _sourceApprovals[action] = ticket;
+    }
+    return true;
+  });
+  @override
+  Future<String> ensurePrimaryConversation() => _chat.ensurePrimary();
+  @override
+  Future<AgentConversationContext> readConversationContext() => _chat.read();
+  @override
+  Future<void> saveConversationSummary(
+    AgentConversationContext expected,
+    String summary,
+  ) => _chat.save(expected, summary);
   final _changes = StreamController<int>.broadcast();
   final Set<ModelSecretLease> _secrets = {};
   final Map<String, AgentRunTicket> _tickets = {};
@@ -53,13 +141,26 @@ final class AgentStore
   });
   Future<void> ensureSourceApproval(
     AgentRunTicket ticket,
-    AgentActionView record,
-  ) => _serial(() async {
+    AgentActionView record, [
+    AgentSourceRequest? request,
+  ]) => _serial(() async {
     await _ensureSourceRecord(ticket, record);
     if (!identical(_sourceApprovals[record], ticket)) {
       throw const AgentFailure(AgentFailureCode.consentRequired);
     }
+    _verifySourceRequest(record, request);
+    await _permissions.validateAction(record);
   });
+  void _verifySourceRequest(
+    AgentActionView record,
+    AgentSourceRequest? request,
+  ) {
+    final expected = _sourceRequests[record];
+    if (expected != null && !identical(expected, request)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+  }
+
   Future<void> _ensureSourceRecord(
     AgentRunTicket ticket,
     AgentActionView record,
@@ -85,13 +186,24 @@ final class AgentStore
   Future<void> bindSourceAction(
     AgentRunTicket ticket,
     AgentActionView record,
-    Object sourceTicket,
-  ) => _serial(() async {
+    Object sourceTicket, [
+    AgentSourceRequest? request,
+  ]) => _serial(() async {
     if (!identical(_actionPermits[record], ticket) ||
         record.kind != AgentActionKind.sourceRefresh) {
       throw const AgentFailure(AgentFailureCode.staleContext);
     }
     await _requireTicket(ticket);
+    _verifySourceRequest(record, request);
+    await _permissions.validateAction(record);
+    final expectedSource = _sourceRequests[record]?.source;
+    if (expectedSource != null &&
+        (expectedSource == AgentRefreshSource.jw
+            ? sourceTicket is! JwJobTicket
+            : sourceTicket is! YoungJobTicket ||
+                  sourceTicket.stamp.kind != YoungJobKind.calendar)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
     if (_revokedActionRuns.contains(ticket.runId)) {
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
@@ -116,6 +228,7 @@ final class AgentStore
     final binding = _sourceActions[sourceTicket];
     if (binding == null) return;
     await _requireTicket(binding.$1);
+    await _permissions.validateAction(binding.$2);
     if (_revokedActionRuns.contains(binding.$1.runId)) {
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
@@ -130,7 +243,18 @@ final class AgentStore
     }
     await _saveAction(
       binding.$1,
-      _actionWith(binding.$2, AgentActionStatus.committed, count: count),
+      _actionWith(
+        binding.$2,
+        AgentActionStatus.committed,
+        count: count,
+        authorization:
+            _permissions.actions[binding.$2]?.mode ==
+                AgentAuthorizationMode.remembered
+            ? AgentActionAuthorization.remembered
+            : identical(_sourceApprovals[binding.$2], binding.$1)
+            ? AgentActionAuthorization.confirmed
+            : AgentActionAuthorization.legacy,
+      ),
     );
     await _db.customStatement(
       "INSERT INTO agenda_plan_audit(action,item_count,committed_at) VALUES ('source',?,?)",
@@ -138,6 +262,7 @@ final class AgentStore
     );
     await _db.onAgentCheckpoint?.call();
     await _requireTicket(binding.$1);
+    await _permissions.validateAction(binding.$2);
     if (_revokedActionRuns.contains(binding.$1.runId)) {
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
@@ -837,7 +962,7 @@ final class AgentStore
             variables: [Variable.withString(conversationId)],
           )
           .getSingle();
-      if (count.read<int>('count') + 2 > 500) {
+      if (count.read<int>('count') + 2 > 20000) {
         throw const AgentFailure(AgentFailureCode.resourceLimit);
       }
       await _budget(utf8.encode(text).length);
@@ -1048,6 +1173,7 @@ final class AgentStore
     final conversation = pending.read<String?>('conversation_id');
     final where = conversation == null ? '' : ' WHERE conversation_id=?';
     final args = conversation == null ? <Object?>[] : <Object?>[conversation];
+    await _chat.clear(conversation);
     final count =
         (await _db
                 .customSelect(
@@ -1095,6 +1221,7 @@ final class AgentStore
   /// Called in C3's existing durable maintenance transaction, without nested
   /// queue/SQL transactions. The runner subsequently drains C4 before deletion.
   Future<void> _beginApplicationMaintenance() async {
+    _chat.invalidate();
     if (await _historyIntent() != null) {
       throw const SettingsFailure(SettingsFailureCode.busy);
     }
@@ -1105,6 +1232,8 @@ final class AgentStore
   }
 
   Future<void> _resetApplication() async {
+    await _chat.clear(null);
+    await _permissions.reset();
     for (final table in [
       'agent_actions',
       'agent_messages',
@@ -1126,6 +1255,7 @@ final class AgentStore
   }
 
   Future<void> close() async {
+    _chat.invalidate();
     _closed = true;
     _revoke();
     await _changes.close();

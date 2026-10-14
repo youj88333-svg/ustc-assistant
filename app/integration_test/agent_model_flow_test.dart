@@ -153,9 +153,8 @@ void main() {
         await _returnFromAgentSettings(tester);
         expect(
           find.byKey(const ValueKey('agent-empty-new-conversation')),
-          findsOneWidget,
+          findsNothing,
         );
-        await _tapKey(tester, 'agent-empty-new-conversation');
         await tester.pumpAndSettle();
         await tester.enterText(
           find.byKey(const ValueKey('agent-composer')),
@@ -290,7 +289,11 @@ void main() {
         expect(first.runtime!.agent.view.settings!.keySaved, isFalse);
         expect(first.runtime!.agent.view.settings!.consent, isFalse);
         expect(first.runtime!.agent.view.settings!.modelId, isNull);
-        expect(first.runtime!.agent.view.conversations, isEmpty);
+        expect(first.runtime!.agent.view.conversations, hasLength(1));
+        expect(
+          first.runtime!.agent.view.conversationId,
+          isNot(originalConversation),
+        );
         expect(first.runtime!.agent.view.messages, isEmpty);
         expect(first.runtime!.agent.view.canSend, isFalse);
         expect(
@@ -662,6 +665,11 @@ void main() {
         expect(committedPlan.committedCount, 3);
         expect(
           find.byKey(ValueKey('agent-action-committed-$acceptedId')),
+          findsNothing,
+        );
+        await _expandLatestProcessingDetails(tester, first.agent);
+        expect(
+          find.byKey(ValueKey('agent-action-committed-$acceptedId')),
           findsOneWidget,
         );
 
@@ -718,6 +726,11 @@ void main() {
         expect(committedUndo.committedCount, 1);
         expect(
           find.byKey(ValueKey('agent-action-committed-$undoId')),
+          findsNothing,
+        );
+        await _expandLatestProcessingDetails(tester, first.agent);
+        expect(
+          find.byKey(ValueKey('agent-action-committed-$undoId')),
           findsOneWidget,
         );
 
@@ -769,6 +782,11 @@ void main() {
         expect(reopenedGateway.requestCount, 0);
         expect(reopened.agent.view.phase, AgentPhase.idle);
         expect(find.byKey(const ValueKey('agent-stop')), findsNothing);
+        expect(
+          find.byKey(ValueKey('agent-action-status-$undoId')),
+          findsNothing,
+        );
+        await _expandLatestProcessingDetails(tester, reopened.agent);
         expect(
           find.byKey(ValueKey('agent-action-status-$undoId')),
           findsOneWidget,
@@ -965,6 +983,17 @@ Future<void> _scrollAgentToLatest(WidgetTester tester) async {
   if (list.evaluate().isEmpty) return;
   await tester.drag(list, const Offset(0, -4000));
   await tester.pumpAndSettle();
+}
+
+Future<void> _expandLatestProcessingDetails(
+  WidgetTester tester,
+  AgentWorkspaceController agent,
+) async {
+  final message = agent.view.messages.last;
+  await _tapKey(
+    tester,
+    'agent-query-details-toggle-${agent.view.conversationId}:${message.id}',
+  );
 }
 
 Future<_PendingAgentRun> _sendUntilApproval(
@@ -1406,7 +1435,34 @@ final class _SyntheticGateway implements ModelGatewayPort {
     chatRequests.add(request);
     if (scriptLocalActions) {
       final last = request.messages.last;
-      if (last.role == 'user') {
+      if (request.toolChoice == 'find_free_slots') {
+        controller.add(
+          ModelCompleted(
+            finishReason: 'tool_calls',
+            toolCalls: [
+              ModelToolCall(
+                id: 'synthetic-free-$requestCount',
+                name: 'find_free_slots',
+                argumentsJson: jsonEncode({
+                  'first_day': '2026-10-13',
+                  'end_day_exclusive': '2026-10-14',
+                  'start_minute': 14 * 60,
+                  'end_minute': 16 * 60,
+                  'block_minutes': 60,
+                }),
+              ),
+            ],
+          ),
+        );
+      } else if (last.role == 'user' ||
+          last.role == 'tool' &&
+              request.messages
+                  .expand((message) => message.toolCalls)
+                  .any(
+                    (call) =>
+                        call.id == last.toolCallId &&
+                        call.name == 'find_free_slots',
+                  )) {
         final undo = (last.content ?? '').contains('撤销');
         final name = undo ? 'propose_undo' : 'propose_local_changes';
         if (!request.tools.any((tool) => tool.name == name)) {

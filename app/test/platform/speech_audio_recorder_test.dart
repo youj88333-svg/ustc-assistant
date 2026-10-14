@@ -90,6 +90,70 @@ void main() {
       expect(backend.calls, ['startStream', 'stop', 'dispose']);
     });
 
+    test('selects the ordinary default input only on start', () async {
+      final backend = _FakeBackend();
+      var selections = 0;
+      final recorder = SpeechAudioRecorder(
+        backendFactory: () => backend,
+        inputDeviceResolver: () async {
+          selections++;
+          return const InputDevice(id: 'synthetic-endpoint', label: '系统默认输入');
+        },
+      );
+      expect(selections, 0);
+      expect(await recorder.hasPermission(), isTrue);
+      expect(selections, 0);
+      await recorder.start();
+      expect(selections, 1);
+      expect(backend.configs.single.device!.id, 'synthetic-endpoint');
+      expect(backend.configs.single.toMap()['device'], {
+        'id': 'synthetic-endpoint',
+        'label': '系统默认输入',
+        'type': 'unknown',
+      });
+      await recorder.close();
+    });
+
+    test('unavailable default input fails before opening capture', () async {
+      final backend = _FakeBackend();
+      final recorder = SpeechAudioRecorder(
+        backendFactory: () => backend,
+        inputDeviceResolver: () async => throw StateError('private-device-id'),
+      );
+      await _expectFailure(
+        recorder.start(),
+        SpeechInputFailureCode.microphoneUnavailable,
+        forbiddenText: 'private-device-id',
+      );
+      expect(backend.configs, isEmpty);
+      expect(backend.calls, isEmpty);
+      await recorder.close();
+    });
+
+    test('stop during default input selection prevents capture', () async {
+      final backend = _FakeBackend();
+      final selection = Completer<InputDevice?>();
+      final selected = Completer<void>();
+      final recorder = SpeechAudioRecorder(
+        backendFactory: () => backend,
+        inputDeviceResolver: () {
+          selected.complete();
+          return selection.future;
+        },
+      );
+      final starting = recorder.start();
+      await selected.future;
+      final stopping = recorder.stop();
+      selection.complete(
+        const InputDevice(id: 'synthetic-endpoint', label: '系统默认输入'),
+      );
+      await stopping;
+      expect(await (await starting).toList(), isEmpty);
+      expect(backend.configs, isEmpty);
+      expect(backend.calls, isEmpty);
+      await recorder.close();
+    });
+
     test(
       'stop during preparation drains the late stream before returning',
       () async {
@@ -166,31 +230,40 @@ void main() {
       },
     );
 
-    test('failed stop drops late frames and can be retried', () async {
-      final backend = _FakeBackend()
-        ..stopError = StateError('device SECRET-456');
-      final recorder = SpeechAudioRecorder(backendFactory: () => backend);
+    test(
+      'failed stop can be retried without exposing backend errors',
+      () async {
+        final backend = _FakeBackend()
+          ..stopError = StateError('device SECRET-456');
+        final recorder = SpeechAudioRecorder(backendFactory: () => backend);
 
-      final stream = await recorder.start();
-      final received = <Uint8List>[];
-      final streamDone = Completer<void>();
-      stream.listen(received.add, onDone: streamDone.complete);
-      final stopping = recorder.stop();
-      backend.source.add(Uint8List.fromList([1, 1]));
-      await _expectFailure(
-        stopping,
-        SpeechInputFailureCode.cleanupFailed,
-        forbiddenText: 'SECRET-456',
-      );
-      expect(received, isEmpty);
+        final stream = await recorder.start();
+        final received = <Uint8List>[];
+        final streamDone = Completer<void>();
+        stream.listen(received.add, onDone: streamDone.complete);
+        backend.stopGate = Completer<void>();
+        final stopping = recorder.stop();
+        await backend.stopEntered.future;
+        backend.source.add(Uint8List.fromList([1, 1]));
+        await Future<void>.delayed(Duration.zero);
+        expect(received, [
+          [1, 1],
+        ]);
+        backend.stopGate!.complete();
+        await _expectFailure(
+          stopping,
+          SpeechInputFailureCode.cleanupFailed,
+          forbiddenText: 'SECRET-456',
+        );
 
-      backend.stopError = null;
-      await recorder.stop();
-      await streamDone.future;
-      expect(backend.calls, ['startStream', 'stop', 'stop']);
-      await recorder.close();
-      expect(backend.calls, ['startStream', 'stop', 'stop', 'dispose']);
-    });
+        backend.stopError = null;
+        await recorder.stop();
+        await streamDone.future;
+        expect(backend.calls, ['startStream', 'stop', 'stop']);
+        await recorder.close();
+        expect(backend.calls, ['startStream', 'stop', 'stop', 'dispose']);
+      },
+    );
 
     test(
       'failed dispose remains retryable and does not report closed',
@@ -213,6 +286,32 @@ void main() {
         await _expectFailure(recorder.start(), SpeechInputFailureCode.closed);
       },
     );
+
+    test('forwards PCM that arrives while a normal stop drains', () async {
+      final backend = _FakeBackend();
+      final recorder = SpeechAudioRecorder(backendFactory: () => backend);
+
+      final stream = await recorder.start();
+      final received = <Uint8List>[];
+      final streamDone = Completer<void>();
+      stream.listen(received.add, onDone: streamDone.complete);
+      backend.source.add(Uint8List.fromList([1, 2]));
+      await Future<void>.delayed(Duration.zero);
+
+      backend.stopFrames = [
+        Uint8List.fromList([3, 4]),
+        Uint8List.fromList([5, 6]),
+      ];
+      await recorder.stop();
+      await streamDone.future;
+
+      expect(received, [
+        [1, 2],
+        [3, 4],
+        [5, 6],
+      ]);
+      await recorder.close();
+    });
   });
 }
 
@@ -243,6 +342,7 @@ final class _FakeBackend implements SpeechAudioRecorderBackend {
   Object? startError;
   Object? stopError;
   Object? disposeError;
+  List<Uint8List> stopFrames = const [];
   Completer<Stream<Uint8List>>? startGate;
   Completer<void>? stopGate;
   final Completer<void> startEntered = Completer<void>();
@@ -280,6 +380,9 @@ final class _FakeBackend implements SpeechAudioRecorderBackend {
     if (gate != null) await gate.future;
     final error = stopError;
     if (error != null) throw error;
+    for (final frame in stopFrames) {
+      source.add(frame);
+    }
     if (!source.isClosed) await source.close();
   }
 

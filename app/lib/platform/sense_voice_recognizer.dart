@@ -4,6 +4,7 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:path/path.dart' as p;
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
@@ -237,19 +238,7 @@ Future<void> _runSpeechWorker(List<Object> arguments) async {
     // sherpa's optional argument is a directory; it appends the platform DLL.
     sherpa.initBindings(bundle.executableDirectory);
     recognizer = sherpa.OfflineRecognizer(
-      sherpa.OfflineRecognizerConfig(
-        model: sherpa.OfflineModelConfig(
-          senseVoice: sherpa.OfflineSenseVoiceModelConfig(
-            model: bundle.modelPath,
-            language: 'auto',
-            useInverseTextNormalization: true,
-          ),
-          tokens: bundle.tokensPath,
-          numThreads: 2,
-          debug: false,
-          provider: 'cpu',
-        ),
-      ),
+      buildSenseVoiceRecognizerConfig(bundle),
     );
     results.send(commands.sendPort);
     await for (final command in commands) {
@@ -293,6 +282,24 @@ Future<void> _runSpeechWorker(List<Object> arguments) async {
     commands.close();
   }
 }
+
+/// Builds the fixed local-recognition configuration without loading native code.
+@visibleForTesting
+sherpa.OfflineRecognizerConfig buildSenseVoiceRecognizerConfig(
+  SpeechModelBundle bundle,
+) => sherpa.OfflineRecognizerConfig(
+  model: sherpa.OfflineModelConfig(
+    senseVoice: sherpa.OfflineSenseVoiceModelConfig(
+      model: bundle.modelPath,
+      language: 'zh',
+      useInverseTextNormalization: true,
+    ),
+    tokens: bundle.tokensPath,
+    numThreads: 2,
+    debug: false,
+    provider: 'cpu',
+  ),
+);
 
 // Load the packaged dependency before sherpa, rather than resolving it through
 // the caller's PATH. A different ONNX API can otherwise crash inside native C++.

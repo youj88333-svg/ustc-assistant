@@ -421,7 +421,7 @@ void main() {
     );
 
     test(
-      'new conversation clears a real task discussion selection before ordinary chat',
+      'same primary chat keeps history and clears a real task discussion selection',
       () async {
         final rig = await _open();
         final snapshot = await rig.store.localCalendar.query(
@@ -439,25 +439,54 @@ void main() {
           const TaskQuery(filter: TaskFilter.all),
         )).items.single;
 
+        rig.gateway.enqueueEvents(_answer('此前普通回答。'));
+        await rig.coordinator.send('此前普通问题');
+        final discussionConversation = rig.coordinator.view.conversationId!;
+        final historyBeforeDiscussion = await rig.store.agent.messages(
+          discussionConversation,
+        );
+
         await rig.coordinator.prepareDiscussion(
           AgentDiscussionSelection.task(task.reference),
         );
-        final discussionConversation = rig.coordinator.view.conversationId;
+        expect(rig.coordinator.view.conversationId, discussionConversation);
         expect(rig.coordinator.view.discussionDraft, isNotNull);
         expect(rig.coordinator.view.discussionId, isNotNull);
 
         await rig.coordinator.newConversation();
-        expect(
-          rig.coordinator.view.conversationId,
-          isNot(discussionConversation),
-        );
+        expect(rig.coordinator.view.conversationId, discussionConversation);
         expect(rig.coordinator.view.discussionDraft, isNull);
         expect(rig.coordinator.view.discussionId, isNull);
+        final historyAfterNewConversation = await rig.store.agent.messages(
+          discussionConversation,
+        );
+        expect(
+          historyAfterNewConversation
+              .map(
+                (message) =>
+                    (message.id, message.role, message.text, message.status),
+              )
+              .toList(),
+          historyBeforeDiscussion
+              .map(
+                (message) =>
+                    (message.id, message.role, message.text, message.status),
+              )
+              .toList(),
+        );
 
         rig.gateway.enqueueEvents(_answer('你好。'));
         await rig.coordinator.send('你好');
-        final request = rig.gateway.generations.single.request;
+        final request = rig.gateway.generations.last.request;
         expect(request.messages.last.content, '你好');
+        expect(
+          request.messages.map((message) => message.content ?? '').join('\n'),
+          contains('此前普通问题'),
+        );
+        expect(
+          request.messages.map((message) => message.content ?? '').join('\n'),
+          contains('此前普通回答。'),
+        );
         expect(request.messages.last.content, isNot(contains('[应用选择]')));
         expect(_toolNames(request), isEmpty);
         expect(
@@ -645,8 +674,15 @@ void main() {
         final diagnostics = _FakeDiagnostics();
         final rig = await _open(diagnostics: diagnostics);
 
-        await rig.coordinator.newConversation();
-        final historyConversation = rig.coordinator.view.conversationId!;
+        final historyConversation = await rig.store.agent.createConversation();
+        await _completeSyntheticRun(
+          rig.store,
+          historyConversation,
+          '归档合成问题',
+          '归档合成回答',
+        );
+        final currentConversation = rig.coordinator.view.conversationId!;
+        expect(historyConversation, isNot(currentConversation));
         rig.gateway.enqueueEvents(_answer('合成历史答复。'));
         await rig.coordinator.send(bodySentinel);
         final originalMessages = await rig.store.agent.messages(
@@ -654,9 +690,7 @@ void main() {
         );
         expect(originalMessages, hasLength(2));
 
-        await rig.coordinator.newConversation();
-        final currentConversation = rig.coordinator.view.conversationId!;
-        expect(currentConversation, isNot(historyConversation));
+        expect(rig.coordinator.view.conversationId, currentConversation);
 
         final settingsBeforeRejectedClear = await rig.store.agent
             .inspectAgent();
@@ -904,6 +938,7 @@ Future<_Rig> _open({
   addTearDown(store.close);
   await store.initialize();
   await store.agent.initializeAgent();
+  await store.agent.ensurePrimaryConversation();
   final settings = await store.agent.inspectAgent();
   await store.agent.saveModelConfiguration(
     settings.authority,
@@ -987,6 +1022,22 @@ List<ModelEvent> _answer(String text) => [
   ModelTextDelta(text),
   ModelCompleted(finishReason: 'stop'),
 ];
+
+Future<void> _completeSyntheticRun(
+  JwStore store,
+  String conversationId,
+  String question,
+  String answer,
+) async {
+  final settings = await store.agent.inspectAgent();
+  final ticket = await store.agent.beginRun(
+    settings.authority,
+    conversationId,
+    question,
+  );
+  await store.agent.saveAssistant(ticket, answer);
+  await store.agent.finishRun(ticket, AgentMessageStatus.complete);
+}
 
 List<ModelEvent> _toolCall(ModelToolCall call) => [
   ModelCompleted(finishReason: 'tool_calls', toolCalls: [call]),

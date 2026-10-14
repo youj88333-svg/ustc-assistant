@@ -18,7 +18,7 @@ void main() {
     () async {
       final store = await _open();
       await _configure(store);
-      final conversation = await store.agent.createConversation();
+      final conversation = await store.agent.ensurePrimaryConversation();
       for (var index = 1; index <= 60; index++) {
         await _completeRun(
           store,
@@ -65,9 +65,15 @@ void main() {
 
       await coordinator.clearHistory(confirmed: true);
       expect(coordinator.view.messages, isEmpty);
-      expect(coordinator.view.conversations, isEmpty);
+      expect(coordinator.view.conversationId, isNotNull);
+      expect(coordinator.view.conversations, hasLength(1));
+      expect(
+        coordinator.view.conversations.single.id,
+        coordinator.view.conversationId,
+      );
       await coordinator.loadOlderMessages();
       expect(coordinator.view.messages, isEmpty);
+      expect(await store.agent.messages(conversation), isEmpty);
       expect(
         await pagePort.messagesBefore(conversation, newest.first.id),
         isEmpty,
@@ -105,7 +111,11 @@ void main() {
       final authority = (await store.agent.inspectAgent()).authority;
       final historyIntent = await store.agent.beginClearHistory(authority);
       await store.agent.completeClearHistory(historyIntent);
-      expect(await store.agent.conversations(), isEmpty);
+      final primary = await store.agent.ensurePrimaryConversation();
+      expect(await store.agent.conversations(), hasLength(1));
+      expect((await store.agent.conversations()).single.id, primary);
+      expect(await store.agent.messages(primary), isEmpty);
+      expect(await store.agent.messages(first.conversationId), isEmpty);
       expect(await _count(store, 'agent_actions'), 0);
       expect(await _count(store, 'agenda_plan_receipts'), 1);
       _expectPreferences(

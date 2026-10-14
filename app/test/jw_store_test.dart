@@ -1844,7 +1844,12 @@ Future<JwStore> _openStore({
     onCheckpoint: onCheckpoint,
     credentialProtector: credentialProtector,
   );
-  await store.initialize();
+  try {
+    await store.initialize();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
   return store;
 }
@@ -1906,7 +1911,12 @@ Future<JwStore> _openPersistentStore(
     onCheckpoint: onCheckpoint,
     credentialProtector: credentialProtector,
   );
-  await store.initialize();
+  try {
+    await store.initialize();
+  } catch (_) {
+    await store.close();
+    rethrow;
+  }
   addTearDown(store.close);
   return store;
 }
@@ -2207,6 +2217,7 @@ final class _SyntheticCredentialProtector implements JwCredentialProtector {
 /// The fixture downgrades only an isolated synthetic copy, never real data.
 void _removeYoungTablesForLegacyFixture(sqlite3.Database database) {
   removeCalendarTablesForLegacyFixture(database);
+  _removeSchema14AgentObjectsForLegacyFixture(database);
   for (final table in const [
     'knowledge_load_items',
     'knowledge_sections',
@@ -2226,6 +2237,25 @@ void _removeYoungTablesForLegacyFixture(sqlite3.Database database) {
     'young_state',
   ]) {
     database.execute('DROP TABLE $table');
+  }
+}
+
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
   }
 }
 

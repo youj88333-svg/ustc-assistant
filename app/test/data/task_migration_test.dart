@@ -43,6 +43,7 @@ void main() {
       late Map<String, List<Map<String, Object?>>> before;
       try {
         removeTaskTablesForLegacyFixture(raw);
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('INSERT INTO jw_account VALUES (1,?)', [
           'SYNTHETICACCOUNT',
         ]);
@@ -103,7 +104,7 @@ void main() {
               .single['n'],
           0,
         );
-        expect(after.select('PRAGMA user_version').single['user_version'], 13);
+        expect(after.select('PRAGMA user_version').single['user_version'], 14);
       } finally {
         after.close();
       }
@@ -192,6 +193,7 @@ void main() {
       late Map<String, List<Map<String, Object?>>> before;
       try {
         removeTaskTablesForLegacyFixture(raw);
+        _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute(
           'CREATE TABLE agenda_audit_v9 (synthetic_collision INTEGER)',
         );
@@ -269,19 +271,38 @@ Map<String, List<Map<String, Object?>>> _facts(sqlite.Database raw) => {
     ],
 };
 
+void _removeSchema14AgentObjectsForLegacyFixture(sqlite.Database database) {
+  final tables = database
+      .select("SELECT name FROM sqlite_master WHERE type='table'")
+      .map((row) => row['name'] as String)
+      .toSet();
+  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_actions')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_actions)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('authorization')) {
+      database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    }
+  }
+}
+
 Future<JwStore> _open(File file) async {
   final store = JwStore(
     NativeDatabase(file),
     ownership: _Owner(),
     clock: FixedClock(DateTime.utc(2026, 10, 12, 4)),
   );
-  addTearDown(store.close);
   try {
     await store.initialize();
   } catch (_) {
     await store.close();
     rethrow;
   }
+  addTearDown(store.close);
   return store;
 }
 

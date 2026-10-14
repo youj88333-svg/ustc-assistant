@@ -39,6 +39,7 @@ final class AgentSourceCoordinator
   final _semesters = <String, (AgentRunTicket, int, String)>{};
   AgentRunTicket? _ticket;
   AgentActionView? _record;
+  AgentSourceRequest? _request;
   Object? _boundJob;
   (AgentRunTicket, YoungJobTicket)? _deliveryProof;
   @override
@@ -87,7 +88,7 @@ final class AgentSourceCoordinator
     if (_cancelled || ticket == null || record == null) {
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
-    await store.agent.bindSourceAction(ticket, record, sourceTicket);
+    await store.agent.bindSourceAction(ticket, record, sourceTicket, _request);
     _boundJob = sourceTicket;
   }
 
@@ -142,7 +143,7 @@ final class AgentSourceCoordinator
     AgentSourceRequest request,
   ) async {
     await _ensure(ticket);
-    await store.agent.ensureSourceApproval(ticket, approvedRecord);
+    await store.agent.ensureSourceApproval(ticket, approvedRecord, request);
     int? semester;
     if (request.source == AgentRefreshSource.jw) {
       if (request.firstDay != null || request.endDayExclusive != null) {
@@ -191,6 +192,7 @@ final class AgentSourceCoordinator
                 const Duration(days: 1),
               ),
             ),
+      request: request,
     );
   }
 
@@ -215,14 +217,16 @@ final class AgentSourceCoordinator
     AgentRunTicket ticket,
     AgentActionView record,
     _AgentSourceJob kind,
-    Future<void> Function() start,
-  ) async {
+    Future<void> Function() start, {
+    AgentSourceRequest? request,
+  }) async {
     await _ensure(ticket);
     if (_job != null) throw const AgentFailure(AgentFailureCode.busy);
     _job = kind;
     _boundJob = null;
     _ticket = ticket;
     _record = record;
+    _request = request;
     _cancelled = false;
     final terminal = Completer<void>();
     _terminal = terminal;
