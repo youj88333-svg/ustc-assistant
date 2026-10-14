@@ -12,3 +12,4 @@
 - [M5.8 本地中文短句听写](records/08-local-speech-input.md)：固定本地模型、按需录音/isolate 推理、草稿回填与取消/维护/退出排空、公开资产/许可和原生合成验核；真实麦克风与术语效果待验。
 - [真人反馈：持续对话、权限与个人安排](records/09-feedback-and-single-chat.md)：单一主对话与 compact/clear、可撤销持久授权、折叠操作、日历任务截止栏、真实日程/个人计划与选择性备注读取、中文纠正和录音默认输入修复；真实录音和最终体验待验。
 - [连续上下文与麦克风不可用](records/10-follow-up-and-microphone.md)：工具回合保留人类意图和安全控制状态、肯定短答/日期锚点、实际请求内容与避免重复执行；修复 Flutter null 参数的 native 误拒绝，补真实 codec 往返回归；真实效果待复验。
+- [上下文与执行权限重构调研](records/11-context-and-permission-research.md)：源码现状、截图链路、官方/开源会话和审批方法、独立复核与提案取舍；完整计划在 §23，尚待批准，未改应用或重跑工程测试。
