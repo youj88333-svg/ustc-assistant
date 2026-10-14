@@ -46,7 +46,7 @@ Future<void> launchM0() async {
     final diagnostics = TransientDiagnostics(
       versions: const DiagnosticVersions(
         application: '0.0.1+0',
-        schema: 13,
+        schema: 14,
         tools: agentToolRegistryVersion,
         prompt: agentPromptVersion,
         revision: String.fromEnvironment(
