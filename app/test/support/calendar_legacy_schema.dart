@@ -96,6 +96,9 @@ void removeSettingsTablesForLegacyFixture(Database database) {
 /// copy before setting its older user_version.
 void removeAgentTablesForLegacyFixture(Database database) {
   for (final table in const [
+    'agent_context_turns',
+    'agent_target_aliases',
+    'agent_use_policy',
     'agent_chat_state',
     'agent_permissions',
     'agent_actions',

@@ -2,9 +2,10 @@ import '../core/agent_contract.dart';
 import '../core/agent_parameter_issue.dart';
 import '../core/calendar_contract.dart';
 import '../core/agent_discussion_contract.dart';
+import '../core/agent_context_contract.dart';
 import 'model_gateway_contract.dart';
 
-const agentToolRegistryVersion = 'agent-tools-v3';
+const agentToolRegistryVersion = 'agent-tools-v4';
 
 const agentPersonalToolNames = {
   'query_agenda',
@@ -29,6 +30,18 @@ abstract interface class AgentToolScopeSession {
 abstract interface class AgentPersonalReadScopeSession {
   /// Only human text establishes the opt-in; source/model text cannot do so.
   void bindHumanReadScope(String question);
+}
+
+/// App-owned policy, installed once on the actual run. Natural language and
+/// source content cannot widen this data scope or execution mode.
+abstract interface class AgentToolPolicySession {
+  void bindToolPolicy(
+    AgentRunTicket ticket, {
+    required bool personalContentAllowed,
+    required bool adviceOnly,
+    AgentTargetAliasPort? aliases,
+  });
+  bool get personalContentUsed;
 }
 
 /// Each result is data, never instructions. No underlying authority is JSON.
@@ -61,7 +74,8 @@ abstract interface class AgentToolSession {
   List<AgentEvidence> get evidence;
   Future<AgentToolResult> execute(ModelToolCall call);
 
-  /// Revalidate every previously delivered snapshot before another outbound.
+  /// Revalidate lifecycle/consent. Old snapshots remain labelled history;
+  /// current object versions are checked when reading/preparing a mutation.
   Future<void> validateDelivery();
   void revoke();
 }

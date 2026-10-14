@@ -60,7 +60,7 @@ final class _AgentPermissionState {
     AgentAuthorizationMode mode,
     bool remember,
   ) async {
-    await owner._requireTicket(ticket);
+    await owner._ensureAgentWritesAllowed(ticket);
     if (categories.isEmpty ||
         remember && mode != AgentAuthorizationMode.confirmed) {
       throw const AgentFailure(AgentFailureCode.invalidInput);
@@ -102,7 +102,7 @@ final class _AgentPermissionState {
       .getSingleOrNull();
 
   Future<void> validate(_PermissionProof proof) async {
-    await owner._requireTicket(proof.ticket);
+    await owner._ensureAgentWritesAllowed(proof.ticket);
     if (proof.scope != await scope() ||
         owner._revokedActionRuns.contains(proof.ticket.runId)) {
       throw const AgentFailure(AgentFailureCode.staleContext);
@@ -122,6 +122,9 @@ final class _AgentPermissionState {
   }
 
   Future<void> validateAction(AgentActionView action) async {
+    final ticket =
+        owner._actionPermits[action] ?? owner._preferencePermits[action]?.$1;
+    if (ticket != null) await owner._ensureAgentWritesAllowed(ticket);
     final proof = actions[action];
     if (proof != null) await validate(proof);
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_context_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_discussion_contract.dart';
 import '../core/agent_permission_contract.dart';
@@ -13,6 +14,22 @@ abstract interface class AgentPermissionWorkspacePort {
   Future<void> approveAndRememberAction(String actionId);
   Future<List<AgentPermissionReference>> readActionPermissions();
   Future<void> revokeActionPermission(AgentPermissionReference reference);
+}
+
+/// Optional app-owned switches for personal-content and daily-operation policy.
+/// Kept separate from per-action remembered permissions for compatibility.
+abstract interface class AgentWorkspaceUsePolicyPort {
+  Future<void> saveUsePolicy({
+    required bool personalContentAllowed,
+    required bool dailyOperationsAllowed,
+  });
+  Future<void> setAdviceOnly(bool value);
+}
+
+/// Optional advanced controls for the per-run context estimate.
+abstract interface class AgentContextOptionsWorkspacePort {
+  Future<AgentContextOptions> readContextOptions();
+  Future<void> saveContextOptions(AgentContextOptions options);
 }
 
 /// C5 human buttons only. None of these methods are a model-callable tool.

@@ -50,8 +50,18 @@ final class _AgentChatState {
       if (coveredMessageId > lastMessageId) {
         throw const AgentFailure(AgentFailureCode.storageFailed);
       }
-      final summary = chat.read<String>('summary');
+      final storedSummary = chat.read<String>('summary');
+      final policyScope = await owner._permissions.scope();
+      final policy = await owner._context._policy(policyScope);
+      final summaryWithheld =
+          chat.read<int>('summary_private') == 1 &&
+          !policy.personalContentAllowed;
+      final summary = summaryWithheld ? '' : storedSummary;
       final messages = await _boundedMessages(conversationId);
+      final (turns, withheld, personal) = await owner._context.readTurns(
+        conversationId,
+        messages,
+      );
       if (messages.isNotEmpty && messages.last.id != lastMessageId) {
         throw const AgentFailure(AgentFailureCode.staleContext);
       }
@@ -59,19 +69,29 @@ final class _AgentChatState {
       context = AgentConversationContext(
         conversationId: conversationId,
         revision: chat.read<int>('revision'),
-        coveredMessageId: coveredMessageId,
+        coveredMessageId: summaryWithheld ? 0 : coveredMessageId,
         lastMessageId: lastMessageId,
         summary: summary,
         messages: messages,
+        turns: turns,
+        withheldAssistantMessageIds: withheld,
+        includesPersonalContent:
+            personal ||
+            (!summaryWithheld && chat.read<int>('summary_private') == 1),
       );
       permit = _AgentChatPermit(
         authority: authority,
         conversationGeneration: conversation.read<int>('generation'),
         conversationId: conversationId,
         revision: context.revision,
-        coveredMessageId: coveredMessageId,
+        coveredMessageId: context.coveredMessageId,
         lastMessageId: lastMessageId,
         summary: summary,
+        storedSummary: storedSummary,
+        storedCoveredMessageId: coveredMessageId,
+        policyScope: policyScope,
+        policyRevision: policy.revision,
+        includesPersonalContent: context.includesPersonalContent,
       );
       await owner._require(authority);
     });
@@ -92,6 +112,7 @@ final class _AgentChatState {
     return owner._serial(() async {
       await owner._db.transaction(() async {
         await owner._require(permit.authority);
+        await _ensurePolicyPermit(permit);
         final live = await _liveSnapshot(permit.conversationId);
         if (live.activeRun != null) {
           throw const AgentFailure(AgentFailureCode.busy);
@@ -99,9 +120,13 @@ final class _AgentChatState {
         _requireExpected(expected, permit, live);
 
         await owner._db.customStatement(
-          'UPDATE agent_chat_state SET summary=?,covered_message_id=?,revision=revision+1 '
+          'UPDATE agent_chat_state SET summary=?,covered_message_id=?,summary_private=?,revision=revision+1 '
           'WHERE singleton=1',
-          [summary, permit.lastMessageId],
+          [
+            summary,
+            permit.lastMessageId,
+            expected.includesPersonalContent ? 1 : 0,
+          ],
         );
         await owner._db.onAgentCheckpoint?.call();
         if (!identical(_issued[expected], permit)) {
@@ -109,6 +134,7 @@ final class _AgentChatState {
         }
 
         await owner._require(permit.authority);
+        await _ensurePolicyPermit(permit);
         final after = await _liveSnapshot(permit.conversationId);
         if (after.activeRun != null ||
             after.primaryConversation != permit.conversationId ||
@@ -140,7 +166,7 @@ final class _AgentChatState {
       );
     }
     await owner._db.customStatement(
-      "UPDATE agent_chat_state SET primary_conversation=?,summary='',"
+      "UPDATE agent_chat_state SET primary_conversation=?,summary='',summary_private=0,"
       'covered_message_id=0,revision=revision+1 WHERE singleton=1',
       [replacement],
     );
@@ -172,7 +198,7 @@ final class _AgentChatState {
       );
     }
     await owner._db.customStatement(
-      "UPDATE agent_chat_state SET primary_conversation=?,summary='',"
+      "UPDATE agent_chat_state SET primary_conversation=?,summary='',summary_private=0,"
       'covered_message_id=0,revision=revision+1 WHERE singleton=1',
       [selected],
     );
@@ -251,10 +277,23 @@ final class _AgentChatState {
         expected.summary != permit.summary ||
         live.primaryConversation != permit.conversationId ||
         live.revision != permit.revision ||
-        live.coveredMessageId != permit.coveredMessageId ||
-        live.summary != permit.summary ||
+        live.coveredMessageId != permit.storedCoveredMessageId ||
+        live.summary != permit.storedSummary ||
         live.conversationGeneration != permit.conversationGeneration ||
         live.lastMessageId != permit.lastMessageId) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+  }
+
+  Future<void> _ensurePolicyPermit(_AgentChatPermit permit) async {
+    final scope = await owner._permissions.scope();
+    final policy = await owner._context._policy(scope);
+    if (scope != permit.policyScope ||
+        policy.revision != permit.policyRevision ||
+        (permit.includesPersonalContent &&
+            owner._context._withdrawn.contains(
+              owner._context._policyKey(scope, policy.revision),
+            ))) {
       throw const AgentFailure(AgentFailureCode.staleContext);
     }
   }
@@ -269,10 +308,18 @@ final class _AgentChatPermit {
     required this.coveredMessageId,
     required this.lastMessageId,
     required this.summary,
+    required this.storedSummary,
+    required this.storedCoveredMessageId,
+    required this.policyScope,
+    required this.policyRevision,
+    required this.includesPersonalContent,
   });
 
   final AgentAuthority authority;
   final String conversationId, summary;
+  final String storedSummary, policyScope;
+  final int storedCoveredMessageId, policyRevision;
+  final bool includesPersonalContent;
   final int conversationGeneration, revision, coveredMessageId, lastMessageId;
 }
 

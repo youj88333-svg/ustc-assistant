@@ -26,6 +26,7 @@ enum AgentFailureCode {
   closed,
   toolUnavailable,
   imageRejected,
+  contextLimit,
 }
 
 final class AgentFailure implements Exception {
@@ -389,6 +390,10 @@ final class AgentRuntimeView {
     this.discussionDraft,
     this.parameterIssue,
     this.contextCompacted = false,
+    this.usePolicyConfigured = false,
+    this.personalContentAllowed = false,
+    this.dailyOperationsAllowed = false,
+    this.adviceOnly = false,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
        messages = List.unmodifiable(messages);
@@ -408,9 +413,13 @@ final class AgentRuntimeView {
   final String? discussionId, discussionDraft;
   final AgentParameterIssue? parameterIssue;
   final bool contextCompacted;
+  final bool usePolicyConfigured,
+      personalContentAllowed,
+      dailyOperationsAllowed,
+      adviceOnly;
   bool get busy => phase != AgentPhase.idle && phase != AgentPhase.closed;
   bool get canSend =>
-      phase == AgentPhase.idle &&
+      (phase == AgentPhase.idle || phase == AgentPhase.waitingForApproval) &&
       settings?.keySaved == true &&
       settings?.consent == true &&
       settings?.modelId != null &&

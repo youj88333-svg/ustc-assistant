@@ -157,6 +157,7 @@ final class DemoRuntime {
     final preservingMaintenance = maintenance.view.blocksProduct;
     await settings.shutdown();
     await speechInput.close();
+    await agent.drainBehaviorValidation();
     await agentCoordinator.quiesceForMaintenance();
     await maintenance.close();
     await calendar.shutdown();
@@ -176,6 +177,7 @@ final class DemoRuntime {
     }
     await browser.dispose();
     await agentCoordinator.close();
+    await agent.closeBehaviorValidation();
     if (!_controllerDisposed) {
       calendar.dispose();
       shell.dispose();
@@ -319,7 +321,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
         versions: const DiagnosticVersions(
           application: '0.0.1+0',
-          schema: 14,
+          schema: 15,
           tools: agentToolRegistryVersion,
           prompt: agentPromptVersion,
           revision: String.fromEnvironment(
@@ -453,6 +455,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       final ownedSpeech = speechInput;
       maintenance.drainAgent = () async {
         await ownedSpeech.cancel();
+        await agent!.drainBehaviorValidation();
         await agentCoordinator!.quiesceForMaintenance();
       };
       // Pending startup reset settles before product assembly installs the
@@ -529,6 +532,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         );
       }
       await speechInput?.close();
+      await agent?.closeBehaviorValidation();
       await agentCoordinator?.close();
       agent?.dispose();
       await browser?.dispose();
@@ -580,6 +584,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       }
       await settings.shutdown();
       await speechInput.close();
+      await agent.drainBehaviorValidation();
       await agentCoordinator.quiesceForMaintenance();
       await maintenance.close();
       await _assembly.close();
@@ -589,6 +594,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       await youngRegistry.closeForMaintenanceExit();
       await browser.dispose();
       await agentCoordinator.close();
+      await agent.closeBehaviorValidation();
       settings.dispose();
       agent.dispose();
       await store.close();

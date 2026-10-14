@@ -89,7 +89,11 @@ final class _KnowledgeRead {
 
 /// C3 public operations share the canonical database, transaction queue and owner.
 /// No school account is manufactured and no school record is read here.
-final class PublicStore implements KnowledgeReadPort, PublicResultGuardPort {
+final class PublicStore
+    implements
+        KnowledgeReadPort,
+        PublicResultGuardPort,
+        PublicResultLifecycleGuardPort {
   PublicStore._(this._db);
   final JwStore _db;
   final Map<String, PublicJobTicket> _jobs = {};
@@ -245,6 +249,17 @@ final class PublicStore implements KnowledgeReadPort, PublicResultGuardPort {
         await _requireStamp(issued.$1);
       });
 
+  @override
+  Future<void> ensurePublicResultContext(PublicQueryResult result) =>
+      _serial(() async {
+        await _db._guard();
+        final issued = _issuedResults[result];
+        if (issued == null) {
+          throw const PublicFailure(PublicFailureCode.staleReference);
+        }
+        await _requireStamp(issued.$1, historical: true);
+      });
+
   Future<bool> hasIcourseConsent() => _serial(
     () async => (await _knowledgeState()).read<int>('icourse_consent') == 1,
   );
@@ -365,12 +380,15 @@ final class PublicStore implements KnowledgeReadPort, PublicResultGuardPort {
     );
   }
 
-  Future<void> _requireStamp(_KnowledgeStamp expected) async {
+  Future<void> _requireStamp(
+    _KnowledgeStamp expected, {
+    bool historical = false,
+  }) async {
     final current = await _stamp();
     if (current.owner != expected.owner ||
         current.reset != expected.reset ||
         current.epoch != expected.epoch ||
-        current.sequence != expected.sequence ||
+        (!historical && current.sequence != expected.sequence) ||
         current.memoryGeneration != expected.memoryGeneration) {
       throw const PublicFailure(PublicFailureCode.staleReference);
     }

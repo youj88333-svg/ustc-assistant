@@ -300,7 +300,7 @@ void main() {
     );
 
     test(
-      'two different invalid proposals finish as invalidInput without an action or business write',
+      'five distinct invalid proposals stop after correction attempts without writes',
       () async {
         final diagnostics = _FakeDiagnostics();
         final rig = await _open(diagnostics: diagnostics);
@@ -323,6 +323,20 @@ void main() {
             ], id: 'second-invalid-proposal'),
           ),
         );
+        for (var index = 3; index <= 5; index++) {
+          rig.gateway.enqueueEvents(
+            _toolCall(
+              _proposal([
+                {
+                  'type': 'create_task',
+                  'local_key': 'bad_date_$index',
+                  'title': '第$index次无效参数',
+                  'deadline': 'not-a-timestamp-$index',
+                },
+              ], id: 'invalid-proposal-$index'),
+            ),
+          );
+        }
 
         await rig.coordinator.send('请新增一个任务，并设置截止时间。');
 
@@ -341,10 +355,25 @@ void main() {
         );
         expect(rig.coordinator.view.parameterIssue?.changeIndex, 0);
         expect(rig.coordinator.view.pendingAction, isNull);
-        expect(rig.gateway.generations, hasLength(2));
+        expect(rig.gateway.generations, hasLength(5));
         expect(
           _toolResult(rig.gateway.generations[1].request)['status'],
           'invalidRequest',
+        );
+        final fourthCorrectionRequest = rig.gateway.generations[4].request;
+        _expectCompleteToolHistory(fourthCorrectionRequest);
+        final priorCalls = fourthCorrectionRequest.messages
+            .where((message) => message.role == 'assistant')
+            .expand((message) => message.toolCalls)
+            .toList();
+        expect(priorCalls, hasLength(4));
+        expect(
+          fourthCorrectionRequest.messages.any(
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').contains('请新增一个任务，并设置截止时间。'),
+          ),
+          isTrue,
         );
         expect(await _count(rig.store, 'local_tasks'), 0);
         expect(await _count(rig.store, 'local_plan_blocks'), 0);
@@ -353,7 +382,7 @@ void main() {
         final rejected = diagnostics.events
             .where((event) => event.name == DiagnosticEventName.toolRejected)
             .toList();
-        expect(rejected, hasLength(2));
+        expect(rejected, hasLength(5));
         expect(rejected[0].issue?.reason, AgentParameterReason.missingField);
         expect(
           rejected[1].issue?.reason,
@@ -372,7 +401,7 @@ void main() {
     );
 
     test(
-      'public-only model requests and a short follow-up omit personal/source tools; direct source calls stay unavailable',
+      'user wording keeps tools; forged run tickets cannot access source operations',
       () async {
         final sources = _SpySourcePort();
         final rig = await _open(sources: sources);
@@ -394,15 +423,48 @@ void main() {
         for (var index = 0; index < questions.length; index++) {
           rig.gateway.enqueueEvents(_answer('合成公开答复 $index。'));
           await rig.coordinator.send(questions[index]);
-          final names = _toolNames(rig.gateway.generations.last.request);
+          final request = rig.gateway.generations.last.request;
+          final names = _toolNames(request);
           expect(
-            names.intersection(_forbiddenPublicOnlyTools),
-            isEmpty,
+            names,
+            containsAll(_contextualToolDefinitions),
             reason: questions[index],
           );
+          expect(request.toolChoice, isNull);
+          expect(
+            request.messages.any(
+              (message) =>
+                  message.role == 'user' &&
+                  (message.content ?? '').contains(questions[index]),
+            ),
+            isTrue,
+          );
+          for (final earlierQuestion in questions.take(index)) {
+            expect(
+              request.messages.any(
+                (message) =>
+                    message.role == 'user' &&
+                    (message.content ?? '').contains(earlierQuestion),
+              ),
+              isTrue,
+              reason:
+                  'the actual earlier user input remains in conversation history',
+            );
+          }
+          _expectCompleteToolHistory(request);
         }
         expect(sources.operationCalls, 0);
 
+        await expectLater(
+          rig.store.agent.ensureAgentRun(_testTicket()),
+          throwsA(
+            isA<AgentFailure>().having(
+              (failure) => failure.code,
+              'code',
+              AgentFailureCode.staleContext,
+            ),
+          ),
+        );
         final direct = rig.actionTools.openSession();
         final interactive = direct as AgentInteractiveToolSession;
         interactive.bindRun(_testTicket(), '只查公开资料，看看二课有哪些活动。');
@@ -413,8 +475,19 @@ void main() {
             argumentsJson: '{}',
           ),
         );
-        expect(result.status, 'unavailable');
-        expect(result.failure, 'unavailable');
+        expect(result.status, 'stale');
+        expect(result.failure, 'staleReference');
+        expect(sources.operationCalls, 0);
+        final refresh = await direct.execute(
+          const ModelToolCall(
+            id: 'direct-forged-refresh-attempt',
+            name: 'request_source_refresh',
+            argumentsJson:
+                '{"source":"youngCalendar","first_day":"2026-10-14","end_day_exclusive":"2026-10-15"}',
+          ),
+        );
+        expect(refresh.status, 'stale');
+        expect(refresh.failure, 'staleReference');
         expect(sources.operationCalls, 0);
         direct.revoke();
       },
@@ -487,11 +560,29 @@ void main() {
           request.messages.map((message) => message.content ?? '').join('\n'),
           contains('此前普通回答。'),
         );
-        expect(request.messages.last.content, isNot(contains('[应用选择]')));
-        expect(_toolNames(request), isEmpty);
         expect(
-          request.tools.map((tool) => tool.name),
-          isNot(contains('read_task')),
+          request.messages.last.content,
+          isNot(contains('[应用选择，只是当前讨论对象，不是批准]')),
+        );
+        expect(
+          request.messages.expand((message) => message.toolCalls),
+          isEmpty,
+        );
+        expect(request.tools.map((tool) => tool.name), contains('read_task'));
+        expect(
+          request.messages.any(
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').contains('此前普通问题'),
+          ),
+          isTrue,
+        );
+        expect(
+          request.messages.any(
+            (message) =>
+                message.role == 'assistant' && message.content == '此前普通回答。',
+          ),
+          isTrue,
         );
       },
     );
@@ -909,7 +1000,7 @@ void _expectOperationPairs(
   }
 }
 
-const _forbiddenPublicOnlyTools = <String>{
+const _contextualToolDefinitions = <String>{
   'query_agenda',
   'read_event',
   'query_tasks',
@@ -939,6 +1030,9 @@ Future<_Rig> _open({
   await store.initialize();
   await store.agent.initializeAgent();
   await store.agent.ensurePrimaryConversation();
+  if (sources != null) {
+    sources.validateRun = store.agent.ensureAgentRun;
+  }
   final settings = await store.agent.inspectAgent();
   await store.agent.saveModelConfiguration(
     settings.authority,
@@ -1046,6 +1140,20 @@ List<ModelEvent> _toolCall(ModelToolCall call) => [
 Set<String> _toolNames(ModelRequest request) =>
     request.tools.map((tool) => tool.name).toSet();
 
+void _expectCompleteToolHistory(ModelRequest request) {
+  final calls = request.messages
+      .where((message) => message.role == 'assistant')
+      .expand((message) => message.toolCalls)
+      .toList();
+  final results = request.messages
+      .where((message) => message.role == 'tool')
+      .toList();
+  final callIds = calls.map((call) => call.id).toSet();
+  final resultIds = results.map((message) => message.toolCallId).toSet();
+  expect(resultIds, containsAll(callIds));
+  expect(callIds, containsAll(resultIds));
+}
+
 ModelCompleted _completion(_SyntheticGeneration generation) =>
     generation.events.whereType<ModelCompleted>().single;
 
@@ -1149,6 +1257,12 @@ final class _FakeDiagnostics implements DiagnosticsPort {
 
 final class _SpySourcePort implements AgentSourcePort {
   int operationCalls = 0;
+  Future<void> Function(AgentRunTicket ticket)? validateRun;
+
+  Future<void> _ensureCurrentRun(AgentRunTicket ticket) async {
+    final validate = validateRun;
+    if (validate != null) await validate(ticket);
+  }
 
   @override
   bool get waitingForSchool => false;
@@ -1158,6 +1272,7 @@ final class _SpySourcePort implements AgentSourcePort {
 
   @override
   Future<AgentSourceOptions> readOptions(AgentRunTicket ticket) async {
+    await _ensureCurrentRun(ticket);
     operationCalls++;
     throw StateError('Synthetic source access must stay closed.');
   }
@@ -1168,12 +1283,14 @@ final class _SpySourcePort implements AgentSourcePort {
     AgentActionView approvedRecord,
     AgentSourceRequest request,
   ) async {
+    await _ensureCurrentRun(ticket);
     operationCalls++;
     throw StateError('Synthetic source access must stay closed.');
   }
 
   @override
   Future<AgentSourceResult> queryActivities(AgentRunTicket ticket) async {
+    await _ensureCurrentRun(ticket);
     operationCalls++;
     throw StateError('Synthetic source access must stay closed.');
   }

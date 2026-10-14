@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import '../core/agent_contract.dart';
+import '../core/agent_context_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_text.dart';
 import '../core/agenda_contract.dart';
@@ -204,7 +205,7 @@ final class AgentReadTools implements AgentReadToolsPort {
     ),
     _tool(
       'read_event',
-      '读取本轮查询签发的日程和本地出勤、听讲计划；用户明确询问备注时才可设 include_note 读取单项备注。',
+      '读取查询签发或会话保留的日程引用，重新核对当前对象和本地出勤、听讲计划。已允许个人内容时可按需用 include_note 读取单项备注；未允许会返回 permissionRequired。',
       {
         'event_ref': _stringSchema(maxLength: 64),
         'include_note': _boolSchema(),
@@ -218,7 +219,7 @@ final class AgentReadTools implements AgentReadToolsPort {
     }),
     _tool(
       'read_task',
-      '读取任务状态与有界时间块；用户明确询问任务正文或备注时可设 include_details，只返回本轮请求的私人字段。',
+      '读取当前任务状态与有界时间块，支持会话保留的任务引用。已允许个人内容时可按需用 include_details 读取正文和备注；未允许会返回 permissionRequired。',
       {
         'task_ref': _stringSchema(maxLength: 64),
         'include_details': _boolSchema(),
@@ -407,6 +408,7 @@ final class _AgentToolSession
         AgentToolSession,
         AgentLocalReferenceSession,
         AgentPersonalReadScopeSession,
+        AgentToolPolicySession,
         AgentDiscussionToolSession {
   _AgentToolSession(this._owner);
   final AgentReadTools _owner;
@@ -422,33 +424,34 @@ final class _AgentToolSession
   bool _executing = false;
   bool _notesRequested = false;
   bool _taskDescriptionRequested = false;
+  AgentRunTicket? _ticket;
+  AgentTargetAliasPort? _aliases;
+  bool _personalContentUsed = false;
+  @override
+  bool get personalContentUsed => _personalContentUsed;
+  @override
+  void bindToolPolicy(
+    AgentRunTicket ticket, {
+    required bool personalContentAllowed,
+    required bool adviceOnly,
+    AgentTargetAliasPort? aliases,
+  }) {
+    _ensureActive();
+    if (_ticket != null && !identical(_ticket, ticket)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    _ticket = ticket;
+    _aliases = aliases;
+    _notesRequested = personalContentAllowed;
+    _taskDescriptionRequested = personalContentAllowed;
+  }
+
   bool get _taskDetailsRequested =>
       _notesRequested || _taskDescriptionRequested;
   @override
   void bindHumanReadScope(String question) {
     _ensureActive();
-    _notesRequested = _asksForPrivateField(question, r'备注|笔记|\bnotes?\b');
-    _taskDescriptionRequested =
-        RegExp(r'任务|\btask\b', caseSensitive: false).hasMatch(question) &&
-        _asksForPrivateField(question, r'正文|内容|描述|\bdescription\b');
-  }
-
-  static bool _asksForPrivateField(String question, String field) {
-    const denied =
-        r'不要|不用|无需|禁止|不能|不准|不许|不(?:读|看|查|访问|发送|显示|公开)|别|勿|do not|don\x27t|never';
-    const span = r'[^，,。.!！;；\r\n]';
-    if (RegExp(
-      '(?:$denied)$span{0,24}(?:$field)|(?:$field)$span{0,12}(?:$denied)',
-      caseSensitive: false,
-    ).hasMatch(question)) {
-      return false;
-    }
-    const reading =
-        r'读|看|查|显示|告诉我|说说|解释|有没有|是什么|写了|写的|记了|记的|what|read|show|check|view|tell';
-    return RegExp(
-      '(?:$reading)$span{0,32}(?:$field)|(?:$field)$span{0,16}(?:$reading|有哪些|是什么|吗|呢|[？?])',
-      caseSensitive: false,
-    ).hasMatch(question);
+    // Kept for old adapters. Text is not an application privacy grant.
   }
 
   @override
@@ -477,6 +480,12 @@ final class _AgentToolSession
         _expiry(),
       );
       _localSnapshots.add(_LocalSnapshot(window.context, window.revision));
+      await _rememberAliases(
+        _PendingResult(
+          result: AgentToolResult(status: 'success'),
+          events: {token: _eventRefs[token]!},
+        ),
+      );
       return '用户从日程页选中 event_ref=$token；先用read_event核对详情。此选择不是批准。';
     }
     if (selection.task != null) {
@@ -492,6 +501,12 @@ final class _AgentToolSession
         _expiry(),
       );
       _localSnapshots.add(_LocalSnapshot(context, window.revision));
+      await _rememberAliases(
+        _PendingResult(
+          result: AgentToolResult(status: 'success'),
+          tasks: {token: _taskRefs[token]!},
+        ),
+      );
       return '用户从任务页选中 task_ref=$token；先用read_task核对详情。此选择不是批准。';
     }
     throw const AgentFailure(AgentFailureCode.invalidInput);
@@ -500,6 +515,17 @@ final class _AgentToolSession
   @override
   Future<(CalendarReference, int)> resolveEventReference(String token) async {
     _ensureActive();
+    if (_aliases != null && _ticket != null) {
+      final current = await _aliases!.resolveAgentEvent(_ticket!, token);
+      _eventRefs[token] = _EventRef(
+        current.$1,
+        current.$1.context,
+        current.$2,
+        _expiry(),
+      );
+      _ensureActive();
+      return current;
+    }
     _prune();
     final issued = _eventRefs[token];
     if (issued == null) {
@@ -512,6 +538,17 @@ final class _AgentToolSession
   @override
   Future<(TaskReference, int)> resolveTaskReference(String token) async {
     _ensureActive();
+    if (_aliases != null && _ticket != null) {
+      final current = await _aliases!.resolveAgentTask(_ticket!, token);
+      _taskRefs[token] = _TaskRef(
+        current.$1,
+        current.$1.context,
+        current.$2,
+        _expiry(),
+      );
+      _ensureActive();
+      return current;
+    }
     _prune();
     final issued = _taskRefs[token];
     if (issued == null) {
@@ -560,17 +597,25 @@ final class _AgentToolSession
     _ensureActive();
     for (final snapshot in List<_LocalSnapshot>.of(_localSnapshots)) {
       try {
-        await _owner.calendarGuard.ensureCalendarRead(
-          snapshot.context,
-          snapshot.revision,
-        );
+        final guard = _owner.calendarGuard;
+        if (guard is CalendarLifecycleGuardPort) {
+          await (guard as CalendarLifecycleGuardPort).ensureCalendarContext(
+            snapshot.context,
+          );
+        } else {
+          await guard.ensureCalendarRead(snapshot.context, snapshot.revision);
+        }
       } on CalendarFailure catch (failure) {
         throw _calendarGuardFailure(failure);
       }
       _ensureActive();
     }
     for (final snapshot in List<_PublicSnapshot>.of(_publicSnapshots)) {
-      await _ensurePublicResult(snapshot.kind, snapshot.result);
+      await _ensurePublicResult(
+        snapshot.kind,
+        snapshot.result,
+        historical: true,
+      );
       _ensureActive();
     }
   }
@@ -592,6 +637,7 @@ final class _AgentToolSession
       _ensureActive();
       final pending = await _dispatch(call.name, args);
       _ensureActive();
+      await _rememberAliases(pending);
       pending.install(this);
       return pending.result;
     } on AgentFailure catch (failure) {
@@ -609,6 +655,27 @@ final class _AgentToolSession
     } finally {
       _executing = false;
     }
+  }
+
+  Future<void> _rememberAliases(_PendingResult pending) async {
+    final aliases = _aliases, ticket = _ticket;
+    if (aliases == null || ticket == null) return;
+    for (final entry in pending.events.entries) {
+      final item = (await _owner.calendar.detail(
+        entry.value.reference,
+      )).occurrence;
+      await aliases.rememberAgentEvent(
+        ticket,
+        entry.key,
+        item.reference,
+        item.startsAtUtc,
+        item.endsAtUtc,
+      );
+    }
+    for (final entry in pending.tasks.entries) {
+      await aliases.rememberAgentTask(ticket, entry.key, entry.value.reference);
+    }
+    _ensureActive();
   }
 
   Future<_PendingResult> _dispatch(String name, Map<String, Object?> args) =>
@@ -641,13 +708,18 @@ final class _AgentToolSession
 
   Future<void> _ensurePublicResult(
     _GuardKind kind,
-    PublicQueryResult result,
-  ) async {
+    PublicQueryResult result, {
+    bool historical = false,
+  }) async {
     try {
-      if (kind == _GuardKind.knowledge) {
-        await _owner.knowledgeGuard.ensurePublicResult(result);
+      final guard = kind == _GuardKind.knowledge
+          ? _owner.knowledgeGuard
+          : _owner.publicGuard;
+      if (historical && guard is PublicResultLifecycleGuardPort) {
+        await (guard as PublicResultLifecycleGuardPort)
+            .ensurePublicResultContext(result);
       } else {
-        await _owner.publicGuard.ensurePublicResult(result);
+        await guard.ensurePublicResult(result);
       }
     } on PublicFailure catch (failure) {
       if (failure.code == PublicFailureCode.consentRequired) {
@@ -931,6 +1003,7 @@ final class _AgentToolSession
 
   Future<_PendingResult> _readEvent(Map<String, Object?> args) async {
     final token = _stringArg(args, 'event_ref');
+    await resolveEventReference(token);
     _prune();
     final issued = _eventRefs[token];
     if (issued == null) {
@@ -946,12 +1019,13 @@ final class _AgentToolSession
     if (_boolArg(args, 'include_note', fallback: false)) {
       if (!_notesRequested) {
         return _owner._emptyPending(
-          status: 'consentRequired',
+          status: 'permissionRequired',
           failure: 'consentRequired',
         );
       }
       AgentText.requireSafe(item.note, maxCharacters: 4000);
       data['note'] = _clipRunes(item.note, 2000);
+      _personalContentUsed = true;
     }
     data['related_decisions'] = detail.relations
         .map((relation) => relation.kind.name)
@@ -1066,6 +1140,7 @@ final class _AgentToolSession
 
   Future<_PendingResult> _readTask(Map<String, Object?> args) async {
     final token = _stringArg(args, 'task_ref');
+    await resolveTaskReference(token);
     _prune();
     final issued = _taskRefs[token];
     if (issued == null) {
@@ -1080,7 +1155,7 @@ final class _AgentToolSession
     if (includeDetails) {
       if (!_taskDetailsRequested) {
         return _owner._emptyPending(
-          status: 'consentRequired',
+          status: 'permissionRequired',
           failure: 'consentRequired',
         );
       }
@@ -1090,6 +1165,7 @@ final class _AgentToolSession
       if (_notesRequested) {
         AgentText.requireSafe(task.draft.note, maxCharacters: 4000);
       }
+      _personalContentUsed = true;
     }
     final allBlocks = detail.blocks;
     final blocks = allBlocks
@@ -2402,6 +2478,7 @@ AgentToolResult _agentFailureResult(AgentFailure failure) {
     AgentFailureCode.staleContext ||
     AgentFailureCode.ownershipLost => ('stale', 'staleReference'),
     AgentFailureCode.resourceLimit ||
+    AgentFailureCode.contextLimit ||
     AgentFailureCode.rateLimited => ('resourceLimit', 'resourceLimit'),
     AgentFailureCode.cancelled => ('cancelled', 'cancelled'),
     AgentFailureCode.closed ||

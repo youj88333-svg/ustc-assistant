@@ -6,6 +6,7 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 
 import 'agent_workspace_contract.dart';
+import '../core/agent_context_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
 import '../core/speech_input_contract.dart';
@@ -15,12 +16,34 @@ const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
 const _agentLine = Color(0xFFE3E9E5);
 
+final class _AgentContextBudgetDraft {
+  bool loading = false;
+  bool loaded = false;
+  bool saving = false;
+  bool saved = false;
+  int inputTokens = 16000;
+  int formEpoch = 0;
+  String outputTokens = '2048';
+  String modelCalls = '16';
+  String toolCalls = '48';
+  String activeSeconds = '300';
+  String? failure;
+}
+
+String _contextInputTokenLabel(int value) => switch (value) {
+  16000 => '16,000 tokens',
+  32000 => '32,000 tokens',
+  64000 => '64,000 tokens',
+  _ => '$value tokens（当前配置）',
+};
+
 /// The M5.1 chat surface. The workspace port is owned by its caller.
 final class AgentWorkspacePage extends StatefulWidget {
   const AgentWorkspacePage({
     super.key,
     required this.controller,
     required this.onSettings,
+    this.onModelValidation,
     this.pickImages,
     this.onOpenLocalEvidence,
     this.diagnostics,
@@ -29,6 +52,7 @@ final class AgentWorkspacePage extends StatefulWidget {
 
   final AgentWorkspacePort controller;
   final VoidCallback onSettings;
+  final VoidCallback? onModelValidation;
   final Future<List<AgentImage>> Function()? pickImages;
   final ValueChanged<AgentEvidence>? onOpenLocalEvidence;
   final DiagnosticsPort? diagnostics;
@@ -59,6 +83,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   bool _pickingImages = false;
   bool _pending = false;
   bool _sending = false;
+  bool _approvalReplySending = false;
   bool _stopping = false;
   bool _actionPending = false;
   bool _schoolContinuationPending = false;
@@ -67,6 +92,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   String? _actionPendingId;
   String? _submittedActionId;
   String? _message;
+  String? _pendingSendDraft;
+  AgentPhase _observedPhase = AgentPhase.idle;
   String? _speechFallbackError;
   SpeechInputPort? _speechPort;
   SpeechInputView _speechView = const SpeechInputView();
@@ -114,6 +141,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       _clearDraftImages(update: false);
       _pending = false;
       _sending = false;
+      _approvalReplySending = false;
+      _pendingSendDraft = null;
       _stopping = false;
       _actionPending = false;
       _schoolContinuationPending = false;
@@ -183,6 +212,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _observedPendingActionId = view.pendingAction?.id;
     _observedContextCompacted = view.contextCompacted;
     _observedConsent = view.settings?.consent;
+    _observedPhase = view.phase;
     final draft = view.discussionDraft;
     if (view.discussionId != null && draft != null && !_draftEditedByUser) {
       _setDiscussionDraft(draft);
@@ -192,6 +222,18 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   void _onControllerChanged() {
     if (!mounted) return;
     final view = widget.controller.view;
+    final enteredApproval =
+        view.phase == AgentPhase.waitingForApproval &&
+        _observedPhase != AgentPhase.waitingForApproval;
+    final activeSend = _sending || _approvalReplySending;
+    if (enteredApproval &&
+        activeSend &&
+        _pendingSendDraft != null &&
+        _draft.text == _pendingSendDraft) {
+      _draft.clear();
+      _draftEditedByUser = false;
+      _pendingSendDraft = null;
+    }
     final historyEpoch = view.settings?.authority.historyEpoch;
     final speechAnchor = _speechAnchor;
     if (speechAnchor != null &&
@@ -238,6 +280,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _observedMessageFingerprint = messageFingerprint;
     _observedConversationId = view.conversationId;
     _observedDiscussionId = view.discussionId;
+    _observedPhase = view.phase;
     _observedConsent = consent;
     final discussionDraft = view.discussionDraft;
     if (discussionChanged &&
@@ -692,6 +735,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   Future<void> _send() async {
     final draftText = _draft.text;
     final command = draftText.trim();
+    final view = widget.controller.view;
+    final approvalReply = view.phase == AgentPhase.waitingForApproval;
     final isCompact = command == '/compact';
     final isClear = command == '/clear';
     if (isCompact || isClear) {
@@ -706,7 +751,6 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       return;
     }
 
-    final view = widget.controller.view;
     final outgoingImages = List<AgentImage>.unmodifiable(
       _draftImages.map((image) => AgentImage(image.bytes)),
     );
@@ -717,7 +761,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     if (!view.canSend ||
         conversationId == null ||
         (text.trim().isEmpty && outgoingImages.isEmpty) ||
-        _sending ||
+        _approvalReplySending ||
+        (_sending && !approvalReply) ||
+        _pending ||
+        _actionPending ||
         _speechView.busy) {
       _releaseImages(outgoingImages);
       return;
@@ -725,8 +772,13 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     final port = widget.controller;
     final generation = _generation;
     _clearDraftImages(update: false);
+    _pendingSendDraft = draftText;
     setState(() {
-      _sending = true;
+      if (approvalReply) {
+        _approvalReplySending = true;
+      } else {
+        _sending = true;
+      }
       _message = null;
       _messageIsError = false;
     });
@@ -753,7 +805,16 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       }
     } finally {
       _releaseImages(outgoingImages);
-      if (_isCurrent(port, generation)) setState(() => _sending = false);
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          if (approvalReply) {
+            _approvalReplySending = false;
+          } else {
+            _sending = false;
+          }
+          if (_pendingSendDraft == draftText) _pendingSendDraft = null;
+        });
+      }
     }
   }
 
@@ -778,6 +839,557 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       }
     } finally {
       if (_isCurrent(port, generation)) setState(() => _stopping = false);
+    }
+  }
+
+  Future<void> _openUsePolicySettings() async {
+    final controller = widget.controller;
+    if (controller is! AgentWorkspaceUsePolicyPort) {
+      widget.onSettings();
+      return;
+    }
+    final policyPort = controller as AgentWorkspaceUsePolicyPort;
+    final budgetPort = controller is AgentContextOptionsWorkspacePort
+        ? controller as AgentContextOptionsWorkspacePort
+        : null;
+    final initial = controller.view;
+    var personalContentAllowed = initial.personalContentAllowed;
+    var dailyOperationsAllowed = initial.dailyOperationsAllowed;
+    var saving = false;
+    String? failure;
+    final budget = _AgentContextBudgetDraft();
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          Future<void> loadContextOptions() async {
+            final port = budgetPort;
+            if (port == null || budget.loading || budget.loaded) return;
+            setSheetState(() {
+              budget.loading = true;
+              budget.failure = null;
+            });
+            try {
+              final options = await port.readContextOptions();
+              if (!mounted || !sheetContext.mounted) {
+                return;
+              }
+              setSheetState(() {
+                budget.inputTokens = options.inputTokens;
+                budget.outputTokens = options.outputTokens.toString();
+                budget.modelCalls = options.modelCalls.toString();
+                budget.toolCalls = options.toolCalls.toString();
+                budget.activeSeconds = options.activeSeconds.toString();
+                budget.loaded = true;
+                budget.loading = false;
+                budget.saved = false;
+                budget.formEpoch++;
+              });
+            } on Object {
+              if (!mounted || !sheetContext.mounted) {
+                return;
+              }
+              setSheetState(() {
+                budget.loading = false;
+                budget.failure = '读取上下文预算失败，请重试。';
+              });
+            }
+          }
+
+          AgentContextOptions? parseContextOptions() {
+            final parsedOutput = int.tryParse(budget.outputTokens.trim());
+            final parsedModelCalls = int.tryParse(budget.modelCalls.trim());
+            final parsedToolCalls = int.tryParse(budget.toolCalls.trim());
+            final parsedActiveSeconds = int.tryParse(
+              budget.activeSeconds.trim(),
+            );
+            if (parsedOutput == null ||
+                parsedModelCalls == null ||
+                parsedToolCalls == null ||
+                parsedActiveSeconds == null) {
+              setSheetState(() {
+                budget.failure =
+                    '请填写整数：输入估算 4,096–65,536、输出 1–8192、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
+              });
+              return null;
+            }
+            final options = AgentContextOptions(
+              inputTokens: budget.inputTokens,
+              outputTokens: parsedOutput,
+              modelCalls: parsedModelCalls,
+              toolCalls: parsedToolCalls,
+              activeSeconds: parsedActiveSeconds,
+            );
+            try {
+              options.validate();
+            } on AgentFailure {
+              setSheetState(() {
+                budget.failure =
+                    '超出范围：输入估算 4,096–65,536、输出 1–8192、模型调用 1–64、工具调用 1–256、主动运行 1–3600 秒。';
+              });
+              return null;
+            }
+            return options;
+          }
+
+          Future<void> saveContextOptions() async {
+            final port = budgetPort;
+            if (port == null || !budget.loaded || budget.saving) return;
+            if (controller.view.busy) {
+              setSheetState(() {
+                budget.failure = '当前对话运行中，完成或取消后再保存预算。';
+              });
+              return;
+            }
+            final options = parseContextOptions();
+            if (options == null) return;
+            setSheetState(() {
+              budget.saving = true;
+              budget.failure = null;
+              budget.saved = false;
+            });
+            try {
+              await port.saveContextOptions(options);
+              if (!mounted || !sheetContext.mounted) {
+                return;
+              }
+              setSheetState(() {
+                budget.saving = false;
+                budget.saved = true;
+              });
+            } on Object {
+              if (!mounted || !sheetContext.mounted) {
+                return;
+              }
+              setSheetState(() {
+                budget.saving = false;
+                budget.failure = '上下文预算未保存，请检查取值后重试。';
+              });
+            }
+          }
+
+          final inputTokenChoices = <int>{
+            16000,
+            32000,
+            64000,
+            budget.inputTokens,
+          }.toList()..sort();
+          return Padding(
+            padding: EdgeInsets.only(
+              left: 20,
+              right: 20,
+              top: 16,
+              bottom: MediaQuery.viewInsetsOf(context).bottom + 16,
+            ),
+            child: SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 620),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Agent 使用权限',
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      initial.usePolicyConfigured
+                          ? '修改后点击保存才会生效。两项许可彼此独立。'
+                          : '当前为基础模式。勾选所需范围并点击保存后才会启用。',
+                      style: const TextStyle(color: _agentMuted, height: 1.4),
+                    ),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      key: const ValueKey('agent-use-policy-personal-content'),
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: personalContentAllowed,
+                      onChanged: saving
+                          ? null
+                          : (value) => setSheetState(
+                              () => personalContentAllowed = value ?? false,
+                            ),
+                      title: const Text('按需读取私人内容'),
+                      subtitle: const Text(
+                        '允许模型为当前任务读取日程备注、任务正文或描述。内容可能随本次请求发送到当前模型服务；不读取密码、Key、Cookie 或学校原始响应。',
+                      ),
+                    ),
+                    CheckboxListTile(
+                      key: const ValueKey('agent-use-policy-daily-operations'),
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      value: dailyOperationsAllowed,
+                      onChanged: saving
+                          ? null
+                          : (value) => setSheetState(
+                              () => dailyOperationsAllowed = value ?? false,
+                            ),
+                      title: const Text('允许日常本地操作（17 类）'),
+                      subtitle: const Text(
+                        '包含日程、任务、时间块的新建/修改/状态，以及备注、出勤、听课、可见性、关系保存/删除、撤销和偏好。个人记录删除与学校同步/刷新不包含在内。',
+                      ),
+                    ),
+                    const Padding(
+                      padding: EdgeInsets.only(top: 2, bottom: 8),
+                      child: Text(
+                        '关闭私人内容读取后，后续模型请求不再携带旧私人结果或由其生成的摘要；聊天记录不会删除。已记住的单项操作许可保持原样，可在完整设置中逐类撤销。',
+                        style: TextStyle(color: _agentMuted, height: 1.4),
+                      ),
+                    ),
+                    if (budgetPort != null)
+                      ExpansionTile(
+                        key: const ValueKey('agent-context-options-expand'),
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: const EdgeInsets.only(bottom: 12),
+                        title: const Text('高级：上下文预算'),
+                        subtitle: const Text('普通使用无需调整。'),
+                        onExpansionChanged: (expanded) {
+                          if (expanded) unawaited(loadContextOptions());
+                        },
+                        children: [
+                          const Align(
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              '建议输入估算 16,000；默认输出 2,048、模型调用 16 次、工具调用 48 次、主动运行 300 秒。配置值，学校模型容量未核验。',
+                              style: TextStyle(color: _agentMuted, height: 1.4),
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          if (budget.loading) const LinearProgressIndicator(),
+                          if (budget.loaded)
+                            KeyedSubtree(
+                              key: ValueKey(
+                                'agent-context-form-${budget.formEpoch}',
+                              ),
+                              child: Column(
+                                children: [
+                                  DropdownButtonFormField<int>(
+                                    key: const ValueKey(
+                                      'agent-context-input-tokens',
+                                    ),
+                                    initialValue: budget.inputTokens,
+                                    decoration: const InputDecoration(
+                                      labelText: '输入上下文估算（token）',
+                                    ),
+                                    items: inputTokenChoices
+                                        .map(
+                                          (value) => DropdownMenuItem(
+                                            value: value,
+                                            child: Text(
+                                              _contextInputTokenLabel(value),
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                    onChanged: budget.saving
+                                        ? null
+                                        : (value) {
+                                            if (value == null) return;
+                                            setSheetState(() {
+                                              budget.inputTokens = value;
+                                              budget.saved = false;
+                                            });
+                                          },
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Wrap(
+                                    spacing: 10,
+                                    runSpacing: 4,
+                                    children: [
+                                      SizedBox(
+                                        width: 138,
+                                        child: TextFormField(
+                                          key: const ValueKey(
+                                            'agent-context-output-tokens',
+                                          ),
+                                          initialValue: budget.outputTokens,
+                                          keyboardType: TextInputType.number,
+                                          enabled: !budget.saving,
+                                          decoration: const InputDecoration(
+                                            labelText: '默认输出 token',
+                                          ),
+                                          onChanged: (value) {
+                                            setSheetState(() {
+                                              budget.outputTokens = value;
+                                              budget.saved = false;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 138,
+                                        child: TextFormField(
+                                          key: const ValueKey(
+                                            'agent-context-model-calls',
+                                          ),
+                                          initialValue: budget.modelCalls,
+                                          keyboardType: TextInputType.number,
+                                          enabled: !budget.saving,
+                                          decoration: const InputDecoration(
+                                            labelText: '模型调用上限',
+                                          ),
+                                          onChanged: (value) {
+                                            setSheetState(() {
+                                              budget.modelCalls = value;
+                                              budget.saved = false;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 138,
+                                        child: TextFormField(
+                                          key: const ValueKey(
+                                            'agent-context-tool-calls',
+                                          ),
+                                          initialValue: budget.toolCalls,
+                                          keyboardType: TextInputType.number,
+                                          enabled: !budget.saving,
+                                          decoration: const InputDecoration(
+                                            labelText: '工具调用上限',
+                                          ),
+                                          onChanged: (value) {
+                                            setSheetState(() {
+                                              budget.toolCalls = value;
+                                              budget.saved = false;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                      SizedBox(
+                                        width: 138,
+                                        child: TextFormField(
+                                          key: const ValueKey(
+                                            'agent-context-active-seconds',
+                                          ),
+                                          initialValue: budget.activeSeconds,
+                                          keyboardType: TextInputType.number,
+                                          enabled: !budget.saving,
+                                          decoration: const InputDecoration(
+                                            labelText: '主动运行秒数',
+                                          ),
+                                          onChanged: (value) {
+                                            setSheetState(() {
+                                              budget.activeSeconds = value;
+                                              budget.saved = false;
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 6),
+                                  if (budget.failure != null)
+                                    Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        budget.failure!,
+                                        key: const ValueKey(
+                                          'agent-context-options-error',
+                                        ),
+                                        style: const TextStyle(
+                                          color: Color(0xFF9B2C2C),
+                                        ),
+                                      ),
+                                    ),
+                                  if (budget.saved)
+                                    const Align(
+                                      alignment: Alignment.centerLeft,
+                                      child: Text(
+                                        '上下文预算已保存。',
+                                        key: ValueKey(
+                                          'agent-context-options-saved',
+                                        ),
+                                        style: TextStyle(color: _agentMuted),
+                                      ),
+                                    ),
+                                  Align(
+                                    alignment: Alignment.centerRight,
+                                    child: TextButton.icon(
+                                      key: const ValueKey(
+                                        'agent-context-options-save',
+                                      ),
+                                      onPressed: budget.saving
+                                          ? null
+                                          : () =>
+                                                unawaited(saveContextOptions()),
+                                      icon: budget.saving
+                                          ? const SizedBox.square(
+                                              dimension: 16,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                              ),
+                                            )
+                                          : const Icon(Icons.save_outlined),
+                                      label: const Text('保存预算'),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (!budget.loading)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton(
+                                onPressed: () =>
+                                    unawaited(loadContextOptions()),
+                                child: Text(
+                                  budget.failure == null ? '读取当前配置' : '重试读取',
+                                ),
+                              ),
+                            ),
+                          if (budget.failure != null && !budget.loaded)
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: Text(
+                                budget.failure!,
+                                key: const ValueKey(
+                                  'agent-context-options-read-error',
+                                ),
+                                style: const TextStyle(
+                                  color: Color(0xFF9B2C2C),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    if (widget.onModelValidation != null)
+                      ExpansionTile(
+                        key: const ValueKey('agent-model-validation-expand'),
+                        tilePadding: EdgeInsets.zero,
+                        childrenPadding: const EdgeInsets.only(bottom: 12),
+                        title: const Text('合成模型核验'),
+                        subtitle: const Text('手动打开后再开始，不会自动运行。'),
+                        children: [
+                          const Text(
+                            '共 14 个场景，最多 96 次请求。只操作合成课程、日程和任务；使用当前已同意的模型，会产生真实模型用量。回复质量需要人工判断。',
+                            style: TextStyle(color: _agentMuted, height: 1.4),
+                          ),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: TextButton.icon(
+                              key: const ValueKey(
+                                'agent-model-validation-open',
+                              ),
+                              onPressed: widget.onModelValidation,
+                              icon: const Icon(Icons.fact_check_outlined),
+                              label: const Text('打开核验面板'),
+                            ),
+                          ),
+                        ],
+                      ),
+                    if (failure != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          failure!,
+                          key: const ValueKey('agent-use-policy-error'),
+                          style: const TextStyle(color: Color(0xFF9B2C2C)),
+                        ),
+                      ),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        TextButton(
+                          onPressed: saving
+                              ? null
+                              : () => Navigator.of(sheetContext).pop(),
+                          child: const Text('取消'),
+                        ),
+                        TextButton(
+                          key: const ValueKey('agent-use-policy-full-settings'),
+                          onPressed: saving
+                              ? null
+                              : () {
+                                  Navigator.of(sheetContext).pop();
+                                  widget.onSettings();
+                                },
+                          child: const Text('完整 Agent 设置'),
+                        ),
+                        FilledButton(
+                          key: const ValueKey('agent-use-policy-save'),
+                          onPressed: saving
+                              ? null
+                              : () async {
+                                  setSheetState(() {
+                                    saving = true;
+                                    failure = null;
+                                  });
+                                  try {
+                                    await policyPort.saveUsePolicy(
+                                      personalContentAllowed:
+                                          personalContentAllowed,
+                                      dailyOperationsAllowed:
+                                          dailyOperationsAllowed,
+                                    );
+                                    if (!mounted || !sheetContext.mounted) {
+                                      return;
+                                    }
+                                    Navigator.of(sheetContext).pop();
+                                    ScaffoldMessenger.of(
+                                      this.context,
+                                    ).showSnackBar(
+                                      const SnackBar(content: Text('使用权限已保存。')),
+                                    );
+                                  } on Object {
+                                    if (!mounted || !sheetContext.mounted) {
+                                      return;
+                                    }
+                                    setSheetState(() {
+                                      saving = false;
+                                      failure = '保存未完成，请检查当前权限后重试。';
+                                    });
+                                  }
+                                },
+                          child: saving
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Text('保存设置'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _setAdviceOnly(bool value) async {
+    final controller = widget.controller;
+    if (controller is! AgentWorkspaceUsePolicyPort || _pending) return;
+    final policyPort = controller as AgentWorkspaceUsePolicyPort;
+    if (controller.view.adviceOnly == value) return;
+    setState(() {
+      _pending = true;
+      _message = null;
+      _messageIsError = false;
+    });
+    try {
+      await policyPort.setAdviceOnly(value);
+    } on Object {
+      if (_isCurrent(controller, _generation)) {
+        setState(() {
+          _message = '仅建议模式设置未完成，请重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(controller, _generation)) {
+        setState(() => _pending = false);
+      }
     }
   }
 
@@ -1017,21 +1629,27 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       label: Text(status),
                     ),
                   Chip(
-                    key: const ValueKey('agent-capability-read-tools'),
+                    key: const ValueKey('agent-operation-policy'),
                     avatar: Icon(
-                      view.businessToolsEnabled
-                          ? Icons.manage_search_rounded
-                          : Icons.chat_outlined,
+                      view.adviceOnly
+                          ? Icons.lightbulb_outline_rounded
+                          : view.dailyOperationsAllowed
+                          ? Icons.task_alt_rounded
+                          : Icons.verified_user_outlined,
                       size: 18,
                     ),
                     label: Text(
-                      view.businessToolsEnabled ? '只读查询可用' : '只读查询未启用',
+                      view.adviceOnly
+                          ? '仅建议 · 不提交'
+                          : view.dailyOperationsAllowed
+                          ? '日常操作已授权'
+                          : '按各类许可处理',
                     ),
                   ),
                   IconButton(
                     key: const ValueKey('agent-settings-open'),
                     tooltip: 'Agent 设置',
-                    onPressed: widget.onSettings,
+                    onPressed: () => unawaited(_openUsePolicySettings()),
                     icon: const Icon(Icons.settings_outlined),
                   ),
                 ],
@@ -1065,13 +1683,20 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   );
 
   bool _canSubmit(AgentWorkspaceView view) {
-    if (_sending || _pending || _pickingImages || _speechView.busy) {
+    final waitingForApproval = view.phase == AgentPhase.waitingForApproval;
+    if (_approvalReplySending ||
+        (_sending && !waitingForApproval) ||
+        _pending ||
+        _actionPending ||
+        _pickingImages ||
+        _speechView.busy) {
       return false;
     }
-    if (view.phase != AgentPhase.idle) return false;
+    if (view.phase != AgentPhase.idle && !waitingForApproval) return false;
     final command = _draft.text.trim();
     if (command == '/clear' || command == '/compact') {
-      return widget.controller is AgentConversationCommandsWorkspacePort;
+      return !waitingForApproval &&
+          widget.controller is AgentConversationCommandsWorkspacePort;
     }
     return view.canSend &&
         view.conversationId != null &&
@@ -1092,6 +1717,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         view.phase == AgentPhase.idle &&
         !_pending &&
         !_sending &&
+        !_approvalReplySending &&
         !_pickingImages &&
         _speechView.phase == SpeechInputPhase.idle;
     final canStop =
@@ -1130,8 +1756,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
           enabled: canSend,
           canPick:
               view.canSend &&
+              view.phase == AgentPhase.idle &&
               view.conversationId != null &&
               !_sending &&
+              !_approvalReplySending &&
               !_pending &&
               !_pickingImages &&
               _draftImages.length < AgentImage.maximumCount &&
@@ -1142,7 +1770,12 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                   ) <
                   AgentImage.maximumTotalBytes,
           canStop: canStop,
-          busy: view.busy,
+          busy:
+              (view.busy && view.phase != AgentPhase.waitingForApproval) ||
+              (_sending && view.phase != AgentPhase.waitingForApproval) ||
+              _approvalReplySending ||
+              _actionPending,
+          waitingForApproval: view.phase == AgentPhase.waitingForApproval,
           speechVisible: speechVisible,
           canStartSpeech: canStartSpeech,
           speechView: _speechView,
@@ -1169,7 +1802,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             const SizedBox(height: 8),
             Text(
               configured
-                  ? '输入消息即可开始；可查询日程、任务、知识与公开资料，写入和同步功能后续开放。'
+                  ? '可以连续讨论课程、日程和任务，并按当前权限读取、准备操作或请求确认。学校资料仍只读。'
                   : '目前尚未配置可用模型。完成设置后即可开始对话。',
               style: const TextStyle(color: _agentMuted, height: 1.45),
               textAlign: TextAlign.center,
@@ -1286,16 +1919,54 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     required bool canPick,
     required bool canStop,
     required bool busy,
+    required bool waitingForApproval,
     required bool speechVisible,
     required bool canStartSpeech,
     required SpeechInputView speechView,
   }) {
+    final view = widget.controller.view;
+    final usePolicyAvailable = widget.controller is AgentWorkspaceUsePolicyPort;
     return Card(
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (usePolicyAvailable) ...[
+              Row(
+                children: [
+                  FilterChip(
+                    key: const ValueKey('agent-advice-only-toggle'),
+                    selected: view.adviceOnly,
+                    avatar: Icon(
+                      view.adviceOnly
+                          ? Icons.lightbulb_rounded
+                          : Icons.lightbulb_outline_rounded,
+                      size: 18,
+                    ),
+                    label: const Text('仅建议'),
+                    onSelected: view.busy || _pending || _actionPending
+                        ? null
+                        : (value) => unawaited(_setAdviceOnly(value)),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      view.adviceOnly
+                          ? '只展示方案，不提交本地操作或刷新学校资料。'
+                          : view.dailyOperationsAllowed
+                          ? '日常本地操作已授权，执行时仍核对目标和范围。'
+                          : '未记住的操作会展示方案并请求确认。',
+                      key: const ValueKey('agent-operation-policy-hint'),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(color: _agentMuted, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+            ],
             if (_draftImages.isNotEmpty) ...[
               _imageDraftPreview(),
               const SizedBox(height: 8),
@@ -1368,8 +2039,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       onSubmitted: (_) {
                         if (enabled) unawaited(_send());
                       },
-                      decoration: const InputDecoration(
-                        hintText: '输入消息…（Enter 发送，Shift+Enter 换行）',
+                      decoration: InputDecoration(
+                        hintText: waitingForApproval
+                            ? '补充条件，或发送“确认 / approve / 取消”…'
+                            : '输入消息…（Enter 发送，Shift+Enter 换行）',
                         border: InputBorder.none,
                         filled: false,
                         contentPadding: EdgeInsets.symmetric(
@@ -1391,13 +2064,15 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.stop_rounded),
-                  )
-                else
+                  ),
+                if (!canStop || waitingForApproval)
                   IconButton.filled(
                     key: const ValueKey('agent-send'),
                     tooltip: '发送消息',
                     onPressed: enabled ? _send : null,
-                    icon: _sending
+                    icon:
+                        _approvalReplySending ||
+                            (_sending && !waitingForApproval)
                         ? const SizedBox.square(
                             dimension: 18,
                             child: CircularProgressIndicator(strokeWidth: 2),
@@ -2344,6 +3019,7 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.protocol ||
   AgentFailureCode.redirectRejected => '模型服务返回内容无法安全验证。',
   AgentFailureCode.resourceLimit => '回复超出当前处理上限。',
+  AgentFailureCode.contextLimit => '当前请求超出模型服务的上下文容量，请缩短内容或减少上下文预算后重试。',
   AgentFailureCode.cancelled => '本次生成已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
   AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',

@@ -8,6 +8,10 @@ final class AgentStore
         AgentRunJournalPort,
         AgentHistoryPagePort,
         AgentConversationControlPort,
+        AgentTranscriptPort,
+        AgentReceiptRecoveryPort,
+        AgentUsePolicyPort,
+        AgentTargetAliasPort,
         AgentPermissionManagementPort,
         AgentRecordPermissionPort,
         AgentPreferencesPort,
@@ -20,6 +24,169 @@ final class AgentStore
   @override
   void revokeConversationContext() => _chat.invalidate();
   late final _permissions = _AgentPermissionState(this);
+  late final _context = _AgentContextState(this);
+  final _adviceRuns = <String>{};
+  @override
+  Future<AgentUsePolicySnapshot> readAgentUsePolicy() => _context.readPolicy();
+  @override
+  Future<void> ensureAgentUsePolicySnapshot(AgentUsePolicySnapshot expected) =>
+      _context.ensureSnapshot(expected);
+  @override
+  Future<void> saveAgentUsePolicy(
+    AgentUsePolicySnapshot expected, {
+    required bool personalContentAllowed,
+    required bool dailyOperationsAllowed,
+    AgentContextOptions? contextOptions,
+  }) => _context.savePolicy(
+    expected,
+    personalContentAllowed,
+    dailyOperationsAllowed,
+    contextOptions,
+  );
+  @override
+  Future<void> bindAgentRunPolicy(
+    AgentRunTicket ticket,
+    AgentUsePolicySnapshot expected,
+  ) => _serial(() => _context.bindPolicy(ticket, expected));
+  @override
+  Future<void> ensureAgentUsePolicy(AgentRunTicket ticket, int revision) =>
+      _serial(() => _context.ensurePolicy(ticket, revision));
+  @override
+  void constrainAgentRunToAdvice(AgentRunTicket ticket) {
+    if (identical(_tickets[ticket.runId], ticket)) {
+      _adviceRuns.add(ticket.runId);
+    }
+  }
+
+  Future<void> _ensureAgentWritesAllowed(AgentRunTicket ticket) async {
+    await _requireTicket(ticket);
+    if (_adviceRuns.contains(ticket.runId)) {
+      throw const AgentFailure(AgentFailureCode.consentRequired);
+    }
+  }
+
+  @override
+  Future<void> saveAgentTurn(
+    AgentRunTicket ticket, {
+    required List<AgentContextItem> items,
+    required bool includesPersonalContent,
+    required int policyRevision,
+    String applicationSelection = '',
+  }) => _context.saveTurn(
+    ticket,
+    items,
+    includesPersonalContent,
+    policyRevision,
+    applicationSelection,
+  );
+  @override
+  Future<AgentLocalReceiptRecovery> findUnfinishedAgentLocalReceipt(
+    AgentRunTicket current,
+    String invocationFingerprint,
+  ) => _serial(() async {
+    await _requireTicket(current);
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(invocationFingerprint)) {
+      throw const AgentFailure(AgentFailureCode.invalidInput);
+    }
+    final cutoff =
+        (await _db
+                .customSelect(
+                  "SELECT COALESCE(MAX(message_id),0) AS n FROM agent_messages "
+                  "WHERE conversation_id=? AND message_id<? AND role='assistant' "
+                  "AND status IN ('complete','streaming')",
+                  variables: [
+                    Variable.withString(current.conversationId),
+                    Variable.withInt(current.assistantMessageId),
+                  ],
+                )
+                .getSingle())
+            .read<int>('n');
+    const receiptRows =
+        'FROM agent_messages m '
+        'JOIN agent_actions a ON a.run_id=m.run_id '
+        'JOIN agenda_plan_receipts p ON p.operation_id=a.action_id '
+        "WHERE m.conversation_id=? AND m.message_id>? AND m.message_id<? "
+        "AND m.role='assistant' AND m.status IN ('failed','interrupted','cancelled') "
+        "AND a.kind='localPlan' AND a.status='committed' ";
+    final variables = [
+      Variable.withString(current.conversationId),
+      Variable.withInt(cutoff),
+      Variable.withInt(current.assistantMessageId),
+    ];
+    final match = await _db
+        .customSelect(
+          'SELECT p.committed_count $receiptRows AND a.invocation_fingerprint=? '
+          'ORDER BY m.message_id DESC,a.created_at DESC LIMIT 1',
+          variables: [...variables, Variable.withString(invocationFingerprint)],
+        )
+        .getSingleOrNull();
+    final unclassified = match == null
+        ? (await _db
+                      .customSelect(
+                        'SELECT COUNT(*) AS n $receiptRows AND a.invocation_fingerprint IS NULL',
+                        variables: variables,
+                      )
+                      .getSingle())
+                  .read<int>('n') >
+              0
+        : false;
+    await _requireTicket(current);
+    return AgentLocalReceiptRecovery(
+      match != null
+          ? AgentLocalReceiptRecoveryState.committed
+          : unclassified
+          ? AgentLocalReceiptRecoveryState.unknown
+          : AgentLocalReceiptRecoveryState.absent,
+      committedCount: match?.read<int>('committed_count') ?? 0,
+    );
+  });
+  @override
+  Future<bool> hasRecoverableAgentLocalReceipt(
+    AgentRunTicket current,
+    int assistantMessageId,
+  ) => _serial(() async {
+    await _requireTicket(current);
+    final row = await _db
+        .customSelect(
+          'SELECT COUNT(*) AS n FROM agent_messages m '
+          'JOIN agent_actions a ON a.run_id=m.run_id '
+          'JOIN agenda_plan_receipts p ON p.operation_id=a.action_id '
+          "WHERE m.message_id=? AND m.conversation_id=? AND m.role='assistant' "
+          "AND m.status IN ('failed','interrupted','cancelled') "
+          "AND a.kind='localPlan' AND a.status='committed'",
+          variables: [
+            Variable.withInt(assistantMessageId),
+            Variable.withString(current.conversationId),
+          ],
+        )
+        .getSingle();
+    await _requireTicket(current);
+    return row.read<int>('n') > 0;
+  });
+  @override
+  Future<void> rememberAgentEvent(
+    AgentRunTicket ticket,
+    String alias,
+    CalendarReference reference,
+    DateTime startsAtUtc,
+    DateTime endsAtUtc,
+  ) => _context.rememberEvent(ticket, alias, reference, startsAtUtc, endsAtUtc);
+  @override
+  Future<void> rememberAgentTask(
+    AgentRunTicket ticket,
+    String alias,
+    TaskReference reference,
+  ) => _context.rememberTask(ticket, alias, reference);
+  @override
+  Future<(CalendarReference, int)> resolveAgentEvent(
+    AgentRunTicket ticket,
+    String alias,
+  ) => _context.resolveEvent(ticket, alias);
+  @override
+  Future<(TaskReference, int)> resolveAgentTask(
+    AgentRunTicket ticket,
+    String alias,
+  ) => _context.resolveTask(ticket, alias);
   final _sourceRequests = Expando<AgentSourceRequest>();
   @override
   Future<List<AgentPermissionReference>> readActionPermissions() =>
@@ -51,7 +218,7 @@ final class AgentStore
     required AgentAuthorizationMode mode,
     bool remember = false,
   }) => _serial(() async {
-    await _requireTicket(ticket);
+    await _ensureAgentWritesAllowed(ticket);
     if (!identical(_actionPermits[action], ticket) &&
         !identical(_preferencePermits[action]?.$1, ticket)) {
       throw const AgentFailure(AgentFailureCode.staleContext);
@@ -136,6 +303,7 @@ final class AgentStore
     AgentRunTicket ticket,
     AgentActionView record,
   ) => _serial(() async {
+    await _ensureAgentWritesAllowed(ticket);
     await _ensureSourceRecord(ticket, record);
     _sourceApprovals[record] = ticket;
   });
@@ -144,6 +312,7 @@ final class AgentStore
     AgentActionView record, [
     AgentSourceRequest? request,
   ]) => _serial(() async {
+    await _ensureAgentWritesAllowed(ticket);
     await _ensureSourceRecord(ticket, record);
     if (!identical(_sourceApprovals[record], ticket)) {
       throw const AgentFailure(AgentFailureCode.consentRequired);
@@ -189,6 +358,7 @@ final class AgentStore
     Object sourceTicket, [
     AgentSourceRequest? request,
   ]) => _serial(() async {
+    await _ensureAgentWritesAllowed(ticket);
     if (!identical(_actionPermits[record], ticket) ||
         record.kind != AgentActionKind.sourceRefresh) {
       throw const AgentFailure(AgentFailureCode.staleContext);
@@ -227,7 +397,7 @@ final class AgentStore
   Future<void> _commitSourceAction(Object sourceTicket, int count) async {
     final binding = _sourceActions[sourceTicket];
     if (binding == null) return;
-    await _requireTicket(binding.$1);
+    await _ensureAgentWritesAllowed(binding.$1);
     await _permissions.validateAction(binding.$2);
     if (_revokedActionRuns.contains(binding.$1.runId)) {
       throw const AgentFailure(AgentFailureCode.cancelled);
@@ -403,7 +573,7 @@ final class AgentStore
     () => _db.transaction(() async {
       await _requireTicket(ticket);
       if (evidence.length > 64 ||
-          steps.length > 16 ||
+          steps.length > 256 ||
           imageCount < 0 ||
           imageCount > 3 ||
           evidence.map((e) => e.id).toSet().length != evidence.length) {
@@ -463,6 +633,8 @@ final class AgentStore
       _revokedActionRuns.add(ticket.runId);
     }
     _tickets.clear();
+    _adviceRuns.clear();
+    _context._runPolicies.clear();
   }
 
   Future<T> _serial<T>(Future<T> Function() body) async {
@@ -1094,6 +1266,8 @@ final class AgentStore
       _db._ownership.ensureHeld();
     });
     _tickets.remove(ticket.runId);
+    _adviceRuns.remove(ticket.runId);
+    _context._runPolicies.remove(ticket.runId);
     _revokedActionRuns.remove(ticket.runId);
     _signal();
   });
@@ -1119,6 +1293,8 @@ final class AgentStore
       _db._ownership.ensureHeld();
     });
     _tickets.remove(ticket.runId);
+    _adviceRuns.remove(ticket.runId);
+    _context._runPolicies.remove(ticket.runId);
     _revokedActionRuns.remove(ticket.runId);
     _signal();
   });
@@ -1174,6 +1350,7 @@ final class AgentStore
     final where = conversation == null ? '' : ' WHERE conversation_id=?';
     final args = conversation == null ? <Object?>[] : <Object?>[conversation];
     await _chat.clear(conversation);
+    await _context.clearConversation(conversation);
     final count =
         (await _db
                 .customSelect(
@@ -1234,6 +1411,8 @@ final class AgentStore
   Future<void> _resetApplication() async {
     await _chat.clear(null);
     await _permissions.reset();
+    await _context.reset();
+    _adviceRuns.clear();
     for (final table in [
       'agent_actions',
       'agent_messages',

@@ -28,13 +28,17 @@ void main() {
 
       final AgentRunJournalPort journal = store.agent;
       await journal.ensureAgentRun(ticket);
+      final steps = List.generate(
+        48,
+        (index) => AgentToolStep(
+          tool: index.isEven ? 'query_agenda' : 'search_knowledge',
+          status: index.isEven ? 'success' : 'empty',
+        ),
+      );
       await journal.saveRunJournal(
         ticket,
         evidence: [_evidence()],
-        steps: const [
-          AgentToolStep(tool: 'query_agenda', status: 'success'),
-          AgentToolStep(tool: 'search_knowledge', status: 'empty'),
-        ],
+        steps: steps,
         imageCount: 2,
       );
       await store.agent.finishRun(ticket, AgentMessageStatus.complete);
@@ -48,10 +52,11 @@ void main() {
       expect(messages.last.text, '请在日程页核对合成安排。');
       expect(messages.last.evidence.single.id, 'e_0123456789abcdef');
       expect(messages.last.evidence.single.snippet, '合成摘录：周二 10:00–11:00');
-      expect(messages.last.steps.map((step) => '${step.tool}:${step.status}'), [
-        'query_agenda:success',
-        'search_knowledge:empty',
-      ]);
+      expect(messages.last.steps, hasLength(48));
+      expect(
+        messages.last.steps.map((step) => '${step.tool}:${step.status}'),
+        steps.map((step) => '${step.tool}:${step.status}'),
+      );
 
       final stored = await store
           .customSelect(
@@ -88,10 +93,12 @@ void main() {
           'applicability',
         }),
       );
-      expect(jsonDecode(stored.last.read<String>('steps_json')), [
-        {'tool': 'query_agenda', 'status': 'success'},
-        {'tool': 'search_knowledge', 'status': 'empty'},
-      ]);
+      expect(
+        jsonDecode(stored.last.read<String>('steps_json')),
+        steps
+            .map((step) => {'tool': step.tool, 'status': step.status})
+            .toList(),
+      );
       expect(
         (await store.customSelect('PRAGMA table_info(agent_messages)').get())
             .map((row) => row.read<String>('name')),
@@ -103,10 +110,11 @@ void main() {
       messages = await store.agent.messages(conversation);
       expect(messages.last.evidence.single.title, '合成日程出处');
       expect(messages.last.evidence.single.sourceVersion, 'synthetic-v1');
-      expect(messages.last.steps.map((step) => step.tool), [
-        'query_agenda',
-        'search_knowledge',
-      ]);
+      expect(messages.last.steps, hasLength(48));
+      expect(
+        messages.last.steps.map((step) => '${step.tool}:${step.status}'),
+        steps.map((step) => '${step.tool}:${step.status}'),
+      );
       expect(messages.first.imageCount, 2);
     },
   );
@@ -259,57 +267,72 @@ void main() {
     },
   );
 
-  test('journal enforces evidence, step, and snippet bounds', () async {
-    final store = await _open();
-    await _configure(store);
-    final conversation = await store.agent.createConversation();
-    final ticket = await _beginRun(store, conversation, '检查证据边界');
-    final AgentRunJournalPort journal = store.agent;
-    final evidence = _evidenceBatch(64);
-    final steps = List.generate(
-      16,
-      (_) => const AgentToolStep(tool: 'query_agenda', status: 'success'),
-    );
-    await journal.saveRunJournal(
-      ticket,
-      evidence: evidence,
-      steps: steps,
-      imageCount: 3,
-    );
-    await _agentFailure(
-      journal.saveRunJournal(
+  test(
+    'journal enforces evidence, step-count, serialized-size, and snippet bounds',
+    () async {
+      final store = await _open();
+      await _configure(store);
+      final conversation = await store.agent.createConversation();
+      final ticket = await _beginRun(store, conversation, '检查证据边界');
+      final AgentRunJournalPort journal = store.agent;
+      final evidence = _evidenceBatch(64);
+      final steps = List.generate(
+        48,
+        (_) => const AgentToolStep(tool: 'query_agenda', status: 'success'),
+      );
+      await journal.saveRunJournal(
         ticket,
-        evidence: _evidenceBatch(65),
-        steps: const [],
-        imageCount: 0,
-      ),
-      AgentFailureCode.invalidInput,
-    );
-    await _agentFailure(
-      journal.saveRunJournal(
-        ticket,
-        evidence: const [],
-        steps: List.generate(
-          17,
-          (_) => const AgentToolStep(tool: 'query_agenda', status: 'success'),
+        evidence: evidence,
+        steps: steps,
+        imageCount: 3,
+      );
+      await _agentFailure(
+        journal.saveRunJournal(
+          ticket,
+          evidence: _evidenceBatch(65),
+          steps: const [],
+          imageCount: 0,
         ),
-        imageCount: 0,
-      ),
-      AgentFailureCode.invalidInput,
-    );
-    await _agentFailure(
-      journal.saveRunJournal(
-        ticket,
-        evidence: [_evidence(snippet: List<String>.filled(401, '摘录').join())],
-        steps: const [],
-        imageCount: 0,
-      ),
-      AgentFailureCode.resourceLimit,
-    );
-    final saved = (await store.agent.messages(conversation)).last;
-    expect(saved.evidence, hasLength(64));
-    expect(saved.steps, hasLength(16));
-  });
+        AgentFailureCode.invalidInput,
+      );
+      await _agentFailure(
+        journal.saveRunJournal(
+          ticket,
+          evidence: const [],
+          steps: List.generate(
+            256,
+            (_) => const AgentToolStep(tool: 'query_agenda', status: 'success'),
+          ),
+          imageCount: 0,
+        ),
+        AgentFailureCode.resourceLimit,
+      );
+      await _agentFailure(
+        journal.saveRunJournal(
+          ticket,
+          evidence: const [],
+          steps: List.generate(
+            257,
+            (_) => const AgentToolStep(tool: 'query_agenda', status: 'success'),
+          ),
+          imageCount: 0,
+        ),
+        AgentFailureCode.invalidInput,
+      );
+      await _agentFailure(
+        journal.saveRunJournal(
+          ticket,
+          evidence: [_evidence(snippet: List<String>.filled(401, '摘录').join())],
+          steps: const [],
+          imageCount: 0,
+        ),
+        AgentFailureCode.resourceLimit,
+      );
+      final saved = (await store.agent.messages(conversation)).last;
+      expect(saved.evidence, hasLength(64));
+      expect(saved.steps, hasLength(48));
+    },
+  );
 
   test(
     'journal checkpoint failure rolls back only the attempted journal write',
@@ -457,7 +480,7 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 14);
+      expect(await _scalar(store, 'PRAGMA user_version'), 15);
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -482,7 +505,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 15);
+    _setSchemaVersion(file, 16);
 
     await expectLater(
       _open(file: file),
@@ -496,7 +519,7 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 15);
+      expect(raw.select('PRAGMA user_version').single['user_version'], 16);
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -704,7 +727,13 @@ void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
       .select("SELECT name FROM sqlite_master WHERE type='table'")
       .map((row) => row['name'] as String)
       .toSet();
-  for (final table in const ['agent_permissions', 'agent_chat_state']) {
+  for (final table in const [
+    'agent_context_turns',
+    'agent_target_aliases',
+    'agent_use_policy',
+    'agent_permissions',
+    'agent_chat_state',
+  ]) {
     if (tables.contains(table)) database.execute('DROP TABLE $table');
   }
   if (tables.contains('agent_actions')) {

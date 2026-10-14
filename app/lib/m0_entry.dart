@@ -10,6 +10,7 @@ import 'app/app_settings_page.dart';
 import 'app/maintenance_recovery_page.dart';
 import 'app/calendar_workspace_page.dart';
 import 'app/agent_workspace_page.dart';
+import 'app/agent_behavior_validation_panel.dart';
 import 'app/agent_settings_panel.dart';
 import 'app/diagnostics_panel.dart';
 import 'app/diagnostic_error_hooks.dart';
@@ -46,7 +47,7 @@ Future<void> launchM0() async {
     final diagnostics = TransientDiagnostics(
       versions: const DiagnosticVersions(
         application: '0.0.1+0',
-        schema: 14,
+        schema: 15,
         tools: agentToolRegistryVersion,
         prompt: agentPromptVersion,
         revision: String.fromEnvironment(
@@ -158,6 +159,24 @@ final class _OwnedAppState extends State<OwnedApplication> {
           diagnostics: runtime.diagnostics,
           speechInput: runtime.speechInput,
           pickImages: pickAgentImages,
+          onModelValidation: () async {
+            try {
+              final runner = await runtime.agent.openBehaviorValidation();
+              if (!context.mounted) return;
+              await showDialog<void>(
+                context: context,
+                barrierDismissible: false,
+                builder: (_) =>
+                    Dialog(child: AgentBehaviorValidationPanel(runner: runner)),
+              );
+            } on Object {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('暂时无法打开核验面板，请稍后重试。')),
+                );
+              }
+            }
+          },
           onOpenLocalEvidence: (evidence) async {
             final navigationEpoch = _navigationResetEpoch;
             try {

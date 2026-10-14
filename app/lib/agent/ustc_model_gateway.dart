@@ -235,6 +235,20 @@ final class UstcModelGateway implements ModelGatewayPort {
       key: key,
       body: body,
     );
+    if (const {400, 413, 422}.contains(response.statusCode)) {
+      // Only a closed provider code triggers one capacity retry. Message text
+      // and echoed request content are never retained or put in diagnostics.
+      final bytes = await _readLimited(response, 8192, operation);
+      try {
+        if (_isContextLimit(jsonDecode(utf8.decode(bytes)))) {
+          throw const AgentFailure(AgentFailureCode.contextLimit);
+        }
+      } on FormatException {
+        // An unknown error remains a normal image/protocol rejection below.
+      } finally {
+        bytes.fillRange(0, bytes.length, 0);
+      }
+    }
     if (modelRequest.messages.any((m) => m.images.isNotEmpty) &&
         const {400, 415, 422}.contains(response.statusCode)) {
       throw const AgentFailure(AgentFailureCode.imageRejected);
@@ -245,6 +259,17 @@ final class UstcModelGateway implements ModelGatewayPort {
       throw const AgentFailure(AgentFailureCode.protocol);
     }
     await _readSse(operation, response, modelRequest.tools, output);
+  }
+
+  static bool _isContextLimit(Object? value) {
+    if (value is! Map<String, dynamic>) return false;
+    final error = value['error'];
+    return error is Map<String, dynamic> &&
+        const {
+          'context_length_exceeded',
+          'context_window_exceeded',
+          'max_context_length_exceeded',
+        }.contains(error['code']);
   }
 
   Future<HttpClientResponse> _send(
@@ -347,7 +372,7 @@ final class UstcModelGateway implements ModelGatewayPort {
         request.maxTokens < 1 ||
         request.maxTokens > 32768 ||
         request.messages.isEmpty ||
-        request.messages.length > 128 ||
+        request.messages.length > 512 ||
         request.tools.length > 32) {
       throw const AgentFailure(AgentFailureCode.invalidInput);
     }
@@ -408,7 +433,7 @@ final class UstcModelGateway implements ModelGatewayPort {
       final content = message.content;
       if (content != null) {
         promptChars += content.runes.length;
-        if (content.runes.length > _textLimit || promptChars > 128 * 1024) {
+        if (content.runes.length > 192 * 1024 || promptChars > 256 * 1024) {
           throw const AgentFailure(AgentFailureCode.resourceLimit);
         }
       }
@@ -643,6 +668,9 @@ final class UstcModelGateway implements ModelGatewayPort {
       }
       if (decoded is! Map<String, dynamic>) {
         throw const AgentFailure(AgentFailureCode.protocol);
+      }
+      if (_isContextLimit(decoded)) {
+        throw const AgentFailure(AgentFailureCode.contextLimit);
       }
       if (decoded['usage'] != null) {
         final usage = decoded['usage'];

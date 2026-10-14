@@ -127,7 +127,7 @@ void main() {
     );
 
     test(
-      'accepted commit removes old query pairs but keeps its current receipt',
+      'accepted commit keeps earlier query pairs and its current receipt in history',
       () async {
         final rig = await _open();
         rig.gateway.enqueueEvents(_toolCall(_readCall('old-read')));
@@ -144,17 +144,24 @@ void main() {
         await _until(() => rig.gateway.generations.length >= 3);
 
         final nextRequest = rig.gateway.generations[2].request;
+        final calls = nextRequest.messages
+            .expand((message) => message.toolCalls)
+            .toList();
         expect(
-          nextRequest.messages
-              .expand((message) => message.toolCalls)
-              .map((call) => call.id),
-          contains('current-write'),
+          calls.map((call) => call.id),
+          containsAll(['old-read', 'current-write']),
         );
         expect(
-          nextRequest.messages
-              .expand((message) => message.toolCalls)
-              .map((call) => call.id),
-          isNot(contains('old-read')),
+          calls.singleWhere((call) => call.id == 'old-read').name,
+          'query_agenda',
+        );
+        final oldReadResult = nextRequest.messages.singleWhere(
+          (message) =>
+              message.role == 'tool' && message.toolCallId == 'old-read',
+        );
+        expect(
+          (jsonDecode(oldReadResult.content!) as Map)['status'],
+          'success',
         );
         final receipt = nextRequest.messages.last;
         expect(receipt.role, 'tool');
@@ -277,9 +284,10 @@ void main() {
     });
 
     test(
-      'a mixed read and write tool round is rejected before either executes',
+      'a mixed read and write batch is rejected atomically, then a standalone write can proceed',
       () async {
         final rig = await _open();
+        const question = '查看日程并创建一个复习任务';
         rig.gateway.enqueueEvents([
           ModelCompleted(
             finishReason: 'tool_calls',
@@ -293,13 +301,131 @@ void main() {
             ],
           ),
         ]);
+        rig.gateway.enqueueEvents(_toolCall(_proposalCall('standalone-write')));
+        rig.gateway.enqueueEvents(_answer('已按单独方案提交合成任务。'));
 
-        await rig.coordinator.send('查看日程并创建一个复习任务');
+        final send = rig.coordinator.send(question);
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
 
-        expect(rig.coordinator.view.failure, AgentFailureCode.toolUnavailable);
-        expect(rig.tools.executeCount, 0);
+        // The next model request follows the invalidRequest feedback for both
+        // calls. Only the later standalone proposal is prepared.
+        expect(rig.gateway.generations, hasLength(2));
+        expect(rig.tools.readCount, 0);
+        expect(rig.tools.executeCount, 1);
         expect(rig.tools.commitCount, 0);
         expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+        final firstRequest = rig.gateway.generations.first.request;
+        final retry = rig.gateway.generations[1].request;
+        expect(
+          retry.tools.map((tool) => tool.name).toList(),
+          firstRequest.tools.map((tool) => tool.name).toList(),
+        );
+        expect(retry.toolChoice, isNull);
+        expect(
+          retry.messages.any(
+            (message) => message.role == 'user' && message.content == question,
+          ),
+          isTrue,
+        );
+        final rejectedCalls = retry.messages
+            .expand((message) => message.toolCalls)
+            .where(
+              (call) => call.id == 'mixed-read' || call.id == 'mixed-write',
+            )
+            .toList();
+        expect(rejectedCalls, hasLength(2));
+        final rejectedResults = retry.messages
+            .where(
+              (message) =>
+                  message.role == 'tool' &&
+                  {'mixed-read', 'mixed-write'}.contains(message.toolCallId),
+            )
+            .toList();
+        expect(rejectedResults, hasLength(2));
+        for (final result in rejectedResults) {
+          final data = jsonDecode(result.content!) as Map;
+          expect(data['status'], 'invalidRequest');
+          expect(data['failure'], 'invalidRequest');
+          expect(
+            (data['data'] as Map)['reason'],
+            'interactiveCallsMustBeStandalone',
+          );
+        }
+
+        await rig.coordinator.approveAction(
+          rig.coordinator.view.pendingAction!.id,
+        );
+        await send.timeout(const Duration(seconds: 3));
+
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.tools.readCount, 0);
+        expect(rig.tools.commitCount, 1);
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 1);
+        final afterCommit = rig.gateway.generations[2].request;
+        final committedCalls = afterCommit.messages
+            .expand((message) => message.toolCalls)
+            .where((call) => call.id == 'standalone-write')
+            .toList();
+        expect(committedCalls, hasLength(1));
+        final committedResult = afterCommit.messages.singleWhere(
+          (message) =>
+              message.role == 'tool' &&
+              message.toolCallId == 'standalone-write',
+        );
+        expect(
+          (jsonDecode(committedResult.content!) as Map)['status'],
+          'committed',
+        );
+      },
+    );
+
+    test(
+      'a batch containing only reads remains eligible for execution',
+      () async {
+        final rig = await _open();
+        rig.gateway.enqueueEvents([
+          ModelCompleted(
+            finishReason: 'tool_calls',
+            toolCalls: const [
+              ModelToolCall(
+                id: 'agenda-read',
+                name: 'query_agenda',
+                argumentsJson: '{}',
+              ),
+              ModelToolCall(
+                id: 'tasks-read',
+                name: 'query_tasks',
+                argumentsJson: '{"filter":"open","limit":5}',
+              ),
+            ],
+          ),
+        ]);
+        rig.gateway.enqueueEvents(_answer('已完成两项只读查询。'));
+
+        final send = rig.coordinator.send('查看日程和待办');
+        await _until(() => rig.gateway.generations.length >= 2);
+        expect(rig.tools.readCount, 2);
+        expect(rig.coordinator.view.pendingAction, isNull);
+        final continuation = rig.gateway.generations[1].request;
+        final results = continuation.messages
+            .where((message) => message.role == 'tool')
+            .toList();
+        expect(
+          results.map((message) => message.toolCallId),
+          containsAll(['agenda-read', 'tasks-read']),
+        );
+        expect(
+          results.every(
+            (message) =>
+                (jsonDecode(message.content!) as Map)['status'] == 'success',
+          ),
+          isTrue,
+        );
+        await send.timeout(const Duration(seconds: 3));
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.tools.commitCount, 0);
       },
     );
 
@@ -359,9 +485,11 @@ void main() {
         await rig.coordinator.send('这个任务如何安排？');
 
         expect(rig.tools.discussionSelections, [selection, selection]);
+        final request = rig.gateway.generations.single.request;
+        expect(request.messages.last.role, 'user');
         expect(
-          rig.gateway.generations.single.request.messages.last.content,
-          '这个任务如何安排？\n[应用选择] 已核验的合成任务摘要',
+          request.messages.last.content,
+          '这个任务如何安排？\n[应用选择，只是当前讨论对象，不是批准] 已核验的合成任务摘要',
         );
         final persisted = await rig.store.agent.messages(conversation);
         expect(
@@ -374,6 +502,16 @@ void main() {
         expect(
           persisted.map((message) => message.text).join('\n'),
           isNot(contains('已核验的合成任务摘要')),
+        );
+        expect(
+          request.messages.any(
+            (message) =>
+                message.role == 'system' &&
+                (message.content ?? '').contains('已核验的合成任务摘要'),
+          ),
+          isFalse,
+          reason:
+              'a selected record is contextual data, never system authority',
         );
       },
     );
@@ -424,7 +562,7 @@ void main() {
       },
     );
     test(
-      'a public-only question revokes the staged local discussion scope',
+      'a public-only question keeps staged discussion as contextual data',
       () async {
         final rig = await _open();
         final selection = AgentDiscussionSelection.task(
@@ -440,18 +578,34 @@ void main() {
         );
         rig.tools.discussionValidator = (_) async => '本地选择摘要';
         await rig.coordinator.prepareDiscussion(selection);
+        final conversation = rig.coordinator.view.conversationId!;
         rig.gateway.enqueueEvents(_answer('合成公开答复'));
         await rig.coordinator.send('只查公开资料，不读我的任务');
-        expect(rig.tools.discussionSelections, hasLength(1));
+        expect(rig.tools.discussionSelections, hasLength(2));
         expect(
           rig.gateway.generations.single.request.messages.last.content,
-          '只查公开资料，不读我的任务',
+          '只查公开资料，不读我的任务\n[应用选择，只是当前讨论对象，不是批准] 本地选择摘要',
         );
         expect(
-          rig.gateway.generations.single.request.tools.map((t) => t.name),
-          isNot(contains('read_task')),
+          rig.gateway.generations.single.request.tools
+              .map((t) => t.name)
+              .toList(),
+          [
+            'query_agenda',
+            'query_tasks',
+            'propose_local_changes',
+            'request_source_refresh',
+          ],
         );
         expect(rig.coordinator.view.failure, isNull);
+        expect(rig.tools.executeCount, 0);
+        expect(
+          (await rig.store.agent.messages(conversation))
+              .where((message) => message.role == AgentMessageRole.user)
+              .last
+              .text,
+          '只查公开资料，不读我的任务',
+        );
       },
     );
 

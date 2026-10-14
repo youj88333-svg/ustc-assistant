@@ -267,6 +267,184 @@ void main() {
       },
     );
 
+    for (final (status, code) in <(int, String)>[
+      (HttpStatus.badRequest, 'context_length_exceeded'),
+      (HttpStatus.requestEntityTooLarge, 'context_window_exceeded'),
+      (HttpStatus.unprocessableEntity, 'max_context_length_exceeded'),
+    ]) {
+      test('maps typed HTTP context code $code to contextLimit', () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = status;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(
+            jsonEncode({
+              'error': {
+                'code': code,
+                'message': 'synthetic-provider-error-body-marker',
+              },
+            }),
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final keyBytes = Uint8List.fromList(utf8.encode('synthetic-test-key'));
+
+        await expectLater(
+          gateway.generate(_request(), ModelSecretLease(keyBytes)).toList(),
+          throwsA(_failure(AgentFailureCode.contextLimit)),
+        );
+
+        expect(keyBytes, everyElement(0));
+        await gateway.close();
+      });
+    }
+
+    for (final (label, error) in <(String, Map<String, Object?>)>[
+      ('message-only', {'message': 'context_length_exceeded'}),
+      (
+        'unknown-code',
+        {
+          'code': 'synthetic_unknown_context_code',
+          'message': 'synthetic-provider-error-body-marker',
+        },
+      ),
+    ]) {
+      test('keeps HTTP context $label as protocol failure', () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = HttpStatus.badRequest;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write(jsonEncode({'error': error}));
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final keyBytes = Uint8List.fromList(utf8.encode('synthetic-test-key'));
+
+        await expectLater(
+          gateway.generate(_request(), ModelSecretLease(keyBytes)).toList(),
+          throwsA(_failure(AgentFailureCode.protocol)),
+        );
+
+        expect(keyBytes, everyElement(0));
+        await gateway.close();
+      });
+    }
+
+    for (final code in const [
+      'context_length_exceeded',
+      'context_window_exceeded',
+      'max_context_length_exceeded',
+    ]) {
+      test('maps typed SSE context code $code', () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          final payload = jsonEncode({
+            'error': {
+              'code': code,
+              'message': 'synthetic-provider-error-body-marker',
+            },
+          });
+          request.response.write('data: $payload\n\n');
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final keyBytes = Uint8List.fromList(utf8.encode('synthetic-test-key'));
+
+        await expectLater(
+          gateway.generate(_request(), ModelSecretLease(keyBytes)).toList(),
+          throwsA(_failure(AgentFailureCode.contextLimit)),
+        );
+
+        expect(keyBytes, everyElement(0));
+        await gateway.close();
+      });
+    }
+
+    for (final (label, error) in <(String, Map<String, Object?>)>[
+      ('message-only', {'message': 'context_length_exceeded'}),
+      (
+        'unknown-code',
+        {
+          'code': 'synthetic_unknown_context_code',
+          'message': 'synthetic-provider-error-body-marker',
+        },
+      ),
+    ]) {
+      test('keeps SSE context $label as protocol failure', () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          final payload = jsonEncode({'error': error});
+          request.response.write('data: $payload\n\n');
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        final keyBytes = Uint8List.fromList(utf8.encode('synthetic-test-key'));
+
+        await expectLater(
+          gateway.generate(_request(), ModelSecretLease(keyBytes)).toList(),
+          throwsA(_failure(AgentFailureCode.protocol)),
+        );
+
+        expect(keyBytes, everyElement(0));
+        await gateway.close();
+      });
+    }
+
+    test('non-capacity HTTP 400 with an image remains imageRejected', () async {
+      var requests = 0;
+      await server.start((request) async {
+        requests++;
+        await utf8.decoder.bind(request).join();
+        request.response.statusCode = HttpStatus.badRequest;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'error': {'message': 'context_length_exceeded'},
+          }),
+        );
+        await request.response.close();
+      });
+      final gateway = server.gateway();
+      final keyBytes = Uint8List.fromList(utf8.encode('synthetic-test-key'));
+      const png =
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8A'
+          'AusB9Y9ZgdwAAAAASUVORK5CYII=';
+
+      await expectLater(
+        gateway
+            .generate(
+              ModelRequest(
+                modelId: 'synthetic-vision',
+                messages: [
+                  ModelChatMessage(
+                    role: 'user',
+                    content: '看图',
+                    images: [AgentImage(Uint8List.fromList(base64Decode(png)))],
+                  ),
+                ],
+              ),
+              ModelSecretLease(keyBytes),
+            )
+            .toList(),
+        throwsA(_failure(AgentFailureCode.imageRejected)),
+      );
+
+      expect(requests, 1);
+      expect(keyBytes, everyElement(0));
+      await gateway.close();
+    });
+
     test('rejects unpaired request tool calls before sending', () async {
       var requests = 0;
       await server.start((request) async {
@@ -527,8 +705,9 @@ void main() {
         final gateway = server.gateway();
         final streamErrors = <Object>[];
         final oldEvents = <ModelEvent>[];
+        final firstKey = Uint8List.fromList(utf8.encode('synthetic-test-key'));
         final subscription = gateway
-            .generate(_request(), _key())
+            .generate(_request(), ModelSecretLease(firstKey))
             .listen(
               oldEvents.add,
               onError: (Object error) => streamErrors.add(error),
@@ -543,6 +722,7 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         expect(models, ['reused']);
+        expect(firstKey, everyElement(0));
         expect(oldEvents.whereType<ModelCompleted>(), isEmpty);
         expect(
           streamErrors,

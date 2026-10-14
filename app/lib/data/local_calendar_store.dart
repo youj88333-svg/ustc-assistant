@@ -7,7 +7,9 @@ final class LocalCalendarStore
         LocalCalendarPort,
         LocalTaskPort,
         CalendarReadGuardPort,
+        CalendarLifecycleGuardPort,
         AgentLocalPlanPort,
+        AgentLocalInvocationPort,
         AgentLocalPermissionPort {
   LocalCalendarStore._(this._db);
   final JwStore _db;
@@ -45,6 +47,43 @@ final class LocalCalendarStore
   @override
   Future<AgentPlanApproval> approveLocalPlan(AgentLocalPlan plan) =>
       _approveAgentPlan(plan);
+  @override
+  Future<void> bindLocalInvocation(
+    AgentLocalPlan plan,
+    String invocationFingerprint,
+  ) => _serial(() async {
+    if (!RegExp(r'^[a-f0-9]{64}$').hasMatch(invocationFingerprint)) {
+      throw const AgentFailure(AgentFailureCode.invalidInput);
+    }
+    final prepared = _agentPlans[plan.id];
+    if (prepared == null ||
+        !identical(prepared.plan, plan) ||
+        plan.view.kind != AgentActionKind.localPlan) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    await _db.transaction(() async {
+      await _verifyAgentPlan(prepared);
+      final row = await _db
+          .customSelect(
+            'SELECT invocation_fingerprint FROM agent_actions WHERE action_id=? AND run_id=? AND status=\'proposed\'',
+            variables: [
+              Variable.withString(plan.id),
+              Variable.withString(plan.ticket.runId),
+            ],
+          )
+          .getSingleOrNull();
+      final prior = row?.read<String?>('invocation_fingerprint');
+      if (row == null || prior != null && prior != invocationFingerprint) {
+        throw const AgentFailure(AgentFailureCode.staleContext);
+      }
+      await _db.customStatement(
+        'UPDATE agent_actions SET invocation_fingerprint=? WHERE action_id=?',
+        [invocationFingerprint, plan.id],
+      );
+      await _verifyAgentPlan(prepared);
+      _db._ownership.ensureHeld();
+    });
+  });
   @override
   Future<AgentPlanApproval?> authorizeLocalPlan(
     AgentLocalPlan plan, {
@@ -87,6 +126,10 @@ final class LocalCalendarStore
         }
         _db._ownership.ensureHeld();
       });
+
+  @override
+  Future<void> ensureCalendarContext(CalendarContext context) =>
+      _serial(() => _guard(context));
 
   static const _relationDefinition = '''(
       local_id INTEGER PRIMARY KEY AUTOINCREMENT,

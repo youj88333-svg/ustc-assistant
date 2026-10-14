@@ -50,6 +50,10 @@ enum DiagnosticEventName {
   logsExported,
   logsCleared,
   speechInputStage,
+  agentContextAssembled,
+  agentContextCompacted,
+  agentContextTrimmed,
+  agentPolicyChanged,
 }
 
 enum DiagnosticTool {
@@ -93,6 +97,8 @@ enum DiagnosticOutcome {
   interrupted,
   closed,
   recovery,
+  permissionRequired,
+  adviceOnly,
 }
 
 enum DiagnosticOperation {
@@ -205,6 +211,132 @@ enum DiagnosticCode {
   recognitionFailed,
   cleanupFailed,
   unknown,
+  contextLimit,
+}
+
+enum DiagnosticReadScope { basic, personal }
+
+enum DiagnosticExecutionMode { confirm, daily, advice }
+
+enum DiagnosticContextDecision {
+  assembled,
+  softCompaction,
+  wholeTurnTrim,
+  serviceCapacityRetry,
+  policySaved,
+  policyRevoked,
+}
+
+/// A closed, value-free projection of context assembly and policy decisions.
+///
+/// Only fixed enum names and bounded counters can cross the diagnostic
+/// boundary. User text, identifiers, and model/service payloads have no
+/// representation in this type.
+final class DiagnosticContextMetadata {
+  const DiagnosticContextMetadata({
+    this.readScope,
+    this.executionMode,
+    this.decision,
+    this.estimatedInputTokens,
+    this.outputReserve,
+    this.availableTools,
+    this.wholeGroupsRemoved,
+  });
+
+  final DiagnosticReadScope? readScope;
+  final DiagnosticExecutionMode? executionMode;
+  final DiagnosticContextDecision? decision;
+  final int? estimatedInputTokens;
+  final int? outputReserve;
+  final int? availableTools;
+  final int? wholeGroupsRemoved;
+
+  Map<String, Object?> toSafeMap() {
+    final result = <String, Object?>{};
+    if (readScope != null) result['readScope'] = readScope!.name;
+    if (executionMode != null) result['executionMode'] = executionMode!.name;
+    if (decision != null) result['decision'] = decision!.name;
+    _addBoundedInteger(
+      result,
+      'estimatedInputTokens',
+      estimatedInputTokens,
+      0,
+      1000000,
+    );
+    _addBoundedInteger(result, 'outputReserve', outputReserve, 1, 8192);
+    _addBoundedInteger(result, 'availableTools', availableTools, 0, 19);
+    _addBoundedInteger(
+      result,
+      'wholeGroupsRemoved',
+      wholeGroupsRemoved,
+      0,
+      1000000,
+    );
+    if (result.isEmpty) {
+      throw const FormatException('diagnostic_context_empty');
+    }
+    return result;
+  }
+
+  factory DiagnosticContextMetadata.fromSafeMap(Map<String, dynamic> raw) {
+    if (raw.isEmpty ||
+        raw.keys.any(
+          (key) => !const {
+            'readScope',
+            'executionMode',
+            'decision',
+            'estimatedInputTokens',
+            'outputReserve',
+            'availableTools',
+            'wholeGroupsRemoved',
+          }.contains(key),
+        )) {
+      throw const FormatException('diagnostic_context_shape');
+    }
+
+    T? optionalEnum<T extends Enum>(String key, List<T> values) {
+      if (!raw.containsKey(key)) return null;
+      final match = values.where((value) => value.name == raw[key]).firstOrNull;
+      if (match == null) throw const FormatException('diagnostic_context_enum');
+      return match;
+    }
+
+    int? boundedInteger(String key, int minimum, int maximum) {
+      if (!raw.containsKey(key)) return null;
+      final value = raw[key];
+      if (value is! int || value < minimum || value > maximum) {
+        throw const FormatException('diagnostic_context_range');
+      }
+      return value;
+    }
+
+    return DiagnosticContextMetadata(
+      readScope: optionalEnum('readScope', DiagnosticReadScope.values),
+      executionMode: optionalEnum(
+        'executionMode',
+        DiagnosticExecutionMode.values,
+      ),
+      decision: optionalEnum('decision', DiagnosticContextDecision.values),
+      estimatedInputTokens: boundedInteger('estimatedInputTokens', 0, 1000000),
+      outputReserve: boundedInteger('outputReserve', 1, 8192),
+      availableTools: boundedInteger('availableTools', 0, 19),
+      wholeGroupsRemoved: boundedInteger('wholeGroupsRemoved', 0, 1000000),
+    );
+  }
+
+  static void _addBoundedInteger(
+    Map<String, Object?> map,
+    String key,
+    int? value,
+    int minimum,
+    int maximum,
+  ) {
+    if (value == null) return;
+    if (value < minimum || value > maximum) {
+      throw const FormatException('diagnostic_context_range');
+    }
+    map[key] = value;
+  }
 }
 
 enum DiagnosticStage {
@@ -304,6 +436,7 @@ final class DiagnosticEvent {
     this.outcome,
     this.code,
     this.issue,
+    this.context,
     this.elapsedMilliseconds,
     this.modelCalls,
     this.toolCalls,
@@ -319,6 +452,7 @@ final class DiagnosticEvent {
   final DiagnosticOutcome? outcome;
   final DiagnosticCode? code;
   final AgentParameterIssue? issue;
+  final DiagnosticContextMetadata? context;
   final int? elapsedMilliseconds, modelCalls, toolCalls, count, httpStatus;
 }
 
@@ -351,6 +485,7 @@ final class DiagnosticRecord {
             (event.issue!.changeIndex! < 0 || event.issue!.changeIndex! > 19)) {
       throw const FormatException('diagnostic_range');
     }
+    event.context?.toSafeMap();
   }
   final DateTime atUtc;
   final DiagnosticEvent event;
@@ -370,6 +505,7 @@ final class DiagnosticRecord {
     if (event.outcome != null) 'outcome': event.outcome!.name,
     if (event.code != null) 'code': event.code!.name,
     if (event.issue != null) 'validation': event.issue!.toSafeMap(),
+    if (event.context != null) 'context': event.context!.toSafeMap(),
     if (event.elapsedMilliseconds != null)
       'elapsedMs': event.elapsedMilliseconds,
     if (event.modelCalls != null) 'modelCalls': event.modelCalls,
@@ -409,6 +545,7 @@ final class DiagnosticRecord {
             'outcome',
             'code',
             'validation',
+            'context',
             'elapsedMs',
             'modelCalls',
             'toolCalls',
@@ -463,6 +600,14 @@ final class DiagnosticRecord {
         action: action,
         changeIndex: v['changeIndex'] as int?,
       );
+    }
+    DiagnosticContextMetadata? context;
+    if (raw.containsKey('context')) {
+      final value = raw['context'];
+      if (value is! Map<String, dynamic>) {
+        throw const FormatException('diagnostic_context_shape');
+      }
+      context = DiagnosticContextMetadata.fromSafeMap(value);
     }
     final name = optionalEnum('event', DiagnosticEventName.values);
     if (name == null || raw.containsKey('trace') && raw['trace'] is! String) {
@@ -519,6 +664,7 @@ final class DiagnosticRecord {
         outcome: optionalEnum('outcome', DiagnosticOutcome.values),
         code: optionalEnum('code', DiagnosticCode.values),
         issue: issue,
+        context: context,
         elapsedMilliseconds: number('elapsedMs'),
         modelCalls: number('modelCalls'),
         toolCalls: number('toolCalls'),

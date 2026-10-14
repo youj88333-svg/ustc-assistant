@@ -5,14 +5,17 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_m0/agent/agent_action_tools.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
 import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_source_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
+import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/core/work_lease.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/jobs/public_query_coordinator.dart';
@@ -126,10 +129,7 @@ void main() {
       final queryRequest = service.chatBodies[3];
       final queryTools = _toolNames(queryRequest);
       expect(queryTools, contains('query_tasks'));
-      expect(
-        (queryRequest['tool_choice'] as Map<String, dynamic>)['function'],
-        {'name': 'query_tasks'},
-      );
+      expect(queryRequest, isNot(contains('tool_choice')));
       final resultRequest = service.chatBodies[4];
       expect(resultRequest, isNot(contains('tool_choice')));
       final queryMessages = resultRequest['messages'] as List<dynamic>;
@@ -167,16 +167,274 @@ void main() {
       expect(coordinator.view.messages.last.text, isEmpty);
       expect(readTools.executeCount, executionsBeforeDuplicate);
       expect(service.chatBodies, hasLength(6));
-      expect(
-        (service.chatBodies.last['tool_choice']
-            as Map<String, dynamic>)['function'],
-        {'name': 'query_tasks'},
-      );
+      expect(service.chatBodies.last, isNot(contains('tool_choice')));
       expect(service.failures, isEmpty);
       expect(await _activeRun(store), isNull);
     },
   );
+
+  test(
+    'typed capacity retry trims whole history once and preserves tools and leases',
+    () async {
+      final service = _LoopbackModelService();
+      await service.start();
+      final protector = _SyntheticProtector();
+      final diagnostics = _CapturingDiagnostics();
+      final store = JwStore(
+        NativeDatabase.memory(),
+        ownership: _TestOwnership(),
+        clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
+        modelCredentialProtector: protector,
+      );
+      await store.initialize();
+      await store.agent.initializeAgent();
+
+      final calendarContext = (await store.localCalendar.readPlanContext()).$1;
+      final seededTask = await store.localCalendar.prepare(
+        calendarContext,
+        const CreateTask(TaskDraft(title: '网关集成合成任务')),
+      );
+      await store.localCalendar.commit(seededTask);
+
+      final publicQueries = PublicQueryCoordinator(
+        store: store.publicStore,
+        leases: WorkLeasePool(),
+        clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
+        sessionFactory: (source) =>
+            throw StateError('Synthetic public HTTP is disabled.'),
+      );
+      final baseReadTools = AgentReadTools(
+        calendar: store.localCalendar,
+        tasks: store.localCalendar,
+        calendarGuard: store.localCalendar,
+        knowledge: store.publicStore,
+        knowledgeGuard: store.publicStore,
+        publicQueries: publicQueries,
+        publicGuard: publicQueries,
+        clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
+      );
+      final enabledTools = AgentActionTools(
+        readTools: baseReadTools,
+        plans: store.localCalendar,
+        calendar: store.localCalendar,
+        tasks: store.localCalendar,
+        preferences: store.agent,
+        preferenceProposals: store.agent,
+        sources: _InertSources(),
+        actionRecords: store.agent,
+        clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
+      );
+      final readTools = _CountingReadTools(enabledTools);
+      final gateway = UstcModelGateway.loopbackForTesting(
+        service.baseUri,
+        connectTimeout: const Duration(seconds: 2),
+        requestTimeout: const Duration(seconds: 5),
+        idleTimeout: const Duration(seconds: 2),
+      );
+      final coordinator = AgentCoordinator(
+        data: store.agent,
+        gateway: gateway,
+        readTools: readTools,
+        clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
+        runTimeout: const Duration(seconds: 15),
+        diagnostics: diagnostics,
+      );
+
+      addTearDown(() async {
+        await coordinator.close();
+        await publicQueries.close();
+        await store.close();
+        await service.close();
+      });
+
+      await coordinator.initialize();
+      await coordinator
+          .verifyAndSave(
+            key: 'synthetic-model-key-loopback',
+            modelId: _LoopbackModelService.modelId,
+            consent: true,
+          )
+          .timeout(const Duration(seconds: 8));
+      expect(coordinator.view.report.capability, ModelCapability.toolReady);
+
+      final longHistory = List.filled(12000, 'h').join();
+      service.nextToolResultText = longHistory;
+      await coordinator
+          .send('查询本地任务并保留一轮较长的合成上下文。')
+          .timeout(const Duration(seconds: 8));
+      expect(coordinator.view.failure, isNull);
+      expect(coordinator.view.messages.last.text, longHistory);
+      expect(readTools.executeCount, 1);
+
+      final availableNames = readTools.definitions
+          .map((definition) => definition.name)
+          .toSet();
+      expect(availableNames, hasLength(19));
+      final executionCount = readTools.executeCount;
+      final successfulStart = service.chatBodies.length;
+      final successDiagnosticsStart = diagnostics.events.length;
+      service
+        ..contextLimitResponsesRemaining = 1
+        ..plainTextRepliesRemaining = 1
+        ..nextPlainText = '已按较小上下文继续。';
+
+      await coordinator.send('请沿着刚才的内容继续。').timeout(const Duration(seconds: 8));
+
+      expect(coordinator.view.failure, isNull);
+      expect(coordinator.view.messages.last.text, '已按较小上下文继续。');
+      expect(service.chatBodies.length - successfulStart, 2);
+      final capacityRequest = service.chatBodies[successfulStart];
+      final retriedRequest = service.chatBodies[successfulStart + 1];
+      expect(_requestText(capacityRequest), contains(longHistory));
+      expect(_requestText(retriedRequest), isNot(contains(longHistory)));
+      final capacityMessages = capacityRequest['messages'] as List<dynamic>;
+      final historicalCallIndex = capacityMessages.indexWhere(
+        (message) =>
+            message is Map<String, dynamic> &&
+            message['role'] == 'assistant' &&
+            message['tool_calls'] is List,
+      );
+      expect(historicalCallIndex, greaterThanOrEqualTo(0));
+      final historicalCallMessage =
+          capacityMessages[historicalCallIndex] as Map<String, dynamic>;
+      final historicalCall =
+          (historicalCallMessage['tool_calls'] as List<dynamic>).single
+              as Map<String, dynamic>;
+      final historicalToolResult =
+          capacityMessages[historicalCallIndex + 1] as Map<String, dynamic>;
+      expect(historicalToolResult['role'], 'tool');
+      expect(historicalToolResult['tool_call_id'], historicalCall['id']);
+      expect(
+        (retriedRequest['messages'] as List).length,
+        lessThan((capacityRequest['messages'] as List).length),
+      );
+      expect(
+        (retriedRequest['messages'] as List<dynamic>).any(
+          (message) =>
+              message is Map<String, dynamic> && message['role'] == 'tool',
+        ),
+        isFalse,
+      );
+      expect(
+        jsonEncode(retriedRequest['tools']),
+        jsonEncode(capacityRequest['tools']),
+      );
+      expect(_toolNames(capacityRequest), availableNames);
+      expect(_toolNames(retriedRequest), availableNames);
+      expect(capacityRequest, isNot(contains('tool_choice')));
+      expect(retriedRequest, isNot(contains('tool_choice')));
+      final successAssemblyEstimates = diagnostics.events
+          .skip(successDiagnosticsStart)
+          .where(
+            (event) => event.name == DiagnosticEventName.agentContextAssembled,
+          )
+          .map((event) => event.context?.estimatedInputTokens)
+          .whereType<int>()
+          .toList();
+      expect(successAssemblyEstimates, hasLength(2));
+      expect(successAssemblyEstimates.first, greaterThan(4096));
+      expect(
+        successAssemblyEstimates.last,
+        lessThan(successAssemblyEstimates.first),
+      );
+      expect(
+        diagnostics.events
+            .skip(successDiagnosticsStart)
+            .where(
+              (event) =>
+                  event.context?.decision ==
+                  DiagnosticContextDecision.serviceCapacityRetry,
+            ),
+        hasLength(1),
+      );
+      expect(readTools.executeCount, executionCount);
+
+      final repeatedFailureStart = service.chatBodies.length;
+      final repeatedDiagnosticsStart = diagnostics.events.length;
+      service.contextLimitResponsesRemaining = 2;
+      await coordinator.send('再继续一次。').timeout(const Duration(seconds: 8));
+
+      expect(coordinator.view.failure, AgentFailureCode.contextLimit);
+      expect(coordinator.view.messages.last.status, AgentMessageStatus.failed);
+      expect(service.chatBodies.length - repeatedFailureStart, 2);
+      final firstFailureRequest = service.chatBodies[repeatedFailureStart];
+      final secondFailureRequest = service.chatBodies[repeatedFailureStart + 1];
+      expect(
+        (secondFailureRequest['messages'] as List).length,
+        lessThan((firstFailureRequest['messages'] as List).length),
+      );
+      expect(
+        jsonEncode(secondFailureRequest['tools']),
+        jsonEncode(firstFailureRequest['tools']),
+      );
+      expect(_toolNames(firstFailureRequest), availableNames);
+      expect(_toolNames(secondFailureRequest), availableNames);
+      final failureAssemblyEstimates = diagnostics.events
+          .skip(repeatedDiagnosticsStart)
+          .where(
+            (event) => event.name == DiagnosticEventName.agentContextAssembled,
+          )
+          .map((event) => event.context?.estimatedInputTokens)
+          .whereType<int>()
+          .toList();
+      expect(failureAssemblyEstimates, hasLength(2));
+      expect(failureAssemblyEstimates.first, greaterThan(4096));
+      expect(
+        failureAssemblyEstimates.last,
+        lessThan(failureAssemblyEstimates.first),
+      );
+      expect(
+        diagnostics.events
+            .skip(repeatedDiagnosticsStart)
+            .where(
+              (event) =>
+                  event.context?.decision ==
+                  DiagnosticContextDecision.serviceCapacityRetry,
+            ),
+        hasLength(1),
+      );
+
+      expect(service.typedCapacityResponsesSent, 3);
+      expect(service.failures, isEmpty);
+      expect(
+        service.authorizationHeaders,
+        everyElement('Bearer synthetic-model-key-loopback'),
+      );
+      expect(protector.plaintextBuffers, isNotEmpty);
+      expect(
+        protector.plaintextBuffers.every(
+          (buffer) => buffer.every((byte) => byte == 0),
+        ),
+        isTrue,
+      );
+      final safeDiagnosticProjection = jsonEncode(
+        diagnostics.events
+            .map(
+              (event) => {
+                'event': event.name.name,
+                'code': event.code?.name,
+                'context': event.context?.toSafeMap(),
+              },
+            )
+            .toList(),
+      );
+      expect(
+        safeDiagnosticProjection,
+        isNot(contains(_LoopbackModelService.capacityErrorMessage)),
+      );
+      expect(
+        jsonEncode(
+          coordinator.view.messages.map((message) => message.text).toList(),
+        ),
+        isNot(contains(_LoopbackModelService.capacityErrorMessage)),
+      );
+      expect(readTools.executeCount, executionCount);
+      expect(await _activeRun(store), isNull);
+    },
+  );
 }
+
+String _requestText(Map<String, dynamic> body) => jsonEncode(body['messages']);
 
 Set<String> _toolNames(Map<String, dynamic> body) =>
     (body['tools'] as List<dynamic>)
@@ -190,12 +448,19 @@ Future<String?> _activeRun(JwStore store) async =>
 
 final class _LoopbackModelService {
   static const modelId = 'synthetic-loopback-agent';
+  static const capacityErrorMessage = 'synthetic-provider-error-body-marker';
 
   HttpServer? _server;
   StreamSubscription<HttpRequest>? _subscription;
   final List<Map<String, dynamic>> chatBodies = [];
   final List<String> failures = [];
+  final List<String?> authorizationHeaders = [];
   bool duplicateNextTaskCall = false;
+  int contextLimitResponsesRemaining = 0;
+  int typedCapacityResponsesSent = 0;
+  int plainTextRepliesRemaining = 0;
+  String nextPlainText = 'synthetic loopback answer';
+  String? nextToolResultText;
   String? forwardedProof;
 
   Uri get baseUri {
@@ -237,9 +502,34 @@ final class _LoopbackModelService {
           jsonDecode(await utf8.decoder.bind(request).join())
               as Map<String, dynamic>;
       chatBodies.add(body);
+      authorizationHeaders.add(
+        request.headers.value(HttpHeaders.authorizationHeader),
+      );
       final messages = body['messages'] as List<dynamic>;
       final lastMessage = messages.last as Map<String, dynamic>;
       final toolChoice = body['tool_choice'];
+
+      if (contextLimitResponsesRemaining > 0) {
+        contextLimitResponsesRemaining--;
+        typedCapacityResponsesSent++;
+        request.response.statusCode = HttpStatus.badRequest;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'error': {
+              'code': 'context_length_exceeded',
+              'message': capacityErrorMessage,
+            },
+          }),
+        );
+        await request.response.close();
+        return;
+      }
+      if (plainTextRepliesRemaining > 0) {
+        plainTextRepliesRemaining--;
+        await _writeText(request.response, nextPlainText);
+        return;
+      }
 
       if (body['tools'] == null) {
         await _writeText(request.response, 'USTC_TEXT_PROBE');
@@ -285,7 +575,9 @@ final class _LoopbackModelService {
             (items.single as Map)['title'] != '网关集成合成任务') {
           throw StateError('C3 read tool returned an unexpected result.');
         }
-        await _writeText(request.response, '已读取合成任务列表。');
+        final text = nextToolResultText ?? '已读取合成任务列表。';
+        nextToolResultText = null;
+        await _writeText(request.response, text);
         return;
       }
 
@@ -442,10 +734,42 @@ final class _LoopbackModelService {
   }
 }
 
+final class _InertSources implements AgentSourcePort {
+  @override
+  bool get waitingForSchool => false;
+
+  @override
+  Stream<void> get changes => const Stream<void>.empty();
+
+  @override
+  Future<AgentSourceOptions> readOptions(AgentRunTicket ticket) async =>
+      throw StateError('Synthetic source operations are disabled.');
+
+  @override
+  Future<AgentSourceResult> refresh(
+    AgentRunTicket ticket,
+    AgentActionView approvedRecord,
+    AgentSourceRequest request,
+  ) async => throw StateError('Synthetic source operations are disabled.');
+
+  @override
+  Future<AgentSourceResult> queryActivities(AgentRunTicket ticket) async =>
+      throw StateError('Synthetic source operations are disabled.');
+
+  @override
+  Future<void> continueSchool() async {}
+
+  @override
+  Future<void> cancelAndDrain() async {}
+
+  @override
+  Future<void> close() async {}
+}
+
 final class _CountingReadTools implements AgentReadToolsPort {
   _CountingReadTools(this._delegate);
 
-  final AgentReadTools _delegate;
+  final AgentReadToolsPort _delegate;
   int executeCount = 0;
 
   @override
@@ -485,6 +809,8 @@ final class _CountingToolSession implements AgentToolSession {
 }
 
 final class _SyntheticProtector implements ModelCredentialProtector {
+  final List<Uint8List> plaintextBuffers = [];
+
   @override
   String get mechanism => 'synthetic-loopback-model-key/v1';
 
@@ -503,10 +829,49 @@ final class _SyntheticProtector implements ModelCredentialProtector {
     if (ciphertext.isEmpty || ciphertext.first != 0xA7) {
       throw StateError('Synthetic ciphertext was invalid.');
     }
-    return Uint8List.fromList(
+    final plaintext = Uint8List.fromList(
       ciphertext.skip(1).map((byte) => byte ^ 0x5A).toList(),
     );
+    plaintextBuffers.add(plaintext);
+    return plaintext;
   }
+}
+
+final class _CapturingDiagnostics implements DiagnosticsPort {
+  final List<DiagnosticEvent> events = [];
+  int _nextTrace = 0;
+
+  @override
+  DiagnosticsView get diagnosticsView => const DiagnosticsView(available: true);
+
+  @override
+  DiagnosticTrace newTrace() =>
+      DiagnosticTrace((++_nextTrace).toRadixString(16).padLeft(32, '0'));
+
+  @override
+  void record(DiagnosticEvent event) => events.add(event);
+
+  @override
+  Future<void> flush() async {}
+
+  @override
+  Future<String> exportRecent() async => jsonEncode(
+    events
+        .map(
+          (event) => {
+            'event': event.name.name,
+            'code': event.code?.name,
+            'context': event.context?.toSafeMap(),
+          },
+        )
+        .toList(),
+  );
+
+  @override
+  Future<void> clear() async => events.clear();
+
+  @override
+  Future<void> close() async {}
 }
 
 final class _TestOwnership implements AssetOwnership {

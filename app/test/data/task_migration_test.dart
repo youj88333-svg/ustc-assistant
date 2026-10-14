@@ -104,7 +104,7 @@ void main() {
               .single['n'],
           0,
         );
-        expect(after.select('PRAGMA user_version').single['user_version'], 14);
+        expect(after.select('PRAGMA user_version').single['user_version'], 15);
       } finally {
         after.close();
       }

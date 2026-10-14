@@ -8,6 +8,7 @@ import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_discussion_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_parameter_issue.dart';
 import 'package:ustc_assistant_m0/core/agent_source_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
@@ -91,6 +92,79 @@ void main() {
         final rejected = await interactive.decidePending(false);
         expect(rejected.status, 'rejected');
         expect(fixture.plans.rejectCalls, 1);
+        expect(fixture.plans.commitCalls, 0);
+        expect(interactive.pendingAction, isNull);
+      },
+    );
+
+    test(
+      'separate rejected local plans can prepare more than 20 changes per session',
+      () async {
+        final fixture = _Fixture();
+        final tools = fixture.tools(_ReadTools(fixture.plans));
+        final session = tools.openSession();
+        final interactive = session as AgentInteractiveToolSession;
+        interactive.bindRun(_ticket(), '分别准备合成任务方案');
+        const proposalSizes = [8, 8, 5];
+
+        for (
+          var proposalIndex = 0;
+          proposalIndex < proposalSizes.length;
+          proposalIndex++
+        ) {
+          final changes = List.generate(
+            proposalSizes[proposalIndex],
+            (changeIndex) => <String, Object?>{
+              'type': 'create_task',
+              'local_key': 'p${proposalIndex}_task$changeIndex',
+              'title': 'Synthetic task $changeIndex',
+            },
+          );
+          final prepared = await session.execute(
+            _call('propose_local_changes', {'changes': changes}),
+          );
+
+          expect(prepared.status, 'waitingForApproval');
+          expect(interactive.pendingAction?.status, AgentActionStatus.proposed);
+          final rejected = await interactive.decidePending(false);
+          expect(rejected.status, 'rejected');
+          expect(interactive.pendingAction, isNull);
+        }
+
+        expect(fixture.plans.prepareCalls, 3);
+        expect(fixture.plans.preparedChangeCounts, proposalSizes);
+        expect(fixture.plans.rejectCalls, 3);
+        expect(fixture.plans.commitCalls, 0);
+      },
+    );
+
+    test(
+      'a 21-change local plan is rejected before any plan is prepared',
+      () async {
+        final fixture = _Fixture();
+        final tools = fixture.tools(_ReadTools(fixture.plans));
+        final session = tools.openSession();
+        final interactive = session as AgentInteractiveToolSession;
+        interactive.bindRun(_ticket(), '准备超出单方案上限的合成任务');
+        final changes = List.generate(
+          21,
+          (changeIndex) => <String, Object?>{
+            'type': 'create_task',
+            'local_key': 'task$changeIndex',
+            'title': 'Synthetic task $changeIndex',
+          },
+        );
+
+        final result = await session.execute(
+          _call('propose_local_changes', {'changes': changes}),
+        );
+
+        expect(result.status, 'invalidRequest');
+        expect(result.failure, 'invalidRequest');
+        expect(result.validation?.reason, AgentParameterReason.limitExceeded);
+        expect(result.validation?.field, AgentParameterField.changes);
+        expect(fixture.plans.prepareCalls, 0);
+        expect(fixture.plans.preparedChangeCounts, isEmpty);
         expect(fixture.plans.commitCalls, 0);
         expect(interactive.pendingAction, isNull);
       },
@@ -853,10 +927,14 @@ void main() {
     );
 
     test(
-      'negative user wording cannot authorize refresh or activity reads',
+      'source permission failures stay typed and independent from request wording',
       () async {
         final fixture = _Fixture();
-        final sources = _FakeSources();
+        final sources = _FakeSources()
+          ..refreshFailure = const AgentFailure(
+            AgentFailureCode.consentRequired,
+          )
+          ..activityFailure = 'consentRequired';
         final records = _FakeActionRecords();
         final tools = fixture.tools(
           _ReadTools(fixture.plans),
@@ -865,19 +943,33 @@ void main() {
         );
         final session = tools.openSession();
         final interactive = session as AgentInteractiveToolSession;
-        interactive.bindRun(_ticket(), '不要刷新教务课表，也不要查询二课活动');
+        interactive.bindRun(_ticket(), '今天下午有什么安排？');
 
-        final refresh = await session.execute(
+        final refreshProposal = await session.execute(
           _call('request_source_refresh', {'source': 'jw'}),
         );
-        final activities = await session.execute(
+        expect(refreshProposal.status, 'waitingForApproval');
+        expect(interactive.pendingAction?.kind, AgentActionKind.sourceRefresh);
+        expect(records.prepareCalls, 1);
+        expect(sources.refreshCalls, 0);
+
+        final deniedRefresh = await interactive.decidePending(true);
+        expect(deniedRefresh.status, 'consentRequired');
+        expect(deniedRefresh.failure, 'consentRequired');
+        expect(interactive.pendingAction, isNotNull);
+        expect(records.settledStatuses, isEmpty);
+        expect(sources.refreshCalls, 1);
+
+        expect((await interactive.decidePending(false)).status, 'rejected');
+        final deniedActivities = await session.execute(
           _call('query_young_activities', {}),
         );
-        expect(refresh.status, 'invalidRequest');
-        expect(activities.status, 'invalidRequest');
-        expect(records.prepareCalls, 0);
-        expect(sources.refreshCalls, 0);
-        expect(sources.activityCalls, 0);
+        expect(deniedActivities.status, 'consentRequired');
+        expect(deniedActivities.failure, 'consentRequired');
+        expect(deniedActivities.data, isEmpty);
+        expect(sources.activityCalls, 1);
+        expect(sources.refreshCalls, 1);
+        expect(records.settledStatuses, [AgentActionStatus.rejected]);
         expect(interactive.pendingAction, isNull);
       },
     );
@@ -1061,6 +1153,7 @@ final class _FakePlans implements AgentLocalPlanPort {
   int approveCalls = 0;
   int rejectCalls = 0;
   int commitCalls = 0;
+  final List<int> preparedChangeCounts = [];
   bool lastRequireFree = false;
   int? lastPreferencesRevision;
   AgentLocalPlan? lastPlan;
@@ -1080,6 +1173,7 @@ final class _FakePlans implements AgentLocalPlanPort {
     int? preferencesRevision,
   }) async {
     prepareCalls++;
+    preparedChangeCounts.add(changes.length);
     lastRequireFree = requireFree;
     lastPreferencesRevision = preferencesRevision;
     final isUndo =
@@ -1274,6 +1368,8 @@ final class _FakeSources implements AgentSourcePort, AgentSourceDeliveryPort {
   bool readOptionsBusy = false;
   bool refreshBusy = false;
   bool waiting = false;
+  AgentFailure? refreshFailure;
+  String? activityFailure;
   bool hasReadProof = false, deliveryStale = false;
   @override
   Future<void> validateDelivery() async {
@@ -1324,6 +1420,7 @@ final class _FakeSources implements AgentSourcePort, AgentSourceDeliveryPort {
     lastRequest = request;
     lastApprovedRecord = approvedRecord;
     if (refreshBusy) throw const AgentFailure(AgentFailureCode.busy);
+    if (refreshFailure case final failure?) throw failure;
     deliveryStale = hasReadProof;
     return AgentSourceResult(
       committed: true,
@@ -1342,6 +1439,7 @@ final class _FakeSources implements AgentSourcePort, AgentSourceDeliveryPort {
       count: activityCount,
       observedAtUtc: _clock.nowUtc,
       complete: activityCount <= 20,
+      failure: activityFailure,
       activities: [
         for (var index = 0; index < activityCount; index++)
           AgentActivityResult(

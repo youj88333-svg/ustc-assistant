@@ -32,6 +32,8 @@ const agentToolStatuses = {
   'partial',
   'busy',
   'consentRequired',
+  'permissionRequired',
+  'adviceOnly',
   'unavailable',
   'accessRestricted',
   'stale',

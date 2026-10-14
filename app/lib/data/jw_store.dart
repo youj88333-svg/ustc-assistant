@@ -18,6 +18,7 @@ import '../core/jw_credentials.dart';
 import '../core/young_work_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_conversation_contract.dart';
+import '../core/agent_context_contract.dart';
 import '../core/agent_permission_contract.dart';
 import '../core/agent_source_contract.dart';
 import '../core/agent_action_contract.dart';
@@ -43,6 +44,7 @@ part 'application_settings_store.dart';
 part 'agent_store.dart';
 part 'agent_chat_store.dart';
 part 'agent_permission_store.dart';
+part 'agent_context_store.dart';
 part 'agent_plan_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
@@ -135,7 +137,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -158,6 +160,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ..._agentActionSchema,
         ..._AgentChatState.schema,
         ..._AgentPermissionState.schema,
+        ..._AgentContextState.schema,
       ]) {
         await customStatement(statement);
       }
@@ -170,7 +173,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 13 || to != 14) {
+      if (from < 1 || from > 14 || to != 15) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -193,8 +196,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 10) ...AgentStore.schema,
           if (from <= 11) ...AgentStore.upgradeFrom11,
           if (from <= 12) ..._agentActionSchema,
-          ..._AgentChatState.schema,
-          ..._AgentPermissionState.schema,
+          if (from <= 13) ..._AgentChatState.schema,
+          if (from <= 13) ..._AgentPermissionState.schema,
+          ..._AgentContextState.schema,
         ]) {
           await customStatement(statement);
         }

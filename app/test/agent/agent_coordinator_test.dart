@@ -31,7 +31,7 @@ void main() {
       },
     );
     test(
-      'ordinary dated class questions expose local agenda while public reviews do not',
+      'stable tool definitions remain available for reads and clarifying turns',
       () async {
         final tools = _ReadTools()..catalogue = true;
         final rig = await _rig(configured: true, readTools: tools);
@@ -55,60 +55,148 @@ void main() {
           ]);
           await rig.coordinator.send(question);
           final request = rig.gateway.generations[firstRequest].request;
-          final names = request.tools.map((t) => t.name);
-          expect(names, contains('query_agenda'));
-          expect(names, isNot(contains('search_courses')));
-          expect(request.toolChoice, 'query_agenda');
+          final names = request.tools.map((t) => t.name).toSet();
+          expect(names, containsAll(['query_agenda', 'search_courses']));
+          expect(request.toolChoice, isNull);
+          expect(
+            request.messages.any(
+              (message) =>
+                  message.role == 'user' &&
+                  (message.content ?? '').contains(question),
+            ),
+            isTrue,
+          );
+          _expectCompleteToolPairs(request);
           expect(rig.gateway.generations, hasLength(firstRequest + 2));
           expect(tools.executed, index + 1);
           index++;
         }
+        const ambiguousQuestion = '下午那节课怎么安排？';
+        final beforeClarification = rig.gateway.generations.length;
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('你说的是哪一天的下午？'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+        await rig.coordinator.send(ambiguousQuestion);
+        final clarificationRequest =
+            rig.gateway.generations[beforeClarification].request;
+        expect(
+          clarificationRequest.tools.map((tool) => tool.name),
+          containsAll(['query_agenda', 'search_courses']),
+        );
+        expect(clarificationRequest.toolChoice, isNull);
+        expect(
+          clarificationRequest.messages.any(
+            (message) =>
+                message.role == 'user' && message.content == ambiguousQuestion,
+          ),
+          isTrue,
+        );
+        expect(rig.coordinator.view.messages.last.text, '你说的是哪一天的下午？');
+        expect(
+          tools.executed,
+          4,
+          reason: 'available tools do not force a read before clarification',
+        );
         rig.gateway.enqueueEvents([
           const ModelTextDelta('合成课程评价回答'),
           ModelCompleted(finishReason: 'stop'),
         ]);
         await rig.coordinator.send('公开课程评价查询');
-        final names = rig.gateway.generations.last.request.tools.map(
-          (t) => t.name,
+        final reviewRequest = rig.gateway.generations.last.request;
+        final names = reviewRequest.tools.map((t) => t.name).toSet();
+        expect(names, containsAll(['query_agenda', 'search_courses']));
+        expect(reviewRequest.toolChoice, isNull);
+        expect(
+          reviewRequest.messages.any(
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').contains('公开课程评价查询'),
+          ),
+          isTrue,
         );
-        expect(names, contains('search_courses'));
-        expect(names, isNot(contains('query_agenda')));
+        _expectCompleteToolPairs(reviewRequest);
+        expect(
+          tools.executed,
+          4,
+          reason: 'the text-only review answer chose no local call',
+        );
       },
     );
 
     test(
-      'an explicit public-only request excludes local reads and follow-up scope',
+      'a public-only turn does not remove stable tools or erase paired local history',
       () async {
-        for (final question in ['不要读取我的日程，只查询公开课程评价', '继续说，但只查评课，老师评价怎么样？']) {
-          final tools = _ReadTools()..catalogue = true;
-          final rig = await _rig(configured: true, readTools: tools);
-          rig.gateway.enqueueEvents([
-            _readCall(
-              'local-agenda',
-              '{"first_day":"2026-10-14","end_day_exclusive":"2026-10-15"}',
-            ),
-          ]);
-          rig.gateway.enqueueEvents([
-            const ModelTextDelta('已完成本地日程核对。'),
-            ModelCompleted(finishReason: 'stop'),
-          ]);
-          await rig.coordinator.send('我明天有哪些课？');
+        final tools = _ReadTools()..catalogue = true;
+        final rig = await _rig(configured: true, readTools: tools);
+        rig.gateway.enqueueEvents([
+          _readCall(
+            'local-agenda',
+            '{"first_day":"2026-10-14","end_day_exclusive":"2026-10-15"}',
+          ),
+        ]);
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('已完成本地日程核对。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+        await rig.coordinator.send('我明天有哪些课？');
+
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('我会按要求只查公开评课。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+        await rig.coordinator.send('不要读取我的日程，只查询公开课程评价');
+
+        rig.gateway.enqueueEvents([
+          _readCall(
+            'after-public-turn',
+            '{"first_day":"2026-10-14","end_day_exclusive":"2026-10-15"}',
+          ),
+        ]);
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('按本次请求再次读取了日程。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+        await rig.coordinator.send('那再查一次我的日程');
+
+        expect(rig.gateway.generations, hasLength(5));
+        final publicRequest = rig.gateway.generations[2].request;
+        final followUpRequest = rig.gateway.generations[3].request;
+        for (final request in [
+          rig.gateway.generations[0].request,
+          publicRequest,
+          followUpRequest,
+        ]) {
           expect(
-            rig.gateway.generations.first.request.toolChoice,
-            'query_agenda',
+            request.tools.map((tool) => tool.name),
+            containsAll(['query_agenda', 'search_courses']),
           );
-          expect(tools.executed, 1);
-          rig.gateway.enqueueEvents([
-            const ModelTextDelta('我会按要求只查公开评课。'),
-            ModelCompleted(finishReason: 'stop'),
-          ]);
-          await rig.coordinator.send(question);
-          final names = rig.gateway.generations.last.request.tools.map(
-            (t) => t.name,
-          );
-          expect(names, contains('search_courses'));
-          expect(names, isNot(contains('query_agenda')));
+          expect(request.toolChoice, isNull);
         }
+        expect(tools.executed, 2);
+        expect(
+          publicRequest.messages.any(
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').contains('我明天有哪些课？'),
+          ),
+          isTrue,
+        );
+        expect(
+          followUpRequest.messages.any(
+            (message) =>
+                message.role == 'user' &&
+                (message.content ?? '').contains('不要读取我的日程，只查询公开课程评价'),
+          ),
+          isTrue,
+        );
+        _expectCompleteToolPairs(publicRequest);
+        _expectCompleteToolPairs(followUpRequest);
+        expect(
+          followUpRequest.messages.expand((message) => message.toolCalls),
+          isNotEmpty,
+          reason: 'history keeps prior reads after the public-only turn',
+        );
       },
     );
 
@@ -257,31 +345,38 @@ void main() {
       },
     );
 
-    test('reordered identical arguments stop without another read', () async {
-      final tools = _ReadTools();
-      final rig = await _rig(configured: true, readTools: tools);
-      rig.gateway.enqueueEvents([_readCall('first', '{"a":1,"b":2}')]);
-      rig.gateway.enqueueEvents([_readCall('repeat', '{"b":2,"a":1}')]);
-      await rig.coordinator.send('循环合成日程问题');
-      expect(tools.executed, 1);
-      expect(rig.gateway.generations, hasLength(2));
-      expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
-      expect(await _activeRun(rig.store), isNull);
-    });
-
     test(
-      'model round budget terminates at eight without new outbound work',
+      'reordered identical arguments are bounded after three executions',
       () async {
         final tools = _ReadTools();
         final rig = await _rig(configured: true, readTools: tools);
-        for (var i = 0; i < 9; i++) {
+        rig.gateway.enqueueEvents([_readCall('repeat-1', '{"a":1,"b":2}')]);
+        rig.gateway.enqueueEvents([_readCall('repeat-2', '{"b":2,"a":1}')]);
+        rig.gateway.enqueueEvents([_readCall('repeat-3', '{"a":1,"b":2}')]);
+        rig.gateway.enqueueEvents([_readCall('repeat-4', '{"b":2,"a":1}')]);
+        await rig.coordinator.send('循环合成日程问题');
+        expect(tools.executed, 3);
+        expect(rig.gateway.generations, hasLength(4));
+        expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
+        expect(await _activeRun(rig.store), isNull);
+      },
+    );
+
+    test(
+      'model call budget terminates at sixteen before a seventeenth request',
+      () async {
+        final tools = _ReadTools();
+        final rig = await _rig(configured: true, readTools: tools);
+        for (var i = 0; i < 17; i++) {
           rig.gateway.enqueueEvents([_readCall('step-$i', '{"page":$i}')]);
         }
         await rig.coordinator.send('预算合成日程问题');
-        expect(rig.gateway.generations, hasLength(8));
-        expect(tools.executed, 8);
+        expect(rig.gateway.generations, hasLength(16));
+        expect(tools.executed, 16);
+        expect(rig.coordinator.view.modelCalls, 16);
+        expect(rig.coordinator.view.toolCalls, 16);
         expect(rig.coordinator.view.failure, AgentFailureCode.resourceLimit);
-        expect(rig.coordinator.view.messages.last.steps, hasLength(8));
+        expect(rig.coordinator.view.messages.last.steps, hasLength(16));
       },
     );
 
@@ -322,7 +417,7 @@ void main() {
     );
 
     test(
-      'selected images are sent once, journal stores only count, and old interpretation is not context',
+      'images are sent once and their interpretation remains in history',
       () async {
         final tools = _ReadTools();
         final rig = await _rig(configured: true, readTools: tools);
@@ -360,8 +455,13 @@ void main() {
             isFalse,
           );
           expect(
-            generation.request.messages.map((m) => m.content).join(),
-            isNot(contains('合成图片旧描述')),
+            generation.request.messages.any(
+              (message) =>
+                  message.role == 'assistant' &&
+                  (message.content ?? '').contains('合成图片旧描述'),
+            ),
+            isTrue,
+            reason: 'the old interpretation is retained as assistant history',
           );
           generation.emit(const ModelTextDelta('新的合成回答'));
           generation.emit(ModelCompleted(finishReason: 'stop'));
@@ -519,47 +619,55 @@ void main() {
       },
     );
 
-    test('complete streaming chat sends only safe completed history', () async {
-      final rig = await _rig(configured: true);
-      final conversation = rig.coordinator.view.conversationId!;
-      final settings = await rig.store.agent.inspectAgent();
-      await _completeRun(
-        rig.store,
-        settings.authority,
-        conversation,
-        '旧的安全问题',
-        '旧的安全回答',
-      );
-      final partial = await rig.store.agent.beginRun(
-        settings.authority,
-        conversation,
-        '中断的问题',
-      );
-      await rig.store.agent.saveAssistant(partial, '必须从上下文排除的部分回答');
-      await rig.store.agent.finishRun(partial, AgentMessageStatus.interrupted);
-      rig.gateway.enqueueEvents([
-        const ModelTextDelta('新的'),
-        const ModelTextDelta('回答'),
-        ModelCompleted(finishReason: 'stop'),
-      ]);
+    test(
+      'complete streaming chat retains visible safe interrupted history',
+      () async {
+        final rig = await _rig(configured: true);
+        final conversation = rig.coordinator.view.conversationId!;
+        final settings = await rig.store.agent.inspectAgent();
+        await _completeRun(
+          rig.store,
+          settings.authority,
+          conversation,
+          '旧的安全问题',
+          '旧的安全回答',
+        );
+        final partial = await rig.store.agent.beginRun(
+          settings.authority,
+          conversation,
+          '中断的问题',
+        );
+        await rig.store.agent.saveAssistant(partial, '必须从上下文排除的部分回答');
+        await rig.store.agent.finishRun(
+          partial,
+          AgentMessageStatus.interrupted,
+        );
+        rig.gateway.enqueueEvents([
+          const ModelTextDelta('新的'),
+          const ModelTextDelta('回答'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
 
-      await rig.coordinator.send('当前安全问题');
+        await rig.coordinator.send('当前安全问题');
 
-      expect(rig.gateway.generations, hasLength(1));
-      final request = rig.gateway.generations.single.request;
-      final outbound = request.messages
-          .map((message) => message.content ?? '')
-          .join('\n');
-      expect(outbound, contains('旧的安全问题'));
-      expect(outbound, contains('旧的安全回答'));
-      expect(outbound, contains('当前安全问题'));
-      expect(outbound, isNot(contains('必须从上下文排除的部分回答')));
-      expect(outbound, isNot(contains('synthetic-chat-key')));
-      final messages = await rig.store.agent.messages(conversation);
-      expect(messages.last.role, AgentMessageRole.assistant);
-      expect(messages.last.status, AgentMessageStatus.complete);
-      expect(messages.last.text, '新的回答');
-    });
+        expect(rig.gateway.generations, hasLength(1));
+        final request = rig.gateway.generations.single.request;
+        final outbound = request.messages
+            .map((message) => message.content ?? '')
+            .join('\n');
+        expect(outbound, contains('旧的安全问题'));
+        expect(outbound, contains('旧的安全回答'));
+        expect(outbound, contains('当前安全问题'));
+        expect(outbound, contains('必须从上下文排除的部分回答'));
+        expect(outbound, contains('上一轮实际显示的未完成回复'));
+        expect(outbound, contains('历史运行终态'));
+        expect(outbound, isNot(contains('synthetic-chat-key')));
+        final messages = await rig.store.agent.messages(conversation);
+        expect(messages.last.role, AgentMessageRole.assistant);
+        expect(messages.last.status, AgentMessageStatus.complete);
+        expect(messages.last.text, '新的回答');
+      },
+    );
 
     test(
       'incomplete stream records the partial answer and reports the gateway failure',
@@ -961,6 +1069,20 @@ ModelCompleted _readCall(String id, String args) => ModelCompleted(
   finishReason: 'tool_calls',
   toolCalls: [ModelToolCall(id: id, name: 'query_agenda', argumentsJson: args)],
 );
+
+void _expectCompleteToolPairs(ModelRequest request) {
+  final calls = request.messages
+      .where((message) => message.role == 'assistant')
+      .expand((message) => message.toolCalls)
+      .toList();
+  final results = request.messages
+      .where((message) => message.role == 'tool')
+      .toList();
+  final callIds = calls.map((call) => call.id).toSet();
+  final resultIds = results.map((message) => message.toolCallId).toSet();
+  expect(resultIds, containsAll(callIds));
+  expect(callIds, containsAll(resultIds));
+}
 
 final class _ReadTools implements AgentReadToolsPort {
   int executed = 0, cancelCount = 0;

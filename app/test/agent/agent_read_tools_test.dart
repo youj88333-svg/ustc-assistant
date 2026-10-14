@@ -36,7 +36,7 @@ const _blockReference = CalendarReference(
 final _now = DateTime.utc(2026, 10, 13, 1);
 
 void main() {
-  test('notes are selected-only and require current human scope', () async {
+  test('event notes require an app-bound personal-content policy', () async {
     final rig = _Rig(
       calendar: _FakeCalendar(items: [_event(note: 'selected-note-sentinel')]),
     );
@@ -59,8 +59,19 @@ void main() {
       'include_note': true,
     });
     final rejected = await session.execute(_call('read_event', args));
+    expect(rejected.status, 'permissionRequired');
     expect(rejected.failure, 'consentRequired');
-    (session as AgentPersonalReadScopeSession).bindHumanReadScope('请读这条日程的备注');
+    expect(rejected.data, isEmpty);
+    (session as AgentToolPolicySession).bindToolPolicy(
+      _ticket(),
+      personalContentAllowed: true,
+      adviceOnly: false,
+    );
+    final withoutNote = await session.execute(
+      _call('read_event', jsonEncode({'event_ref': row['event_ref']})),
+    );
+    expect(withoutNote.status, 'success');
+    expect(withoutNote.data.containsKey('note'), isFalse);
     final accepted = await session.execute(_call('read_event', args));
     expect(accepted.data['note'], 'selected-note-sentinel');
     expect(
@@ -71,7 +82,7 @@ void main() {
     expect((await other.execute(_call('read_event', args))).status, 'stale');
   });
 
-  test('task body and note are opt-in for a currently selected task', () async {
+  test('task details require an app-bound personal-content policy', () async {
     final rig = _Rig(
       tasks: _FakeTasks(
         task: _task(
@@ -88,35 +99,34 @@ void main() {
       'task_ref': row['task_ref'],
       'include_details': true,
     });
-    expect(
-      (await session.execute(_call('read_task', args))).failure,
-      'consentRequired',
+    final rejected = await session.execute(_call('read_task', args));
+    expect(rejected.status, 'permissionRequired');
+    expect(rejected.failure, 'consentRequired');
+    expect(rejected.data, isEmpty);
+    (session as AgentToolPolicySession).bindToolPolicy(
+      _ticket(),
+      personalContentAllowed: true,
+      adviceOnly: false,
     );
-    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
-      '读这个任务的正文和备注',
+    final withoutDetails = await session.execute(
+      _call('read_task', jsonEncode({'task_ref': row['task_ref']})),
     );
+    expect(withoutDetails.status, 'success');
+    expect(withoutDetails.data.containsKey('description'), isFalse);
+    expect(withoutDetails.data.containsKey('note'), isFalse);
     final accepted = await session.execute(_call('read_task', args));
     expect(accepted.data['description'], 'task-body-sentinel');
     expect(accepted.data['note'], 'task-note-sentinel');
-    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
-      '请查看任务的正文，不要读备注',
+    expect(jsonEncode(accepted.toMap()), contains('task-body-sentinel'));
+    expect(jsonEncode(accepted.toMap()), contains('task-note-sentinel'));
+    expect(
+      jsonEncode(session.evidence.map((e) => e.snippet).toList()),
+      isNot(contains('task-body-sentinel')),
     );
-    final bodyOnly = await session.execute(_call('read_task', args));
-    expect(bodyOnly.data['description'], 'task-body-sentinel');
-    expect(bodyOnly.data.containsKey('note'), isFalse);
-    expect(jsonEncode(bodyOnly.toMap()), isNot(contains('task-note-sentinel')));
-    (session as AgentPersonalReadScopeSession).bindHumanReadScope(
-      '请看任务的备注，不要读取正文',
+    expect(
+      jsonEncode(session.evidence.map((e) => e.snippet).toList()),
+      isNot(contains('task-note-sentinel')),
     );
-    final noteOnly = await session.execute(_call('read_task', args));
-    expect(noteOnly.data['note'], 'task-note-sentinel');
-    expect(noteOnly.data.containsKey('description'), isFalse);
-    for (final question in ['不要读取备注或任务正文', '不读任务备注', '把任务备注改成待复习']) {
-      (session as AgentPersonalReadScopeSession).bindHumanReadScope(question);
-      final denied = await session.execute(_call('read_task', args));
-      expect(denied.failure, 'consentRequired', reason: question);
-      expect(denied.data, isEmpty);
-    }
   });
 
   group('AgentReadTools fixed registry and validation', () {
@@ -716,6 +726,20 @@ final class _Rig {
 
 ModelToolCall _call(String name, String arguments) =>
     ModelToolCall(id: 'synthetic-call', name: name, argumentsJson: arguments);
+
+AgentRunTicket _ticket() => AgentRunTicket(
+  authority: const AgentAuthority(
+    owner: 'synthetic-agent-owner',
+    resetEpoch: 1,
+    historyEpoch: 1,
+    configRevision: 1,
+  ),
+  runId: 'synthetic-run',
+  conversationId: 'synthetic-conversation',
+  conversationGeneration: 1,
+  runGeneration: 1,
+  assistantMessageId: 1,
+);
 
 CalendarOccurrence _event({
   CalendarReference reference = _eventReference,

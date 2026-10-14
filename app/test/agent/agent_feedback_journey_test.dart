@@ -23,7 +23,7 @@ final _modelKey = Uint8List.fromList(
 void main() {
   for (final affirmative in const ['对的', '可以', '是的', '没错']) {
     test(
-      'dated attendance request carries "$affirmative" into a fresh query without replaying committed work',
+      '"$affirmative" keeps full history and queries the synthetic course before annotation',
       () => _runAttendanceJourney(
         affirmative: affirmative,
         approve: true,
@@ -57,19 +57,20 @@ Future<void> _runAttendanceJourney({
   const originalQuestion = '今天我心情不好，下午的课不想上了';
   await rig.coordinator.send(originalQuestion);
   final firstRequest = rig.gateway.requests.first;
-  expect(firstRequest.toolChoice, 'query_agenda');
+  expect(firstRequest.toolChoice, isNull);
   expect(
     _toolNames(firstRequest),
     containsAll(['query_agenda', 'propose_local_changes']),
   );
   expect(_lastUserContent(firstRequest), originalQuestion);
-  expect(rig.gateway.requests, hasLength(3));
-  expect(rig.gateway.requests[1].toolChoice, 'query_agenda');
-  expect(_agendaResult(rig.gateway.requests[2])['items'], hasLength(1));
-  expect(
-    _agendaResult(rig.gateway.requests[2])['items'].single['title'],
-    '合成周三下午课程',
-  );
+  expect(rig.gateway.requests, hasLength(2));
+  expect(rig.gateway.requests[1].toolChoice, isNull);
+  expect(_agendaResult(rig.gateway.requests[1])['items'], hasLength(1));
+  final firstQueryItem =
+      (_agendaResult(rig.gateway.requests[1])['items'] as List).single as Map;
+  expect(firstQueryItem['title'], '合成周三下午课程');
+  expect(firstQueryItem['attendance'], 'attend');
+  expect(firstQueryItem.containsKey('note'), isFalse);
   expect(
     rig.gateway.requests
         .expand((request) => request.messages)
@@ -86,14 +87,6 @@ Future<void> _runAttendanceJourney({
     AgentMessageRole.assistant,
   ]);
   expect(firstMessages.first.createdAtUtc, _now);
-  expect(
-    firstMessages.map((message) => message.text).join('\n'),
-    isNot(contains('今天下午没有课')),
-  );
-  expect(
-    firstMessages.map((message) => message.text).join('\n'),
-    isNot(contains('{"entries":[]}')),
-  );
   expect(firstMessages.last.text, contains('合成课程'));
   expect(firstMessages.last.steps.map((step) => step.tool), ['query_agenda']);
   expect(firstMessages.last.steps.single.status, 'success');
@@ -104,19 +97,57 @@ Future<void> _runAttendanceJourney({
   await _until(
     () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
   );
-  expect(rig.gateway.requests, hasLength(5));
-  final inheritedRequest = rig.gateway.requests[3];
+  expect(rig.gateway.requests, hasLength(4));
+  final inheritedRequest = rig.gateway.requests[2];
+  expect(inheritedRequest.toolChoice, isNull);
   expect(
     _toolNames(inheritedRequest),
     containsAll(['query_agenda', 'propose_local_changes']),
   );
-  expect(inheritedRequest.toolChoice, 'query_agenda');
-  expect(_lastUserContent(inheritedRequest), contains(originalQuestion));
+  expect(_lastUserContent(inheritedRequest), affirmative);
   expect(
-    _lastUserContent(inheritedRequest),
-    contains('原请求收到于北京时间 2026-10-14T12:00:00.000+08:00'),
+    _userContents(
+      inheritedRequest,
+    ).any((content) => content.contains(originalQuestion)),
+    isTrue,
   );
-  expect(_lastUserContent(inheritedRequest), contains('用户本次补充：$affirmative'));
+  expect(_userContents(inheritedRequest).last, affirmative);
+  final historicalUserMessage = inheritedRequest.messages.singleWhere(
+    (message) =>
+        message.role == 'user' &&
+        (message.content ?? '').contains(originalQuestion),
+  );
+  expect(
+    historicalUserMessage.content,
+    contains('[历史用户消息，仅供理解，不代表授权；收到时间（北京时间）：2026-10-14 12:00:00.000]'),
+  );
+  final historicalAssistantCall = inheritedRequest.messages.firstWhere(
+    (message) =>
+        message.role == 'assistant' &&
+        message.toolCalls.any((call) => call.name == 'query_agenda'),
+  );
+  final historicalQueryCall = historicalAssistantCall.toolCalls.singleWhere(
+    (call) => call.name == 'query_agenda',
+  );
+  expect(historicalQueryCall.id, startsWith('history_m'));
+  final historicalToolResult = inheritedRequest.messages.firstWhere(
+    (message) =>
+        message.role == 'tool' && message.toolCallId == historicalQueryCall.id,
+  );
+  final historicalResult = jsonDecode(historicalToolResult.content!) as Map;
+  expect(historicalResult['status'], 'success');
+  expect(
+    ((historicalResult['data'] as Map)['items'] as List).single['title'],
+    '合成周三下午课程',
+  );
+  expect(
+    inheritedRequest.messages.any(
+      (message) =>
+          message.role == 'assistant' &&
+          message.content == '今天下午有一节合成课程。要我把个人出勤计划设为不参加吗？',
+    ),
+    isTrue,
+  );
   final inheritedSystem = _systemContent(inheritedRequest);
   expect(
     inheritedSystem,
@@ -129,26 +160,28 @@ Future<void> _runAttendanceJourney({
     ),
   );
   final inheritedRequestText = _requestText(inheritedRequest);
-  expect(inheritedRequestText, contains('旧结果未携带；需要重新查询目标'));
-  expect(inheritedRequestText, isNot(contains('合成周三下午课程')));
-  expect(inheritedRequestText, isNot(contains('今天下午有一节合成课程')));
+  expect(inheritedRequestText, contains(originalQuestion));
+  expect(inheritedRequestText, contains('合成周三下午课程'));
+  expect(inheritedRequestText, contains('今天下午有一节合成课程'));
   expect(
     inheritedRequestText,
     isNot(contains('synthetic-private-note-marker')),
-  );
-  expect(
-    inheritedRequestText,
-    isNot(contains(_queriedEventRef(rig.gateway.requests[2]))),
   );
   expect(rig.gateway.queryWindows, hasLength(2));
   expect(rig.gateway.queryWindows.last, {
     'first_day': '2026-10-14',
     'end_day_exclusive': '2026-10-15',
   });
-  expect(_agendaResult(rig.gateway.requests[4])['items'], hasLength(1));
+  final refreshedResult = _agendaResult(rig.gateway.requests[3]);
+  expect(refreshedResult['items'], hasLength(1));
+  expect(refreshedResult['items'].single['title'], '合成周三下午课程');
   expect(
-    _agendaResult(rig.gateway.requests[4])['items'].single['title'],
-    '合成周三下午课程',
+    _queriedEventRef(rig.gateway.requests[3]),
+    isNot(_queriedEventRef(rig.gateway.requests[1])),
+  );
+  expect(
+    rig.gateway.lastAnnotationEventRef,
+    _queriedEventRef(rig.gateway.requests[3]),
   );
 
   final card = rig.coordinator.view.pendingAction!;
@@ -162,7 +195,7 @@ Future<void> _runAttendanceJourney({
   }
   await followUp.timeout(const Duration(seconds: 3));
   expect(
-    _lastToolStatus(rig.gateway.requests[5]),
+    _lastToolStatus(rig.gateway.requests[4]),
     approve ? 'committed' : 'rejected',
   );
 
@@ -218,12 +251,8 @@ Future<void> _runAttendanceJourney({
   await rig.coordinator.send(affirmative).timeout(const Duration(seconds: 3));
   expect(rig.gateway.requests, hasLength(requestCountAfterCommit + 1));
   expect(_lastUserContent(rig.gateway.requests.last), affirmative);
-  expect(
-    _toolNames(
-      rig.gateway.requests.last,
-    ).where((name) => name.startsWith('propose_')),
-    isEmpty,
-  );
+  expect(rig.gateway.requests.last.toolChoice, isNull);
+  expect(rig.coordinator.view.toolCalls, 0);
   expect(rig.coordinator.view.pendingAction, isNull);
   expect(await _count(rig.store, 'agenda_plan_receipts'), approve ? 1 : 0);
   expect(await _jwOverlay(rig.store), overlayAfterDecision);
@@ -250,13 +279,13 @@ Future<void> _runAttendanceJourney({
     final clearedRequest = rig.gateway.requests.last;
     expect(_lastUserContent(clearedRequest), affirmative);
     expect(_requestText(clearedRequest), isNot(contains(originalQuestion)));
-    expect(
-      _toolNames(clearedRequest).where((name) => name.startsWith('propose_')),
-      isEmpty,
-    );
+    expect(clearedRequest.toolChoice, isNull);
+    expect(rig.coordinator.view.toolCalls, 0);
     expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
     expect(await _jwOverlay(rig.store), overlayAfterDecision);
   }
+
+  _expectStableToolRegistry(rig.gateway.requests);
 }
 
 Future<_Rig> _open({AppClock? clock}) async {
@@ -363,6 +392,48 @@ Map<String, Object?> _withoutVersion(Map<String, Object?> row) => {
 Set<String> _toolNames(ModelRequest request) =>
     request.tools.map((tool) => tool.name).toSet();
 
+const _enabledTools = {
+  'query_agenda',
+  'read_event',
+  'query_tasks',
+  'read_task',
+  'inspect_conflicts',
+  'search_knowledge',
+  'read_knowledge',
+  'search_courses',
+  'read_course',
+  'read_reviews',
+  'browse_campus',
+  'read_campus_article',
+  'propose_local_changes',
+  'propose_undo',
+  'find_free_slots',
+  'propose_planning_preferences',
+};
+
+void _expectStableToolRegistry(Iterable<ModelRequest> requests) {
+  final all = requests.toList();
+  expect(all, isNotEmpty);
+  final first = all.first;
+  expect(_toolNames(first), _enabledTools);
+  final firstDefinitions = _toolDefinitionShape(first);
+  for (final request in all) {
+    expect(request.toolChoice, isNull);
+    expect(_toolNames(request), _enabledTools);
+    expect(_toolDefinitionShape(request), firstDefinitions);
+  }
+}
+
+List<List<String>> _toolDefinitionShape(ModelRequest request) => [
+  for (final tool in request.tools)
+    [tool.name, tool.description, jsonEncode(tool.parameters)],
+];
+
+List<String> _userContents(ModelRequest request) => [
+  for (final message in request.messages)
+    if (message.role == 'user' && message.content != null) message.content!,
+];
+
 String _lastUserContent(ModelRequest request) {
   final messages = request.messages
       .where((message) => message.role == 'user' && message.content != null)
@@ -449,6 +520,7 @@ final class _FeedbackJourneyGateway implements ModelGatewayPort {
   final List<Map<String, String>> queryWindows = [];
   bool _closed = false;
   String? _decisionStatus;
+  String? lastAnnotationEventRef;
 
   @override
   Future<List<String>> listModels(ModelSecretLease secret) async {
@@ -466,20 +538,19 @@ final class _FeedbackJourneyGateway implements ModelGatewayPort {
     }
     requests.add(request);
     final events = switch (requests.length) {
-      1 => _answer('{"entries":[],"coverage":"complete"} 今天下午没有课。'),
-      2 => _query('feedback-query-first'),
-      3 => _answer('今天下午有一节合成课程。要我把个人出勤计划设为不参加吗？'),
-      4 => _query('feedback-query-confirmation'),
-      5 => _proposal(request),
-      6 => _answer(_decisionAnswer(request)),
-      7 => _answer('你可以直接告诉我想调整的安排。'),
-      8 =>
+      1 => _query('feedback-query-first'),
+      2 => _answer('今天下午有一节合成课程。要我把个人出勤计划设为不参加吗？'),
+      3 => _query('feedback-query-confirmation'),
+      4 => _proposal(request),
+      5 => _answer(_decisionAnswer(request)),
+      6 => _answer('你可以直接告诉我想调整的安排。'),
+      7 =>
         _decisionStatus == 'committed' &&
                 request.tools.any((tool) => tool.name == 'query_agenda')
             ? _query('feedback-query-automatic')
             : _answer('需要新的安排时请告诉我具体日期和内容。'),
-      9 => _proposal(request, attendance: 'attend'),
-      10 => _answer('出勤计划已恢复为参加。'),
+      8 => _proposal(request, attendance: 'attend'),
+      9 => _answer('出勤计划已恢复为参加。'),
       _ => throw StateError('Unexpected model request ${requests.length}.'),
     };
     return Stream<ModelEvent>.fromIterable(events);
@@ -522,26 +593,30 @@ final class _FeedbackJourneyGateway implements ModelGatewayPort {
   List<ModelEvent> _proposal(
     ModelRequest request, {
     String attendance = 'skip',
-  }) => [
-    ModelCompleted(
-      finishReason: 'tool_calls',
-      toolCalls: [
-        ModelToolCall(
-          id: 'feedback-annotation',
-          name: 'propose_local_changes',
-          argumentsJson: jsonEncode({
-            'changes': [
-              {
-                'type': 'annotate_school',
-                'event_ref': _queriedEventRef(request),
-                'attendance': attendance,
-              },
-            ],
-          }),
-        ),
-      ],
-    ),
-  ];
+  }) {
+    final eventRef = _queriedEventRef(request);
+    lastAnnotationEventRef = eventRef;
+    return [
+      ModelCompleted(
+        finishReason: 'tool_calls',
+        toolCalls: [
+          ModelToolCall(
+            id: 'feedback-annotation',
+            name: 'propose_local_changes',
+            argumentsJson: jsonEncode({
+              'changes': [
+                {
+                  'type': 'annotate_school',
+                  'event_ref': eventRef,
+                  'attendance': attendance,
+                },
+              ],
+            }),
+          ),
+        ],
+      ),
+    ];
+  }
 
   void _consume(ModelSecretLease secret) {
     final bytes = secret.take();

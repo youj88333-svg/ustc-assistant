@@ -18,7 +18,7 @@ import 'package:ustc_assistant_m0/jobs/public_query_coordinator.dart';
 
 void main() {
   test(
-    'C4 selects write and planning tools from both deadline word orders',
+    'C4 keeps the enabled tool registry available for both deadline word orders',
     () async {
       final rig = await _open();
       final planningQuestions = [
@@ -54,15 +54,20 @@ void main() {
           () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
         );
         final request = rig.gateway.generations[firstRequest].request;
-        expect(request.toolChoice, 'find_free_slots', reason: question);
+        expect(request.toolChoice, isNull, reason: question);
         expect(
           _toolNames(request),
-          containsAll({'find_free_slots', 'propose_local_changes'}),
+          contains('find_free_slots'),
           reason: question,
         );
         final proposalRequest =
             rig.gateway.generations[firstRequest + 1].request;
         expect(proposalRequest.toolChoice, isNull);
+        expect(
+          _toolNames(proposalRequest),
+          contains('find_free_slots'),
+          reason: question,
+        );
         expect(
           _lastToolResult(proposalRequest)['status'],
           'success',
@@ -96,11 +101,15 @@ void main() {
         await sending.timeout(const Duration(seconds: 3));
         expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
       }
+
+      _expectStableToolRegistry(
+        rig.gateway.generations.map((generation) => generation.request),
+      );
     },
   );
 
   test(
-    'local clarifications retain planning tools; new ordinary and public topics do not',
+    'ordinary, public, clarification, and planning requests keep one tool registry',
     () async {
       final rig = await _open();
 
@@ -109,14 +118,7 @@ void main() {
       ]);
       rig.gateway.enqueueEvents(_answer('我会先核对可用时间。'));
       await rig.coordinator.send('请帮我安排下周一的一小时复习');
-      expect(
-        rig.gateway.generations.first.request.toolChoice,
-        'find_free_slots',
-      );
-      expect(
-        _toolNames(rig.gateway.generations.first.request),
-        contains('propose_local_changes'),
-      );
+      expect(rig.gateway.generations.first.request.toolChoice, isNull);
 
       final clarificationRequest = rig.gateway.generations.length;
       rig.gateway.enqueueEvents([
@@ -133,20 +135,20 @@ void main() {
       final clarification =
           rig.gateway.generations[clarificationRequest].request;
       final clarificationTools = _toolNames(clarification);
-      expect(clarification.toolChoice, 'find_free_slots');
+      expect(clarification.toolChoice, isNull);
       expect(clarificationTools, contains('propose_local_changes'));
       expect(clarificationTools, contains('find_free_slots'));
       expect(rig.coordinator.view.toolCalls, 1);
 
       rig.gateway.enqueueEvents(_answer('我可以协助查询和整理信息。'));
       await rig.coordinator.send('你能帮我做什么？');
-      expect(_toolNames(rig.gateway.generations.last.request), isEmpty);
+      expect(rig.gateway.generations.last.request.toolChoice, isNull);
 
       rig.gateway.enqueueEvents(_answer('请查看学校公开的办理说明。'));
       await rig.coordinator.send('只查公开资料，USTC 学费缴纳流程是什么？');
       final publicTools = _toolNames(rig.gateway.generations.last.request);
-      expect(publicTools, isNot(contains('propose_local_changes')));
-      expect(publicTools, isNot(contains('query_agenda')));
+      expect(publicTools, contains('propose_local_changes'));
+      expect(publicTools, contains('query_agenda'));
       expect(
         publicTools.any(
           (name) => name == 'search_knowledge' || name == 'browse_campus',
@@ -160,10 +162,14 @@ void main() {
       await rig.coordinator.send('只给我建议，帮我找下周一空闲的一小时，不用保存');
       final suggestion = rig.gateway.generations[suggestionRequest].request;
       final suggestionTools = _toolNames(suggestion);
-      expect(suggestionTools, isNot(contains('propose_local_changes')));
+      expect(suggestionTools, contains('propose_local_changes'));
       expect(suggestionTools, contains('find_free_slots'));
-      expect(suggestion.toolChoice, 'find_free_slots');
+      expect(suggestion.toolChoice, isNull);
       expect(rig.coordinator.view.toolCalls, 1);
+
+      _expectStableToolRegistry(
+        rig.gateway.generations.map((generation) => generation.request),
+      );
     },
   );
 
@@ -174,7 +180,7 @@ void main() {
 
       rig.gateway.enqueueEvents(_answer('我无法创建日程。'));
       await rig.coordinator.send('你好');
-      expect(rig.gateway.generations.last.request.tools, isEmpty);
+      expect(rig.gateway.generations.last.request.toolChoice, isNull);
 
       rig.gateway.enqueueEvents(_toolCall(_personalProposal('history-write')));
       rig.gateway.enqueueEvents(_answer('方案已拒绝，没有写入日程。'));
@@ -188,7 +194,8 @@ void main() {
       final prompt = request.messages
           .firstWhere((message) => message.role == 'system')
           .content!;
-      expect(prompt, contains('默认用简体中文回答'));
+      expect(prompt, contains('自然、简短地用中文回答'));
+      expect(prompt, contains('英文工具名和术语不是失败'));
       expect(prompt, contains('propose_local_changes'));
       expect(
         request.messages.any(
@@ -200,6 +207,10 @@ void main() {
       final pending = rig.coordinator.view.pendingAction!;
       await rig.coordinator.rejectAction(pending.id);
       await sending.timeout(const Duration(seconds: 3));
+
+      _expectStableToolRegistry(
+        rig.gateway.generations.map((generation) => generation.request),
+      );
     },
   );
 
@@ -256,7 +267,7 @@ void main() {
   );
 
   test(
-    'tool transition prose is deferred, used in tool protocol, then removed from final history',
+    'English transition prose reaches the tool handoff and is removed from final history',
     () async {
       final rig = await _open();
       final transition = List.filled(
@@ -272,12 +283,6 @@ void main() {
       first.emit(ModelTextDelta(transition));
       await Future<void>.delayed(const Duration(milliseconds: 5));
       final conversation = rig.coordinator.view.conversationId!;
-      final beforeRead = await rig.store.agent.messages(conversation);
-      expect(
-        beforeRead.map((message) => message.text).join('\n'),
-        isNot(contains(transition)),
-        reason: 'transition prose is deferred until an actual local read call',
-      );
 
       rig.gateway.enqueueEvents(_answer('明天没有已记录的日程。'));
       first.emit(
@@ -297,7 +302,7 @@ void main() {
       await send.timeout(const Duration(seconds: 3));
 
       final followupRequest = rig.gateway.generations[1].request;
-      expect(rig.gateway.generations.first.request.toolChoice, 'query_agenda');
+      expect(rig.gateway.generations.first.request.toolChoice, isNull);
       expect(followupRequest.toolChoice, isNull);
       final assistantRound = followupRequest.messages.firstWhere(
         (message) =>
@@ -318,31 +323,37 @@ void main() {
         persisted.map((message) => message.text).join('\n'),
         isNot(contains(transition)),
       );
+      _expectStableToolRegistry(
+        rig.gateway.generations.map((generation) => generation.request),
+      );
     },
   );
 
-  test('ordinary replies correct English or parameter dumps once', () async {
+  test('ordinary request carries Chinese response guidance', () async {
     final rig = await _open();
-    rig.gateway.enqueueEvents(
-      _answer("I'll help you. 请求参数：{\"start\":\"synthetic\"}"),
-    );
-    rig.gateway.enqueueEvents(_answer('可以，直接告诉我需要处理的事情。'));
+    rig.gateway.enqueueEvents(_answer('你好，我可以帮你处理日程和任务。'));
     await rig.coordinator.send('你好');
     expect(rig.coordinator.view.failure, isNull);
-    expect(rig.coordinator.view.messages.last.text, '可以，直接告诉我需要处理的事情。');
-    expect(rig.gateway.generations, hasLength(2));
+    expect(rig.coordinator.view.messages.last.text, '你好，我可以帮你处理日程和任务。');
+    expect(rig.gateway.generations, hasLength(1));
+    expect(
+      rig.gateway.generations.single.request.messages
+          .firstWhere((message) => message.role == 'system')
+          .content,
+      contains('自然、简短地用中文回答'),
+    );
   });
 
   test(
-    'a repeated parameter dump fails without preserving the fabricated reply',
+    'ordinary text that resembles a parameter dump remains a valid model reply',
     () async {
       final rig = await _open();
-      rig.gateway.enqueueEvents(_answer('请求参数：{"start":"synthetic"}'));
-      rig.gateway.enqueueEvents(_answer('返回值：{"entries":[]}'));
+      const reply = '返回值：{"entries":[]}';
+      rig.gateway.enqueueEvents(_answer(reply));
       await rig.coordinator.send('你好');
-      expect(rig.coordinator.view.failure, AgentFailureCode.protocol);
-      expect(rig.coordinator.view.messages.last.text, isEmpty);
-      expect(rig.gateway.generations, hasLength(2));
+      expect(rig.coordinator.view.failure, isNull);
+      expect(rig.coordinator.view.messages.last.text, reply);
+      expect(rig.gateway.generations, hasLength(1));
     },
   );
 
@@ -434,6 +445,43 @@ Future<_Rig> _open() async {
 
 Set<String> _toolNames(ModelRequest request) =>
     request.tools.map((tool) => tool.name).toSet();
+
+const _enabledTools = {
+  'query_agenda',
+  'read_event',
+  'query_tasks',
+  'read_task',
+  'inspect_conflicts',
+  'search_knowledge',
+  'read_knowledge',
+  'search_courses',
+  'read_course',
+  'read_reviews',
+  'browse_campus',
+  'read_campus_article',
+  'propose_local_changes',
+  'propose_undo',
+  'find_free_slots',
+  'propose_planning_preferences',
+};
+
+void _expectStableToolRegistry(Iterable<ModelRequest> requests) {
+  final all = requests.toList();
+  expect(all, isNotEmpty);
+  final first = all.first;
+  expect(_toolNames(first), _enabledTools);
+  final firstDefinitions = _toolDefinitionShape(first);
+  for (final request in all) {
+    expect(request.toolChoice, isNull);
+    expect(_toolNames(request), _enabledTools);
+    expect(_toolDefinitionShape(request), firstDefinitions);
+  }
+}
+
+List<List<String>> _toolDefinitionShape(ModelRequest request) => [
+  for (final tool in request.tools)
+    [tool.name, tool.description, jsonEncode(tool.parameters)],
+];
 
 ModelToolCall _personalProposal([String id = 'personal-write']) =>
     ModelToolCall(

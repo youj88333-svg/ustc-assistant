@@ -54,6 +54,7 @@ void main() {
         expect(firstGateway.requestCount, 0);
 
         await _tapKey(tester, 'agent-settings-open');
+        await _tapKey(tester, 'agent-use-policy-full-settings');
         expect(find.text('Agent 设置'), findsOneWidget);
         expect(
           tester
@@ -178,10 +179,12 @@ void main() {
         expect(find.textContaining('合成流式片段'), findsOneWidget);
         expect(firstGateway.chatRequests, hasLength(1));
         expect(
-          firstGateway.chatRequests.single.tools,
-          isEmpty,
+          firstGateway.chatRequests.single.tools
+              .map((tool) => tool.name)
+              .toSet(),
+          hasLength(19),
           reason:
-              'A plain chat question does not expose business tool families.',
+              'The configured tool registry stays stable for ordinary chat.',
         );
         expect(firstGateway.chatRequests.single.toolChoice, isNull);
         await _tapKey(tester, 'agent-stop');
@@ -226,6 +229,7 @@ void main() {
         expect(reopened.runtime!.agent.view.phase, AgentPhase.idle);
         expect(reopenedGateway.requestCount, 0);
         await _tapKey(tester, 'agent-settings-open');
+        await _tapKey(tester, 'agent-use-policy-full-settings');
         expect(
           tester
               .widget<TextField>(

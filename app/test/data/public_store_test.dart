@@ -42,6 +42,39 @@ void main() {
             ),
           ),
         );
+        await expectLater(
+          store.publicStore.ensurePublicResultContext(result),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+      },
+    );
+    test(
+      'historical result survives a catalogue revision but never clear',
+      () async {
+        final store = await _openStore(_identity(['teach/history']));
+        final result = await store.publicStore.searchKnowledge('合成历史范围');
+        await store.customStatement(
+          'UPDATE knowledge_state SET sequence=sequence+1 WHERE singleton=1',
+        );
+        await expectLater(
+          store.publicStore.ensurePublicResult(result),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+        await store.publicStore.ensurePublicResultContext(result);
+        await expectLater(
+          store.publicStore.ensurePublicResultContext(
+            PublicQueryResult(
+              coverage: result.coverage,
+              candidates: result.candidates,
+            ),
+          ),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
+        await store.publicStore.clearKnowledge(confirmed: true);
+        await expectLater(
+          store.publicStore.ensurePublicResultContext(result),
+          throwsA(_publicFailure(PublicFailureCode.staleReference)),
+        );
       },
     );
     test(

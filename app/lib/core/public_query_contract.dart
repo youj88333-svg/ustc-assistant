@@ -280,6 +280,13 @@ abstract interface class PublicResultGuardPort {
   Future<void> ensurePublicResult(PublicQueryResult result);
 }
 
+/// Historical observations keep their text after a normal catalogue revision.
+/// Ownership, reset, clearing and consent still have to be current. References
+/// and cursors continue to use the stricter live-result guard above.
+abstract interface class PublicResultLifecycleGuardPort {
+  Future<void> ensurePublicResultContext(PublicQueryResult result);
+}
+
 /// A bounded review slice retains the C2 cursor's exact character position.
 /// The ordinary application read API keeps its existing 12000-character cap.
 abstract interface class PublicReviewReadPort {

@@ -658,7 +658,7 @@ void main() {
         ]) {
           raw.execute('DROP TABLE $table');
         }
-        _removeSchema14AgentObjectsForLegacyFixture(raw);
+        _removeSchema15AgentObjectsForLegacyFixture(raw);
         raw.execute('PRAGMA user_version=10');
         raw.execute('COMMIT');
       } finally {
@@ -729,11 +729,40 @@ Future<JwStore> _openWithExecutor(
   return store;
 }
 
-void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
+void _removeSchema15AgentObjectsForLegacyFixture(sqlite3.Database database) {
   final tables = database
       .select("SELECT name FROM sqlite_master WHERE type='table'")
       .map((row) => row['name'] as String)
       .toSet();
+  for (final table in const [
+    'agent_context_turns',
+    'agent_target_aliases',
+    'agent_use_policy',
+  ]) {
+    if (tables.contains(table)) database.execute('DROP TABLE $table');
+  }
+  if (tables.contains('agent_messages')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_messages)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('context_private')) {
+      database.execute(
+        'ALTER TABLE agent_messages DROP COLUMN context_private',
+      );
+    }
+  }
+  if (tables.contains('agent_chat_state')) {
+    final columns = database
+        .select('PRAGMA table_info(agent_chat_state)')
+        .map((row) => row['name'] as String)
+        .toSet();
+    if (columns.contains('summary_private')) {
+      database.execute(
+        'ALTER TABLE agent_chat_state DROP COLUMN summary_private',
+      );
+    }
+  }
   for (final table in const ['agent_permissions', 'agent_chat_state']) {
     if (tables.contains(table)) database.execute('DROP TABLE $table');
   }

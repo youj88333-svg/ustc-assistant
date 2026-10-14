@@ -6,8 +6,10 @@ import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_m0/agent/agent_context_budget.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_context_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_conversation_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
@@ -15,7 +17,7 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
   test(
-    'compact persists across restart and only sends its safe summary with new turns',
+    'compact preserves its summary and recent complete transcript across restart',
     () async {
       final file = await _temporaryDatabase();
       var store = await _open(file: file);
@@ -52,16 +54,28 @@ void main() {
       expect(compactRequest.messages, hasLength(2));
       final compactInput = compactRequest.messages.last.content!;
       expect(compactInput, contains('linear algebra study intent marker'));
+      expect(compactInput, contains('收到时间（北京时间）：2026-10-13 16:00:00.000'));
       expect(
         compactInput,
         isNot(contains('archive-A-private-question-marker')),
       );
-      expect(
-        compactInput,
-        isNot(contains('old assistant fabricated fact marker')),
-      );
-      expect(compactInput, isNot(contains('old-tool-step-marker')));
+      expect(compactInput, contains('old assistant fabricated fact marker'));
       expect(compactInput, isNot(contains('old-evidence-marker')));
+      expect(compactInput, isNot(contains('e_0123456789abcdef')));
+      expect(compactInput, isNot(contains('query_agenda')));
+
+      final storedHistory = await store.agent.messages(primary);
+      final storedAssistant = storedHistory.singleWhere(
+        (message) => message.role == AgentMessageRole.assistant,
+      );
+      expect(
+        storedAssistant.evidence.map((evidence) => evidence.id),
+        contains('e_0123456789abcdef'),
+      );
+      expect(
+        storedAssistant.steps.map((step) => step.tool),
+        contains('query_agenda'),
+      );
 
       final saved = await (store.agent as AgentConversationControlPort)
           .readConversationContext();
@@ -96,16 +110,42 @@ void main() {
       expect(afterRestart, contains('历史摘要'));
       expect(afterRestart, contains(saved.summary));
       expect(afterRestart, contains('我该从哪里开始？'));
-      expect(
-        afterRestart,
-        isNot(contains('linear algebra study intent marker')),
-      );
-      expect(
-        afterRestart,
-        isNot(contains('old assistant fabricated fact marker')),
-      );
-      expect(afterRestart, isNot(contains('old-tool-step-marker')));
+      expect(afterRestart, contains('linear algebra study intent marker'));
+      expect(afterRestart, contains('old assistant fabricated fact marker'));
       expect(afterRestart, isNot(contains('old-evidence-marker')));
+      expect(afterRestart, isNot(contains('e_0123456789abcdef')));
+      final historicalUser = gateway.requests.single.messages.firstWhere(
+        (message) =>
+            message.role == 'user' &&
+            (message.content ?? '').contains(
+              'linear algebra study intent marker',
+            ),
+      );
+      expect(
+        historicalUser.content,
+        contains('收到时间（北京时间）：2026-10-13 16:00:00.000'),
+      );
+      expect(
+        gateway.requests.single.messages.any(
+          (message) =>
+              message.role == 'assistant' && message.toolCalls.isNotEmpty,
+        ),
+        isFalse,
+      );
+      expect(
+        gateway.requests.single.messages.where(
+          (message) => message.role == 'tool',
+        ),
+        isEmpty,
+      );
+      expect(
+        gateway.requests.single.messages.any(
+          (message) =>
+              message.role == 'assistant' &&
+              message.content == 'old assistant fabricated fact marker',
+        ),
+        isTrue,
+      );
       expect(
         afterRestart,
         isNot(contains('archive-A-private-question-marker')),
@@ -135,14 +175,175 @@ void main() {
         afterClear,
         isNot(contains('old assistant fabricated fact marker')),
       );
-      expect(afterClear, isNot(contains('old-tool-step-marker')));
       expect(afterClear, isNot(contains('old-evidence-marker')));
+      expect(afterClear, isNot(contains('e_0123456789abcdef')));
       expect(afterClear, isNot(contains('archive-A-private-question-marker')));
     },
   );
 
   test(
-    'affirmation after compact and restart retains intent and control state without old tool facts',
+    'manual compact timeout preserves the stored chat and a later send succeeds',
+    () async {
+      final store = await _open();
+      final configured = await _configure(store);
+      final primary = await store.agent.ensurePrimaryConversation();
+      await _writeHistory(
+        store,
+        configured.authority,
+        primary,
+        'manual-timeout-old-user-marker',
+        'manual-timeout-old-assistant-marker',
+      );
+      final before = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      final gateway = _SyntheticGateway()
+        ..enqueueFailure(TimeoutException('synthetic no tokens'))
+        ..enqueueEvents([
+          const ModelTextDelta('已根据保留的历史继续回答。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+      final coordinator = await _coordinator(store, gateway);
+
+      await coordinator.send('/compact');
+
+      expect(coordinator.view.failure, AgentFailureCode.timeout);
+      expect(gateway.cancelCount, greaterThanOrEqualTo(1));
+      final afterTimeout = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      expect(afterTimeout.summary, before.summary);
+      expect(
+        afterTimeout.messages.map((message) => message.text).toList(),
+        before.messages.map((message) => message.text).toList(),
+      );
+      expect(gateway.requests, hasLength(1));
+      expect(gateway.requests.single.tools, isEmpty);
+
+      await coordinator.send('继续处理保留的内容');
+
+      expect(coordinator.view.failure, isNull);
+      final resumedRequest = gateway.requests.last;
+      expect(
+        resumedRequest.messages.any(
+          (message) =>
+              message.role == 'user' &&
+              (message.content ?? '').contains(
+                'manual-timeout-old-user-marker',
+              ),
+        ),
+        isTrue,
+      );
+      expect(
+        resumedRequest.messages.any(
+          (message) =>
+              message.role == 'assistant' &&
+              message.content == 'manual-timeout-old-assistant-marker',
+        ),
+        isTrue,
+      );
+      expect(resumedRequest.messages.last.content, '继续处理保留的内容');
+      final afterResume = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      expect(afterResume.summary, before.summary);
+    },
+  );
+
+  test(
+    'automatic compact timeout keeps durable history and fits complete groups around the current question',
+    () async {
+      final store = await _open();
+      final configured = await _configure(store);
+      final primary = await store.agent.ensurePrimaryConversation();
+      final oldLongQuestion =
+          'old-long-user-marker ${List.filled(2200, '课').join()}';
+      final oldLongAnswer =
+          'old-long-assistant-marker ${List.filled(1000, '学').join()}';
+      await _writeHistory(
+        store,
+        configured.authority,
+        primary,
+        oldLongQuestion,
+        oldLongAnswer,
+      );
+      await _writeHistory(
+        store,
+        configured.authority,
+        primary,
+        'retained-middle-user-marker',
+        'retained-middle-assistant-marker',
+      );
+      final gateway = _SyntheticGateway()
+        ..enqueueFailure(TimeoutException('synthetic no tokens'))
+        ..enqueueEvents([
+          const ModelTextDelta('已在完整历史组范围内继续回答。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+      final coordinator = await _coordinator(
+        store,
+        gateway,
+        contextBudget: AgentContextBudget(
+          maximumInputTokens: 4096,
+          softFraction: 0.75,
+        ),
+      );
+      const currentQuestion = 'current-question-after-auto-timeout';
+
+      await coordinator.send(currentQuestion);
+
+      expect(coordinator.view.failure, isNull);
+      expect(gateway.requests, hasLength(2));
+      expect(gateway.cancelCount, greaterThanOrEqualTo(1));
+      expect(gateway.requests.first.tools, isEmpty);
+      final request = gateway.requests.last;
+      expect(
+        request.messages.any(
+          (message) =>
+              message.role == 'user' && message.content == currentQuestion,
+        ),
+        isTrue,
+      );
+      expect(
+        request.messages.any(
+          (message) =>
+              message.role == 'user' &&
+              (message.content ?? '').contains('retained-middle-user-marker'),
+        ),
+        isTrue,
+      );
+      expect(
+        request.messages.any(
+          (message) =>
+              message.role == 'assistant' &&
+              message.content == 'retained-middle-assistant-marker',
+        ),
+        isTrue,
+      );
+      expect(
+        request.messages.any(
+          (message) => (message.content ?? '').contains('old-long-user-marker'),
+        ),
+        isFalse,
+        reason: 'the oversized oldest transcript is trimmed as one full group',
+      );
+
+      final persisted = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      expect(persisted.summary, isEmpty);
+      expect(
+        persisted.messages.map((message) => message.text),
+        containsAll([
+          oldLongQuestion,
+          oldLongAnswer,
+          'retained-middle-user-marker',
+          'retained-middle-assistant-marker',
+          currentQuestion,
+          '已在完整历史组范围内继续回答。',
+        ]),
+      );
+    },
+  );
+
+  test(
+    'a short affirmation retains the original scope and answer after compact',
     () async {
       const question = '请把今天下午课程的本地出勤计划改为不参加';
       final file = await _temporaryDatabase();
@@ -178,17 +379,35 @@ void main() {
       await coordinator.send('对的');
       expect(coordinator.view.failure, isNull);
       final request = gateway.requests.single;
-      expect(request.messages.last.content, contains(question));
-      expect(
-        request.messages.last.content,
-        contains('原请求收到于北京时间 2026-10-13T16:00:00.000+08:00'),
-      );
-      expect(request.messages.last.content, contains('用户本次补充：对的'));
       final text = _requestText(request);
-      expect(text, contains('助手曾询问是否继续按用户原请求准备方案'));
-      expect(text, contains('上一轮没有本地操作方案卡或提交回执'));
-      expect(text, contains('需要重新查询目标'));
-      expect(text, isNot(contains('synthetic-old-course-detail-marker')));
+      final historicalUser = request.messages.firstWhere(
+        (message) =>
+            message.role == 'user' &&
+            (message.content ?? '').contains(question),
+      );
+      expect(historicalUser.content, contains(question));
+      expect(
+        historicalUser.content,
+        contains('收到时间（北京时间）：2026-10-13 16:00:00.000'),
+      );
+      expect(request.messages.last.role, 'user');
+      expect(request.messages.last.content, '对的');
+      expect(
+        request.messages.any(
+          (message) =>
+              message.role == 'assistant' &&
+              (message.content ?? '').contains(
+                'synthetic-old-course-detail-marker',
+              ),
+        ),
+        isTrue,
+        reason:
+            'the complete prior assistant answer remains available after compact',
+      );
+      expect(text, contains('确认这样做吗？'));
+      expect(text, contains('用户想把下午课程的本地出勤计划改为不参加'));
+      expect(request.messages.expand((message) => message.toolCalls), isEmpty);
+      expect(text, contains('synthetic-old-course-detail-marker'));
       expect(text, isNot(contains('old-evidence-marker')));
       expect(text, isNot(contains('e_0123456789abcdef')));
       expect(coordinator.view.pendingAction, isNull);
@@ -303,12 +522,14 @@ Future<AgentSettingsSnapshot> _configure(JwStore store) async {
 
 Future<AgentCoordinator> _coordinator(
   JwStore store,
-  _SyntheticGateway gateway,
-) async {
+  _SyntheticGateway gateway, {
+  AgentContextBudget? contextBudget,
+}) async {
   final coordinator = AgentCoordinator(
     data: store.agent,
     gateway: gateway,
     clock: FixedClock(DateTime.utc(2026, 10, 13, 8)),
+    contextBudget: contextBudget,
   );
   addTearDown(coordinator.close);
   await coordinator.initialize();
@@ -359,6 +580,13 @@ Future<void> _writeStructuredHistory(
     steps: const [AgentToolStep(tool: 'query_agenda', status: 'success')],
     imageCount: 0,
   );
+  final policy = await (store.agent as AgentUsePolicyPort).readAgentUsePolicy();
+  await (store.agent as AgentTranscriptPort).saveAgentTurn(
+    ticket,
+    items: [AgentContextItem(role: 'assistant', text: answer)],
+    includesPersonalContent: false,
+    policyRevision: policy.revision,
+  );
   await store.agent.finishRun(ticket, AgentMessageStatus.complete);
 }
 
@@ -397,14 +625,18 @@ Future<File> _temporaryDatabase() async {
 }
 
 final class _SyntheticGateway implements ModelGatewayPort {
-  final Queue<List<ModelEvent>> _scripts = Queue<List<ModelEvent>>();
+  final Queue<Object> _scripts = Queue();
   final List<ModelRequest> requests = [];
   final List<_SyntheticGeneration> _generations = [];
   final List<Completer<ModelRequest>> _requestWaiters = [];
   final List<ModelRequest> _pendingRequests = [];
   bool _closed = false;
+  int cancelCount = 0;
 
   void enqueueEvents(List<ModelEvent> events) => _scripts.add(events);
+
+  void enqueueFailure(Object error) =>
+      _scripts.add(_SyntheticStreamFailure(error));
 
   Future<ModelRequest> nextRequest() {
     if (_pendingRequests.isNotEmpty) {
@@ -435,11 +667,14 @@ final class _SyntheticGateway implements ModelGatewayPort {
     } else {
       _requestWaiters.removeAt(0).complete(request);
     }
+    final script = _scripts.isEmpty ? null : _scripts.removeFirst();
+    if (script is _SyntheticStreamFailure) {
+      return Stream<ModelEvent>.error(script.error);
+    }
     final generation = _SyntheticGeneration(request);
     _generations.add(generation);
-    if (_scripts.isNotEmpty) {
-      final events = _scripts.removeFirst();
-      unawaited(_emit(generation, events));
+    if (script is List<ModelEvent>) {
+      unawaited(_emit(generation, script));
     }
     return generation.stream;
   }
@@ -462,6 +697,7 @@ final class _SyntheticGateway implements ModelGatewayPort {
 
   @override
   Future<void> cancelAndDrain() async {
+    cancelCount++;
     await Future.wait(
       _generations
           .where((generation) => !generation.isClosed)
@@ -481,6 +717,11 @@ final class _SyntheticGateway implements ModelGatewayPort {
     }
     _requestWaiters.clear();
   }
+}
+
+final class _SyntheticStreamFailure {
+  const _SyntheticStreamFailure(this.error);
+  final Object error;
 }
 
 final class _SyntheticGeneration {

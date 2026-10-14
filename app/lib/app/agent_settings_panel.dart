@@ -1280,6 +1280,7 @@ String _phaseText(AgentPhase phase) => switch (phase) {
 String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
   AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
+  AgentFailureCode.contextLimit => '模型服务的上下文容量不足，请降低上下文预算或换用更大容量的模型。',
   AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
   AgentFailureCode.consentRequired => '请先阅读发送说明并明确勾选同意。',
   AgentFailureCode.keyRequired => '请提供模型 Key，或使用本机已保存的 Key。',

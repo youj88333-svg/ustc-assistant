@@ -76,7 +76,11 @@ final class _ArticlePage extends _Continuation {
 /// C2 is the only online admission point. No model, cookie jar or school
 /// account is involved; every call owns the existing global source lease.
 final class PublicQueryCoordinator
-    implements PublicQueryPort, PublicResultGuardPort, PublicReviewReadPort {
+    implements
+        PublicQueryPort,
+        PublicResultGuardPort,
+        PublicReviewReadPort,
+        PublicResultLifecycleGuardPort {
   PublicQueryCoordinator({
     required this.store,
     required this.leases,
@@ -120,6 +124,16 @@ final class PublicQueryCoordinator
   Future<void> ensurePublicResult(PublicQueryResult result) async {
     final issued = _issuedResults[result];
     if (_closing || issued == null || !clock.nowUtc.isBefore(issued.$2)) {
+      throw const PublicFailure(PublicFailureCode.staleReference);
+    }
+    await store.ensureAuthority(issued.$1);
+    if (_closing) throw const PublicFailure(PublicFailureCode.cancelled);
+  }
+
+  @override
+  Future<void> ensurePublicResultContext(PublicQueryResult result) async {
+    final issued = _issuedResults[result];
+    if (_closing || issued == null) {
       throw const PublicFailure(PublicFailureCode.staleReference);
     }
     await store.ensureAuthority(issued.$1);

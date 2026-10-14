@@ -1,4 +1,5 @@
 import 'agent_contract.dart';
+import 'agent_context_contract.dart';
 
 /// C3-issued snapshot. A constructor alone cannot authorize a context update.
 final class AgentConversationContext {
@@ -9,10 +10,20 @@ final class AgentConversationContext {
     required this.lastMessageId,
     required this.summary,
     required List<AgentMessage> messages,
-  }) : messages = List.unmodifiable(messages);
+    List<AgentConversationTurn> turns = const [],
+    Set<int> withheldAssistantMessageIds = const {},
+    this.includesPersonalContent = false,
+  }) : messages = List.unmodifiable(messages),
+       turns = List.unmodifiable(turns),
+       withheldAssistantMessageIds = Set.unmodifiable(
+         withheldAssistantMessageIds,
+       );
   final String conversationId, summary;
   final int revision, coveredMessageId, lastMessageId;
   final List<AgentMessage> messages;
+  final List<AgentConversationTurn> turns;
+  final Set<int> withheldAssistantMessageIds;
+  final bool includesPersonalContent;
   @override
   String toString() => 'AgentConversationContext';
 }

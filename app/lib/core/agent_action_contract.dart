@@ -156,6 +156,15 @@ final class AgentPlanApproval {
   String toString() => 'AgentPlanApproval';
 }
 
+/// Associates an issued, unmodified plan with the invocation that prepared it.
+/// This does not approve or execute the plan; normal transaction guards apply.
+abstract interface class AgentLocalInvocationPort {
+  Future<void> bindLocalInvocation(
+    AgentLocalPlan plan,
+    String invocationFingerprint,
+  );
+}
+
 final class AgentLocalPlanReceipt {
   AgentLocalPlanReceipt({
     required this.planId,

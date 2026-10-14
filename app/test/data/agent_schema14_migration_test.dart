@@ -25,7 +25,7 @@ void main() {
       final before = _legacyFacts(file);
 
       final store = await _open(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 14);
+      expect(await _scalar(store, 'PRAGMA user_version'), 15);
       final settings = await store.agent.inspectAgent();
       expect(settings.modelId, 'synthetic-migration-model');
       expect(settings.keySaved, isTrue);
@@ -254,6 +254,16 @@ void _rewindToSchema13(File file) {
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    for (final table in [
+      'agent_context_turns',
+      'agent_target_aliases',
+      'agent_use_policy',
+    ]) {
+      raw.execute('DROP TABLE $table');
+    }
+    raw.execute('ALTER TABLE agent_messages DROP COLUMN context_private');
+    raw.execute('DROP INDEX agent_action_invocation');
+    raw.execute('ALTER TABLE agent_actions DROP COLUMN invocation_fingerprint');
     raw.execute('DROP TABLE agent_chat_state');
     raw.execute('DROP TABLE agent_permissions');
     raw.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
@@ -317,6 +327,8 @@ List<Map<String, Object?>> _legacyFactsFromRaw(sqlite3.Database raw) => [
     for (final row in raw.select('SELECT * FROM $table ORDER BY rowid'))
       Map<String, Object?>.from(row)
         ..remove('authorization')
+        ..remove('context_private')
+        ..remove('invocation_fingerprint')
         ..updateAll(
           (key, value) =>
               value is Uint8List ? value.toList(growable: false) : value,

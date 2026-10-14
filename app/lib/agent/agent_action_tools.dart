@@ -5,6 +5,7 @@ import 'dart:math';
 import '../core/agent_action_contract.dart';
 import '../core/agent_permission_contract.dart';
 import '../core/agent_contract.dart';
+import '../core/agent_context_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_discussion_contract.dart';
 import '../core/agent_source_contract.dart';
@@ -14,8 +15,8 @@ import '../core/calendar_contract.dart';
 import '../core/calendar_validation.dart';
 import '../core/contracts.dart';
 import 'agent_free_slots.dart';
+import 'agent_invocation_fingerprint.dart';
 import 'agent_change_spec.dart';
-import 'agent_request_intent.dart';
 import 'agent_read_tools.dart' show parseAgentActionArguments;
 import 'agent_tool_contract.dart';
 import 'model_gateway_contract.dart';
@@ -74,13 +75,18 @@ final class AgentActionTools implements AgentReadToolsPort {
     ...readTools.definitions,
     _actionTool(
       'propose_local_changes',
-      '准备最多 20 项本地个人日程、任务或时间块变化，由应用等待用户批准。修改/删除已有项的引用须来自本轮读取；此工具不直接写入。$agentChangeGuidance',
+      '准备最多 20 项本地个人日程、任务或时间块变化。应用检查已有许可后执行或交付具体确认卡；仅建议模式只展示。已有项引用可来自查询或会话保留，应用复验当前对象、版本和原定日期范围。继续未完成回复时不重复已提交方案；只有用户明确要求另外一个新操作时才设 new_operation=true，同样检查当前许可。$agentChangeGuidance',
       {
         'changes': {
           'type': 'array',
           'minItems': 1,
           'maxItems': _actionBudget,
           'items': _actionSchema(),
+        },
+        'new_operation': {
+          'type': 'boolean',
+          'default': false,
+          'description': '用户明确要求另一个新操作，允许与未完成历史操作参数相同；不是批准或重试开关。',
         },
       },
       required: const ['changes'],
@@ -109,7 +115,7 @@ final class AgentActionTools implements AgentReadToolsPort {
     ),
     _actionTool(
       'propose_planning_preferences',
-      '提出结构化规划偏好变更；省略字段沿用当前值，仍需用户批准。',
+      '提出结构化规划偏好变更；省略字段沿用当前值。应用检查已有许可后执行或交付确认卡。',
       {
         'weekdays': _intArraySchema(minimum: 1, maximum: 7, maxItems: 7),
         'start_minute': _intSchema(minimum: 0, maximum: 1439),
@@ -133,7 +139,7 @@ final class AgentActionTools implements AgentReadToolsPort {
       ),
       _actionTool(
         'request_source_refresh',
-        '提出固定教务学期或二课活动日历刷新；刷新来源和范围必须来自本轮用户请求，仍需应用批准。',
+        '按用户请求准备固定教务学期或二课活動日历刷新。应用检查该来源单独许可后执行或交付具体确认卡；仅建议模式不启动刷新。',
         {
           'source': _stringSchema(enumValues: const ['jw', 'youngCalendar']),
           'semester_ref': _stringSchema(maxLength: 64),
@@ -273,6 +279,7 @@ final class _AgentActionToolSession
         AgentDiscussionToolSession,
         AgentInteractiveToolSession,
         AgentRememberedToolSession,
+        AgentToolPolicySession,
         AgentToolScopeSession {
   _AgentActionToolSession(this._owner, AgentToolSession readSession)
     : _readSession = readSession {
@@ -285,6 +292,40 @@ final class _AgentActionToolSession
   AgentRunTicket? _ticket;
   String? _humanQuestion;
   bool _personalDataRestricted = false;
+  bool _adviceOnly = false,
+      _personalContentAllowed = false,
+      _personalContentUsed = false;
+  AgentTargetAliasPort? _aliases;
+  @override
+  bool get personalContentUsed =>
+      _personalContentUsed ||
+      (_readSession is AgentToolPolicySession &&
+          (_readSession as AgentToolPolicySession).personalContentUsed);
+  @override
+  void bindToolPolicy(
+    AgentRunTicket ticket, {
+    required bool personalContentAllowed,
+    required bool adviceOnly,
+    AgentTargetAliasPort? aliases,
+  }) {
+    _ensureActive();
+    if (_ticket != null && !identical(_ticket, ticket)) {
+      throw const AgentFailure(AgentFailureCode.staleContext);
+    }
+    _ticket = ticket;
+    _adviceOnly = adviceOnly;
+    _personalContentAllowed = personalContentAllowed;
+    _aliases = aliases;
+    final reader = _readSession;
+    if (reader is AgentToolPolicySession) {
+      (reader as AgentToolPolicySession).bindToolPolicy(
+        ticket,
+        personalContentAllowed: personalContentAllowed,
+        adviceOnly: adviceOnly,
+        aliases: aliases,
+      );
+    }
+  }
 
   @override
   void restrictPersonalData() => _personalDataRestricted = true;
@@ -298,7 +339,6 @@ final class _AgentActionToolSession
   bool _contextInvalidated = false;
   bool _readerUnavailable = false;
   bool _usedFreeSlotSearch = false;
-  int _changeBudgetUsed = 0;
 
   @override
   List<AgentEvidence> get evidence => _readSession.evidence;
@@ -402,8 +442,7 @@ final class _AgentActionToolSession
         return _result('stale', failure: 'staleReference');
       }
       if (agentPersonalToolNames.contains(call.name) &&
-          (_personalDataRestricted ||
-              agentRestrictsPersonalData(_humanQuestion ?? ''))) {
+          _personalDataRestricted) {
         return _result('unavailable', failure: 'unavailable');
       }
       AgentText.requireSafe(call.argumentsJson, maxCharacters: 16384);
@@ -552,13 +591,7 @@ final class _AgentActionToolSession
     final source = sourceName == 'jw'
         ? AgentRefreshSource.jw
         : AgentRefreshSource.youngCalendar;
-    if (!_questionRequestsRefresh(source)) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
-    }
     _ensureNoPending();
-    if (_changeBudgetUsed >= _actionBudget) {
-      throw const AgentFailure(AgentFailureCode.resourceLimit);
-    }
 
     final AgentSourceRequest request;
     final String title;
@@ -620,7 +653,6 @@ final class _AgentActionToolSession
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
     _validateActionRecord(record);
-    _changeBudgetUsed++;
     _pending = _PendingSourceRefresh(ticket, record, request, title);
     _notify();
     return _waitingResult(_pending!);
@@ -630,9 +662,6 @@ final class _AgentActionToolSession
     Map<String, Object?> args,
   ) async {
     _requireKeys(args, const {}, const {});
-    if (!_questionRequestsYoungActivities()) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
-    }
     final result = await _requireSources().queryActivities(_requireTicket());
     _ensureActive();
     await validateDelivery();
@@ -773,23 +802,12 @@ final class _AgentActionToolSession
       }
       for (final option in options.semesters) {
         if (option.reference == sourceReference) {
-          final explicitlyNamed = explicit?.reference == option.reference;
-          final savedDefault =
-              explicit == null &&
-              !_questionHasSemesterSpecifier() &&
-              option.lastUsed;
-          if (!explicitlyNamed && !savedDefault) {
-            throw const AgentFailure(AgentFailureCode.invalidInput);
-          }
           return option;
         }
       }
       throw const AgentFailure(AgentFailureCode.staleContext);
     }
     if (explicit != null) return explicit;
-    if (_questionHasSemesterSpecifier()) {
-      throw const AgentFailure(AgentFailureCode.invalidInput);
-    }
     final lastUsed = options.semesters
         .where((value) => value.lastUsed)
         .toList();
@@ -813,51 +831,6 @@ final class _AgentActionToolSession
       throw const AgentFailure(AgentFailureCode.invalidInput);
     }
     return matches.isEmpty ? null : matches.single;
-  }
-
-  bool _questionHasSemesterSpecifier() => RegExp(
-    r'20\d{2}|第[一二三四五六]学期|春季?学期|秋季?学期|夏季?学期|冬季?学期',
-    caseSensitive: false,
-  ).hasMatch(_humanQuestion ?? '');
-
-  bool _questionRequestsRefresh(AgentRefreshSource source) {
-    final question = (_humanQuestion ?? '').toLowerCase();
-    final negatesRefresh = RegExp(
-      r'(?:不要|不需要|无需|不用|不必|不许|别|不想|不)(?:给我|再|直接|去)?(?:刷新|同步|更新|重新采集|拉取)|(?:don\x27t|do not|no|without|not)\s+(?:refresh|sync|update|fetch)',
-      caseSensitive: false,
-    ).hasMatch(question);
-    if (negatesRefresh) return false;
-    final hasRefreshIntent = RegExp(
-      r'刷新|同步|更新|重新采集|拉取|refresh|sync|update|fetch',
-      caseSensitive: false,
-    ).hasMatch(question);
-    if (!hasRefreshIntent) return false;
-    return switch (source) {
-      AgentRefreshSource.jw => RegExp(
-        r'\bjw\b|教务|课表|学期课程|学校课程',
-        caseSensitive: false,
-      ).hasMatch(question),
-      AgentRefreshSource.youngCalendar => RegExp(
-        r'young|二课|青春科大|青年|活动日历|青年活动',
-        caseSensitive: false,
-      ).hasMatch(question),
-    };
-  }
-
-  bool _questionRequestsYoungActivities() {
-    final question = (_humanQuestion ?? '').toLowerCase();
-    final negatesQuery = RegExp(
-      r'(?:不要|不需要|无需|不用|不必|不许|别|不想|不)(?:给我|再|去|直接)?(?:查询|查看|看|查|列出)|(?:don\x27t|do not|no|without|not)\s+(?:query|look|check|list|show)',
-      caseSensitive: false,
-    ).hasMatch(question);
-    final asksToRead = RegExp(
-      r'看看|查看|查询|查一下|查下|列出|有哪些|有什么|有啥|安排|show|list|what|find|check',
-      caseSensitive: false,
-    ).hasMatch(question);
-    return !negatesQuery &&
-        asksToRead &&
-        RegExp(r'young|二课|青春科大|青年', caseSensitive: false).hasMatch(question) &&
-        RegExp(r'活动|event', caseSensitive: false).hasMatch(question);
   }
 
   Future<void> _settleSourceRecord(
@@ -934,7 +907,8 @@ final class _AgentActionToolSession
   Future<AgentToolResult> _proposeLocalChanges(
     Map<String, Object?> args,
   ) async {
-    _requireKeys(args, const {'changes'}, const {'changes'});
+    _requireKeys(args, const {'changes', 'new_operation'}, const {'changes'});
+    _optionalBool(args, 'new_operation');
     final rawChanges = args['changes'];
     if (rawChanges is! List<Object?> ||
         rawChanges.isEmpty ||
@@ -945,9 +919,6 @@ final class _AgentActionToolSession
       );
     }
     _ensureNoPending();
-    if (_changeBudgetUsed + rawChanges.length > _actionBudget) {
-      throw const AgentFailure(AgentFailureCode.resourceLimit);
-    }
     final ticket = _requireTicket();
     final (context, revision) = await _owner.plans.readPlanContext();
     final changes = <AgentLocalChange>[];
@@ -999,6 +970,13 @@ final class _AgentActionToolSession
       requireFree: requireFree,
       preferencesRevision: preferencesRevision,
     );
+    final invocations = _owner.plans;
+    if (invocations is AgentLocalInvocationPort) {
+      await (invocations as AgentLocalInvocationPort).bindLocalInvocation(
+        plan,
+        agentLocalInvocationFingerprint(args),
+      );
+    }
     if (_revoked) {
       _owner.plans.revokeLocalPlans(ticket);
       throw const AgentFailure(AgentFailureCode.cancelled);
@@ -1011,7 +989,6 @@ final class _AgentActionToolSession
       _owner.plans.revokeLocalPlans(ticket);
       throw const AgentFailure(AgentFailureCode.storageFailed);
     }
-    _changeBudgetUsed += changes.length;
     _pending = _PendingLocalPlan(plan, '待确认的本地日程与任务变化', changes.length);
     _notify();
     return _waitingResult(_pending!);
@@ -1445,9 +1422,6 @@ final class _AgentActionToolSession
   Future<AgentToolResult> _proposeUndo(Map<String, Object?> args) async {
     _requireKeys(args, const {}, const {});
     _ensureNoPending();
-    if (_changeBudgetUsed >= _actionBudget) {
-      throw const AgentFailure(AgentFailureCode.resourceLimit);
-    }
     final ticket = _requireTicket();
     final (context, revision) = await _owner.plans.readPlanContext();
     final undo = await _owner.tasks.queryUndo(context);
@@ -1486,7 +1460,6 @@ final class _AgentActionToolSession
       _owner.plans.revokeLocalPlans(ticket);
       throw const AgentFailure(AgentFailureCode.storageFailed);
     }
-    _changeBudgetUsed++;
     _pending = _PendingLocalPlan(plan, '撤销最近一次本地修改', 1);
     _notify();
     return _waitingResult(_pending!);
@@ -1666,9 +1639,6 @@ final class _AgentActionToolSession
       'avoid',
     }, const {});
     _ensureNoPending();
-    if (_changeBudgetUsed >= _actionBudget) {
-      throw const AgentFailure(AgentFailureCode.resourceLimit);
-    }
     final ticket = _requireTicket();
     final current = await _owner.preferences.readPlanningPreferences();
     final proposed = AgentPlanningPreferences(
@@ -1711,7 +1681,6 @@ final class _AgentActionToolSession
         record.status != AgentActionStatus.proposed) {
       throw const AgentFailure(AgentFailureCode.storageFailed);
     }
-    _changeBudgetUsed++;
     _pending = _PendingPreferences(ticket, record, '待确认的规划偏好设置');
     _notify();
     return _waitingResult(_pending!);
@@ -1919,6 +1888,14 @@ final class _AgentActionToolSession
     _ensureActive();
     final pending = _pending;
     if (pending == null || _decisionInFlight) return null;
+    if (_adviceOnly) {
+      final details = pending.view.details;
+      await decidePending(false);
+      return _result(
+        'adviceOnly',
+        data: {'submitted': false, 'details': details},
+      );
+    }
     if (pending is _PendingLocalPlan) {
       final permissions = _owner.plans;
       if (permissions is! AgentLocalPermissionPort) return null;
@@ -1962,6 +1939,7 @@ final class _AgentActionToolSession
 
   Future<void> _afterAcceptedMutation() async {
     _slots.clear();
+    _personalContentUsed = personalContentUsed;
     _readSession.revoke();
     final source = _owner.sources;
     if (source is AgentSourceDeliveryPort) {
@@ -1970,6 +1948,15 @@ final class _AgentActionToolSession
     _contextInvalidated = true;
     try {
       _readSession = _owner.readTools.openSession();
+      final ticket = _ticket;
+      if (ticket != null && _readSession is AgentToolPolicySession) {
+        (_readSession as AgentToolPolicySession).bindToolPolicy(
+          ticket,
+          personalContentAllowed: _personalContentAllowed,
+          adviceOnly: _adviceOnly,
+          aliases: _aliases,
+        );
+      }
       if (_readSession is AgentPersonalReadScopeSession) {
         (_readSession as AgentPersonalReadScopeSession).bindHumanReadScope(
           _humanQuestion ?? '',

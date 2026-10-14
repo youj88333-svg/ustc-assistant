@@ -515,3 +515,7 @@ abstract interface class LocalCalendarPort {
 abstract interface class CalendarReadGuardPort {
   Future<void> ensureCalendarRead(CalendarContext context, int revision);
 }
+
+abstract interface class CalendarLifecycleGuardPort {
+  Future<void> ensureCalendarContext(CalendarContext context);
+}
