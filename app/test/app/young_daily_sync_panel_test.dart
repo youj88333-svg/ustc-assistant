@@ -3,8 +3,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/app/app_shell_contract.dart';
+import 'package:ustc_assistant_m0/app/app_settings_page.dart';
+import 'package:ustc_assistant_m0/app/settings_contract.dart';
 import 'package:ustc_assistant_m0/app/source_settings_page.dart';
 import 'package:ustc_assistant_m0/app/young_daily_sync_panel.dart';
+import 'package:ustc_assistant_m0/app/young_sync_panel.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/young_daily_sync_contract.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_port.dart';
@@ -252,6 +255,105 @@ void main() {
     expect(find.byKey(const ValueKey('young-daily-sync-panel')), findsNothing);
     expect(tester.takeException(), isNull);
   });
+
+  for (final scenario in <({Size size, double scale})>[
+    (size: const Size(1280, 760), scale: 1),
+    (size: const Size(900, 600), scale: 1.5),
+    (size: const Size(420, 700), scale: 2),
+  ]) {
+    testWidgets(
+      'complete settings keeps daily controls above the manual form ${scenario.size}/${scenario.scale}',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = scenario.size;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final shell = _FakeShell();
+        final settings = _FakeSettings();
+        final daily = _FakeDailySyncPort(
+          initial: _snapshot(
+            enabled: true,
+            configured: true,
+            phase: YoungDailySyncPhase.scheduled,
+          ),
+        );
+        addTearDown(shell.dispose);
+        addTearDown(settings.dispose);
+        addTearDown(daily.dispose);
+        await tester.pumpWidget(
+          MaterialApp(
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(scenario.scale)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Padding(
+                padding: const EdgeInsets.all(16),
+                child: ApplicationSettingsPage(
+                  settings: settings,
+                  controller: shell,
+                  dailySync: daily,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        await _tap(tester, find.byKey(const ValueKey('source-settings-young')));
+
+        final dailyRect = tester.getRect(find.byType(YoungDailySyncPanel));
+        final manualRect = tester.getRect(find.byType(YoungSyncPanel));
+        expect(
+          dailyRect.bottom,
+          lessThanOrEqualTo(manualRect.top),
+          reason:
+              'The manual form must follow the entire daily panel, not clip it into a header viewport.',
+        );
+        final toggle = find.byKey(const ValueKey('young-daily-sync-toggle'));
+        await tester.ensureVisible(toggle);
+        await tester.pumpAndSettle();
+        expect(toggle.hitTestable(), findsOneWidget);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        expect(daily.setEnabledCalls, 1);
+        await tester.tap(toggle);
+        await tester.pumpAndSettle();
+        final syncNow = find.byKey(const ValueKey('young-daily-sync-now'));
+        await tester.ensureVisible(syncNow);
+        await tester.pumpAndSettle();
+        expect(syncNow.hitTestable(), findsOneWidget);
+        final password = find.byKey(const ValueKey('young-sync-password'));
+        await tester.ensureVisible(password);
+        await tester.pumpAndSettle();
+        expect(password.hitTestable(), findsOneWidget);
+        await tester.enterText(
+          password,
+          'synthetic-not-retained-after-source-switch',
+        );
+        await tester.ensureVisible(toggle);
+        await tester.pumpAndSettle();
+        await tester.ensureVisible(password);
+        await tester.pumpAndSettle();
+        expect(
+          tester.widget<TextField>(password).controller!.text,
+          'synthetic-not-retained-after-source-switch',
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
+}
+
+final class _FakeSettings extends ChangeNotifier
+    implements ApplicationSettingsPort {
+  @override
+  ApplicationSettingsView get settingsView => const ApplicationSettingsView();
+  @override
+  Future<void> refreshSettings() async {}
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 SwitchListTile _toggle(WidgetTester tester) => tester.widget<SwitchListTile>(

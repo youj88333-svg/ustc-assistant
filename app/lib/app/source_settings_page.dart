@@ -34,6 +34,13 @@ final class SourceSettingsPage extends StatefulWidget {
 
 final class _SourceSettingsPageState extends State<SourceSettingsPage> {
   _SelectedSource _selectedSource = _SelectedSource.jw;
+  final _scrollController = ScrollController();
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
@@ -46,147 +53,133 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
           ? !view.jw.busy
           : !view.young.busy;
 
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Flexible(
-            flex: 4,
-            fit: FlexFit.loose,
-            child: SingleChildScrollView(
-              key: const ValueKey('source-settings-header-scroll'),
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 1100),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
+      return Scrollbar(
+        controller: _scrollController,
+        thumbVisibility: true,
+        child: SingleChildScrollView(
+          key: const ValueKey('source-settings-scroll'),
+          controller: _scrollController,
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 1100),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    '来源设置',
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _sharedPasswordNote(context),
+                  const SizedBox(height: 12),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
                     children: [
-                      Text(
-                        '来源设置',
-                        style: Theme.of(context).textTheme.headlineSmall
-                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ChoiceChip(
+                        key: const ValueKey('source-settings-jw'),
+                        selected: _selectedSource == _SelectedSource.jw,
+                        avatar: const Icon(Icons.school_outlined, size: 18),
+                        label: const Text('教务'),
+                        onSelected: (_) => setState(
+                          () => _selectedSource = _SelectedSource.jw,
+                        ),
                       ),
-                      const SizedBox(height: 8),
-                      _sharedPasswordNote(context),
-                      const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 8,
+                      ChoiceChip(
+                        key: const ValueKey('source-settings-young'),
+                        selected: _selectedSource == _SelectedSource.young,
+                        avatar: const Icon(
+                          Icons.event_available_outlined,
+                          size: 18,
+                        ),
+                        label: const Text('二课'),
+                        onSelected: (_) => setState(
+                          () => _selectedSource = _SelectedSource.young,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final width = constraints.maxWidth < 520
+                          ? constraints.maxWidth
+                          : (constraints.maxWidth - 12) / 2;
+                      return Wrap(
+                        spacing: 12,
                         runSpacing: 8,
                         children: [
-                          ChoiceChip(
-                            key: const ValueKey('source-settings-jw'),
-                            selected: _selectedSource == _SelectedSource.jw,
-                            avatar: const Icon(Icons.school_outlined, size: 18),
-                            label: const Text('教务'),
-                            onSelected: (_) => setState(
-                              () => _selectedSource = _SelectedSource.jw,
+                          SizedBox(
+                            width: width,
+                            child: _sourceStatus(
+                              context,
+                              title: '教务',
+                              status: _jwStatus(view.jw),
+                              recovery: view.jw.phase == JwSyncPhase.recovery,
+                              busy: view.jw.busy,
                             ),
                           ),
-                          ChoiceChip(
-                            key: const ValueKey('source-settings-young'),
-                            selected: _selectedSource == _SelectedSource.young,
-                            avatar: const Icon(
-                              Icons.event_available_outlined,
-                              size: 18,
-                            ),
-                            label: const Text('二课'),
-                            onSelected: (_) => setState(
-                              () => _selectedSource = _SelectedSource.young,
+                          SizedBox(
+                            width: width,
+                            child: _sourceStatus(
+                              context,
+                              title: '二课',
+                              status: _youngStatus(view.young),
+                              recovery:
+                                  view.young.phase == YoungSyncPhase.recovery,
+                              busy: view.young.busy,
                             ),
                           ),
                         ],
-                      ),
-                      const SizedBox(height: 8),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final width = constraints.maxWidth < 520
-                              ? constraints.maxWidth
-                              : (constraints.maxWidth - 12) / 2;
-                          return Wrap(
-                            spacing: 12,
-                            runSpacing: 8,
-                            children: [
-                              SizedBox(
-                                width: width,
-                                child: _sourceStatus(
-                                  context,
-                                  title: '教务',
-                                  status: _jwStatus(view.jw),
-                                  recovery:
-                                      view.jw.phase == JwSyncPhase.recovery,
-                                  busy: view.jw.busy,
-                                ),
-                              ),
-                              SizedBox(
-                                width: width,
-                                child: _sourceStatus(
-                                  context,
-                                  title: '二课',
-                                  status: _youngStatus(view.young),
-                                  recovery:
-                                      view.young.phase ==
-                                      YoungSyncPhase.recovery,
-                                  busy: view.young.busy,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                      if (_selectedSource == _SelectedSource.young &&
-                          widget.dailySync != null) ...[
-                        const SizedBox(height: 10),
-                        YoungDailySyncPanel(controller: widget.dailySync!),
-                      ],
-                      if (view.progressUnavailable ||
-                          view.actionPending ||
-                          (view.globallyBusy && currentSourceIdle)) ...[
-                        const SizedBox(height: 8),
-                        _availabilityNote(
-                          context,
-                          view: view,
-                          otherSourceBusy:
-                              view.globallyBusy && currentSourceIdle,
-                        ),
-                      ],
-                      if (widget.diagnosticsBuilder != null) ...[
-                        const SizedBox(height: 2),
-                        _LazyDiagnosticsSection(
-                          key: ValueKey(
-                            'source-settings-dev-${_selectedSource.name}',
-                          ),
-                          builder: widget.diagnosticsBuilder!,
-                        ),
-                      ],
-                    ],
+                      );
+                    },
                   ),
-                ),
-              ),
-            ),
-          ),
-          Expanded(
-            flex: 6,
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 1100),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
-                  child: _selectedSource == _SelectedSource.jw
+                  if (_selectedSource == _SelectedSource.young &&
+                      widget.dailySync != null) ...[
+                    const SizedBox(height: 10),
+                    YoungDailySyncPanel(controller: widget.dailySync!),
+                  ],
+                  if (view.progressUnavailable ||
+                      view.actionPending ||
+                      (view.globallyBusy && currentSourceIdle)) ...[
+                    const SizedBox(height: 8),
+                    _availabilityNote(
+                      context,
+                      view: view,
+                      otherSourceBusy: view.globallyBusy && currentSourceIdle,
+                    ),
+                  ],
+                  if (widget.diagnosticsBuilder != null) ...[
+                    const SizedBox(height: 2),
+                    _LazyDiagnosticsSection(
+                      key: ValueKey(
+                        'source-settings-dev-${_selectedSource.name}',
+                      ),
+                      builder: widget.diagnosticsBuilder!,
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  _selectedSource == _SelectedSource.jw
                       ? JwSyncPanel(
                           controller: widget.controller.jw,
                           productMode: true,
+                          embedded: true,
                           blockNewActions: locked,
                         )
                       : YoungSyncPanel(
                           controller: widget.controller.young,
                           productMode: true,
+                          embedded: true,
                           blockNewActions: locked,
                         ),
-                ),
+                ],
               ),
             ),
           ),
-        ],
+        ),
       );
     },
   );

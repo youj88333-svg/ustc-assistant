@@ -21,11 +21,15 @@ final class JwSyncPanel extends StatefulWidget {
     required this.controller,
     this.productMode = false,
     this.blockNewActions = false,
+    this.embedded = false,
   });
 
   final JwSyncPort controller;
   final bool productMode;
   final bool blockNewActions;
+
+  /// The containing settings page owns vertical scrolling when embedded.
+  final bool embedded;
 
   @override
   State<JwSyncPanel> createState() => _JwSyncPanelState();
@@ -696,12 +700,8 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        padding: EdgeInsets.symmetric(
-          horizontal: constraints.maxWidth < 560 ? 12 : 20,
-          vertical: 12,
-        ),
-        child: Center(
+      builder: (context, constraints) {
+        final content = Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 900),
             child: Card(
@@ -853,8 +853,15 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
               ),
             ),
           ),
-        ),
-      ),
+        );
+        final padding = EdgeInsets.symmetric(
+          horizontal: constraints.maxWidth < 560 ? 12 : 20,
+          vertical: 12,
+        );
+        return widget.embedded
+            ? Padding(padding: padding, child: content)
+            : SingleChildScrollView(padding: padding, child: content);
+      },
     );
   }
 

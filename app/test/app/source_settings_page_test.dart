@@ -288,7 +288,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(jw.clearSessionCalls, 0);
 
-      await tester.tap(find.byKey(const ValueKey('source-settings-young')));
+      await _tapVisible(
+        tester,
+        find.byKey(const ValueKey('source-settings-young')),
+      );
       await tester.pumpAndSettle();
       await _tapVisible(tester, find.text('清除二课登录资料'));
       expect(find.text('清除二课登录资料？'), findsOneWidget);

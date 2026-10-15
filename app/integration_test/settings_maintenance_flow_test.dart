@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
+import 'package:ustc_assistant_m0/app/young_sync_panel.dart';
 import 'package:ustc_assistant_m0/m0_entry.dart';
 import 'package:ustc_assistant_m0/app/calendar_workspace_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
@@ -39,6 +40,26 @@ void main() {
         await tester.pumpWidget(_application(first));
         await tester.pumpAndSettle();
         await _openSettings(tester);
+        await _tapKey(tester, 'source-settings-young');
+        final dailyPanel = find.byKey(const ValueKey('young-daily-sync-panel'));
+        expect(
+          tester.getRect(dailyPanel).bottom,
+          lessThanOrEqualTo(tester.getRect(find.byType(YoungSyncPanel)).top),
+          reason: 'The full daily panel must precede the manual form.',
+        );
+        await tester.ensureVisible(dailyPanel);
+        await tester.pumpAndSettle();
+        final toggle = find.byKey(const ValueKey('young-daily-sync-toggle'));
+        expect(toggle.hitTestable(), findsOneWidget);
+        expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+        await _captureSyntheticUi(tester, 'daily-sync-controls');
+        // This test never enables school synchronization. Inspect only the
+        // local controls in this TEMP runtime and scroll to the manual form.
+        final password = find.byKey(const ValueKey('young-sync-password'));
+        await tester.ensureVisible(password);
+        await tester.pumpAndSettle();
+        expect(password.hitTestable(), findsOneWidget);
+        await _captureSyntheticUi(tester, 'source-manual-form');
         await _tapKey(tester, 'settings-section-display');
         await _tapKey(tester, 'settings-calendar-view-day');
         await _waitSettled(tester, first);

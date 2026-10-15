@@ -18,11 +18,15 @@ final class YoungSyncPanel extends StatefulWidget {
     this.clock,
     this.productMode = false,
     this.blockNewActions = false,
+    this.embedded = false,
   });
 
   final YoungSyncPort controller;
   final bool productMode;
   final bool blockNewActions;
+
+  /// The containing settings page owns vertical scrolling when embedded.
+  final bool embedded;
 
   /// Supplies a current instant. The panel converts it to a Beijing date.
   final DateTime Function()? clock;
@@ -406,12 +410,8 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
-      builder: (context, constraints) => SingleChildScrollView(
-        padding: EdgeInsets.symmetric(
-          horizontal: constraints.maxWidth < 560 ? 12 : 20,
-          vertical: 12,
-        ),
-        child: Center(
+      builder: (context, constraints) {
+        final content = Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 900),
             child: Card(
@@ -540,8 +540,15 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
               ),
             ),
           ),
-        ),
-      ),
+        );
+        final padding = EdgeInsets.symmetric(
+          horizontal: constraints.maxWidth < 560 ? 12 : 20,
+          vertical: 12,
+        );
+        return widget.embedded
+            ? Padding(padding: padding, child: content)
+            : SingleChildScrollView(padding: padding, child: content);
+      },
     );
   }
 
