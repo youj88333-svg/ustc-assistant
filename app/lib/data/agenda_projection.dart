@@ -38,6 +38,7 @@ final class AgendaProjection {
             JwPresence.missingWithinScope => AgendaPresence.missingWithinScope,
           },
           hidden: event.hidden,
+          sourceRetired: event.sourceRetired,
           location: event.academicDetails?.locationLabel,
           academicDetails: event.academicDetails,
         ),
@@ -59,11 +60,13 @@ final class AgendaProjection {
               AgendaPresence.missingWithinScope,
           },
           hidden: event.hidden,
+          sourceRetired: event.sourceRetired,
         ),
     ];
     final matching =
         records.where((record) {
           if (!includeHidden && record.hidden) return false;
+          if (!includeHidden && record.sourceRetired) return false;
           if (!record.startsAtUtc.isBefore(end) ||
               !record.endsAtUtc.isAfter(start)) {
             return false;

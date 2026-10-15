@@ -105,7 +105,7 @@ void main() {
               .single['n'],
           0,
         );
-        expect(after.select('PRAGMA user_version').single['user_version'], 16);
+        expect(after.select('PRAGMA user_version').single['user_version'], 17);
       } finally {
         after.close();
       }
@@ -268,6 +268,7 @@ Map<String, List<Map<String, Object?>>> _facts(sqlite.Database raw) => {
     table: [
       for (final row in raw.select('SELECT * FROM $table'))
         Map<String, Object?>.from(row)
+          ..remove('source_retired')
           ..remove('task_json')
           ..remove('undo_id'),
     ],
@@ -293,6 +294,8 @@ void _removeSchema14AgentObjectsForLegacyFixture(sqlite.Database database) {
 }
 
 void _dropM6TablesForLegacyFixture(sqlite.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',

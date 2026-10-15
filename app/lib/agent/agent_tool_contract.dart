@@ -5,7 +5,7 @@ import '../core/agent_discussion_contract.dart';
 import '../core/agent_context_contract.dart';
 import 'model_gateway_contract.dart';
 
-const agentToolRegistryVersion = 'agent-tools-v5';
+const agentToolRegistryVersion = 'agent-tools-v6';
 
 const agentPersonalToolNames = {
   'query_agenda',

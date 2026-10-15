@@ -770,6 +770,7 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   Widget _localCalendar(BuildContext context) {
     final events = _view.data?.events ?? const <YoungStoredEvent>[];
     final hiddenCount = events.where((event) => event.hidden).length;
+    final retiredCount = events.where((event) => event.sourceRetired).length;
     final visibleEvents = events
         .where((event) => _showHidden || !event.hidden)
         .toList(growable: false);
@@ -778,7 +779,10 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
       children: [
         Text('本地二课日程', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 4),
-        Text('本地记录：${events.length}；同步次数：${_view.data?.importCount ?? 0}'),
+        Text(
+          '有效日程：${events.length - retiredCount} · 保留的来源失效历史：$retiredCount · '
+          '同步次数：${_view.data?.importCount ?? 0}',
+        ),
         CheckboxListTile(
           key: const ValueKey('young-sync-show-hidden'),
           contentPadding: EdgeInsets.zero,
@@ -818,6 +822,7 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
             ),
             const Text('来源：二课个人日历中的活动关联记录'),
             Text(_presenceLabel(event.presence)),
+            if (event.sourceRetired) const Text('来源已不再返回，已退出有效日程。'),
             if (event.hidden) const Text('此日程已隐藏。'),
             Align(
               alignment: Alignment.centerLeft,

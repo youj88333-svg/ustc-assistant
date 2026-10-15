@@ -12,6 +12,7 @@ final class YoungStoredEvent {
     required this.endsAtUtc,
     required this.presence,
     required this.hidden,
+    this.sourceRetired = false,
   });
   final int localId;
   final int version;
@@ -21,6 +22,7 @@ final class YoungStoredEvent {
   final DateTime endsAtUtc;
   final YoungPresence presence;
   final bool hidden;
+  final bool sourceRetired;
   @override
   String toString() => 'YoungStoredEvent';
 }

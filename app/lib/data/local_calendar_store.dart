@@ -340,13 +340,22 @@ final class LocalCalendarStore
         planBlock: reference.identity.kind == CalendarKind.planBlock
             ? await _blockByRef(reference)
             : null,
-        relations: item.allDay
+        relations: item.allDay || item.sourceRetired
             ? const []
             : snapshot.relations
                   .where(
                     (r) =>
                         (r.left == reference.identity ||
                             r.right == reference.identity) &&
+                        _projection
+                                .occurrence(
+                                  snapshot,
+                                  r.left == reference.identity
+                                      ? r.right
+                                      : r.left,
+                                )
+                                ?.sourceRetired !=
+                            true &&
                         _projection
                                 .occurrence(
                                   snapshot,
@@ -404,7 +413,7 @@ final class LocalCalendarStore
     final (youngWhere, youngVariables) = schoolSelection(true);
     final jw = await _db
         .customSelect(
-          'SELECT e.local_id,e.version,e.kind,e.title,e.academic_json,e.starts_at,e.ends_at,e.presence,'
+          'SELECT e.local_id,e.version,e.kind,e.title,e.academic_json,e.starts_at,e.ends_at,e.presence,e.source_retired,'
           'o.hidden,o.note,o.attendance,o.listening FROM jw_events e '
           'JOIN jw_overlays o ON o.local_id=e.local_id $jwWhere ORDER BY e.local_id LIMIT 5001',
           variables: jwVariables,
@@ -412,7 +421,7 @@ final class LocalCalendarStore
         .get();
     final young = await _db
         .customSelect(
-          'SELECT e.local_id,e.version,e.title,e.place,e.starts_at,e.ends_at,e.presence,'
+          'SELECT e.local_id,e.version,e.title,e.place,e.starts_at,e.ends_at,e.presence,e.source_retired,'
           'o.hidden,o.note,o.attendance FROM young_events e '
           'JOIN young_overlays o ON o.local_id=e.local_id $youngWhere ORDER BY e.local_id LIMIT 5001',
           variables: youngVariables,
@@ -537,6 +546,7 @@ final class LocalCalendarStore
           : academic?.locationLabel ?? '',
       academicDetails: academic,
       presence: _enum(AgendaPresence.values, row.read<String>('presence')),
+      sourceRetired: row.read<int>('source_retired') == 1,
       hidden: row.read<int>('hidden') == 1,
       note: row.read<String>('note'),
       attendance: _enum(

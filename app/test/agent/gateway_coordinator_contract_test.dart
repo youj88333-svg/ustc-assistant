@@ -325,7 +325,7 @@ void main() {
       // capacity failures exercise the normal request and its single retry.
       // Soft compaction has its own coordinator coverage; its threshold also
       // includes the evolving system prompt and fixed tool definitions.
-      final longHistory = List.filled(9000, 'h').join();
+      final longHistory = List.filled(7000, 'h').join();
       service.nextToolResultText = longHistory;
       await coordinator
           .send('查询本地任务并保留一轮较长的合成上下文。')

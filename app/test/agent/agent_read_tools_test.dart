@@ -36,6 +36,42 @@ const _blockReference = CalendarReference(
 final _now = DateTime.utc(2026, 10, 13, 1);
 
 void main() {
+  test(
+    'retired source history is explicit and remains marked when reading details',
+    () async {
+      final calendar = _FakeCalendar(items: [_event(sourceRetired: true)]);
+      final rig = _Rig(calendar: calendar);
+      final session = rig.tools.openSession();
+      final current = await session.execute(
+        _call(
+          'query_agenda',
+          '{"first_day":"2026-10-13","end_day_exclusive":"2026-10-14"}',
+        ),
+      );
+      expect(current.status, 'empty');
+      expect(calendar.lastQuery!.includeRetired, isFalse);
+      final history = await session.execute(
+        _call(
+          'query_agenda',
+          '{"first_day":"2026-10-13","end_day_exclusive":"2026-10-14","include_retired":true}',
+        ),
+      );
+      expect(history.status, 'success');
+      expect(calendar.lastQuery!.includeRetired, isTrue);
+      final row = (history.data['items'] as List).single as Map;
+      expect(row['source_retired'], isTrue);
+      expect(row['source_active'], isFalse);
+      final detail = await session.execute(
+        _call('read_event', jsonEncode({'event_ref': row['event_ref']})),
+      );
+      expect(detail.data['source_retired'], isTrue);
+      expect(
+        jsonEncode(session.evidence.map((e) => e.snippet).toList()),
+        contains('不计入有效安排'),
+      );
+    },
+  );
+
   test('event notes require an app-bound personal-content policy', () async {
     final rig = _Rig(
       calendar: _FakeCalendar(items: [_event(note: 'selected-note-sentinel')]),
@@ -748,6 +784,7 @@ CalendarOccurrence _event({
   bool allDay = false,
   bool hidden = false,
   bool skipped = false,
+  bool sourceRetired = false,
   String note = 'private-event-note-marker',
   JwAcademicDetails? details,
   TaskStatus? taskStatus = TaskStatus.active,
@@ -760,6 +797,7 @@ CalendarOccurrence _event({
   allDay: allDay,
   hidden: hidden,
   skipped: skipped,
+  sourceRetired: sourceRetired,
   location: 'Fallback location',
   note: note,
   academicDetails: details,
@@ -818,14 +856,17 @@ final class _FakeCalendar implements LocalCalendarPort {
   Future<CalendarWindow> query(CalendarQuery query) async {
     queryCount++;
     lastQuery = query;
+    final selected = items
+        .where((item) => query.includeRetired || !item.sourceRetired)
+        .toList();
     return CalendarWindow(
       context: _context,
       revision: 17,
       query: query,
-      items: items,
+      items: selected,
       segments: const [],
       conflicts: conflicts,
-      matched: items.length,
+      matched: selected.length,
       truncated: false,
       conflictsTruncated: false,
     );

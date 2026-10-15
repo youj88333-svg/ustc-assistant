@@ -147,7 +147,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 16;
+  int get schemaVersion => 17;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -185,7 +185,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 15 || to != 16) {
+      if (from < 1 || from > 16 || to != 17) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -211,8 +211,15 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 13) ..._AgentChatState.schema,
           if (from <= 13) ..._AgentPermissionState.schema,
           if (from <= 14) ..._AgentContextState.schema,
-          ...M6Store.schema,
-          ...MorningBriefStore.schema,
+          if (from <= 15) ...M6Store.schema,
+          if (from <= 15) ...MorningBriefStore.schema,
+          'ALTER TABLE jw_events ADD COLUMN source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))',
+          // Older upgrade paths create Young using the current schema.
+          if (from >= 4)
+            'ALTER TABLE young_events ADD COLUMN source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))',
+          "UPDATE jw_events SET source_retired=1,version=version+1 WHERE kind='course' AND presence='missingWithinScope'",
+          "UPDATE young_events SET source_retired=1,version=version+1 WHERE presence='missingWithinScope'",
+          'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
         ]) {
           await customStatement(statement);
         }
@@ -1072,6 +1079,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         'starts_at': row.read<int>('starts_at'),
         'ends_at': row.read<int>('ends_at'),
         'presence': presence.single,
+        'source_retired': row.read<int>('source_retired'),
         'hidden': row.read<int>('hidden'),
         'version': row.read<int>('version'),
       };
@@ -1087,12 +1095,14 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       final desired = isSelectedCourse
           ? JwPresence.missingWithinScope
           : JwPresence.outsideScope;
-      if (event['presence'] != desired) {
+      final retired = isSelectedCourse ? 1 : event['source_retired'] as int;
+      if (event['presence'] != desired || event['source_retired'] != retired) {
         await customStatement(
-          'UPDATE jw_events SET presence = ?, version = version + 1 WHERE local_id = ?',
-          [desired.name, event['local_id']],
+          'UPDATE jw_events SET presence = ?, source_retired=?, version = version + 1 WHERE local_id = ?',
+          [desired.name, retired, event['local_id']],
         );
         event['presence'] = desired;
+        event['source_retired'] = retired;
         event['version'] = (event['version'] as int) + 1;
         await noteWrite();
       }
@@ -1135,11 +1145,12 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           old['academic_json'] != academicJson ||
           old['starts_at'] != startsAt ||
           old['ends_at'] != endsAt ||
-          old['presence'] != desiredPresence;
+          old['presence'] != desiredPresence ||
+          old['source_retired'] != 0;
       if (changed) {
         await customStatement(
           'UPDATE jw_events SET kind = ?, semester_id = ?, title = ?, '
-          'starts_at = ?, ends_at = ?, presence = ?, academic_json = ?, version = version + 1 '
+          'starts_at = ?, ends_at = ?, presence = ?, academic_json = ?, source_retired=0, version = version + 1 '
           'WHERE local_id = ?',
           [
             draft.kind.name,
@@ -1159,6 +1170,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         old['starts_at'] = startsAt;
         old['ends_at'] = endsAt;
         old['presence'] = desiredPresence;
+        old['source_retired'] = 0;
         old['version'] = (old['version'] as int) + 1;
         await noteWrite();
       }
@@ -1351,7 +1363,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     _validateOwner(state.read<String>('owner_id'));
     final rows = await customSelect(
       'SELECT e.local_id, e.version, e.kind, e.semester_id, e.title, e.starts_at, e.ends_at, '
-      'e.presence, e.academic_json, o.hidden FROM jw_events e '
+      'e.presence, e.source_retired, e.academic_json, o.hidden FROM jw_events e '
       'JOIN jw_overlays o ON o.local_id = e.local_id '
       'ORDER BY e.starts_at, e.external_id, e.local_id',
     ).get();
@@ -1441,6 +1453,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
             isUtc: true,
           ),
           presence: presence.single,
+          sourceRetired: row.read<int>('source_retired') == 1,
           hidden: row.read<int>('hidden') != 0,
         );
       }).toList(),
@@ -1581,6 +1594,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       presence TEXT NOT NULL CHECK(presence IN
         ('observed','outsideScope','missingWithinScope')),
       version INTEGER NOT NULL CHECK(version > 0),
+      source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1)),
       CHECK(starts_at < ends_at),
       CHECK((kind = 'course' AND semester_id IS NOT NULL) OR
         (kind = 'exam' AND semester_id IS NULL))

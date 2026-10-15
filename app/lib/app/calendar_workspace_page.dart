@@ -505,7 +505,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     color: _green,
                   ),
                   const SizedBox(width: 9),
-                  const Text('显示隐藏/跳过记录'),
+                  const Text('显示隐藏/跳过及来源失效历史'),
                 ],
               ),
             ),
@@ -1146,6 +1146,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     child: Text(
                       '${_kindLabel(occurrence.reference.identity.kind)} · ${_occurrenceTime(occurrence)}'
                       '${_overflowAcademicSummary(occurrence)}'
+                      '${occurrence.sourceRetired ? ' · 来源已不再返回，已退出有效日程' : ''}'
                       '${occurrence.presence == AgendaPresence.missingWithinScope ? ' · 来源暂缺，仍保留' : ''}'
                       '${occurrence.presence == AgendaPresence.outsideScope ? ' · 当前不在观察范围' : ''}',
                     ),
@@ -1444,6 +1445,14 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             value: occurrence.presence == AgendaPresence.missingWithinScope
                 ? '来源当前缺少这条记录，本地日程仍予以保留。'
                 : '这条记录目前不在来源已观察的范围内。',
+          ),
+        ],
+        if (occurrence.sourceRetired) ...[
+          const SizedBox(height: 12),
+          const _DetailLine(
+            icon: Icons.history_rounded,
+            label: '来源有效性',
+            value: '来源已不再返回，已退出有效日程。',
           ),
         ],
         if (occurrence.note.trim().isNotEmpty && !planBlock) ...[
@@ -2115,6 +2124,13 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           '这里只保存你的备注和计划，不修改学校记录或学校完成事实。',
           style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
         ),
+        if (occurrence.sourceRetired) ...[
+          const SizedBox(height: 5),
+          const Text(
+            '隐藏状态只控制本地显示，不会恢复来源有效性。',
+            style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
+          ),
+        ],
         if (!canWrite) ...[
           const SizedBox(height: 8),
           Text(
@@ -3592,11 +3608,12 @@ String _occurrenceTime(CalendarOccurrence occurrence) {
 }
 
 String _presenceSuffix(CalendarOccurrence occurrence) =>
-    switch (occurrence.presence) {
+    '${occurrence.sourceRetired ? ' · 来源已不再返回，已退出有效日程' : ''}'
+    '${switch (occurrence.presence) {
       AgendaPresence.observed => '',
       AgendaPresence.missingWithinScope => ' · 来源暂缺，仍保留',
       AgendaPresence.outsideScope => ' · 当前在来源观察范围外',
-    };
+    }}';
 
 String _clockLabel(DateTime time) =>
     '${time.hour.toString().padLeft(2, '0')}:${time.minute.toString().padLeft(2, '0')}';
@@ -3838,6 +3855,8 @@ List<Widget> _stateTags(CalendarOccurrence occurrence) => [
     const _SmallTag(text: '来源暂缺，仍保留', color: Color(0xFFFFF0DA)),
   if (occurrence.presence == AgendaPresence.outsideScope)
     const _SmallTag(text: '当前不在观察范围', color: Color(0xFFF0F3F1)),
+  if (occurrence.sourceRetired)
+    const _SmallTag(text: '来源已不再返回 · 已退出有效日程', color: Color(0xFFFFF0DA)),
   if (occurrence.hidden) const _SmallTag(text: '已隐藏', color: Color(0xFFF0F3F1)),
   if (occurrence.skipped)
     const _SmallTag(text: '已跳过', color: Color(0xFFFFF0DA)),

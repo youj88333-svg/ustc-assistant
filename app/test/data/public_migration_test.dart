@@ -188,6 +188,8 @@ void main() {
       await store.close();
       final raw = sqlite3.sqlite3.open(file.path);
       try {
+        raw.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+        raw.execute('ALTER TABLE young_events DROP COLUMN source_retired');
         removeCalendarTablesForLegacyFixture(raw);
         for (final table in const [
           'knowledge_load_items',
@@ -216,11 +218,19 @@ void main() {
       }
 
       store = await _openStore(file);
+      expect(
+        (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
+          'user_version',
+        ),
+        17,
+      );
       final afterJw = await store.readView();
       final afterYoung = await store.readYoungView();
       final afterAuthority = await store.readAuthority();
       expect(_jwFacts(afterJw), _jwFacts(beforeJw));
       expect(_youngFacts(afterYoung), _youngFacts(beforeYoung));
+      expect(afterJw.events.single.sourceRetired, isFalse);
+      expect(afterYoung.events.single.sourceRetired, isFalse);
       expect(afterAuthority.ownerId, beforeAuthority.ownerId);
       expect(afterAuthority.resetEpoch, beforeAuthority.resetEpoch);
       expect(

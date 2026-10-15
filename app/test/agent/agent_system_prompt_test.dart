@@ -12,7 +12,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-student-agent-v9');
+      expect(agentPromptVersion, 'ustc-student-agent-v10');
       expect(prompt, contains('热心、靠谱的学长'));
       expect(prompt, contains('不编造自己在科大读书'));
       expect(prompt, contains('围绕当前问题选信息'));
@@ -21,6 +21,9 @@ void main() {
       expect(prompt, contains('许可不足时仍可准备卡'));
       expect(prompt, contains('学校网站和学校业务记录始终只读'));
       expect(prompt, contains('模型不得自行批准或重放'));
+      expect(prompt, contains('日程查询默认返回仍有效的本地场次'));
+      expect(prompt, contains('正常旧学期仍在原日期显示'));
+      expect(prompt, contains('不等于学校已取消或已核实退报名'));
     },
   );
   test('prompt names only tools supplied for this request', () {

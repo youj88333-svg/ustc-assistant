@@ -506,6 +506,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       filter: _filter,
       includeHidden: _includeInactive,
       includeSkipped: _includeInactive,
+      includeRetired: _includeInactive,
     );
     try {
       final result = await calendar.query(query);

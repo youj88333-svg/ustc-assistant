@@ -1075,6 +1075,12 @@ void main() {
       }
 
       store = await _openAt(file, configure: false);
+      expect(
+        (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
+          'user_version',
+        ),
+        17,
+      );
       expect(await _count(store, 'agent_context_turns'), 0);
       expect(await _count(store, 'agent_target_aliases'), 0);
       final legacyPolicy = await store.agent.readAgentUsePolicy();
@@ -1322,6 +1328,8 @@ Future<File> _temporaryDatabase() async {
 }
 
 void _removeSchema15ObjectsForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',

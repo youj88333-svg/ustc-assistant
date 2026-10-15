@@ -666,6 +666,7 @@ void main() {
       }
 
       store = await _openAt(file);
+      expect(await _scalar(store, 'PRAGMA user_version'), 17);
       expect(await _count(store, 'agent_state'), 1);
       expect(await _count(store, 'agent_config'), 0);
       expect(
@@ -683,6 +684,8 @@ void main() {
         retainedCredential,
       );
       final afterWindow = await _calendarWindow(store);
+      expect(afterWindow.context, beforeWindow.context);
+      expect(afterWindow.revision, beforeWindow.revision + 1);
       final afterUndo = await store.localCalendar.queryUndo(
         afterWindow.context,
       );
@@ -730,6 +733,8 @@ Future<JwStore> _openWithExecutor(
 }
 
 void _removeSchema15AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',

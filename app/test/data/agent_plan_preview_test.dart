@@ -3,6 +3,7 @@ import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/data/agent_plan_preview.dart';
+import 'package:ustc_assistant_m0/data/calendar_projection.dart';
 
 const _context = CalendarContext(
   owner: 'synthetic-preview-owner',
@@ -12,6 +13,58 @@ const _context = CalendarContext(
 final _nowUtc = DateTime.utc(2026, 10, 12, 17);
 
 void main() {
+  test(
+    'history display does not revive conflicts or planning after an overlay edit',
+    () {
+      final retired = _school(
+        CalendarKind.course,
+        99,
+        DateTime.utc(2026, 10, 13, 2),
+        DateTime.utc(2026, 10, 13, 3),
+        sourceRetired: true,
+        presence: AgendaPresence.outsideScope,
+      );
+      final normal = _school(
+        CalendarKind.young,
+        98,
+        retired.startsAtUtc,
+        retired.endsAtUtc,
+      );
+      final snapshot = _snapshot(school: [retired, normal]);
+      final history = const CalendarProjection().query(
+        snapshot,
+        CalendarQuery(
+          firstDay: DateTime.utc(2026, 10, 13),
+          endDayExclusive: DateTime.utc(2026, 10, 14),
+          includeRetired: true,
+        ),
+      );
+      expect(history.items, hasLength(2));
+      expect(history.conflicts, isEmpty);
+      final result = previewAgentPlan(_snapshot(school: [retired]), [
+        AgentCalendarChange(
+          UpdateSchoolAnnotation(
+            retired.reference,
+            hidden: false,
+            note: '保留的历史备注',
+          ),
+        ),
+        AgentCalendarChange(
+          CreatePersonalEvent(
+            PersonalEventDraft(
+              title: '空出来的时间',
+              start: retired.startsAtUtc,
+              end: retired.endsAtUtc,
+            ),
+          ),
+        ),
+      ], _nowUtc);
+      expect(result.complete, isTrue);
+      expect(result.freeConstraintViolated, isFalse);
+      expect(result.actionConflicts, isEmpty);
+    },
+  );
+
   test('new plan block reports overlap with a missing school source', () {
     final result = previewAgentPlan(
       _snapshot(
@@ -517,6 +570,7 @@ CalendarOccurrence _school(
   DateTime start,
   DateTime end, {
   AgendaPresence presence = AgendaPresence.observed,
+  bool sourceRetired = false,
   String title = '合成来源安排',
 }) => CalendarOccurrence(
   reference: CalendarReference(_context, CalendarIdentity(kind, id), 1),
@@ -524,6 +578,7 @@ CalendarOccurrence _school(
   startsAtUtc: start,
   endsAtUtc: end,
   presence: presence,
+  sourceRetired: sourceRetired,
 );
 
 CalendarOccurrence _block({

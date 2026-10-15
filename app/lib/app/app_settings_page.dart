@@ -298,12 +298,12 @@ final class _ApplicationSettingsPageState
         ),
         const SizedBox(height: 12),
         _SettingsCard(
-          title: '默认包含隐藏与跳过项',
-          subtitle: '开启后，打开日程时会同时显示已隐藏或已跳过的记录。',
+          title: '默认显示隐藏、跳过及来源失效历史',
+          subtitle: '开启后，打开日程时会同时显示隐藏、跳过和已退出有效日程的历史记录。',
           child: SwitchListTile.adaptive(
             key: const ValueKey('settings-include-inactive'),
             contentPadding: EdgeInsets.zero,
-            title: const Text('包含隐藏与跳过项'),
+            title: const Text('显示隐藏、跳过及来源失效历史'),
             value: preferences.includeInactive,
             onChanged: writable
                 ? (value) => _savePreferences(

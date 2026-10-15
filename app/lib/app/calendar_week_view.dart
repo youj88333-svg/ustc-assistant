@@ -656,6 +656,13 @@ final class CalendarWeekView extends StatelessWidget {
           conflict.relation?.kind == CalendarRelationKind.legacyUndecided,
     );
     final statuses = <({String tooltip, String shortLabel, Color color})>[];
+    if (occurrence.sourceRetired) {
+      statuses.add((
+        tooltip: '来源已不再返回，已退出有效日程',
+        shortLabel: '退',
+        color: const Color(0xFF805900),
+      ));
+    }
     if (hasConflict) {
       final tooltip = explicitConflict && hasDefaultConflict
           ? '含已确认冲突和默认冲突候选'

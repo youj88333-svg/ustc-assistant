@@ -787,7 +787,7 @@ void main() {
   );
 
   testWidgets(
-    'synthetic missing school records keep independent overlays and relations across native reopen',
+    'synthetic school retirement retains independent overlays and relation history across native reopen',
     (tester) async {
       final workspace = await _createWorkspace();
       final runtimes = <DemoRuntime>[];
@@ -805,7 +805,7 @@ void main() {
 
         // This is explicit synthetic data inserted only into this test's
         // nonce TEMP database. No source coordinator or school endpoint runs.
-        await _seedSyntheticMissingSources(tester, active);
+        await _seedSyntheticSchoolSources(tester, active);
         await _loadWorkspace(
           tester,
           active,
@@ -820,8 +820,8 @@ void main() {
         );
         var course = _oneItem(window, 'M42 synthetic course');
         var young = _oneItem(window, 'M42 synthetic Young activity');
-        expect(course.presence, AgendaPresence.missingWithinScope);
-        expect(young.presence, AgendaPresence.missingWithinScope);
+        expect(course.presence, AgendaPresence.observed);
+        expect(young.presence, AgendaPresence.observed);
         expect(
           course.reference.identity.localId,
           young.reference.identity.localId,
@@ -849,8 +849,6 @@ void main() {
           findsOneWidget,
         );
         await _captureSyntheticUi(tester, 'jw-academic-details');
-        await _scrollDetailTo(tester, find.text('来源当前缺少这条记录，本地日程仍予以保留。'));
-        expect(find.text('来源当前缺少这条记录，本地日程仍予以保留。'), findsOneWidget);
         await tester.scrollUntilVisible(
           find.byKey(const ValueKey('calendar-relation-edit-young-0')),
           200,
@@ -903,7 +901,7 @@ void main() {
         );
 
         // The school detail editor changes only the local overlay. Source
-        // absence, attendance, listening and note remain independent facts.
+        // activity, attendance, listening and note remain independent facts.
         await _selectOccurrence(tester, course.reference);
         await _scrollDetailTo(
           tester,
@@ -936,7 +934,7 @@ void main() {
           DateTime.utc(2026, 10, 13),
         );
         course = _oneItem(window, 'M42 synthetic course');
-        expect(course.presence, AgendaPresence.missingWithinScope);
+        expect(course.presence, AgendaPresence.observed);
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
         expect(course.listening, ListeningMode.selfStudy);
@@ -970,7 +968,7 @@ void main() {
         final hiddenCourse = _oneItem(hiddenWindow, 'M42 synthetic course');
         expect(hiddenCourse.hidden, isTrue);
         expect(hiddenCourse.reference.version, 4);
-        expect(hiddenCourse.presence, AgendaPresence.missingWithinScope);
+        expect(hiddenCourse.presence, AgendaPresence.observed);
 
         await _loadWorkspace(
           tester,
@@ -997,7 +995,7 @@ void main() {
         course = _oneItem(window, 'M42 synthetic course');
         expect(course.hidden, isFalse);
         expect(course.reference.version, 5);
-        expect(course.presence, AgendaPresence.missingWithinScope);
+        expect(course.presence, AgendaPresence.observed);
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
         expect(course.listening, ListeningMode.selfStudy);
@@ -1010,6 +1008,30 @@ void main() {
           () => active!.jwStore.localCalendar.detail(course.reference),
         );
         expect(courseDetail.relations.single.note, '同一时段，共存说明');
+
+        // Reproduce the persisted state from a complete covered-source import
+        // without any real school request. Both source rows become history,
+        // while overlays and relation facts remain in the TEMP database.
+        await _runNative(tester, () async {
+          await active!.jwStore.transaction(() async {
+            for (final table in ['jw_events', 'young_events']) {
+              await active!.jwStore.customStatement(
+                "UPDATE $table SET source_retired=1,presence='missingWithinScope',version=version+1",
+              );
+            }
+            await active!.jwStore.customStatement(
+              'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+            );
+          });
+        });
+        final retiredDefault = await _query(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          DateTime.utc(2026, 10, 13),
+        );
+        expect(retiredDefault.items, isEmpty);
+        expect(retiredDefault.conflicts, isEmpty);
 
         expect(
           (await _runNative(tester, active.jwStore.readCommittedPermits)),
@@ -1047,30 +1069,62 @@ void main() {
         await tester.pumpWidget(_productApp(active));
         await tester.pumpAndSettle();
         await _tapKey(tester, 'shell-nav-agenda');
+        expect(
+          (await _query(
+            tester,
+            active,
+            DateTime.utc(2026, 10, 12),
+            DateTime.utc(2026, 10, 13),
+          )).items,
+          isEmpty,
+        );
         window = await _query(
           tester,
           active,
           DateTime.utc(2026, 10, 12),
           DateTime.utc(2026, 10, 13),
           includeHidden: true,
+          includeRetired: true,
         );
         course = _oneItem(window, 'M42 synthetic course');
         young = _oneItem(window, 'M42 synthetic Young activity');
         expect(course.presence, AgendaPresence.missingWithinScope);
         expect(course.hidden, isFalse);
-        expect(course.reference.version, 5);
+        expect(course.reference.version, 6);
+        expect(course.sourceRetired, isTrue);
         expect(course.note, 'M42 合成用户备注');
         expect(course.attendance, AttendanceDecision.attend);
         expect(course.listening, ListeningMode.selfStudy);
         expect(young.presence, AgendaPresence.missingWithinScope);
+        expect(young.sourceRetired, isTrue);
         expect(young.hidden, isFalse);
         courseDetail = await _runNative(
           tester,
           () => active!.jwStore.localCalendar.detail(course.reference),
         );
-        expect(courseDetail.relations, hasLength(1));
-        expect(courseDetail.relations.single.reference.version, 1);
-        expect(courseDetail.relations.single.note, '同一时段，共存说明');
+        expect(courseDetail.relations, isEmpty);
+        expect(window.conflicts, isEmpty);
+        final savedRelation = await _runNative(
+          tester,
+          () => active!.jwStore
+              .customSelect('SELECT version,note FROM agenda_relations')
+              .getSingle(),
+        );
+        expect(savedRelation.read<int>('version'), 1);
+        expect(savedRelation.read<String>('note'), '同一时段，共存说明');
+        await _loadWorkspace(
+          tester,
+          active,
+          DateTime.utc(2026, 10, 12),
+          CalendarViewMode.day,
+          includeInactive: true,
+        );
+        await _selectOccurrence(tester, course.reference);
+        await _scrollDetailTo(
+          tester,
+          find.text('来源已不再返回，已退出有效日程。'),
+        );
+        expect(find.text('来源已不再返回，已退出有效日程。'), findsOneWidget);
         expect(
           (await _runNative(tester, active.jwStore.readCommittedPermits)),
           isEmpty,
@@ -1844,6 +1898,7 @@ Future<CalendarWindow> _query(
   DateTime endDayExclusive, {
   bool includeHidden = false,
   bool includeSkipped = false,
+  bool includeRetired = false,
 }) => _runNative(
   tester,
   () => runtime.jwStore.localCalendar.query(
@@ -1852,6 +1907,7 @@ Future<CalendarWindow> _query(
       endDayExclusive: endDayExclusive,
       includeHidden: includeHidden,
       includeSkipped: includeSkipped,
+      includeRetired: includeRetired,
     ),
   ),
 );
@@ -1914,7 +1970,7 @@ Future<int> _auditCount(WidgetTester tester, DemoRuntime runtime) => _runNative(
           .read<int>('count'),
 );
 
-Future<void> _seedSyntheticMissingSources(
+Future<void> _seedSyntheticSchoolSources(
   WidgetTester tester,
   DemoRuntime runtime,
 ) => _runNative(tester, () async {
@@ -1938,7 +1994,7 @@ Future<void> _seedSyntheticMissingSources(
         'M42 synthetic course',
         courseStart,
         courseEnd,
-        'missingWithinScope',
+        'observed',
         jsonEncode(
           JwAcademicDetails(
             lessonId: 11,
@@ -1972,7 +2028,7 @@ Future<void> _seedSyntheticMissingSources(
         '合成活动室',
         youngStart,
         youngEnd,
-        'missingWithinScope',
+        'observed',
       ],
     );
     await runtime.jwStore.customStatement(

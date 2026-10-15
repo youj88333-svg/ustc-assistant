@@ -638,10 +638,12 @@ extension YoungStoreOperations on JwStore {
       final desired = within
           ? YoungPresence.missingWithinScope
           : YoungPresence.outsideScope;
-      if (old.read<String>('presence') != desired.name) {
+      final retired = within ? 1 : old.read<int>('source_retired');
+      if (old.read<String>('presence') != desired.name ||
+          old.read<int>('source_retired') != retired) {
         await customStatement(
-          'UPDATE young_events SET presence=?,version=version+1 WHERE local_id=?',
-          [desired.name, old.read<int>('local_id')],
+          'UPDATE young_events SET presence=?,source_retired=?,version=version+1 WHERE local_id=?',
+          [desired.name, retired, old.read<int>('local_id')],
         );
         await _youngNoteWrite(ticket);
       }
@@ -672,9 +674,10 @@ extension YoungStoreOperations on JwStore {
           old.read<int>('starts_at') !=
               entry.startsAtUtc.microsecondsSinceEpoch ||
           old.read<int>('ends_at') != entry.endsAtUtc.microsecondsSinceEpoch ||
-          old.read<String>('presence') != YoungPresence.observed.name) {
+          old.read<String>('presence') != YoungPresence.observed.name ||
+          old.read<int>('source_retired') != 0) {
         await customStatement(
-          'UPDATE young_events SET item_id=?,title=?,place=?,starts_at=?,ends_at=?,presence=?,version=version+1 WHERE local_id=?',
+          'UPDATE young_events SET item_id=?,title=?,place=?,starts_at=?,ends_at=?,presence=?,source_retired=0,version=version+1 WHERE local_id=?',
           [
             entry.itemId,
             entry.title,
@@ -847,6 +850,7 @@ extension YoungStoreOperations on JwStore {
           isUtc: true,
         ),
         presence: presence.single,
+        sourceRetired: row.read<int>('source_retired') == 1,
         hidden: row.read<int>('hidden') == 1,
       );
     }).toList();
@@ -935,7 +939,8 @@ const _youngSchema = [
     item_id TEXT NOT NULL CHECK(length(item_id)>0), title TEXT NOT NULL, place TEXT NOT NULL,
     starts_at INTEGER NOT NULL, ends_at INTEGER NOT NULL CHECK(ends_at>starts_at),
     presence TEXT NOT NULL CHECK(presence IN ('observed','outsideScope','missingWithinScope')),
-    version INTEGER NOT NULL CHECK(version>0)
+    version INTEGER NOT NULL CHECK(version>0),
+    source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))
   )''',
   '''CREATE TABLE young_overlays (
     local_id INTEGER PRIMARY KEY, hidden INTEGER NOT NULL CHECK(hidden IN (0,1))

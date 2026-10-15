@@ -25,7 +25,7 @@ void main() {
       final before = _legacyFacts(file);
 
       final store = await _open(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 16);
+      expect(await _scalar(store, 'PRAGMA user_version'), 17);
       final settings = await store.agent.inspectAgent();
       expect(settings.modelId, 'synthetic-migration-model');
       expect(settings.keySaved, isTrue);
@@ -279,6 +279,8 @@ void _rewindToSchema13(File file) {
 }
 
 void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',
@@ -343,6 +345,8 @@ List<Map<String, Object?>> _legacyFactsFromRaw(sqlite3.Database raw) => [
         ..remove('authorization')
         ..remove('context_private')
         ..remove('invocation_fingerprint')
+        ..remove('source_retired')
+        ..removeWhere((key, _) => table == 'agenda_state' && key == 'revision')
         ..updateAll(
           (key, value) =>
               value is Uint8List ? value.toList(growable: false) : value,

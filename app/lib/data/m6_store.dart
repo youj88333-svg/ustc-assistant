@@ -282,6 +282,8 @@ final class M6Store
         if (occurrence.planBlockStatus != PlanBlockStatus.planned) {
           reason = 'blockInactive';
         }
+      } else if (occurrence.sourceRetired) {
+        reason = 'sourceRetired';
       } else if (occurrence.hidden) {
         reason = 'hidden';
       } else if (occurrence.skipped) {
@@ -594,6 +596,7 @@ final class M6Store
     o.taskStatus?.name,
     o.task?.localId,
     o.task?.version,
+    o.sourceRetired,
   ];
   List<Object?> _encodeDraft(PersonalEventDraft d) => [
     d.title,
@@ -632,6 +635,7 @@ final class M6Store
         attendance: AttendanceDecision.values.byName(o[11] as String),
         listening: ListeningMode.values.byName(o[12] as String),
         presence: AgendaPresence.values.byName(o[13] as String),
+        sourceRetired: o.length > 19 && o[19] == true,
         location: o[14] as String,
         planBlockStatus: o[15] == null
             ? null
@@ -986,7 +990,9 @@ final class M6Store
     );
     final snapshot = await _db.localCalendar._snapshot(targets: {identity});
     final item = const CalendarProjection().occurrence(snapshot, identity);
-    return item == null ? null : ReminderTarget.calendar(item.reference);
+    return item == null || item.sourceRetired
+        ? null
+        : ReminderTarget.calendar(item.reference);
   });
 
   Future<void> _clearForMaintenance({required bool reset}) async {

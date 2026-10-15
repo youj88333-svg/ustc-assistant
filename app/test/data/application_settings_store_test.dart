@@ -1121,7 +1121,7 @@ void main() {
       store = await _open(file: file);
       raw = sqlite3.sqlite3.open(file.path);
       try {
-        expect(raw.select('PRAGMA user_version').single['user_version'], 16);
+        expect(raw.select('PRAGMA user_version').single['user_version'], 17);
         expect(_legacyFacts(raw), before);
         expect(
           raw
@@ -1567,6 +1567,8 @@ void _makeSyntheticVersionNine(File file) {
 }
 
 void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',
@@ -1621,8 +1623,11 @@ Map<String, List<List<Object?>>> _legacyFacts(sqlite3.Database raw) => {
     query: [
       for (final row in raw.select(query))
         [
-          for (final value in row.values)
-            value is Uint8List ? value.toList() : value,
+          for (final entry in row.entries)
+            if (entry.key != 'source_retired')
+              entry.value is Uint8List
+                  ? (entry.value as Uint8List).toList()
+                  : entry.value,
         ],
     ],
 };

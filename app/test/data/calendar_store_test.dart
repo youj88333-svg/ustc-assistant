@@ -408,17 +408,37 @@ void main() {
       expect(current.listening, ListeningMode.selfStudy);
       expect(window.conflicts.single.relation?.note, '合成解释');
       await _importCourse(store, empty: true);
-      current = (await _window(
-        store,
-      )).items.singleWhere((e) => e.reference.identity == firstId);
+      final activeAfterMissing = await _window(store);
+      expect(
+        activeAfterMissing.items.any((e) => e.reference.identity == firstId),
+        isFalse,
+      );
+      expect(activeAfterMissing.conflicts, isEmpty);
+      final history = await _window(store, includeRetired: true);
+      current = history.items.singleWhere(
+        (e) => e.reference.identity == firstId,
+      );
       expect(current.presence, AgendaPresence.missingWithinScope);
-      expect((await _window(store)).conflicts, hasLength(1));
+      expect(current.sourceRetired, isTrue);
+      expect(current.note, '合成个人备注');
+      expect(current.attendance, AttendanceDecision.skip);
+      expect(current.listening, ListeningMode.selfStudy);
+      expect(history.conflicts, isEmpty);
+      expect(await _count(store, 'agenda_relations'), 1);
+      expect(
+        (await store.localCalendar.detail(current.reference)).occurrence.note,
+        '合成个人备注',
+      );
       await _importCourse(store, title: '合成再出现', endMinute: 630);
       current = (await _window(
         store,
       )).items.singleWhere((e) => e.reference.identity == firstId);
       expect(current.presence, AgendaPresence.observed);
+      expect(current.sourceRetired, isFalse);
       expect(current.note, '合成个人备注');
+      expect(current.attendance, AttendanceDecision.skip);
+      expect(current.listening, ListeningMode.selfStudy);
+      expect((await _window(store)).conflicts.single.relation?.note, '合成解释');
       await _failure(
         _write(
           store,
@@ -1045,7 +1065,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        16,
+        17,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1304,7 +1324,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        16,
+        17,
       );
     },
   );
@@ -1384,6 +1404,8 @@ void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
 }
 
 void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',
@@ -1434,12 +1456,14 @@ Future<CalendarWindow> _window(
   JwStore store, {
   DateTime? day,
   bool inactive = false,
+  bool includeRetired = false,
 }) => store.localCalendar.query(
   CalendarQuery(
     firstDay: day ?? _day,
     endDayExclusive: (day ?? _day).add(const Duration(days: 1)),
     includeHidden: inactive,
     includeSkipped: inactive,
+    includeRetired: includeRetired,
   ),
 );
 

@@ -185,7 +185,7 @@ void main() {
       final beforeMissing = publication;
 
       // Complete selected course scope / selected Young day now contains no
-      // source rows. Retained local facts are not deleted or silently disabled.
+      // source rows. Retain history and overlays, but withdraw effective slots.
       await _importJw(store, omitted: true);
       await _importYoung(store, omitted: true);
       expect(
@@ -197,18 +197,17 @@ void main() {
         YoungPresence.missingWithinScope,
       );
       final missing = await store.features.prepareReminderPublication();
-      expect(missing.desired, hasLength(2));
-      expect(missing.invalidPriorIds, isEmpty);
-      for (final retained in missing.desired) {
-        final original = _kind(beforeMissing, retained.target.kind);
-        expect(retained.logicalKey, original.logicalKey);
-        expect(retained.request.id, original.request.id);
-        expect(retained.request.digest, original.request.digest);
-        expect(retained.request.deliveryAtUtc, original.request.deliveryAtUtc);
-        expect(retained.accepted, isTrue);
+      expect(missing.desired, isEmpty);
+      expect(
+        missing.invalidPriorIds.toSet(),
+        beforeMissing.desired.map((m) => m.request.id).toSet(),
+      );
+      expect((await store.readView()).events.single.sourceRetired, isTrue);
+      expect((await store.readYoungView()).events.single.sourceRetired, isTrue);
+      for (final original in beforeMissing.desired) {
         expect(
           await store.features.resolveNotification(_activation(original)),
-          isNotNull,
+          isNull,
         );
       }
     },

@@ -179,6 +179,7 @@ final class CalendarOccurrence {
     required this.endsAtUtc,
     this.allDay = false,
     this.presence = AgendaPresence.observed,
+    this.sourceRetired = false,
     this.hidden = false,
     this.skipped = false,
     this.completed = false,
@@ -197,6 +198,9 @@ final class CalendarOccurrence {
   final DateTime endsAtUtc;
   final bool allDay;
   final AgendaPresence presence;
+
+  /// Absent from a complete source scope; independent of the user's choices.
+  final bool sourceRetired;
   final bool hidden;
   final bool skipped;
   final bool completed;
@@ -274,6 +278,7 @@ final class CalendarQuery {
     this.filter = CalendarFilter.all,
     this.includeHidden = false,
     this.includeSkipped = false,
+    this.includeRetired = false,
     this.limit = 500,
   });
   final DateTime firstDay;
@@ -281,6 +286,7 @@ final class CalendarQuery {
   final CalendarFilter filter;
   final bool includeHidden;
   final bool includeSkipped;
+  final bool includeRetired;
   final int limit;
 }
 

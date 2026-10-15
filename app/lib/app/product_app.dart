@@ -1176,7 +1176,7 @@ final class _AgendaToolbar extends StatelessWidget {
               FilterChip(
                 selected: includeHidden,
                 onSelected: onIncludeHiddenChanged,
-                label: const Text('显示隐藏记录'),
+                label: const Text('显示隐藏及来源失效历史'),
                 avatar: const Icon(Icons.visibility_outlined, size: 17),
               ),
             ],
@@ -1392,6 +1392,11 @@ final class _AgendaListTile extends StatelessWidget {
                   ),
                   if (item.hidden)
                     const _SmallTag(text: '已隐藏', color: Color(0xFFF1F3F2)),
+                  if (item.sourceRetired)
+                    const _SmallTag(
+                      text: '来源已不再返回 · 已退出有效日程',
+                      color: Color(0xFFFFF6E6),
+                    ),
                   if (item.presence == AgendaPresence.missingWithinScope)
                     const _SmallTag(text: '来源缺失，已保留', color: Color(0xFFFFF6E6)),
                   if (item.presence == AgendaPresence.outsideScope)
@@ -1556,6 +1561,14 @@ final class _AgendaDetailCard extends StatelessWidget {
                     : '这条记录目前不在来源已观察的范围内。',
               ),
             ],
+            if (item.sourceRetired) ...[
+              const SizedBox(height: 14),
+              const _DetailLine(
+                icon: Icons.history_rounded,
+                label: '来源有效性',
+                value: '来源已不再返回，已退出有效日程。',
+              ),
+            ],
             if (item.hidden) ...[
               const SizedBox(height: 14),
               const _DetailLine(
@@ -1575,6 +1588,14 @@ final class _AgendaDetailCard extends StatelessWidget {
               ),
               label: Text(item.hidden ? '恢复显示' : '隐藏这条日程'),
             ),
+            if (item.sourceRetired) ...[
+              const SizedBox(height: 8),
+              const Text(
+                '隐藏状态只控制本地显示，不会恢复来源有效性。',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: _muted, fontSize: 12),
+              ),
+            ],
             if (writeBlocked) ...[
               const SizedBox(height: 8),
               Text(

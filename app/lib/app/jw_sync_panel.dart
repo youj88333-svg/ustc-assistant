@@ -1326,6 +1326,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         semesterId: _displaySemesterLabel(semesterId, coursesBySemester),
     };
     final hasHiddenEvents = events.any((event) => event.hidden);
+    final retiredCount = events.where((event) => event.sourceRetired).length;
     final visibleEvents =
         events.where((event) {
           if (!_showHidden && event.hidden) return false;
@@ -1354,7 +1355,12 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         ),
         const SizedBox(height: 4),
         Text(
-          '时间均为北京时间；来源范围状态只说明本次观察结果，缺失记录仍会显示。课表学期仅筛选课程，考试独立显示。',
+          '时间均为北京时间；来源范围状态只说明本次观察结果。来源已不再返回的记录会退出有效日程，但保留历史供查看。课表学期仅筛选课程，考试独立显示。',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '有效日程：${events.length - retiredCount} 条 · 保留的来源失效历史：$retiredCount 条',
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 10),
@@ -1517,6 +1523,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
             '${formatBeijing(event.startsAtUtc)} — ${formatBeijing(event.endsAtUtc)}',
           ),
           Text(_presenceMessage(event.presence)),
+          if (event.sourceRetired) const Text('来源已不再返回，已退出有效日程。'),
           if (event.hidden) const Text('已隐藏'),
         ],
       ),

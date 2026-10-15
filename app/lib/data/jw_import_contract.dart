@@ -46,6 +46,7 @@ final class JwStoredEvent {
     required this.endsAtUtc,
     required this.presence,
     required this.hidden,
+    this.sourceRetired = false,
     this.semesterId,
     this.academicDetails,
   });
@@ -57,6 +58,7 @@ final class JwStoredEvent {
   final DateTime endsAtUtc;
   final JwPresence presence;
   final bool hidden;
+  final bool sourceRetired;
 
   /// Source-backed course membership; exams have no verified semester label.
   final int? semesterId;

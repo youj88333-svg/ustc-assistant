@@ -192,13 +192,14 @@ final class AgentReadTools implements AgentReadToolsPort {
   late final List<ModelToolDefinition> _definitions = List.unmodifiable([
     _tool(
       'query_agenda',
-      '按北京时间查询本地日程窗口。',
+      '按北京时间查询本地有效日程。只有主动查看来源失效历史时才设置include_retired=true；历史条目不占用空闲、不参与提醒或冲突。',
       {
         'first_day': _stringSchema(pattern: r'^\d{4}-\d{2}-\d{2}$'),
         'end_day_exclusive': _stringSchema(pattern: r'^\d{4}-\d{2}-\d{2}$'),
         'filter': _stringSchema(enumValues: _calendarFilters),
         'include_hidden': _boolSchema(),
         'include_skipped': _boolSchema(),
+        'include_retired': _boolSchema(),
         'limit': _intSchema(minimum: 1, maximum: _maxListSize),
       },
       required: const ['first_day', 'end_day_exclusive'],
@@ -469,6 +470,7 @@ final class _AgentToolSession
           endDayExclusive: first.add(const Duration(days: 1)),
           includeHidden: true,
           includeSkipped: true,
+          includeRetired: true,
         ),
       );
       await _owner.calendar.detail(selection.event!);
@@ -875,6 +877,8 @@ final class _AgentToolSession
         'end': _beijingDateTime(item.endsAtUtc),
       },
       'presence': item.presence.name,
+      'source_retired': item.sourceRetired,
+      'source_active': !item.sourceRetired,
       if (item.reference.identity.kind == CalendarKind.young) ...{
         'calendar_basis': 'activityLinkedPersonalCalendar',
         'registration_verified': false,
@@ -917,7 +921,8 @@ final class _AgentToolSession
       title: item.title,
       scope: scope,
       locator: token,
-      snippet: '${item.title}；$timeText；地点：$location$teacherText',
+      snippet:
+          '${item.sourceRetired ? '来源已不再返回的历史场次；不计入有效安排；' : ''}${item.title}；$timeText；地点：$location$teacherText',
       complete: complete,
       eventReference: item.reference,
     );
@@ -931,6 +936,7 @@ final class _AgentToolSession
     final filter = _enumArg(args, 'filter', _calendarFilters, fallback: 'all');
     final includeHidden = _boolArg(args, 'include_hidden', fallback: false);
     final includeSkipped = _boolArg(args, 'include_skipped', fallback: false);
+    final includeRetired = _boolArg(args, 'include_retired', fallback: false);
     final limit = _intArg(
       args,
       'limit',
@@ -944,6 +950,7 @@ final class _AgentToolSession
       filter: CalendarFilter.values.byName(filter),
       includeHidden: includeHidden,
       includeSkipped: includeSkipped,
+      includeRetired: includeRetired,
       limit: limit,
     );
     final window = await _owner.calendar.query(query);
@@ -993,6 +1000,7 @@ final class _AgentToolSession
         'filter': filter,
         'include_hidden': includeHidden,
         'include_skipped': includeSkipped,
+        'include_retired': includeRetired,
       },
       evidenceIds: ids,
       events: events,
@@ -2629,6 +2637,7 @@ const _toolArgumentFields = <String, Set<String>>{
     'filter',
     'include_hidden',
     'include_skipped',
+    'include_retired',
     'limit',
   },
   'read_event': {'event_ref', 'include_note'},

@@ -190,7 +190,7 @@ void main() {
     expect(_schemaVersion(file), 15);
     store = await _open(file: file);
 
-    expect(await _scalar(store, 'PRAGMA user_version'), 16);
+    expect(await _scalar(store, 'PRAGMA user_version'), 17);
     expect(await _scalar(store, 'SELECT owner_id FROM jw_state'), ownerBefore);
     final settings = await store.features.inspectReminders();
     expect(settings.preferences.enabled, isFalse);
@@ -668,6 +668,8 @@ void _rewindToSchema15(File file) {
   final database = sqlite3.sqlite3.open(file.path);
   try {
     database.execute('BEGIN IMMEDIATE');
+    database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+    database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
     for (final table in const [
       'm6_native_map',
       'm6_reminder_overrides',

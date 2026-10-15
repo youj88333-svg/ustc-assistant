@@ -52,6 +52,7 @@ final class AgendaItem {
     required this.endsAtUtc,
     required this.presence,
     required this.hidden,
+    this.sourceRetired = false,
     this.location,
     this.academicDetails,
   });
@@ -61,6 +62,7 @@ final class AgendaItem {
   final DateTime endsAtUtc;
   final AgendaPresence presence;
   final bool hidden;
+  final bool sourceRetired;
   final String? location;
   final JwAcademicDetails? academicDetails;
 

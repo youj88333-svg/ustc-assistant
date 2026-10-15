@@ -86,6 +86,7 @@ enum AgentParameterField {
   avoid,
   include_hidden,
   include_skipped,
+  include_retired,
   max_candidates,
   source,
   semester_ref,

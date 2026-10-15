@@ -104,6 +104,7 @@ final class CalendarProjection {
       ..sort(_compareOccurrences);
     final visible = allWindowItems.where((item) {
       return _matchesFilter(item, query.filter) &&
+          (query.includeRetired || !item.sourceRetired) &&
           (query.includeHidden || !item.hidden) &&
           (query.includeSkipped || !item.skipped);
     }).toList()..sort(_compareOccurrences);
@@ -395,7 +396,13 @@ final class CalendarProjection {
   ) {
     final candidates =
         allWindowItems
-            .where((item) => !item.hidden && !item.skipped && !item.allDay)
+            .where(
+              (item) =>
+                  !item.sourceRetired &&
+                  !item.hidden &&
+                  !item.skipped &&
+                  !item.allDay,
+            )
             .toList()
           ..sort(_compareOccurrences);
     final active = <CalendarOccurrence>[];

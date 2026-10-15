@@ -781,7 +781,7 @@ void main() {
     );
 
     test(
-      'v1, v2, and v3 synthetic copies upgrade to v4 and retain their JW facts',
+      'v1, v2, and v3 synthetic copies upgrade to v17 and retain their JW facts',
       () async {
         final directory = await Directory.systemTemp.createTemp(
           'young-store-migration-',
@@ -806,6 +806,18 @@ void main() {
           _setSyntheticSchemaVersion(file, version);
 
           final upgraded = await _openFileStore(file);
+          expect(
+            (await upgraded.customSelect('PRAGMA user_version').getSingle())
+                .read<int>('user_version'),
+            17,
+          );
+          for (final table in ['jw_events', 'young_events']) {
+            expect(
+              (await upgraded.customSelect('PRAGMA table_info($table)').get())
+                  .where((row) => row.read<String>('name') == 'source_retired'),
+              hasLength(1),
+            );
+          }
           final view = await upgraded.readView();
           expect(view.accountBound, isTrue);
           expect(view.courseCount, 1);
@@ -815,6 +827,7 @@ void main() {
           expect(view.events, hasLength(1));
           expect(view.events.single.localId, jw.eventLocalId);
           expect(view.events.single.hidden, isTrue);
+          expect(view.events.single.sourceRetired, isFalse);
           final storedEvent = await upgraded
               .customSelect(
                 'SELECT external_id FROM jw_events WHERE local_id = ?',
@@ -1254,6 +1267,8 @@ void _setSyntheticSchemaVersion(File file, int version) {
 }
 
 void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
+  database.execute('ALTER TABLE young_events DROP COLUMN source_retired');
   for (final table in const [
     'm6_state',
     'm6_expected',

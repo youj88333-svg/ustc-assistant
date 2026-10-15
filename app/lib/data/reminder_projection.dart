@@ -382,6 +382,7 @@ final class ReminderProjection {
   }
 
   bool _eligibleOccurrence(CalendarOccurrence occurrence) {
+    if (occurrence.sourceRetired) return false;
     final kind = occurrence.reference.identity.kind;
     if (kind == CalendarKind.planBlock) {
       // A block's own planning status is authoritative. Parent task status is
