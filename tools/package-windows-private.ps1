@@ -29,7 +29,8 @@ function Get-ExpectedReleasePaths {
     'data/flutter_assets/shaders/stretch_effect.frag', 'data/speech/sensevoice/FUNASR-MODEL-LICENSE.txt',
     'data/speech/sensevoice/LICENSE', 'data/speech/sensevoice/model.int8.onnx', 'data/speech/sensevoice/NOTICE.txt',
     'data/speech/sensevoice/ONNXRUNTIME-LICENSE.txt', 'data/speech/sensevoice/RECORD-LICENSE.txt',
-    'data/speech/sensevoice/SHERPA-ONNX-LICENSE.txt', 'data/speech/sensevoice/tokens.txt'
+    'data/speech/sensevoice/SHERPA-ONNX-LICENSE.txt', 'data/speech/sensevoice/tokens.txt',
+    'data/licenses/webview2/LICENSE.txt', 'data/licenses/webview2/NOTICE.txt'
   )
 }
 

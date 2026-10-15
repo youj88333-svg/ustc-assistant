@@ -1,7 +1,3 @@
-# Digests bind these reviewed/compiled bytes; never let checkout rewrite them.
-docs/archive/** -text whitespace=-blank-at-eol,-blank-at-eof,cr-at-eol
-knowledge/curated/** -text whitespace=cr-at-eol
-knowledge/samples/** -text whitespace=cr-at-eol
-knowledge/catalog-v1.json -text whitespace=cr-at-eol
-app/assets/knowledge/** -text
-app/lib/data/bundled_knowledge_identity.dart -text
+# Preserve the pinned vendor notices byte-for-byte, including upstream spacing.
+app/resources/webview2/LICENSE.txt -text -whitespace
+app/resources/webview2/NOTICE.txt -text -whitespace

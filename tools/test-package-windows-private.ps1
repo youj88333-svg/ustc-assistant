@@ -19,7 +19,7 @@ function Throws([scriptblock]$Action, [string]$Pattern, [string]$Message) {
 try {
   [void][IO.Directory]::CreateDirectory($temp)
   Check ((Get-ReleaseVersion) -ceq '1.0.0+1') 'pubspec and Dart application version agree'
-  Check (@(Get-ExpectedReleasePaths).Count -eq 33) 'fixed runtime allowlist contains 33 files'
+  Check (@(Get-ExpectedReleasePaths).Count -eq 35) 'fixed runtime allowlist includes WebView2 notices'
   Throws { Assert-NoReparseAttributes ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint) 'fixture' } 'reparse point' 'reject reparse attributes'
   Throws { Assert-SafeRelativePath '../outside' } 'Unsafe package path' 'reject archive traversal'
 
@@ -32,7 +32,7 @@ try {
   [IO.File]::WriteAllText((Join-Path $release 'notification_native.lib'), 'build-only')
   $release = Resolve-ReleaseDirectory $release
   $files = @(Get-ValidatedReleaseFiles $release)
-  Check ($files.Count -eq 33) 'accept exact runtime file list and exclude notification_native.lib'
+  Check ($files.Count -eq 35) 'accept exact runtime file list and exclude notification_native.lib'
   $unknown = Join-Path $release 'extra.txt'; [IO.File]::WriteAllText($unknown, 'fixture')
   Throws { Get-ValidatedReleaseFiles $release } 'non-allowlisted' 'reject unknown release file'
   Remove-Item -LiteralPath $unknown

@@ -120,3 +120,8 @@ endif()
 # The SDK DLLs are distributed even in a text-only build without model weights.
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/../resources/speech/"
   DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/speech/sensevoice" COMPONENT Runtime)
+
+# The WebView2 loader is linked statically; retain its binary-distribution notices.
+install(FILES "${CMAKE_SOURCE_DIR}/../resources/webview2/LICENSE.txt"
+  "${CMAKE_SOURCE_DIR}/../resources/webview2/NOTICE.txt"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/licenses/webview2" COMPONENT Runtime)
