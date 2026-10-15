@@ -257,7 +257,11 @@ void main() {
           .timeout(const Duration(seconds: 8));
       expect(coordinator.view.report.capability, ModelCapability.toolReady);
 
-      final longHistory = List.filled(12000, 'h').join();
+      // Keep this fixture below automatic soft compaction so the injected
+      // capacity failures exercise the normal request and its single retry.
+      // Soft compaction has its own coordinator coverage; its threshold also
+      // includes the evolving system prompt and fixed tool definitions.
+      final longHistory = List.filled(9000, 'h').join();
       service.nextToolResultText = longHistory;
       await coordinator
           .send('查询本地任务并保留一轮较长的合成上下文。')

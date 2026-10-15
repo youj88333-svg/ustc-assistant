@@ -3,6 +3,26 @@ import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 
 void main() {
+  test(
+    'warm conversation guidance is assembled without changing action policy',
+    () {
+      final prompt = buildAgentSystemPrompt(
+        day: '2026-10-15',
+        receivedAt: '2026-10-15 17:00:00+08:00',
+        definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
+      );
+      // This verifies what the request supplies, not how a live model will speak.
+      expect(agentPromptVersion, 'ustc-student-agent-v7');
+      expect(prompt, contains('热心、靠谱的学长'));
+      expect(prompt, contains('不编造自己在科大读书'));
+      expect(prompt, contains('围绕当前问题选信息'));
+      expect(prompt, contains('不需要模仿旧回复'));
+      expect(prompt, contains('只有应用回执明确 committed'));
+      expect(prompt, contains('许可不足时仍可准备卡'));
+      expect(prompt, contains('学校网站和学校业务记录始终只读'));
+      expect(prompt, contains('模型不得自行批准或重放'));
+    },
+  );
   test('prompt names only tools supplied for this request', () {
     final prompt = buildAgentSystemPrompt(
       day: '2026-10-14',

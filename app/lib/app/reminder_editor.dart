@@ -273,14 +273,14 @@ final class ReminderPairControls extends StatelessWidget {
     );
   }
 
-  String _slotLabel(int index) => '提醒槽位 ${index + 1}';
+  String _slotLabel(int index) => index == 0 ? '第一次提醒' : '第二次提醒';
 
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       _slot(context, 0),
-      const SizedBox(height: 10),
+      const SizedBox(height: 16),
       _slot(context, 1),
     ],
   );
@@ -288,58 +288,74 @@ final class ReminderPairControls extends StatelessWidget {
   Widget _slot(BuildContext context, int index) {
     final rule = _ruleAt(index);
     final key = '$keyPrefix-slot-${index + 1}';
+    final label = _slotLabel(index);
     final kinds = allDay
         ? const [ReminderRuleKind.none, ReminderRuleKind.dayTime]
         : const [ReminderRuleKind.none, ReminderRuleKind.before];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        DropdownButtonFormField<ReminderRuleKind>(
-          key: ValueKey('$key-kind-${rule.kind.name}'),
-          initialValue: rule.kind,
-          decoration: InputDecoration(labelText: _slotLabel(index)),
-          items: kinds
-              .map(
-                (kind) => DropdownMenuItem(
-                  value: kind,
-                  child: Text(_kindLabel(kind)),
-                ),
-              )
-              .toList(),
-          onChanged: enabled
-              ? (kind) {
-                  if (kind == null) return;
-                  if (kind == ReminderRuleKind.none) {
-                    _replace(index, const ReminderRule.none());
-                  } else if (kind == ReminderRuleKind.before) {
-                    _replace(
-                      index,
-                      ReminderRule.before(
-                        rule.kind == ReminderRuleKind.before
-                            ? rule.minutesBefore
-                            : 30,
-                      ),
-                    );
-                  } else {
-                    _replace(
-                      index,
-                      ReminderRule.dayTime(
-                        dayOffset: rule.kind == ReminderRuleKind.dayTime
-                            ? rule.dayOffset
-                            : 0,
-                        minuteOfDay: rule.kind == ReminderRuleKind.dayTime
-                            ? rule.minuteOfDay
-                            : 540,
-                      ),
-                    );
+        ExcludeSemantics(
+          child: Text(
+            label,
+            key: ValueKey('$key-label'),
+            style: Theme.of(context).textTheme.labelLarge,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Semantics(
+          label: label,
+          child: DropdownButtonFormField<ReminderRuleKind>(
+            key: ValueKey('$key-kind-${rule.kind.name}'),
+            isExpanded: true,
+            itemHeight: null,
+            initialValue: rule.kind,
+            decoration: const InputDecoration(),
+            items: kinds
+                .map(
+                  (kind) => DropdownMenuItem(
+                    value: kind,
+                    child: Text(_kindLabel(kind)),
+                  ),
+                )
+                .toList(),
+            onChanged: enabled
+                ? (kind) {
+                    if (kind == null) return;
+                    if (kind == ReminderRuleKind.none) {
+                      _replace(index, const ReminderRule.none());
+                    } else if (kind == ReminderRuleKind.before) {
+                      _replace(
+                        index,
+                        ReminderRule.before(
+                          rule.kind == ReminderRuleKind.before
+                              ? rule.minutesBefore
+                              : 30,
+                        ),
+                      );
+                    } else {
+                      _replace(
+                        index,
+                        ReminderRule.dayTime(
+                          dayOffset: rule.kind == ReminderRuleKind.dayTime
+                              ? rule.dayOffset
+                              : 0,
+                          minuteOfDay: rule.kind == ReminderRuleKind.dayTime
+                              ? rule.minuteOfDay
+                              : 540,
+                        ),
+                      );
+                    }
                   }
-                }
-              : null,
+                : null,
+          ),
         ),
         if (!allDay && rule.kind == ReminderRuleKind.before) ...[
           const SizedBox(height: 8),
           DropdownButtonFormField<int>(
             key: ValueKey('$key-before-${rule.minutesBefore}'),
+            isExpanded: true,
+            itemHeight: null,
             initialValue: _timedChoices.contains(rule.minutesBefore)
                 ? rule.minutesBefore
                 : -1,
@@ -382,6 +398,8 @@ final class ReminderPairControls extends StatelessWidget {
           const SizedBox(height: 8),
           DropdownButtonFormField<int>(
             key: ValueKey('$key-offset-${rule.dayOffset}'),
+            isExpanded: true,
+            itemHeight: null,
             initialValue: rule.dayOffset,
             decoration: const InputDecoration(labelText: '相对日程日期'),
             items: List.generate(15, (i) => i - 7)

@@ -2,10 +2,9 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:markdown/markdown.dart' as md;
 
 import 'agent_workspace_contract.dart';
+import 'assistant_markdown.dart';
 import '../core/agent_context_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
@@ -2920,9 +2919,7 @@ final class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final user = message.role == AgentMessageRole.user;
-    final text = _boundedMarkdown(
-      _markEvidenceReferences(message.text, message.evidence),
-    );
+    final text = _markEvidenceReferences(message.text, message.evidence);
     final status = _messageStatus(message.status);
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
@@ -2962,16 +2959,7 @@ final class _MessageBubble extends StatelessWidget {
                 ),
               if (text.isNotEmpty) ...[
                 if (!user) const SizedBox(height: 5),
-                MarkdownBody(
-                  data: text,
-                  softLineBreak: true,
-                  fitContent: true,
-                  builders: {'a': _PlainAnchorBuilder()},
-                  imageBuilder: (uri, title, alt) => Text(
-                    alt == null || alt.isEmpty ? '（图片已隐藏）' : '（图片已隐藏：$alt）',
-                    style: const TextStyle(color: _agentMuted),
-                  ),
-                ),
+                AssistantMarkdown(data: text),
               ] else if (message.status != AgentMessageStatus.complete) ...[
                 const SizedBox(height: 4),
                 Text(
@@ -3039,18 +3027,6 @@ final class _MessageBubble extends StatelessWidget {
   }
 }
 
-final class _PlainAnchorBuilder extends MarkdownElementBuilder {
-  _PlainAnchorBuilder();
-
-  @override
-  Widget visitElementAfterWithContext(
-    BuildContext context,
-    md.Element element,
-    TextStyle? preferredStyle,
-    TextStyle? parentStyle,
-  ) => Text(element.textContent, style: parentStyle);
-}
-
 final class _MessageStatus extends StatelessWidget {
   const _MessageStatus({required this.label, required this.failed});
 
@@ -3072,17 +3048,6 @@ final class _MessageStatus extends StatelessWidget {
       ),
     ),
   );
-}
-
-String _boundedMarkdown(String input) {
-  const maxLength = 12000;
-  final bounded = input.length <= maxLength
-      ? input
-      : '${input.substring(0, maxLength)}\n\n…内容过长，已截断显示';
-  // Raw HTML is displayed as ordinary text. Markdown links stay visible but
-  // are rendered by _PlainAnchorBuilder without tap handlers; images are
-  // replaced with an inert label in imageBuilder.
-  return bounded.replaceAll('<', r'\<');
 }
 
 String? _messageStatus(AgentMessageStatus status) => switch (status) {

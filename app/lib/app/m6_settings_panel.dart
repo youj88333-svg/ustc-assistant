@@ -343,6 +343,7 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
                     const Text('单条日程可单独覆盖；恢复默认会重新继承这里的规则。'),
                     const SizedBox(height: 12),
                     Text('定时日程', style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 8),
                     ReminderPairControls(
                       key: const ValueKey('m6-default-timed-pair'),
                       pair: settings.preferences.timed,
@@ -353,8 +354,9 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
                         (current) => current.copyWith(timed: pair),
                       ),
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 16),
                     Text('全天日程', style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 8),
                     ReminderPairControls(
                       key: const ValueKey('m6-default-all-day-pair'),
                       pair: settings.preferences.allDay,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_m0/app/assistant_markdown.dart';
 import 'package:ustc_assistant_m0/app/m6_settings_panel.dart';
 import 'package:ustc_assistant_m0/app/morning_brief_card.dart';
 import 'package:ustc_assistant_m0/app/reminder_editor.dart';
@@ -198,7 +199,7 @@ void main() {
   });
 
   testWidgets(
-    'morning brief stays one line until opened and shows facts and sources',
+    'morning brief stays one line and keeps details folded until requested',
     (tester) async {
       tester.view.physicalSize = const Size(320, 568);
       tester.view.devicePixelRatio = 1;
@@ -232,7 +233,7 @@ void main() {
         tester.getSize(find.byKey(const ValueKey('morning-brief-card'))).height,
         48,
       );
-      expect(find.text('今日安排 1 项'), findsNothing);
+      expect(find.text('安排与截止任务'), findsNothing);
       expect(find.text('晨报摘要短句。'), findsNothing);
       expect(find.text('仅在展开后出现的正文'), findsNothing);
       expect(find.byKey(const ValueKey('morning-brief-discuss')), findsNothing);
@@ -241,15 +242,54 @@ void main() {
       await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
       await tester.pumpAndSettle();
       expect(find.byType(Dialog), findsOneWidget);
-      expect(find.text('今日安排 1 项 · 今日截止 1 项'), findsOneWidget);
-      expect(find.text('报告截止 · 2026-10-15 17:00'), findsOneWidget);
-      expect(find.text('晨报摘要短句。'), findsOneWidget);
-      expect(find.text('仅在展开后出现的正文'), findsOneWidget);
-      expect(find.textContaining('教务通知：1 条符合日期'), findsOneWidget);
-      expect(find.textContaining('昨日范围已读完'), findsNWidgets(2));
+      expect(find.text('晨报'), findsOneWidget);
+      expect(find.text('今天有 1 项任务截止。'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('morning-brief-full-summary')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<AssistantMarkdown>(
+              find.byKey(const ValueKey('morning-brief-full-summary')),
+            )
+            .data,
+        '晨报摘要短句。',
+      );
+      expect(find.text('安排与截止任务'), findsOneWidget);
+      expect(find.text('报告截止'), findsNothing);
+      expect(find.text('仅在展开后出现的正文'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('morning-brief-notice-status')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('morning-brief-source-expand')),
+        findsOneWidget,
+      );
       expect(opened, isEmpty);
       expect(hidden, 0);
       expect(tester.takeException(), isNull);
+
+      final agendaExpansion = find.byKey(
+        const ValueKey('morning-brief-agenda-expand'),
+      );
+      await tester.ensureVisible(agendaExpansion);
+      await tester.tap(agendaExpansion);
+      await tester.pumpAndSettle();
+      expect(find.text('报告截止'), findsOneWidget);
+      expect(find.text('待进行'), findsOneWidget);
+      expect(find.text('planned'), findsNothing);
+
+      final sourceExpansion = find.byKey(
+        const ValueKey('morning-brief-source-expand'),
+      );
+      await tester.ensureVisible(sourceExpansion);
+      await tester.tap(sourceExpansion);
+      await tester.pumpAndSettle();
+      expect(find.text('仅在展开后出现的正文'), findsOneWidget);
+      expect(find.text('教务通知'), findsOneWidget);
+      expect(find.textContaining('范围已读完'), findsNWidgets(2));
 
       final sourceButton = find.byKey(
         const ValueKey('morning-notice-source-0-teach'),
@@ -351,10 +391,17 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
     await tester.pumpAndSettle();
-    expect(find.textContaining('昨日读取范围达到上限'), findsOneWidget);
+    expect(find.textContaining('公开通知覆盖不完整'), findsOneWidget);
     expect(find.textContaining('来源读取失败'), findsNothing);
     expect(find.text('旧摘要中的无公告断言不能在部分覆盖时显示。'), findsNothing);
     expect(find.text('晨报摘要短句。'), findsNothing);
+    final sourceExpansion = find.byKey(
+      const ValueKey('morning-brief-source-expand'),
+    );
+    await tester.ensureVisible(sourceExpansion);
+    await tester.tap(sourceExpansion);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('读取范围达到上限'), findsWidgets);
     await tester.tap(find.byKey(const ValueKey('morning-brief-details-close')));
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const ValueKey('morning-brief-retry')));
@@ -440,14 +487,7 @@ void main() {
 
     changes.add(partialView(busy: false));
     await tester.pumpAndSettle();
-    expect(
-      tester
-          .widget<Text>(
-            find.byKey(const ValueKey('morning-brief-details-phase')),
-          )
-          .data,
-      '部分完成',
-    );
+    expect(find.text('部分完成'), findsOneWidget);
     expect(
       tester
           .widget<OutlinedButton>(
@@ -514,15 +554,29 @@ void main() {
     expect(find.byType(Dialog), findsOneWidget);
     expect(
       tester
-          .widget<Text>(
+          .widget<AssistantMarkdown>(
             find.byKey(const ValueKey('morning-brief-full-summary')),
           )
           .data,
-      '$todaySummary\n\n$noticesSummary',
+      todaySummary,
     );
+    expect(
+      tester
+          .widget<AssistantMarkdown>(
+            find.byKey(const ValueKey('morning-brief-notice-summary')),
+          )
+          .data,
+      noticesSummary,
+    );
+    final sourceExpansion = find.byKey(
+      const ValueKey('morning-brief-source-expand'),
+    );
+    await tester.ensureVisible(sourceExpansion);
+    await tester.tap(sourceExpansion);
+    await tester.pumpAndSettle();
     expect(find.text('完成后公告'), findsOneWidget);
     expect(find.text('完成后的来源正文'), findsOneWidget);
-    expect(find.textContaining('昨日范围已读完'), findsNWidgets(2));
+    expect(find.textContaining('范围已读完'), findsNWidgets(2));
     expect(find.textContaining('"kind"'), findsNothing);
     expect(
       find.byKey(const ValueKey('morning-brief-details-retry')),
@@ -619,7 +673,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
     await tester.pumpAndSettle();
     expect(find.text('旧日期摘要不能显示为今天。'), findsNothing);
-    expect(find.text('摘要暂不可用，以上为当前可用的本地事实。'), findsOneWidget);
+    expect(find.text('摘要暂不可用，以下为当前可用的本地事实。'), findsOneWidget);
   });
 
   testWidgets('clear morning requires confirmation and only calls brief port', (
