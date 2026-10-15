@@ -3,7 +3,7 @@
 ## 工作区与文档
 
 - 仅在 `E:\107\.worktrees\rewrite\design-reset`、`codex/design-reset` 修改新工程，未经用户要求不推送。`E:\107` 的 minimal 未提交内容和 `rewrite/flutter-native` 参考分支保留，不接管其资产。
-- 唯一导航为 [docs/README.md](docs/README.md)。[状态页](docs/status.md)维护当前阶段；M0–M5 已由用户确认关闭，未观察项与已知语音问题继续登记；[M6](docs/milestones/m6/plan.md) 为每日晨报和 Windows 系统提醒提案，待批准、未实施。默认 Agent，Agent/日程两主页，任务在日程内，设置为辅助入口。M3 公开内部能力无独立产品检索入口；M5 按批准范围接入固定工具，main 只读界面参考不转移代码或资产。
+- 唯一导航为 [docs/README.md](docs/README.md)。[状态页](docs/status.md)维护当前阶段；M0–M5 已由用户确认关闭，未观察项与已知语音问题继续登记；[M6](docs/milestones/m6/plan.md) 每日晨报和 Windows 系统提醒的工程及根全套/Windows/Release已完成，统一真人验收待验，未关闭。默认 Agent，Agent/日程两主页，任务在日程内，设置为辅助入口。M3 公开内部能力无独立产品检索入口；M5 按批准范围接入固定工具，main 只读界面参考不转移代码或资产。
 - 现行依据为 `docs/architecture/07–12`、`docs/quality/13`、`docs/reviews/14`、[15 工作流](docs/workflow.md)和对应来源参考/已批准决定。旧 `docs/refactor-docs/00–15` 仅是迁移导航，原文在冻结档案，不能采用旧里程碑或旧通过结论。
 - 较大阶段只维护 `docs/milestones/<阶段>/plan.md` 一份任务单；实施/失败/检查写 `records*`，用户验收和关闭写 `acceptance.md`。遵循 [文档维护规则](docs/maintaining.md)，不向设计、AGENTS 或入口追加进展流水。
 - 每份任务规格与子代理提示词显式列出设计依据、已批准修订、接口/不变量、修改范围、依赖及验收条件；冲突交主代理，不照搬历史实现、测试、fixtures、CI 或施工插件。
@@ -30,4 +30,4 @@
 - 手工编辑使用 `apply_patch`，保留用户未提交修改。整理只读原文可复制归档并核验哈希，归档不再追加。
 - 若需 Python，优先 Conda `basic310`；既有手动登录跳转工具按用户专项偏好使用 `E:/conda/envs/ustc_assistant/python.exe`。
 - 本机代理端口为 7897，尊重已有环境变量；用户确认本机在校园网，遇明确校园 IP 限制时对已注册校园请求用本机直连复验。不改全局代理、降低 TLS、修改系统信任或浏览器宿主；实际登录限制仍按来源授权处理。
-- 纯文档变更运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-docs.ps1` 与 `git diff --check`，执行策略只作用于本次进程；不为此重复运行 Flutter 或真实采集。
+- Windows 原生自动检查在本次进程使用 `USTC_NOTIFICATION_TEST_HOST=1`，结束还原；仅 Debug 生效，实际 OS 验核用独立身份，不登记生产通知。纯文档变更运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-docs.ps1` 与 `git diff --check`，执行策略只作用于本次进程；不为此重复运行 Flutter 或真实采集。
