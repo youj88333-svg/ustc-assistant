@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.14)
 project(runner LANGUAGES CXX)
 
+# Keep C++/WinRT and its exception-enabled STL separate from the Flutter runner.
+# apply_standard_settings intentionally does not apply to this target.
+add_library(notification_native STATIC
+  "notification_platform.cpp"
+  "notification_activation.cpp"
+)
+target_compile_features(notification_native PRIVATE cxx_std_20)
+target_compile_options(notification_native PRIVATE /W4 /WX /EHsc /utf-8)
+target_compile_definitions(notification_native PRIVATE UNICODE _UNICODE NOMINMAX
+  "$<$<CONFIG:Debug>:_DEBUG>")
+target_link_libraries(notification_native PUBLIC windowsapp ole32 shell32 propsys advapi32 uuid)
+
 # Define the application target. To change its name, change BINARY_NAME in the
 # top-level CMakeLists.txt, not the value here, or `flutter run` will no longer
 # work.
@@ -10,6 +22,7 @@ add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
   "default_audio_input.cpp"
   "observation_bridge.cpp"
+  "notification_bridge.cpp"
   "young_json_projection.cpp"
   "young_read_only_observer.cpp"
   "young_business_reader.cpp"
@@ -38,7 +51,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
-target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
+target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app notification_native)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
 include("webview2_sdk.cmake")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")

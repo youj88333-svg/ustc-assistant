@@ -4,10 +4,15 @@
 
 #include "flutter/generated_plugin_registrant.h"
 
-FlutterWindow::FlutterWindow(const flutter::DartProject& project)
-    : project_(project) {}
+FlutterWindow::FlutterWindow(const flutter::DartProject& project,
+    NotificationActivationHub& activations, NotificationInstance& instance,
+    bool test_host)
+    : project_(project), activations_(activations), instance_(instance),
+      notification_test_host_(test_host) {}
 
 FlutterWindow::~FlutterWindow() {
+  instance_.DetachWindow();
+  notification_bridge_.reset();
   default_audio_input_bridge_.reset();
   observation_bridge_.reset();
 }
@@ -16,6 +21,7 @@ bool FlutterWindow::OnCreate() {
   if (!Win32Window::OnCreate()) {
     return false;
   }
+  if (!instance_.AttachWindow(GetHandle())) return false;
 
   RECT frame = GetClientArea();
 
@@ -32,6 +38,8 @@ bool FlutterWindow::OnCreate() {
       flutter_controller_->engine()->messenger());
   observation_bridge_ = std::make_unique<ObservationBridge>(
       flutter_controller_->engine()->messenger(), GetHandle());
+  notification_bridge_ = std::make_unique<NotificationBridge>(
+      flutter_controller_->engine()->messenger(), activations_, notification_test_host_);
   SetChildContent(flutter_controller_->view()->GetNativeWindow());
 
   flutter_controller_->engine()->SetNextFrameCallback([&]() {
@@ -47,6 +55,8 @@ bool FlutterWindow::OnCreate() {
 }
 
 void FlutterWindow::OnDestroy() {
+  instance_.DetachWindow();
+  notification_bridge_.reset();
   default_audio_input_bridge_.reset();
   observation_bridge_.reset();
   if (flutter_controller_) {
@@ -60,6 +70,9 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_COPYDATA) {
+    return instance_.Receive(reinterpret_cast<const COPYDATASTRUCT*>(lparam), activations_);
+  }
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =
@@ -72,7 +85,7 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
 
   switch (message) {
     case WM_FONTCHANGE:
-      flutter_controller_->engine()->ReloadSystemFonts();
+      if (flutter_controller_) flutter_controller_->engine()->ReloadSystemFonts();
       break;
   }
 
