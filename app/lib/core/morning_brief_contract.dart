@@ -77,26 +77,50 @@ String morningFactsSummary(MorningFacts facts) {
     return '${b.hour.toString().padLeft(2, '0')}:${b.minute.toString().padLeft(2, '0')}';
   }
 
+  final courses = facts.agenda.where((item) => item.kind == 'course').toList();
+  final notGoing = courses.where((item) => item.state == 'skip').length;
+  final planned = facts.agenda
+      .where(
+        (item) => !const {
+          'skip',
+          'skipped',
+          'done',
+          'completed',
+        }.contains(item.state),
+      )
+      .toList();
   final lines = <String>[
-    if (facts.agenda.isEmpty)
-      facts.complete && facts.hasSchoolImports ? '今天本地日历没有安排。' : '今天尚无可列出的本地安排。'
-    else
-      '今天的本地安排有 ${facts.agenda.length} 项：',
-    for (final item in facts.agenda.take(6))
+    if (facts.overdueTasks > 0) '还有 ${facts.overdueTasks} 件事已经过了截止时间。',
+    if (facts.tasks.isNotEmpty) '有 ${facts.tasks.length} 件事今天到期。',
+    if (facts.conflicts > 0) '今天有 ${facts.conflicts} 处安排撞了时间，需要留意。',
+    if (facts.agenda.isEmpty) '今天的日程里暂时没查到安排。',
+    if (courses.isNotEmpty)
+      notGoing == courses.length
+          ? '今天这 ${courses.length} 节课你都不打算去。'
+          : notGoing > 0
+          ? '今天有 ${courses.length} 节课，其中 $notGoing 节你不打算去。'
+          : '今天有 ${courses.length} 节课。',
+    for (final item in planned.take(3))
       '${item.allDay ? '全天' : '${time(item.start)}–${time(item.end)}'} '
-          '${item.title}${item.location.isEmpty ? '' : ' · ${item.location}'}'
-          '${switch (item.state) {
-            'skip' => '（计划不参加）',
-            'skipped' => '（已跳过）',
-            'done' || 'completed' => '（已完成）',
-            _ => '',
-          }}',
-    if (facts.agenda.length > 6) '其余安排可在日程页查看。',
-    if (facts.tasks.isNotEmpty) '今天有 ${facts.tasks.length} 项任务截止。',
-    if (facts.overdueTasks > 0) '还有 ${facts.overdueTasks} 项过期任务。',
-    if (facts.conflicts > 0) '有 ${facts.conflicts} 处时间冲突，留意安排。',
-    if (!facts.complete) '本地日程覆盖尚不完整。',
-    if (!facts.hasSchoolImports) '尚未导入学校日程。',
+          '**${item.title}**${item.location.isEmpty ? '' : '，${item.location}'}'
+          '${item.state == 'planned' ? '' : '（${item.planDescription}）'}。',
+    for (final item
+        in facts.agenda
+            .where(
+              (item) =>
+                  item.kind != 'course' &&
+                  const {
+                    'skip',
+                    'skipped',
+                    'done',
+                    'completed',
+                  }.contains(item.state),
+            )
+            .take(3))
+      '${item.title}：${item.planDescription}。',
+    if (planned.length > 3) '其余安排可在日程页查看。',
+    if (!facts.complete) '今天的安排还没读全，可能有遗漏。',
+    if (!facts.hasSchoolImports) '还没导入学校日程，今天有没有课暂时说不准。',
   ];
   // Bound the fallback just like model-derived sections; no private fields.
   final text = lines.join('\n');
@@ -128,6 +152,30 @@ final class MorningAgendaItem {
   final String title, location, kind, state;
   final DateTime start, end;
   final bool allDay;
+
+  /// Meaning for prose generation, derived from the existing immutable facts.
+  /// `planned` combines several attendance choices, so it must stay neutral.
+  String get planDescription => switch (state) {
+    'skip' => switch (kind) {
+      'course' => '你不打算去上这节课',
+      'exam' => '你不打算参加这场考试',
+      'young' => '你不打算参加这次活动',
+      _ => '你不打算参加这次安排',
+    },
+    'skipped' => kind == 'planBlock' ? '这段时间不按原计划做了' : '这次不按原计划做了',
+    'done' || 'completed' => kind == 'planBlock' ? '这段安排已经做过了' : '这件事已经做完了',
+    'planned' => kind == 'planBlock' ? '留出了这段时间来做这件事' : '仍在今天原定的安排里',
+    _ => '这次的安排还不确定',
+  };
+
+  String get kindDescription => switch (kind) {
+    'course' => '课程',
+    'exam' => '考试',
+    'young' => '二课活动',
+    'personal' => '个人安排',
+    'planBlock' => '为任务留出的时间',
+    _ => '安排',
+  };
   List<Object> get canonical => [
     title,
     location,

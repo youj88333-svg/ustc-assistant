@@ -12,7 +12,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-student-agent-v7');
+      expect(agentPromptVersion, 'ustc-student-agent-v8');
       expect(prompt, contains('热心、靠谱的学长'));
       expect(prompt, contains('不编造自己在科大读书'));
       expect(prompt, contains('围绕当前问题选信息'));
