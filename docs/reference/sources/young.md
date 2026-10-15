@@ -81,13 +81,14 @@ profile 只保留 `username`。分页响应只接受成功 envelope 中的 `resu
 
 `activities` 成功后仅向应用查询视图提供结果；不插入、更新或删除本地日程。账号/Young 分区认领、作业回执、审计以及本次新共享密码事实由 C3 在成功事务中处理。
 
-`calendar` 只提交完整范围内已验证且具非空 `itemId` 的唯一日程。更新按 `id` upsert，保留本地事件标识和用户隐藏覆盖；完整范围内不再出现的旧项记录为范围内缺失，不清除范围外事实；范围外的日程不会因本次查询被改写。日历范围、业务事件、回执、审计、Young 分区许可以及本次更新的共享凭据同一事务提交。事务失败保留旧业务事实，取消与提交先后按通用事务规则裁决。
+`calendar` 只提交完整范围内已验证且具非空 `itemId` 的唯一日程。更新按 `id` upsert，保留本地事件标识和用户覆盖。只有本次完整所选日期范围内的旧活动关联日程未再返回，或其同一 `id` 返回时已无非空 `itemId`，才将该旧日程的 `source_retired` 置为 `true`；`activities` 查询不改变日程失效状态。范围外只更新 `presence=outside_scope`，不修改 `source_retired`；它不能使已失效日程复活，正常历史日程仍按原日期显示。
+
+同一完整范围再次返回相同 `id` 且具有非空 `itemId` 时恢复 `source_retired=false`，保留本地事件标识、备注、隐藏及其它用户覆盖。新的日历 `id` 是新稳定键，不继承旧事件的备注或覆盖。失效位与 `presence`、UserOverlay 独立；失败、取消、不完整响应或事务回滚不得部分停用。日期范围、业务事件、回执、审计、Young 分区许可及本次更新的共享凭据同一事务提交。
 
 ## 明确保留的未知项
 
 - 真实未关联日历行样本未观察；产品已按用户批准规则验证全部行后排除未关联项。
-- `itemId` 关联不证明本人报名成功、取消或撤回状态；这些业务语义仍未观察。
-- 学校来源对日程撤回/缺失的完整含义未被独立证实；本地仅按完整所选日期范围记录观察状态。
+- `itemId` 关联不证明本人报名成功、取消或撤回状态；`source_retired` 只表示来源在完整所选范围内不再返回该活动关联日程，不证明学校取消或本人报名状态，这些语义仍未观察。
 - M2 的关闭仅覆盖上述正式范围，不把剩余未知项改写为真实通过。
 
 静态实现依据：[固定 origin 与入口](../../../app/lib/source/observation_contract.dart)、[固定 Young 页面和登录过渡](../../../app/windows/runner/observation_bridge.cpp)、[受控 API 读取器](../../../app/windows/runner/young_business_reader.cpp)、[业务字段与分页契约](../../../app/lib/source/young_business_contract.dart)、[采集封存与范围规则](../../../app/lib/source/young_collection_contract.dart)、[身份关联与作业协调](../../../app/lib/jobs/observation_coordinator.dart)、[正式同步协调器](../../../app/lib/jobs/young_sync_coordinator.dart)、[共享认证驱动](../../../app/lib/jobs/school_authentication_driver.dart)、[本地事务存储](../../../app/lib/data/young_store_extension.dart)。
