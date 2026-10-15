@@ -1,6 +1,6 @@
 # 项目当前状态
 
-更新时间：2026-10-14。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
+更新时间：2026-10-15。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
@@ -9,12 +9,13 @@
 | M2 | 已关闭，2026-10-11 | Young 活动关联日程和独立报名活动只读查询、全自动及生命周期/连续性；[用户验收](milestones/m2/acceptance.md) |
 | M3 | 已关闭，2026-10-12 | 内部评课/校园查询及首批 7 项长期 Markdown，临时界面可选，无 Agent/工具注册；[关闭依据与保留项](milestones/m3/acceptance.md) |
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
-| M5 | §23 重构工程、根全套/Windows/Release 完成；集中真人待验，未关闭 | [唯一任务单 §23](milestones/m5/plan.md#23-m59-上下文与执行权限重构已批准)、[本切工程证据](milestones/m5/records/12-context-and-permission-implementation.md)及[前期调研](milestones/m5/records/11-context-and-permission-research.md)；1214 项/1 平台跳过、九套 Windows 29 组通过。真实语音失败及最终体验见[待验清单](milestones/m5/acceptance.md) |
-| 后续 | 未排定 | 提醒、移动端及发布按后续阶段确认 |
+| M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
+| M6 | 计划待批准，未实施 | [唯一计划提案](milestones/m6/plan.md)：06:00 后非阻塞晨报、两槽提醒、Windows 退出后系统调度；先平台有限验证，再迁移/业务/晨报和集成验收 |
+| 后续 | 未排定 | 移动端原生实现、正式发布及其能力验收另行确认 |
 
 ## 已批准范围与待验证
 
-五条来源、本地日程、任务和 Agent 的总体范围保留。评课/校园内部能力已按 M3 关闭，Agent 接入前的 Windows 应用已按 M4 验收。M5 已装配单 Agent、查询/证据/图片、本地修改/撤销、有界规划、固定学校来源协调、单一持续对话与 compact/clear、可撤销的记住授权、任务截止栏、安全诊断/导出及本地中文听写。§23 已落实完整安全交互、稳定 19 工具、跨轮目标定位、独立私人读取/17 类日常许可、仅建议硬模式、当前卡文字确认、估算预算与实际回执恢复，并完成根全套/Windows/Release，详见[记录 12](milestones/m5/records/12-context-and-permission-implementation.md)。用户报告 `approve` 后失去目标的原失败保留，修订版真实效果待验；可选合成模型核验需用户在应用主动启动，根未运行真实模型。真实听写“I.”及“未识别出语言”未由本切修改或关闭。提醒、移动端、正式部署、整体冻结与完整 V 项尚未关闭。
+五条来源、本地日程、任务和 Agent 的总体范围保留。评课/校园内部能力已按 M3 关闭，Agent 接入前的 Windows 应用已按 M4 验收。M5 已装配单 Agent、查询/证据/图片、本地修改/撤销、有界规划、固定学校来源协调、单一持续对话与 compact/clear、可撤销的记住授权、任务截止栏、安全诊断/导出及本地中文听写。§23 已落实完整安全交互、稳定 19 工具、跨轮目标定位、独立私人读取/17 类日常许可、仅建议硬模式、当前卡文字确认、估算预算与实际回执恢复，并完成根全套/Windows/Release，详见[记录 12](milestones/m5/records/12-context-and-permission-implementation.md)。用户于 2026-10-15 明确确认关闭 M5 并要求 M6 先给计划；这是阶段整体关闭，不推断前述清单逐项操作、新业务计数或独立模型评分。原确认后失去目标的失败记录保留；可选合成模型核验需用户在应用主动启动，根未运行真实模型。真实听写“I.”及“未识别出语言”未取得新修复/复验反馈，继续作为已知问题，不由阶段关闭改写为通过。M6 的提醒平台、晨报默认值及模型仲裁尚待批准和实证；移动端、正式部署、整体冻结与完整 V 项仍未关闭。
 
 M3 的内部 v1 接口、首批逐份目录、匿名公开 HTTP、中文检索/正文续读、schema 5 增量迁移和材料事务维护已装配。根已执行工程检查、构建、有限公开契约复验和实际随包资料原生链路核验；用户接受阶段结论并确认关闭，不记作亲自完成临时界面三组操作。财务在线关键词/FAQ 回复保持 unavailable，政策现行性及本轮真实自动直连回退未核验。关闭证据与保留项统一见 [M3 验收](milestones/m3/acceptance.md)，详细命令和失败见 [M3 记录](milestones/m3/records.md)。
 
