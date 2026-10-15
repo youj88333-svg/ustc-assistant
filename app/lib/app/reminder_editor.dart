@@ -39,6 +39,7 @@ final class _ReminderEditorDialog extends StatefulWidget {
 }
 
 final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
+  late bool _allDay = widget.allDay;
   late ReminderPair _pair = _defaults;
   bool _inherited = true;
   bool _series = false;
@@ -49,7 +50,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
   int _operation = 0;
 
   ReminderPair get _defaults =>
-      widget.allDay ? ReminderPair.allDay : ReminderPair.timed;
+      _allDay ? ReminderPair.allDay : ReminderPair.timed;
 
   bool get _canChooseSeries =>
       widget.supportsSeries && widget.target.kind == ReminderKind.personal;
@@ -75,6 +76,14 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       _message = null;
     });
     try {
+      final shape = widget.data;
+      final allDay = shape is ReminderTargetShapePort
+          ? await (shape as ReminderTargetShapePort).reminderAllDay(
+              widget.target,
+              series: _series,
+            )
+          : widget.allDay;
+      if (!_isCurrent(operation)) return;
       final pair = await widget.data.readReminderPair(
         widget.target,
         series: _series,
@@ -82,15 +91,16 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       if (!_isCurrent(operation)) return;
       final inheritedPair = pair == null
           ? await widget.data.inspectReminders().then(
-              (settings) => widget.allDay
+              (settings) => allDay
                   ? settings.preferences.allDay
                   : settings.preferences.timed,
             )
           : null;
       if (!_isCurrent(operation)) return;
-      pair?.validate(allDay: widget.allDay);
-      inheritedPair?.validate(allDay: widget.allDay);
+      pair?.validate(allDay: allDay);
+      inheritedPair?.validate(allDay: allDay);
       setState(() {
+        _allDay = allDay;
         _inherited = pair == null;
         _pair = pair ?? inheritedPair ?? _defaults;
         _loading = false;
@@ -120,7 +130,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
     if (_saving || _loading || _readFailed) return;
     final pair = restoreDefault || _inherited ? null : _pair;
     try {
-      pair?.validate(allDay: widget.allDay);
+      pair?.validate(allDay: _allDay);
     } on ReminderFailure {
       setState(() => _message = '提醒规则无效，请检查后重试。');
       return;
@@ -180,7 +190,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
                   const SizedBox(height: 12),
                   ReminderPairControls(
                     pair: _pair,
-                    allDay: widget.allDay,
+                    allDay: _allDay,
                     enabled: !_saving && !_readFailed,
                     keyPrefix: 'reminder-editor',
                     onChanged: (pair) => setState(() {

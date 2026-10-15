@@ -28,6 +28,56 @@ int _sequence = 0;
 
 void main() {
   test(
+    'mixed personal occurrence exposes the correct series and occurrence kind',
+    () async {
+      final store = await _open();
+      await _preferences(store, reminders: true);
+      final created = await _write(
+        store,
+        CreatePersonalEvent(
+          PersonalEventDraft(
+            title: 'Synthetic mixed series',
+            start: _day,
+            end: _day.add(const Duration(days: 1)),
+            allDay: true,
+            weekly: true,
+          ),
+        ),
+      );
+      await _write(
+        store,
+        UpdatePersonalOccurrence(
+          created.target!,
+          _timed('Synthetic timed exception', 2),
+        ),
+      );
+      final current = (await _occurrence(
+        store,
+        created.target!.identity,
+      )).reference;
+      final target = ReminderTarget.calendar(current);
+      expect(await store.features.reminderAllDay(target), isFalse);
+      expect(await store.features.reminderAllDay(target, series: true), isTrue);
+      await store.features.saveReminderPair(
+        target,
+        ReminderPair.allDay,
+        series: true,
+      );
+      await store.features.saveReminderPair(
+        target,
+        const ReminderPair(ReminderRule.before(15), ReminderRule.none()),
+      );
+      expect(
+        (await store.features.prepareReminderPublication())
+            .desired
+            .first
+            .request
+            .deliveryAtUtc,
+        DateTime.utc(2026, 10, 15, 1, 45),
+      );
+    },
+  );
+  test(
     'JW and Young imports update durable reminder input and retain overlays',
     () async {
       final store = await _open();

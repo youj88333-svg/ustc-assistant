@@ -13,6 +13,29 @@ import 'package:ustc_assistant_m0/core/public_query_contract.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 
 void main() {
+  testWidgets(
+    'an exception and its parent series use their own reminder time kind',
+    (tester) async {
+      final data = _MixedShapeReminderData();
+      addTearDown(data.dispose);
+      await tester.pumpWidget(_editorHost(data, supportsSeries: true));
+      await _openEditor(tester, supportsSeries: true);
+      expect(
+        find.byKey(const ValueKey('reminder-editor-slot-1-time')),
+        findsNothing,
+      );
+      await tester.tap(find.text('整个系列'));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('reminder-editor-slot-1-time')),
+        findsOneWidget,
+      );
+      expect(find.text('无法读取提醒设置，请稍后重试。'), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('reminder-editor-save')));
+      await tester.pumpAndSettle();
+      expect(data.savedPairs.single.series, isTrue);
+    },
+  );
   TestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
 
@@ -493,7 +516,16 @@ MorningRuntimeView _morningView() {
   );
 }
 
-final class _FakeReminderData implements ReminderDataPort {
+final class _MixedShapeReminderData extends _FakeReminderData
+    implements ReminderTargetShapePort {
+  @override
+  Future<bool> reminderAllDay(
+    ReminderTarget target, {
+    bool series = false,
+  }) async => series;
+}
+
+class _FakeReminderData implements ReminderDataPort {
   _FakeReminderData()
     : settings = ReminderSettings(
         context: const CalendarContext(

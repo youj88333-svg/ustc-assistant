@@ -379,6 +379,11 @@ abstract interface class ReminderDataPort {
   );
 }
 
+/// The series may have a different time kind from one replaced occurrence.
+abstract interface class ReminderTargetShapePort {
+  Future<bool> reminderAllDay(ReminderTarget target, {bool series = false});
+}
+
 final class ReminderRuntimeView {
   const ReminderRuntimeView({
     this.busy = false,

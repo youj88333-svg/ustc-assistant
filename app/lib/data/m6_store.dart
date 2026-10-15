@@ -2,7 +2,7 @@ part of 'jw_store.dart';
 
 /// Versioned desired input is captured inside each authoritative business
 /// transaction. Native publishing/cleanup is deliberately outside this store.
-final class M6Store implements ReminderDataPort {
+final class M6Store implements ReminderDataPort, ReminderTargetShapePort {
   M6Store._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -163,6 +163,37 @@ final class M6Store implements ReminderDataPort {
     }
     return ReminderTarget.calendar(current.reference);
   }
+
+  @override
+  Future<bool> reminderAllDay(ReminderTarget target, {bool series = false}) =>
+      _db._serialized(() async {
+        await _currentTarget(target);
+        if (series && target.kind != ReminderKind.personal) {
+          throw const ReminderFailure(ReminderFailureCode.invalidInput);
+        }
+        if (target.kind != ReminderKind.personal) return false;
+        final snapshot = await _db.localCalendar._snapshot(
+          targets: {
+            CalendarIdentity(
+              CalendarKind.personal,
+              target.localId,
+              ordinal: target.ordinal,
+            ),
+          },
+        );
+        return series
+            ? snapshot.personal.single.draft.allDay
+            : const CalendarProjection()
+                  .occurrence(
+                    snapshot,
+                    CalendarIdentity(
+                      CalendarKind.personal,
+                      target.localId,
+                      ordinal: target.ordinal,
+                    ),
+                  )!
+                  .allDay;
+      });
 
   @override
   Future<ReminderPair?> readReminderPair(
