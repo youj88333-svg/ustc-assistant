@@ -4,6 +4,8 @@
 
 接续主题：[Agent管理提醒：实现、审查与检查](records/01-agent-reminders.md)。
 
+最新整体核查：[Windows联动终审、修复与根验核](records/02-windows-integration-review.md)。
+
 ## 研究先行
 
 | 一手来源 | 采用的方法与本项目适配 |
