@@ -11,7 +11,7 @@
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
-| Windows 收尾 | 四项工程修订/根验核完成，原路径新版已启动，待体验反馈 | [任务单](milestones/windows-polish/plan.md)、[研究与实施](milestones/windows-polish/records.md)：晨报层级、提醒重叠、回复可读性与热心学长语气；[原路径启动复核](milestones/windows-polish/records.md#原路径启动复核2026-10-15)已记录，不含发布或移动端 |
+| Windows 收尾 | 表达修复及根全套/Windows/Release完成，待旧窗口退出后替换 | [任务单](milestones/windows-polish/plan.md)、[接续修复记录](milestones/windows-polish/records.md#接续修订日常语义与晨报人格2026-10-15)：共享人格与日常语义、晨报请求/事实短报；真实语气待体验反馈，不含发布或移动端 |
 | 后续 | 未排定 | 移动端原生实现、正式发布及其能力验收另行确认 |
 
 ## 已批准范围与待验证
