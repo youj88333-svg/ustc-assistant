@@ -480,7 +480,7 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 15);
+      expect(await _scalar(store, 'PRAGMA user_version'), 16);
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -505,7 +505,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 16);
+    _setSchemaVersion(file, 17);
 
     await expectLater(
       _open(file: file),
@@ -519,7 +519,7 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 16);
+      expect(raw.select('PRAGMA user_version').single['user_version'], 17);
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -681,6 +681,7 @@ Future<void> _rewindMessagesToSchema11(
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    _dropM6TablesForLegacyFixture(raw);
     raw.execute('DROP INDEX IF EXISTS agent_messages_conversation');
     raw.execute('ALTER TABLE agent_messages RENAME TO agent_messages_v12');
     raw.execute('''CREATE TABLE agent_messages (
@@ -719,6 +720,19 @@ Future<void> _rewindMessagesToSchema11(
     rethrow;
   } finally {
     raw.close();
+  }
+}
+
+void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }
 

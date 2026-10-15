@@ -730,6 +730,16 @@ Future<JwStore> _openWithExecutor(
 }
 
 void _removeSchema15AgentObjectsForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
+  }
   final tables = database
       .select("SELECT name FROM sqlite_master WHERE type='table'")
       .map((row) => row['name'] as String)

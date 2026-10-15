@@ -26,6 +26,7 @@ final class ProductApp extends StatelessWidget {
     this.agentBuilder,
     this.destination,
     this.onDestinationChanged,
+    this.scaffoldMessengerKey,
   });
 
   final AppShellPort controller;
@@ -34,9 +35,11 @@ final class ProductApp extends StatelessWidget {
   final WidgetBuilder? agentBuilder;
   final ValueListenable<ShellDestination>? destination;
   final ValueChanged<ShellDestination>? onDestinationChanged;
+  final GlobalKey<ScaffoldMessengerState>? scaffoldMessengerKey;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
+    scaffoldMessengerKey: scaffoldMessengerKey,
     debugShowCheckedModeBanner: false,
     locale: const Locale('zh', 'CN'),
     supportedLocales: const [Locale('zh', 'CN'), Locale('en')],

@@ -365,6 +365,7 @@ final class LocalCalendarStore
   );
 
   Future<CalendarSnapshot> _snapshot({
+    bool includeAllBlocks = false,
     CalendarQuery? query,
     Set<CalendarIdentity>? targets,
   }) async {
@@ -493,7 +494,12 @@ final class LocalCalendarStore
           ),
       ],
       relations: [for (final row in relations) _relation(row, context)],
-      planBlocks: await _blockOccurrences(context, query, targets),
+      planBlocks: await _blockOccurrences(
+        context,
+        query,
+        targets,
+        all: includeAllBlocks,
+      ),
     );
   }
 
@@ -1047,6 +1053,7 @@ final class LocalCalendarStore
     await _db.customStatement(
       'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
     );
+    await _db.features._captureExpected();
     final revision = (await _agendaState()).read<int>('revision');
     await _db.customStatement(
       'INSERT INTO agenda_audit(action,item_count,committed_at) VALUES (?,?,?)',

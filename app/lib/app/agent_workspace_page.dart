@@ -9,8 +9,10 @@ import 'agent_workspace_contract.dart';
 import '../core/agent_context_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/diagnostics_contract.dart';
+import '../core/morning_brief_contract.dart';
 import '../core/speech_input_contract.dart';
 import 'diagnostics_panel.dart';
+import 'morning_brief_card.dart';
 
 const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
@@ -48,6 +50,11 @@ final class AgentWorkspacePage extends StatefulWidget {
     this.onOpenLocalEvidence,
     this.diagnostics,
     this.speechInput,
+    this.morningView,
+    this.morningChanges,
+    this.morningNowUtc,
+    this.onMorningRetry,
+    this.openMorningSource,
   });
 
   final AgentWorkspacePort controller;
@@ -59,6 +66,11 @@ final class AgentWorkspacePage extends StatefulWidget {
 
   /// Optional caller-owned local speech input. This page only cancels it.
   final SpeechInputPort? speechInput;
+  final MorningRuntimeView? morningView;
+  final Stream<MorningRuntimeView>? morningChanges;
+  final DateTime Function()? morningNowUtc;
+  final Future<void> Function()? onMorningRetry;
+  final Future<void> Function(Uri)? openMorningSource;
 
   @override
   State<AgentWorkspacePage> createState() => _AgentWorkspacePageState();
@@ -98,6 +110,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   SpeechInputPort? _speechPort;
   SpeechInputView _speechView = const SpeechInputView();
   StreamSubscription<SpeechInputView>? _speechSubscription;
+  StreamSubscription<MorningRuntimeView>? _morningSubscription;
+  MorningRuntimeView? _morningView;
+  int _morningGeneration = 0;
   _SpeechDraftAnchor? _speechAnchor;
   TextEditingValue _lastDraftValue = TextEditingValue.empty;
   bool _speechCommandPending = false;
@@ -114,6 +129,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _draft.addListener(_onDraftValueChanged);
     widget.controller.addListener(_onControllerChanged);
     _bindSpeechInput(widget.speechInput);
+    _bindMorning(widget.morningChanges, widget.morningView);
     _rememberControllerView();
     _scheduleRefresh();
   }
@@ -161,11 +177,19 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       _rememberControllerView();
       _scheduleRefresh();
     }
+    if (!identical(oldWidget.morningChanges, widget.morningChanges)) {
+      _bindMorning(widget.morningChanges, widget.morningView);
+    } else if (!identical(oldWidget.morningView, widget.morningView) &&
+        widget.morningView != null) {
+      _morningView = widget.morningView;
+    }
   }
 
   @override
   void dispose() {
     _generation++;
+    _morningGeneration++;
+    _morningSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _unbindSpeechInput(cancel: true);
     widget.controller.removeListener(_onControllerChanged);
@@ -515,6 +539,36 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       text: value,
       selection: TextSelection.collapsed(offset: value.length),
     );
+  }
+
+  void _bindMorning(
+    Stream<MorningRuntimeView>? changes,
+    MorningRuntimeView? initial,
+  ) {
+    _morningSubscription?.cancel();
+    _morningSubscription = null;
+    final generation = ++_morningGeneration;
+    _morningView = initial;
+    if (changes == null) return;
+    _morningSubscription = changes.listen(
+      (view) {
+        if (!mounted || generation != _morningGeneration) return;
+        setState(() => _morningView = view);
+      },
+      onError: (Object _) {
+        // Keep the last local facts visible; a transient stream error must not
+        // clear a brief or manufacture a failure state.
+      },
+    );
+  }
+
+  void _prepareMorningDiscussion() {
+    const prompt = '请结合我的今天日程和昨天的校园公告，帮我梳理重点。';
+    final current = _draft.text.trimRight();
+    _setDiscussionDraft(current.isEmpty ? prompt : '$current\n\n$prompt');
+    _draftEditedByUser = true;
+    _composerFocus.requestFocus();
+    setState(() {});
   }
 
   void _clearDraftImages({bool update = true}) {
@@ -1596,6 +1650,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     builder: (context, _) {
       final view = widget.controller.view;
       final status = _statusLabel(view);
+      final morning = _morningView;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1674,6 +1729,25 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                   diagnostics: widget.diagnostics!,
                 ),
               ),
+          ],
+          if (morning != null && morning.enabled) ...[
+            const SizedBox(height: 8),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 220),
+              child: SingleChildScrollView(
+                child: MorningBriefCard(
+                  view: morning,
+                  nowUtc: (widget.morningNowUtc?.call() ?? DateTime.now())
+                      .toUtc(),
+                  onRetry: () {
+                    final retry = widget.onMorningRetry;
+                    if (retry != null) unawaited(retry());
+                  },
+                  onDiscuss: _prepareMorningDiscussion,
+                  openSource: widget.openMorningSource ?? (uri) async {},
+                ),
+              ),
+            ),
           ],
           const SizedBox(height: 12),
           Expanded(child: _conversation(view)),

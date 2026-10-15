@@ -6,11 +6,13 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import '../core/agenda_contract.dart';
 import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
+import '../core/reminder_contract.dart';
 import 'calendar_event_editor.dart';
 import 'calendar_display_style.dart';
 import 'calendar_task_band.dart';
 import 'calendar_week_view.dart';
 import 'calendar_workspace_contract.dart';
+import 'reminder_editor.dart';
 import 'task_workspace_contract.dart';
 import 'task_workspace_editor.dart';
 import 'task_workspace_page.dart';
@@ -23,6 +25,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
     this.tasks,
     this.calendarTaskNowUtc,
     this.onDiscuss,
+    this.reminders,
     this.initialTasks = false,
     this.initialSelection,
     this.onInitialNavigationConsumed,
@@ -32,6 +35,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
   final TaskWorkspacePort? tasks;
   final DateTime? calendarTaskNowUtc;
   final ValueChanged<AgentDiscussionSelection>? onDiscuss;
+  final ReminderDataPort? reminders;
   final bool initialTasks;
   final CalendarReference? initialSelection;
   final VoidCallback? onInitialNavigationConsumed;
@@ -232,6 +236,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                     key: ValueKey<TaskWorkspacePort>(widget.tasks!),
                     port: widget.tasks!,
                     onDiscuss: widget.onDiscuss,
+                    reminders: widget.reminders,
                   ),
           )
         else ...[
@@ -1409,6 +1414,18 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           label: '来源',
           value: _kindLabel(occurrence.reference.identity.kind),
         ),
+        if (widget.reminders != null) ...[
+          const SizedBox(height: 10),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('calendar-reminder-settings'),
+              onPressed: () => unawaited(_editReminder(detail)),
+              icon: const Icon(Icons.notifications_active_outlined, size: 18),
+              label: const Text('设置提醒'),
+            ),
+          ),
+        ],
         const SizedBox(height: 12),
         _DetailLine(
           icon: Icons.place_outlined,
@@ -1870,6 +1887,23 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ],
       ],
     );
+  }
+
+  Future<void> _editReminder(CalendarDetail detail) async {
+    final data = widget.reminders;
+    if (data == null) return;
+    final occurrence = detail.occurrence;
+    await _withRoute<void>(() async {
+      await showReminderEditor(
+        context,
+        data: data,
+        target: ReminderTarget.calendar(occurrence.reference),
+        allDay: occurrence.allDay,
+        supportsSeries:
+            occurrence.reference.identity.kind == CalendarKind.personal &&
+            detail.personalDraft?.weekly == true,
+      );
+    });
   }
 
   Future<void> _editPlanBlock(

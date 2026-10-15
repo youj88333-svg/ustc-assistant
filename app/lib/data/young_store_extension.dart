@@ -507,6 +507,7 @@ extension YoungStoreOperations on JwStore {
           await customStatement(
             'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
           );
+          await features._captureExpected();
         }
         await agent._commitSourceAction(ticket, count);
         return YoungCompletionReceipt(
@@ -785,6 +786,10 @@ extension YoungStoreOperations on JwStore {
           [command.localId],
         );
         ++version;
+        await customStatement(
+          'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+        );
+        await features._captureExpected();
         await customStatement(
           "INSERT INTO young_audit (action,item_count,committed_at) VALUES ('overlay',1,?)",
           [at.microsecondsSinceEpoch],

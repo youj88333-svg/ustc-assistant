@@ -603,6 +603,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
       await _db.customStatement(
         'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
       );
+      await _db.features._captureExpected();
       final revision = (await _agendaState()).read<int>('revision');
       final now = _db._clock.nowUtc;
       if (!now.isUtc) {

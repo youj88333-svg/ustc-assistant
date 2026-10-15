@@ -50,6 +50,7 @@ void main() {
       try {
         removeTaskTablesForLegacyFixture(raw);
         _removeSchema14AgentObjectsForLegacyFixture(raw);
+        _dropM6TablesForLegacyFixture(raw);
         raw.execute('ALTER TABLE jw_events DROP COLUMN academic_json');
         raw.execute('PRAGMA user_version=7');
       } finally {
@@ -814,6 +815,7 @@ void main() {
       try {
         removeCalendarTablesForLegacyFixture(raw);
         _removeSchema14AgentObjectsForLegacyFixture(raw);
+        _dropM6TablesForLegacyFixture(raw);
         raw.execute('CREATE TABLE agenda_relations(synthetic_marker INTEGER)');
         raw.execute('PRAGMA user_version=5');
       } finally {
@@ -1043,7 +1045,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        15,
+        16,
       );
       course = window.items.singleWhere(
         (item) => item.reference.identity.kind == CalendarKind.course,
@@ -1266,6 +1268,7 @@ void main() {
       try {
         removeCalendarTablesForLegacyFixture(raw);
         _removeSchema14AgentObjectsForLegacyFixture(raw);
+        _dropM6TablesForLegacyFixture(raw);
         raw.execute('PRAGMA user_version=5');
       } finally {
         raw.close();
@@ -1301,7 +1304,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        15,
+        16,
       );
     },
   );
@@ -1336,6 +1339,7 @@ void _downgradeRelationsToSynthetic6(File file) {
     raw.execute('BEGIN');
     removeTaskTablesForLegacyFixture(raw);
     _removeSchema14AgentObjectsForLegacyFixture(raw);
+    _dropM6TablesForLegacyFixture(raw);
     raw.execute(
       'ALTER TABLE agenda_relations RENAME TO synthetic_relations_v7',
     );
@@ -1376,6 +1380,19 @@ void _removeSchema14AgentObjectsForLegacyFixture(sqlite3.Database database) {
     if (columns.contains('authorization')) {
       database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
     }
+  }
+}
+
+void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }
 

@@ -1212,6 +1212,7 @@ Future<_SyntheticJwFacts> _seedJwLedger(JwStore store) async {
 void _setSyntheticSchemaVersion(File file, int version) {
   final database = sqlite3.sqlite3.open(file.path);
   try {
+    _dropM6TablesForLegacyFixture(database);
     removeCalendarTablesForLegacyFixture(database);
     _removeSchema14AgentObjectsForLegacyFixture(database);
     for (final table in [
@@ -1249,6 +1250,19 @@ void _setSyntheticSchemaVersion(File file, int version) {
     database.execute('PRAGMA user_version = $version');
   } finally {
     database.close();
+  }
+}
+
+void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }
 

@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'app/demo_runtime.dart';
@@ -32,6 +34,8 @@ import 'app/public_validation_panel.dart';
 import 'core/contracts.dart';
 import 'core/calendar_contract.dart';
 import 'core/agenda_contract.dart';
+import 'core/reminder_contract.dart';
+import 'app/m6_settings_panel.dart';
 
 // This temporary panel is absent from normal product navigation.
 const m3ValidationEnabled = bool.fromEnvironment('USTC_M3_VALIDATION');
@@ -47,7 +51,7 @@ Future<void> launchM0() async {
     final diagnostics = TransientDiagnostics(
       versions: const DiagnosticVersions(
         application: '0.0.1+0',
-        schema: 15,
+        schema: 16,
         tools: agentToolRegistryVersion,
         prompt: agentPromptVersion,
         revision: String.fromEnvironment(
@@ -82,11 +86,16 @@ final class _OwnedAppState extends State<OwnedApplication> {
   int? _navigationResetEpoch;
   CalendarReference? _evidenceSelection;
   bool _evidenceTasks = false;
+  DemoRuntime? _boundRuntime;
+  StreamSubscription<ReminderTarget>? _reminderNavigation;
+  int _runtimeGeneration = 0;
+  final _messengerKey = GlobalKey<ScaffoldMessengerState>();
   @override
   void initState() {
     super.initState();
     _diagnosticErrors = DiagnosticErrorHooks(widget.bootstrap.diagnostics);
     _lifecycle = AppLifecycleListener(
+      onStateChange: _onLifecycleStateChanged,
       onExitRequested: () async {
         try {
           await widget.bootstrap.close();
@@ -100,6 +109,8 @@ final class _OwnedAppState extends State<OwnedApplication> {
 
   @override
   void dispose() {
+    _runtimeGeneration++;
+    _reminderNavigation?.cancel();
     _diagnosticErrors.dispose();
     _lifecycle.dispose();
     _destination.dispose();
@@ -112,6 +123,146 @@ final class _OwnedAppState extends State<OwnedApplication> {
     if (!identical(oldWidget.bootstrap, widget.bootstrap)) {
       _diagnosticErrors.dispose();
       _diagnosticErrors = DiagnosticErrorHooks(widget.bootstrap.diagnostics);
+      final runtime = widget.bootstrap.runtime;
+      final maintenanceBlocksProduct =
+          widget.bootstrap.settings.settingsView.maintenance.blocksProduct;
+      _bindRuntime(
+        runtime == null || maintenanceBlocksProduct ? null : runtime,
+      );
+    }
+  }
+
+  void _onLifecycleStateChanged(AppLifecycleState state) {
+    final morning = _boundRuntime?.morning;
+    if (morning == null) return;
+    switch (state) {
+      case AppLifecycleState.resumed:
+        morning.onForeground(true);
+        break;
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.paused:
+      case AppLifecycleState.detached:
+        morning.onForeground(false);
+        break;
+      case AppLifecycleState.inactive:
+        break;
+    }
+  }
+
+  void _bindRuntime(DemoRuntime? runtime) {
+    if (identical(_boundRuntime, runtime)) return;
+    _runtimeGeneration++;
+    _reminderNavigation?.cancel();
+    _reminderNavigation = null;
+    _boundRuntime = runtime;
+    if (runtime == null) return;
+
+    final generation = _runtimeGeneration;
+    _reminderNavigation = runtime.reminders.navigation.listen(
+      (target) => unawaited(_openReminderTarget(runtime, target, generation)),
+      onError: (Object _) {
+        if (mounted) {
+          _messengerKey.currentState?.showSnackBar(
+            const SnackBar(content: Text('无法打开这条系统提醒，请从日程中重新选择。')),
+          );
+        }
+      },
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          generation != _runtimeGeneration ||
+          !identical(widget.bootstrap.runtime, runtime)) {
+        return;
+      }
+      final state = WidgetsBinding.instance.lifecycleState;
+      if (state == null || state == AppLifecycleState.resumed) {
+        runtime.morning.onForeground(true);
+      }
+    });
+  }
+
+  bool _isCurrentRuntime(DemoRuntime runtime, int generation) =>
+      mounted &&
+      generation == _runtimeGeneration &&
+      identical(_boundRuntime, runtime) &&
+      identical(widget.bootstrap.runtime, runtime);
+
+  Future<void> _openReminderTarget(
+    DemoRuntime runtime,
+    ReminderTarget target,
+    int generation,
+  ) async {
+    try {
+      final localCalendar = runtime.jwStore.localCalendar;
+      await localCalendar.ensureCalendarContext(target.context);
+      if (!_isCurrentRuntime(runtime, generation)) return;
+
+      if (target.kind == ReminderKind.taskDeadline) {
+        final reference = TaskReference(
+          target.context,
+          target.localId,
+          target.version,
+        );
+        final detail = await localCalendar.taskDetail(reference);
+        await runtime.calendar.loadTasks();
+        await runtime.calendar.selectTask(detail.task.reference);
+        await localCalendar.ensureCalendarContext(target.context);
+        if (!_isCurrentRuntime(runtime, generation) ||
+            runtime.calendar.taskView.window?.context != target.context ||
+            runtime.calendar.taskView.detail?.task.reference.localId !=
+                target.localId) {
+          return;
+        }
+        setState(() {
+          _evidenceSelection = null;
+          _evidenceTasks = true;
+        });
+      } else {
+        final kind = switch (target.kind) {
+          ReminderKind.course => CalendarKind.course,
+          ReminderKind.exam => CalendarKind.exam,
+          ReminderKind.young => CalendarKind.young,
+          ReminderKind.personal => CalendarKind.personal,
+          ReminderKind.planBlock => CalendarKind.planBlock,
+          ReminderKind.taskDeadline => throw StateError(
+            'invalid calendar target',
+          ),
+        };
+        final reference = CalendarReference(
+          target.context,
+          CalendarIdentity(kind, target.localId, ordinal: target.ordinal),
+          target.version,
+        );
+        final detail = await localCalendar.detail(reference);
+        await runtime.calendar.load(
+          day: beijingDay(detail.occurrence.startsAtUtc),
+          filter: CalendarFilter.all,
+          includeInactive: true,
+        );
+        await localCalendar.ensureCalendarContext(target.context);
+        final currentDetail = await localCalendar.detail(
+          detail.occurrence.reference,
+        );
+        if (!_isCurrentRuntime(runtime, generation) ||
+            runtime.calendar.view.window?.context != target.context ||
+            currentDetail.occurrence.reference.identity !=
+                detail.occurrence.reference.identity) {
+          return;
+        }
+        setState(() {
+          _evidenceSelection = currentDetail.occurrence.reference;
+          _evidenceTasks = false;
+        });
+      }
+      if (_destination.value != ShellDestination.agenda) {
+        _destination.value = ShellDestination.agenda;
+      }
+    } on Object {
+      if (mounted && _isCurrentRuntime(runtime, generation)) {
+        _messengerKey.currentState?.showSnackBar(
+          const SnackBar(content: Text('这条提醒已失效，请从当前日程或任务中重新选择。')),
+        );
+      }
     }
   }
 
@@ -122,10 +273,14 @@ final class _OwnedAppState extends State<OwnedApplication> {
       final bootstrap = widget.bootstrap;
       final runtime = bootstrap.runtime;
       final view = bootstrap.settings.settingsView;
+      _bindRuntime(
+        runtime == null || view.maintenance.blocksProduct ? null : runtime,
+      );
       if (runtime == null || view.maintenance.blocksProduct) {
         // The product subtree and its routes are withdrawn during maintenance;
         // old forms cannot remain attached to the next agenda/reset epoch.
         return MaterialApp(
+          scaffoldMessengerKey: _messengerKey,
           debugShowCheckedModeBanner: false,
           locale: const Locale('zh', 'CN'),
           supportedLocales: const [Locale('zh', 'CN'), Locale('en')],
@@ -148,6 +303,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
       }
       _navigationResetEpoch = resetEpoch;
       return ProductApp(
+        scaffoldMessengerKey: _messengerKey,
         key: ValueKey(view.snapshot?.context.resetEpoch),
         controller: runtime.shell,
         destination: _destination,
@@ -158,6 +314,11 @@ final class _OwnedAppState extends State<OwnedApplication> {
           controller: runtime.agent,
           diagnostics: runtime.diagnostics,
           speechInput: runtime.speechInput,
+          morningView: runtime.morning.view,
+          morningChanges: runtime.morning.changes,
+          morningNowUtc: () => runtime.clock.nowUtc,
+          onMorningRetry: () => runtime.morning.check(manual: true),
+          openMorningSource: (uri) => _openRestrictedExternalLink(context, uri),
           pickImages: pickAgentImages,
           onModelValidation: () async {
             try {
@@ -231,6 +392,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
           key: ValueKey(view.snapshot?.context.agendaEpoch),
           controller: runtime.calendar,
           tasks: runtime.calendar,
+          reminders: runtime.jwStore.features,
           initialTasks: _evidenceTasks,
           initialSelection: _evidenceSelection,
           onInitialNavigationConsumed: () {
@@ -249,6 +411,15 @@ final class _OwnedAppState extends State<OwnedApplication> {
               AgentSettingsPanel(controller: runtime.agent),
           logsBuilder: (context) =>
               DiagnosticsPanel(diagnostics: runtime.diagnostics),
+          remindersBuilder: (context) => M6SettingsPanel(
+            data: runtime.jwStore.features,
+            briefs: runtime.jwStore.briefs,
+            reminderChanges: runtime.reminders.changes,
+            initialReminderView: runtime.reminders.view,
+            retryReminders: runtime.reminders.refresh,
+            testNotification: runtime.reminders.testNotification,
+            regenerateMorning: () => runtime.morning.check(manual: true),
+          ),
           diagnosticsBuilder:
               developmentDiagnosticsEnabled || m3ValidationEnabled
               ? _buildDiagnostics
@@ -259,6 +430,59 @@ final class _OwnedAppState extends State<OwnedApplication> {
   );
 
   DemoRuntime get _runtime => widget.bootstrap.runtime!;
+
+  bool _isSafeHttpsSource(Uri uri) =>
+      uri.scheme.toLowerCase() == 'https' &&
+      uri.hasAuthority &&
+      uri.host.isNotEmpty &&
+      uri.userInfo.isEmpty &&
+      !RegExp(r'[\x00-\x1f\x7f]').hasMatch(uri.toString());
+
+  Future<void> _openRestrictedExternalLink(
+    BuildContext sourceContext,
+    Uri uri,
+  ) async {
+    if (!sourceContext.mounted) return;
+    if (!_isSafeHttpsSource(uri)) {
+      ScaffoldMessenger.of(
+        sourceContext,
+      ).showSnackBar(const SnackBar(content: Text('该链接不是可复制的 HTTPS 出处。')));
+      return;
+    }
+    await showDialog<void>(
+      context: sourceContext,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('公开出处链接'),
+        content: SelectableText(uri.toString()),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('关闭'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              try {
+                await Clipboard.setData(ClipboardData(text: uri.toString()));
+                if (dialogContext.mounted) Navigator.of(dialogContext).pop();
+                if (sourceContext.mounted) {
+                  ScaffoldMessenger.of(sourceContext).showSnackBar(
+                    const SnackBar(content: Text('已复制 HTTPS 出处链接。')),
+                  );
+                }
+              } on Object {
+                if (dialogContext.mounted) {
+                  ScaffoldMessenger.of(dialogContext).showSnackBar(
+                    const SnackBar(content: Text('复制 HTTPS 出处链接失败。')),
+                  );
+                }
+              }
+            },
+            child: const Text('复制链接'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Widget _buildDiagnostics(BuildContext context) => SizedBox(
     height: 600,

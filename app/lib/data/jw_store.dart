@@ -24,6 +24,9 @@ import '../core/agent_source_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_evidence.dart';
 import '../core/agent_text.dart';
+import '../core/reminder_contract.dart';
+import '../core/morning_brief_contract.dart';
+import '../core/morning_notice_contract.dart';
 import '../source/young_collection_contract.dart';
 import '../source/jw_collection_contract.dart';
 import '../source/jw_probe_contract.dart';
@@ -34,6 +37,7 @@ import 'knowledge_markdown.dart';
 import 'bundled_knowledge_identity.dart';
 import 'calendar_projection.dart';
 import 'agent_plan_preview.dart';
+import 'reminder_projection.dart';
 
 part 'young_store_extension.dart';
 part 'public_store.dart';
@@ -46,6 +50,8 @@ part 'agent_chat_store.dart';
 part 'agent_permission_store.dart';
 part 'agent_context_store.dart';
 part 'agent_plan_store.dart';
+part 'm6_store.dart';
+part 'morning_brief_store.dart';
 
 enum JwImportCheckpoint { afterFirstWrite, beforeCommit }
 
@@ -121,6 +127,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   late final AgentStore agent = AgentStore._(this);
   late final PublicStore publicStore = PublicStore._(this);
   late final LocalCalendarStore localCalendar = LocalCalendarStore._(this);
+  late final M6Store features = M6Store._(this);
+  late final MorningBriefStore briefs = MorningBriefStore._(this);
+  int? _m6Changed;
   late final ApplicationSettingsStore applicationSettings =
       ApplicationSettingsStore._(this);
   final String _newOwnerId;
@@ -137,7 +146,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -161,6 +170,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ..._AgentChatState.schema,
         ..._AgentPermissionState.schema,
         ..._AgentContextState.schema,
+        ...M6Store.schema,
+        ...MorningBriefStore.schema,
       ]) {
         await customStatement(statement);
       }
@@ -173,7 +184,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 14 || to != 15) {
+      if (from < 1 || from > 15 || to != 16) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -198,7 +209,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 12) ..._agentActionSchema,
           if (from <= 13) ..._AgentChatState.schema,
           if (from <= 13) ..._AgentPermissionState.schema,
-          ..._AgentContextState.schema,
+          if (from <= 14) ..._AgentContextState.schema,
+          ...M6Store.schema,
+          ...MorningBriefStore.schema,
         ]) {
           await customStatement(statement);
         }
@@ -215,7 +228,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       await previous;
       try {
         _ownership.ensureHeld();
-        result.complete(await action());
+        final value = await action();
+        if (_m6Changed != null) features._signal(_m6Changed!);
+        result.complete(value);
       } on AppFailure catch (error) {
         result.completeError(error);
       } on JwIdentityException catch (error) {
@@ -232,8 +247,12 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         result.completeError(error);
       } on AgentFailure catch (error) {
         result.completeError(error);
+      } on ReminderFailure catch (error) {
+        result.completeError(error);
       } on Object {
         result.completeError(const AppFailure(FailureCode.storageFailed));
+      } finally {
+        _m6Changed = null;
       }
     }();
     return result.future;
@@ -939,6 +958,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         await customStatement(
           'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
         );
+        await features._captureExpected();
         await agent._commitSourceAction(
           ticket,
           artifact.courseCount + artifact.examCount,
@@ -1273,6 +1293,10 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           'WHERE local_id = ? AND version = ?',
           [command.localId, command.expectedVersion],
         );
+        await customStatement(
+          'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+        );
+        await features._captureExpected();
       }
       final current = await customSelect(
         'SELECT e.version, o.hidden FROM jw_events e '
@@ -1487,6 +1511,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     _youngFirstWriteCheckpoints.clear();
     await _credentialChanges.close();
     await localCalendar._changes.close();
+    await features._changes.close();
     await applicationSettings._close();
     await agent.close();
     await super.close();

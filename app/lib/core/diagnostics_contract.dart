@@ -54,6 +54,12 @@ enum DiagnosticEventName {
   agentContextCompacted,
   agentContextTrimmed,
   agentPolicyChanged,
+  reminderReconcileStarted,
+  reminderReconcileCompleted,
+  reminderFailed,
+  morningBriefStarted,
+  morningBriefCompleted,
+  morningBriefFailed,
 }
 
 enum DiagnosticTool {
@@ -111,6 +117,17 @@ enum DiagnosticOperation {
 
 /// Fixed codes, shared vocabulary only; no exception strings or raw statuses.
 enum DiagnosticCode {
+  platformUnavailable,
+  disabledBySystem,
+  publishFailed,
+  cancelFailed,
+  factsChanged,
+  configurationChanged,
+  drainFailed,
+  attemptLimit,
+  foreground,
+  background,
+  disabled,
   invalidInput,
   secretDetected,
   consentRequired,
@@ -355,6 +372,8 @@ enum DiagnosticStage {
   ui,
   export,
   speechInput,
+  notifications,
+  morningBrief,
 }
 
 enum DiagnosticPhase {

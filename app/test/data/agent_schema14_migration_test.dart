@@ -25,7 +25,7 @@ void main() {
       final before = _legacyFacts(file);
 
       final store = await _open(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 15);
+      expect(await _scalar(store, 'PRAGMA user_version'), 16);
       final settings = await store.agent.inspectAgent();
       expect(settings.modelId, 'synthetic-migration-model');
       expect(settings.keySaved, isTrue);
@@ -254,6 +254,7 @@ void _rewindToSchema13(File file) {
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    _dropM6TablesForLegacyFixture(raw);
     for (final table in [
       'agent_context_turns',
       'agent_target_aliases',
@@ -274,6 +275,19 @@ void _rewindToSchema13(File file) {
     rethrow;
   } finally {
     raw.close();
+  }
+}
+
+void _dropM6TablesForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }
 

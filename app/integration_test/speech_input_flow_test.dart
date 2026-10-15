@@ -122,7 +122,7 @@ void main() {
         expect(identical(first.speechInput, firstSpeech), isTrue);
         expect(identical(runtime.speechInput, firstSpeech), isTrue);
         expect(runtime.agent.view.settings!.keySaved, isFalse);
-        expect(runtime.jwStore.schemaVersion, 14);
+        expect(runtime.jwStore.schemaVersion, 16);
 
         await tester.pumpWidget(OwnedApplication(bootstrap: first));
         await tester.pumpAndSettle();
@@ -200,7 +200,7 @@ void main() {
         );
         bootstraps.add(reopened);
         final reopenedRuntime = reopened.runtime!;
-        expect(reopenedRuntime.jwStore.schemaVersion, 14);
+        expect(reopenedRuntime.jwStore.schemaVersion, 16);
         expect(reopenedRuntime.agent.view.messages, isEmpty);
         expect(
           reopenedRuntime.calendar.view.window!.items.any(

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
@@ -27,6 +28,12 @@ import '../jobs/young_sync_coordinator.dart';
 import '../jobs/public_query_coordinator.dart';
 import '../jobs/application_maintenance_coordinator.dart';
 import '../jobs/application_profile_cleanup.dart';
+import '../jobs/reminder_coordinator.dart';
+import '../jobs/morning_brief_coordinator.dart';
+import '../jobs/morning_notice_query.dart';
+import '../core/reminder_contract.dart';
+import '../platform/windows_notifications.dart';
+import '../source/public_http.dart';
 import '../platform/demo_directory.dart';
 import '../platform/diagnostic_journal.dart';
 import '../platform/jw_directory_path.dart';
@@ -76,6 +83,9 @@ final class DemoRuntime {
     this.diagnostics,
     this.diagnosticBindings,
     this.speechInput,
+    this.reminders,
+    this.morning,
+    this.clock,
   );
 
   final DemoDirectory directory;
@@ -100,6 +110,9 @@ final class DemoRuntime {
   final DiagnosticsPort diagnostics;
   final RuntimeDiagnosticBindings diagnosticBindings;
   final SpeechInputPort speechInput;
+  final ReminderCoordinator reminders;
+  final MorningBriefCoordinator morning;
+  final AppClock clock;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
 
@@ -140,6 +153,8 @@ final class DemoRuntime {
         );
         await diagnostics.flush();
         await agentCoordinator.resumeAfterFailedExit();
+        morning.resumeAfterMaintenance();
+        reminders.resumeAfterMaintenance();
         settings.resumeAfterFailedExit(shell: shell);
         _closeFuture = null;
         throw error;
@@ -156,6 +171,7 @@ final class DemoRuntime {
     );
     final preservingMaintenance = maintenance.view.blocksProduct;
     await settings.shutdown();
+    await morning.quiesceForMaintenance();
     await speechInput.close();
     await agent.drainBehaviorValidation();
     await agentCoordinator.quiesceForMaintenance();
@@ -176,6 +192,8 @@ final class DemoRuntime {
       await youngSync.shutdown();
     }
     await browser.dispose();
+    await morning.close();
+    await reminders.close();
     await agentCoordinator.close();
     await agent.closeBehaviorValidation();
     if (!_controllerDisposed) {
@@ -214,6 +232,8 @@ final class DemoRuntime {
       resetDay: kind == MaintenanceKind.reset,
     );
     await settings.refreshSettings();
+    reminders.resumeAfterMaintenance();
+    morning.resumeAfterMaintenance();
     await _clearResetDiagnostics(diagnostics, kind);
   }
 }
@@ -242,6 +262,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     required this.diagnostics,
     required this.diagnosticBindings,
     required this.speechInput,
+    required this.reminders,
+    required this.morning,
     this.onActivationCheckpoint,
   });
   final DemoDirectory directory, jwDirectory;
@@ -263,6 +285,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
   final DiagnosticsPort diagnostics;
   final RuntimeDiagnosticBindings diagnosticBindings;
   final SpeechInputPort speechInput;
+  final ReminderCoordinator reminders;
+  final MorningBriefCoordinator morning;
   @visibleForTesting
   final Future<void> Function()? onActivationCheckpoint;
   DemoRuntime? _runtime;
@@ -279,6 +303,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     @visibleForTesting ModelGatewayPort? modelGateway,
     @visibleForTesting ModelCredentialProtector? modelCredentialProtector,
     @visibleForTesting SpeechInputPort? speechInput,
+    @visibleForTesting NotificationPlatformPort? notificationPlatform,
+    @visibleForTesting ModelGatewayPort? morningGateway,
   }) async {
     final directory = await DemoDirectory.acquire(directoryPath);
     DemoDirectory? formal;
@@ -289,6 +315,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
     AgentWorkspaceController? agent;
     DiagnosticsPort? diagnostics;
     RuntimeDiagnosticBindings? diagnosticBindings;
+    ReminderCoordinator? reminders;
+    MorningBriefCoordinator? morning;
     try {
       formal = await DemoDirectory.acquire(
         jwDirectoryPath ??
@@ -321,7 +349,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
         versions: const DiagnosticVersions(
           application: '0.0.1+0',
-          schema: 15,
+          schema: 16,
           tools: agentToolRegistryVersion,
           prompt: agentPromptVersion,
           revision: String.fromEnvironment(
@@ -429,6 +457,47 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ),
       );
       agent = AgentWorkspaceController(agentCoordinator);
+      reminders = ReminderCoordinator(
+        clock: clock,
+        data: database.features,
+        platform: notificationPlatform ?? WindowsNotifications(),
+        diagnostics: diagnostics,
+      );
+      final morningBudget = MorningHttpBudget();
+      final morningTargets = PublicHttpTargets();
+      final morningQueries = PublicQueryCoordinator(
+        store: database.publicStore,
+        leases: leases,
+        clock: clock,
+        drainTimeout: const Duration(seconds: 1),
+        targets: morningTargets,
+        sessionFactory: (source) => IoPublicHttpSession(
+          targets: morningTargets,
+          source: source,
+          beforeRequest: morningBudget.consume,
+        ),
+      );
+      morning = MorningBriefCoordinator(
+        data: database.briefs,
+        settings: database.features,
+        agentData: database.agent,
+        gateway:
+            morningGateway ??
+            UstcModelGateway(requestTimeout: const Duration(seconds: 240)),
+        notices: MorningNoticeQuery(source: morningQueries, clock: clock),
+        clock: clock,
+        diagnostics: diagnostics,
+        cancelQueries: morningQueries.cancel,
+        closeQueries: morningQueries.close,
+        resetNetworkBudget: morningBudget.reset,
+        isForegroundBusy: () => agentCoordinator!.view.busy || leases.isBusy,
+      );
+      agentCoordinator.onForegroundWork = morning.yieldToForeground;
+      final ownedMorning = morning;
+      // This subscription is owned until the Agent stream closes at shutdown.
+      agentCoordinator.changes.listen(
+        (_) => ownedMorning.onAgentStateChanged(),
+      );
       final queries = PublicQueryCoordinator(
         store: database.publicStore,
         leases: leases,
@@ -454,10 +523,18 @@ final class RuntimeBootstrap extends ChangeNotifier {
       );
       final ownedSpeech = speechInput;
       maintenance.drainAgent = () async {
+        await ownedMorning.quiesceForMaintenance();
         await ownedSpeech.cancel();
         await agent!.drainBehaviorValidation();
         await agentCoordinator!.quiesceForMaintenance();
       };
+      final ownedReminders = reminders;
+      final ownedDatabase = database;
+      maintenance.drainReminders = () async =>
+          ownedReminders.clearForMaintenance(
+            nativeCleanupRequired: await ownedDatabase.features
+                .requiresNativeCleanup(),
+          );
       // Pending startup reset settles before product assembly installs the
       // richer refresh callback. It must clear diagnostics on that path too.
       maintenance.onRefresh = (kind) =>
@@ -504,6 +581,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         diagnostics: diagnostics,
         diagnosticBindings: diagnosticBindings,
         speechInput: speechInput,
+        reminders: reminders,
+        morning: morning,
       );
       ready = bootstrap;
       settings.onRecovered = bootstrap._activate;
@@ -532,6 +611,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         );
       }
       await speechInput?.close();
+      await morning?.close();
+      await reminders?.close();
       await agent?.closeBehaviorValidation();
       await agentCoordinator?.close();
       agent?.dispose();
@@ -583,6 +664,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         return;
       }
       await settings.shutdown();
+      await morning.quiesceForMaintenance();
       await speechInput.close();
       await agent.drainBehaviorValidation();
       await agentCoordinator.quiesceForMaintenance();
@@ -593,6 +675,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
       await jwRegistry.closeForMaintenanceExit();
       await youngRegistry.closeForMaintenanceExit();
       await browser.dispose();
+      await morning.close();
+      await reminders.close();
       await agentCoordinator.close();
       await agent.closeBehaviorValidation();
       settings.dispose();
@@ -622,6 +706,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ),
       );
       await agentCoordinator.resumeAfterFailedExit();
+      morning.resumeAfterMaintenance();
+      reminders.resumeAfterMaintenance();
       settings.resumeAfterFailedExit();
       _closing = null;
       rethrow;
@@ -693,6 +779,7 @@ final class _RuntimeAssembly {
     }
     if (!_databaseReady) {
       await b.jwStore.initialize();
+      await b.jwStore.features.initialize();
       _databaseReady = true;
     }
     final coordinator = _coordinator ??= JobCoordinator(
@@ -809,6 +896,9 @@ final class _RuntimeAssembly {
       b.diagnostics,
       b.diagnosticBindings,
       b.speechInput,
+      b.reminders,
+      b.morning,
+      b.clock,
     );
     b.diagnosticBindings.bindJw(jw.syncChanges);
     b.diagnosticBindings.bindYoung(young.syncChanges);
@@ -822,6 +912,10 @@ final class _RuntimeAssembly {
     );
     b.settings.attachShell(shell);
     b.maintenance.onRefresh = runtime._refreshAfterMaintenance;
+    b.reminders.resumeAfterMaintenance();
+    b.reminders.start();
+    b.morning.resumeAfterMaintenance();
+    b.morning.start();
     return runtime;
   }
 

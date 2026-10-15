@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 
 import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
+import '../core/reminder_contract.dart';
 import 'calendar_display_style.dart';
+import 'reminder_editor.dart';
 import 'task_workspace_contract.dart';
 import 'task_workspace_editor.dart';
 
@@ -15,10 +17,16 @@ const _line = Color(0xFFE3E9E5);
 
 /// Task and PlanBlock UI. The port owns reads, writes, busy state and refresh.
 final class TaskWorkspacePage extends StatefulWidget {
-  const TaskWorkspacePage({super.key, required this.port, this.onDiscuss});
+  const TaskWorkspacePage({
+    super.key,
+    required this.port,
+    this.onDiscuss,
+    this.reminders,
+  });
 
   final TaskWorkspacePort port;
   final ValueChanged<AgentDiscussionSelection>? onDiscuss;
+  final ReminderDataPort? reminders;
 
   @override
   State<TaskWorkspacePage> createState() => _TaskWorkspacePageState();
@@ -562,6 +570,34 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                       ),
                   ],
                 ),
+                if (widget.reminders != null) ...[
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: OutlinedButton.icon(
+                      key: const ValueKey('task-deadline-reminder'),
+                      onPressed: () => unawaited(
+                        _editReminder(
+                          ReminderTarget.task(detail.task.reference),
+                          allDay: false,
+                        ),
+                      ),
+                      icon: const Icon(
+                        Icons.notifications_active_outlined,
+                        size: 18,
+                      ),
+                      label: const Text('设置截止提醒'),
+                    ),
+                  ),
+                  if (detail.task.draft.deadlineAtUtc == null)
+                    const Padding(
+                      padding: EdgeInsets.only(top: 5),
+                      child: Text(
+                        '当前没有截止时间；规则会暂存，添加截止时间前不会生成提醒。',
+                        style: TextStyle(color: _muted, fontSize: 12),
+                      ),
+                    ),
+                ],
                 if (detail.task.draft.description.trim().isNotEmpty) ...[
                   const SizedBox(height: 15),
                   _detailText('描述', detail.task.draft.description),
@@ -806,6 +842,25 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                 ),
             ],
           ),
+          if (widget.reminders != null) ...[
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                key: ValueKey(
+                  'task-block-reminder-${block.reference.identity.localId}',
+                ),
+                onPressed: () => unawaited(
+                  _editReminder(
+                    ReminderTarget.calendar(block.reference),
+                    allDay: false,
+                  ),
+                ),
+                icon: const Icon(Icons.notifications_active_outlined, size: 17),
+                label: const Text('时间块提醒'),
+              ),
+            ),
+          ],
           if (block.draft.location.trim().isNotEmpty) ...[
             const SizedBox(height: 6),
             _BlockFact(icon: Icons.place_outlined, text: block.draft.location),
@@ -816,6 +871,20 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
           ],
         ],
       ),
+    );
+  }
+
+  Future<void> _editReminder(
+    ReminderTarget target, {
+    required bool allDay,
+  }) async {
+    final data = widget.reminders;
+    if (data == null) return;
+    await showReminderEditor(
+      context,
+      data: data,
+      target: target,
+      allDay: allDay,
     );
   }
 

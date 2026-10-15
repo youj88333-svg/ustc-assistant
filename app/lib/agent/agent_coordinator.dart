@@ -75,6 +75,9 @@ final class AgentCoordinator {
     this.diagnostics,
   });
   final AgentDataPort data;
+
+  /// Foreground work gets priority over the separate morning-summary channel.
+  Future<void> Function()? onForegroundWork;
   final ModelGatewayPort gateway;
   final AgentReadToolsPort? readTools;
   final AppClock clock;
@@ -495,6 +498,7 @@ final class AgentCoordinator {
     _work = done.future;
     _publish();
     try {
+      await onForegroundWork?.call();
       await body(generation);
     } catch (e) {
       _failure = _budgetExpired

@@ -9,7 +9,7 @@ import 'source_settings_page.dart';
 
 const _settingsMuted = Color(0xFF66736C);
 
-enum _SettingsSection { sources, agent, display, dataPrivacy, about }
+enum _SettingsSection { sources, agent, reminders, display, dataPrivacy, about }
 
 /// Formal settings projection for the existing source and local settings ports.
 ///
@@ -22,6 +22,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
     required this.controller,
     this.diagnosticsBuilder,
     this.agentBuilder,
+    this.remindersBuilder,
     this.logsBuilder,
   });
 
@@ -29,6 +30,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
   final AppShellPort controller;
   final WidgetBuilder? diagnosticsBuilder;
   final WidgetBuilder? agentBuilder;
+  final WidgetBuilder? remindersBuilder;
   final WidgetBuilder? logsBuilder;
 
   @override
@@ -165,6 +167,12 @@ final class _ApplicationSettingsPageState
                     'Agent',
                     Icons.auto_awesome_outlined,
                   ),
+                if (widget.remindersBuilder != null)
+                  _sectionChip(
+                    _SettingsSection.reminders,
+                    '晨报与提醒',
+                    Icons.notifications_active_outlined,
+                  ),
                 _sectionChip(
                   _SettingsSection.display,
                   '显示',
@@ -190,7 +198,8 @@ final class _ApplicationSettingsPageState
             if (snapshot != null &&
                 !writable &&
                 _section != _SettingsSection.sources &&
-                _section != _SettingsSection.agent) ...[
+                _section != _SettingsSection.agent &&
+                _section != _SettingsSection.reminders) ...[
               const SizedBox(height: 8),
               const _SettingsNotice(message: '本机有操作或恢复正在进行；新的设置操作暂不可用。'),
             ],
@@ -205,6 +214,9 @@ final class _ApplicationSettingsPageState
                 _SettingsSection.agent =>
                   widget.agentBuilder?.call(context) ??
                       _loadingSection('模型设置尚未装配。'),
+                _SettingsSection.reminders =>
+                  widget.remindersBuilder?.call(context) ??
+                      _loadingSection('晨报与提醒尚未装配。'),
                 _SettingsSection.display => _displaySection(
                   context,
                   preferences,

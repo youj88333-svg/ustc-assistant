@@ -2216,6 +2216,16 @@ final class _SyntheticCredentialProtector implements JwCredentialProtector {
 
 /// The fixture downgrades only an isolated synthetic copy, never real data.
 void _removeYoungTablesForLegacyFixture(sqlite3.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
+  }
   removeCalendarTablesForLegacyFixture(database);
   _removeSchema14AgentObjectsForLegacyFixture(database);
   for (final table in const [

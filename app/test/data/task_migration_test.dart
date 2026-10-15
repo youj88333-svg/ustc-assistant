@@ -42,6 +42,7 @@ void main() {
       final raw = sqlite.sqlite3.open(file.path);
       late Map<String, List<Map<String, Object?>>> before;
       try {
+        _dropM6TablesForLegacyFixture(raw);
         removeTaskTablesForLegacyFixture(raw);
         _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute('INSERT INTO jw_account VALUES (1,?)', [
@@ -104,7 +105,7 @@ void main() {
               .single['n'],
           0,
         );
-        expect(after.select('PRAGMA user_version').single['user_version'], 15);
+        expect(after.select('PRAGMA user_version').single['user_version'], 16);
       } finally {
         after.close();
       }
@@ -192,6 +193,7 @@ void main() {
       final raw = sqlite.sqlite3.open(file.path);
       late Map<String, List<Map<String, Object?>>> before;
       try {
+        _dropM6TablesForLegacyFixture(raw);
         removeTaskTablesForLegacyFixture(raw);
         _removeSchema14AgentObjectsForLegacyFixture(raw);
         raw.execute(
@@ -287,6 +289,19 @@ void _removeSchema14AgentObjectsForLegacyFixture(sqlite.Database database) {
     if (columns.contains('authorization')) {
       database.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
     }
+  }
+}
+
+void _dropM6TablesForLegacyFixture(sqlite.Database database) {
+  for (final table in const [
+    'm6_state',
+    'm6_expected',
+    'm6_reminder_overrides',
+    'm6_native_map',
+    'm6_briefs',
+    'm6_brief_suppressed',
+  ]) {
+    database.execute('DROP TABLE IF EXISTS $table');
   }
 }
 

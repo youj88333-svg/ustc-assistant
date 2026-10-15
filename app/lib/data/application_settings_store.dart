@@ -544,6 +544,9 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
       await _db.customStatement(
         'UPDATE agenda_state SET maintenance=0,revision=revision+1 WHERE singleton=1',
       );
+      await _db.features._clearForMaintenance(
+        reset: request.kind == MaintenanceKind.reset,
+      );
       await _db.customStatement('DELETE FROM app_maintenance_intent');
       await _db.onSettingsCheckpoint?.call();
       _db._ownership.ensureHeld();

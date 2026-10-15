@@ -9,6 +9,7 @@ import 'package:ustc_assistant_m0/app/agent_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/morning_brief_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_permission_contract.dart';
 
 void main() {
@@ -49,6 +50,35 @@ void main() {
     expect(_textField(tester, 'agent-composer').controller?.text, '可以先输入草稿');
     expect(find.byKey(const ValueKey('agent-new-conversation')), findsNothing);
     expect(find.byKey(const ValueKey('agent-conversation-list')), findsNothing);
+    expect(port.sent, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('morning discussion only prefills the editable composer', (
+    tester,
+  ) async {
+    final port = _FakeAgentPort(view: _view(conversationId: 'conversation-a'));
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(
+      _host(
+        AgentWorkspacePage(
+          controller: port,
+          onSettings: () {},
+          morningView: const MorningRuntimeView(enabled: true),
+          morningNowUtc: () => DateTime.utc(2026, 10, 15, 0),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('morning-brief-discuss')));
+    await tester.pump();
+
+    expect(
+      _textField(tester, 'agent-composer').controller?.text,
+      '请结合我的今天日程和昨天的校园公告，帮我梳理重点。',
+    );
     expect(port.sent, isEmpty);
     expect(tester.takeException(), isNull);
   });

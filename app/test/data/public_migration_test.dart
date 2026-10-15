@@ -200,6 +200,16 @@ void main() {
         ]) {
           raw.execute('DROP TABLE $table');
         }
+        for (final table in const [
+          'm6_state',
+          'm6_expected',
+          'm6_reminder_overrides',
+          'm6_native_map',
+          'm6_briefs',
+          'm6_brief_suppressed',
+        ]) {
+          raw.execute('DROP TABLE IF EXISTS $table');
+        }
         raw.execute('PRAGMA user_version = 4');
       } finally {
         raw.close();

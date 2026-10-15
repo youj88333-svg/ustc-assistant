@@ -19,6 +19,7 @@ final class ApplicationMaintenanceCoordinator {
   final Future<void> Function(WorkLease) cleanProfiles;
   final Future<void> Function() drainForExit;
   Future<void> Function()? drainAgent;
+  Future<void> Function()? drainReminders;
   Future<void> Function(MaintenanceKind)? onRefresh;
   final _changes = StreamController<MaintenanceProgress>.broadcast();
   MaintenanceProgress _view = const MaintenanceProgress();
@@ -195,6 +196,7 @@ final class ApplicationMaintenanceCoordinator {
       // C3 has already invalidated Agent tickets in the durable intent. Its
       // separate model channel must be drained before any deletion begins.
       await drainAgent?.call();
+      await drainReminders?.call();
       if (intent.kind == MaintenanceKind.reset) {
         _publish(MaintenancePhase.cleaning);
         await cleanProfiles(_lease!);

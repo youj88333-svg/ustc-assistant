@@ -203,12 +203,20 @@ final class PublicHttpTargets {
 
 /// One anonymous client implementation per job; no cookie jar or browser assets.
 final class IoPublicHttpSession implements PublicHttpSession {
-  IoPublicHttpSession({required this.targets, required this.source}) {
+  IoPublicHttpSession({
+    required this.targets,
+    required this.source,
+    this.beforeRequest,
+  }) {
     _proxied.findProxy = (uri) => HttpClient.findProxyFromEnvironment(uri);
     _direct.findProxy = (_) => 'DIRECT';
   }
   final PublicHttpTargets targets;
   final PublicSource source;
+
+  /// Optional composition budget, charged for every real request including
+  /// redirects, broken-connection retries and the registered campus direct retry.
+  final void Function()? beforeRequest;
   final HttpClient _proxied = HttpClient();
   final HttpClient _direct = HttpClient();
   final Stopwatch _elapsed = Stopwatch()..start();
@@ -266,6 +274,7 @@ final class IoPublicHttpSession implements PublicHttpSession {
     while (true) {
       if (_closed) throw const PublicFailure(PublicFailureCode.cancelled);
       targets.requireAllowed(uri, source);
+      beforeRequest?.call();
       final client = directRoute ? _direct : _proxied;
       client.connectionTimeout = _remaining;
       final request = await client.getUrl(uri).timeout(_remaining);

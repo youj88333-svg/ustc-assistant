@@ -258,8 +258,9 @@ extension _TaskStorage on LocalCalendarStore {
   Future<List<CalendarOccurrence>> _blockOccurrences(
     CalendarContext context,
     CalendarQuery? query,
-    Set<CalendarIdentity>? targets,
-  ) async {
+    Set<CalendarIdentity>? targets, {
+    bool all = false,
+  }) async {
     final clauses = <String>[];
     final vars = <Variable>[];
     if (query != null) {
@@ -283,7 +284,8 @@ extension _TaskStorage on LocalCalendarStore {
       clauses.add('b.local_id IN (${List.filled(ids.length, '?').join(',')})');
       vars.addAll(ids.map(Variable.withInt));
     }
-    if (query == null && ids.isEmpty) return [];
+    if (query == null && ids.isEmpty && !all) return [];
+    if (clauses.isEmpty) clauses.add('1=1');
     final rows = await _db
         .customSelect(
           '$_blockSelect WHERE t.deleted=0 AND b.deleted=0 AND (${clauses.join(' OR ')}) LIMIT 5001',
