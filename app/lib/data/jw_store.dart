@@ -150,8 +150,10 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   bool _closing = false;
   Future<void>? _closeFuture;
 
+  static const currentSchemaVersion = 18;
+
   @override
-  int get schemaVersion => 18;
+  int get schemaVersion => currentSchemaVersion;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];

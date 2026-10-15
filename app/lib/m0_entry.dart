@@ -19,6 +19,8 @@ import 'app/diagnostic_error_hooks.dart';
 import 'platform/agent_image_picker.dart';
 import 'platform/transient_diagnostics.dart';
 import 'core/diagnostics_contract.dart';
+import 'core/application_version.dart';
+import 'data/jw_store.dart';
 import 'agent/agent_tool_contract.dart';
 import 'agent/agent_system_prompt.dart';
 import 'app/jw_data_probe_panel.dart';
@@ -50,8 +52,8 @@ Future<void> launchM0() async {
     final code = error is AppFailure ? error.code : FailureCode.storageFailed;
     final diagnostics = TransientDiagnostics(
       versions: const DiagnosticVersions(
-        application: '0.0.1+0',
-        schema: 16,
+        application: applicationVersion,
+        schema: JwStore.currentSchemaVersion,
         tools: agentToolRegistryVersion,
         prompt: agentPromptVersion,
         revision: String.fromEnvironment(

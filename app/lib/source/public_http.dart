@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../core/public_query_contract.dart';
+import '../core/application_version.dart';
 import 'public_source_contract.dart';
 
 final class PublicHtmlPage {
@@ -280,7 +281,7 @@ final class IoPublicHttpSession implements PublicHttpSession {
       final request = await client.getUrl(uri).timeout(_remaining);
       request.followRedirects = false;
       request.headers.set(HttpHeaders.acceptHeader, 'text/html');
-      request.headers.set(HttpHeaders.userAgentHeader, 'USTCAssistant/0.0.1');
+      request.headers.set(HttpHeaders.userAgentHeader, applicationUserAgent);
       final response = await request.close().timeout(_remaining);
       if ([301, 302, 303, 307, 308].contains(response.statusCode)) {
         final location = response.headers.value(HttpHeaders.locationHeader);

@@ -63,6 +63,12 @@ void main() {
       expect(settings.preferenceWrites.last.$2.includeInactive, isTrue);
       expect(find.textContaining('北京时间'), findsOneWidget);
       expect(find.textContaining('周一开始'), findsOneWidget);
+
+      await _tap(tester, find.byKey(const ValueKey('settings-section-about')));
+      expect(find.text('USTC Assistant · 1.00'), findsOneWidget);
+      expect(find.textContaining('1.0.0+1'), findsOneWidget);
+      expect(find.textContaining('管理个人安排'), findsOneWidget);
+      expect(find.textContaining('正在接入'), findsNothing);
     });
 
     testWidgets('maintenance uses fixed scopes and two confirmations', (

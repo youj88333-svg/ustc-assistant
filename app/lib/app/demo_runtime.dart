@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../core/contracts.dart';
+import '../core/application_version.dart';
 import '../core/work_lease.dart';
 import '../core/settings_contract.dart';
 import '../core/agent_contract.dart';
@@ -355,8 +356,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         },
         clock: clock,
         versions: const DiagnosticVersions(
-          application: '0.0.1+0',
-          schema: 18,
+          application: applicationVersion,
+          schema: JwStore.currentSchemaVersion,
           tools: agentToolRegistryVersion,
           prompt: agentPromptVersion,
           revision: String.fromEnvironment(

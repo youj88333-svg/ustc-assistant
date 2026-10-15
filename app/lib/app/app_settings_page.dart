@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/knowledge_contract.dart';
+import '../core/application_version.dart';
 import '../core/young_daily_sync_contract.dart';
 import 'app_shell_contract.dart';
 import 'settings_contract.dart';
@@ -799,13 +800,18 @@ final class _ApplicationSettingsPageState
   Widget _aboutSection() => _sectionScroll(
     children: const [
       _SettingsCard(
+        title: 'USTC Assistant · $applicationDisplayVersion',
+        child: Text('工程版本 $applicationVersion · Windows x64 私有交付版'),
+      ),
+      SizedBox(height: 12),
+      _SettingsCard(
         title: '本地优先',
         child: Text('日程、任务和设置保存在本机。学校来源保持只读；联网功能仅在相应授权后由明确操作使用。'),
       ),
       SizedBox(height: 12),
       _SettingsCard(
         title: 'Agent 状态',
-        child: Text('可在 Agent 设置中连接学校模型服务，使用对话、停止和本机历史。业务查询、规划及写入功能正在接入。'),
+        child: Text('连接学校模型服务后，可用对话查询、规划日程和管理个人安排。修改按你的许可执行，学校来源保持只读。'),
       ),
       SizedBox(height: 12),
       _SettingsCard(

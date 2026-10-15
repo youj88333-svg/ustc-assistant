@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "cn.ustcassistant" "\0"
-            VALUE "FileDescription", "ustc_assistant_m0" "\0"
+            VALUE "FileDescription", "USTC Assistant" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "ustc_assistant_m0" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 cn.ustcassistant. All rights reserved." "\0"
             VALUE "OriginalFilename", "ustc_assistant_m0.exe" "\0"
-            VALUE "ProductName", "ustc_assistant_m0" "\0"
+            VALUE "ProductName", "USTC Assistant" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END
