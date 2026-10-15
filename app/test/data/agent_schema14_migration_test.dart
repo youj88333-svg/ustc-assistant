@@ -25,7 +25,7 @@ void main() {
       final before = _legacyFacts(file);
 
       final store = await _open(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 17);
+      expect(await _scalar(store, 'PRAGMA user_version'), 18);
       final settings = await store.agent.inspectAgent();
       expect(settings.modelId, 'synthetic-migration-model');
       expect(settings.keySaved, isTrue);
@@ -268,6 +268,7 @@ void _rewindToSchema13(File file) {
     raw.execute('DROP TABLE agent_chat_state');
     raw.execute('DROP TABLE agent_permissions');
     raw.execute('ALTER TABLE agent_actions DROP COLUMN authorization');
+    raw.execute('DROP TABLE IF EXISTS young_daily_sync');
     raw.execute('PRAGMA user_version=13');
     raw.execute('COMMIT');
   } on Object {

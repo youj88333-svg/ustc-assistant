@@ -809,7 +809,7 @@ void main() {
           expect(
             (await upgraded.customSelect('PRAGMA user_version').getSingle())
                 .read<int>('user_version'),
-            17,
+            18,
           );
           for (final table in ['jw_events', 'young_events']) {
             expect(

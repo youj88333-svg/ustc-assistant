@@ -3,6 +3,7 @@ import 'dart:async';
 import '../core/diagnostics_contract.dart';
 import '../core/settings_contract.dart';
 import '../core/young_work_contract.dart';
+import '../core/young_daily_sync_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
 
@@ -12,6 +13,46 @@ final class RuntimeDiagnosticBindings {
   RuntimeDiagnosticBindings(this.port);
   final DiagnosticsPort port;
   final List<StreamSubscription<Object?>> _subscriptions = [];
+
+  void bindYoungDaily(Stream<YoungDailySyncView> changes) {
+    String? previous;
+    DiagnosticTrace? trace;
+    _subscriptions.add(
+      changes.listen((view) {
+        final key =
+            '${view.phase.name}/${view.enabled}/${view.attempts}/${view.failure?.name}';
+        if (key == previous) return;
+        previous = key;
+        if (view.phase == YoungDailySyncPhase.syncing) {
+          trace = _trace();
+        }
+        recordDiagnostic(
+          port,
+          DiagnosticEvent(
+            name: DiagnosticEventName.youngDailySyncState,
+            trace: trace,
+            stage: DiagnosticStage.young,
+            outcome: switch (view.phase) {
+              YoungDailySyncPhase.done => DiagnosticOutcome.committed,
+              YoungDailySyncPhase.failed => DiagnosticOutcome.failure,
+              YoungDailySyncPhase.needsLogin =>
+                DiagnosticOutcome.waitingForSchool,
+              YoungDailySyncPhase.disabled ||
+              YoungDailySyncPhase.closed => DiagnosticOutcome.closed,
+              YoungDailySyncPhase.paused ||
+              YoungDailySyncPhase.waitingForIdle =>
+                DiagnosticOutcome.interrupted,
+              _ => DiagnosticOutcome.started,
+            },
+            code: view.failure == null
+                ? null
+                : diagnosticCode(view.failure!.name),
+            count: view.attempts,
+          ),
+        );
+      }),
+    );
+  }
 
   void bindJw(
     Stream<JwSyncView> changes, {

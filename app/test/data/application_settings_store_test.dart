@@ -1121,7 +1121,7 @@ void main() {
       store = await _open(file: file);
       raw = sqlite3.sqlite3.open(file.path);
       try {
-        expect(raw.select('PRAGMA user_version').single['user_version'], 17);
+        expect(raw.select('PRAGMA user_version').single['user_version'], 18);
         expect(_legacyFacts(raw), before);
         expect(
           raw

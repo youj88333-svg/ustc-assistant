@@ -17,6 +17,7 @@ import '../source/young_active_contract.dart';
 final class NativeObservationBrowser
     implements
         ObservationBrowserPort,
+        BackgroundObservationBrowserPort,
         JwProbeBrowserPort,
         JwDataProbeBrowserPort,
         JwCollectionBrowserPort,
@@ -265,6 +266,31 @@ final class NativeObservationBrowser
     required String profilePath,
     required ObservationTarget target,
     bool recoveryOnly = false,
+  }) => _openBrowser(
+    session: session,
+    profilePath: profilePath,
+    target: target,
+    recoveryOnly: recoveryOnly,
+  );
+
+  @override
+  Future<void> openBackground({
+    required int session,
+    required String profilePath,
+    required ObservationTarget target,
+  }) => _openBrowser(
+    session: session,
+    profilePath: profilePath,
+    target: target,
+    background: true,
+  );
+
+  Future<void> _openBrowser({
+    required int session,
+    required String profilePath,
+    required ObservationTarget target,
+    bool recoveryOnly = false,
+    bool background = false,
   }) async {
     _session = session;
     _target = target;
@@ -276,6 +302,7 @@ final class NativeObservationBrowser
       'allowedOrigins': target.allowedOrigins,
       'testMode': target.isFixture,
       'recoveryOnly': recoveryOnly,
+      'background': background,
       if (target.isFixture && fixtureDeniedUri != null)
         'fixtureDeniedUrl': fixtureDeniedUri.toString(),
       if (target.isFixture && fixtureUpgradeFromOrigin != null)
@@ -307,6 +334,12 @@ final class NativeObservationBrowser
       document: document,
       ready: result['ready'] as bool,
       origin: _origin(result['origin']),
+      windowVisible: result['windowVisible'] is bool
+          ? result['windowVisible'] as bool
+          : null,
+      windowForeground: result['windowForeground'] is bool
+          ? result['windowForeground'] as bool
+          : null,
     );
   }
 

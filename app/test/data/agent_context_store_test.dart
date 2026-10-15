@@ -1068,6 +1068,7 @@ void main() {
       try {
         raw.execute('BEGIN');
         _removeSchema15ObjectsForLegacyFixture(raw);
+        raw.execute('DROP TABLE IF EXISTS young_daily_sync');
         raw.execute('PRAGMA user_version=14');
         raw.execute('COMMIT');
       } finally {
@@ -1079,7 +1080,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        17,
+        18,
       );
       expect(await _count(store, 'agent_context_turns'), 0);
       expect(await _count(store, 'agent_target_aliases'), 0);

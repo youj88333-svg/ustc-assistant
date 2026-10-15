@@ -424,6 +424,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
   }
 
   void _invalidateCapabilities() {
+    _db.youngDaily._revoke();
     _db.agent._revoke();
     for (final ticket in [
       ..._db._tickets.values,
@@ -547,6 +548,9 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
       await _db.features._clearForMaintenance(
         reset: request.kind == MaintenanceKind.reset,
       );
+      await _db.youngDaily._clearForMaintenance(
+        reset: request.kind == MaintenanceKind.reset,
+      );
       await _db.customStatement('DELETE FROM app_maintenance_intent');
       await _db.onSettingsCheckpoint?.call();
       _db._ownership.ensureHeld();
@@ -567,6 +571,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
     _invalidateCapabilities();
     _db.localCalendar._signal(agendaRevision);
     _signal(receipt.context.revision);
+    _db.youngDaily._signal();
     return receipt;
   });
 

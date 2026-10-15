@@ -25,6 +25,7 @@ import '../jobs/observation_coordinator.dart';
 import '../jobs/observation_port.dart';
 import '../jobs/jw_sync_coordinator.dart';
 import '../jobs/young_sync_coordinator.dart';
+import '../jobs/young_daily_sync_coordinator.dart';
 import '../jobs/public_query_coordinator.dart';
 import '../jobs/application_maintenance_coordinator.dart';
 import '../jobs/application_profile_cleanup.dart';
@@ -85,6 +86,7 @@ final class DemoRuntime {
     this.speechInput,
     this.reminders,
     this.morning,
+    this.youngDaily,
     this.clock,
   );
 
@@ -112,6 +114,7 @@ final class DemoRuntime {
   final SpeechInputPort speechInput;
   final ReminderCoordinator reminders;
   final MorningBriefCoordinator morning;
+  final YoungDailySyncCoordinator youngDaily;
   final AppClock clock;
   Future<void>? _closeFuture;
   bool _controllerDisposed = false;
@@ -154,6 +157,7 @@ final class DemoRuntime {
         await diagnostics.flush();
         await agentCoordinator.resumeAfterFailedExit();
         morning.resumeAfterMaintenance();
+        youngDaily.resumeAfterMaintenance();
         reminders.resumeAfterMaintenance();
         settings.resumeAfterFailedExit(shell: shell);
         _closeFuture = null;
@@ -170,6 +174,7 @@ final class DemoRuntime {
       ),
     );
     final preservingMaintenance = maintenance.view.blocksProduct;
+    await youngDaily.quiesceForMaintenance();
     await settings.shutdown();
     await morning.quiesceForMaintenance();
     await speechInput.close();
@@ -193,6 +198,7 @@ final class DemoRuntime {
     }
     await browser.dispose();
     await morning.close();
+    await youngDaily.close();
     await reminders.close();
     await agentCoordinator.close();
     await agent.closeBehaviorValidation();
@@ -234,6 +240,7 @@ final class DemoRuntime {
     await settings.refreshSettings();
     reminders.resumeAfterMaintenance();
     morning.resumeAfterMaintenance();
+    youngDaily.resumeAfterMaintenance();
     await _clearResetDiagnostics(diagnostics, kind);
   }
 }
@@ -349,7 +356,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         clock: clock,
         versions: const DiagnosticVersions(
           application: '0.0.1+0',
-          schema: 16,
+          schema: 18,
           tools: agentToolRegistryVersion,
           prompt: agentPromptVersion,
           revision: String.fromEnvironment(
@@ -756,6 +763,8 @@ final class _RuntimeAssembly {
   YoungSyncCoordinator? _young;
   AppShellController? _shell;
   CalendarWorkspaceController? _calendar;
+  YoungDailySyncCoordinator? _daily;
+  StreamSubscription<Object?>? _dailyAgentSubscription;
   bool _disposed = false;
 
   Future<void> _initializeObservation(
@@ -841,6 +850,39 @@ final class _RuntimeAssembly {
       await young.initialize();
       _youngReady = true;
     }
+    if (_daily?.isClosed == true) {
+      await _dailyAgentSubscription?.cancel();
+      _daily = null;
+    }
+    if (_daily == null) {
+      final daily = _daily = YoungDailySyncCoordinator(
+        data: b.jwStore.youngDaily,
+        source: young,
+        startCalendar: (grant, {required bool background}) =>
+            young.startDailyCalendar(grant, background: background),
+        isForegroundBusy: () =>
+            b.leases.isBusy ||
+            b.agentCoordinator.view.busy ||
+            b.morning.view.busy ||
+            b.maintenance.view.blocksProduct,
+        adviceOnly: () => b.agentCoordinator.view.adviceOnly,
+        clock: b.clock,
+      );
+      _dailyAgentSubscription = b.agentCoordinator.changes.listen(
+        (_) => daily.onAgentStateChanged(),
+      );
+      daily.onAgentStateChanged();
+      b.agentCoordinator.onForegroundWork = () async {
+        await daily.yieldToForeground();
+        await b.morning.yieldToForeground();
+      };
+      final drain = b.maintenance.drainAgent;
+      b.maintenance.drainAgent = () async {
+        await daily.quiesceForMaintenance();
+        await drain?.call();
+      };
+      b.diagnosticBindings.bindYoungDaily(daily.changes);
+    }
     final shell = _shell ??= AppShellController(
       jw: jw,
       young: young,
@@ -900,6 +942,7 @@ final class _RuntimeAssembly {
       b.speechInput,
       b.reminders,
       b.morning,
+      _daily!,
       b.clock,
     );
     b.diagnosticBindings.bindJw(jw.syncChanges);
@@ -918,10 +961,14 @@ final class _RuntimeAssembly {
     b.reminders.start();
     b.morning.resumeAfterMaintenance();
     b.morning.start();
+    _daily!.resumeAfterMaintenance();
+    _daily!.start();
     return runtime;
   }
 
   Future<void> close() async {
+    await _daily?.close();
+    await _dailyAgentSubscription?.cancel();
     await _calendar?.shutdown();
     await _coordinator?.close();
     await _youngObservation?.shutdown();

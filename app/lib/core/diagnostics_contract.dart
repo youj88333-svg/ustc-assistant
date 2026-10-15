@@ -43,6 +43,7 @@ enum DiagnosticEventName {
   historyMaintenance,
   modelConfiguration,
   sourceStage,
+  youngDailySyncState,
   maintenanceStarted,
   maintenanceFinished,
   maintenanceFailed,

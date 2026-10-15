@@ -95,6 +95,7 @@ void removeSettingsTablesForLegacyFixture(Database database) {
 /// Remove v11 Agent tables from an explicitly constructed synthetic legacy
 /// copy before setting its older user_version.
 void removeAgentTablesForLegacyFixture(Database database) {
+  database.execute('DROP TABLE IF EXISTS young_daily_sync');
   for (final table in const [
     'agent_context_turns',
     'agent_target_aliases',

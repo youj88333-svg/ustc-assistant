@@ -659,6 +659,7 @@ void main() {
           raw.execute('DROP TABLE $table');
         }
         _removeSchema15AgentObjectsForLegacyFixture(raw);
+        raw.execute('DROP TABLE IF EXISTS young_daily_sync');
         raw.execute('PRAGMA user_version=10');
         raw.execute('COMMIT');
       } finally {
@@ -666,7 +667,7 @@ void main() {
       }
 
       store = await _openAt(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 17);
+      expect(await _scalar(store, 'PRAGMA user_version'), 18);
       expect(await _count(store, 'agent_state'), 1);
       expect(await _count(store, 'agent_config'), 0);
       expect(

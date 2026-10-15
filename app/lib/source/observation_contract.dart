@@ -69,11 +69,14 @@ final class BrowserInspection {
     required this.document,
     required this.ready,
     this.origin,
+    this.windowVisible,
+    this.windowForeground,
   });
   final int session;
   final int document;
   final bool ready;
   final String? origin;
+  final bool? windowVisible, windowForeground;
 }
 
 /// C1-owned policy. Callers can choose a registered target, never a UI URL.
@@ -178,4 +181,14 @@ abstract interface class ObservationBrowserPort {
   });
   Future<void> close(int session);
   Future<bool> drained(int session);
+}
+
+/// Presentation only; the same source, profile and native request boundary
+/// remain in force. Ordinary callers continue to open a visible window.
+abstract interface class BackgroundObservationBrowserPort {
+  Future<void> openBackground({
+    required int session,
+    required String profilePath,
+    required ObservationTarget target,
+  });
 }

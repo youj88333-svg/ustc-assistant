@@ -558,6 +558,7 @@ struct State : std::enable_shared_from_this<State> {
   bool test_mode = false;
   bool young_source = false;
   bool recovery_only = false;
+  bool background_window = false;
   bool completed = false;
   bool dom_loaded = false;
   bool ready = false;
@@ -1141,7 +1142,9 @@ struct State : std::enable_shared_from_this<State> {
       if (Alive() && result) {
         Map snapshot{{Value("session"), Value(session)},
                      {Value("document"), Value(document)},
-                     {Value("ready"), Value(false)}};
+                     {Value("ready"), Value(false)},
+                     {Value("windowVisible"), Value(window && IsWindowVisible(window) != FALSE)},
+                     {Value("windowForeground"), Value(window && GetForegroundWindow() == window)}};
         if (origin) snapshot[Value("origin")] = Value(Narrow(*origin));
         result->Success(Value(snapshot));
       }
@@ -1180,6 +1183,8 @@ struct State : std::enable_shared_from_this<State> {
         Map snapshot{{Value("session"), Value(self->session)},
                      {Value("document"), Value(expected_document)},
                      {Value("ready"), Value(is_ready)},
+                     {Value("windowVisible"), Value(self->window && IsWindowVisible(self->window) != FALSE)},
+                     {Value("windowForeground"), Value(self->window && GetForegroundWindow() == self->window)},
                      {Value("origin"), Value(Narrow(*origin))}};
         result->Success(Value(snapshot));
       }
@@ -2512,7 +2517,7 @@ bool CreateObservationWindow(const std::shared_ptr<State>& state, HWND owner) {
   if (!state->window) return false;
   binding->window_owned = true;
   binding.release();
-  if (!state->recovery_only) ShowWindow(state->window, SW_SHOW);
+  if (!state->recovery_only && !state->background_window) ShowWindow(state->window, SW_SHOW);
   return true;
 }
 
@@ -2540,6 +2545,11 @@ bool ValidTarget(const Map* args, State* state) {
     const auto* value = std::get_if<bool>(recovery);
     if (!value) return false;
     state->recovery_only = *value;
+  }
+  if (const auto* background = Field(args, "background")) {
+    const auto* value = std::get_if<bool>(background);
+    if (!value) return false;
+    state->background_window = *value;
   }
   state->initial_url = Wide(*initial);
   state->test_mode = *mode;

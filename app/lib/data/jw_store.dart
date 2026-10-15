@@ -27,6 +27,8 @@ import '../core/agent_text.dart';
 import '../core/reminder_contract.dart';
 import '../core/morning_brief_contract.dart';
 import '../core/morning_notice_contract.dart';
+import '../core/young_daily_sync_contract.dart';
+import '../core/young_daily_sync_policy.dart';
 import '../source/young_collection_contract.dart';
 import '../source/jw_collection_contract.dart';
 import '../source/jw_probe_contract.dart';
@@ -40,6 +42,7 @@ import 'agent_plan_preview.dart';
 import 'reminder_projection.dart';
 
 part 'young_store_extension.dart';
+part 'young_daily_sync_store.dart';
 part 'public_store.dart';
 part 'local_calendar_store.dart';
 part 'local_task_store.dart';
@@ -130,6 +133,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   late final LocalCalendarStore localCalendar = LocalCalendarStore._(this);
   late final M6Store features = M6Store._(this);
   late final MorningBriefStore briefs = MorningBriefStore._(this);
+  late final YoungDailySyncStore youngDaily = YoungDailySyncStore._(this);
   int? _m6Changed;
   late final ApplicationSettingsStore applicationSettings =
       ApplicationSettingsStore._(this);
@@ -147,7 +151,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   Future<void>? _closeFuture;
 
   @override
-  int get schemaVersion => 17;
+  int get schemaVersion => 18;
 
   @override
   Iterable<TableInfo<Table, dynamic>> get allTables => const [];
@@ -173,6 +177,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ..._AgentContextState.schema,
         ...M6Store.schema,
         ...MorningBriefStore.schema,
+        ...YoungDailySyncStore.schema,
       ]) {
         await customStatement(statement);
       }
@@ -185,7 +190,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 16 || to != 17) {
+      if (from < 1 || from > 17 || to != 18) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -213,13 +218,18 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 14) ..._AgentContextState.schema,
           if (from <= 15) ...M6Store.schema,
           if (from <= 15) ...MorningBriefStore.schema,
-          'ALTER TABLE jw_events ADD COLUMN source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))',
+          if (from <= 16)
+            'ALTER TABLE jw_events ADD COLUMN source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))',
           // Older upgrade paths create Young using the current schema.
-          if (from >= 4)
+          if (from >= 4 && from <= 16)
             'ALTER TABLE young_events ADD COLUMN source_retired INTEGER NOT NULL DEFAULT 0 CHECK(source_retired IN (0,1))',
-          "UPDATE jw_events SET source_retired=1,version=version+1 WHERE kind='course' AND presence='missingWithinScope'",
-          "UPDATE young_events SET source_retired=1,version=version+1 WHERE presence='missingWithinScope'",
-          'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+          if (from <= 16)
+            "UPDATE jw_events SET source_retired=1,version=version+1 WHERE kind='course' AND presence='missingWithinScope'",
+          if (from <= 16)
+            "UPDATE young_events SET source_retired=1,version=version+1 WHERE presence='missingWithinScope'",
+          if (from <= 16)
+            'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
+          ...YoungDailySyncStore.schema,
         ]) {
           await customStatement(statement);
         }
@@ -303,6 +313,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         'WHERE singleton = 1',
       );
       await _initializeYoungState();
+      await youngDaily._recover();
       await publicStore._initialize();
       await _guard();
     });
@@ -1526,6 +1537,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     await _credentialChanges.close();
     await localCalendar._changes.close();
     await features._changes.close();
+    await youngDaily._close();
     await applicationSettings._close();
     await agent.close();
     await super.close();

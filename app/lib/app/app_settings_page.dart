@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../core/knowledge_contract.dart';
+import '../core/young_daily_sync_contract.dart';
 import 'app_shell_contract.dart';
 import 'settings_contract.dart';
 import 'source_settings_page.dart';
@@ -24,6 +25,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
     this.agentBuilder,
     this.remindersBuilder,
     this.logsBuilder,
+    this.dailySync,
   });
 
   final ApplicationSettingsPort settings;
@@ -32,6 +34,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
   final WidgetBuilder? agentBuilder;
   final WidgetBuilder? remindersBuilder;
   final WidgetBuilder? logsBuilder;
+  final YoungDailySyncControlPort? dailySync;
 
   @override
   State<ApplicationSettingsPage> createState() =>
@@ -207,6 +210,7 @@ final class _ApplicationSettingsPageState
             Expanded(
               child: switch (_section) {
                 _SettingsSection.sources => SourceSettingsPage(
+                  dailySync: widget.dailySync,
                   key: const ValueKey('application-settings-sources'),
                   controller: widget.controller,
                   diagnosticsBuilder: widget.diagnosticsBuilder,

@@ -138,12 +138,14 @@ final class _OwnedAppState extends State<OwnedApplication> {
     switch (state) {
       case AppLifecycleState.resumed:
         runtime.morning.onForeground(true);
+        runtime.youngDaily.onForeground(true);
         runtime.reminders.onForeground();
         break;
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
         runtime.morning.onForeground(false);
+        runtime.youngDaily.onForeground(false);
         break;
       case AppLifecycleState.inactive:
         break;
@@ -178,6 +180,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
       final state = WidgetsBinding.instance.lifecycleState;
       if (state == null || state == AppLifecycleState.resumed) {
         runtime.morning.onForeground(true);
+        runtime.youngDaily.onForeground(true);
       }
     });
   }
@@ -406,6 +409,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
           },
         ),
         settingsBuilder: (context) => ApplicationSettingsPage(
+          dailySync: runtime.youngDaily,
           settings: runtime.settings,
           controller: runtime.shell,
           agentBuilder: (context) =>

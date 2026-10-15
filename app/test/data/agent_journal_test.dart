@@ -480,7 +480,7 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 17);
+      expect(await _scalar(store, 'PRAGMA user_version'), 18);
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -505,7 +505,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 18);
+    _setSchemaVersion(file, 19);
 
     await expectLater(
       _open(file: file),
@@ -519,7 +519,7 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 18);
+      expect(raw.select('PRAGMA user_version').single['user_version'], 19);
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -704,6 +704,7 @@ Future<void> _rewindMessagesToSchema11(
         "ALTER TABLE agent_messages ADD COLUMN steps_json TEXT NOT NULL DEFAULT '[]' CHECK(length(steps_json)<=8192)",
       );
     }
+    raw.execute('DROP TABLE IF EXISTS young_daily_sync');
     raw.execute('PRAGMA user_version=11');
     for (final table in [
       'agent_actions',

@@ -57,6 +57,7 @@ void main() {
       late List<Map<String, Object?>> retainedFacts;
       try {
         raw.execute('BEGIN IMMEDIATE');
+        raw.execute('DROP TABLE IF EXISTS young_daily_sync');
         raw.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
         raw.execute('ALTER TABLE young_events DROP COLUMN source_retired');
         final input =
@@ -85,14 +86,14 @@ void main() {
       }
 
       store = await _open(file);
-      expect(store.schemaVersion, 17);
+      expect(store.schemaVersion, 18);
       expect((await _window(store)).context, originalContext);
       expect((await _window(store)).revision, originalRevision + 1);
       final upgraded = sqlite.sqlite3.open(file.path);
       try {
         expect(
           upgraded.select('PRAGMA user_version').single['user_version'],
-          17,
+          18,
         );
         expect(_retainedFacts(upgraded), retainedFacts);
         expect(

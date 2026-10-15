@@ -6,6 +6,7 @@ import '../core/jw_credentials.dart';
 import '../core/observation_assets.dart';
 import '../core/work_lease.dart';
 import '../core/young_work_contract.dart';
+import '../core/young_daily_sync_contract.dart';
 import '../data/jw_store.dart';
 import '../data/young_import_contract.dart';
 import '../platform/young_partition_registry.dart';
@@ -67,6 +68,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
   Future<void>? _work, _finishing, _shutdown;
   bool _cancelled = false, _closing = false, _revokeRequired = false;
   bool _initialized = false;
+  bool _backgroundWindow = false;
 
   @override
   YoungSyncView get syncView => _view;
@@ -217,6 +219,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
         assets: assets,
         leases: leases,
         borrowedLease: _lease,
+        backgroundWindow: _backgroundWindow,
         target: target,
         pollInterval: pollInterval,
         drainTimeout: drainTimeout,
@@ -268,6 +271,17 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     savePassword: savePassword,
   );
 
+  Future<void> startDailyCalendar(
+    YoungDailySyncGrant grant, {
+    bool background = true,
+  }) => _open(
+    YoungJobKind.calendar,
+    firstDay: grant.firstDay,
+    lastDay: grant.endDayExclusive.subtract(const Duration(days: 1)),
+    dailyGrant: grant,
+    background: background,
+  );
+
   @override
   Future<void> startActivities({
     String? expectedAccountCode,
@@ -287,8 +301,11 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     DateTime? lastDay,
     String? password,
     bool savePassword = false,
+    YoungDailySyncGrant? dailyGrant,
+    bool background = false,
   }) {
     _acquire();
+    _backgroundWindow = background;
     _cancelled = false;
     _authentication = SchoolAuthenticationDriver();
     _publish(
@@ -310,6 +327,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
           expectedAccountCode: expectedAccountCode,
           firstDay: firstDay,
           lastDay: lastDay,
+          dailyGrant: dailyGrant,
         );
         await onJobAdmitted?.call(_ticket!);
         expectedAccountCode = null;

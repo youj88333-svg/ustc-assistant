@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../core/young_daily_sync_contract.dart';
 import '../core/young_work_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
 import 'app_shell_contract.dart';
 import 'jw_sync_panel.dart';
+import 'young_daily_sync_panel.dart';
 import 'young_sync_panel.dart';
 
 enum _SelectedSource { jw, young }
@@ -19,10 +21,12 @@ final class SourceSettingsPage extends StatefulWidget {
     super.key,
     required this.controller,
     this.diagnosticsBuilder,
+    this.dailySync,
   });
 
   final AppShellPort controller;
   final WidgetBuilder? diagnosticsBuilder;
+  final YoungDailySyncControlPort? dailySync;
 
   @override
   State<SourceSettingsPage> createState() => _SourceSettingsPageState();
@@ -129,6 +133,11 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
                           );
                         },
                       ),
+                      if (_selectedSource == _SelectedSource.young &&
+                          widget.dailySync != null) ...[
+                        const SizedBox(height: 10),
+                        YoungDailySyncPanel(controller: widget.dailySync!),
+                      ],
                       if (view.progressUnavailable ||
                           view.actionPending ||
                           (view.globallyBusy && currentSourceIdle)) ...[

@@ -36,6 +36,7 @@ final class ObservationCoordinator
     required this.assets,
     required this.leases,
     this.borrowedLease,
+    this.backgroundWindow = false,
     ObservationTarget? target,
     this.drainTimeout = const Duration(seconds: 12),
     this.pollInterval = const Duration(milliseconds: 100),
@@ -48,6 +49,7 @@ final class ObservationCoordinator
   final ObservationAssetsPort assets;
   final WorkLeasePool leases;
   final WorkLease? borrowedLease;
+  final bool backgroundWindow;
   final ObservationTarget target;
   final Duration drainTimeout;
   final Duration pollInterval;
@@ -331,9 +333,22 @@ final class ObservationCoordinator
         _session = ++_sequence;
         _document = 0;
         _nativeStarted = true;
-        await _bounded(
-          browser.open(session: _session!, profilePath: path, target: target),
-        );
+        if (backgroundWindow) {
+          if (browser is! BackgroundObservationBrowserPort) {
+            throw const AppFailure(FailureCode.unsupportedPlatform);
+          }
+          await _bounded(
+            (browser as BackgroundObservationBrowserPort).openBackground(
+              session: _session!,
+              profilePath: path,
+              target: target,
+            ),
+          );
+        } else {
+          await _bounded(
+            browser.open(session: _session!, profilePath: path, target: target),
+          );
+        }
         if (!_cancelled && view.phase == ObservationPhase.opening) {
           _publish(
             ObservationPhase.open,

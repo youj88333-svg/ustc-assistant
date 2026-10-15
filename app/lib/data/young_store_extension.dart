@@ -9,10 +9,13 @@ final class YoungJobTicket extends _SchoolCredentialTicket {
     String expectedAccountCode,
     this.firstDay,
     this.lastDay,
+    this.dailyGrant,
   ) : super(expectedAccountCode);
   final YoungWorkStamp stamp;
   final DateTime? firstDay;
   final DateTime? lastDay;
+  final YoungDailySyncGrant? dailyGrant;
+  bool _dailyCommitted = false;
 
   @override
   String get _credentialOwnerId => stamp.ownerId;
@@ -93,6 +96,7 @@ extension YoungStoreOperations on JwStore {
     String? expectedAccountCode,
     DateTime? firstDay,
     DateTime? lastDay,
+    YoungDailySyncGrant? dailyGrant,
   }) async {
     if (kind == YoungJobKind.calendar) {
       _validateYoungDays(firstDay, lastDay);
@@ -101,6 +105,16 @@ extension YoungStoreOperations on JwStore {
     }
     final ticket = await _serialized(
       () => transaction(() async {
+        if (dailyGrant != null) {
+          await youngDaily._require(dailyGrant);
+          if (kind != YoungJobKind.calendar ||
+              (dailyGrant as _YoungDailyGrant).boundJob != null ||
+              firstDay != dailyGrant.firstDay ||
+              lastDay?.add(const Duration(days: 1)) !=
+                  dailyGrant.endDayExclusive) {
+            throw const AppFailure(FailureCode.staleResult);
+          }
+        }
         final canonical = await _state();
         final state = await _youngState();
         final owner = canonical.read<String>('owner_id');
@@ -153,7 +167,8 @@ extension YoungStoreOperations on JwStore {
           [generation, stamp.jobId],
         );
         await _guard();
-        return YoungJobTicket._(stamp, expected, firstDay, lastDay);
+        if (dailyGrant != null) youngDaily._assertCurrent(dailyGrant);
+        return YoungJobTicket._(stamp, expected, firstDay, lastDay, dailyGrant);
       }),
     );
     for (final previous in _youngTickets.values) {
@@ -162,6 +177,9 @@ extension YoungStoreOperations on JwStore {
     }
     _youngTickets.clear();
     _youngTickets[ticket.stamp.jobId] = ticket;
+    if (dailyGrant is _YoungDailyGrant) {
+      dailyGrant.boundJob = ticket.stamp.jobId;
+    }
     return ticket;
   }
 
@@ -198,6 +216,12 @@ extension YoungStoreOperations on JwStore {
     bool allowCommitted = false,
   }) async {
     final stamp = ticket.stamp;
+    if (ticket.dailyGrant != null && !ticket._dailyCommitted) {
+      await youngDaily._require(ticket.dailyGrant!);
+      if ((ticket.dailyGrant as _YoungDailyGrant).boundJob != stamp.jobId) {
+        throw const AppFailure(FailureCode.staleResult);
+      }
+    }
     if (!identical(_youngTickets[stamp.jobId], ticket)) {
       throw const AppFailure(FailureCode.staleResult);
     }
@@ -224,6 +248,12 @@ extension YoungStoreOperations on JwStore {
       throw const AppFailure(FailureCode.staleResult);
     }
     await _guard();
+    if (ticket.dailyGrant != null && !ticket._dailyCommitted) {
+      youngDaily._assertCurrent(ticket.dailyGrant!);
+      if ((ticket.dailyGrant as _YoungDailyGrant).boundJob != stamp.jobId) {
+        throw const AppFailure(FailureCode.staleResult);
+      }
+    }
   }
 
   Future<void> stageYoungPartition(
@@ -437,15 +467,17 @@ extension YoungStoreOperations on JwStore {
         }
         if (ticket.stamp.kind == YoungJobKind.calendar) {
           await _applyYoungProjection(ticket, artifact);
-          await customStatement(
-            'INSERT INTO young_preferences (account_id,first_day,last_day) VALUES (1,?,?) '
-            'ON CONFLICT(account_id) DO UPDATE SET first_day=excluded.first_day,last_day=excluded.last_day',
-            [
-              _youngDayString(ticket.firstDay!),
-              _youngDayString(ticket.lastDay!),
-            ],
-          );
-          await _youngNoteWrite(ticket);
+          if (ticket.dailyGrant == null) {
+            await customStatement(
+              'INSERT INTO young_preferences (account_id,first_day,last_day) VALUES (1,?,?) '
+              'ON CONFLICT(account_id) DO UPDATE SET first_day=excluded.first_day,last_day=excluded.last_day',
+              [
+                _youngDayString(ticket.firstDay!),
+                _youngDayString(ticket.lastDay!),
+              ],
+            );
+            await _youngNoteWrite(ticket);
+          }
         }
         final at = _clock.nowUtc;
         if (!at.isUtc) {
@@ -510,6 +542,10 @@ extension YoungStoreOperations on JwStore {
           await features._captureExpected();
         }
         await agent._commitSourceAction(ticket, count);
+        if (ticket.stamp.kind == YoungJobKind.calendar) {
+          await youngDaily._recordCalendarSuccess(ticket, at);
+        }
+        await _requireYoungCurrent(ticket, allowCommitted: true);
         return YoungCompletionReceipt(
           operationId: ticket.stamp.jobId,
           kind: ticket.stamp.kind,
@@ -519,6 +555,10 @@ extension YoungStoreOperations on JwStore {
         );
       });
       succeeded = true;
+      ticket._dailyCommitted = true;
+      if (ticket.dailyGrant is _YoungDailyGrant) {
+        (ticket.dailyGrant as _YoungDailyGrant).committed = true;
+      }
       if (!receipt.replayed) {
         if (receipt.kind == YoungJobKind.calendar) {
           localCalendar._signal(
@@ -526,6 +566,7 @@ extension YoungStoreOperations on JwStore {
           );
         }
         agent._signal();
+        if (receipt.kind == YoungJobKind.calendar) youngDaily._signal();
       }
       if (!receipt.replayed &&
           ticket._saveCredential &&
