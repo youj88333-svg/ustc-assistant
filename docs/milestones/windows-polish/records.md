@@ -4,7 +4,7 @@
 
 接续主题：[Agent管理提醒：实现、审查与检查](records/01-agent-reminders.md)。
 
-整体核查：[Windows联动终审、修复与根验核](records/02-windows-integration-review.md)。最新接续：[来源场次退出有效日程](records/03-source-retirement.md)。
+整体核查：[Windows联动终审、修复与根验核](records/02-windows-integration-review.md)。接续修复：[来源场次退出有效日程](records/03-source-retirement.md)；最新功能补齐：[每日二课自动同步](records/04-young-daily-sync.md)。
 
 ## 研究先行
 

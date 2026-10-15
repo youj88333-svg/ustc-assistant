@@ -11,14 +11,14 @@
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
-| Windows 收尾 | 整体联动终审及来源场次失效修复已交付，新版已启动 | [任务单](milestones/windows-polish/plan.md)、[最新来源失效记录](milestones/windows-polish/records/03-source-retirement.md)：schema17保留资料，完整本次学期/日期范围内旧场次退出有效投影，其它学期及历史保留；1386项/1跳过、Windows八套30组及Release通过。[前轮联动终审](milestones/windows-polish/records/02-windows-integration-review.md)保留。20工具不变；体验关闭未代用户决定，不含发布或移动端 |
+| Windows 收尾 | 每日二课同步及前轮联动修复已交付，新版已启动 | [任务单](milestones/windows-polish/plan.md)、[每日二课记录04](milestones/windows-polish/records/04-young-daily-sync.md)：默认关闭、06:00后可见空闲时隐藏窗口同步昨天起31天，schema18保留资料和手动日期；1432项/1跳过、Windows十套35组及Release通过。[来源失效修复](milestones/windows-polish/records/03-source-retirement.md)与[前轮终审](milestones/windows-polish/records/02-windows-integration-review.md)保留。20工具不变；真实每日触发与整体体验未代用户决定，不含发布或移动端 |
 | 后续 | 未排定 | 移动端原生实现、正式发布及其能力验收另行确认 |
 
 ## 已批准范围与待验证
 
 五条来源、本地日程、任务和 Agent 的总体范围保留。评课/校园内部能力已按 M3 关闭，Agent 接入前的 Windows 应用已按 M4 验收。M5 已装配单 Agent、查询/证据/图片、本地修改/撤销、有界规划、固定学校来源协调、单一持续对话与 compact/clear、可撤销的记住授权、任务截止栏、安全诊断/导出及本地中文听写。§23 已落实完整安全交互、稳定 19 工具、跨轮目标定位、独立私人读取/17 类日常许可、仅建议硬模式、当前卡文字确认、估算预算与实际回执恢复，并完成根全套/Windows/Release，详见[记录 12](milestones/m5/records/12-context-and-permission-implementation.md)。用户于 2026-10-15 明确确认关闭 M5 和 M6；这是阶段整体关闭，不推断前述清单逐项操作、新业务计数或独立模型评分。原确认后失去目标的失败记录保留；可选合成模型核验需用户在应用主动启动，根未运行真实模型。真实听写“I.”及“未识别出语言”未取得新修复/复验反馈，继续作为已知问题，不由阶段关闭改写为通过。
 
-M6 已按批准范围完成晨报、系统提醒与后续修订，工程/原生证据及未观察项见[记录](milestones/m6/records.md)，用户关闭见[验收](milestones/m6/acceptance.md#阶段关闭2026-10-15)。当前 Windows 收尾包含已反馈的体验问题、Agent提醒扩充、[整体联动终审](milestones/windows-polish/records/02-windows-integration-review.md)及用户批准的[来源失效修订](decisions/source-occurrence-retirement.md)，实际结果见[研究与实施](milestones/windows-polish/records.md)；移动端、正式部署、整体冻结与完整 V 项仍未关闭。
+M6 已按批准范围完成晨报、系统提醒与后续修订，工程/原生证据及未观察项见[记录](milestones/m6/records.md)，用户关闭见[验收](milestones/m6/acceptance.md#阶段关闭2026-10-15)。当前 Windows 收尾包含已反馈的体验问题、Agent提醒扩充、[整体联动终审](milestones/windows-polish/records/02-windows-integration-review.md)、用户批准的[来源失效修订](decisions/source-occurrence-retirement.md)及[每日二课同步](milestones/windows-polish/records/04-young-daily-sync.md)，实际结果见[研究与实施](milestones/windows-polish/records.md)。每日同步需独立启用，不消耗模型额度、退出后不运行，挑战或无保存凭据不循环登录；未取得真实每日自动同步的新人工反馈。移动端、正式部署、整体冻结与完整 V 项仍未关闭。
 
 M3 的内部 v1 接口、首批逐份目录、匿名公开 HTTP、中文检索/正文续读、schema 5 增量迁移和材料事务维护已装配。根已执行工程检查、构建、有限公开契约复验和实际随包资料原生链路核验；用户接受阶段结论并确认关闭，不记作亲自完成临时界面三组操作。财务在线关键词/FAQ 回复保持 unavailable，政策现行性及本轮真实自动直连回退未核验。关闭证据与保留项统一见 [M3 验收](milestones/m3/acceptance.md)，详细命令和失败见 [M3 记录](milestones/m3/records.md)。
 

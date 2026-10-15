@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6 已由用户确认关闭，[M6 关闭依据及保留项](milestones/m6/acceptance.md#阶段关闭2026-10-15)区分整体确认与未观察结果。当前进入 [Windows 收尾](milestones/windows-polish/plan.md)，只做已反馈的体验优化与缺陷修复；移动端和正式发布另行确认。具体边界与已知语音问题、未观察项见 [状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6 已由用户确认关闭，[M6 关闭依据及保留项](milestones/m6/acceptance.md#阶段关闭2026-10-15)区分整体确认与未观察结果。当前进入 [Windows 收尾](milestones/windows-polish/plan.md)，按已批准的接续切片做体验修复与功能补齐；移动端和正式发布另行确认。具体边界与已知语音问题、未观察项见 [状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
