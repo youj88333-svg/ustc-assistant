@@ -12,6 +12,7 @@
 | M5 | 学生事务 Agent 与受控运行环境 | [详细任务单](m5/plan.md)，§23 已批准并完成工程 | [工程索引](m5/records.md)，最新[记录 12](m5/records/12-context-and-permission-implementation.md)有根全套/Windows/Release 证据 | [2026-10-15 关闭](m5/acceptance.md#阶段关闭2026-10-15)，不补造逐项真人结果，语音与其他未观察项保留 |
 | M6 | 每日晨报与 Windows 系统日程提醒 | [任务单](m6/plan.md) | [记录](m6/records.md)，含日期窗口/紧凑展示修订与根全套 | [2026-10-15 关闭](m6/acceptance.md#阶段关闭2026-10-15)，未观察项保留 |
 | Windows 收尾与1.00 | 已批准修复、每日二课及本地私有交付收口 | [任务单](windows-polish/plan.md) | [研究与实施](windows-polish/records.md) · [1.00交付记录](windows-polish/records/05-windows-v1-private-release.md) | [用户认可1.00基线](windows-polish/acceptance.md)，暂不公开发布；APK仅调研 |
+| Android APK迁移（候选A0–A8） | 同一Flutter核心、Android平台/手机体验及APK鸿蒙实证 | [完整计划](android-apk/plan.md)，待用户批准 | 尚无实施；[研究依据](../research/android-apk-migration.md) | 未验收；未创建Android宿主或产包 |
 
 M5/M6 的批准范围、接口、分切片和验收条件统一见各任务单，实际工程与真人结论分开记录。两阶段已由用户整体确认关闭；未单独反馈的真人项目、Windows重启/睡眠等保持未观察，不把阶段关闭当完整 V 项已关闭。Windows收尾保留原数据、工具与权限行为，具体体验修订见当前任务单。
 

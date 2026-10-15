@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)与[Android APK迁移调研](research/android-apk-migration.md)均已完成；暂不公开发布，也未开始移动实现。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)现已形成、待用户批准；暂不公开发布，也未开始移动实现。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
@@ -20,7 +20,7 @@
 | 各阶段的计划、失败、检查与用户关闭 | [阶段索引](milestones/README.md) |
 | 长期知识资料的 Markdown 制作与样稿 | [知识材料目录](../knowledge/README.md) |
 | 如何启动和使用应用 | [应用说明](../app/README.md) |
-| Windows 1.00 私有包与移动方向 | [交付说明](releases/windows-1.00.md) · [已知问题](releases/windows-1.00-known-issues.md) · [APK迁移评估](research/android-apk-migration.md) |
+| Windows 1.00 私有包与移动方向 | [交付说明](releases/windows-1.00.md) · [已知问题](releases/windows-1.00-known-issues.md) · [APK迁移评估](research/android-apk-migration.md) · [完整迁移计划](milestones/android-apk/plan.md) |
 | 前置实验、诊断与证据在哪里 | [verification](../verification/README.md) |
 | 旧设计和整理前原文 | [只读档案](archive/README.md) |
 | 以后文档怎样维护 | [维护规则](maintaining.md) |
