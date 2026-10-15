@@ -11,7 +11,7 @@
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
-| Windows 收尾 | 每日二课同步及前轮联动修复已交付，新版已启动 | [任务单](milestones/windows-polish/plan.md)、[每日二课记录04](milestones/windows-polish/records/04-young-daily-sync.md)：默认关闭、06:00后可见空闲时隐藏窗口同步昨天起31天，schema18保留资料和手动日期；1432项/1跳过、Windows十套35组及Release通过。[来源失效修复](milestones/windows-polish/records/03-source-retirement.md)与[前轮终审](milestones/windows-polish/records/02-windows-integration-review.md)保留。20工具不变；真实每日触发与整体体验未代用户决定，不含发布或移动端 |
+| Windows 收尾 | 每日二课同步及设置页裁切修复已交付，新版已启动 | [任务单](milestones/windows-polish/plan.md)、[记录04及显示修订](milestones/windows-polish/records/04-young-daily-sync.md)：schema18默认关闭的固定每日范围同步保留；整页滚动修复通过78项相关测试、Windows4组与Release，前轮全套及35组原生证据单独保留。[来源失效修复](milestones/windows-polish/records/03-source-retirement.md)与[前轮终审](milestones/windows-polish/records/02-windows-integration-review.md)不改写。20工具不变；真实每日触发与整体体验未代用户决定，不含发布或移动端 |
 | 后续 | 未排定 | 移动端原生实现、正式发布及其能力验收另行确认 |
 
 ## 已批准范围与待验证
