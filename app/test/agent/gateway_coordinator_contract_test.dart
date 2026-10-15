@@ -7,7 +7,9 @@ import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_action_tools.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
+import 'package:ustc_assistant_m0/agent/agent_context_budget.dart';
 import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
+import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
@@ -21,6 +23,68 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/jobs/public_query_coordinator.dart';
 
 void main() {
+  test(
+    'the full reminder-enabled registry leaves room for conversation in the default budget',
+    () async {
+      final clock = FixedClock(DateTime.utc(2026, 10, 15));
+      final store = JwStore(
+        NativeDatabase.memory(),
+        ownership: _TestOwnership(),
+        clock: clock,
+      );
+      final queries = PublicQueryCoordinator(
+        store: store.publicStore,
+        leases: WorkLeasePool(),
+        clock: clock,
+        sessionFactory: (_) =>
+            throw StateError('No public HTTP in schema-budget check.'),
+      );
+      final tools = AgentActionTools(
+        plans: store.localCalendar,
+        calendar: store.localCalendar,
+        tasks: store.localCalendar,
+        preferences: store.agent,
+        preferenceProposals: store.agent,
+        sources: _InertSources(),
+        actionRecords: store.agent,
+        reminders: store.features,
+        clock: clock,
+        readTools: AgentReadTools(
+          calendar: store.localCalendar,
+          tasks: store.localCalendar,
+          calendarGuard: store.localCalendar,
+          knowledge: store.publicStore,
+          knowledgeGuard: store.publicStore,
+          publicQueries: queries,
+          publicGuard: queries,
+          clock: clock,
+        ),
+      );
+      try {
+        expect(tools.definitions.map((d) => d.name).toSet(), hasLength(20));
+        final prompt = buildAgentSystemPrompt(
+          day: '2026-10-15',
+          receivedAt: '2026-10-15 08:00:00+08:00',
+          definitions: tools.definitions,
+        );
+        final budget = AgentContextBudget();
+        final estimated = budget.estimateMessages([
+          ModelChatMessage(role: 'system', content: prompt),
+          ModelChatMessage(role: 'user', content: '你好，帮我看看今天的安排。'),
+        ], tools.definitions);
+        expect(
+          estimated.estimatedInputTokens,
+          lessThan(12000),
+          reason:
+              'Fixed guidance and schemas must fit below the default soft-compaction threshold, leaving room for actual dialogue.',
+        );
+      } finally {
+        await tools.close();
+        await queries.close();
+        await store.close();
+      }
+    },
+  );
   test(
     'loopback SSE tool IDs survive capability verification and C3 read pairing',
     () async {

@@ -595,6 +595,11 @@ final class _PreviewBuilder {
       _applyPersonalPatch(change);
     } else if (change is AgentBlockPatch) {
       _applyBlockPatch(change);
+    } else if (change is AgentReminderChange ||
+        change is AgentNotificationPreferencesPatch) {
+      // Reminder rules do not move, create or cancel calendar occurrences.
+      // C3 validates their separate versioned notification state.
+      return;
     } else {
       _stop(AgentPlanPreviewWarningCode.unsupportedChange);
     }

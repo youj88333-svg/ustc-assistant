@@ -217,7 +217,19 @@ List<AgentPermissionCategory> _planPermissionCategories(AgentLocalPlan plan) {
   }
   final categories = <AgentPermissionCategory>{};
   for (final change in plan.changes) {
-    if (change is AgentCreateTask) {
+    if (change is AgentReminderChange) {
+      categories.add(AgentPermissionCategory.reminders);
+    } else if (change is AgentNotificationPreferencesPatch) {
+      if (change.morningEnabled != null) {
+        categories.add(AgentPermissionCategory.morningBrief);
+      }
+      if (change.enabled != null ||
+          change.privateDisplay != null ||
+          change.timed != null ||
+          change.allDay != null) {
+        categories.add(AgentPermissionCategory.notificationPreferences);
+      }
+    } else if (change is AgentCreateTask) {
       categories.add(AgentPermissionCategory.createTask);
     } else if (change is AgentDependentBlock) {
       categories.add(AgentPermissionCategory.createBlock);

@@ -182,7 +182,7 @@ void main() {
           firstGateway.chatRequests.single.tools
               .map((tool) => tool.name)
               .toSet(),
-          hasLength(19),
+          hasLength(20),
           reason:
               'The configured tool registry stays stable for ordinary chat.',
         );

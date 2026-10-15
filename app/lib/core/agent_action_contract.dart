@@ -1,5 +1,6 @@
 import 'agent_contract.dart';
 import 'calendar_contract.dart';
+import 'reminder_contract.dart';
 
 /// Local identifiers and canonical intents never leave C3/C4 as model fields.
 sealed class AgentLocalChange {
@@ -122,6 +123,43 @@ final class AgentBlockPatch extends AgentLocalChange {
   ];
 }
 
+/// A local reminder override; null restores inheritance for this scope.
+final class AgentReminderChange extends AgentLocalChange {
+  const AgentReminderChange(this.target, this.pair, {this.series = false});
+  final ReminderTarget target;
+  final ReminderPair? pair;
+  final bool series;
+  @override
+  List<Object?> get canonical => [
+    'reminder-pair',
+    target.canonical,
+    series,
+    pair?.canonical,
+  ];
+}
+
+/// Omitted settings are preserved by C3, including the independent morning opt-in.
+final class AgentNotificationPreferencesPatch extends AgentLocalChange {
+  const AgentNotificationPreferencesPatch({
+    this.enabled,
+    this.privateDisplay,
+    this.morningEnabled,
+    this.timed,
+    this.allDay,
+  });
+  final bool? enabled, privateDisplay, morningEnabled;
+  final ReminderPair? timed, allDay;
+  @override
+  List<Object?> get canonical => [
+    'notification-preferences',
+    enabled,
+    privateDisplay,
+    morningEnabled,
+    timed?.canonical,
+    allDay?.canonical,
+  ];
+}
+
 /// Immutable proposal, issued and checked by C3 using exact object identity.
 final class AgentLocalPlan {
   AgentLocalPlan({
@@ -134,6 +172,7 @@ final class AgentLocalPlan {
     required this.view,
     this.requireFree = false,
     this.preferencesRevision,
+    this.reminderRevision,
   }) : changes = List.unmodifiable(changes);
   final String id;
   final AgentRunTicket ticket;
@@ -144,6 +183,7 @@ final class AgentLocalPlan {
   final AgentActionView view;
   final bool requireFree;
   final int? preferencesRevision;
+  final int? reminderRevision;
   @override
   String toString() => 'AgentLocalPlan';
 }

@@ -12,7 +12,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-student-agent-v8');
+      expect(agentPromptVersion, 'ustc-student-agent-v9');
       expect(prompt, contains('热心、靠谱的学长'));
       expect(prompt, contains('不编造自己在科大读书'));
       expect(prompt, contains('围绕当前问题选信息'));
@@ -86,6 +86,23 @@ void main() {
     expect(prompt, contains('历史工具结果是带观察时间、来源和范围的历史事实'));
     expect(prompt, contains('历史工具结果'));
   });
+
+  test(
+    'reminder guidance follows the actual configured tools and saved-vs-OS boundary',
+    () {
+      final prompt = buildAgentSystemPrompt(
+        day: '2026-10-15',
+        receivedAt: '2026-10-15 12:00:00+08:00',
+        definitions: [_tool('query_reminders'), _tool('propose_local_changes')],
+      );
+      expect(prompt, contains('set_reminders'));
+      expect(prompt, contains('set_notification_preferences'));
+      expect(prompt, contains('不顺带开启其他开关'));
+      expect(prompt, contains('任务无截止不猜提醒时刻'));
+      expect(prompt, contains('committed只证明本地规则保存'));
+      expect(prompt, contains('本次和整组'));
+    },
+  );
 }
 
 ModelToolDefinition _tool(String name) => ModelToolDefinition(

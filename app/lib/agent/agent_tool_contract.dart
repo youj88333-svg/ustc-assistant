@@ -5,7 +5,7 @@ import '../core/agent_discussion_contract.dart';
 import '../core/agent_context_contract.dart';
 import 'model_gateway_contract.dart';
 
-const agentToolRegistryVersion = 'agent-tools-v4';
+const agentToolRegistryVersion = 'agent-tools-v5';
 
 const agentPersonalToolNames = {
   'query_agenda',
@@ -20,6 +20,7 @@ const agentPersonalToolNames = {
   'query_source_options',
   'request_source_refresh',
   'query_young_activities',
+  'query_reminders',
 };
 
 abstract interface class AgentToolScopeSession {

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
@@ -9,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
@@ -31,6 +33,188 @@ final _agendaQuery = CalendarQuery(
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
+
+  testWidgets(
+    'composed Agent reminder tools commit and undo against the native temporary store and reconcile the fake OS queue',
+    (tester) async {
+      final workspace = await _createWorkspace();
+      final bootstraps = <RuntimeBootstrap>[];
+      final os = _FakeNotificationQueue();
+      final platform = _FakeNotificationPlatform(os);
+      final gateway = _NoNetworkGateway();
+      AgentToolSession? session;
+      try {
+        final bootstrap = await _openBootstrap(
+          tester,
+          workspace,
+          platform,
+          gateway,
+        );
+        bootstraps.add(bootstrap);
+        final runtime = bootstrap.runtime!;
+        final created = await _write(
+          tester,
+          runtime,
+          CreatePersonalEvent(
+            PersonalEventDraft(
+              title: 'Agent 合成提醒安排',
+              start: DateTime.utc(2026, 10, 16, 6),
+              end: DateTime.utc(2026, 10, 16, 7),
+            ),
+          ),
+        );
+        final data = runtime.jwStore.agent;
+        final ticket = await _runNative(tester, () async {
+          final settings = await data.inspectAgent();
+          await data.saveModelConfiguration(
+            settings.authority,
+            modelId: 'synthetic-reminder-model',
+            modelIds: const ['synthetic-reminder-model'],
+            report: const AgentCapabilityReport(
+              text: true,
+              streaming: true,
+              toolCall: true,
+              toolResult: true,
+            ),
+            consent: true,
+            key: Uint8List.fromList('m6-agent-synthetic-key-only'.codeUnits),
+          );
+          final current = await data.inspectAgent();
+          final conversation = await data.createConversation();
+          return data.beginRun(
+            current.authority,
+            conversation,
+            '开启提醒，将这次安排提前十分钟和两分钟提醒',
+          );
+        });
+        final tools = runtime.agentCoordinator.readTools!;
+        expect(tools.definitions.map((d) => d.name).toSet(), hasLength(20));
+        expect(
+          tools.definitions.any((d) => d.name == 'query_reminders'),
+          isTrue,
+        );
+        session = tools.openSession();
+        final interactive = session as AgentInteractiveToolSession;
+        interactive.bindRun(ticket, '开启提醒，将这次安排提前十分钟和两分钟提醒');
+        Future<dynamic> call(String name, Map<String, Object?> args) =>
+            _runNative(
+              tester,
+              () => session!.execute(
+                ModelToolCall(
+                  id: 'synthetic-$name',
+                  name: name,
+                  argumentsJson: jsonEncode(args),
+                ),
+              ),
+            );
+        Future<String> eventRef() async {
+          final result = await call('query_agenda', {
+            'first_day': '2026-10-16',
+            'end_day_exclusive': '2026-10-17',
+          });
+          expect(result.status, 'success');
+          return ((result.data['items'] as List).single as Map)['event_ref']
+              as String;
+        }
+
+        var token = await eventRef();
+        final prepared = await call('propose_local_changes', {
+          'changes': [
+            {'type': 'set_notification_preferences', 'enabled': true},
+            {
+              'type': 'set_reminders',
+              'event_ref': token,
+              'reminders': [
+                {'kind': 'before', 'minutes_before': 10},
+                {'kind': 'before', 'minutes_before': 2},
+              ],
+            },
+          ],
+        });
+        expect(prepared.status, 'waitingForApproval');
+        expect(os.pending, isEmpty);
+        expect(
+          (await _runNative(
+            tester,
+            runtime.jwStore.features.inspectReminders,
+          )).preferences.enabled,
+          isFalse,
+        );
+        final committed = await _runNative(
+          tester,
+          () => interactive.decidePending(true),
+        );
+        expect(committed.status, 'committed');
+        expect(committed.data['reminder_effect'], contains('规则已保存'));
+        interactive.acknowledgeContextInvalidated();
+        await _refreshUntil(
+          tester,
+          runtime,
+          () =>
+              !runtime.reminders.view.busy &&
+              runtime.reminders.view.accepted == 2 &&
+              os.pending.length == 2,
+        );
+        expect(os.pending.values.map((p) => p.deliveryAtUtc).toSet(), {
+          DateTime.utc(2026, 10, 16, 5, 50),
+          DateTime.utc(2026, 10, 16, 5, 58),
+        });
+        token = await eventRef();
+        final inspected = await call('query_reminders', {'event_ref': token});
+        expect(inspected.status, 'success');
+        expect(
+          (inspected.data['target'] as Map)['accepted_slots'],
+          hasLength(2),
+        );
+        expect((inspected.data['runtime'] as Map)['system_available'], isTrue);
+        expect(
+          jsonEncode(inspected.data),
+          isNot(contains(os.pending.values.first.token)),
+        );
+        expect((await call('propose_undo', {})).status, 'waitingForApproval');
+        expect(
+          (await _runNative(
+            tester,
+            () => interactive.decidePending(true),
+          )).status,
+          'committed',
+        );
+        await _refreshUntil(
+          tester,
+          runtime,
+          () => !runtime.reminders.view.busy && os.pending.isEmpty,
+        );
+        expect(
+          (await _runNative(
+            tester,
+            runtime.jwStore.features.inspectReminders,
+          )).preferences.enabled,
+          isFalse,
+        );
+        expect(
+          await _runNative(tester, () async {
+            final current = (await runtime.jwStore.localCalendar.query(
+              _agendaQuery,
+            )).items.single;
+            expect(current.reference.identity, created.target!.identity);
+            return runtime.jwStore.features.readReminderPair(
+              ReminderTarget.calendar(current.reference),
+            );
+          }),
+          isNull,
+        );
+        expect(gateway.requestCalls, 0);
+        await _runNative(
+          tester,
+          () => data.finishRun(ticket, AgentMessageStatus.complete),
+        );
+      } finally {
+        session?.revoke();
+        await _disposeAndClean(tester, workspace, bootstraps);
+      }
+    },
+    skip: !Platform.isWindows,
+  );
 
   testWidgets(
     'M6 publishes synthetic C3 reminders, reconciles changes, and preserves the fake OS queue on close',

@@ -26,7 +26,10 @@ enum AgentPermissionCategory {
   undo('撤销最近本地修改'),
   preferences('保存时间规划偏好'),
   refreshJw('同步教务'),
-  refreshYoung('同步二课日程');
+  refreshYoung('同步二课日程'),
+  reminders('修改日程或任务提醒'),
+  notificationPreferences('修改系统提醒默认规则与显示'),
+  morningBrief('开启或关闭每日晨报');
 
   const AgentPermissionCategory(this.label);
   final String label;

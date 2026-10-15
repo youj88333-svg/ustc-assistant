@@ -384,6 +384,37 @@ abstract interface class ReminderTargetShapePort {
   Future<bool> reminderAllDay(ReminderTarget target, {bool series = false});
 }
 
+enum ReminderPairOrigin { defaults, series, target }
+
+/// One atomic local read. No native notification identifiers or tokens leave C3.
+final class ReminderInspection {
+  const ReminderInspection({
+    required this.settings,
+    required this.target,
+    required this.allDay,
+    required this.pair,
+    required this.origin,
+    required this.eligible,
+    required this.reason,
+    required this.hasTime,
+    required this.acceptedSlots,
+  });
+  final ReminderSettings settings;
+  final ReminderTarget target;
+  final bool allDay, eligible, hasTime;
+  final ReminderPair pair;
+  final ReminderPairOrigin origin;
+  final String reason;
+  final List<int> acceptedSlots;
+}
+
+abstract interface class ReminderInspectionPort {
+  Future<ReminderInspection> inspectReminder(
+    ReminderTarget target, {
+    bool series = false,
+  });
+}
+
 final class ReminderRuntimeView {
   const ReminderRuntimeView({
     this.busy = false,

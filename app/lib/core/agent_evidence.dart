@@ -24,6 +24,7 @@ const agentRegisteredToolNames = {
   'query_source_options',
   'request_source_refresh',
   'query_young_activities',
+  'query_reminders',
   'propose_planning_preferences',
 };
 const agentToolStatuses = {

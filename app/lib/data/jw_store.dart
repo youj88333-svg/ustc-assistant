@@ -50,6 +50,7 @@ part 'agent_chat_store.dart';
 part 'agent_permission_store.dart';
 part 'agent_context_store.dart';
 part 'agent_plan_store.dart';
+part 'agent_reminder_store.dart';
 part 'm6_store.dart';
 part 'morning_brief_store.dart';
 

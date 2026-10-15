@@ -105,9 +105,32 @@ const agentChangeSpecs = <AgentChangeType, AgentChangeSpec>{
     {},
     '删除两个不同日程已有的本地关系。',
   ),
+  AgentChangeType.set_reminders: AgentChangeSpec(
+    {'type'},
+    {'event_ref', 'task_ref', 'scope', 'reminders', 'inherit'},
+    'event_ref/task_ref必须且仅给一种。scope默认occurrence，series只用于个人日程整组。'
+    '给固定两项reminders或inherit=true，两者互斥；恢复本次继承会先沿用个人系列、再沿用默认。'
+    '每槽kind=none仅关闭；定时kind=before,minutes_before=0..10080；全天kind=dayTime,day_offset=-7..7,time=HH:mm（北京时间）。'
+    '只保存规则，不暗中开启系统提醒；无截止任务需先设具体截止或安排时间块才有可提醒时刻。',
+  ),
+  AgentChangeType.set_notification_preferences: AgentChangeSpec(
+    {'type'},
+    {
+      'enabled',
+      'private_display',
+      'morning_enabled',
+      'timed',
+      'all_day_reminders',
+    },
+    '至少一项。enabled是本应用系统提醒开关；private_display=true在通知/锁屏隐藏名称地点；'
+    'morning_enabled单独开启/关闭自动晨报。timed/all_day_reminders为固定两槽默认规则，分别只用定时/全天规则。'
+    '省略保持原值，不改写现有单条或系列覆盖，不改变Windows全局通知设置。',
+  ),
 };
 
-String get agentChangeGuidance =>
+String get agentChangeGuidance => agentChangeGuidanceFor();
+
+String agentChangeGuidanceFor({bool includeReminders = true}) =>
     '每项只用该type允许的字段；未知可选项省略，不发送null。'
     '时刻格式YYYY-MM-DDTHH:mm[:ss]+08:00；日期格式YYYY-MM-DD。\n'
-    '${agentChangeSpecs.entries.map((e) => e.value.describe(e.key)).join('\n')}';
+    '${agentChangeSpecs.entries.where((e) => includeReminders || e.key != AgentChangeType.set_reminders && e.key != AgentChangeType.set_notification_preferences).map((e) => e.value.describe(e.key)).join('\n')}';

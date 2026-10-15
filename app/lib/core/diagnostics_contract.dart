@@ -83,6 +83,7 @@ enum DiagnosticTool {
   query_source_options,
   request_source_refresh,
   query_young_activities,
+  query_reminders,
 }
 
 enum DiagnosticOutcome {

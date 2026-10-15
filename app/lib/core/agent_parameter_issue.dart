@@ -37,6 +37,8 @@ enum AgentChangeType {
   annotate_school,
   set_relation,
   delete_relation,
+  set_reminders,
+  set_notification_preferences,
 }
 
 enum AgentParameterField {
@@ -89,6 +91,16 @@ enum AgentParameterField {
   semester_ref,
   semester_start,
   limit,
+  reminders,
+  inherit,
+  enabled,
+  private_display,
+  morning_enabled,
+  timed,
+  all_day_reminders,
+  minutes_before,
+  day_offset,
+  time,
 }
 
 final class AgentParameterIssue implements Exception {

@@ -14,10 +14,12 @@ import '../core/agent_parameter_issue.dart';
 import '../core/calendar_contract.dart';
 import '../core/calendar_validation.dart';
 import '../core/contracts.dart';
+import '../core/reminder_contract.dart';
 import 'agent_free_slots.dart';
 import 'agent_invocation_fingerprint.dart';
 import 'agent_change_spec.dart';
 import 'agent_read_tools.dart' show parseAgentActionArguments;
+import 'agent_reminder_wire.dart';
 import 'agent_tool_contract.dart';
 import 'model_gateway_contract.dart';
 
@@ -26,6 +28,7 @@ const _actionToolNames = {
   'propose_undo',
   'find_free_slots',
   'propose_planning_preferences',
+  'query_reminders',
 };
 const _sourceToolNames = {
   'query_source_options',
@@ -54,6 +57,8 @@ final class AgentActionTools implements AgentReadToolsPort {
     required this.preferenceProposals,
     this.sources,
     this.actionRecords,
+    this.reminders,
+    this.reminderRuntime,
     this.clock = const SystemClock(),
   });
 
@@ -65,6 +70,8 @@ final class AgentActionTools implements AgentReadToolsPort {
   final AgentPreferencesProposalPort preferenceProposals;
   final AgentSourcePort? sources;
   final AgentActionRecordPort? actionRecords;
+  final ReminderDataPort? reminders;
+  final ReminderRuntimeView Function()? reminderRuntime;
   final AppClock clock;
 
   bool _closing = false;
@@ -75,13 +82,13 @@ final class AgentActionTools implements AgentReadToolsPort {
     ...readTools.definitions,
     _actionTool(
       'propose_local_changes',
-      '准备最多 20 项本地个人日程、任务或时间块变化。应用检查已有许可后执行或交付具体确认卡；仅建议模式只展示。已有项引用可来自查询或会话保留，应用复验当前对象、版本和原定日期范围。继续未完成回复时不重复已提交方案；只有用户明确要求另外一个新操作时才设 new_operation=true，同样检查当前许可。$agentChangeGuidance',
+      '准备最多 20 项本地个人日程、任务、时间块${reminders == null ? "" : "或提醒设置"}变化。应用检查已有许可后执行或交付具体确认卡；仅建议模式只展示。已有项引用可来自查询或会话保留，应用复验当前对象、版本和原定日期范围。继续未完成回复时不重复已提交方案；只有用户明确要求另外一个新操作时才设 new_operation=true，同样检查当前许可。${agentChangeGuidanceFor(includeReminders: reminders != null)}',
       {
         'changes': {
           'type': 'array',
           'minItems': 1,
           'maxItems': _actionBudget,
-          'items': _actionSchema(),
+          'items': _actionSchema(includeReminders: reminders != null),
         },
         'new_operation': {
           'type': 'boolean',
@@ -125,6 +132,19 @@ final class AgentActionTools implements AgentReadToolsPort {
         'avoid': _avoidSchema(),
       },
     ),
+    if (reminders != null)
+      _actionTool(
+        'query_reminders',
+        '读取本应用提醒开关、两槽默认规则、自动晨报开关和系统登记状态。'
+            '可用event_ref或task_ref（仅一种）读取对应目标的有效两槽、继承来源、当前是否具备提醒条件和已登记槽位。'
+            'scope默认occurrence，series只用于个人日程整组规则，资格与登记仍只指所选这一次。'
+            '不读取私人备注、不联网、不发布通知。保存规则不等于系统已接受；无截止、已完成、跳过或不参加可能暂不提醒。',
+        {
+          'event_ref': _stringSchema(maxLength: 64),
+          'task_ref': _stringSchema(maxLength: 64),
+          'scope': _stringSchema(enumValues: const ['occurrence', 'series']),
+        },
+      ),
     if (sources != null && actionRecords != null) ...[
       _actionTool(
         'query_source_options',
@@ -481,6 +501,7 @@ final class _AgentActionToolSession
         'query_source_options' => await _querySourceOptions(args),
         'request_source_refresh' => await _requestSourceRefresh(args),
         'query_young_activities' => await _queryYoungActivities(args),
+        'query_reminders' => await _queryReminders(args),
         _ => _result('unavailable', failure: 'unavailable'),
       };
       _ensureActive();
@@ -508,11 +529,127 @@ final class _AgentActionToolSession
       return _agentFailure(failure);
     } on CalendarFailure catch (failure) {
       return _calendarFailure(failure);
+    } on ReminderFailure catch (failure) {
+      return _reminderFailure(failure);
     } on Object {
       return _result('failure', failure: 'storageFailed');
     } finally {
       _executing = false;
     }
+  }
+
+  ReminderDataPort _requireReminders() =>
+      _owner.reminders ??
+      (throw const AgentFailure(AgentFailureCode.toolUnavailable));
+
+  AgentToolResult _reminderFailure(
+    ReminderFailure failure,
+  ) => switch (failure.code) {
+    ReminderFailureCode.invalidInput => _result(
+      'invalidRequest',
+      failure: 'invalidRequest',
+    ),
+    ReminderFailureCode.stale => _result('stale', failure: 'staleReference'),
+    ReminderFailureCode.maintenance => _result('busy', failure: 'maintenance'),
+    ReminderFailureCode.closed => _result('unavailable', failure: 'closed'),
+    _ => _result('failure', failure: 'storageFailed'),
+  };
+
+  Future<AgentToolResult> _queryReminders(Map<String, Object?> args) async {
+    _requireKeys(args, const {'event_ref', 'task_ref', 'scope'}, const {});
+    final data = _requireReminders();
+    final hasEvent = args.containsKey('event_ref');
+    final hasTask = args.containsKey('task_ref');
+    if (hasEvent && hasTask ||
+        !hasEvent && !hasTask && args.containsKey('scope')) {
+      throw const AgentParameterIssue(
+        reason: AgentParameterReason.mutuallyExclusive,
+      );
+    }
+    final series =
+        args.containsKey('scope') &&
+        _requiredEnum(args, 'scope', const {'occurrence', 'series'}) ==
+            'series';
+    ReminderInspection? inspection;
+    if (hasEvent || hasTask) {
+      if (data is! ReminderInspectionPort) {
+        throw const AgentFailure(AgentFailureCode.toolUnavailable);
+      }
+      final (context, revision) = await _owner.plans.readPlanContext();
+      final ReminderTarget target;
+      if (hasEvent) {
+        target = ReminderTarget.calendar(
+          (await _resolveEvent(
+            _requiredString(args, 'event_ref', maxLength: 64),
+            context,
+            revision,
+          )).$1,
+        );
+      } else {
+        target = ReminderTarget.task(
+          (await _resolveTask(
+            _requiredString(args, 'task_ref', maxLength: 64),
+            context,
+            revision,
+          )).$1,
+        );
+      }
+      inspection = await (data as ReminderInspectionPort).inspectReminder(
+        target,
+        series: series,
+      );
+      final current = await _owner.plans.readPlanContext();
+      if (current.$1 != context || current.$2 != revision) {
+        throw const AgentFailure(AgentFailureCode.staleContext);
+      }
+    }
+    final settings = inspection?.settings ?? await data.inspectReminders();
+    final preferences = settings.preferences;
+    final runtime = _owner.reminderRuntime?.call();
+    final capability = runtime?.capability;
+    return _result(
+      'success',
+      data: {
+        'settings': {
+          'enabled': preferences.enabled,
+          'private_display': preferences.privateDisplay,
+          'morning_enabled': preferences.morningEnabled,
+          'timed': agentReminderPairToWire(preferences.timed),
+          'all_day_reminders': agentReminderPairToWire(preferences.allDay),
+        },
+        'runtime': {
+          'known': runtime != null,
+          'busy': runtime?.busy,
+          'system_available': capability?.available,
+          'system_enabled': capability?.enabledBySystem,
+          'schedules_after_exit': capability?.schedulesAfterExit,
+          'accepted': runtime?.accepted,
+          'desired': runtime?.desired,
+          'complete': runtime?.complete,
+          'through_day': runtime?.throughDay == null
+              ? null
+              : _dateOnly(runtime!.throughDay!),
+          'failure': runtime?.failure?.name,
+          'meaning': '本应用当前对账状态；已登记不保证用户一定看到通知，系统设置仍有效。',
+        },
+        if (inspection != null)
+          'target': {
+            if (hasEvent) 'event_ref': args['event_ref'],
+            if (hasTask) 'task_ref': args['task_ref'],
+            'scope': series ? 'series' : 'occurrence',
+            'all_day': inspection.allDay,
+            'origin': inspection.origin.name,
+            'reminders': agentReminderPairToWire(inspection.pair),
+            'eligible': inspection.eligible,
+            'eligibility_reason': inspection.reason,
+            'has_time': inspection.hasTime,
+            'accepted_slots': inspection.acceptedSlots,
+            'eligibility_scope': 'selected_occurrence',
+            'meaning': '有效规则与这次安排的资格；全局开关关闭、时刻已过、范围未登记或系统限制时仍可能不提醒。',
+          },
+        'observed_at': _beijingDateTime(_owner.clock.nowUtc),
+      },
+    );
   }
 
   Future<AgentToolResult> _querySourceOptions(Map<String, Object?> args) async {
@@ -952,6 +1089,13 @@ final class _AgentActionToolSession
           action: agentChangeType(raw['type']),
           changeIndex: index,
         );
+      } on ReminderFailure catch (failure) {
+        if (failure.code != ReminderFailureCode.invalidInput) rethrow;
+        throw AgentParameterIssue(
+          reason: AgentParameterReason.invalidTarget,
+          action: agentChangeType(raw['type']),
+          changeIndex: index,
+        );
       }
     }
     final current = await _owner.plans.readPlanContext();
@@ -989,7 +1133,7 @@ final class _AgentActionToolSession
       _owner.plans.revokeLocalPlans(ticket);
       throw const AgentFailure(AgentFailureCode.storageFailed);
     }
-    _pending = _PendingLocalPlan(plan, '待确认的本地日程与任务变化', changes.length);
+    _pending = _PendingLocalPlan(plan, '待确认的本地日程、任务与提醒变化', changes.length);
     _notify();
     return _waitingResult(_pending!);
   }
@@ -1011,6 +1155,94 @@ final class _AgentActionToolSession
     final spec = agentChangeSpecs[action]!;
     _requireKeys(value, spec.allowedFields, spec.requiredFields);
     switch (type) {
+      case 'set_reminders':
+        _requireReminders();
+        if (value.containsKey('event_ref') == value.containsKey('task_ref')) {
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.mutuallyExclusive,
+            field: AgentParameterField.event_ref,
+          );
+        }
+        final series =
+            value.containsKey('scope') &&
+            _requiredEnum(value, 'scope', const {'occurrence', 'series'}) ==
+                'series';
+        if (value.containsKey('reminders') && value.containsKey('inherit')) {
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.mutuallyExclusive,
+            field: AgentParameterField.reminders,
+          );
+        }
+        final inherit = _optionalBool(value, 'inherit') ?? false;
+        if (!inherit && !value.containsKey('reminders')) {
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.missingField,
+            field: AgentParameterField.reminders,
+          );
+        }
+        final ReminderTarget target;
+        if (value.containsKey('event_ref')) {
+          target = ReminderTarget.calendar(
+            (await _resolveEvent(
+              _requiredString(value, 'event_ref', maxLength: 64),
+              context,
+              revision,
+            )).$1,
+          );
+        } else {
+          target = ReminderTarget.task(
+            (await _resolveTask(
+              _requiredString(value, 'task_ref', maxLength: 64),
+              context,
+              revision,
+            )).$1,
+          );
+        }
+        if (series && target.kind != ReminderKind.personal) {
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.invalidTarget,
+            field: AgentParameterField.scope,
+          );
+        }
+        return AgentReminderChange(
+          target,
+          inherit ? null : parseAgentReminderPair(value['reminders']),
+          series: series,
+        );
+
+      case 'set_notification_preferences':
+        _requireReminders();
+        if (!_hasAny(value, const {
+          'enabled',
+          'private_display',
+          'morning_enabled',
+          'timed',
+          'all_day_reminders',
+        })) {
+          throw const AgentParameterIssue(
+            reason: AgentParameterReason.missingPatch,
+          );
+        }
+        return AgentNotificationPreferencesPatch(
+          enabled: _optionalBool(value, 'enabled'),
+          privateDisplay: _optionalBool(value, 'private_display'),
+          morningEnabled: _optionalBool(value, 'morning_enabled'),
+          timed: value.containsKey('timed')
+              ? parseAgentReminderPair(
+                  value['timed'],
+                  allDay: false,
+                  field: AgentParameterField.timed,
+                )
+              : null,
+          allDay: value.containsKey('all_day_reminders')
+              ? parseAgentReminderPair(
+                  value['all_day_reminders'],
+                  allDay: true,
+                  field: AgentParameterField.all_day_reminders,
+                )
+              : null,
+        );
+
       case 'create_personal':
         final allDay = _optionalBool(value, 'all_day') ?? false;
         final weekly = _optionalBool(value, 'weekly') ?? false;
@@ -1715,7 +1947,13 @@ final class _AgentActionToolSession
           await _afterAcceptedMutation();
           return _result(
             'committed',
-            data: {'title': pending.title, 'count': receipt.committedCount},
+            data: {
+              'title': pending.title,
+              'count': receipt.committedCount,
+              if (pending.plan.reminderRevision != null)
+                'reminder_effect':
+                    '规则已保存；系统异步登记，不能据此声称已投递。可用query_reminders查看当前状态。',
+            },
           );
         }
         await _owner.plans.rejectLocalPlan(pending.plan);
@@ -1867,6 +2105,9 @@ final class _AgentActionToolSession
       if (!identical(_pending, pending)) return _calendarFailure(failure);
       await _clearFailedDecision(pending);
       return _calendarFailure(failure);
+    } on ReminderFailure catch (failure) {
+      if (identical(_pending, pending)) await _clearFailedDecision(pending);
+      return _reminderFailure(failure);
     } on Object {
       if (!identical(_pending, pending)) {
         return _result('cancelled', failure: 'cancelled');
@@ -2446,11 +2687,11 @@ ModelToolDefinition _actionTool(
   },
 );
 
-Map<String, Object?> _actionSchema() => {
+Map<String, Object?> _actionSchema({required bool includeReminders}) => {
   'type': 'object',
   'properties': {
     'type': _stringSchema(
-      enumValues: const [
+      enumValues: [
         'create_personal',
         'update_personal',
         'personal_state',
@@ -2466,6 +2707,10 @@ Map<String, Object?> _actionSchema() => {
         'annotate_school',
         'set_relation',
         'delete_relation',
+        if (includeReminders) ...[
+          'set_reminders',
+          'set_notification_preferences',
+        ],
       ],
     ),
     'event_ref': _stringSchema(maxLength: 64),
@@ -2521,6 +2766,15 @@ Map<String, Object?> _actionSchema() => {
       enumValues: const ['listening', 'selfStudy', 'undecided'],
     ),
     'kind': _stringSchema(enumValues: const ['conflict', 'notConflict']),
+    if (includeReminders) ...{
+      'reminders': agentReminderPairSchema(),
+      'inherit': _boolSchema(),
+      'enabled': _boolSchema(),
+      'private_display': _boolSchema(),
+      'morning_enabled': _boolSchema(),
+      'timed': agentReminderPairSchema(allDay: false),
+      'all_day_reminders': agentReminderPairSchema(allDay: true),
+    },
   },
   'required': const ['type'],
   'additionalProperties': false,

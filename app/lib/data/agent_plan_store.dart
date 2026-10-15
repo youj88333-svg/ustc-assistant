@@ -231,6 +231,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
   Future<void> _verifyAgentPlan(
     _PreparedAgentPlan prepared, {
     bool revision = true,
+    bool reminders = true,
   }) async {
     if (prepared.revoked ||
         _closed ||
@@ -258,6 +259,12 @@ extension _AgentPlanStorage on LocalCalendarStore {
             plan.preferencesRevision) {
       throw const AgentFailure(AgentFailureCode.staleContext);
     }
+    if (reminders &&
+        plan.reminderRevision != null &&
+        (await _db.features._state()).read<int>('revision') !=
+            plan.reminderRevision) {
+      throw const CalendarFailure(CalendarFailureCode.staleReference);
+    }
     if (prepared.fingerprint !=
         fingerprint([
           plan.context.owner,
@@ -266,6 +273,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
           plan.revision,
           plan.requireFree,
           plan.preferencesRevision,
+          plan.reminderRevision,
           plan.changes.map((c) => c.canonical).toList(),
         ])) {
       throw const CalendarFailure(CalendarFailureCode.idempotencyConflict);
@@ -304,6 +312,9 @@ extension _AgentPlanStorage on LocalCalendarStore {
         throw const CalendarFailure(CalendarFailureCode.limitExceeded);
       }
       final normalized = <AgentLocalChange>[];
+      final reminderRevision = changes.any(_isReminderChange)
+          ? (await _db.features._state()).read<int>('revision')
+          : null;
       final keys = <String>{};
       final deleted = <(String, int)>{};
       final deletedBlocks = <CalendarIdentity>{};
@@ -329,6 +340,28 @@ extension _AgentPlanStorage on LocalCalendarStore {
             throw const CalendarFailure(CalendarFailureCode.invalidInput);
           }
           _validateBlockDraft(value.draft);
+        } else if (_isReminderChange(value)) {
+          await _validateReminderChange(context, value, planChanges: changes);
+          if (value is AgentReminderChange) {
+            final target = value.target;
+            final key = target.kind == ReminderKind.taskDeadline
+                ? ('task', target.localId)
+                : await _aggregateKey(
+                    CalendarIdentity(
+                      CalendarKind.values.byName(target.kind.name),
+                      target.localId,
+                      ordinal: target.ordinal,
+                    ),
+                  );
+            if (deleted.contains(key) ||
+                target.kind == ReminderKind.planBlock &&
+                    deletedBlocks.contains(
+                      CalendarIdentity(CalendarKind.planBlock, target.localId),
+                    )) {
+              throw const CalendarFailure(CalendarFailureCode.invalidInput);
+            }
+          }
+          inverseBytes += 1024;
         } else if (value is AgentCalendarChange) {
           final intent = value.intent;
           _validateIntent(context, intent);
@@ -423,7 +456,8 @@ extension _AgentPlanStorage on LocalCalendarStore {
         title: undoOnly ? '撤销最近一次本地修改' : '待批准的本地变化',
         details: lines,
         warning:
-            '批准后将一次提交上述全部变化。学校资料未自动刷新。$previewWarning${taskWarnings.join()}',
+            '批准后将一次提交上述全部变化。学校资料未自动刷新。$previewWarning${taskWarnings.join()}'
+            '${reminderRevision == null ? "" : "提醒规则保存后由系统异步登记；保存成功不代表Windows已接收或保证投递。"}',
       );
       final proposed = AgentLocalPlan(
         id: id,
@@ -435,6 +469,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
         view: view,
         requireFree: requireFree,
         preferencesRevision: preferencesRevision,
+        reminderRevision: reminderRevision,
       );
       await _db.agent._saveAction(ticket, view);
       await _db.onAgentCheckpoint?.call();
@@ -454,6 +489,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
         revision,
         requireFree,
         preferencesRevision,
+        plan.reminderRevision,
         plan.changes.map((c) => c.canonical).toList(),
       ]),
     );
@@ -496,7 +532,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
       throw const AgentFailure(AgentFailureCode.staleContext);
     }
     await _db.transaction(() async {
-      await _verifyAgentPlan(prepared, revision: false);
+      await _verifyAgentPlan(prepared, revision: false, reminders: false);
       await _db.agent._saveAction(
         plan.ticket,
         _actionWith(plan.view, AgentActionStatus.rejected),
@@ -539,6 +575,12 @@ extension _AgentPlanStorage on LocalCalendarStore {
         final normalized = await _normalizeAgentChange(plan.context, change);
         if (normalized is AgentCalendarChange) {
           await _verifyPlanIntent(plan.context, normalized.intent);
+        } else if (_isReminderChange(normalized)) {
+          await _validateReminderChange(
+            plan.context,
+            normalized,
+            planChanges: plan.changes,
+          );
         }
       }
       if (plan.requireFree) {
@@ -555,7 +597,10 @@ extension _AgentPlanStorage on LocalCalendarStore {
       }
       final newTasks = <String, TaskReference>{};
       final inverses = <Map<String, dynamic>>[];
-      for (final change in plan.changes) {
+      for (final change in [
+        ...plan.changes.where((change) => !_isReminderChange(change)),
+        ...plan.changes.where(_isReminderChange),
+      ]) {
         if (prepared.revoked) {
           throw const AgentFailure(AgentFailureCode.cancelled);
         }
@@ -564,6 +609,11 @@ extension _AgentPlanStorage on LocalCalendarStore {
           plan.context,
           await _rebaseAgentPatch(change),
         );
+        if (_isReminderChange(normalized)) {
+          inverses.add(await _applyReminderChange(plan.context, normalized));
+          await _verifyAgentPlan(prepared, reminders: false);
+          continue;
+        }
         if (normalized is AgentCreateTask) {
           intent = CreateTask(normalized.draft);
         } else if (normalized is AgentDependentBlock) {
@@ -590,14 +640,14 @@ extension _AgentPlanStorage on LocalCalendarStore {
           captureUndo: inverses.add,
         );
         if (change is AgentCreateTask) newTasks[change.localKey] = step.task!;
-        await _verifyAgentPlan(prepared);
+        await _verifyAgentPlan(prepared, reminders: false);
       }
       CalendarUndoReference? undo;
       if (inverses.isNotEmpty) {
         undo = await _recordGroupUndo(plan.context, inverses);
       }
       await _db.onAgentCheckpoint?.call();
-      await _verifyAgentPlan(prepared);
+      await _verifyAgentPlan(prepared, reminders: false);
       await _db.agent._permissions.validate(permission);
       await _db.agent._permissions.persist(permission);
       await _db.customStatement(
@@ -639,7 +689,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
         ],
       );
       // After the mutation our expected revision is intentionally +1.
-      await _verifyAgentPlan(prepared, revision: false);
+      await _verifyAgentPlan(prepared, revision: false, reminders: false);
       await _db.agent._permissions.validate(permission);
       return AgentLocalPlanReceipt(
         planId: plan.id,
@@ -1038,6 +1088,7 @@ extension _AgentPlanStorage on LocalCalendarStore {
     AgentLocalChange change, {
     AgentLocalChange? original,
   }) async {
+    if (_isReminderChange(change)) return _describeReminderChange(change);
     String time(DateTime d) =>
         '${d.add(const Duration(hours: 8)).toIso8601String().replaceFirst(RegExp(r'Z$'), '')}+08:00';
     String personal(PersonalEventDraft d) =>

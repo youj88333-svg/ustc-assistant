@@ -2,7 +2,11 @@ part of 'jw_store.dart';
 
 /// Versioned desired input is captured inside each authoritative business
 /// transaction. Native publishing/cleanup is deliberately outside this store.
-final class M6Store implements ReminderDataPort, ReminderTargetShapePort {
+final class M6Store
+    implements
+        ReminderDataPort,
+        ReminderTargetShapePort,
+        ReminderInspectionPort {
   M6Store._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -136,7 +140,11 @@ final class M6Store implements ReminderDataPort, ReminderTargetShapePort {
   Future<ReminderTarget> _currentTarget(ReminderTarget target) async {
     await _db._guard();
     final context = await _db.localCalendar._context();
-    if (context != target.context || target.localId < 1 || target.ordinal < 0) {
+    if (context != target.context ||
+        target.localId < 1 ||
+        target.version < 1 ||
+        target.ordinal < 0 ||
+        target.kind != ReminderKind.personal && target.ordinal != 0) {
       throw const ReminderFailure(ReminderFailureCode.stale);
     }
     if (target.kind == ReminderKind.taskDeadline) {
@@ -163,6 +171,177 @@ final class M6Store implements ReminderDataPort, ReminderTargetShapePort {
     }
     return ReminderTarget.calendar(current.reference);
   }
+
+  Future<bool> _targetAllDay(ReminderTarget target, bool series) async {
+    await _currentTarget(target);
+    if (series && target.kind != ReminderKind.personal) {
+      throw const ReminderFailure(ReminderFailureCode.invalidInput);
+    }
+    if (target.kind != ReminderKind.personal) return false;
+    final identity = CalendarIdentity(
+      CalendarKind.personal,
+      target.localId,
+      ordinal: target.ordinal,
+    );
+    final snapshot = await _db.localCalendar._snapshot(targets: {identity});
+    return series
+        ? snapshot.personal.single.draft.allDay
+        : const CalendarProjection().occurrence(snapshot, identity)!.allDay;
+  }
+
+  Future<String?> _overrideJson(ReminderTarget target, bool series) async =>
+      (await _db
+              .customSelect(
+                'SELECT pair_json FROM m6_reminder_overrides WHERE kind=? AND local_id=? AND ordinal=?',
+                variables: [
+                  Variable.withString(target.kind.name),
+                  Variable.withInt(target.localId),
+                  Variable.withInt(series ? -1 : target.ordinal),
+                ],
+              )
+              .getSingleOrNull())
+          ?.read<String>('pair_json');
+
+  /// Caller owns C3's queue/transaction; publishing always happens afterwards.
+  Future<void> _writePair(
+    ReminderTarget target,
+    ReminderPair? pair,
+    bool series,
+  ) async {
+    final allDay = await _targetAllDay(target, series);
+    pair?.validate(allDay: allDay);
+    final params = <Object>[
+      target.kind.name,
+      target.localId,
+      series ? -1 : target.ordinal,
+    ];
+    if (pair == null) {
+      await _db.customStatement(
+        'DELETE FROM m6_reminder_overrides WHERE kind=? AND local_id=? AND ordinal=?',
+        params,
+      );
+    } else {
+      await _db.customStatement(
+        'INSERT INTO m6_reminder_overrides VALUES(?,?,?,?) ON CONFLICT(kind,local_id,ordinal) DO UPDATE SET pair_json=excluded.pair_json',
+        [...params, jsonEncode(pair.canonical)],
+      );
+    }
+  }
+
+  @override
+  Future<ReminderInspection> inspectReminder(
+    ReminderTarget target, {
+    bool series = false,
+  }) => _db._serialized(() async {
+    final allDay = await _targetAllDay(target, series);
+    final settings = await _readSettings();
+    var pairJson = await _overrideJson(target, series);
+    var origin = pairJson == null
+        ? ReminderPairOrigin.defaults
+        : series
+        ? ReminderPairOrigin.series
+        : ReminderPairOrigin.target;
+    if (pairJson == null && !series && target.kind == ReminderKind.personal) {
+      pairJson = await _overrideJson(target, true);
+      if (pairJson != null) origin = ReminderPairOrigin.series;
+    }
+    var pair = pairJson == null ? null : _decodePair(jsonDecode(pairJson));
+    // Match ReminderProjection exactly: an incompatible exact override falls
+    // back to defaults, rather than resurrecting the parent-series override.
+    if (pair != null && !pair.supports(allDay: allDay)) {
+      pair = null;
+      origin = ReminderPairOrigin.defaults;
+    }
+    pair ??= allDay ? settings.preferences.allDay : settings.preferences.timed;
+    pair.validate(allDay: allDay);
+    var reason = 'ready';
+    var hasTime = true;
+    if (target.kind == ReminderKind.taskDeadline) {
+      final row = await _db
+          .customSelect(
+            'SELECT deadline_at,status FROM local_tasks WHERE local_id=? AND deleted=0',
+            variables: [Variable.withInt(target.localId)],
+          )
+          .getSingle();
+      hasTime = row.read<int?>('deadline_at') != null;
+      if (!hasTime) {
+        reason = 'noDeadline';
+      } else if (!['active', 'blocked'].contains(row.read<String>('status'))) {
+        reason = 'taskInactive';
+      }
+    } else {
+      final identity = CalendarIdentity(
+        CalendarKind.values.byName(target.kind.name),
+        target.localId,
+        ordinal: target.ordinal,
+      );
+      final snapshot = await _db.localCalendar._snapshot(targets: {identity});
+      final occurrence = const CalendarProjection().occurrence(
+        snapshot,
+        identity,
+      )!;
+      if (identity.kind == CalendarKind.planBlock) {
+        if (occurrence.planBlockStatus != PlanBlockStatus.planned) {
+          reason = 'blockInactive';
+        }
+      } else if (occurrence.hidden) {
+        reason = 'hidden';
+      } else if (occurrence.skipped) {
+        reason = 'skipped';
+      } else if (occurrence.completed) {
+        reason = 'completed';
+      } else if (occurrence.attendance == AttendanceDecision.skip) {
+        reason = 'notAttending';
+      }
+    }
+    final acceptedSlots = <int>[];
+    // A persisted accepted bit alone is insufficient after a rule/state edit.
+    // Compare current desired candidates and never expose OS IDs/tokens.
+    if (!series && settings.preferences.enabled && reason == 'ready') {
+      final row = await _db
+          .customSelect('SELECT input_json FROM m6_expected WHERE singleton=1')
+          .getSingle();
+      final encoded = row.read<String?>('input_json');
+      if (encoded != null) {
+        final input = _decodeInput(encoded);
+        final candidates = const ReminderProjection().resolve(input, target);
+        final rows = await _db
+            .customSelect(
+              'SELECT * FROM m6_native_map WHERE kind=? AND local_id=? AND ordinal=? AND accepted=1',
+              variables: [
+                Variable.withString(target.kind.name),
+                Variable.withInt(target.localId),
+                Variable.withInt(target.ordinal),
+              ],
+            )
+            .get();
+        for (final row in rows) {
+          final mapping = _mapping(row);
+          if (mapping.target.context == target.context &&
+              mapping.request.deliveryAtUtc.isAfter(_db._clock.nowUtc) &&
+              candidates.any(
+                (candidate) =>
+                    candidate.logicalKey == mapping.logicalKey &&
+                    candidate.digest == mapping.request.digest &&
+                    candidate.fireAtUtc == mapping.request.deliveryAtUtc,
+              )) {
+            acceptedSlots.add(mapping.slot);
+          }
+        }
+      }
+    }
+    return ReminderInspection(
+      settings: settings,
+      target: target,
+      allDay: allDay,
+      pair: pair,
+      origin: origin,
+      eligible: reason == 'ready',
+      reason: reason,
+      hasTime: hasTime,
+      acceptedSlots: List.unmodifiable(acceptedSlots..sort()),
+    );
+  });
 
   @override
   Future<bool> reminderAllDay(ReminderTarget target, {bool series = false}) =>

@@ -20,6 +20,8 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     'block-update',
     'block-status',
     'block-delete',
+    'reminder-pair',
+    'notification-preferences',
   };
 
   Future<List<Object?>> _beforeUndo(CalendarIntent intent) async {
@@ -160,11 +162,18 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     'task' => 'local_tasks',
     'course' || 'exam' => 'jw_events',
     'young' => 'young_events',
+    'reminders' => 'm6_state',
     _ => throw const CalendarFailure(CalendarFailureCode.storageFailed),
   };
 
   Future<int> _aggregateVersion((String, int) key) async {
     final (kind, id) = key;
+    if (kind == 'reminders') {
+      if (id != 1) {
+        throw const CalendarFailure(CalendarFailureCode.storageFailed);
+      }
+      return (await _db.features._state()).read<int>('revision');
+    }
     final row = await _db
         .customSelect(
           'SELECT * FROM ${_aggregateTable(kind)} WHERE local_id=?',
@@ -186,7 +195,11 @@ extension _CalendarUndoStorage on LocalCalendarStore {
   Future<void> _touchAggregates(Iterable<(String, int)> keys) async {
     for (final key in keys.toSet()) {
       await _aggregateVersion(key);
-      if (key.$1 == 'task') {
+      if (key.$1 == 'reminders') {
+        await _db.customStatement(
+          'UPDATE m6_state SET revision=revision+1 WHERE singleton=1',
+        );
+      } else if (key.$1 == 'task') {
         await _bumpTask(key.$2, _db._clock.nowUtc);
       } else {
         await _db.customStatement(
@@ -457,6 +470,10 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       }
       // Before values are tuples of fixed business fields, never executable paths.
       final action = value['action'] as String;
+      if (action == 'reminder-pair' || action == 'notification-preferences') {
+        _validateReminderUndo(value);
+        return value;
+      }
       final sizes = switch (action) {
         'create' || 'task-create' || 'block-create' => [0],
         'series' ||
@@ -690,7 +707,10 @@ extension _CalendarUndoStorage on LocalCalendarStore {
       return;
     }
     final expected = <(String, int)>{};
-    if (payload['relation'] != null) {
+    if (payload['action'] == 'reminder-pair' ||
+        payload['action'] == 'notification-preferences') {
+      expected.addAll(await _reminderUndoKeys(payload));
+    } else if (payload['relation'] != null) {
       final r = payload['relation'] as List;
       expected.addAll([
         await _aggregateKey(_decodeIdentity(r[2] as String)),
@@ -995,6 +1015,28 @@ extension _CalendarUndoStorage on LocalCalendarStore {
     CalendarRelationReference? relation;
     try {
       switch (action) {
+        case 'reminder-pair':
+          if (b[3] == null) {
+            await _db.customStatement(
+              'DELETE FROM m6_reminder_overrides WHERE kind=? AND local_id=? AND ordinal=?',
+              b.take(3).toList(),
+            );
+          } else {
+            await _db.customStatement(
+              'INSERT INTO m6_reminder_overrides VALUES(?,?,?,?) ON CONFLICT(kind,local_id,ordinal) DO UPDATE SET pair_json=excluded.pair_json',
+              b,
+            );
+          }
+        case 'notification-preferences':
+          await _writeAgentNotificationPreferences(
+            ReminderPreferences(
+              enabled: b[0] == 1,
+              morningEnabled: b[1] == 1,
+              privateDisplay: b[2] == 1,
+              timed: _db.features._decodePair(jsonDecode(b[3] as String)),
+              allDay: _db.features._decodePair(jsonDecode(b[4] as String)),
+            ),
+          );
         case 'create':
           await _db.customStatement(
             'UPDATE personal_events SET deleted=1 WHERE local_id=?',

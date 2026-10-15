@@ -2858,6 +2858,7 @@ String? _toolLabel(String? tool) {
     'query_source_options' => '查看来源刷新范围',
     'request_source_refresh' => '请求学校来源刷新',
     'query_young_activities' => '查询二课活动',
+    'query_reminders' => '查看提醒设置与系统状态',
     'propose_planning_preferences' => '准备时间偏好方案',
     _ => null,
   };

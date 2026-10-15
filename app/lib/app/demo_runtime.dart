@@ -443,6 +443,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
           preferenceProposals: database.agent,
           sources: agentSources,
           actionRecords: database.agent,
+          reminders: database.features,
+          reminderRuntime: () => reminders!.view,
           clock: clock,
           readTools: AgentReadTools(
             calendar: database.localCalendar,
