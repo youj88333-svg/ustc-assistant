@@ -34,7 +34,8 @@ final class ReminderCoordinator {
       _initialized = false,
       _closing = false;
   int _generation = 0;
-  Timer? _timer;
+  Timer? _timer, _rollTimer;
+  ReminderPublication? _lastPublication;
   NotificationCapability? _capability;
 
   void _publish({
@@ -99,6 +100,39 @@ final class ReminderCoordinator {
     );
   }
 
+  /// Windows delivery frees queue slots without a C3 change notification.
+  /// Keep the same bounded projection moving while this process is alive.
+  void _scheduleRollingRefresh() {
+    _rollTimer?.cancel();
+    _rollTimer = null;
+    final publication = _lastPublication;
+    if (_subscription == null ||
+        _paused ||
+        _closed ||
+        _closing ||
+        publication?.enabled != true) {
+      return;
+    }
+    final now = clock.nowUtc.toUtc();
+    var next = now.add(const Duration(minutes: 30));
+    if (_view.failure == null) {
+      for (final mapping in publication!.desired) {
+        final delivered = mapping.request.deliveryAtUtc.add(
+          const Duration(seconds: 1),
+        );
+        if (delivered.isAfter(now) && delivered.isBefore(next)) {
+          next = delivered;
+        }
+      }
+    }
+    _rollTimer = Timer(next.difference(now), () {
+      _rollTimer = null;
+      unawaited(refresh());
+    });
+  }
+
+  void onForeground() => _scheduleRefresh();
+
   Future<void> _ensurePlatform() async {
     _capability = await platform.initialize();
     if (_capability?.available != true) {
@@ -115,6 +149,7 @@ final class ReminderCoordinator {
     }
     final done = Completer<void>();
     _work = done.future;
+    _rollTimer?.cancel();
     try {
       do {
         _again = false;
@@ -141,6 +176,7 @@ final class ReminderCoordinator {
     } finally {
       _work = null;
       done.complete();
+      _scheduleRollingRefresh();
     }
   }
 
@@ -150,6 +186,7 @@ final class ReminderCoordinator {
     _publish(busy: true);
     final publication = await data.prepareReminderPublication();
     if (!_live(generation)) return;
+    _lastPublication = publication;
     if (!publication.enabled && publication.prior.isEmpty && !_initialized) {
       _publish(complete: true);
       return;
@@ -251,6 +288,7 @@ final class ReminderCoordinator {
     _paused = true;
     _generation++;
     _timer?.cancel();
+    _rollTimer?.cancel();
     await _work;
     if (!_initialized && !nativeCleanupRequired) {
       _publish(complete: true);
@@ -329,6 +367,7 @@ final class ReminderCoordinator {
     _closing = true;
     _again = false;
     _timer?.cancel();
+    _rollTimer?.cancel();
     await _work;
     _paused = true;
     _generation++;

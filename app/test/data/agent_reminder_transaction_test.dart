@@ -30,6 +30,101 @@ const _newAllDay = ReminderPair(
 
 void main() {
   test(
+    'removed occurrence cannot receive an occurrence-only reminder in a mixed batch',
+    () async {
+      final store = await _open();
+      await _seedEvent(
+        store,
+        weekly: true,
+        untilDay: DateTime.utc(2026, 10, 29),
+      );
+      final later = (await store.localCalendar.query(_query())).items
+          .singleWhere((item) => item.reference.identity.ordinal == 2)
+          .reference;
+      final port = store.localCalendar as AgentLocalPlanPort;
+      final (context, revision) = await port.readPlanContext();
+      final plan = await port
+          .prepareLocalPlan(await _ticket(store), context, revision, [
+            AgentPersonalPatch(later, entireSeries: true, untilDay: _day),
+            AgentReminderChange(ReminderTarget.calendar(later), _newTimed),
+          ]);
+      await expectLater(
+        port.commitLocalPlan(await port.approveLocalPlan(plan)),
+        throwsA(
+          isA<ReminderFailure>().having(
+            (e) => e.code,
+            'code',
+            ReminderFailureCode.stale,
+          ),
+        ),
+      );
+      expect((await store.localCalendar.query(_query())).items, hasLength(3));
+      expect((await port.readPlanContext()).$2, revision);
+      expect(
+        await store.features.readReminderPair(ReminderTarget.calendar(later)),
+        isNull,
+      );
+      expect(await _count(store, 'agenda_plan_receipts'), 0);
+    },
+  );
+
+  for (final stopRepeating in [false, true]) {
+    for (final reminderFirst in [false, true]) {
+      test('series reminder survives removed selected occurrence '
+          '(single=$stopRepeating, reminderFirst=$reminderFirst)', () async {
+        final store = await _open();
+        final anchor = await _seedEvent(
+          store,
+          weekly: true,
+          untilDay: DateTime.utc(2026, 10, 29),
+        );
+        final later = (await store.localCalendar.query(_query())).items
+            .singleWhere((item) => item.reference.identity.ordinal == 2)
+            .reference;
+        final target = ReminderTarget.calendar(later);
+        await store.features.saveReminderPair(target, _oldTimed, series: true);
+        final change = AgentPersonalPatch(
+          later,
+          entireSeries: true,
+          weekly: stopRepeating ? false : null,
+          untilDay: stopRepeating ? null : _day,
+        );
+        final reminder = AgentReminderChange(target, _newTimed, series: true);
+        final port = store.localCalendar as AgentLocalPlanPort;
+        final (context, revision) = await port.readPlanContext();
+        final plan = await port.prepareLocalPlan(
+          await _ticket(store),
+          context,
+          revision,
+          reminderFirst ? [reminder, change] : [change, reminder],
+        );
+        final receipt = await port.commitLocalPlan(
+          await port.approveLocalPlan(plan),
+        );
+        final surviving = await _currentEvent(store, anchor.identity.localId);
+        expect((await store.localCalendar.query(_query())).items, hasLength(1));
+        expect(
+          (await store.features.inspectReminder(
+            ReminderTarget.calendar(surviving.reference),
+            series: true,
+          )).pair.canonical,
+          _newTimed.canonical,
+        );
+        await _write(store, context, UndoCalendarWrite(receipt.undo!));
+        expect((await store.localCalendar.query(_query())).items, hasLength(3));
+        final restored = await _currentEvent(store, anchor.identity.localId);
+        expect(
+          (await store.features.inspectReminder(
+            ReminderTarget.calendar(restored.reference),
+            series: true,
+          )).pair.canonical,
+          _oldTimed.canonical,
+        );
+      });
+    }
+  }
+
+  test(
     'one C3 commit and shared undo each capture reminder expectations once',
     () async {
       final store = await _open();

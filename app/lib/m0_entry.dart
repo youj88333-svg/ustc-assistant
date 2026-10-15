@@ -133,16 +133,17 @@ final class _OwnedAppState extends State<OwnedApplication> {
   }
 
   void _onLifecycleStateChanged(AppLifecycleState state) {
-    final morning = _boundRuntime?.morning;
-    if (morning == null) return;
+    final runtime = _boundRuntime;
+    if (runtime == null) return;
     switch (state) {
       case AppLifecycleState.resumed:
-        morning.onForeground(true);
+        runtime.morning.onForeground(true);
+        runtime.reminders.onForeground();
         break;
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
-        morning.onForeground(false);
+        runtime.morning.onForeground(false);
         break;
       case AppLifecycleState.inactive:
         break;

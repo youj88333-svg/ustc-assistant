@@ -398,6 +398,8 @@ final class ReminderInspection {
     required this.reason,
     required this.hasTime,
     required this.acceptedSlots,
+    this.series = false,
+    this.overridePresent = false,
   });
   final ReminderSettings settings;
   final ReminderTarget target;
@@ -406,6 +408,12 @@ final class ReminderInspection {
   final ReminderPairOrigin origin;
   final String reason;
   final List<int> acceptedSlots;
+
+  /// The inspected editing scope, independent of where the effective rule came from.
+  final bool series;
+
+  /// Includes a retained override whose time kind currently does not apply.
+  final bool overridePresent;
 }
 
 abstract interface class ReminderInspectionPort {
@@ -413,6 +421,14 @@ abstract interface class ReminderInspectionPort {
     ReminderTarget target, {
     bool series = false,
   });
+}
+
+/// Manual editors and Agent plans both guard against concurrent reminder edits.
+abstract interface class ReminderEditingPort implements ReminderInspectionPort {
+  Future<void> saveInspectedReminder(
+    ReminderInspection expected,
+    ReminderPair? pair,
+  );
 }
 
 final class ReminderRuntimeView {

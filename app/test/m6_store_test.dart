@@ -15,6 +15,140 @@ final _now = DateTime.utc(2026, 10, 15, 0);
 final _syntheticKey = Uint8List.fromList('synthetic-model-key-01'.codeUnits);
 
 void main() {
+  test(
+    'manual reminder snapshot guards concurrent rules and target edits',
+    () async {
+      final store = await _open();
+      final context = await _context(store);
+      final created = await _write(
+        store,
+        context,
+        CreatePersonalEvent(
+          PersonalEventDraft(
+            title: 'synthetic reminder editor race',
+            start: _now.add(const Duration(hours: 3)),
+            end: _now.add(const Duration(hours: 4)),
+            weekly: true,
+          ),
+        ),
+      );
+      final target = ReminderTarget.calendar(created.target!);
+      const seriesPair = ReminderPair(
+        ReminderRule.before(15),
+        ReminderRule.none(),
+      );
+      const changedPair = ReminderPair(
+        ReminderRule.before(10),
+        ReminderRule.none(),
+      );
+      await store.features.saveReminderPair(target, seriesPair, series: true);
+      final displayed = await store.features.inspectReminder(target);
+      expect(displayed.pair.canonical, seriesPair.canonical);
+      expect(displayed.origin, ReminderPairOrigin.series);
+      expect(displayed.series, isFalse);
+      expect(displayed.overridePresent, isFalse);
+      final seriesDisplay = await store.features.inspectReminder(
+        target,
+        series: true,
+      );
+      expect(seriesDisplay.series, isTrue);
+      expect(seriesDisplay.overridePresent, isTrue);
+
+      await store.features.saveReminderPair(target, changedPair, series: true);
+      final changedRevision =
+          (await store.features.inspectReminders()).revision;
+      await expectLater(
+        store.features.saveInspectedReminder(displayed, ReminderPair.timed),
+        throwsA(
+          isA<ReminderFailure>().having(
+            (e) => e.code,
+            'code',
+            ReminderFailureCode.stale,
+          ),
+        ),
+      );
+      expect(
+        (await store.features.inspectReminders()).revision,
+        changedRevision,
+      );
+      expect(await store.features.readReminderPair(target), isNull);
+      final latest = await store.features.inspectReminder(target);
+      await store.features.saveInspectedReminder(latest, seriesPair);
+      expect(
+        (await store.features.readReminderPair(target))!.canonical,
+        seriesPair.canonical,
+      );
+
+      final beforeTargetEdit = await store.features.inspectReminder(target);
+      await _write(
+        store,
+        context,
+        SetPersonalOccurrenceState(created.target!, completed: true),
+      );
+      await expectLater(
+        store.features.saveInspectedReminder(beforeTargetEdit, null),
+        throwsA(
+          isA<ReminderFailure>().having(
+            (e) => e.code,
+            'code',
+            ReminderFailureCode.stale,
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'inspection distinguishes retained incompatible override from inheritance',
+    () async {
+      final store = await _open();
+      final context = await _context(store);
+      final created = await _write(
+        store,
+        context,
+        CreatePersonalEvent(
+          PersonalEventDraft(
+            title: 'synthetic retained time kind rule',
+            start: _day,
+            end: _day.add(const Duration(days: 1)),
+            allDay: true,
+          ),
+        ),
+      );
+      await store.features.saveReminderPair(
+        ReminderTarget.calendar(created.target!),
+        ReminderPair.allDay,
+      );
+      await _write(
+        store,
+        context,
+        UpdatePersonalOccurrence(
+          created.target!,
+          PersonalEventDraft(
+            title: 'synthetic retained time kind rule',
+            start: _now.add(const Duration(hours: 3)),
+            end: _now.add(const Duration(hours: 4)),
+          ),
+        ),
+      );
+      final current = (await _window(store)).items.single.reference;
+      final inspection = await store.features.inspectReminder(
+        ReminderTarget.calendar(current),
+      );
+      expect(inspection.allDay, isFalse);
+      expect(inspection.origin, ReminderPairOrigin.defaults);
+      expect(inspection.overridePresent, isTrue);
+      expect(inspection.pair.canonical, ReminderPair.timed.canonical);
+      await store.features.saveInspectedReminder(inspection, null);
+      expect(
+        (await store.features.inspectReminder(
+          ReminderTarget.calendar(current),
+        )).overridePresent,
+        isFalse,
+      );
+    },
+  );
+
   test('schema 15 upgrade preserves synthetic C3 and Agent assets', () async {
     final file = await _temporaryDatabase('m6-schema15-');
     var store = await _open(file: file);

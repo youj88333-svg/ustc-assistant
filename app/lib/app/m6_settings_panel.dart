@@ -34,9 +34,12 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
   ReminderSettings? _settings;
   ReminderRuntimeView _runtime = const ReminderRuntimeView();
   StreamSubscription<ReminderRuntimeView>? _runtimeSubscription;
+  StreamSubscription<int>? _settingsSubscription;
   int _generation = 0;
+  int _settingsReadGeneration = 0;
   bool _loading = true;
   bool _mutationBusy = false;
+  bool _settingsRefreshPending = false;
   bool _retryBusy = false;
   String? _settingsMessage;
   bool _settingsMessageIsError = false;
@@ -47,6 +50,7 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
     super.initState();
     _runtime = widget.initialReminderView;
     _watchReminderChanges();
+    _watchSettingsChanges();
     unawaited(_readSettings());
   }
 
@@ -56,11 +60,16 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
     if (!identical(oldWidget.data, widget.data) ||
         !identical(oldWidget.briefs, widget.briefs)) {
       _generation++;
+      _settingsReadGeneration++;
+      _settingsSubscription?.cancel();
+      _settingsRefreshPending = false;
       _settings = null;
       _loading = true;
       _mutationBusy = false;
       _retryBusy = false;
       _settingsMessage = null;
+      _settingsMessageIsError = false;
+      _watchSettingsChanges();
       unawaited(_readSettings());
     }
     if (!identical(oldWidget.reminderChanges, widget.reminderChanges)) {
@@ -75,7 +84,29 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
   void dispose() {
     _generation++;
     _runtimeSubscription?.cancel();
+    _settingsSubscription?.cancel();
     super.dispose();
+  }
+
+  void _watchSettingsChanges() {
+    _settingsSubscription = widget.data.changes.listen(
+      (_) {
+        if (!mounted) return;
+        if (_mutationBusy) {
+          _settingsRefreshPending = true;
+        } else {
+          unawaited(_readSettings());
+        }
+      },
+      onError: (Object _) {
+        if (mounted) {
+          setState(() {
+            _settingsMessage = '提醒设置变更暂不可用，请重试读取当前设置。';
+            _settingsMessageIsError = true;
+          });
+        }
+      },
+    );
   }
 
   void _watchReminderChanges() {
@@ -98,21 +129,28 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
 
   bool _isCurrent(int generation) => mounted && generation == _generation;
 
-  Future<void> _readSettings() async {
+  Future<void> _readSettings({bool preserveMessage = false}) async {
     final generation = _generation;
+    final readGeneration = ++_settingsReadGeneration;
     if (mounted) setState(() => _loading = true);
     try {
       final settings = await widget.data.inspectReminders();
-      if (_isCurrent(generation)) {
+      if (_isCurrent(generation) && readGeneration == _settingsReadGeneration) {
+        if (_mutationBusy) {
+          _settingsRefreshPending = true;
+          return;
+        }
         setState(() {
           _settings = settings;
           _loading = false;
-          _settingsMessage = null;
-          _settingsMessageIsError = false;
+          if (!preserveMessage) {
+            _settingsMessage = null;
+            _settingsMessageIsError = false;
+          }
         });
       }
     } on Object {
-      if (_isCurrent(generation)) {
+      if (_isCurrent(generation) && readGeneration == _settingsReadGeneration) {
         setState(() {
           _loading = false;
           _settingsMessage = '无法读取提醒设置，请重试。';
@@ -125,7 +163,8 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
   Future<void> _updatePreferences(
     ReminderPreferences Function(ReminderPreferences current) update,
   ) async {
-    if (_mutationBusy) return;
+    final expected = _settings;
+    if (_mutationBusy || expected == null) return;
     final generation = _generation;
     setState(() {
       _mutationBusy = true;
@@ -133,10 +172,8 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
       _settingsMessageIsError = false;
     });
     var saved = false;
+    var stale = false;
     try {
-      // Read the current context/revision immediately before the atomic write.
-      final expected = await widget.data.inspectReminders();
-      if (!_isCurrent(generation)) return;
       final preferences = update(expected.preferences);
       await widget.data.saveReminderPreferences(expected, preferences);
       saved = true;
@@ -148,17 +185,31 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
         _settingsMessage = '已保存。';
         _settingsMessageIsError = false;
       });
-    } on Object {
+    } on Object catch (error) {
+      stale =
+          error is ReminderFailure && error.code == ReminderFailureCode.stale;
+      if (stale) _settingsRefreshPending = true;
       if (_isCurrent(generation)) {
         setState(() {
-          _settingsMessage = saved
+          _settingsMessage = stale
+              ? '提醒设置已被其他操作修改，正在重新读取；请核对后再调整。'
+              : saved
               ? '设置已提交，但无法重新读取确认；请重试读取当前设置。'
               : '保存提醒设置失败，请重试。';
           _settingsMessageIsError = true;
         });
       }
     } finally {
-      if (_isCurrent(generation)) setState(() => _mutationBusy = false);
+      _finishSettingsMutation(generation);
+    }
+  }
+
+  void _finishSettingsMutation(int generation) {
+    if (!_isCurrent(generation)) return;
+    setState(() => _mutationBusy = false);
+    if (_settingsRefreshPending) {
+      _settingsRefreshPending = false;
+      unawaited(_readSettings(preserveMessage: true));
     }
   }
 
@@ -227,7 +278,7 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
         });
       }
     } finally {
-      if (_isCurrent(generation)) setState(() => _mutationBusy = false);
+      _finishSettingsMutation(generation);
     }
   }
 
@@ -271,7 +322,7 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
         });
       }
     } finally {
-      if (_isCurrent(generation)) setState(() => _mutationBusy = false);
+      _finishSettingsMutation(generation);
     }
   }
 

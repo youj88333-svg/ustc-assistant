@@ -3,10 +3,7 @@ part of 'jw_store.dart';
 /// Versioned desired input is captured inside each authoritative business
 /// transaction. Native publishing/cleanup is deliberately outside this store.
 final class M6Store
-    implements
-        ReminderDataPort,
-        ReminderTargetShapePort,
-        ReminderInspectionPort {
+    implements ReminderDataPort, ReminderTargetShapePort, ReminderEditingPort {
   M6Store._(this._db);
   final JwStore _db;
   final _changes = StreamController<int>.broadcast();
@@ -236,6 +233,7 @@ final class M6Store
     final allDay = await _targetAllDay(target, series);
     final settings = await _readSettings();
     var pairJson = await _overrideJson(target, series);
+    final overridePresent = pairJson != null;
     var origin = pairJson == null
         ? ReminderPairOrigin.defaults
         : series
@@ -340,8 +338,31 @@ final class M6Store
       reason: reason,
       hasTime: hasTime,
       acceptedSlots: List.unmodifiable(acceptedSlots..sort()),
+      series: series,
+      overridePresent: overridePresent,
     );
   });
+
+  @override
+  Future<void> saveInspectedReminder(
+    ReminderInspection expected,
+    ReminderPair? pair,
+  ) => _db._serialized(
+    () => _db.transaction(() async {
+      await _db._guard();
+      final actual = await _readSettings();
+      if (actual.context != expected.settings.context ||
+          actual.revision != expected.settings.revision ||
+          actual.context != expected.target.context) {
+        throw const ReminderFailure(ReminderFailureCode.stale);
+      }
+      await _writePair(expected.target, pair, expected.series);
+      await _db.customStatement(
+        'UPDATE m6_state SET revision=revision+1 WHERE singleton=1',
+      );
+      await _captureExpected();
+    }),
+  );
 
   @override
   Future<bool> reminderAllDay(ReminderTarget target, {bool series = false}) =>

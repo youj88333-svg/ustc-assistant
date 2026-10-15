@@ -81,16 +81,31 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.port,
     builder: (context, _) => LayoutBuilder(
-      builder: (context, constraints) =>
-          _workspace(context, widget.port.taskView, constraints.maxWidth),
+      builder: (context, constraints) => _workspace(
+        context,
+        widget.port.taskView,
+        constraints.maxWidth,
+        nowUtc: _nowUtc,
+      ),
     ),
   );
+
+  DateTime get _nowUtc {
+    final port = widget.port;
+    if (port is CalendarTaskWorkspacePort) {
+      return (port as CalendarTaskWorkspacePort).nowUtc.toUtc();
+    }
+    // Standalone task ports have no clock contract; the app's shared calendar
+    // and task controller supplies its AppClock through the port above.
+    return DateTime.now().toUtc();
+  }
 
   Widget _workspace(
     BuildContext context,
     TaskWorkspaceView view,
-    double width,
-  ) {
+    double width, {
+    required DateTime nowUtc,
+  }) {
     final wide = width >= 820;
     final detail = _detailFor(view);
     return Column(
@@ -143,18 +158,18 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                   width: math
                       .min(390.0, math.max(300.0, width * .37))
                       .toDouble(),
-                  child: _taskList(view),
+                  child: _taskList(view, nowUtc),
                 ),
                 const SizedBox(width: 10),
-                Expanded(child: _detailPanel(view, detail)),
+                Expanded(child: _detailPanel(view, detail, nowUtc: nowUtc)),
               ],
             ),
           )
         else
           Expanded(
             child: _selected == null
-                ? _taskList(view)
-                : _detailPanel(view, detail, compact: true),
+                ? _taskList(view, nowUtc)
+                : _detailPanel(view, detail, nowUtc: nowUtc, compact: true),
           ),
       ],
     );
@@ -281,7 +296,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     );
   }
 
-  Widget _taskList(TaskWorkspaceView view) {
+  Widget _taskList(TaskWorkspaceView view, DateTime nowUtc) {
     final window = view.window;
     if (window == null) {
       return _EmptyTaskPanel(
@@ -379,7 +394,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                       selected:
                           _selected?.localId ==
                           window.items[index].reference.localId,
-                      nowUtc: DateTime.now().toUtc(),
+                      nowUtc: nowUtc,
                     ),
                   ),
           ),
@@ -396,7 +411,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     final deadline = task.draft.deadlineAtUtc;
     final overdue =
         deadline != null &&
-        deadline.isBefore(nowUtc) &&
+        !deadline.toUtc().isAfter(nowUtc.toUtc()) &&
         task.status != TaskStatus.completed &&
         task.status != TaskStatus.cancelled;
     final subtitle = <String>[
@@ -469,6 +484,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
   Widget _detailPanel(
     TaskWorkspaceView view,
     TaskDetail? detail, {
+    required DateTime nowUtc,
     bool compact = false,
   }) {
     if (_selected == null) {
@@ -556,10 +572,10 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                       _TaskTag(
                         label:
                             '截止 ${_beijingDateTimeLabel(detail.task.draft.deadlineAtUtc!)}',
-                        fill: _isOverdue(detail.task, detail.nowUtc)
+                        fill: _isOverdue(detail.task, nowUtc)
                             ? const Color(0xFFFFF0DA)
                             : const Color(0xFFF0F3F1),
-                        textColor: _isOverdue(detail.task, detail.nowUtc)
+                        textColor: _isOverdue(detail.task, nowUtc)
                             ? const Color(0xFF805900)
                             : _muted,
                       ),
@@ -633,7 +649,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                   const _InlineNote(text: '还没有时间块。手动安排后，时间到只会提示复核，不会自动完成任务。')
                 else
                   for (final block in blocks) ...[
-                    _blockCard(view, detail, block),
+                    _blockCard(view, detail, block, nowUtc),
                     const SizedBox(height: 8),
                   ],
               ],
@@ -722,8 +738,9 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     TaskWorkspaceView view,
     TaskDetail detail,
     PlanBlockRecord block,
+    DateTime nowUtc,
   ) {
-    final awaiting = block.awaitingReview(detail.nowUtc);
+    final awaiting = block.awaitingReview(nowUtc);
     final deadline = detail.task.draft.deadlineAtUtc;
     final afterDeadline =
         deadline != null && block.draft.startsAtUtc.isAfter(deadline);
@@ -1490,7 +1507,7 @@ String _safeTaskError(Object error) {
 bool _isOverdue(TaskRecord task, DateTime nowUtc) {
   final deadline = task.draft.deadlineAtUtc;
   return deadline != null &&
-      deadline.isBefore(nowUtc) &&
+      !deadline.toUtc().isAfter(nowUtc.toUtc()) &&
       task.status != TaskStatus.completed &&
       task.status != TaskStatus.cancelled;
 }

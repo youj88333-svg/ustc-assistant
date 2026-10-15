@@ -146,7 +146,10 @@ extension _AgentReminderStorage on LocalCalendarStore {
     return reminder.series ? seriesAllDay : occurrenceAllDay ?? seriesAllDay;
   }
 
-  Future<ReminderTarget> _rebaseReminderTarget(ReminderTarget target) async {
+  Future<ReminderTarget> _rebaseReminderTarget(
+    ReminderTarget target, {
+    required bool series,
+  }) async {
     if (target.kind == ReminderKind.taskDeadline) {
       return ReminderTarget.task(
         await _currentTaskRef(
@@ -161,7 +164,10 @@ extension _AgentReminderStorage on LocalCalendarStore {
           CalendarIdentity(
             CalendarKind.values.byName(target.kind.name),
             target.localId,
-            ordinal: target.ordinal,
+            // A valid series edit may remove the originally selected occurrence.
+            // Its original reference was checked before any batch writes; bind
+            // the series rule to the surviving anchor after those writes.
+            ordinal: series ? 0 : target.ordinal,
           ),
           target.version,
         ),
@@ -180,7 +186,10 @@ extension _AgentReminderStorage on LocalCalendarStore {
     final String action;
     if (change is AgentReminderChange) {
       action = 'reminder-pair';
-      final target = await _rebaseReminderTarget(change.target);
+      final target = await _rebaseReminderTarget(
+        change.target,
+        series: change.series,
+      );
       before.addAll([
         target.kind.name,
         target.localId,

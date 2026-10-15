@@ -825,10 +825,8 @@ final class _PreviewBuilder {
       end: change.end ?? oldDraft.end,
       allDay: change.allDay ?? oldDraft.allDay,
       weekly: change.entireSeries ? change.weekly ?? oldDraft.weekly : false,
-      untilDay: change.entireSeries
-          ? change.clearUntil
-                ? null
-                : change.untilDay ?? oldDraft.untilDay
+      untilDay: change.entireSeries && (change.weekly ?? oldDraft.weekly)
+          ? (change.clearUntil ? null : change.untilDay ?? oldDraft.untilDay)
           : null,
       location: change.location ?? oldDraft.location,
       note: change.note ?? oldDraft.note,

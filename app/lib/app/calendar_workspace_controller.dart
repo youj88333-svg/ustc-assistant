@@ -56,6 +56,9 @@ final class CalendarWorkspaceController extends ChangeNotifier
   bool _closing = false;
   bool _disposed = false;
   bool _refreshQueued = false;
+  bool _refreshDirty = false;
+  int? _refreshingEpoch;
+  int _refreshEpoch = 0;
   int _queryGeneration = 0;
   int _detailGeneration = 0;
   Object? _lastJwData;
@@ -75,6 +78,11 @@ final class CalendarWorkspaceController extends ChangeNotifier
   bool _calendarTasksLoading = false;
   CalendarFailureCode? _calendarTasksFailure;
   int _calendarTasksGeneration = 0;
+  Timer? _timeRefreshTimer;
+  int _timeRefreshGeneration = 0;
+  bool _timeRefreshEnabled = false;
+
+  static const _timeRefreshPollInterval = Duration(minutes: 1);
 
   @override
   TaskWorkspaceView get taskView => TaskWorkspaceView(
@@ -135,6 +143,10 @@ final class CalendarWorkspaceController extends ChangeNotifier
     DisplayPreferences preferences, {
     required bool resetDay,
   }) async {
+    ++_refreshEpoch;
+    _refreshDirty = false;
+    _timeRefreshEnabled = false;
+    _cancelTimeRefresh();
     ++_queryGeneration;
     ++_detailGeneration;
     ++_taskQueryGeneration;
@@ -188,24 +200,141 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _lastYoungData = young;
       _scheduleRefresh();
     }
+    _queueRefreshDrain();
     _notify();
   }
 
   void _scheduleRefresh() {
-    if (_refreshQueued || _closing || _disposed || _pending) return;
+    if (_closing || _disposed) return;
+    _refreshDirty = true;
+    _queueRefreshDrain();
+  }
+
+  void _queueRefreshDrain() {
+    if (_refreshQueued ||
+        !_refreshDirty ||
+        _closing ||
+        _disposed ||
+        _pending ||
+        shell.view.globallyBusy) {
+      return;
+    }
     _refreshQueued = true;
     scheduleMicrotask(() {
       _refreshQueued = false;
-      if (!_closing && !_disposed && !_pending) unawaited(_refreshAll());
+      if (_closing || _disposed) {
+        _refreshDirty = false;
+        return;
+      }
+      if (!_refreshDirty ||
+          _pending ||
+          shell.view.globallyBusy ||
+          _refreshingEpoch == _refreshEpoch) {
+        return;
+      }
+      _refreshDirty = false;
+      final epoch = _refreshEpoch;
+      _refreshingEpoch = epoch;
+      unawaited(_drainRefresh(epoch));
     });
   }
 
-  Future<void> _refreshAll() async {
-    await load();
-    if (tasks != null && !_closing && !_disposed) {
-      await loadTasks();
-      await loadCalendarTasks();
+  Future<void> _drainRefresh(int epoch) async {
+    try {
+      await _refreshAll(refreshEpoch: epoch);
+    } finally {
+      if (_refreshingEpoch == epoch) _refreshingEpoch = null;
+      _queueRefreshDrain();
     }
+  }
+
+  Future<void> _refreshAll({int? refreshEpoch}) async {
+    final epoch = refreshEpoch ?? _refreshEpoch;
+    if (!_refreshCurrent(epoch)) return;
+    await load();
+    if (_refreshCurrent(epoch) && tasks != null) {
+      await loadTasks();
+      if (_refreshCurrent(epoch)) await loadCalendarTasks();
+    }
+  }
+
+  bool _refreshCurrent(int epoch) =>
+      !_closing && !_disposed && epoch == _refreshEpoch;
+
+  void _cancelTimeRefresh() {
+    ++_timeRefreshGeneration;
+    _timeRefreshTimer?.cancel();
+    _timeRefreshTimer = null;
+  }
+
+  void _rescheduleTimeRefresh() {
+    _cancelTimeRefresh();
+    if (!_timeRefreshEnabled || _closing || _disposed) return;
+
+    final now = clock.nowUtc.toUtc();
+    DateTime? nextBoundary;
+    void consider(DateTime? boundary) {
+      if (boundary == null) return;
+      final instant = boundary.toUtc();
+      if (instant.isAfter(now) &&
+          (nextBoundary == null || instant.isBefore(nextBoundary!))) {
+        nextBoundary = instant;
+      }
+    }
+
+    void considerTask(TaskRecord task) {
+      if (task.status == TaskStatus.completed ||
+          task.status == TaskStatus.cancelled) {
+        return;
+      }
+      consider(task.draft.deadlineAtUtc);
+    }
+
+    for (final task in _taskWindow?.items ?? const <TaskRecord>[]) {
+      considerTask(task);
+    }
+    for (final task in _calendarTasks?.items ?? const <TaskRecord>[]) {
+      considerTask(task);
+    }
+    final selectedTask = _taskDetail?.task;
+    if (selectedTask != null) considerTask(selectedTask);
+
+    void considerBlock(PlanBlockRecord? block) {
+      if (block?.status == PlanBlockStatus.planned) {
+        consider(block!.draft.endsAtUtc);
+      }
+    }
+
+    for (final block in _taskDetail?.blocks ?? const <PlanBlockRecord>[]) {
+      considerBlock(block);
+    }
+    considerBlock(_detail?.planBlock);
+    for (final occurrence in _window?.items ?? const <CalendarOccurrence>[]) {
+      if (occurrence.reference.identity.kind == CalendarKind.planBlock &&
+          occurrence.planBlockStatus == PlanBlockStatus.planned) {
+        consider(occurrence.endsAtUtc);
+      }
+    }
+
+    final beijingTomorrow = beijingDay(now).add(const Duration(days: 1));
+    consider(beijingTomorrow.subtract(const Duration(hours: 8)));
+    final untilBoundary = nextBoundary?.difference(now);
+    final delay =
+        untilBoundary == null || untilBoundary > _timeRefreshPollInterval
+        ? _timeRefreshPollInterval
+        : untilBoundary;
+    final generation = _timeRefreshGeneration;
+    _timeRefreshTimer = Timer(delay, () {
+      if (generation != _timeRefreshGeneration ||
+          _closing ||
+          _disposed ||
+          !_timeRefreshEnabled) {
+        return;
+      }
+      _timeRefreshTimer = null;
+      _notify();
+      _rescheduleTimeRefresh();
+    });
   }
 
   @override
@@ -216,6 +345,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _calendarTasks = null;
       _calendarTasksLoading = false;
       _calendarTasksFailure = CalendarFailureCode.storageFailed;
+      _rescheduleTimeRefresh();
       _notify();
       return;
     }
@@ -230,12 +360,15 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _calendarTasks = result;
       _calendarTasksLoading = false;
       _calendarTasksFailure = null;
+      _timeRefreshEnabled = true;
+      _rescheduleTimeRefresh();
       _notify();
     } catch (error) {
       if (!_calendarTasksCurrent(generation)) return;
       _calendarTasks = null;
       _calendarTasksLoading = false;
       _calendarTasksFailure = _code(error);
+      _rescheduleTimeRefresh();
       _notify();
     }
   }
@@ -256,6 +389,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _taskDetail = null;
       ++_taskDetailGeneration;
       _taskDetailLoading = false;
+      _rescheduleTimeRefresh();
     }
     final generation = ++_taskQueryGeneration;
     _tasksLoading = true;
@@ -268,6 +402,8 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _taskWindow = result;
       _undo = undo;
       _tasksLoading = false;
+      _timeRefreshEnabled = true;
+      _rescheduleTimeRefresh();
       _notify();
       final selected = _selectedTask;
       if (selected != null) {
@@ -279,6 +415,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
           _taskDetail = null;
           ++_taskDetailGeneration;
           _taskDetailLoading = false;
+          _rescheduleTimeRefresh();
           _notify();
         } else {
           await selectTask(latest.first.reference);
@@ -289,6 +426,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _tasksLoading = false;
       _taskFailure = _code(error);
       _undo = const CalendarUndoView();
+      _rescheduleTimeRefresh();
       _notify();
     }
   }
@@ -301,6 +439,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
     _selectedTask = reference;
     _taskDetail = null;
     _taskDetailLoading = reference != null;
+    _rescheduleTimeRefresh();
     _notify();
     if (reference == null) return;
     try {
@@ -312,6 +451,8 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _taskDetail = detail;
       _taskDetailLoading = false;
       _taskFailure = null;
+      _timeRefreshEnabled = true;
+      _rescheduleTimeRefresh();
       _notify();
     } catch (error) {
       if (!_taskCurrent(queryGeneration) ||
@@ -320,6 +461,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       }
       _taskDetailLoading = false;
       _taskFailure = _code(error);
+      _rescheduleTimeRefresh();
       _notify();
     }
   }
@@ -347,6 +489,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       ++_detailGeneration;
       _detailLoading = false;
       _window = null;
+      _rescheduleTimeRefresh();
     }
     final generation = ++_queryGeneration;
     _loading = true;
@@ -369,6 +512,8 @@ final class CalendarWorkspaceController extends ChangeNotifier
       if (!_current(generation)) return;
       _window = result;
       _loading = false;
+      _timeRefreshEnabled = true;
+      _rescheduleTimeRefresh();
       _notify();
       final selected = _selected;
       if (selected != null) {
@@ -380,6 +525,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
           _detail = null;
           ++_detailGeneration;
           _detailLoading = false;
+          _rescheduleTimeRefresh();
           _notify();
         } else {
           await select(latest.first.reference);
@@ -389,6 +535,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       if (!_current(generation)) return;
       _loading = false;
       _failure = _code(error);
+      _rescheduleTimeRefresh();
       _notify();
     }
   }
@@ -404,6 +551,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
     _selected = reference;
     _detail = null;
     _detailLoading = reference != null;
+    _rescheduleTimeRefresh();
     _notify();
     if (reference == null) return;
     try {
@@ -412,11 +560,14 @@ final class CalendarWorkspaceController extends ChangeNotifier
       _detail = detail;
       _detailLoading = false;
       _failure = null;
+      _timeRefreshEnabled = true;
+      _rescheduleTimeRefresh();
       _notify();
     } catch (error) {
       if (!_current(queryGeneration) || generation != _detailGeneration) return;
       _detailLoading = false;
       _failure = _code(error);
+      _rescheduleTimeRefresh();
       _notify();
     }
   }
@@ -461,6 +612,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
         const CalendarFailure(CalendarFailureCode.staleReference),
       );
     }
+    final actionRefreshEpoch = _refreshEpoch;
     final result = Completer<CalendarWriteReceipt>();
     _pending = true;
     _failure = null;
@@ -471,15 +623,23 @@ final class CalendarWorkspaceController extends ChangeNotifier
       try {
         final command = await calendar.prepare(context, intent);
         final receipt = await calendar.commit(command);
-        if (!_closing && !_disposed) {
-          await _refreshAll();
+        if (_refreshCurrent(actionRefreshEpoch)) {
+          // The post-commit read satisfies changes observed while this write
+          // was pending. Keep them dirty if maintenance or a source job blocks
+          // the read; new signals during the read set the bit again.
+          if (shell.view.globallyBusy) {
+            _refreshDirty = true;
+          } else {
+            _refreshDirty = false;
+            await _refreshAll(refreshEpoch: actionRefreshEpoch);
+          }
         }
         // A query failure cannot turn an already committed command into a
         // reported write failure; the separate view failure exposes the read.
         result.complete(receipt);
       } catch (error) {
         final code = _code(error);
-        if (!_closing && !_disposed) {
+        if (_refreshCurrent(actionRefreshEpoch)) {
           _failure = code;
           _taskFailure = code;
         }
@@ -487,6 +647,7 @@ final class CalendarWorkspaceController extends ChangeNotifier
       } finally {
         _pending = false;
         _notify();
+        _queueRefreshDrain();
       }
     }();
     return result.future;
@@ -498,6 +659,10 @@ final class CalendarWorkspaceController extends ChangeNotifier
       return;
     }
     _closing = true;
+    ++_refreshEpoch;
+    _refreshDirty = false;
+    _timeRefreshEnabled = false;
+    _cancelTimeRefresh();
     ++_queryGeneration;
     ++_detailGeneration;
     ++_taskQueryGeneration;
@@ -514,6 +679,10 @@ final class CalendarWorkspaceController extends ChangeNotifier
     if (_disposed) return;
     _disposed = true;
     _closing = true;
+    ++_refreshEpoch;
+    _refreshDirty = false;
+    _timeRefreshEnabled = false;
+    _cancelTimeRefresh();
     ++_queryGeneration;
     ++_detailGeneration;
     ++_taskQueryGeneration;

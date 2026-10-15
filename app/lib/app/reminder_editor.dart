@@ -43,10 +43,12 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
   late ReminderPair _pair = _defaults;
   bool _inherited = true;
   bool _series = false;
+  bool _dirty = false;
   bool _loading = true;
   bool _readFailed = false;
   bool _saving = false;
   String? _message;
+  ReminderInspection? _inspection;
   int _operation = 0;
 
   ReminderPair get _defaults =>
@@ -76,6 +78,27 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       _message = null;
     });
     try {
+      final data = widget.data;
+      if (data is ReminderEditingPort) {
+        final inspection = await (data as ReminderEditingPort).inspectReminder(
+          widget.target,
+          series: _series,
+        );
+        if (!_isCurrent(operation)) return;
+        inspection.pair.validate(allDay: inspection.allDay);
+        setState(() {
+          _inspection = inspection;
+          _allDay = inspection.allDay;
+          _inherited =
+              inspection.origin == ReminderPairOrigin.defaults ||
+              (!_series && inspection.origin == ReminderPairOrigin.series);
+          _pair = inspection.pair;
+          _dirty = false;
+          _loading = false;
+          _readFailed = false;
+        });
+        return;
+      }
       final shape = widget.data;
       final allDay = shape is ReminderTargetShapePort
           ? await (shape as ReminderTargetShapePort).reminderAllDay(
@@ -100,9 +123,11 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       pair?.validate(allDay: allDay);
       inheritedPair?.validate(allDay: allDay);
       setState(() {
+        _inspection = null;
         _allDay = allDay;
         _inherited = pair == null;
         _pair = pair ?? inheritedPair ?? _defaults;
+        _dirty = false;
         _loading = false;
         _readFailed = false;
       });
@@ -128,6 +153,13 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
 
   Future<void> _save({bool restoreDefault = false}) async {
     if (_saving || _loading || _readFailed) return;
+    final data = widget.data;
+    final inspection = _inspection;
+    final guarded = data is ReminderEditingPort && inspection != null;
+    if (guarded && !restoreDefault && !_dirty) {
+      Navigator.of(context).pop(false);
+      return;
+    }
     final pair = restoreDefault || _inherited ? null : _pair;
     try {
       pair?.validate(allDay: _allDay);
@@ -141,14 +173,22 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       _message = null;
     });
     try {
-      await widget.data.saveReminderPair(widget.target, pair, series: _series);
+      if (guarded) {
+        final editing = data as ReminderEditingPort;
+        await editing.saveInspectedReminder(inspection, pair);
+      } else {
+        await data.saveReminderPair(widget.target, pair, series: _series);
+      }
       if (!_isCurrent(operation) || !mounted) return;
       Navigator.of(context).pop(true);
-    } on Object {
+    } on Object catch (error) {
       if (_isCurrent(operation)) {
+        final stale =
+            error is ReminderFailure && error.code == ReminderFailureCode.stale;
         setState(() {
           _saving = false;
-          _message = '保存提醒设置失败，请重试。';
+          _readFailed = stale;
+          _message = stale ? '提醒设置已被其他操作修改，请重新读取后再保存。' : '保存提醒设置失败，请重试。';
         });
       }
     }
@@ -184,7 +224,9 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
                     const SizedBox(height: 12),
                   ],
                   Text(
-                    _inherited ? '当前继承全局默认提醒。' : '此对象使用单独的提醒设置。',
+                    _inspection == null
+                        ? (_inherited ? '当前继承全局默认提醒。' : '此对象使用单独的提醒设置。')
+                        : _inspectionDescription(_inspection!),
                     style: Theme.of(context).textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 12),
@@ -196,6 +238,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
                     onChanged: (pair) => setState(() {
                       _pair = pair;
                       _inherited = false;
+                      _dirty = true;
                       _message = null;
                     }),
                   ),
@@ -206,7 +249,11 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
                       child: TextButton(
                         key: const ValueKey('reminder-editor-retry-read'),
                         onPressed: _saving ? null : _reload,
-                        child: const Text('重试读取'),
+                        child: Text(
+                          _message?.contains('其他操作修改') == true
+                              ? '重新读取'
+                              : '重试读取',
+                        ),
                       ),
                     ),
                   ],
@@ -243,6 +290,25 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
       ),
     ],
   );
+
+  String _inspectionDescription(ReminderInspection inspection) {
+    if (inspection.overridePresent &&
+        inspection.origin == ReminderPairOrigin.defaults) {
+      return _series
+          ? '已保留的系列设置与当前日程类型不匹配；当前使用全局默认提醒。'
+          : '已保留的本次设置与当前日程类型不匹配；当前使用全局默认提醒。';
+    }
+    if (_series) {
+      return inspection.origin == ReminderPairOrigin.series
+          ? '整个系列使用单独的提醒设置。'
+          : '整个系列当前继承全局默认提醒。';
+    }
+    return switch (inspection.origin) {
+      ReminderPairOrigin.defaults => '当前继承全局默认提醒。',
+      ReminderPairOrigin.series => '当前继承整个系列的提醒设置。',
+      ReminderPairOrigin.target => '本次使用单独的提醒设置。',
+    };
+  }
 }
 
 /// Two bounded reminder slots shared by the object editor and global settings.

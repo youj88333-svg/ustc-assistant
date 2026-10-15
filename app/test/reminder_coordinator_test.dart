@@ -1,7 +1,9 @@
 import 'dart:async';
 
+import 'package:fake_async/fake_async.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/jobs/reminder_coordinator.dart';
 
@@ -16,6 +18,111 @@ const _digest =
 const _token = 'bbbbbbbbbbbbbbbb';
 
 void main() {
+  test(
+    'a running coordinator fills the next slot after OS delivery without a C3 edit',
+    () {
+      fakeAsync((time) {
+        final start = DateTime.utc(2026, 10, 15);
+        final first = _request(
+          id: 'first',
+          deliveryAtUtc: start.add(const Duration(minutes: 1)),
+        );
+        final following = _request(
+          id: 'following',
+          deliveryAtUtc: start.add(const Duration(minutes: 2)),
+        );
+        final data = _FakeReminderData(
+          publication: _publication(desired: [_mapping(first)]),
+          nextPublication: _publication(desired: [_mapping(following)]),
+        );
+        final platform = _FakeNotifications();
+        final coordinator = ReminderCoordinator(
+          data: data,
+          platform: platform,
+          clock: _ElapsedClock(start, () => time.elapsed),
+        );
+        coordinator.start();
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        expect(platform.pendingItems.single.id, 'first');
+        expect(data._prepareCount, 1);
+        // Windows removes the delivered schedule without a business-change event.
+        platform.pendingItems.clear();
+        time.elapse(const Duration(minutes: 1, seconds: 1));
+        time.flushMicrotasks();
+        expect(data._prepareCount, 2);
+        expect(platform.pendingItems.single.id, 'following');
+        unawaited(coordinator.close());
+        time.flushMicrotasks();
+        expect(time.pendingTimers, isEmpty);
+        expect(platform.clearCalls, 0);
+        expect(platform.pendingItems.single.id, 'following');
+        unawaited(data._changes.close());
+        time.flushMicrotasks();
+      });
+    },
+  );
+
+  test(
+    'rolling empty horizons refresh locally and maintenance cancels the timer',
+    () {
+      fakeAsync((time) {
+        final data = _FakeReminderData(publication: _publication());
+        final platform = _FakeNotifications();
+        final coordinator = ReminderCoordinator(
+          data: data,
+          platform: platform,
+          clock: _ElapsedClock(DateTime.utc(2026, 10, 15), () => time.elapsed),
+        );
+        coordinator.start();
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        time.elapse(const Duration(minutes: 30));
+        time.flushMicrotasks();
+        expect(data._prepareCount, 2);
+        unawaited(coordinator.clearForMaintenance());
+        time.flushMicrotasks();
+        expect(time.pendingTimers, isEmpty);
+        time.elapse(const Duration(hours: 1));
+        expect(data._prepareCount, 2);
+        unawaited(coordinator.close());
+        unawaited(data._changes.close());
+        time.flushMicrotasks();
+      });
+    },
+  );
+
+  test(
+    'disabled reminders never poll or register the OS and foreground checks coalesce',
+    () {
+      fakeAsync((time) {
+        final data = _FakeReminderData(
+          publication: _publication(enabled: false),
+        );
+        final platform = _FakeNotifications();
+        final coordinator = ReminderCoordinator(data: data, platform: platform);
+        coordinator.start();
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        expect(data._prepareCount, 1);
+        expect(time.pendingTimers, isEmpty);
+        time.elapse(const Duration(hours: 1));
+        expect(data._prepareCount, 1);
+        coordinator.onForeground();
+        coordinator.onForeground();
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        expect(data._prepareCount, 2);
+        expect(platform.initializeCalls, 0);
+        expect(platform.scheduleCalls, 0);
+        unawaited(coordinator.close());
+        unawaited(data._changes.close());
+        time.flushMicrotasks();
+        expect(time.pendingTimers, isEmpty);
+      });
+    },
+  );
+
   test(
     'explicit test notification needs opt-in and contains no business fields',
     () async {
@@ -347,6 +454,14 @@ void main() {
     await navigation.cancel();
     await coordinator.close();
   });
+}
+
+final class _ElapsedClock implements AppClock {
+  _ElapsedClock(this.start, this.elapsed);
+  final DateTime start;
+  final Duration Function() elapsed;
+  @override
+  DateTime get nowUtc => start.add(elapsed());
 }
 
 NotificationRequest _request({
