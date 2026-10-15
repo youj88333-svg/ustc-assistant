@@ -10,7 +10,7 @@
 | M3 | 已关闭，2026-10-12 | 内部评课/校园查询及首批 7 项长期 Markdown，临时界面可选，无 Agent/工具注册；[关闭依据与保留项](milestones/m3/acceptance.md) |
 | M4 | 已关闭，2026-10-13；M4.1–M4.4 均已验收 | [任务单](milestones/m4/plan.md)：Windows 应用壳、日程/个人安排、任务/手工时间规划、设置与持久维护恢复及集成；[分段与总体验收](milestones/m4/acceptance.md)，[实际记录](milestones/m4/records.md)。不接模型/工具 |
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
-| M6 | 工程完成，等待统一真人验收；未关闭 | [唯一任务单](milestones/m6/plan.md)、[批准记录](milestones/m6/acceptance.md)：06:00 后非阻塞晨报、两槽提醒、Windows 退出后系统调度；先平台有限验证，再迁移/业务/晨报和集成验收，实际证据见[记录](milestones/m6/records.md) |
+| M6 | 工程完成，晨报体验修订后待验；未关闭 | [唯一任务单](milestones/m6/plan.md)、[批准记录](milestones/m6/acceptance.md)：06:00 后非阻塞晨报、两槽提醒、Windows 退出后系统调度；[晨报日期窗口与紧凑展示修订](milestones/m6/records/03-morning-window-and-presentation.md)区分真实反馈、公开诊断、自动回归和待验，平台/集成见[记录](milestones/m6/records.md) |
 | 后续 | 未排定 | 移动端原生实现、正式发布及其能力验收另行确认 |
 
 ## 已批准范围与待验证
