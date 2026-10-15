@@ -76,6 +76,17 @@ void main() {
             DateTime.utc(2026, 10, 10),
           );
 
+          // Expire the fixture browser session while retaining the C3
+          // credential and calendar. The hidden attempt must authenticate
+          // afresh rather than succeeding only through a warm cookie.
+          final priorLogins = fixture.successfulAuthenticationSubmissions;
+          await harness.sync.clearSession();
+          expect(harness.sync.syncView.data!.credentialSaved, isTrue);
+          expect(
+            harness.sync.syncView.data!.events.single.localId,
+            retainedEventId,
+          );
+
           final beforeEnable = await harness.store.youngDaily.inspect();
           expect(beforeEnable.lastSuccessAtUtc, isNull);
           await harness.store.youngDaily.setEnabled(beforeEnable.context, true);
@@ -132,6 +143,8 @@ void main() {
           expect(harness.sync.syncView.normalization!.days, 31);
           expect(harness.sync.syncView.normalization!.calendarPages, 31);
           expect(fixture.calendarRequests, requestsBeforeDaily + 31);
+          expect(fixture.successfulAuthenticationSubmissions, priorLogins + 1);
+          expect(fixture.unexpectedAuthenticationSubmissions, 0);
           expect(harness.sync.syncView.data!.events, hasLength(1));
           expect(
             harness.sync.syncView.data!.events.single.localId,
