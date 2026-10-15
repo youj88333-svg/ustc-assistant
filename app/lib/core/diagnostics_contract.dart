@@ -60,6 +60,7 @@ enum DiagnosticEventName {
   morningBriefStarted,
   morningBriefCompleted,
   morningBriefFailed,
+  morningNoticeRead,
 }
 
 enum DiagnosticTool {
@@ -229,6 +230,10 @@ enum DiagnosticCode {
   cleanupFailed,
   unknown,
   contextLimit,
+  accessRestricted,
+  campusOnly,
+  sourceSchema,
+  unsafeTarget,
 }
 
 enum DiagnosticReadScope { basic, personal }
@@ -374,6 +379,8 @@ enum DiagnosticStage {
   speechInput,
   notifications,
   morningBrief,
+  morningTeachNotices,
+  morningFinanceNotices,
 }
 
 enum DiagnosticPhase {

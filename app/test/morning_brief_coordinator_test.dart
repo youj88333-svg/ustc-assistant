@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -13,6 +14,7 @@ import 'package:ustc_assistant_m0/core/public_query_contract.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/jobs/morning_brief_coordinator.dart';
 import 'package:ustc_assistant_m0/jobs/morning_notice_query.dart';
+import 'package:ustc_assistant_m0/platform/transient_diagnostics.dart';
 
 const _context = CalendarContext(
   owner: 'synthetic-owner-id-private-7',
@@ -24,6 +26,130 @@ const _noticeUrl =
     'https://www.teach.ustc.edu.cn/2026/10/14/private-id-sentinel.html';
 
 void main() {
+  test(
+    'manual retry refreshes even a previously complete notice cache',
+    () async {
+      final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 22));
+      fixture.data.cached = MorningBrief(
+        day: fixture.data.facts.day,
+        phase: MorningBriefPhase.ready,
+        factDigest: _briefDigest,
+        autoAttempts: 1,
+        notices: _coverageBatch(complete: true),
+        summary: 'synthetic earlier summary',
+      );
+      fixture.coordinator.onForeground(true);
+      await _waitFor(() => fixture.coordinator.view.facts != null);
+      await fixture.coordinator.check(manual: true);
+      await fixture.gateway.started.future.timeout(const Duration(seconds: 2));
+      expect(fixture.source.browseCalls, 2);
+      fixture.gateway.finishSuccessfully();
+      await fixture.data.readySaved.future.timeout(const Duration(seconds: 2));
+      await fixture.close();
+    },
+  );
+
+  test(
+    'partial notices never become an unchecked no-notice conclusion',
+    () async {
+      final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 22));
+      fixture.source.failures[CampusColumn.financeNotice] =
+          PublicFailureCode.networkFailed;
+      fixture.coordinator.onForeground(true);
+      await fixture.data.readySaved.future.timeout(const Duration(seconds: 2));
+      await _waitFor(
+        () => fixture.coordinator.view.phase == MorningBriefPhase.ready,
+      );
+      final brief = fixture.data.cached!;
+      expect(
+        morningSummaryForDisplay(brief.summary, brief.notices),
+        morningFactsSummary(fixture.data.facts),
+      );
+      expect(fixture.gateway.generateCalls, 0);
+      expect(fixture.agent.inspectCalls, 0);
+      expect(fixture.data.modelAttempts, 0);
+      expect(brief.summary, contains('morning-facts-v1'));
+      expect(brief.summary, isNot(contains('昨天没有新公告')));
+      final exported =
+          jsonDecode(await fixture.diagnostics.exportRecent()) as Map;
+      final records = (exported['records'] as List).cast<Map>();
+      final failures = records.where(
+        (r) =>
+            r['event'] == 'morningNoticeRead' &&
+            r['stage'] == 'morningFinanceNotices',
+      );
+      expect(failures.single['code'], 'networkFailed');
+      expect(failures.single['outcome'], 'failure');
+      expect(failures.single['count'], 0);
+      expect(records.last['outcome'], 'truncated');
+      expect(records.map((r) => r['trace']).toSet(), hasLength(1));
+      final safeLog = jsonEncode(exported);
+      expect(safeLog, isNot(contains('synthetic public title')));
+      expect(safeLog, isNot(contains(_noticeUrl)));
+      expect(safeLog, isNot(contains(_context.owner)));
+      expect(safeLog, isNot(contains('今天有一项安排')));
+      expect(fixture.diagnostics.diagnosticsView.invalid, 0);
+      await fixture.close();
+    },
+  );
+
+  test(
+    'legacy incomplete summaries stay hidden without editing stored data',
+    () {
+      const oldSummary = '今天有课。昨天没有新公告。';
+      expect(
+        morningSummaryForDisplay(oldSummary, _coverageBatch(complete: false)),
+        '',
+      );
+      expect(morningSummaryForDisplay(oldSummary, null), '');
+      expect(
+        morningSummaryForDisplay(oldSummary, _coverageBatch(complete: true)),
+        oldSummary,
+      );
+      expect(
+        morningSummaryForDisplay('{bad json}', _coverageBatch(complete: true)),
+        '',
+      );
+      final current = const MorningSummary(
+        today: '今天有课。',
+        notices: '有一则公告。',
+      ).encode();
+      expect(
+        morningSummaryForDisplay(current, _coverageBatch(complete: false)),
+        '',
+      );
+      expect(
+        morningSummaryForDisplay(current, _coverageBatch(complete: true)),
+        '今天有课。\n\n有一则公告。',
+      );
+      final adversarial = const MorningSummary(
+        today: '今天有课。昨天没有新公告。',
+        notices: '',
+      ).encode();
+      expect(
+        morningSummaryForDisplay(adversarial, _coverageBatch(complete: false)),
+        '',
+      );
+    },
+  );
+
+  test(
+    'invalid structured model output fails without rendering raw fields',
+    () async {
+      final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 22));
+      await _startGeneration(fixture);
+      fixture.gateway.emitText('{"unexpected":"synthetic untrusted output"}');
+      fixture.gateway.finishWithoutText();
+      await _waitFor(
+        () => fixture.coordinator.view.phase == MorningBriefPhase.failed,
+      );
+      expect(fixture.coordinator.view.failure, 'protocol');
+      expect(fixture.coordinator.view.text, '');
+      expect(fixture.data.readyWrites, 0);
+      await fixture.close();
+    },
+  );
+
   test(
     'a stalled generation times out and closes its local subscription',
     () async {
@@ -269,6 +395,23 @@ void main() {
   );
 }
 
+MorningNoticeBatch _coverageBatch({required bool complete}) =>
+    MorningNoticeBatch(
+      day: DateTime.utc(2026, 10, 14),
+      notices: const [],
+      operations: 2,
+      coverage: [
+        for (final provider in [PublicProvider.teach, PublicProvider.finance])
+          MorningNoticeCoverage(
+            provider: provider,
+            pages: 1,
+            matched: 0,
+            unknownDates: 0,
+            complete: complete,
+          ),
+      ],
+    );
+
 Future<void> _startGeneration(_BriefFixture fixture) async {
   fixture.coordinator.onForeground(true);
   await fixture.gateway.started.future.timeout(const Duration(seconds: 2));
@@ -293,7 +436,8 @@ final class _BriefFixture {
        settings = _FakeReminderSettings(_context),
        agent = _FakeAgentData(),
        source = _FakePublicQuery(),
-       gateway = _FakeGateway() {
+       gateway = _FakeGateway(),
+       diagnostics = TransientDiagnostics() {
     notices = MorningNoticeQuery(source: source, clock: clock);
     coordinator = MorningBriefCoordinator(
       data: data,
@@ -307,6 +451,7 @@ final class _BriefFixture {
       isForegroundBusy: () => foregroundBusy,
       clock: clock,
       generationTimeout: generationTimeout,
+      diagnostics: diagnostics,
     );
   }
 
@@ -316,6 +461,7 @@ final class _BriefFixture {
   final _FakeAgentData agent;
   final _FakePublicQuery source;
   final _FakeGateway gateway;
+  final TransientDiagnostics diagnostics;
   late final MorningNoticeQuery notices;
   late final MorningBriefCoordinator coordinator;
   bool foregroundBusy = false;
@@ -614,8 +760,17 @@ final class _FakeGateway implements ModelGatewayPort {
     return _events.stream;
   }
 
-  void finishSuccessfully() {
-    _events.add(const ModelTextDelta('synthetic morning summary'));
+  void finishSuccessfully({
+    String today = 'synthetic morning summary',
+    String notices = 'synthetic yesterday notices',
+  }) {
+    _events.add(
+      ModelTextDelta(jsonEncode({'today': today, 'notices': notices})),
+    );
+    finishWithoutText();
+  }
+
+  void finishWithoutText() {
     _events.add(
       ModelCompleted(finishReason: 'stop', inputTokens: 32, outputTokens: 11),
     );
@@ -655,6 +810,7 @@ final class _FakePublicQuery implements PublicQueryPort {
   );
   Completer<PublicQueryResult>? firstBrowseGate;
   final PublicJobView _view = const PublicJobView(phase: PublicJobPhase.idle);
+  final Map<CampusColumn, PublicFailureCode> failures = {};
   int browseCalls = 0, articleReads = 0, cancelCalls = 0, closeCalls = 0;
   int? lastArticleMaximum;
 
@@ -680,6 +836,7 @@ final class _FakePublicQuery implements PublicQueryPort {
     PublicCursor? cursor,
   }) async {
     browseCalls++;
+    if (failures[column] case final code?) throw PublicFailure(code);
     if (browseCalls == 1 && firstBrowseGate != null) {
       return firstBrowseGate!.future;
     }

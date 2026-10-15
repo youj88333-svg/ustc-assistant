@@ -17,6 +17,16 @@ import 'morning_brief_card.dart';
 const _agentGreen = Color(0xFF1F6B45);
 const _agentMuted = Color(0xFF66736C);
 const _agentLine = Color(0xFFE3E9E5);
+const _morningHiddenDayStorageKey = ValueKey<String>(
+  'agent-morning-brief-hidden-day',
+);
+
+String _beijingDayKey(DateTime nowUtc) {
+  final beijing = nowUtc.toUtc().add(const Duration(hours: 8));
+  return '${beijing.year.toString().padLeft(4, '0')}-'
+      '${beijing.month.toString().padLeft(2, '0')}-'
+      '${beijing.day.toString().padLeft(2, '0')}';
+}
 
 final class _AgentContextBudgetDraft {
   bool loading = false;
@@ -113,6 +123,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   StreamSubscription<MorningRuntimeView>? _morningSubscription;
   MorningRuntimeView? _morningView;
   int _morningGeneration = 0;
+  bool _morningVisibilityRestored = false;
+  String? _morningHiddenDay;
   _SpeechDraftAnchor? _speechAnchor;
   TextEditingValue _lastDraftValue = TextEditingValue.empty;
   bool _speechCommandPending = false;
@@ -132,6 +144,17 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _bindMorning(widget.morningChanges, widget.morningView);
     _rememberControllerView();
     _scheduleRefresh();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_morningVisibilityRestored) return;
+    final stored = PageStorage.maybeOf(
+      context,
+    )?.readState(context, identifier: _morningHiddenDayStorageKey);
+    _morningHiddenDay = stored is String ? stored : null;
+    _morningVisibilityRestored = true;
   }
 
   @override
@@ -202,6 +225,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (mounted) setState(() {});
+      return;
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
@@ -562,12 +589,19 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     );
   }
 
-  void _prepareMorningDiscussion() {
-    const prompt = '请结合我的今天日程和昨天的校园公告，帮我梳理重点。';
-    final current = _draft.text.trimRight();
-    _setDiscussionDraft(current.isEmpty ? prompt : '$current\n\n$prompt');
-    _draftEditedByUser = true;
-    _composerFocus.requestFocus();
+  void _hideMorningToday(String dayKey) {
+    _morningHiddenDay = dayKey;
+    PageStorage.maybeOf(
+      context,
+    )?.writeState(context, dayKey, identifier: _morningHiddenDayStorageKey);
+    setState(() {});
+  }
+
+  void _restoreMorningToday() {
+    _morningHiddenDay = null;
+    PageStorage.maybeOf(
+      context,
+    )?.writeState(context, null, identifier: _morningHiddenDayStorageKey);
     setState(() {});
   }
 
@@ -1651,6 +1685,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       final view = widget.controller.view;
       final status = _statusLabel(view);
       final morning = _morningView;
+      final morningNowUtc = (widget.morningNowUtc?.call() ?? DateTime.now())
+          .toUtc();
+      final morningDayKey = _beijingDayKey(morningNowUtc);
+      final morningHiddenToday = _morningHiddenDay == morningDayKey;
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1701,6 +1739,13 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                           : '按各类许可处理',
                     ),
                   ),
+                  if (morning != null && morning.enabled && morningHiddenToday)
+                    IconButton(
+                      key: const ValueKey('morning-brief-restore'),
+                      tooltip: '恢复今日晨报',
+                      onPressed: _restoreMorningToday,
+                      icon: const Icon(Icons.wb_twilight_outlined),
+                    ),
                   IconButton(
                     key: const ValueKey('agent-settings-open'),
                     tooltip: 'Agent 设置',
@@ -1730,23 +1775,18 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                 ),
               ),
           ],
-          if (morning != null && morning.enabled) ...[
+          if (morning != null && morning.enabled && !morningHiddenToday) ...[
             const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 220),
-              child: SingleChildScrollView(
-                child: MorningBriefCard(
-                  view: morning,
-                  nowUtc: (widget.morningNowUtc?.call() ?? DateTime.now())
-                      .toUtc(),
-                  onRetry: () {
-                    final retry = widget.onMorningRetry;
-                    if (retry != null) unawaited(retry());
-                  },
-                  onDiscuss: _prepareMorningDiscussion,
-                  openSource: widget.openMorningSource ?? (uri) async {},
-                ),
-              ),
+            MorningBriefCard(
+              view: morning,
+              nowUtc: morningNowUtc,
+              onRetry: () {
+                final retry = widget.onMorningRetry;
+                if (retry != null) unawaited(retry());
+              },
+              onHideToday: () => _hideMorningToday(morningDayKey),
+              openSource: widget.openMorningSource ?? (uri) async {},
+              changes: widget.morningChanges,
             ),
           ],
           const SizedBox(height: 12),

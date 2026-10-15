@@ -1,7 +1,107 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'calendar_contract.dart';
 import 'morning_notice_contract.dart';
+
+/// Sections remain separate until coverage is known. Raw model text is never
+/// displayed while streaming, and an unverified notice conclusion is omitted.
+final class MorningSummary {
+  const MorningSummary({
+    required this.today,
+    required this.notices,
+    this.factsOnly = false,
+  });
+  final String today, notices;
+  final bool factsOnly;
+
+  factory MorningSummary.fromModel(String text) {
+    final raw = jsonDecode(text.trim());
+    if (raw is! Map<String, dynamic> ||
+        raw.length != 2 ||
+        raw['today'] is! String ||
+        raw['notices'] is! String ||
+        (raw['today'] as String).trim().isEmpty ||
+        (raw['today'] as String).runes.length > 1000 ||
+        (raw['notices'] as String).runes.length > 1000) {
+      throw const FormatException('morning_summary_shape');
+    }
+    return MorningSummary(
+      today: (raw['today'] as String).trim(),
+      notices: (raw['notices'] as String).trim(),
+    );
+  }
+
+  String encode() => jsonEncode({
+    'kind': factsOnly ? 'morning-facts-v1' : 'morning-summary-v2',
+    'today': today,
+    'notices': notices,
+  });
+}
+
+String morningSummaryForDisplay(String raw, MorningNoticeBatch? batch) {
+  final trimmed = raw.trim();
+  if (trimmed.isEmpty) return '';
+  try {
+    final encoded = jsonDecode(trimmed);
+    if (encoded is Map<String, dynamic> &&
+        const {
+          'morning-summary-v2',
+          'morning-facts-v1',
+        }.contains(encoded['kind'])) {
+      // Incomplete-source prose comes only from the host's local fact
+      // formatter. Even the model's "today" field is not a semantic proof.
+      if (batch?.complete != true && encoded['kind'] != 'morning-facts-v1') {
+        return '';
+      }
+      final summary = MorningSummary.fromModel(
+        jsonEncode({'today': encoded['today'], 'notices': encoded['notices']}),
+      );
+      return [
+        summary.today,
+        if (batch?.complete == true && summary.notices.isNotEmpty)
+          summary.notices,
+      ].join('\n\n');
+    }
+  } on Object {
+    // Legacy prose can be reused only with complete notice coverage. Never
+    // try to remove sentences by keywords, which cannot prove their meaning.
+  }
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) return '';
+  return batch?.complete == true ? trimmed : '';
+}
+
+String morningFactsSummary(MorningFacts facts) {
+  String time(DateTime value) {
+    final b = value.toUtc().add(const Duration(hours: 8));
+    return '${b.hour.toString().padLeft(2, '0')}:${b.minute.toString().padLeft(2, '0')}';
+  }
+
+  final lines = <String>[
+    if (facts.agenda.isEmpty)
+      facts.complete && facts.hasSchoolImports ? '今天本地日历没有安排。' : '今天尚无可列出的本地安排。'
+    else
+      '今天的本地安排有 ${facts.agenda.length} 项：',
+    for (final item in facts.agenda.take(6))
+      '${item.allDay ? '全天' : '${time(item.start)}–${time(item.end)}'} '
+          '${item.title}${item.location.isEmpty ? '' : ' · ${item.location}'}'
+          '${switch (item.state) {
+            'skip' => '（计划不参加）',
+            'skipped' => '（已跳过）',
+            'done' || 'completed' => '（已完成）',
+            _ => '',
+          }}',
+    if (facts.agenda.length > 6) '其余安排可在日程页查看。',
+    if (facts.tasks.isNotEmpty) '今天有 ${facts.tasks.length} 项任务截止。',
+    if (facts.overdueTasks > 0) '还有 ${facts.overdueTasks} 项过期任务。',
+    if (facts.conflicts > 0) '有 ${facts.conflicts} 处时间冲突，留意安排。',
+    if (!facts.complete) '本地日程覆盖尚不完整。',
+    if (!facts.hasSchoolImports) '尚未导入学校日程。',
+  ];
+  // Bound the fallback just like model-derived sections; no private fields.
+  final text = lines.join('\n');
+  return String.fromCharCodes(text.runes.take(1000));
+}
 
 enum MorningBriefPhase {
   idle,

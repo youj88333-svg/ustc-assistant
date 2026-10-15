@@ -57,6 +57,17 @@ final class MorningNoticeBatch {
 
   /// Number of PublicQueryPort calls, not a count of underlying HTTP requests.
   final int operations;
+
+  /// Completeness refers to the requested publication day, not the archive.
+  bool get complete =>
+      coverage.length == 2 &&
+      coverage.map((c) => c.provider).toSet().containsAll(const {
+        PublicProvider.teach,
+        PublicProvider.finance,
+      }) &&
+      coverage.every(
+        (c) => c.complete && c.failure == null && c.unknownDates == 0,
+      );
 }
 
 DateTime _utcDay(DateTime value) =>

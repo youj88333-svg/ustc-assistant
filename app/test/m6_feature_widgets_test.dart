@@ -198,10 +198,14 @@ void main() {
   });
 
   testWidgets(
-    'card is compact, folds notice body, and invokes callbacks only on tap',
+    'morning brief stays one line until opened and shows facts and sources',
     (tester) async {
+      tester.view.physicalSize = const Size(320, 568);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
       final opened = <Uri>[];
-      var discussed = 0;
+      var hidden = 0;
       final view = _morningView();
       await tester.pumpWidget(
         MaterialApp(
@@ -209,15 +213,14 @@ void main() {
           supportedLocales: const [Locale('zh', 'CN')],
           locale: const Locale('zh', 'CN'),
           home: Scaffold(
-            body: SingleChildScrollView(
+            body: Padding(
+              padding: const EdgeInsets.all(8),
               child: MorningBriefCard(
                 view: view,
                 nowUtc: DateTime.utc(2026, 10, 14, 18),
                 onRetry: () {},
-                onDiscuss: () => discussed++,
-                openSource: (uri) async {
-                  opened.add(uri);
-                },
+                onHideToday: () => hidden++,
+                openSource: (uri) async => opened.add(uri),
               ),
             ),
           ),
@@ -225,29 +228,342 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('今日安排 1 项'), findsOneWidget);
-      expect(find.textContaining('下一个未开始：实验课'), findsOneWidget);
-      expect(find.text('晨报摘要短句。'), findsOneWidget);
-      expect(find.text('仅在展开后出现的正文'), findsNothing);
-      expect(opened, isEmpty);
-      expect(discussed, 0);
-
-      await tester.tap(find.byKey(const ValueKey('morning-brief-details')));
-      await tester.pumpAndSettle();
-      expect(find.text('仅在展开后出现的正文'), findsOneWidget);
-      expect(opened, isEmpty);
-      await tester.ensureVisible(
-        find.byKey(const ValueKey('morning-brief-discuss')),
+      expect(
+        tester.getSize(find.byKey(const ValueKey('morning-brief-card'))).height,
+        48,
       );
-      await tester.tap(find.byKey(const ValueKey('morning-brief-discuss')));
-      expect(discussed, 1);
+      expect(find.text('今日安排 1 项'), findsNothing);
+      expect(find.text('晨报摘要短句。'), findsNothing);
+      expect(find.text('仅在展开后出现的正文'), findsNothing);
+      expect(find.byKey(const ValueKey('morning-brief-discuss')), findsNothing);
       expect(opened, isEmpty);
-      await tester.ensureVisible(find.text('打开通知来源'));
-      await tester.tap(find.text('打开通知来源'));
+
+      await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+      await tester.pumpAndSettle();
+      expect(find.byType(Dialog), findsOneWidget);
+      expect(find.text('今日安排 1 项 · 今日截止 1 项'), findsOneWidget);
+      expect(find.text('报告截止 · 2026-10-15 17:00'), findsOneWidget);
+      expect(find.text('晨报摘要短句。'), findsOneWidget);
+      expect(find.text('仅在展开后出现的正文'), findsOneWidget);
+      expect(find.textContaining('教务通知：1 条符合日期'), findsOneWidget);
+      expect(find.textContaining('昨日范围已读完'), findsNWidgets(2));
+      expect(opened, isEmpty);
+      expect(hidden, 0);
+      expect(tester.takeException(), isNull);
+
+      final sourceButton = find.byKey(
+        const ValueKey('morning-notice-source-0-teach'),
+      );
+      await tester.ensureVisible(sourceButton);
+      await tester.tap(sourceButton);
       await tester.pumpAndSettle();
       expect(opened, [Uri.parse('https://example.edu/notice/1')]);
+
+      await tester.tap(
+        find.byKey(const ValueKey('morning-brief-details-close')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('morning-brief-hide')));
+      expect(hidden, 1);
+      expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets('partial coverage remains visible and can be retried', (
+    tester,
+  ) async {
+    final base = _morningView();
+    final completeBatch = base.brief!.notices!;
+    final partialBatch = MorningNoticeBatch(
+      day: completeBatch.day,
+      notices: completeBatch.notices,
+      coverage: [
+        const MorningNoticeCoverage(
+          provider: PublicProvider.teach,
+          pages: 5,
+          matched: 1,
+          unknownDates: 0,
+          complete: false,
+          failure: PublicFailureCode.resourceLimit,
+        ),
+        const MorningNoticeCoverage(
+          provider: PublicProvider.finance,
+          pages: 5,
+          matched: 0,
+          unknownDates: 0,
+          complete: true,
+        ),
+      ],
+      operations: 10,
+    );
+    final partialBrief = MorningBrief(
+      day: base.brief!.day,
+      phase: MorningBriefPhase.ready,
+      factDigest: base.brief!.factDigest,
+      autoAttempts: 2,
+      notices: partialBatch,
+      summary: '旧摘要中的无公告断言不能在部分覆盖时显示。',
+    );
+    final partialView = MorningRuntimeView(
+      enabled: true,
+      facts: base.facts,
+      brief: partialBrief,
+      phase: MorningBriefPhase.ready,
+      text: partialBrief.summary,
+    );
+    final busyView = MorningRuntimeView(
+      enabled: true,
+      facts: base.facts,
+      brief: partialBrief,
+      phase: MorningBriefPhase.ready,
+      text: partialBrief.summary,
+      busy: true,
+    );
+    var retries = 0;
+
+    Widget host(MorningRuntimeView view) => MaterialApp(
+      home: Scaffold(
+        body: MorningBriefCard(
+          view: view,
+          nowUtc: DateTime.utc(2026, 10, 14, 18),
+          onRetry: () => retries++,
+          onHideToday: () {},
+          openSource: (_) async {},
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(host(busyView));
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('morning-brief-retry')))
+          .onPressed,
+      isNull,
+    );
+    await tester.pumpWidget(host(partialView));
+    await tester.pumpAndSettle();
+    expect(find.text('部分完成 · 可重试'), findsOneWidget);
+    expect(
+      tester
+          .widget<IconButton>(find.byKey(const ValueKey('morning-brief-retry')))
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('昨日读取范围达到上限'), findsOneWidget);
+    expect(find.textContaining('来源读取失败'), findsNothing);
+    expect(find.text('旧摘要中的无公告断言不能在部分覆盖时显示。'), findsNothing);
+    expect(find.text('晨报摘要短句。'), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('morning-brief-details-close')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('morning-brief-retry')));
+    expect(retries, 1);
+  });
+
+  testWidgets('open details follow generation and retry stream updates', (
+    tester,
+  ) async {
+    final base = _morningView();
+    final completeBatch = base.brief!.notices!;
+    final partialBatch = MorningNoticeBatch(
+      day: completeBatch.day,
+      notices: completeBatch.notices,
+      coverage: [
+        const MorningNoticeCoverage(
+          provider: PublicProvider.teach,
+          pages: 5,
+          matched: 1,
+          unknownDates: 0,
+          complete: false,
+          failure: PublicFailureCode.resourceLimit,
+        ),
+        const MorningNoticeCoverage(
+          provider: PublicProvider.finance,
+          pages: 5,
+          matched: 0,
+          unknownDates: 0,
+          complete: true,
+        ),
+      ],
+      operations: 10,
+    );
+    final partialBrief = MorningBrief(
+      day: base.brief!.day,
+      phase: MorningBriefPhase.ready,
+      factDigest: base.brief!.factDigest,
+      autoAttempts: 2,
+      notices: partialBatch,
+      summary: '旧的部分覆盖摘要不能显示。',
+    );
+    MorningRuntimeView partialView({required bool busy}) => MorningRuntimeView(
+      enabled: true,
+      busy: busy,
+      facts: base.facts,
+      brief: partialBrief,
+      phase: busy ? MorningBriefPhase.generating : MorningBriefPhase.ready,
+      text: partialBrief.summary,
+    );
+
+    final changes = StreamController<MorningRuntimeView>.broadcast();
+    addTearDown(changes.close);
+    var retries = 0;
+    final opened = <Uri>[];
+    Widget host(MorningRuntimeView view) => MaterialApp(
+      home: Scaffold(
+        body: MorningBriefCard(
+          view: view,
+          nowUtc: DateTime.utc(2026, 10, 15, 10),
+          onRetry: () => retries++,
+          onHideToday: () {},
+          openSource: (uri) async => opened.add(uri),
+          changes: changes.stream,
+        ),
+      ),
+    );
+
+    await tester.pumpWidget(host(partialView(busy: true)));
+    await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+    await tester.pumpAndSettle();
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(find.text('旧的部分覆盖摘要不能显示。'), findsNothing);
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('morning-brief-details-retry')),
+          )
+          .onPressed,
+      isNull,
+    );
+    expect(retries, 0);
+    expect(opened, isEmpty);
+
+    changes.add(partialView(busy: false));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('morning-brief-details-phase')),
+          )
+          .data,
+      '部分完成',
+    );
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('morning-brief-details-retry')),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    await tester.tap(find.byKey(const ValueKey('morning-brief-details-retry')));
+    await tester.pump();
+    expect(retries, 1);
+    expect(find.byType(Dialog), findsOneWidget);
+
+    changes.add(partialView(busy: true));
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<OutlinedButton>(
+            find.byKey(const ValueKey('morning-brief-details-retry')),
+          )
+          .onPressed,
+      isNull,
+    );
+
+    final todaySummary = List<String>.filled(1000, '今').join();
+    final noticesSummary = List<String>.filled(1000, '公').join();
+    final updatedBatch = MorningNoticeBatch(
+      day: completeBatch.day,
+      notices: [
+        MorningNotice(
+          provider: PublicProvider.teach,
+          title: '完成后公告',
+          articleUrl: Uri.parse('https://example.edu/notice/refreshed'),
+          publishedDay: completeBatch.day,
+          observedAtUtc: DateTime.utc(2026, 10, 14, 9),
+          excerpt: '完成后的来源正文',
+        ),
+      ],
+      coverage: completeBatch.coverage,
+      operations: completeBatch.operations,
+    );
+    final updatedBrief = MorningBrief(
+      day: base.brief!.day,
+      phase: MorningBriefPhase.ready,
+      factDigest: base.brief!.factDigest,
+      autoAttempts: 3,
+      notices: updatedBatch,
+      summary: MorningSummary(
+        today: todaySummary,
+        notices: noticesSummary,
+      ).encode(),
+    );
+    changes.add(
+      MorningRuntimeView(
+        enabled: true,
+        facts: base.facts,
+        brief: updatedBrief,
+        phase: MorningBriefPhase.ready,
+        text: updatedBrief.summary,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(Dialog), findsOneWidget);
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(const ValueKey('morning-brief-full-summary')),
+          )
+          .data,
+      '$todaySummary\n\n$noticesSummary',
+    );
+    expect(find.text('完成后公告'), findsOneWidget);
+    expect(find.text('完成后的来源正文'), findsOneWidget);
+    expect(find.textContaining('昨日范围已读完'), findsNWidgets(2));
+    expect(find.textContaining('"kind"'), findsNothing);
+    expect(
+      find.byKey(const ValueKey('morning-brief-details-retry')),
+      findsNothing,
+    );
+    expect(retries, 1);
+    expect(opened, isEmpty);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed morning phase is visible and only retries on tap', (
+    tester,
+  ) async {
+    var retries = 0;
+    var opened = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: MorningBriefCard(
+            view: const MorningRuntimeView(
+              enabled: true,
+              phase: MorningBriefPhase.failed,
+              failure: 'synthetic failure',
+            ),
+            nowUtc: DateTime.utc(2026, 10, 14, 18),
+            onRetry: () => retries++,
+            onHideToday: () {},
+            openSource: (_) async => opened++,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('失败，可重试'), findsOneWidget);
+    expect(retries, 0);
+    expect(opened, 0);
+    await tester.tap(find.byKey(const ValueKey('morning-brief-retry')));
+    expect(retries, 1);
+    expect(opened, 0);
+  });
 
   testWidgets('disabled morning brief does not leave an empty placeholder', (
     tester,
@@ -259,7 +575,7 @@ void main() {
             view: const MorningRuntimeView(enabled: false),
             nowUtc: DateTime.utc(2026, 10, 14, 18),
             onRetry: () {},
-            onDiscuss: () {},
+            onHideToday: () {},
             openSource: (_) async {},
           ),
         ),
@@ -290,7 +606,7 @@ void main() {
             view: stale,
             nowUtc: DateTime.utc(2026, 10, 14, 18),
             onRetry: () {},
-            onDiscuss: () {},
+            onHideToday: () {},
             openSource: (_) async {},
           ),
         ),
@@ -300,7 +616,10 @@ void main() {
 
     expect(find.text('晨报 · 2026-10-15'), findsOneWidget);
     expect(find.text('旧日期摘要不能显示为今天。'), findsNothing);
-    expect(find.byKey(const ValueKey('morning-brief-details')), findsNothing);
+    await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+    await tester.pumpAndSettle();
+    expect(find.text('旧日期摘要不能显示为今天。'), findsNothing);
+    expect(find.text('摘要暂不可用，以上为当前可用的本地事实。'), findsOneWidget);
   });
 
   testWidgets('clear morning requires confirmation and only calls brief port', (
@@ -463,7 +782,7 @@ MorningRuntimeView _morningView() {
         state: 'planned',
       ),
     ],
-    tasks: const [],
+    tasks: [MorningTaskItem('报告截止', DateTime.utc(2026, 10, 15, 9))],
     conflicts: 0,
     overdueTasks: 0,
     complete: true,

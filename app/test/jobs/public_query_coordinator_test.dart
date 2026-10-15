@@ -291,6 +291,49 @@ void main() {
     );
 
     test(
+      'listing coverage retains source order across cached and fetched pages',
+      () async {
+        final harness = await _openHarness(
+          parser: _SyntheticParser(
+            campusListingOrder: PublicListingOrder.newestFirst,
+            campusNextPageOrder: PublicListingOrder.unknown,
+            campusHasNextPage: true,
+          ),
+        );
+        var page = await harness.coordinator.browseCampus(
+          CampusColumn.teachNotice,
+          pageSize: 1,
+        );
+        expect(page.coverage.listingOrder, PublicListingOrder.newestFirst);
+
+        page = await harness.coordinator.browseCampus(
+          CampusColumn.teachNotice,
+          pageSize: 1,
+          cursor: page.next,
+        );
+        expect(page.coverage.listingOrder, PublicListingOrder.newestFirst);
+        expect(page.coverage.cached, isTrue);
+
+        page = await harness.coordinator.browseCampus(
+          CampusColumn.teachNotice,
+          pageSize: 1,
+          cursor: page.next,
+        );
+        expect(page.coverage.listingOrder, PublicListingOrder.newestFirst);
+        expect(page.coverage.cached, isTrue);
+
+        page = await harness.coordinator.browseCampus(
+          CampusColumn.teachNotice,
+          pageSize: 1,
+          cursor: page.next,
+        );
+        expect(page.coverage.listingOrder, PublicListingOrder.unknown);
+        expect(page.coverage.cached, isFalse);
+        expect(harness.sessions.requests, hasLength(2));
+      },
+    );
+
+    test(
       'cursors reject changed keywords, page size, reference, and sort',
       () async {
         final harness = await _openHarness();
@@ -776,12 +819,20 @@ final class _SyntheticOwnership implements AssetOwnership {
 }
 
 final class _SyntheticParser implements PublicSourceParser {
-  _SyntheticParser({String? reviewText, String? articleText})
-    : reviewText = reviewText ?? List<String>.filled(24010, '评').join(),
-      articleText = articleText ?? List<String>.filled(24020, '文').join();
+  _SyntheticParser({
+    String? reviewText,
+    String? articleText,
+    this.campusListingOrder = PublicListingOrder.unknown,
+    this.campusNextPageOrder = PublicListingOrder.unknown,
+    this.campusHasNextPage = false,
+  }) : reviewText = reviewText ?? List<String>.filled(24010, '评').join(),
+       articleText = articleText ?? List<String>.filled(24020, '文').join();
 
   final String reviewText;
   final String articleText;
+  final PublicListingOrder campusListingOrder;
+  final PublicListingOrder campusNextPageOrder;
+  final bool campusHasNextPage;
   String get articleMarkdown => '# 合成文章\n\n$articleText';
 
   @override
@@ -812,9 +863,11 @@ final class _SyntheticParser implements PublicSourceParser {
 
   @override
   SourcePublicPage campus(String html, Uri uri, CampusColumn column) {
+    final secondPage = uri.path.contains('/page/2/');
+    final start = secondPage ? 3 : 0;
     return SourcePublicPage(
-      items: List<SourcePublicItem>.generate(3, (index) {
-        final id = 23001 + index;
+      items: List<SourcePublicItem>.generate(secondPage ? 2 : 3, (index) {
+        final id = 23001 + start + index;
         return SourcePublicItem(
           key: 'notice:$id',
           title: '合成公告$id',
@@ -825,6 +878,10 @@ final class _SyntheticParser implements PublicSourceParser {
           snippet: '合成公告摘要',
         );
       }),
+      nextPage: !secondPage && campusHasNextPage
+          ? uri.replace(path: '/category/notice/page/2/')
+          : null,
+      listingOrder: secondPage ? campusNextPageOrder : campusListingOrder,
     );
   }
 

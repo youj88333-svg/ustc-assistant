@@ -12,23 +12,22 @@ final class MorningBriefCard extends StatelessWidget {
     required this.view,
     required this.nowUtc,
     required this.onRetry,
-    required this.onDiscuss,
+    required this.onHideToday,
     required this.openSource,
+    this.changes,
   });
 
   final MorningRuntimeView view;
   final DateTime nowUtc;
-  final VoidCallback onRetry, onDiscuss;
+  final VoidCallback onRetry, onHideToday;
   final Future<void> Function(Uri) openSource;
+  final Stream<MorningRuntimeView>? changes;
 
   @override
   Widget build(BuildContext context) {
     if (!view.enabled) return const SizedBox.shrink();
 
     final today = _beijingDay(nowUtc);
-    final facts = view.facts != null && _sameDay(view.facts!.day, today)
-        ? view.facts
-        : null;
     final brief = view.brief != null && _sameDay(view.brief!.day, today)
         ? view.brief
         : null;
@@ -39,132 +38,98 @@ final class MorningBriefCard extends StatelessWidget {
         ? candidateBatch
         : null;
     final phase = view.phase;
-    final summary = _summaryForToday(brief, view.text, today);
-    final next = facts == null ? null : _nextPlannedItem(facts, nowUtc);
+    final canRetry =
+        phase == MorningBriefPhase.failed ||
+        phase == MorningBriefPhase.interrupted ||
+        view.failure != null ||
+        (noticeBatch != null && !noticeBatch.complete);
 
     return Card(
       key: const ValueKey('morning-brief-card'),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.wb_twilight_outlined),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    '晨报 · ${_dateOnly(today)}',
-                    key: const ValueKey('morning-brief-date'),
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+      margin: EdgeInsets.zero,
+      child: SizedBox(
+        height: 48,
+        child: Padding(
+          padding: const EdgeInsets.only(left: 12, right: 4),
+          child: Row(
+            children: [
+              const Icon(Icons.wb_twilight_outlined, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '晨报 · ${_dateOnly(today)}',
+                  key: const ValueKey('morning-brief-date'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleSmall,
                 ),
-                Text(_phaseLabel(phase)),
-              ],
-            ),
-            const SizedBox(height: 8),
-            if (facts == null)
-              const Text(
-                '本地日程尚未同步到今天，当前不展示旧日期的晨报。',
-                key: ValueKey('morning-brief-local-not-synced'),
-              )
-            else ...[
-              Wrap(
-                spacing: 14,
-                runSpacing: 4,
-                children: [
-                  Text('今日安排 ${facts.agenda.length} 项'),
-                  if (facts.tasks.isNotEmpty)
-                    Text('今日截止 ${facts.tasks.length} 项'),
-                  if (facts.conflicts > 0) Text('冲突 ${facts.conflicts} 项'),
-                  if (facts.overdueTasks > 0)
-                    Text('过期任务 ${facts.overdueTasks} 项'),
-                ],
               ),
-              if (!facts.complete) ...[
-                const SizedBox(height: 4),
-                const Text('本地日程覆盖不完整；未同步来源不代表今天没有安排。'),
-              ],
-              if (!facts.hasSchoolImports) ...[
-                const SizedBox(height: 4),
-                const Text('尚无已导入的学校日程事实。'),
-              ],
-              const SizedBox(height: 4),
-              Text(
-                next == null
-                    ? '下一个未开始安排：暂无'
-                    : '下一个未开始：${next.title} · ${_timeLabel(next)}',
-                key: const ValueKey('morning-brief-next-item'),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (facts.tasks.isNotEmpty) ...[
-                const SizedBox(height: 4),
-                for (final task in facts.tasks.take(2))
-                  Text(
-                    '截止：${task.title} · ${_beijingClock(task.deadline)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                if (facts.tasks.length > 2)
-                  Text('另有 ${facts.tasks.length - 2} 项今日截止任务。'),
-              ],
-            ],
-            const SizedBox(height: 8),
-            Text(
-              _noticeStatus(noticeBatch, phase),
-              key: const ValueKey('morning-brief-notice-status'),
-            ),
-            if (summary.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                summary,
-                key: const ValueKey('morning-brief-summary'),
-                maxLines: 5,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
-            if (noticeBatch != null) ...[
-              const SizedBox(height: 4),
-              ExpansionTile(
-                key: const ValueKey('morning-brief-details'),
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(bottom: 4),
-                title: const Text('更多内容：通知出处与正文'),
-                initiallyExpanded: false,
-                children: [
-                  _noticeDetails(
-                    context,
-                    noticeBatch,
-                    onOpenSource: _openSource,
-                  ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 4),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                if (phase == MorningBriefPhase.failed ||
-                    phase == MorningBriefPhase.interrupted ||
-                    view.failure != null)
-                  OutlinedButton.icon(
-                    key: const ValueKey('morning-brief-retry'),
-                    onPressed: view.busy ? null : onRetry,
-                    icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('重试晨报'),
-                  ),
-                TextButton.icon(
-                  key: const ValueKey('morning-brief-discuss'),
-                  onPressed: onDiscuss,
-                  icon: const Icon(Icons.chat_bubble_outline_rounded),
-                  label: const Text('和 Agent 讨论'),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  _compactStatus(view, phase, noticeBatch),
+                  key: const ValueKey('morning-brief-phase'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: Theme.of(context).textTheme.bodySmall,
                 ),
-              ],
-            ),
-          ],
+              ),
+              IconButton(
+                key: const ValueKey('morning-brief-open'),
+                tooltip: '查看晨报',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                padding: EdgeInsets.zero,
+                onPressed: () => _showDetails(context),
+                icon: const Icon(Icons.open_in_full_rounded, size: 19),
+              ),
+              if (canRetry)
+                IconButton(
+                  key: const ValueKey('morning-brief-retry'),
+                  tooltip: '重试晨报',
+                  visualDensity: VisualDensity.compact,
+                  constraints: const BoxConstraints.tightFor(
+                    width: 36,
+                    height: 36,
+                  ),
+                  padding: EdgeInsets.zero,
+                  onPressed: view.busy ? null : onRetry,
+                  icon: const Icon(Icons.refresh_rounded, size: 19),
+                ),
+              IconButton(
+                key: const ValueKey('morning-brief-hide'),
+                tooltip: '隐藏今天的晨报',
+                visualDensity: VisualDensity.compact,
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                padding: EdgeInsets.zero,
+                onPressed: onHideToday,
+                icon: const Icon(Icons.close_rounded, size: 19),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDetails(BuildContext context) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => StreamBuilder<MorningRuntimeView>(
+        stream: changes,
+        initialData: view,
+        builder: (context, snapshot) => _MorningBriefDetailsDialog(
+          view: snapshot.data ?? view,
+          nowUtc: nowUtc,
+          onRetry: onRetry,
+          openSource: (sourceContext, uri) => _openSource(sourceContext, uri),
         ),
       ),
     );
@@ -183,6 +148,202 @@ final class MorningBriefCard extends StatelessWidget {
   }
 }
 
+final class _MorningBriefDetailsDialog extends StatelessWidget {
+  const _MorningBriefDetailsDialog({
+    required this.view,
+    required this.nowUtc,
+    required this.onRetry,
+    required this.openSource,
+  });
+
+  final MorningRuntimeView view;
+  final DateTime nowUtc;
+  final VoidCallback onRetry;
+  final Future<void> Function(BuildContext, Uri) openSource;
+
+  @override
+  Widget build(BuildContext context) {
+    final today = _beijingDay(nowUtc);
+    final facts = view.facts != null && _sameDay(view.facts!.day, today)
+        ? view.facts
+        : null;
+    final brief = view.brief != null && _sameDay(view.brief!.day, today)
+        ? view.brief
+        : null;
+    final candidateBatch = brief?.notices;
+    final noticeBatch =
+        candidateBatch != null &&
+            _sameDay(candidateBatch.day, _yesterday(today))
+        ? candidateBatch
+        : null;
+    final phase = view.phase;
+    final summary = _summaryForToday(brief, view.text, today);
+    final canRetry =
+        phase == MorningBriefPhase.failed ||
+        phase == MorningBriefPhase.interrupted ||
+        view.failure != null ||
+        (noticeBatch != null && !noticeBatch.complete);
+    final phaseLabel = view.failure != null
+        ? '失败，可重试'
+        : phase == MorningBriefPhase.ready &&
+              noticeBatch != null &&
+              !noticeBatch.complete
+        ? '部分完成'
+        : _phaseLabel(phase);
+
+    return Dialog(
+      insetPadding: const EdgeInsets.all(16),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxWidth: 560,
+          maxHeight: MediaQuery.sizeOf(context).height * .88,
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      '晨报 · ${_dateOnly(today)}',
+                      key: const ValueKey('morning-brief-details-date'),
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('morning-brief-details-close'),
+                    tooltip: '关闭晨报',
+                    onPressed: () => Navigator.of(context).pop(),
+                    icon: const Icon(Icons.close_rounded),
+                  ),
+                ],
+              ),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  phaseLabel,
+                  key: const ValueKey('morning-brief-details-phase'),
+                ),
+              ),
+              const Divider(height: 20),
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (facts == null)
+                        const Text(
+                          '本地日程尚未同步到今天，当前不展示旧日期的晨报。',
+                          key: ValueKey('morning-brief-local-not-synced'),
+                        )
+                      else ...[
+                        Text(
+                          '今日安排 ${facts.agenda.length} 项 · 今日截止 ${facts.tasks.length} 项',
+                          key: const ValueKey('morning-brief-facts-summary'),
+                        ),
+                        if (facts.conflicts > 0)
+                          Text('冲突 ${facts.conflicts} 项'),
+                        if (facts.overdueTasks > 0)
+                          Text('过期任务 ${facts.overdueTasks} 项'),
+                        Text(
+                          facts.complete
+                              ? '本地日程覆盖完整。'
+                              : '本地日程覆盖不完整；未同步来源不代表今天没有安排。',
+                        ),
+                        if (!facts.hasSchoolImports)
+                          const Text('尚无已导入的学校日程事实。'),
+                        const SizedBox(height: 10),
+                        Text(
+                          '今日安排',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        if (facts.agenda.isEmpty)
+                          const Text('今天没有已读取到的安排。')
+                        else
+                          for (final item in facts.agenda)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 7),
+                              child: Text(
+                                '${item.allDay ? '全天' : '${_timeLabel(item)}–${_beijingTime(item.end)}'} · ${item.title}'
+                                '${item.location.isEmpty ? '' : ' · ${item.location}'}'
+                                ' · ${item.state}',
+                                key: ValueKey(
+                                  'morning-brief-agenda-${item.title}',
+                                ),
+                              ),
+                            ),
+                        if (facts.tasks.isNotEmpty) ...[
+                          const SizedBox(height: 10),
+                          Text(
+                            '今日截止任务',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                          for (final task in facts.tasks)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 7),
+                              child: Text(
+                                '${task.title} · ${_beijingClock(task.deadline)}',
+                                key: ValueKey(
+                                  'morning-brief-task-${task.title}',
+                                ),
+                              ),
+                            ),
+                        ],
+                      ],
+                      const SizedBox(height: 14),
+                      Text(
+                        '晨报摘要',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        summary.isEmpty ? '摘要暂不可用，以上为当前可用的本地事实。' : summary,
+                        key: const ValueKey('morning-brief-full-summary'),
+                      ),
+                      const SizedBox(height: 14),
+                      Text(
+                        '昨天的公开通知',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        _noticeStatus(noticeBatch, phase),
+                        key: const ValueKey('morning-brief-notice-status'),
+                      ),
+                      if (noticeBatch != null) ...[
+                        const SizedBox(height: 8),
+                        _noticeDetails(
+                          context,
+                          noticeBatch,
+                          onOpenSource: openSource,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              if (canRetry) ...[
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: OutlinedButton.icon(
+                    key: const ValueKey('morning-brief-details-retry'),
+                    onPressed: view.busy ? null : onRetry,
+                    icon: const Icon(Icons.refresh_rounded),
+                    label: const Text('重试晨报'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 Widget _noticeDetails(
   BuildContext context,
   MorningNoticeBatch batch, {
@@ -195,7 +356,7 @@ Widget _noticeDetails(
         child: Text(
           '${_providerLabel(coverage.provider)}：${coverage.matched} 条符合日期；'
           '${coverage.unknownDates} 条日期未知；'
-          '${coverage.complete ? '遍历完整' : '覆盖不完整'}'
+          '${coverage.complete ? '昨日范围已读完' : '覆盖不完整'}'
           '${coverage.failure == null ? '' : '；${_publicFailureLabel(coverage.failure!)}'}',
         ),
       ),
@@ -244,17 +405,19 @@ Widget _noticeDetails(
   );
 }
 
-MorningAgendaItem? _nextPlannedItem(MorningFacts facts, DateTime nowUtc) {
-  final now = nowUtc.toUtc();
-  final planned =
-      facts.agenda
-          .where(
-            (item) =>
-                item.state == 'planned' && item.start.toUtc().isAfter(now),
-          )
-          .toList()
-        ..sort((a, b) => a.start.compareTo(b.start));
-  return planned.isEmpty ? null : planned.first;
+String _compactStatus(
+  MorningRuntimeView view,
+  MorningBriefPhase phase,
+  MorningNoticeBatch? noticeBatch,
+) {
+  if (view.failure != null || phase == MorningBriefPhase.failed) {
+    return '失败，可重试';
+  }
+  if (phase == MorningBriefPhase.interrupted) return '已暂停，可重试';
+  if (noticeBatch != null && !noticeBatch.complete) {
+    return '部分完成 · 可重试';
+  }
+  return _phaseLabel(phase);
 }
 
 String _summaryForToday(
@@ -266,8 +429,7 @@ String _summaryForToday(
   final raw = runtimeText.trim().isNotEmpty
       ? runtimeText.trim()
       : brief.summary.trim();
-  if (raw.runes.length <= 500) return raw;
-  return '${String.fromCharCodes(raw.runes.take(500))}…';
+  return morningSummaryForDisplay(raw, brief.notices);
 }
 
 String _noticeStatus(MorningNoticeBatch? batch, MorningBriefPhase phase) {
@@ -281,19 +443,26 @@ String _noticeStatus(MorningNoticeBatch? batch, MorningBriefPhase phase) {
     };
   }
 
-  final failures = batch.coverage.where((item) => item.failure != null).length;
+  final failedSources = batch.coverage
+      .where(
+        (item) =>
+            item.failure != null &&
+            item.failure != PublicFailureCode.resourceLimit,
+      )
+      .length;
+  final limitedSources = batch.coverage
+      .where((item) => item.failure == PublicFailureCode.resourceLimit)
+      .length;
   final unknown = batch.coverage.fold<int>(
     0,
     (sum, item) => sum + item.unknownDates,
   );
-  final fullyCovered =
-      batch.coverage.isNotEmpty &&
-      batch.coverage.every((item) => item.complete && item.failure == null);
+  final fullyCovered = batch.complete;
   final pieces = <String>[];
   if (batch.notices.isEmpty) {
     if (fullyCovered && unknown == 0) {
       pieces.add('昨天没有符合条件的公开通知');
-    } else if (failures == batch.coverage.length && failures > 0) {
+    } else if (failedSources == batch.coverage.length && failedSources > 0) {
       pieces.add('公开通知来源读取失败');
     } else {
       pieces.add('没有匹配条目，读取覆盖不完整');
@@ -301,9 +470,12 @@ String _noticeStatus(MorningNoticeBatch? batch, MorningBriefPhase phase) {
   } else {
     pieces.add('已取得 ${batch.notices.length} 条昨天发布的通知');
   }
-  if (failures > 0 && !pieces.any((piece) => piece.contains('来源读取失败'))) {
-    pieces.add(failures == batch.coverage.length ? '公开通知来源读取失败' : '部分来源读取失败');
+  if (failedSources > 0 && !pieces.any((piece) => piece.contains('来源读取失败'))) {
+    pieces.add(
+      failedSources == batch.coverage.length ? '公开通知来源读取失败' : '部分来源读取失败',
+    );
   }
+  if (limitedSources > 0) pieces.add('昨日读取范围达到上限');
   if (!fullyCovered) pieces.add('覆盖不完整');
   if (unknown > 0) pieces.add('$unknown 条公告日期未知，未计入昨天条数');
   return '${pieces.join('；')}。';
@@ -339,7 +511,7 @@ String _publicFailureLabel(PublicFailureCode code) => switch (code) {
   PublicFailureCode.networkFailed => '网络读取失败',
   PublicFailureCode.sourceSchema => '来源格式发生变化',
   PublicFailureCode.unsafeTarget => '来源地址未通过检查',
-  PublicFailureCode.resourceLimit => '已达到读取范围上限',
+  PublicFailureCode.resourceLimit => '读取范围达到上限',
   PublicFailureCode.storageFailed => '本地保存失败',
   PublicFailureCode.cleanupPending => '仍有清理待办',
   PublicFailureCode.closed => '来源服务已关闭',
@@ -366,6 +538,12 @@ String _dateOnly(DateTime value) =>
 String _timeLabel(MorningAgendaItem item) {
   if (item.allDay) return '全天';
   final beijing = item.start.toUtc().add(const Duration(hours: 8));
+  return '${beijing.hour.toString().padLeft(2, '0')}:'
+      '${beijing.minute.toString().padLeft(2, '0')}';
+}
+
+String _beijingTime(DateTime value) {
+  final beijing = value.toUtc().add(const Duration(hours: 8));
   return '${beijing.hour.toString().padLeft(2, '0')}:'
       '${beijing.minute.toString().padLeft(2, '0')}';
 }

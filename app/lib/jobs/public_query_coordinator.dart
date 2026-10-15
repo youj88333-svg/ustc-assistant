@@ -580,6 +580,7 @@ final class PublicQueryCoordinator
         observed: page.items.length,
         totalReported: page.totalReported,
         excluded: page.excluded,
+        listingOrder: page.listingOrder,
         truncated: end < page.items.length,
         complete: next == null,
         cached: cached,

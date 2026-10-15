@@ -54,6 +54,105 @@ void main() {
     final day = DateTime.utc(2026, 10, 14);
 
     test(
+      'finishes the requested day before traversing older archives',
+      () async {
+        final source = _FakePublicPort(
+          clock: FixedClock(DateTime.utc(2026, 10, 15, 1)),
+        );
+        for (final column in [
+          CampusColumn.teachNotice,
+          CampusColumn.financeNotice,
+        ]) {
+          source.orderedColumns.add(column);
+          source.setPages(column, [
+            [_candidate('${column.name}-old', column.provider, '2026-10-13')],
+            [_candidate('${column.name}-older', column.provider, '2026-10-12')],
+          ]);
+        }
+        final batch = await MorningNoticeQuery(
+          source: source,
+          clock: source.clock,
+        ).collect(day);
+        expect(batch.complete, isTrue);
+        expect(batch.notices, isEmpty);
+        expect(source.browseCalls, hasLength(4));
+        expect(
+          batch.coverage.every((c) => c.pages == 2 && c.failure == null),
+          isTrue,
+        );
+      },
+    );
+
+    test('keeps all matches through the first older date', () async {
+      final source = _FakePublicPort(
+        clock: FixedClock(DateTime.utc(2026, 10, 15, 1)),
+      )..orderedColumns.add(CampusColumn.teachNotice);
+      source.setPages(CampusColumn.teachNotice, [
+        [_candidate('newer', PublicProvider.teach, '2026-10-15')],
+        [
+          _candidate('match', PublicProvider.teach, '2026-10-14'),
+          _candidate('old', PublicProvider.teach, '2026-10-13'),
+        ],
+        [_candidate('older', PublicProvider.teach, '2026-10-12')],
+      ]);
+      final batch = await MorningNoticeQuery(
+        source: source,
+        clock: source.clock,
+      ).collect(day);
+      expect(batch.complete, isTrue);
+      expect(batch.notices.map((n) => n.title), ['match']);
+      expect(batch.coverage.first.pages, 3);
+    });
+
+    test(
+      'a newer next page invalidates an apparent older-date boundary',
+      () async {
+        final source = _FakePublicPort(
+          clock: FixedClock(DateTime.utc(2026, 10, 15, 1)),
+        )..orderedColumns.add(CampusColumn.teachNotice);
+        source.setPages(CampusColumn.teachNotice, [
+          [_candidate('first-old', PublicProvider.teach, '2026-10-13')],
+          [_candidate('reordered-match', PublicProvider.teach, '2026-10-14')],
+          [_candidate('last-old', PublicProvider.teach, '2026-10-12')],
+        ]);
+        final batch = await MorningNoticeQuery(
+          source: source,
+          clock: source.clock,
+        ).collect(day);
+        expect(batch.notices.map((n) => n.title), ['reordered-match']);
+        expect(batch.coverage.first.pages, 3);
+        expect(
+          batch.complete,
+          isTrue,
+        ); // Reached the actual end, not an early stop.
+      },
+    );
+
+    test(
+      'unknown ordering and dates cannot prove the day is complete',
+      () async {
+        final source = _FakePublicPort(
+          clock: FixedClock(DateTime.utc(2026, 10, 15, 1)),
+        )..orderedColumns.add(CampusColumn.teachNotice);
+        source.setPages(CampusColumn.teachNotice, [
+          [
+            _candidate('missing', PublicProvider.teach, null),
+            _candidate('old', PublicProvider.teach, '2026-10-13'),
+          ],
+          [_candidate('late-match', PublicProvider.teach, '2026-10-14')],
+        ]);
+        final batch = await MorningNoticeQuery(
+          source: source,
+          clock: source.clock,
+        ).collect(day);
+        expect(batch.complete, isFalse);
+        expect(batch.notices.map((n) => n.title), ['late-match']);
+        expect(batch.coverage.first.unknownDates, 1);
+        expect(batch.coverage.first.pages, 2);
+      },
+    );
+
+    test(
       'keeps only the requested day and marks unknown dates incomplete',
       () async {
         final source =
@@ -132,7 +231,7 @@ void main() {
         ]);
         expect(batch.coverage[0].pages, 5);
         expect(batch.coverage[0].matched, 6);
-        expect(batch.coverage[0].failure, PublicFailureCode.resourceLimit);
+        expect(batch.coverage[0].failure, isNull);
         expect(batch.coverage[0].complete, isFalse);
         expect(source.browseCalls.map((call) => call.$3?.value), [
           null,
@@ -368,6 +467,7 @@ final class _FakePublicPort implements PublicQueryPort {
   final Map<String, PublicFailure> articleFailures = {};
   final Map<String, String> articleBodies = {};
   final Set<String> truncatedPages = {};
+  final Set<CampusColumn> orderedColumns = {};
   final List<(CampusColumn, int, PublicCursor?)> browseCalls = [];
   final List<(PublicReference, int)> articleCalls = [];
   Future<void> Function(CampusColumn, int)? beforeBrowseReturn;
@@ -434,6 +534,9 @@ final class _FakePublicPort implements PublicQueryPort {
         returned: candidates.length,
         truncated: truncated,
         complete: next == null && !truncated,
+        listingOrder: orderedColumns.contains(column)
+            ? PublicListingOrder.newestFirst
+            : PublicListingOrder.unknown,
       ),
     );
   }

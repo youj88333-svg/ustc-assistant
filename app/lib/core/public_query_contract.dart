@@ -6,6 +6,10 @@ enum PublicSource { icourse, campus }
 
 enum PublicProvider { icourse, teach, finance }
 
+/// Traversal order of a registered timeline, revalidated on every source page.
+/// This is never a caller-selected sort or a promise about unrelated columns.
+enum PublicListingOrder { unknown, newestFirst }
+
 extension PublicProviderSource on PublicProvider {
   PublicSource get source => this == PublicProvider.icourse
       ? PublicSource.icourse
@@ -129,6 +133,7 @@ final class PublicCoverage {
     this.observed,
     this.totalReported,
     this.excluded = 0,
+    this.listingOrder = PublicListingOrder.unknown,
     this.truncated = false,
     this.complete = false,
     this.cached = false,
@@ -138,6 +143,7 @@ final class PublicCoverage {
   final int? observed;
   final int? totalReported;
   final int excluded;
+  final PublicListingOrder listingOrder;
   final bool truncated;
 
   /// Complete only for the stated scope, never an inferred whole-site promise.

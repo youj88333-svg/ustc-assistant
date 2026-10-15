@@ -392,6 +392,7 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
             ).hasMatch(row.attributes['class'] ?? ''),
           );
       final items = <SourcePublicItem>[];
+      final orderedRows = <SourcePublicItem>[];
       var excluded = 0;
       final seen = <String>{};
       for (final row in rows) {
@@ -417,19 +418,25 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
           continue;
         }
         final title = _plainText(anchor!);
-        if (title.isEmpty || !seen.add(target.toString())) {
+        if (title.isEmpty) {
           excluded++;
           continue;
         }
-        items.add(
-          SourcePublicItem(
-            key: target.path,
-            title: title,
-            uri: target,
-            provider: PublicProvider.teach,
-            publishedOn: _dateValue(row.querySelector('span.date')),
-          ),
+        final item = SourcePublicItem(
+          key: target.path,
+          title: title,
+          uri: target,
+          provider: PublicProvider.teach,
+          publishedOn: _dateValue(row.querySelector('span.date')),
         );
+        if (column == CampusColumn.teachNotice && route.keyword == null) {
+          orderedRows.add(item);
+        }
+        if (!seen.add(target.toString())) {
+          excluded++;
+          continue;
+        }
+        items.add(item);
       }
       final noResults =
           _hasClass(document.body, 'search-no-results') &&
@@ -441,6 +448,10 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
         items: items,
         nextPage: _teachNextPage(document, uri, route),
         excluded: excluded,
+        listingOrder:
+            column == CampusColumn.teachNotice && route.keyword == null
+            ? _newestFirstIfNonIncreasing(orderedRows)
+            : PublicListingOrder.unknown,
       );
     }
 
@@ -514,10 +525,16 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
     }
     final rows = list.querySelectorAll('li.news.clearfix');
     final items = <SourcePublicItem>[];
+    final orderedRows = <SourcePublicItem>[];
     final seen = <String>{};
     var excluded = 0;
     for (final row in rows) {
       if (!_isVisible(row)) continue;
+      if (row.classes.contains('sticky') ||
+          row.classes.contains('post-sticky')) {
+        excluded++;
+        continue;
+      }
       final anchor = row.querySelector('span.news_title > a[href]');
       final target = anchor == null
           ? null
@@ -529,19 +546,23 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
         continue;
       }
       final title = _plainText(anchor!);
-      if (title.isEmpty || !seen.add(target.toString())) {
+      if (title.isEmpty) {
         excluded++;
         continue;
       }
-      items.add(
-        SourcePublicItem(
-          key: target.path,
-          title: title,
-          uri: target,
-          provider: PublicProvider.finance,
-          publishedOn: _dateValue(row.querySelector('span.news_meta')),
-        ),
+      final item = SourcePublicItem(
+        key: target.path,
+        title: title,
+        uri: target,
+        provider: PublicProvider.finance,
+        publishedOn: _dateValue(row.querySelector('span.news_meta')),
       );
+      if (column == CampusColumn.financeNotice) orderedRows.add(item);
+      if (!seen.add(target.toString())) {
+        excluded++;
+        continue;
+      }
+      items.add(item);
     }
     if (items.isEmpty) {
       throw const PublicFailure(PublicFailureCode.sourceSchema);
@@ -552,7 +573,62 @@ final class FixedPublicHtmlParser implements PublicSourceParser {
       nextPage: nextPage,
       totalReported: _financeReportedCount(document),
       excluded: excluded,
+      listingOrder: column == CampusColumn.financeNotice
+          ? _newestFirstIfNonIncreasing(orderedRows)
+          : PublicListingOrder.unknown,
     );
+  }
+
+  static PublicListingOrder _newestFirstIfNonIncreasing(
+    List<SourcePublicItem> rows,
+  ) {
+    if (rows.isEmpty) return PublicListingOrder.unknown;
+    int? previousDate;
+    for (final row in rows) {
+      final date = _calendarDateKey(row.publishedOn);
+      if (date == null || previousDate != null && date > previousDate) {
+        return PublicListingOrder.unknown;
+      }
+      previousDate = date;
+    }
+    return PublicListingOrder.newestFirst;
+  }
+
+  static int? _calendarDateKey(String? value) {
+    if (value == null) return null;
+    final source = value.trim();
+    final patterns = <RegExp>[
+      RegExp(r'^(\d{4})-(\d{2})-(\d{2})(.*)$'),
+      RegExp(r'^(\d{4})/(\d{2})/(\d{2})(.*)$'),
+      RegExp(r'^(\d{4})年(\d{1,2})月(\d{1,2})日(.*)$'),
+    ];
+    for (final pattern in patterns) {
+      final match = pattern.firstMatch(source);
+      if (match == null || !_validCalendarDateTail(match.group(4)!)) continue;
+      final year = int.tryParse(match.group(1)!);
+      final month = int.tryParse(match.group(2)!);
+      final day = int.tryParse(match.group(3)!);
+      if (year == null || month == null || day == null || year < 1) continue;
+      if (month < 1 || month > 12 || day < 1) continue;
+      final leapYear = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+      final daysInMonth = switch (month) {
+        2 => leapYear ? 29 : 28,
+        4 || 6 || 9 || 11 => 30,
+        _ => 31,
+      };
+      if (day <= daysInMonth) return year * 10000 + month * 100 + day;
+    }
+    return null;
+  }
+
+  static bool _validCalendarDateTail(String tail) {
+    if (tail.isEmpty) return true;
+    return RegExp(
+      r'^[ T](?:[01]\d|2[0-3]):[0-5]\d'
+      r'(?::[0-5]\d(?:\.\d{1,9})?)?'
+      r'(?:Z|[+-](?:0\d|1[0-3]):?[0-5]\d|[+-]14:?00)?$',
+      caseSensitive: false,
+    ).hasMatch(tail);
   }
 
   static dom.Document _parse(String html) {

@@ -54,34 +54,101 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('morning discussion only prefills the editable composer', (
-    tester,
-  ) async {
-    final port = _FakeAgentPort(view: _view(conversationId: 'conversation-a'));
-    addTearDown(port.dispose);
+  testWidgets(
+    'morning brief hides for the day, survives updates and page switches',
+    (tester) async {
+      final port = _FakeAgentPort(
+        view: _view(conversationId: 'conversation-a'),
+      );
+      addTearDown(port.dispose);
+      final morningChanges = StreamController<MorningRuntimeView>.broadcast();
+      addTearDown(morningChanges.close);
+      final pageStorageBucket = PageStorageBucket();
+      var nowUtc = DateTime.utc(2026, 10, 15);
 
-    await tester.pumpWidget(
-      _host(
+      Widget agentPage() => _host(
         AgentWorkspacePage(
           controller: port,
           onSettings: () {},
           morningView: const MorningRuntimeView(enabled: true),
-          morningNowUtc: () => DateTime.utc(2026, 10, 15, 0),
+          morningChanges: morningChanges.stream,
+          morningNowUtc: () => nowUtc,
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
+        pageStorageBucket: pageStorageBucket,
+      );
 
-    await tester.tap(find.byKey(const ValueKey('morning-brief-discuss')));
-    await tester.pump();
+      await _setSize(tester, const Size(360, 720));
+      await tester.pumpWidget(agentPage());
+      await tester.pumpAndSettle();
 
-    expect(
-      _textField(tester, 'agent-composer').controller?.text,
-      '请结合我的今天日程和昨天的校园公告，帮我梳理重点。',
-    );
-    expect(port.sent, isEmpty);
-    expect(tester.takeException(), isNull);
-  });
+      expect(
+        tester.getSize(find.byKey(const ValueKey('morning-brief-card'))).height,
+        48,
+      );
+      expect(find.byKey(const ValueKey('morning-brief-discuss')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('morning-brief-hide')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('morning-brief-card')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('morning-brief-restore')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('agent-composer')));
+      await tester.pump();
+      final focusBeforeUpdate = tester.binding.focusManager.primaryFocus;
+      morningChanges.add(
+        const MorningRuntimeView(
+          enabled: true,
+          busy: true,
+          phase: MorningBriefPhase.generating,
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const ValueKey('morning-brief-card')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('morning-brief-restore')),
+        findsOneWidget,
+      );
+      expect(
+        identical(focusBeforeUpdate, tester.binding.focusManager.primaryFocus),
+        isTrue,
+      );
+      expect(_textField(tester, 'agent-composer').controller?.text, isEmpty);
+      expect(port.sent, isEmpty);
+      expect(tester.takeException(), isNull);
+
+      await tester.pumpWidget(
+        _host(const SizedBox.shrink(), pageStorageBucket: pageStorageBucket),
+      );
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(agentPage());
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('morning-brief-card')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('morning-brief-restore')),
+        findsOneWidget,
+      );
+
+      await tester.tap(find.byKey(const ValueKey('morning-brief-restore')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('morning-brief-card')), findsOneWidget);
+      expect(find.byKey(const ValueKey('morning-brief-restore')), findsNothing);
+
+      await tester.tap(find.byKey(const ValueKey('morning-brief-hide')));
+      await tester.pumpAndSettle();
+      nowUtc = DateTime.utc(2026, 10, 16);
+      morningChanges.add(
+        const MorningRuntimeView(enabled: true, phase: MorningBriefPhase.ready),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byKey(const ValueKey('morning-brief-card')), findsOneWidget);
+      expect(find.byKey(const ValueKey('morning-brief-restore')), findsNothing);
+      expect(find.text('晨报 · 2026-10-16'), findsOneWidget);
+      expect(port.sent, isEmpty);
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets('/clear is a local command and preserves the primary history', (
     tester,
@@ -1490,13 +1557,17 @@ void main() {
   });
 }
 
-Widget _host(Widget child) => MaterialApp(
-  home: Scaffold(
-    body: SafeArea(
-      child: Padding(padding: const EdgeInsets.all(12), child: child),
-    ),
-  ),
-);
+Widget _host(Widget child, {PageStorageBucket? pageStorageBucket}) =>
+    MaterialApp(
+      home: PageStorage(
+        bucket: pageStorageBucket ?? PageStorageBucket(),
+        child: Scaffold(
+          body: SafeArea(
+            child: Padding(padding: const EdgeInsets.all(12), child: child),
+          ),
+        ),
+      ),
+    );
 
 AgentSettingsSnapshot _settings({
   required bool keySaved,

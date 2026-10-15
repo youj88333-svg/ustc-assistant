@@ -39,11 +39,13 @@ final class SourcePublicPage {
     this.nextPage,
     this.totalReported,
     this.excluded = 0,
+    this.listingOrder = PublicListingOrder.unknown,
   }) : items = List.unmodifiable(items);
   final List<SourcePublicItem> items;
   final Uri? nextPage;
   final int? totalReported;
   final int excluded;
+  final PublicListingOrder listingOrder;
 }
 
 final class SourcePublicDocument {

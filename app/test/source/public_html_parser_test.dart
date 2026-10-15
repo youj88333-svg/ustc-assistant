@@ -50,6 +50,42 @@ String _financePageHtml(String pages, String nextHref) =>
   </body></html>
 ''';
 
+String _teachNoticeHtml(List<String?> dates, {String? stickyDate}) {
+  final rows = <String>[
+    if (stickyDate != null)
+      '''<li class="post-999 post type-post status-publish sticky">
+        <span class="post"><a href="/notice/notice-teaching/999.html">置顶通知</a></span>
+        <span class="date">$stickyDate</span>
+      </li>''',
+    for (var index = 0; index < dates.length; index++)
+      '''<li class="post-${index + 1} post type-post status-publish">
+        <span class="post"><a href="/notice/notice-teaching/${index + 1}.html">通知${index + 1}</a></span>
+        ${dates[index] == null ? '' : '<span class="date">${dates[index]}</span>'}
+      </li>''',
+  ];
+  return '''<html><body><main class="main"><section>
+    <ul class="article-list with-tag">${rows.join()}</ul>
+  </section></main></body></html>''';
+}
+
+String _financeNoticeHtml(List<String?> dates, {String? stickyDate}) {
+  final rows = <String>[
+    if (stickyDate != null)
+      '''<li class="news sticky clearfix">
+        <span class="news_title"><a href="/2026/1014/c21813a748899/page.psp">置顶通知</a></span>
+        <span class="news_meta">$stickyDate</span>
+      </li>''',
+    for (var index = 0; index < dates.length; index++)
+      '''<li class="news n$index clearfix">
+        <span class="news_title"><a href="/2026/1015/c21813a${748900 + index}/page.psp">通知${index + 1}</a></span>
+        ${dates[index] == null ? '' : '<span class="news_meta">${dates[index]}</span>'}
+      </li>''',
+  ];
+  return '''<html><body><div id="wp_news_w6"><ul class="news_list list2">
+    ${rows.join()}
+  </ul></div></body></html>''';
+}
+
 String _financeArticleHtml(String content) =>
     '''
   <html><body>
@@ -460,8 +496,53 @@ void main() {
         expect(page.excluded, 1);
         expect(page.nextPage?.path, '/category/notice/page/2/');
         expect(page.nextPage?.queryParameters['s'], '缓考');
+        expect(page.listingOrder, PublicListingOrder.unknown);
       },
     );
+
+    test('recognizes only valid non-increasing teach notice dates', () {
+      final uri = Uri.parse('https://www.teach.ustc.edu.cn/category/notice');
+      final ordered = _parser.campus(
+        _teachNoticeHtml([
+          '2026-10-15',
+          '2026-10-15',
+          '2026-10-14',
+        ], stickyDate: '2020-01-01'),
+        uri,
+        CampusColumn.teachNotice,
+      );
+      expect(ordered.items, hasLength(3));
+      expect(ordered.excluded, 1);
+      expect(ordered.listingOrder, PublicListingOrder.newestFirst);
+
+      final completeDateForms = _parser.campus(
+        _teachNoticeHtml(['2026/10/15 12:30:00', '2026年10月15日']),
+        uri,
+        CampusColumn.teachNotice,
+      );
+      expect(completeDateForms.listingOrder, PublicListingOrder.newestFirst);
+
+      for (final dates in <List<String?>>[
+        ['2026-10-14', '2026-10-15'],
+        ['2026-10-15', null],
+        ['2026-02-30'],
+        ['2026-10-15 25:00'],
+      ]) {
+        final page = _parser.campus(
+          _teachNoticeHtml(dates),
+          uri,
+          CampusColumn.teachNotice,
+        );
+        expect(page.listingOrder, PublicListingOrder.unknown);
+      }
+
+      final search = _parser.campus(
+        _teachNoticeHtml(['2026-10-15', '2026-10-14']),
+        uri.replace(queryParameters: {'s': '通知'}),
+        CampusColumn.teachNotice,
+      );
+      expect(search.listingOrder, PublicListingOrder.unknown);
+    });
 
     test(
       'uses teach no-results state and limits student links to main sections',
@@ -518,6 +599,7 @@ void main() {
         expect(page.items.first.publishedOn, '2015-07-03');
         expect(page.items.last.publishedOn, isNull);
         expect(page.excluded, 3);
+        expect(page.listingOrder, PublicListingOrder.unknown);
       },
     );
 
@@ -546,6 +628,7 @@ void main() {
         );
         expect(page.items.map((item) => item.title), ['课程办理', '双分类通知']);
         expect(page.excluded, 1);
+        expect(page.listingOrder, PublicListingOrder.unknown);
         expect(page.nextPage!.path, '/category/service/svc-student/page/2');
         expect(page.nextPage!.queryParameters['s'], '课程');
         final empty = _parser.campus(
@@ -611,6 +694,7 @@ void main() {
         ]);
         expect(page.items.first.publishedOn, '2025-11-28');
         expect(page.nextPage?.path, '/ywzn/list2.htm');
+        expect(page.listingOrder, PublicListingOrder.unknown);
 
         _expectFailure(
           PublicFailureCode.unsafeTarget,
@@ -660,6 +744,35 @@ void main() {
         );
       },
     );
+
+    test('recognizes only valid non-increasing finance notice dates', () {
+      final uri = Uri.parse('https://finance.ustc.edu.cn/tzgg/list.htm');
+      final ordered = _parser.campus(
+        _financeNoticeHtml([
+          '2026-10-15',
+          '2026-10-15',
+          '2026-10-14',
+        ], stickyDate: '2020-01-01'),
+        uri,
+        CampusColumn.financeNotice,
+      );
+      expect(ordered.items, hasLength(3));
+      expect(ordered.excluded, 1);
+      expect(ordered.listingOrder, PublicListingOrder.newestFirst);
+
+      for (final dates in <List<String?>>[
+        ['2026-10-14', '2026-10-15'],
+        ['2026-10-15', null],
+        ['2026-02-30'],
+      ]) {
+        final page = _parser.campus(
+          _financeNoticeHtml(dates),
+          uri,
+          CampusColumn.financeNotice,
+        );
+        expect(page.listingOrder, PublicListingOrder.unknown);
+      }
+    });
 
     test(
       'follows observed finance page suffixes and validates terminal placeholders',

@@ -110,7 +110,7 @@ final class MorningNoticeQuery {
     try {
       for (final plan in _providerPlans) {
         _checkCancelled(isCancelled);
-        await _collectProvider(plan, state, isCancelled);
+        await _collectProvider(plan, targetDay, state, isCancelled);
       }
 
       final matching = <_ListedNotice>[];
@@ -212,11 +212,15 @@ final class MorningNoticeQuery {
 
   Future<void> _collectProvider(
     _ProviderPlan plan,
+    DateTime targetDay,
     _QueryState state,
     bool Function()? isCancelled,
   ) async {
     final coverage = state.coverage[plan.provider]!;
     PublicCursor? cursor;
+    var verifiedOrder = true;
+    DateTime? previousDate;
+    var olderRealPageSeen = false;
 
     while (coverage.pages < _maximumPagesPerProvider && !coverage.reachedEnd) {
       _checkCancelled(isCancelled);
@@ -247,6 +251,9 @@ final class MorningNoticeQuery {
       }
 
       coverage.pages++;
+      verifiedOrder =
+          verifiedOrder &&
+          result.coverage.listingOrder == PublicListingOrder.newestFirst;
       for (final candidate in result.candidates) {
         _checkCancelled(isCancelled);
         final evidence = candidate.evidence;
@@ -256,6 +263,11 @@ final class MorningNoticeQuery {
         }
         final key = (plan.provider, evidence.articleUrl);
         final publishedDay = parseMorningPublishedDay(evidence.publishedOn);
+        if (publishedDay == null ||
+            previousDate != null && publishedDay.isAfter(previousDate)) {
+          verifiedOrder = false;
+        }
+        if (publishedDay != null) previousDate = publishedDay;
         final prior = state.listed[key];
         if (prior == null) {
           state.listed[key] = _ListedNotice(candidate, publishedDay);
@@ -265,6 +277,22 @@ final class MorningNoticeQuery {
       }
 
       if (coverage.failure == PublicFailureCode.sourceSchema) return;
+      // Only registered, validated date-descending lists can establish this
+      // window boundary. An older pinned item, unknown date or unordered list
+      // must never hide a matching item on a later page.
+      if (verifiedOrder &&
+          result.candidates.isNotEmpty &&
+          previousDate != null &&
+          previousDate.isBefore(targetDay)) {
+        // Validate one subsequent physical page as a guard on the registered
+        // timeline's traversal order. A cached local slice of the same page
+        // cannot provide this confirmation.
+        if (olderRealPageSeen && !result.coverage.cached) {
+          coverage.reachedEnd = true;
+          return;
+        }
+        if (!result.coverage.cached) olderRealPageSeen = true;
+      }
       if (result.next == null) {
         coverage.reachedEnd = true;
         coverage.truncated =
@@ -276,7 +304,7 @@ final class MorningNoticeQuery {
 
     if (!coverage.reachedEnd) {
       coverage.truncated = true;
-      coverage.failure ??= PublicFailureCode.resourceLimit;
+      // A bounded archive scan is partial coverage, not a failed HTTP read.
     }
   }
 
