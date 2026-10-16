@@ -8,8 +8,12 @@ param(
     [string]$PubCache = 'E:\Android\pub_cache',
     [ValidateSet('All', 'Notifications')]
     [string]$TestScope = 'All',
-    [ValidateSet(35, 36)]
+    [ValidateSet(35, 36, 37)]
     [int]$ApiLevel = 35,
+    [switch]$CurrentProvider,
+    [ValidateSet('A1', 'A2')]
+    [string]$IntegrationSuite = 'A1',
+    [switch]$UnsupportedSourceOnly,
     [switch]$VerifyRetained
 )
 
@@ -20,8 +24,16 @@ $taskRoot = Join-Path $appRoot 'build/android-a0'
 $taskTemp = Join-Path $taskRoot 'temp'
 $avdHome = Join-Path $taskRoot 'avd-home'
 $avdName = "ustc_android_a0_api$ApiLevel"
-$emulatorPort = $(if ($ApiLevel -eq 35) { 5580 } else { 5582 })
+$imageApi = $(if ($ApiLevel -eq 37) { '37.0' } else { "$ApiLevel" })
+$imageTag = 'google_apis'
+$emulatorPort = $(if ($ApiLevel -eq 35) { 5580 } elseif ($ApiLevel -eq 36) { 5582 } else { 5584 })
+if ($CurrentProvider) {
+    if ($ApiLevel -ne 37) { throw 'The current-provider probe requires the separate API 37 QA image.' }
+    $avdName = 'ustc_android_a2_current_provider'
+    $imageApi = '37.2'; $imageTag = 'google_apis_ps16k'; $emulatorPort = 5586
+}
 $serial = "emulator-$emulatorPort"
+$emulatorLog = $(if ($CurrentProvider) { 'current-provider' } else { "api$ApiLevel" })
 $adb = Join-Path $SdkRoot 'platform-tools/adb.exe'
 $emulator = Join-Path $SdkRoot 'emulator/emulator.exe'
 $flutter = Join-Path $FlutterRoot 'bin/flutter.bat'
@@ -85,9 +97,9 @@ try {
             } finally { Pop-Location }
         }
         'PrepareDevice' {
-            $imageMetadata = Join-Path $SdkRoot "system-images/android-$ApiLevel/google_apis/x86_64/package.xml"
+            $imageMetadata = Join-Path $SdkRoot "system-images/android-$imageApi/$imageTag/x86_64/package.xml"
             if (-not (Test-Path -LiteralPath $imageMetadata)) {
-                & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/sdkmanager.bat') "--sdk_root=$SdkRoot" --proxy=http --proxy_host=127.0.0.1 --proxy_port=7897 "system-images;android-$ApiLevel;google_apis;x86_64"
+                & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/sdkmanager.bat') "--sdk_root=$SdkRoot" --proxy=http --proxy_host=127.0.0.1 --proxy_port=7897 "system-images;android-$imageApi;$imageTag;x86_64"
                 Assert-ExitCode 'Official Google system image'
             }
         }
@@ -96,7 +108,7 @@ try {
             Assert-ExitCode 'Hardware acceleration; enable Windows Hypervisor Platform and reboot first'
             $avdPath = Join-Path $avdHome "$avdName.avd"
             if (-not (Test-Path -LiteralPath $avdPath)) {
-                'no' | & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/avdmanager.bat') create avd --name $avdName --package "system-images;android-$ApiLevel;google_apis;x86_64" --device pixel_7 --path $avdPath
+                'no' | & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/avdmanager.bat') create avd --name $avdName --package "system-images;android-$imageApi;$imageTag;x86_64" --device pixel_7 --path $avdPath
                 Assert-ExitCode 'New isolated A0 AVD'
             }
             & $adb -P 5038 start-server
@@ -104,8 +116,8 @@ try {
             $process = Start-Process -FilePath $emulator -ArgumentList @('-avd', $avdName, '-port', $emulatorPort,
                 '-accel', 'on', '-gpu', 'swiftshader', '-cores', '2', '-memory', '2048', '-no-window',
                 '-no-audio', '-no-boot-anim', '-no-snapshot', '-no-metrics') -WindowStyle Hidden -PassThru `
-                -RedirectStandardOutput (Join-Path $taskRoot "emulator-api$ApiLevel.stdout.log") `
-                -RedirectStandardError (Join-Path $taskRoot "emulator-api$ApiLevel.stderr.log")
+                -RedirectStandardOutput (Join-Path $taskRoot "emulator-$emulatorLog.stdout.log") `
+                -RedirectStandardError (Join-Path $taskRoot "emulator-$emulatorLog.stderr.log")
             Write-Output "Isolated QA emulator started: PID $($process.Id), $serial, ADB 5038."
         }
         'Stop' {
@@ -133,15 +145,17 @@ try {
                 $retainedValue = $VerifyRetained.IsPresent.ToString().ToLowerInvariant()
                 # Flutter test otherwise uninstalls even after a successful run,
                 # which would invalidate the cross-process retention checks.
-                & $flutter test integration_test/android_a1_test.dart -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue"
+                $integrationFile = "integration_test/android_$($IntegrationSuite.ToLowerInvariant())_test.dart"
+                $gateValue = $UnsupportedSourceOnly.IsPresent.ToString().ToLowerInvariant()
+                & $flutter test $integrationFile -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue" "--dart-define=USTC_A2_UNSUPPORTED_SOURCE_ONLY=$gateValue"
                 $integrationExitCode = $LASTEXITCODE
                 $installedPaths = & $adb -P 5038 -s $serial shell pm path cn.ustcassistant.mobile.qa
-                Assert-ExitCode 'A1 QA package retention check'
+                Assert-ExitCode 'QA package retention check'
                 if (-not (($installedPaths -join "`n") -match '(?m)^package:')) {
-                    throw 'A1 QA package was removed; retention results are invalid.'
+                    throw 'QA package was removed; retention results are invalid.'
                 }
-                Write-Output 'A1 QA package remains installed after the integration runner.'
-                if ($integrationExitCode -ne 0) { throw "Android A1 integration failed ($integrationExitCode)." }
+                Write-Output "$IntegrationSuite QA package remains installed after the integration runner."
+                if ($integrationExitCode -ne 0) { throw "Android $IntegrationSuite integration failed ($integrationExitCode)." }
             } finally { Pop-Location }
         }
     }

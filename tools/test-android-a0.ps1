@@ -23,7 +23,12 @@ function Invoke-QaAdb {
 }
 
 # A device explicitly created for this probe is mandatory. Never target a phone or other AVD.
-$allowedTargets = @{ 'emulator-5580' = 'ustc_android_a0_api35'; 'emulator-5582' = 'ustc_android_a0_api36' }
+$allowedTargets = @{
+    'emulator-5580' = 'ustc_android_a0_api35'
+    'emulator-5582' = 'ustc_android_a0_api36'
+    'emulator-5584' = 'ustc_android_a0_api37'
+    'emulator-5586' = 'ustc_android_a2_current_provider'
+}
 if (-not $allowedTargets.ContainsKey($Serial) -or $allowedTargets[$Serial] -ne $ExpectedAvd) {
     throw 'Only the isolated A0 emulator is accepted by this destructive QA runner.'
 }
