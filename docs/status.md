@@ -12,8 +12,8 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | A2原生桥与合成链路通过；目标机/真实来源待验 | [A0–A8计划](milestones/android-apk/plan.md)、[A1底座](milestones/android-apk/records/03-a1-platform-bootstrap.md)、[A2实际记录](milestones/android-apk/records/04-a2-school-bridges.md)。教务/二课固定认证、读取、隔离与清理接入既有C1/C2/C3；支持隔离世界的官方独立镜像上完成合成链路。旧提供方缺能力时拒绝采集，资料恢复另行验证；不以API36的A0通过推断完整认证可用。SDK/缓存/AVD/临时目录继续E盘；暂无实机，鸿蒙、真实来源/模型和完整手机版未验收，旧数据/双端同步不在首版范围 |
-| 后续 | A3 Agent与公开能力，其他切片按依赖推进；A2实机条件保留 | 模拟器与目标实机分别验证；私有APK、原生鸿蒙及Windows公开发布分别定界 |
+| Android APK迁移 | A3 Agent/公开能力合成验证通过；目标机/真实模型及来源待验 | [A0–A8计划](milestones/android-apk/plan.md)、[A2学校桥](milestones/android-apk/records/04-a2-school-bridges.md)、[A3实际记录](milestones/android-apk/records/06-a3-agent-public.md)。Keystore/流式模型/20工具、规划确认/回执恢复、单对话/知识查读和后台停止贯通；公开C2/C3与七份随包Markdown实证通过。相关Windows回归及普通QA构建通过；[清理记录](milestones/android-apk/records/05-generated-cleanup.md)记录实际释放45.177GiB。SDK/缓存/AVD/临时目录继续E盘。旧WebView提供方缺隔离能力仍拒绝学校采集，不以A3在API36通过推断学校认证可用；暂无实机，鸿蒙、真实来源/模型和完整手机版未验收，旧数据/双端同步不在首版范围 |
+| 后续 | A4 手机界面与文件；A2/A3真实条件保留 | 模拟器与目标实机分别验证；系统提醒/晨报/每日同步及本地语音仍按A5/A6推进，私有APK、原生鸿蒙及Windows公开发布分别定界 |
 
 ## 已批准范围与待验证
 

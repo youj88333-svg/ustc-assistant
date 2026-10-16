@@ -1,6 +1,6 @@
 # USTC Assistant
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；QA版已装配本地底座及教务/二课原生桥，完成[A2合成验证](../docs/milestones/android-apk/records/04-a2-school-bridges.md)，仍是模拟器开发包，目标手机和真实来源未验收。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；本地底座、教务/二课原生桥及Agent/公开能力已完成[A3及前序合成验证](../docs/milestones/android-apk/records/06-a3-agent-public.md)，仍是模拟器开发包，目标手机和真实模型/来源未验收。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内，设置为侧边栏底部辅助入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
@@ -41,15 +41,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 # 已有合成样本时，严格要求日程和任务保留，不允许重新生成样本：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -VerifyRetained
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
+# A3模型、公开查询及随包知识仅使用合成/loopback/私有临时根：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 36
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3_Public
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
 # A2学校桥仅运行loopback，不登录学校：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 37 -CurrentProvider
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 37 -CurrentProvider -IntegrationSuite A2
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 37 -CurrentProvider
 ```
 
-集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
+集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；可附加`-BuildRevision <40位源码SHA>`，Flutter与后续Gradle均保留该诊断定义。集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
 
-Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。系统提醒/语音整合仍待A5/A6，手机布局/文件和真实设备另行验证。A2的x86_64 QA APK用于模拟器，不是手机arm64私有发行包。
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。系统提醒/语音整合仍待A5/A6，手机布局/文件和真实设备另行验证。最新普通包位于`build/android-a3/artifacts/USTC-Assistant-Android-A3-QA-x86_64.apk`，仅用于模拟器，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
 
 ## 模型配置与对话
 
