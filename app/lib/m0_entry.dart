@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -16,6 +17,7 @@ import 'app/agent_behavior_validation_panel.dart';
 import 'app/agent_settings_panel.dart';
 import 'app/diagnostics_panel.dart';
 import 'app/diagnostic_error_hooks.dart';
+import 'app/runtime_diagnostics.dart';
 import 'platform/agent_image_picker.dart';
 import 'platform/transient_diagnostics.dart';
 import 'core/diagnostics_contract.dart';
@@ -139,6 +141,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
     if (runtime == null) return;
     switch (state) {
       case AppLifecycleState.resumed:
+        _setAgentHostAvailable(runtime, true);
         runtime.morning.onForeground(true);
         runtime.youngDaily.onForeground(true);
         runtime.reminders.onForeground();
@@ -146,12 +149,34 @@ final class _OwnedAppState extends State<OwnedApplication> {
       case AppLifecycleState.hidden:
       case AppLifecycleState.paused:
       case AppLifecycleState.detached:
+        _setAgentHostAvailable(runtime, false);
         runtime.morning.onForeground(false);
         runtime.youngDaily.onForeground(false);
         break;
       case AppLifecycleState.inactive:
         break;
     }
+  }
+
+  void _setAgentHostAvailable(DemoRuntime runtime, bool available) {
+    if (defaultTargetPlatform != TargetPlatform.android) return;
+    unawaited(
+      runtime.agentCoordinator.setHostAvailable(available).catchError((
+        Object _,
+      ) {
+        // The coordinator retains its recovery barrier; never expose an
+        // underlying network/storage error or resume the interrupted request.
+        recordDiagnostic(
+          runtime.diagnostics,
+          const DiagnosticEvent(
+            name: DiagnosticEventName.agentRunFailed,
+            stage: DiagnosticStage.tools,
+            outcome: DiagnosticOutcome.recovery,
+            code: DiagnosticCode.cleanupPending,
+          ),
+        );
+      }),
+    );
   }
 
   void _bindRuntime(DemoRuntime? runtime) {
@@ -180,6 +205,12 @@ final class _OwnedAppState extends State<OwnedApplication> {
         return;
       }
       final state = WidgetsBinding.instance.lifecycleState;
+      _setAgentHostAvailable(
+        runtime,
+        state == null ||
+            state == AppLifecycleState.resumed ||
+            state == AppLifecycleState.inactive,
+      );
       if (state == null || state == AppLifecycleState.resumed) {
         runtime.morning.onForeground(true);
         runtime.youngDaily.onForeground(true);

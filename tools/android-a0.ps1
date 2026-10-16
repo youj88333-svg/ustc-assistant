@@ -9,12 +9,14 @@ param(
     [ValidateSet('All', 'Notifications')]
     [string]$TestScope = 'All',
     [ValidateSet(35, 36, 37)]
-    [int]$ApiLevel = 35,
+    [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
-    [ValidateSet('A1', 'A2')]
+    [ValidateSet('A1', 'A2', 'A3', 'A3_Public')]
     [string]$IntegrationSuite = 'A1',
     [switch]$UnsupportedSourceOnly,
-    [switch]$VerifyRetained
+    [switch]$VerifyRetained,
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string]$BuildRevision
 )
 
 $ErrorActionPreference = 'Stop'
@@ -78,7 +80,15 @@ try {
             try {
                 & $flutter pub get --offline
                 Assert-ExitCode 'Pinned Flutter dependencies'
-                & $flutter build apk --debug --no-pub --target-platform android-x64 --split-per-abi
+                $revisionArguments = @()
+                $gradleRevisionArguments = @()
+                if ($BuildRevision) {
+                    $revisionDefine = "USTC_BUILD_REVISION=$BuildRevision"
+                    $revisionArguments = @("--dart-define=$revisionDefine")
+                    $encodedDefine = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($revisionDefine))
+                    $gradleRevisionArguments = @("-Pdart-defines=$encodedDefine")
+                }
+                & $flutter build apk --debug --no-pub --target-platform android-x64 --split-per-abi @revisionArguments
                 Assert-ExitCode 'Isolated QA APK'
                 # Flutter generates Windows drive colons unescaped; this AGP lint requires Properties escaping.
                 $localPropertiesPath = Join-Path $appRoot 'android/local.properties'
@@ -91,7 +101,7 @@ try {
                 Push-Location (Join-Path $appRoot 'android')
                 try {
                     # Request both tasks: this Flutter SDK does not register its compile task for AndroidTest alone.
-                    & .\gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest :app:processReleaseMainManifest :app:lintDebug '-Ptarget-platform=android-x64' '-Psplit-per-abi=true' --console=plain --quiet
+                    & .\gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest :app:processReleaseMainManifest :app:lintDebug '-Ptarget-platform=android-x64' '-Psplit-per-abi=true' @gradleRevisionArguments --console=plain --quiet
                     Assert-ExitCode 'QA test APK, lint and production manifest'
                 } finally { Pop-Location }
             } finally { Pop-Location }

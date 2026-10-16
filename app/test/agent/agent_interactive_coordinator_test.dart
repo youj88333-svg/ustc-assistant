@@ -18,6 +18,29 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 void main() {
   group('AgentCoordinator interactive decisions', () {
     test(
+      'background withdrawal revokes approval and foreground cannot replay it',
+      () async {
+        final rig = await _open();
+        rig.gateway.enqueueEvents(_toolCall(_proposalCall()));
+        final send = rig.coordinator.send('合成后台前的任务');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final card = rig.coordinator.view.pendingAction!.id;
+        final hidden = rig.coordinator.setHostAvailable(false);
+        await rig.coordinator.approveAction(card);
+        await hidden;
+        await send;
+        await rig.coordinator.setHostAvailable(true);
+        await rig.coordinator.approveAction(card);
+        expect(rig.tools.commitCount, 0);
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+        expect(rig.coordinator.view.pendingAction, isNull);
+        expect(rig.gateway.generations, hasLength(1));
+      },
+    );
+
+    test(
       'only the current card approves; stale and repeated ids do nothing',
       () async {
         final rig = await _open();

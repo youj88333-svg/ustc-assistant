@@ -14,6 +14,45 @@ import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
+  test(
+    'a hidden mobile host drains a stream and never resumes it implicitly',
+    () async {
+      final rig = await _rig(configured: true);
+      final conversation = rig.coordinator.view.conversationId;
+      final sending = rig.coordinator.send('合成后台中断问题');
+      final generation = await rig.gateway.nextGeneration();
+      await generation.started.future;
+      generation.emit(const ModelTextDelta('已收到的合成片段'));
+      await _until(() => rig.coordinator.view.messages.last.text.isNotEmpty);
+
+      await rig.coordinator.setHostAvailable(false);
+      await sending;
+      expect(generation.isClosed, isTrue);
+      expect(
+        rig.coordinator.view.messages.last.status,
+        AgentMessageStatus.cancelled,
+      );
+      expect(await _activeRun(rig.store), isNull);
+      final before = rig.gateway.requestCount;
+      await rig.coordinator.send('后台不能发起新请求');
+      expect(rig.gateway.requestCount, before);
+      expect(rig.coordinator.view.failure, AgentFailureCode.cancelled);
+
+      await rig.coordinator.setHostAvailable(true);
+      expect(rig.gateway.requestCount, before);
+      expect(rig.coordinator.view.conversationId, conversation);
+      rig.gateway.enqueueEvents([
+        const ModelTextDelta('回到前台后主动发送的新回答'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await rig.coordinator.send('主动继续');
+      expect(
+        rig.coordinator.view.messages.last.status,
+        AgentMessageStatus.complete,
+      );
+    },
+  );
+
   group('AgentCoordinator M5.2 bounded reads', () {
     test(
       'read-session admission failure settles its newly issued C3 run',

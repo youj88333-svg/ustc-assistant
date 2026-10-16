@@ -674,6 +674,49 @@ void main() {
       await countGateway.close();
     });
 
+    test('delivers an SSE text delta while the response is still open', () async {
+      final release = Completer<void>();
+      await server.start((request) async {
+        await utf8.decoder.bind(request).join();
+        request.response.bufferOutput = false;
+        request.response.headers.chunkedTransferEncoding = true;
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+          charset: 'utf-8',
+        );
+        request.response.write(
+          'data: {"choices":[{"index":0,"delta":{"content":"合成首片段"},"finish_reason":null}]}\n\n',
+        );
+        await request.response.flush();
+        await release.future;
+        await request.response.close();
+      });
+      final gateway = server.gateway();
+      final delta = Completer<String>();
+      final finished = Completer<void>();
+      final subscription = gateway
+          .generate(_request(), _key())
+          .listen(
+            (event) {
+              if (event is ModelTextDelta && !delta.isCompleted) {
+                delta.complete(event.text);
+              }
+            },
+            onError: (Object _) {},
+            onDone: finished.complete,
+          );
+      try {
+        expect(await delta.future.timeout(const Duration(seconds: 3)), '合成首片段');
+        expect(finished.isCompleted, isFalse);
+        await gateway.cancelAndDrain().timeout(const Duration(seconds: 3));
+      } finally {
+        if (!release.isCompleted) release.complete();
+        await subscription.cancel();
+        await gateway.close();
+      }
+    });
+
     test(
       'cancel drains an in-flight stream and the same gateway accepts a later request',
       () async {

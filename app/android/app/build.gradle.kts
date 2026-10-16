@@ -26,7 +26,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a2"
+            versionNameSuffix = "-qa-a3"
         }
         release {
             // A8 supplies the privately managed production signature.

@@ -118,6 +118,7 @@ final class AgentCoordinator {
   Future<void>? _work, _stopFuture, _closeFuture;
   int _generation = 0;
   bool _stopping = false, _closed = false;
+  bool _hostAvailable = true;
   AgentRunTicket? _ticket;
   AgentHistoryIntent? _pendingHistory;
   _OperationDiagnostics? _pendingHistoryDiagnostics;
@@ -277,9 +278,19 @@ final class AgentCoordinator {
 
   void _current(int generation) {
     if (_closed) throw const AgentFailure(AgentFailureCode.closed);
-    if (_stopping || generation != _generation) {
+    if (!_hostAvailable || _stopping || generation != _generation) {
       throw const AgentFailure(AgentFailureCode.cancelled);
     }
+  }
+
+  /// The mobile host withdraws active work when it goes into the background.
+  /// Fence new work synchronously, then use the ordinary C3 cancel/drain path;
+  /// returning to the foreground never replays a request or an approval.
+  Future<void> setHostAvailable(bool available) {
+    _hostAvailable = available;
+    if (!available) return stop();
+    _publish();
+    return Future<void>.value();
   }
 
   Future<ModelSecretLease> _secret(
@@ -470,6 +481,11 @@ final class AgentCoordinator {
   ) async {
     if (_closed || _closingDependencies || _closeFuture != null) {
       _failure = AgentFailureCode.closed;
+      _publish();
+      return;
+    }
+    if (!_hostAvailable) {
+      _failure = AgentFailureCode.cancelled;
       _publish();
       return;
     }
@@ -2183,6 +2199,7 @@ final class AgentCoordinator {
         decision == null ||
         decision.isCompleted ||
         _interactive?.pendingAction?.id != id ||
+        !_hostAvailable ||
         _stopping) {
       return;
     }
@@ -2193,7 +2210,9 @@ final class AgentCoordinator {
   }
 
   Future<void> continueSchool() async {
-    if (_phase != AgentPhase.waitingForSchool || _stopping) return;
+    if (!_hostAvailable || _phase != AgentPhase.waitingForSchool || _stopping) {
+      return;
+    }
     await _interactive?.continueSchool();
   }
 
