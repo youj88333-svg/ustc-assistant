@@ -1,6 +1,6 @@
-# Android APK迁移计划（待批准）
+# Android APK迁移计划（已批准，A0进行中）
 
-日期：2026-10-15。用户已选择“优先Android APK，兼顾可安装APK的鸿蒙”，并要求完整迁移计划；本文件为待批准施工规格，**不是实施已获批准或手机已支持的结论**。本轮只读核对、官方检索和文档编制，不创建Android宿主、不安装SDK、不连接手机、不构建APK、不访问真实学校或正式资料。
+编制日期：2026-10-15；批准日期：2026-10-16。用户明确要求“请按照项目工作流和迁移计划开始进行迁移”，本文件成为A0–A8施工规格。用户暂无Android实机，鸿蒙具体版本待确认；先采用Android15/API35/x86_64独立模拟器，后续补Android14兼容回归。批准不等于手机能力已验证；实际实施与限制见[记录](records/00-a0-platform-probes.md)。自动检查仍不访问真实学校或正式资料。
 
 ## 1. 目标、基线与范围
 
@@ -24,7 +24,7 @@
 
 ## 2. 现状与技术路线
 
-Windows基线为本地标签`windows-v1.00`；实际运行包工程修订为`862a13ac2ccbf85e4a4ef9fbf66c8279c169f3fe`，文档关闭提交为`e9746b9`。当前无`app/android`。现有Flutter3.44.5/Dart3.12.2和依赖先保留；SDK模板与锁定record_android的候选下限为API24，compile/target候选36、NDK28.2。A0实际解析完整Gradle/Kotlin/AGP/插件组合后锁定，不把当前官网面向新SDK的示例直接覆盖现有工程。
+Windows基线为本地标签`windows-v1.00`；实际运行包工程修订为`862a13ac2ccbf85e4a4ef9fbf66c8279c169f3fe`，文档关闭提交为`e9746b9`。批准前基线无`app/android`。现有Flutter3.44.5/Dart3.12.2和依赖先保留；SDK模板与锁定record_android的候选下限为API24，compile/target候选36、NDK28.2。A0实际解析完整Gradle/Kotlin/AGP/插件组合后锁定，不把当前官网面向新SDK的示例直接覆盖现有工程。
 
 建议主目标为一台arm64 Android实机；模拟器用于可重复故障与权限测试，x86_64仅为测试增加。API24是候选安装下限，不是所有低版本设备都支持学校同步的承诺。UI与本地功能按能力独立可用，学校WebView有自己的运行时门禁。
 
