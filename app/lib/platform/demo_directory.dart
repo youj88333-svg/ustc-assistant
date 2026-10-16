@@ -5,12 +5,16 @@ import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/contracts.dart';
+import 'owned_directory.dart';
 
 /// Pins an explicitly selected application root throughout its asset lifetime.
-final class DemoDirectory implements AssetOwnership {
+final class DemoDirectory implements OwnedDirectory {
   DemoDirectory._(this.path, this._pins);
 
+  @override
   final String path;
+  @override
+  p.Context get paths => p.windows;
   final List<_DirectoryPin> _pins;
   bool _released = false;
   bool _lost = false;
@@ -99,6 +103,7 @@ final class DemoDirectory implements AssetOwnership {
 
   /// The composition root must close the database before releasing its owner.
   /// Failed closes remain recorded and cannot turn into a successful release.
+  @override
   Future<void> release() async {
     if (_released) return;
     var failedClose = false;
@@ -118,6 +123,7 @@ final class DemoDirectory implements AssetOwnership {
   }
 
   /// Checks only the fixed database filenames, without reading file contents.
+  @override
   void ensureDatabaseFilesSafe({String filename = 'm0_demo.sqlite'}) {
     if (filename != 'm0_demo.sqlite' && filename != 'jw.sqlite') {
       throw const AppFailure(FailureCode.unsafeDirectory);
@@ -135,6 +141,7 @@ final class DemoDirectory implements AssetOwnership {
 
   /// Validate a controlled descendant by metadata only. Static junctions and
   /// reparse files are rejected; this is not a hostile same-user sandbox.
+  @override
   String checkedChildPath(String relative, {required bool directory}) {
     ensureHeld();
     final target = _safeLocalPath(p.windows.join(path, relative));
@@ -156,6 +163,7 @@ final class DemoDirectory implements AssetOwnership {
     return target;
   }
 
+  @override
   String createPlainChildDirectory(String relative) {
     final target = checkedChildPath(relative, directory: true);
     _win.createDirectory(target);

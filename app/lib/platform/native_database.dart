@@ -2,19 +2,17 @@ import 'dart:io';
 
 import 'package:drift/drift.dart';
 import 'package:drift/native.dart';
-import 'package:path/path.dart' as p;
+import 'owned_directory.dart';
 
-import 'demo_directory.dart';
-
-QueryExecutor openDemoDatabase(DemoDirectory directory) =>
+QueryExecutor openDemoDatabase(OwnedDirectory directory) =>
     _openOwnedDatabase(directory, 'm0_demo.sqlite');
-QueryExecutor openJwDatabase(DemoDirectory directory) =>
+QueryExecutor openJwDatabase(OwnedDirectory directory) =>
     _openOwnedDatabase(directory, 'jw.sqlite');
 
-QueryExecutor _openOwnedDatabase(DemoDirectory directory, String filename) {
+QueryExecutor _openOwnedDatabase(OwnedDirectory directory, String filename) {
   directory.ensureDatabaseFilesSafe(filename: filename);
   return NativeDatabase(
-    File(p.windows.join(directory.path, filename)),
+    File(directory.checkedChildPath(filename, directory: false)),
     logStatements: false,
     setup: (database) {
       directory.ensureDatabaseFilesSafe(filename: filename);
@@ -30,7 +28,7 @@ QueryExecutor _openOwnedDatabase(DemoDirectory directory, String filename) {
 /// and rolling back remain possible after ownership loss to drain resources.
 final class _OwnershipGuard extends QueryInterceptor {
   _OwnershipGuard(this.directory, this.filename);
-  final DemoDirectory directory;
+  final OwnedDirectory directory;
   final String filename;
 
   @override

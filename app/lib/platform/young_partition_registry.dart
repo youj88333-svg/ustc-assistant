@@ -2,18 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:path/path.dart' as p;
-
 import '../core/contracts.dart';
 import '../core/young_work_contract.dart';
-import 'demo_directory.dart';
+import 'owned_directory.dart';
 
 /// Owns only the application's Young browser profile subdirectory and ledger.
 /// It never inspects the JW or observation partition roots.
 final class YoungPartitionRegistry {
   YoungPartitionRegistry(this.owner);
 
-  final DemoDirectory owner;
+  final OwnedDirectory owner;
   static const _root = 'young_partitions_v1';
   static final _idPattern = RegExp(r'^yp-[0-9a-f]{32}$');
   final _random = Random.secure();
@@ -30,7 +28,10 @@ final class YoungPartitionRegistry {
   }
 
   String _path(String name, {required bool directory}) =>
-      owner.checkedChildPath(p.windows.join(_root, name), directory: directory);
+      owner.checkedChildPath(
+        name == '.' ? _root : owner.paths.join(_root, name),
+        directory: directory,
+      );
 
   Future<T> _exclusive<T>(Future<T> Function() action) async {
     _ensureOpen();
@@ -130,7 +131,7 @@ final class YoungPartitionRegistry {
         _path('$id.registering', directory: false),
       ).rename(_path('$id.json', directory: false));
       _records[id] = record;
-      owner.createPlainChildDirectory(p.windows.join(_root, id));
+      owner.createPlainChildDirectory(owner.paths.join(_root, id));
       return ref;
     } catch (_) {
       _ready = false;
@@ -310,7 +311,7 @@ final class YoungPartitionRegistry {
 
     // Validate the full Young ledger before replaying or deleting anything.
     for (final entry in entries) {
-      final name = p.windows.basename(entry.path);
+      final name = owner.paths.basename(entry.path);
       if (_idPattern.hasMatch(name)) {
         _path(name, directory: true);
         profiles.add(name);
@@ -435,7 +436,7 @@ final class YoungPartitionRegistry {
       followLinks: false,
     )) {
       owner.checkedChildPath(
-        p.windows.relative(entry.path, from: owner.path),
+        owner.paths.relative(entry.path, from: owner.path),
         directory: entry is Directory,
       );
     }

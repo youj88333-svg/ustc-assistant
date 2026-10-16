@@ -129,6 +129,12 @@ Future<Uint8List> _transform(
     throw JwCredentialException(failure);
   } finally {
     input.fillRange(0, input.length, 0);
-    output?.fillRange(0, output.length, 0);
+    try {
+      output?.fillRange(0, output.length, 0);
+    } on UnsupportedError {
+      // Android's engine can deliver an immutable platform-message view.
+      // The returned copy is mutable and owned by the consumer; inability to
+      // erase the engine view must not replace a valid result or typed failure.
+    }
   }
 }

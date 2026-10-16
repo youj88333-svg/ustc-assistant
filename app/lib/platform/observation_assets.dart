@@ -2,26 +2,27 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:path/path.dart' as p;
-
 import '../core/contracts.dart';
 import '../core/observation_assets.dart';
-import 'demo_directory.dart';
+import 'owned_directory.dart';
 
 /// Disposable, unclaimed observations. A flushed marker precedes every profile.
 /// Only ledger markers are read; browser asset contents are never inspected.
 final class ObservationAssets implements ObservationAssetsPort {
   ObservationAssets(this.owner) : _root = 'observation_v1';
   ObservationAssets.young(this.owner) : _root = 'young_observation_v1';
-  final DemoDirectory owner;
+  final OwnedDirectory owner;
   final String _root;
   static final _id = RegExp(r'^obs-[0-9a-f]{32}$');
   final _random = Random.secure();
   String? _active;
   bool _closed = false;
 
-  String _path(String relative, {required bool directory}) => owner
-      .checkedChildPath(p.windows.join(_root, relative), directory: directory);
+  String _path(String relative, {required bool directory}) =>
+      owner.checkedChildPath(
+        relative == '.' ? _root : owner.paths.join(_root, relative),
+        directory: directory,
+      );
 
   void _ensureRoot() {
     if (_closed) throw const AppFailure(FailureCode.closed);
@@ -39,7 +40,7 @@ final class ObservationAssets implements ObservationAssetsPort {
     final registering = <String>{};
     // First validate the whole ledger. Unknown directories are never deleted.
     for (final entry in entries) {
-      final name = p.basename(entry.path);
+      final name = owner.paths.basename(entry.path);
       if (name.endsWith('.pending') &&
           _id.hasMatch(name.substring(0, name.length - 8))) {
         final id = name.substring(0, name.length - 8);
@@ -126,7 +127,7 @@ final class ObservationAssets implements ObservationAssetsPort {
     }
     await staging.rename(marker.path);
     _active = id;
-    return owner.createPlainChildDirectory(p.windows.join(_root, id));
+    return owner.createPlainChildDirectory(owner.paths.join(_root, id));
   }
 
   @override
@@ -150,7 +151,7 @@ final class ObservationAssets implements ObservationAssetsPort {
           followLinks: false,
         )) {
           owner.checkedChildPath(
-            p.windows.relative(entry.path, from: owner.path),
+            owner.paths.relative(entry.path, from: owner.path),
             directory: entry is Directory,
           );
         }

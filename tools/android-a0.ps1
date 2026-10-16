@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Build', 'PrepareDevice', 'Start', 'Stop', 'Test', 'CheckAcceleration')]
+    [ValidateSet('Build', 'PrepareDevice', 'Start', 'Stop', 'Test', 'IntegrationTest', 'CheckAcceleration')]
     [string]$Action = 'CheckAcceleration',
     [string]$SdkRoot = 'E:\Android\Sdk',
     [string]$FlutterRoot = 'E:\flutter\flutter',
@@ -9,7 +9,8 @@ param(
     [ValidateSet('All', 'Notifications')]
     [string]$TestScope = 'All',
     [ValidateSet(35, 36)]
-    [int]$ApiLevel = 35
+    [int]$ApiLevel = 35,
+    [switch]$VerifyRetained
 )
 
 $ErrorActionPreference = 'Stop'
@@ -117,6 +118,31 @@ try {
         }
         'Test' {
             & (Join-Path $PSScriptRoot 'test-android-a0.ps1') -SdkRoot $SdkRoot -Serial $serial -ExpectedAvd $avdName -Scope $TestScope
+        }
+        'IntegrationTest' {
+            $actualAvd = & $adb -P 5038 -s $serial shell getprop ro.boot.qemu.avd_name
+            Assert-ExitCode 'Integration QA identity'
+            if (($actualAvd -join '').Trim() -ne $avdName) { throw 'Unexpected AVD; refusing integration tests.' }
+            $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
+            $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4001) {
+                throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
+            }
+            Push-Location $appRoot
+            try {
+                $retainedValue = $VerifyRetained.IsPresent.ToString().ToLowerInvariant()
+                # Flutter test otherwise uninstalls even after a successful run,
+                # which would invalidate the cross-process retention checks.
+                & $flutter test integration_test/android_a1_test.dart -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue"
+                $integrationExitCode = $LASTEXITCODE
+                $installedPaths = & $adb -P 5038 -s $serial shell pm path cn.ustcassistant.mobile.qa
+                Assert-ExitCode 'A1 QA package retention check'
+                if (-not (($installedPaths -join "`n") -match '(?m)^package:')) {
+                    throw 'A1 QA package was removed; retention results are invalid.'
+                }
+                Write-Output 'A1 QA package remains installed after the integration runner.'
+                if ($integrationExitCode -ne 0) { throw "Android A1 integration failed ($integrationExitCode)." }
+            } finally { Pop-Location }
         }
     }
 } finally {

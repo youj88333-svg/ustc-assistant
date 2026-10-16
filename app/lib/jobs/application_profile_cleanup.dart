@@ -2,10 +2,10 @@ import '../core/contracts.dart';
 import '../core/observation_assets.dart';
 import '../core/work_lease.dart';
 import '../data/jw_store.dart';
-import '../platform/demo_directory.dart';
 import '../platform/jw_partition_registry.dart';
 import '../platform/young_partition_registry.dart';
 import '../platform/observation_assets.dart';
+import '../platform/owned_directory.dart';
 import '../source/observation_contract.dart';
 import 'observation_coordinator.dart';
 
@@ -25,7 +25,7 @@ final class ApplicationProfileCleanup {
   final ObservationBrowserPort browser;
   final JwPartitionRegistry jwRegistry;
   final YoungPartitionRegistry youngRegistry;
-  final DemoDirectory observationDirectory;
+  final OwnedDirectory observationDirectory;
   ObservationCoordinator? _helper;
 
   Future<void> _drain(

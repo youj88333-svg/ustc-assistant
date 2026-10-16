@@ -2,17 +2,15 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
-import 'package:path/path.dart' as p;
-
 import '../core/contracts.dart';
 import '../core/jw_work_contract.dart';
-import 'demo_directory.dart';
+import 'owned_directory.dart';
 
 /// Private application lifecycle metadata. Browser contents are never read.
 final class JwPartitionRegistry {
   JwPartitionRegistry(this.owner);
 
-  final DemoDirectory owner;
+  final OwnedDirectory owner;
   static const _root = 'jw_partitions_v1';
   static final _idPattern = RegExp(r'^jwp-[0-9a-f]{32}$');
   final _random = Random.secure();
@@ -29,7 +27,10 @@ final class JwPartitionRegistry {
   }
 
   String _path(String name, {required bool directory}) =>
-      owner.checkedChildPath(p.windows.join(_root, name), directory: directory);
+      owner.checkedChildPath(
+        name == '.' ? _root : owner.paths.join(_root, name),
+        directory: directory,
+      );
 
   Future<T> _exclusive<T>(Future<T> Function() action) async {
     _ensureOpen();
@@ -119,7 +120,7 @@ final class JwPartitionRegistry {
         _path('$id.registering', directory: false),
       ).rename(_path('$id.json', directory: false));
       _records[id] = record;
-      owner.createPlainChildDirectory(p.windows.join(_root, id));
+      owner.createPlainChildDirectory(owner.paths.join(_root, id));
       return ref;
     } catch (_) {
       _ready = false;
@@ -297,7 +298,7 @@ final class JwPartitionRegistry {
     ).list(followLinks: false).toList();
     // Validate the entire ledger before any recovery mutation or deletion.
     for (final entry in entries) {
-      final name = p.windows.basename(entry.path);
+      final name = owner.paths.basename(entry.path);
       if (_idPattern.hasMatch(name)) {
         _path(name, directory: true);
         profiles.add(name);
@@ -420,7 +421,7 @@ final class JwPartitionRegistry {
       followLinks: false,
     )) {
       owner.checkedChildPath(
-        p.windows.relative(entry.path, from: owner.path),
+        owner.paths.relative(entry.path, from: owner.path),
         directory: entry is Directory,
       );
     }

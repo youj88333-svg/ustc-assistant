@@ -26,7 +26,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a0"
+            versionNameSuffix = "-qa-a1"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -44,6 +44,19 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// Split ABI output codes must not turn a later non-split integration build
+// into a downgrade that Flutter handles by uninstalling the QA application.
+// Production codes/signing remain under the separately approved release flow.
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        // The pinned Flutter plugin adds 4000 to the x86_64 split's base code.
+        // A1's isolated emulator builds use that ABI; non-split integration
+        // builds need the same final code to preserve their synthetic data.
+        val splitQa = project.findProperty("split-per-abi") == "true"
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 1 else 4001) }
+    }
 }
 
 dependencies {

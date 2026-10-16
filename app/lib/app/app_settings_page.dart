@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 
 import '../core/knowledge_contract.dart';
 import '../core/application_version.dart';
@@ -798,23 +799,25 @@ final class _ApplicationSettingsPageState
   }
 
   Widget _aboutSection() => _sectionScroll(
-    children: const [
+    children: [
       _SettingsCard(
         title: 'USTC Assistant · $applicationDisplayVersion',
-        child: Text('工程版本 $applicationVersion · Windows x64 私有交付版'),
+        child: Text(
+          '工程版本 $applicationVersion · ${defaultTargetPlatform == TargetPlatform.android ? 'Android 开发验证版' : 'Windows x64 私有交付版'}',
+        ),
       ),
-      SizedBox(height: 12),
-      _SettingsCard(
+      const SizedBox(height: 12),
+      const _SettingsCard(
         title: '本地优先',
         child: Text('日程、任务和设置保存在本机。学校来源保持只读；联网功能仅在相应授权后由明确操作使用。'),
       ),
-      SizedBox(height: 12),
-      _SettingsCard(
+      const SizedBox(height: 12),
+      const _SettingsCard(
         title: 'Agent 状态',
         child: Text('连接学校模型服务后，可用对话查询、规划日程和管理个人安排。修改按你的许可执行，学校来源保持只读。'),
       ),
-      SizedBox(height: 12),
-      _SettingsCard(
+      const SizedBox(height: 12),
+      const _SettingsCard(
         title: '时间与显示',
         child: Text('时间固定为北京时间，周视图从周一开始。主题和默认 Agent 入口固定。'),
       ),

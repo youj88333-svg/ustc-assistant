@@ -7,10 +7,19 @@ import 'package:native_toolchain_c/native_toolchain_c.dart';
 
 Future<void> main(List<String> args) async {
   await build(args, (input, output) async {
-    if (!input.config.buildCodeAssets ||
-        input.config.code.targetOS != OS.windows) {
+    if (!input.config.buildCodeAssets) {
       return;
     }
+    if (input.config.code.targetOS == OS.android) {
+      await CBuilder.library(
+        name: 'ustc_directory_posix',
+        assetName: 'platform/android_directory.dart',
+        sources: ['native/directory_posix.c'],
+        linkModePreference: LinkModePreference.dynamic,
+      ).run(input: input, output: output);
+      return;
+    }
+    if (input.config.code.targetOS != OS.windows) return;
     final compilerInput = input.config.code.cCompiler == null
         ? await _withWindowsCompiler(input, output)
         : input;

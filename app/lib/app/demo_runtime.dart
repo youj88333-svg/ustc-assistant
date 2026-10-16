@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
@@ -34,22 +33,16 @@ import '../jobs/reminder_coordinator.dart';
 import '../jobs/morning_brief_coordinator.dart';
 import '../jobs/morning_notice_query.dart';
 import '../core/reminder_contract.dart';
-import '../platform/windows_notifications.dart';
 import '../source/public_http.dart';
-import '../platform/demo_directory.dart';
+import '../platform/owned_directory.dart';
+import '../platform/runtime_platform_factory.dart';
 import '../platform/diagnostic_journal.dart';
-import '../platform/jw_directory_path.dart';
 import '../platform/native_database.dart';
 import '../platform/bundled_knowledge_loader.dart';
 import '../platform/native_observation_browser.dart';
 import '../platform/observation_assets.dart';
 import '../platform/jw_partition_registry.dart';
 import '../platform/young_partition_registry.dart';
-import '../platform/windows_jw_credential_protector.dart';
-import '../platform/windows_model_credential_protector.dart';
-import '../platform/offline_speech_input.dart';
-import '../platform/speech_audio_recorder.dart';
-import '../platform/sense_voice_recognizer.dart';
 import '../source/synthetic_source.dart';
 import '../source/observation_contract.dart';
 import 'demo_controller.dart';
@@ -91,13 +84,13 @@ final class DemoRuntime {
     this.clock,
   );
 
-  final DemoDirectory directory;
+  final OwnedDirectory directory;
   final DemoStore store;
   final JobCoordinator coordinator;
   final DemoController controller;
   final ObservationCoordinator observation;
   final NativeObservationBrowser browser;
-  final DemoDirectory jwDirectory;
+  final OwnedDirectory jwDirectory;
   final JwStore jwStore;
   final JwSyncCoordinator jwSync;
   final ObservationCoordinator youngObservation;
@@ -274,7 +267,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
     required this.morning,
     this.onActivationCheckpoint,
   });
-  final DemoDirectory directory, jwDirectory;
+  final OwnedDirectory directory, jwDirectory;
   final DemoStore store;
   final JwStore jwStore;
   final WorkLeasePool leases;
@@ -313,9 +306,15 @@ final class RuntimeBootstrap extends ChangeNotifier {
     @visibleForTesting SpeechInputPort? speechInput,
     @visibleForTesting NotificationPlatformPort? notificationPlatform,
     @visibleForTesting ModelGatewayPort? morningGateway,
+    @visibleForTesting RuntimePlatformFactory? platformFactory,
   }) async {
-    final directory = await DemoDirectory.acquire(directoryPath);
-    DemoDirectory? formal;
+    final platform = platformFactory ?? runtimePlatformFactory();
+    final roots = await platform.acquireDirectories(
+      directoryPath: directoryPath,
+      jwDirectoryPath: jwDirectoryPath,
+    );
+    final directory = roots.demo;
+    final formal = roots.formal;
     JwStore? database;
     DemoStore? demo;
     NativeObservationBrowser? browser;
@@ -326,14 +325,11 @@ final class RuntimeBootstrap extends ChangeNotifier {
     ReminderCoordinator? reminders;
     MorningBriefCoordinator? morning;
     try {
-      formal = await DemoDirectory.acquire(
-        jwDirectoryPath ??
-            (directoryPath == null
-                ? defaultJwDirectoryPath(Platform.environment)
-                : '${directoryPath}_jw'),
-      );
       final ownedFormal = formal;
-      String diagnosticPath = '${ownedFormal.path}\\diagnostics';
+      String diagnosticPath = ownedFormal.paths.join(
+        ownedFormal.path,
+        'diagnostics',
+      );
       try {
         diagnosticPath = ownedFormal.createPlainChildDirectory('diagnostics');
       } catch (_) {
@@ -350,7 +346,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
             throw const AppFailure(FailureCode.unsafeDirectory);
           }
           return ownedFormal.checkedChildPath(
-            'diagnostics\\$filename',
+            ownedFormal.paths.join('diagnostics', filename),
             directory: false,
           );
         },
@@ -375,18 +371,14 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ),
       );
       diagnosticBindings = RuntimeDiagnosticBindings(diagnostics);
-      speechInput ??= OfflineSpeechInput(
-        recorder: SpeechAudioRecorder(),
-        recognizer: SenseVoiceRecognizer(),
-        diagnostics: diagnostics,
-      );
+      speechInput ??= platform.createSpeech(diagnostics);
       database = JwStore(
         openJwDatabase(formal),
         ownership: formal,
         clock: clock,
-        credentialProtector: const WindowsJwCredentialProtector(),
+        credentialProtector: platform.schoolCredentials,
         modelCredentialProtector:
-            modelCredentialProtector ?? const WindowsModelCredentialProtector(),
+            modelCredentialProtector ?? platform.modelCredentials,
       );
       demo = DemoStore(
         openDemoDatabase(directory),
@@ -400,7 +392,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
         leases: leases,
         clock: clock,
       );
-      browser = NativeObservationBrowser();
+      browser = platform.createBrowser();
       final jwRegistry = JwPartitionRegistry(formal);
       final youngRegistry = YoungPartitionRegistry(formal);
       late final AgentSourceCoordinator agentSources;
@@ -470,7 +462,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       reminders = ReminderCoordinator(
         clock: clock,
         data: database.features,
-        platform: notificationPlatform ?? WindowsNotifications(),
+        platform: notificationPlatform ?? platform.createNotifications(),
         diagnostics: diagnostics,
       );
       final morningBudget = MorningHttpBudget();
@@ -631,7 +623,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       await database?.close();
       await diagnosticBindings?.close();
       await diagnostics?.close();
-      await formal?.release();
+      await formal.release();
       await directory.release();
       throw error is AppFailure
           ? error
