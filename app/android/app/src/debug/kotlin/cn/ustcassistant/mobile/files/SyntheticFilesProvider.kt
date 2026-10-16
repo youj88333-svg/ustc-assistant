@@ -205,39 +205,39 @@ class SyntheticFilesProvider : ContentProvider() {
 
         private fun create(resolver: android.content.ContentResolver, bytes: ByteArray, blockOpen: Boolean): Uri {
             val id = "synthetic_${java.util.UUID.randomUUID().toString().replace("-", "") }"
-            resolver.call(AUTHORITY, METHOD_CREATE, id, Bundle())
             val uri = DocumentsContract.buildDocumentUri(AUTHORITY, id)
+            resolver.call(uri, METHOD_CREATE, id, Bundle())
             if (bytes.isNotEmpty()) {
                 resolver.openOutputStream(uri, "wt")!!.use { output -> output.write(bytes) }
             }
             if (blockOpen) {
-                resolver.call(AUTHORITY, METHOD_SET_BLOCK_OPEN, id,
+                resolver.call(uri, METHOD_SET_BLOCK_OPEN, id,
                     Bundle().apply { putBoolean(EXTRA_BLOCK_OPEN, true) })
             }
-            resolver.call(AUTHORITY, METHOD_RESET_STATS, id, null)
+            resolver.call(uri, METHOD_RESET_STATS, id, null)
             return uri
         }
 
         fun state(resolver: android.content.ContentResolver, uri: Uri): Bundle =
-            requireNotNull(resolver.call(AUTHORITY, METHOD_STATE, DocumentsContract.getDocumentId(uri), null))
+            requireNotNull(resolver.call(uri, METHOD_STATE, DocumentsContract.getDocumentId(uri), null))
 
         fun readContents(resolver: android.content.ContentResolver, uri: Uri): ByteArray =
             resolver.openInputStream(uri)!!.use { it.readBytes() }
 
         fun remove(resolver: android.content.ContentResolver, uri: Uri) {
-            resolver.call(AUTHORITY, METHOD_REMOVE, DocumentsContract.getDocumentId(uri), null)
+            resolver.call(uri, METHOD_REMOVE, DocumentsContract.getDocumentId(uri), null)
         }
 
         fun awaitOpen(resolver: android.content.ContentResolver, uri: Uri): Boolean =
-            requireNotNull(resolver.call(AUTHORITY, METHOD_WAIT_OPEN, DocumentsContract.getDocumentId(uri), null))
+            requireNotNull(resolver.call(uri, METHOD_WAIT_OPEN, DocumentsContract.getDocumentId(uri), null))
                 .getBoolean(EXTRA_OPEN_STARTED)
 
         fun releaseOpen(resolver: android.content.ContentResolver, uri: Uri) {
-            resolver.call(AUTHORITY, METHOD_RELEASE_OPEN, DocumentsContract.getDocumentId(uri), null)
+            resolver.call(uri, METHOD_RELEASE_OPEN, DocumentsContract.getDocumentId(uri), null)
         }
 
         fun awaitDeleted(resolver: android.content.ContentResolver, uri: Uri): Boolean =
-            requireNotNull(resolver.call(AUTHORITY, METHOD_WAIT_DELETED, DocumentsContract.getDocumentId(uri), null))
+            requireNotNull(resolver.call(uri, METHOD_WAIT_DELETED, DocumentsContract.getDocumentId(uri), null))
                 .getBoolean(EXTRA_DELETE_FINISHED)
     }
 }
