@@ -119,6 +119,16 @@ Android13+通知许可和精确闹钟能力分开申请/反馈；首选用户授
 - 目录锁覆盖SQLite、诊断及登记；派生子目录仍受同一所有者管理。保留WAL/外键/synchronous与故障恢复语义，日志保持有界7天/1MiB，不记录参数值、原始响应、账号、Key、录音或图片。
 - 备份排除在任何真实资料进入手机前完成；平台能力查询失败用明确不可用状态，不伪装为缺少全部资料或自动清库。
 
+### A1凭据端口实施契约
+
+依据本计划、07/09/11/12的C3与秘密边界和15工作流，先实现可独立验收的Keystore保护原语，再由Sol装配平台工厂；不能把原语通过写成A1整体完成。
+
+- Dart沿用`JwCredentialProtector`与`ModelCredentialProtector`；Android机制固定`android-keystore-aes-gcm-v1`，Windows仍用原DPAPI。学校用途仅接受C3的`ustc-assistant/jw/login/v1:<jw-owner-32hex>:<64hex指纹>`，模型用途仅接受`ustc-model-key/v1/<jw-owner-32hex>`，两族使用不同非导出AES-256/GCM密钥。
+- 私有MethodChannel为`ustc_assistant/credentials_v1`，仅`protect/unprotect`，参数严格为`purpose`及`data`二项。明文最多16KiB、封套最多64KiB、用途最多256字符；封套为版本1字节、12字节随机nonce和含16字节认证tag的密文。完整用途作为AAD，不返回Key、别名、明文日志或底层异常文字。
+- `protect`才允许创建对应族密钥，每次由Keystore生成新nonce；`unprotect`缺失/失效密钥、坏版本、用途不符、坏tag均拒绝，不能为解密重建密钥、清业务或改写C3。原生处理使用后台串行队列；临时字节缓冲尽力归零，不承诺跨运行时副本绝对抹除。
+- 固定失败码为`invalid_request/unavailable/protection_failed/invalid_credential`，Dart映射现有类型失败；方法缺失/平台缺失明确不可用。持久数据只有C3密文与Keystore原生密钥，不建SharedPreferences密码库或一般秘密存取接口。
+- 本块允许新增Android凭据原语/其instrumentation、Dart适配/合成通道测试及根注册代码；Manifest、组合根和平台工厂仍由Sol单一写入。验收覆盖两族往返、用途/族隔离、随机nonce、坏封套/大小、密钥丢失后拒绝且不自动重建，以及异常映射/不记录秘密；全部只使用独立QA合成数据。
+
 ### A2/A3实施要点
 
 - 认证origin与页面/操作令牌绑定，允许成熟来源契约中的复杂重定向、frame和弹窗；不能只在首个登录URL放行。禁止任意`addJavascriptInterface`式通用执行/抓取接口暴露给网页或Agent。
