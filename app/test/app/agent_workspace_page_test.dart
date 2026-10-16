@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/app/agent_settings_panel.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_contract.dart';
 import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
+import 'package:ustc_assistant_m0/app/workspace_visibility.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/morning_brief_contract.dart';
@@ -15,6 +16,59 @@ import 'package:ustc_assistant_m0/core/agent_permission_contract.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
+
+  testWidgets(
+    'phone composer stays reachable with large text, keyboard and a long approval',
+    (tester) async {
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      addTearDown(tester.view.resetViewInsets);
+      for (final size in [
+        const Size(320, 780),
+        const Size(360, 780),
+        const Size(412, 780),
+        const Size(800, 360),
+      ]) {
+        final width = size.width;
+        final keyboardHeight = size.height < 500 ? 180.0 : 260.0;
+        for (final scale in [1.0, 1.5, 2.0]) {
+          await _setSize(tester, size);
+          tester.platformDispatcher.textScaleFactorTestValue = scale;
+          tester.view.viewInsets = FakeViewPadding(bottom: keyboardHeight);
+          final port = _FakeActionAgentPort(
+            view: _configuredView().copyWithForTest(
+              phase: AgentPhase.waitingForApproval,
+              pendingAction: _action(
+                id: 'a4-approval',
+                kind: AgentActionKind.localPlan,
+                status: AgentActionStatus.proposed,
+                title: '合成待批准安排',
+                details: List.filled(12, '一个需要完整展示而非截断的安排说明'),
+              ),
+            ),
+          );
+          await tester.pumpWidget(
+            _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+          );
+          await tester.pumpAndSettle();
+          await _enter(tester, 'agent-composer', '确认');
+          final send = find.byKey(const ValueKey('agent-send'));
+          await tester.ensureVisible(send);
+          await tester.pumpAndSettle();
+          final rect = tester.getRect(send);
+          expect(rect.height, greaterThanOrEqualTo(48 - 1e-6));
+          expect(rect.bottom, lessThanOrEqualTo(size.height - keyboardHeight));
+          expect(rect.left, greaterThanOrEqualTo(0));
+          expect(rect.right, lessThanOrEqualTo(width));
+          await tester.tap(send);
+          await tester.pumpAndSettle();
+          expect(port.sent, ['确认']);
+          expect(tester.takeException(), isNull, reason: '$width / $scale');
+          await tester.pumpWidget(const SizedBox.shrink());
+          port.dispose();
+        }
+      }
+    },
+  );
 
   testWidgets('unconfigured workspace guides to settings and cannot send', (
     tester,
@@ -53,6 +107,40 @@ void main() {
     expect(port.sent, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'retained chat rejects a pending image result after leaving the page without losing text',
+    (tester) async {
+      final port = _configuredPort();
+      addTearDown(port.dispose);
+      final pick = Completer<List<AgentImage>>();
+      Widget page(bool active) => _host(
+        WorkspaceVisibility(
+          active: active,
+          child: AgentWorkspacePage(
+            controller: port,
+            onSettings: () {},
+            pickImages: () => pick.future,
+          ),
+        ),
+      );
+      await tester.pumpWidget(page(true));
+      await tester.pumpAndSettle();
+      await _enter(tester, 'agent-composer', '保留草稿');
+      await tester.tap(find.byKey(const ValueKey('agent-attach-image')));
+      await tester.pump();
+      await tester.pumpWidget(page(false));
+      final image = AgentImage(Uint8List.fromList(_testPng1x1()));
+      pick.complete([image]);
+      await tester.pumpAndSettle();
+      await tester.pumpWidget(page(true));
+      await tester.pumpAndSettle();
+      expect(image.bytes, everyElement(0));
+      expect(find.byKey(const ValueKey('agent-image-preview-0')), findsNothing);
+      expect(_textField(tester, 'agent-composer').controller!.text, '保留草稿');
+      expect(tester.takeException(), isNull);
+    },
+  );
 
   testWidgets(
     'morning brief hides for the day, survives updates and page switches',

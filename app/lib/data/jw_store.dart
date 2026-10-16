@@ -110,6 +110,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     this.modelCredentialProtector,
     this.onAgentCheckpoint,
     this.knowledgeIdentity = bundledKnowledgeIdentity,
+    this.initialCalendarView = DefaultCalendarView.week,
     // Keep the public capability names independent of platform internals.
     // ignore: prefer_initializing_formals
   }) : _ownership = ownership,
@@ -126,6 +127,9 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   final Future<void> Function()? onCalendarCheckpoint;
   final Future<void> Function()? onSettingsCheckpoint;
   final KnowledgeEditionIdentity knowledgeIdentity;
+
+  /// Applies only to a newly created database, never to an existing preference.
+  final DefaultCalendarView initialCalendarView;
   final ModelCredentialProtector? modelCredentialProtector;
   final Future<void> Function()? onAgentCheckpoint;
   late final AgentStore agent = AgentStore._(this);
@@ -182,6 +186,11 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...YoungDailySyncStore.schema,
       ]) {
         await customStatement(statement);
+      }
+      if (initialCalendarView == DefaultCalendarView.day) {
+        await customStatement(
+          "UPDATE app_settings SET calendar_view='day' WHERE singleton=1",
+        );
       }
       await customStatement(
         'INSERT INTO jw_state '

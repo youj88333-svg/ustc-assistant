@@ -157,39 +157,50 @@ final class _ApplicationSettingsPageState
               ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                _sectionChip(
-                  _SettingsSection.sources,
-                  '来源',
-                  Icons.school_outlined,
-                ),
-                if (widget.agentBuilder != null)
+            SingleChildScrollView(
+              key: const ValueKey('settings-sections-scroll'),
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
                   _sectionChip(
-                    _SettingsSection.agent,
-                    'Agent',
-                    Icons.auto_awesome_outlined,
+                    _SettingsSection.sources,
+                    '来源',
+                    Icons.school_outlined,
                   ),
-                if (widget.remindersBuilder != null)
+                  const SizedBox(width: 8),
+                  if (widget.agentBuilder != null)
+                    _sectionChip(
+                      _SettingsSection.agent,
+                      'Agent',
+                      Icons.auto_awesome_outlined,
+                    ),
+                  if (widget.agentBuilder != null) const SizedBox(width: 8),
+                  if (widget.remindersBuilder != null)
+                    _sectionChip(
+                      _SettingsSection.reminders,
+                      '晨报与提醒',
+                      Icons.notifications_active_outlined,
+                    ),
+                  if (widget.remindersBuilder != null) const SizedBox(width: 8),
                   _sectionChip(
-                    _SettingsSection.reminders,
-                    '晨报与提醒',
-                    Icons.notifications_active_outlined,
+                    _SettingsSection.display,
+                    '显示',
+                    Icons.tune_rounded,
                   ),
-                _sectionChip(
-                  _SettingsSection.display,
-                  '显示',
-                  Icons.tune_rounded,
-                ),
-                _sectionChip(
-                  _SettingsSection.dataPrivacy,
-                  '数据与隐私',
-                  Icons.shield_outlined,
-                ),
-                _sectionChip(_SettingsSection.about, '关于', Icons.info_outline),
-              ],
+                  const SizedBox(width: 8),
+                  _sectionChip(
+                    _SettingsSection.dataPrivacy,
+                    '数据与隐私',
+                    Icons.shield_outlined,
+                  ),
+                  const SizedBox(width: 8),
+                  _sectionChip(
+                    _SettingsSection.about,
+                    '关于',
+                    Icons.info_outline,
+                  ),
+                ],
+              ),
             ),
             if (_localFailure != null || view.failure != null) ...[
               const SizedBox(height: 8),
@@ -250,6 +261,7 @@ final class _ApplicationSettingsPageState
         selected: _section == section,
         avatar: Icon(icon, size: 18),
         label: Text(label),
+        materialTapTargetSize: MaterialTapTargetSize.padded,
         onSelected: (_) => _selectSection(section),
       );
 

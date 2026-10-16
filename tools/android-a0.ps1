@@ -11,7 +11,7 @@ param(
     [ValidateSet(35, 36, 37)]
     [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
-    [ValidateSet('A1', 'A2', 'A3', 'A3_Public')]
+    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4')]
     [string]$IntegrationSuite = 'A1',
     [switch]$UnsupportedSourceOnly,
     [switch]$VerifyRetained,

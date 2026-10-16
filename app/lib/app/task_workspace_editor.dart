@@ -114,26 +114,27 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
 
   @override
   Widget build(BuildContext context) => Dialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     child: ConstrainedBox(
       constraints: BoxConstraints(
         maxWidth: 620,
-        maxHeight: MediaQuery.sizeOf(context).height * .88,
+        maxHeight: _dialogAvailableHeight(context),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 20, 22, 8),
-            child: Text(
-              widget.heading,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 8),
+              child: Text(
+                widget.heading,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
             ),
-          ),
-          Flexible(
-            child: SingleChildScrollView(
+            Padding(
               padding: const EdgeInsets.fromLTRB(22, 8, 22, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -330,28 +331,33 @@ final class _TaskEditorDialogState extends State<_TaskEditorDialog> {
                 ],
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('task-editor-save'),
-                  onPressed: _save,
-                  icon: const Icon(Icons.save_outlined, size: 18),
-                  label: const Text('保存任务'),
-                ),
-              ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  TextButton(
+                    key: const ValueKey('task-editor-cancel'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton.icon(
+                    key: const ValueKey('task-editor-save'),
+                    onPressed: _save,
+                    icon: const Icon(Icons.save_outlined, size: 18),
+                    label: const Text('保存任务'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(64, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   );
@@ -478,26 +484,27 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
 
   @override
   Widget build(BuildContext context) => Dialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
     child: ConstrainedBox(
       constraints: BoxConstraints(
         maxWidth: 580,
-        maxHeight: MediaQuery.sizeOf(context).height * .86,
+        maxHeight: _dialogAvailableHeight(context),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(22, 20, 22, 8),
-            child: Text(
-              widget.heading,
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 8),
+              child: Text(
+                widget.heading,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+              ),
             ),
-          ),
-          Flexible(
-            child: SingleChildScrollView(
+            Padding(
               padding: const EdgeInsets.fromLTRB(22, 8, 22, 10),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -554,28 +561,33 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
                 ],
               ),
             ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
-            child: Wrap(
-              alignment: WrapAlignment.end,
-              spacing: 8,
-              runSpacing: 6,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('取消'),
-                ),
-                FilledButton.icon(
-                  key: const ValueKey('plan-block-editor-save'),
-                  onPressed: _save,
-                  icon: const Icon(Icons.save_outlined, size: 18),
-                  label: const Text('保存时间块'),
-                ),
-              ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  TextButton(
+                    key: const ValueKey('plan-block-editor-cancel'),
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton.icon(
+                    key: const ValueKey('plan-block-editor-save'),
+                    onPressed: _save,
+                    icon: const Icon(Icons.save_outlined, size: 18),
+                    label: const Text('保存时间块'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(64, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     ),
   );
@@ -692,6 +704,12 @@ final class _PlanBlockEditorDialogState extends State<_PlanBlockEditorDialog> {
       ),
     );
   }
+}
+
+double _dialogAvailableHeight(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final available = media.size.height - media.viewInsets.vertical - 24;
+  return available.clamp(0.0, media.size.height * .94).toDouble();
 }
 
 DateTime? _parseDate(String value) {

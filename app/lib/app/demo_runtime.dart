@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 
@@ -377,6 +378,9 @@ final class RuntimeBootstrap extends ChangeNotifier {
         ownership: formal,
         clock: clock,
         credentialProtector: platform.schoolCredentials,
+        initialCalendarView: Platform.isAndroid
+            ? DefaultCalendarView.day
+            : DefaultCalendarView.week,
         modelCredentialProtector:
             modelCredentialProtector ?? platform.modelCredentials,
       );

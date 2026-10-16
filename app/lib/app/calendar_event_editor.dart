@@ -135,6 +135,8 @@ final class _CalendarEventEditorState extends State<CalendarEventEditor> {
                   child: Form(
                     key: _formKey,
                     child: SingleChildScrollView(
+                      keyboardDismissBehavior:
+                          ScrollViewKeyboardDismissBehavior.onDrag,
                       padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -301,6 +303,10 @@ final class _CalendarEventEditorState extends State<CalendarEventEditor> {
                                     )
                                   : const Icon(Icons.save_outlined),
                               label: Text(_saving ? '正在保存…' : '保存安排'),
+                              style: FilledButton.styleFrom(
+                                minimumSize: const Size(48, 48),
+                                tapTargetSize: MaterialTapTargetSize.padded,
+                              ),
                             ),
                           ),
                           AnimatedBuilder(

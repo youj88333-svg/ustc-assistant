@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -5,6 +6,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/agent_contract.dart';
+import 'android_file_access.dart';
 
 const _maximumOriginalBytes = 10 * 1024 * 1024;
 const _maximumPixels = 16 * 1000 * 1000;
@@ -19,6 +21,9 @@ const _agentImageTypes = XTypeGroup(
 /// Opens the native file selector and returns normalized, bounded PNG images.
 /// Paths and plugin exceptions stay inside this adapter.
 Future<List<AgentImage>> pickAgentImages() async {
+  if (Platform.isAndroid) {
+    return normalizeAndroidImages(await const AndroidFileAccess().pickImages());
+  }
   final List<XFile> files;
   try {
     files = await openFiles(acceptedTypeGroups: const [_agentImageTypes]);
@@ -71,6 +76,40 @@ Future<List<AgentImage>> pickAgentImages() async {
   } on Object {
     _wipe(normalized);
     throw const AgentFailure(AgentFailureCode.invalidInput);
+  }
+}
+
+/// Native Android has already bounded provider reads. The common decoder still
+/// enforces single-frame input, strips metadata, and bounds the outgoing bytes.
+@visibleForTesting
+Future<List<AgentImage>> normalizeAndroidImages(
+  List<Uint8List> originals,
+) async {
+  final normalized = <AgentImage>[];
+  try {
+    if (originals.length > AgentImage.maximumCount) {
+      throw const AgentFailure(AgentFailureCode.resourceLimit);
+    }
+    var total = 0;
+    for (final original in originals) {
+      final image = await normalizeAgentImage(original);
+      normalized.add(image);
+      total += image.bytes.length;
+      if (total > AgentImage.maximumTotalBytes) {
+        throw const AgentFailure(AgentFailureCode.resourceLimit);
+      }
+    }
+    return List.unmodifiable(normalized);
+  } on AgentFailure {
+    _wipe(normalized);
+    rethrow;
+  } on Object {
+    _wipe(normalized);
+    throw const AgentFailure(AgentFailureCode.invalidInput);
+  } finally {
+    for (final original in originals) {
+      original.fillRange(0, original.length, 0);
+    }
   }
 }
 

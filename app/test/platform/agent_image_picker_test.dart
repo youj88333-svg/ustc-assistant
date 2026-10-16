@@ -9,6 +9,25 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
+    'Android normalization wipes every original on success and failure',
+    () async {
+      final original = _png(2, 2, includeTextMetadata: true);
+      final result = await normalizeAndroidImages([original]);
+      expect(result.single.width, 2);
+      expect(original, everyElement(0));
+      expect(_chunkTypes(result.single.bytes), isNot(contains('tEXt')));
+      final good = _png(2, 2);
+      final bad = Uint8List.fromList([1, 2, 3]);
+      await expectLater(
+        normalizeAndroidImages([good, bad]),
+        _failsWith(AgentFailureCode.invalidInput),
+      );
+      expect(good, everyElement(0));
+      expect(bad, everyElement(0));
+    },
+  );
+
+  test(
     'rejects an original image larger than 10 MiB before decoding',
     () async {
       final source = Uint8List(10 * 1024 * 1024 + 1);

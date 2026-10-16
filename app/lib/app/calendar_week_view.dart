@@ -7,6 +7,7 @@ import '../core/calendar_contract.dart';
 import 'calendar_display_style.dart';
 import 'calendar_task_band.dart';
 import 'calendar_teaching_axis.dart';
+import 'workspace_visibility.dart';
 
 final class CalendarWeekView extends StatelessWidget {
   const CalendarWeekView({
@@ -46,18 +47,26 @@ final class CalendarWeekView extends StatelessWidget {
       (index) =>
           DateTime.utc(firstDay.year, firstDay.month, firstDay.day + index),
     );
-    final boardWidth = _timeGutter + _minimumDayWidth * days.length;
+    final baselineWidth = _timeGutter + _minimumDayWidth * days.length;
     return LayoutBuilder(
       builder: (context, constraints) {
         final availableWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
-            : boardWidth;
+            : baselineWidth;
         final availableHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : 680.0;
+        final mobile = isPhoneWorkspace(context) || availableWidth < 620;
+        final boardWidth =
+            _timeGutter + (mobile ? 160 : _minimumDayWidth) * days.length;
         final contentWidth = math.max(boardWidth, availableWidth).toDouble();
         final dayWidth = (contentWidth - _timeGutter) / days.length;
         final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final headingHeight = mobile
+            ? math
+                  .max(48.0, _headingHeight * textScale.clamp(1.0, 2.0))
+                  .toDouble()
+            : _headingHeight;
         final allDay = _segmentsByDay(days, allDay: true);
         final earlyMorning = _segmentsByDay(days, earlyMorning: true);
         final taskProjection = projectCalendarTasks(
@@ -75,27 +84,50 @@ final class CalendarWeekView extends StatelessWidget {
             ? math.min(72.0, availableHeight * .18).toDouble()
             : 92.0;
         final allDayHeight = showAllDay
-            ? _bandHeight(textScale, bandLimit)
+            ? math
+                  .max(mobile ? 48.0 : 0.0, _bandHeight(textScale, bandLimit))
+                  .toDouble()
             : 0.0;
-        final earlyHeight = showEarly ? _bandHeight(textScale, bandLimit) : 0.0;
-        final taskHeight = showTasks ? _taskBandHeight(textScale) : 0.0;
-        final separatorHeight = showAllDay || showEarly || showTasks
-            ? 5.0
+        final earlyHeight = showEarly
+            ? math
+                  .max(mobile ? 48.0 : 0.0, _bandHeight(textScale, bandLimit))
+                  .toDouble()
             : 0.0;
+        final taskHeight = showTasks
+            ? math
+                  .max(mobile ? 49.0 : 0.0, _taskBandHeight(textScale))
+                  .toDouble()
+            : 0.0;
+        final hasBands = showAllDay || showEarly || showTasks;
+        final bandContentHeight = allDayHeight + taskHeight + earlyHeight;
+        final separatorHeight = hasBands ? 5.0 : 0.0;
+        final minimumTimelineViewport = mobile
+            ? math.min(120.0, math.max(64.0, availableHeight * .25))
+            : 0.0;
+        final bandViewportHeight = math
+            .min(
+              bandContentHeight,
+              math.max(
+                0.0,
+                availableHeight -
+                    headingHeight -
+                    separatorHeight -
+                    minimumTimelineViewport,
+              ),
+            )
+            .toDouble();
         final axisAvailable = math
             .max(
               0,
               availableHeight -
-                  _headingHeight -
-                  allDayHeight -
-                  taskHeight -
-                  earlyHeight -
+                  headingHeight -
+                  bandViewportHeight -
                   separatorHeight,
             )
             .toDouble();
         final axis = CalendarTeachingAxis.fit(
           axisAvailable,
-          textScale: textScale,
+          textScale: mobile ? math.max(2.0, textScale) : textScale,
         );
 
         return SingleChildScrollView(
@@ -107,37 +139,49 @@ final class CalendarWeekView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _dayHeadings(days, dayWidth: dayWidth),
-                if (showAllDay)
-                  _compactBand(
-                    days,
-                    allDay,
-                    dayWidth: dayWidth,
-                    height: allDayHeight,
-                    label: '全天',
-                    textScale: textScale,
-                  ),
-                if (showTasks)
-                  CalendarTaskBand(
-                    days: days,
-                    tasks: tasks,
-                    nowUtc: nowUtc,
-                    height: taskHeight,
-                    gutterWidth: _timeGutter,
-                    dayWidth: dayWidth,
-                    onSelectTask: onSelectTask,
-                    onOpenUnscheduledTasks: onOpenUnscheduledTasks,
-                    onOverflow: onTaskOverflow,
-                  ),
-                if (showEarly)
-                  _compactBand(
-                    days,
-                    earlyMorning,
-                    dayWidth: dayWidth,
-                    height: earlyHeight,
-                    label: '凌晨 00:00–07:00',
-                    textScale: textScale,
-                    earlyMorning: true,
+                _dayHeadings(days, dayWidth: dayWidth, height: headingHeight),
+                if (hasBands)
+                  SizedBox(
+                    height: bandViewportHeight,
+                    child: SingleChildScrollView(
+                      key: const ValueKey('calendar-week-bands-scroll'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (showAllDay)
+                            _compactBand(
+                              days,
+                              allDay,
+                              dayWidth: dayWidth,
+                              height: allDayHeight,
+                              label: '全天',
+                              textScale: textScale,
+                            ),
+                          if (showTasks)
+                            CalendarTaskBand(
+                              days: days,
+                              tasks: tasks,
+                              nowUtc: nowUtc,
+                              height: taskHeight,
+                              gutterWidth: _timeGutter,
+                              dayWidth: dayWidth,
+                              onSelectTask: onSelectTask,
+                              onOpenUnscheduledTasks: onOpenUnscheduledTasks,
+                              onOverflow: onTaskOverflow,
+                            ),
+                          if (showEarly)
+                            _compactBand(
+                              days,
+                              earlyMorning,
+                              dayWidth: dayWidth,
+                              height: earlyHeight,
+                              label: '凌晨 00:00–07:00',
+                              textScale: textScale,
+                              earlyMorning: true,
+                            ),
+                        ],
+                      ),
+                    ),
                   ),
                 if (separatorHeight > 0) const Divider(height: 5, thickness: 1),
                 Expanded(
@@ -164,42 +208,45 @@ final class CalendarWeekView extends StatelessWidget {
     );
   }
 
-  Widget _dayHeadings(List<DateTime> days, {required double dayWidth}) =>
-      SizedBox(
-        height: _headingHeight,
-        child: Row(
-          children: [
-            const SizedBox(width: _timeGutter),
-            for (final day in days)
-              SizedBox(
-                width: dayWidth,
-                child: Container(
-                  alignment: Alignment.center,
-                  decoration: BoxDecoration(
-                    color: _sameDay(day, today)
-                        ? const Color(0xFFE5F1E9)
-                        : Colors.white,
-                    border: const Border(
-                      right: BorderSide(color: Color(0xFFE3E9E5)),
-                    ),
-                  ),
-                  child: Text(
-                    '${_weekday(day.weekday)}  ${_date(day)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: _sameDay(day, today)
-                          ? const Color(0xFF1F6B45)
-                          : const Color(0xFF1D2922),
-                    ),
-                  ),
+  Widget _dayHeadings(
+    List<DateTime> days, {
+    required double dayWidth,
+    required double height,
+  }) => SizedBox(
+    height: height,
+    child: Row(
+      children: [
+        const SizedBox(width: _timeGutter),
+        for (final day in days)
+          SizedBox(
+            width: dayWidth,
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _sameDay(day, today)
+                    ? const Color(0xFFE5F1E9)
+                    : Colors.white,
+                border: const Border(
+                  right: BorderSide(color: Color(0xFFE3E9E5)),
                 ),
               ),
-          ],
-        ),
-      );
+              child: Text(
+                '${_weekday(day.weekday)}  ${_date(day)}',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: _sameDay(day, today)
+                      ? const Color(0xFF1F6B45)
+                      : const Color(0xFF1D2922),
+                ),
+              ),
+            ),
+          ),
+      ],
+    ),
+  );
 
   double _bandHeight(double textScale, double maximum) =>
       math.min(28 * textScale.clamp(1, 2), maximum).toDouble();
@@ -266,8 +313,12 @@ final class CalendarWeekView extends StatelessWidget {
     if (segments.isEmpty) return const SizedBox.shrink();
     final segment = segments.first;
     final remaining = segments.length - 1;
+    final paddedTarget = height >= 48;
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+      padding: EdgeInsets.symmetric(
+        horizontal: 3,
+        vertical: paddedTarget ? 0 : 2,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -284,16 +335,17 @@ final class CalendarWeekView extends StatelessWidget {
           ),
           if (remaining > 0)
             SizedBox(
-              width: 28,
+              width: paddedTarget ? 48 : 28,
               child: TextButton(
                 key: ValueKey(
                   'calendar-week-overflow-${earlyMorning ? 'early' : 'all-day'}-${_dayKey(segments.first.day)}',
                 ),
                 style: TextButton.styleFrom(
-                  minimumSize: Size.zero,
+                  minimumSize: paddedTarget ? const Size(48, 48) : Size.zero,
                   padding: const EdgeInsets.symmetric(horizontal: 2),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: paddedTarget
+                      ? MaterialTapTargetSize.padded
+                      : MaterialTapTargetSize.shrinkWrap,
                 ),
                 onPressed: () => onOverflow(
                   '$heading · ${_date(segments.first.day)}',

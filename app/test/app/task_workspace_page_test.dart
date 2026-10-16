@@ -322,20 +322,118 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('narrow layout and large text remain operable without overflow', (
+  testWidgets(
+    'phone task list, details, and create controls fit and remain reachable',
+    (tester) async {
+      _installFlutterErrorLogger();
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      const scenarios = <({Size size, double textScale})>[
+        (size: Size(320, 800), textScale: 1),
+        (size: Size(320, 800), textScale: 1.5),
+        (size: Size(320, 800), textScale: 2),
+        (size: Size(360, 800), textScale: 1),
+        (size: Size(360, 800), textScale: 1.5),
+        (size: Size(360, 800), textScale: 2),
+        (size: Size(412, 850), textScale: 1),
+        (size: Size(412, 850), textScale: 1.5),
+        (size: Size(412, 850), textScale: 2),
+        (size: Size(800, 360), textScale: 1.5),
+      ];
+
+      for (final scenario in scenarios) {
+        tester.view.physicalSize = scenario.size;
+        final seed = _taskWithBlocks();
+        final port = _FakeTaskWorkspacePort(
+          tasks: [seed.task],
+          blocks: seed.blocks,
+        );
+        addTearDown(port.dispose);
+        await tester.pumpWidget(
+          _localizedMaterialApp(
+            textScale: scenario.textScale,
+            home: Scaffold(
+              body: SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: TaskWorkspacePage(port: port),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final search = find.byKey(const ValueKey('task-workspace-search'));
+        await tester.ensureVisible(search);
+        _expectMobileTarget(tester, search, scenario.size);
+        final tile = find.byKey(const ValueKey('task-tile-7'));
+        await tester.ensureVisible(tile);
+        _expectMobileTarget(tester, tile, scenario.size);
+        await tester.tap(tile);
+        await tester.pumpAndSettle();
+
+        final deadlineTag = find.textContaining('2026-10-12 23:59');
+        await tester.ensureVisible(deadlineTag);
+        final deadlineRect = tester.getRect(deadlineTag);
+        expect(deadlineRect.left, greaterThanOrEqualTo(0));
+        expect(deadlineRect.right, lessThanOrEqualTo(scenario.size.width));
+
+        final back = find.byKey(const ValueKey('task-workspace-back-to-list'));
+        await tester.ensureVisible(back);
+        _expectMobileTarget(tester, back, scenario.size);
+        final blockCreate = find.byKey(const ValueKey('task-block-create'));
+        final detailContent = find.byKey(
+          const ValueKey('task-workspace-detail-content'),
+        );
+        final detailScroll = find
+            .descendant(of: detailContent, matching: find.byType(Scrollable))
+            .first;
+        await tester.scrollUntilVisible(
+          blockCreate,
+          100,
+          scrollable: detailScroll,
+        );
+        await tester.pumpAndSettle();
+        _expectMobileTarget(tester, blockCreate, scenario.size);
+
+        final create = find.byKey(const ValueKey('task-workspace-create'));
+        await tester.ensureVisible(create);
+        _expectMobileTarget(tester, create, scenario.size);
+        await tester.tap(create);
+        await tester.pumpAndSettle();
+        final title = find.byKey(const ValueKey('task-editor-title'));
+        await tester.ensureVisible(title);
+        expect(title.hitTestable(), findsOneWidget);
+        final save = find.byKey(const ValueKey('task-editor-save'));
+        await tester.ensureVisible(save);
+        _expectMobileTarget(tester, save, scenario.size);
+        await tester.tap(find.byKey(const ValueKey('task-editor-cancel')));
+        await tester.pumpAndSettle();
+        expect(port.intents, isEmpty);
+        _expectNoFlutterTestException(
+          tester,
+          'phone task controls at ${scenario.size}, scale ${scenario.textScale}',
+        );
+      }
+    },
+  );
+
+  testWidgets('mobile deadline and plan block pickers keep their own state', (
     tester,
   ) async {
-    await _setSize(tester, const Size(360, 620));
+    _installFlutterErrorLogger();
+    await _setSize(tester, const Size(320, 800));
     final seed = _taskWithBlocks();
     final port = _FakeTaskWorkspacePort(
       tasks: [seed.task],
       blocks: seed.blocks,
     );
     addTearDown(port.dispose);
-
     await tester.pumpWidget(
       _localizedMaterialApp(
-        textScale: 2,
+        textScale: 1.5,
         home: Scaffold(
           body: SafeArea(
             child: Padding(
@@ -347,21 +445,244 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byKey(const ValueKey('task-workspace-search')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-workspace-create')), findsOneWidget);
-    expect(find.byKey(const ValueKey('task-tile-7')), findsOneWidget);
-    expect(tester.takeException(), isNull);
 
     await _tapKey(tester, 'task-workspace-create');
-    await _enter(tester, 'task-editor-title', '窄窗口任务');
+    await _enter(tester, 'task-editor-title', '手机截止任务');
     await _tapKey(tester, 'task-editor-has-deadline');
-    await _pickDate(tester, 'task-editor-deadline-day-picker', 13);
+    await _tapKey(tester, 'task-editor-deadline-day-picker');
+    final dateDialog = find.byType(DatePickerDialog);
+    expect(dateDialog, findsOneWidget);
+    final dateRect = tester.getRect(dateDialog);
+    expect(dateRect.left, greaterThanOrEqualTo(0));
+    expect(dateRect.right, lessThanOrEqualTo(320));
+    await tester.tap(find.text('取消').last);
+    await tester.pumpAndSettle();
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('task-editor-deadline-day')),
+          )
+          .controller!
+          .text,
+      '2026-10-12',
+    );
     await _pickTime(tester, 'task-editor-deadline-time-picker', 14, 30);
     await _tapKey(tester, 'task-editor-save');
-    final intent = port.intents.single.intent as CreateTask;
-    expect(intent.draft.deadlineAtUtc, DateTime.utc(2026, 10, 13, 6, 30));
+    final taskIntent = port.intents.single.intent as CreateTask;
+    expect(taskIntent.draft.deadlineAtUtc, DateTime.utc(2026, 10, 12, 6, 30));
+
+    port.intents.clear();
+    await tester.tap(find.byKey(const ValueKey('task-tile-7')));
+    await tester.pumpAndSettle();
+    await _tapKey(tester, 'task-block-create');
+    final startTime = find.byKey(
+      const ValueKey('plan-block-start-time-picker'),
+    );
+    await tester.ensureVisible(startTime);
+    _expectMobileTarget(tester, startTime, const Size(320, 800));
+    await _pickDate(tester, 'plan-block-start-day-picker', 14);
+    await _pickTime(tester, 'plan-block-start-time-picker', 9, 15);
+    await _pickDate(tester, 'plan-block-end-day-picker', 14);
+    await _pickTime(tester, 'plan-block-end-time-picker', 10, 15);
+    final blockSave = find.byKey(const ValueKey('plan-block-editor-save'));
+    await tester.ensureVisible(blockSave);
+    _expectMobileTarget(tester, blockSave, const Size(320, 800));
+    await tester.tap(blockSave);
+    await tester.pumpAndSettle();
+    final blockIntent = port.intents.single.intent as CreatePlanBlock;
+    expect(blockIntent.draft.startsAtUtc, DateTime.utc(2026, 10, 14, 1, 15));
+    expect(blockIntent.draft.endsAtUtc, DateTime.utc(2026, 10, 14, 2, 15));
+    _expectNoFlutterTestException(tester, 'mobile deadline and block pickers');
+  });
+
+  testWidgets('task editor save and cancel stay above the mobile keyboard', (
+    tester,
+  ) async {
+    _installFlutterErrorLogger();
+    await _setSize(tester, const Size(360, 640));
+    addTearDown(tester.view.resetViewInsets);
+    final port = _FakeTaskWorkspacePort();
+    addTearDown(port.dispose);
+    await tester.pumpWidget(
+      _localizedMaterialApp(
+        textScale: 2,
+        home: Scaffold(
+          body: SafeArea(child: TaskWorkspacePage(port: port)),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await _tapKey(tester, 'task-workspace-create');
+    await tester.enterText(
+      find.byKey(const ValueKey('task-editor-title')),
+      '键盘中的任务草稿',
+    );
+    tester.view.viewInsets = const FakeViewPadding(bottom: 260);
+    await tester.pumpAndSettle();
+
+    final keyboardTop = 640 - 260.0;
+    final save = find.byKey(const ValueKey('task-editor-save'));
+    final cancel = find.byKey(const ValueKey('task-editor-cancel'));
+    for (final target in [save, cancel]) {
+      await tester.ensureVisible(target);
+      await tester.pumpAndSettle();
+      final rect = tester.getRect(target);
+      expect(rect.height, greaterThanOrEqualTo(48));
+      expect(rect.left, greaterThanOrEqualTo(0));
+      expect(rect.right, lessThanOrEqualTo(360));
+      expect(rect.bottom, lessThanOrEqualTo(keyboardTop));
+      expect(target.hitTestable(), findsOneWidget);
+    }
+    await tester.tap(cancel);
+    await tester.pumpAndSettle();
+    expect(port.intents, isEmpty);
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets(
+    'task editor actions scroll into reach in short landscape with large text',
+    (tester) async {
+      _installFlutterErrorLogger();
+      await _setSize(tester, const Size(640, 360));
+      addTearDown(tester.view.resetViewInsets);
+      final port = _FakeTaskWorkspacePort();
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        _localizedMaterialApp(
+          textScale: 2,
+          home: Scaffold(
+            body: SafeArea(child: TaskWorkspacePage(port: port)),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'task-workspace-create');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 180);
+      await tester.pumpAndSettle();
+
+      const viewport = Size(640, 360);
+      const keyboardTop = 180.0;
+      final save = find.byKey(const ValueKey('task-editor-save'));
+      final cancel = find.byKey(const ValueKey('task-editor-cancel'));
+      for (final target in [save, cancel]) {
+        await tester.ensureVisible(target);
+        await tester.pumpAndSettle();
+        final rect = tester.getRect(target);
+        expect(rect.width, greaterThanOrEqualTo(48));
+        expect(rect.height, greaterThanOrEqualTo(48));
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.top, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(viewport.width));
+        expect(rect.bottom, lessThanOrEqualTo(keyboardTop));
+        expect(target.hitTestable(), findsOneWidget);
+      }
+      await tester.tap(cancel);
+      await tester.pumpAndSettle();
+      expect(port.intents, isEmpty);
+      _expectNoFlutterTestException(
+        tester,
+        'short landscape task editor keyboard',
+      );
+    },
+  );
+
+  testWidgets(
+    'plan block editor actions scroll into reach in short landscape with large text',
+    (tester) async {
+      _installFlutterErrorLogger();
+      await _setSize(tester, const Size(640, 360));
+      addTearDown(tester.view.resetViewInsets);
+      final seed = _taskWithBlocks();
+      final port = _FakeTaskWorkspacePort(
+        tasks: [seed.task],
+        blocks: seed.blocks,
+      );
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        _localizedMaterialApp(
+          textScale: 2,
+          home: Scaffold(
+            body: SafeArea(child: TaskWorkspacePage(port: port)),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'task-tile-7');
+      await tester.pumpAndSettle();
+      final detail = find.byKey(
+        const ValueKey('task-workspace-detail-content'),
+      );
+      final detailScroll = find
+          .descendant(of: detail, matching: find.byType(Scrollable))
+          .first;
+      await tester.scrollUntilVisible(
+        find.byKey(const ValueKey('task-block-create')),
+        100,
+        scrollable: detailScroll,
+      );
+      await tester.pumpAndSettle();
+      await _tapKey(tester, 'task-block-create');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 180);
+      await tester.pumpAndSettle();
+
+      const viewport = Size(640, 360);
+      const keyboardTop = 180.0;
+      final save = find.byKey(const ValueKey('plan-block-editor-save'));
+      final cancel = find.byKey(const ValueKey('plan-block-editor-cancel'));
+      for (final target in [save, cancel]) {
+        await tester.ensureVisible(target);
+        await tester.pumpAndSettle();
+        final rect = tester.getRect(target);
+        expect(rect.width, greaterThanOrEqualTo(48));
+        expect(rect.height, greaterThanOrEqualTo(48));
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.top, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(viewport.width));
+        expect(rect.bottom, lessThanOrEqualTo(keyboardTop));
+        expect(target.hitTestable(), findsOneWidget);
+      }
+      await tester.tap(cancel);
+      await tester.pumpAndSettle();
+      expect(port.intents, isEmpty);
+      _expectNoFlutterTestException(
+        tester,
+        'short landscape plan block editor keyboard',
+      );
+    },
+  );
+}
+
+void _expectMobileTarget(WidgetTester tester, Finder target, Size viewport) {
+  expect(target, findsOneWidget);
+  final rect = tester.getRect(target);
+  expect(rect.width, greaterThanOrEqualTo(48));
+  expect(rect.height, greaterThanOrEqualTo(48));
+  expect(rect.left, greaterThanOrEqualTo(0));
+  expect(rect.top, greaterThanOrEqualTo(0));
+  expect(rect.right, lessThanOrEqualTo(viewport.width));
+  expect(rect.bottom, lessThanOrEqualTo(viewport.height));
+  expect(target.hitTestable(), findsOneWidget);
+}
+
+void _expectNoFlutterTestException(WidgetTester tester, String context) {
+  final exception = tester.takeException();
+  if (exception is FlutterError) {
+    // Include the full diagnostics tree so any remaining RenderFlex error has
+    // its creator and source location in the saved test report.
+    debugPrint('FlutterError during $context:\n${exception.toStringDeep()}');
+  } else if (exception != null) {
+    debugPrint('Exception during $context:\n$exception');
+  }
+  expect(exception, isNull, reason: context);
+}
+
+void _installFlutterErrorLogger() {
+  final previousHandler = FlutterError.onError;
+  FlutterError.onError = (details) {
+    debugPrint('Full FlutterErrorDetails:\n$details');
+    previousHandler?.call(details);
+  };
+  addTearDown(() => FlutterError.onError = previousHandler);
 }
 
 Widget _host(_FakeTaskWorkspacePort port) => _localizedMaterialApp(

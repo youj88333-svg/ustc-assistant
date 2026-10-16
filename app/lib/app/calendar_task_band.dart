@@ -167,34 +167,34 @@ final class CalendarTaskBand extends StatelessWidget {
     );
   }
 
-  Widget _gutter(List<TaskRecord> unscheduled) => Container(
-    alignment: Alignment.center,
-    decoration: const BoxDecoration(
-      color: Color(0xFFF8FAF9),
-      border: Border(
-        right: BorderSide(color: Color(0xFFE3E9E5)),
-        bottom: BorderSide(color: Color(0xFFE3E9E5)),
-      ),
-    ),
-    child: Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const Text(
-          '任务',
-          maxLines: 1,
-          style: TextStyle(
-            fontSize: 9,
-            color: Color(0xFF66736C),
-            fontWeight: FontWeight.w600,
+  Widget _gutter(List<TaskRecord> unscheduled) {
+    final hasUnscheduled = unscheduled.isNotEmpty;
+    final cell = InkWell(
+      key: hasUnscheduled ? const ValueKey('calendar-task-unscheduled') : null,
+      onTap: hasUnscheduled ? onOpenUnscheduledTasks : null,
+      child: Container(
+        alignment: Alignment.center,
+        decoration: const BoxDecoration(
+          color: Color(0xFFF8FAF9),
+          border: Border(
+            right: BorderSide(color: Color(0xFFE3E9E5)),
+            bottom: BorderSide(color: Color(0xFFE3E9E5)),
           ),
         ),
-        if (unscheduled.isNotEmpty)
-          Tooltip(
-            message: '待安排：${unscheduled.length} 项无截止任务',
-            child: InkWell(
-              key: const ValueKey('calendar-task-unscheduled'),
-              onTap: onOpenUnscheduledTasks,
-              child: Padding(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Text(
+              '任务',
+              maxLines: 1,
+              style: TextStyle(
+                fontSize: 9,
+                color: Color(0xFF66736C),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (hasUnscheduled)
+              Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 1),
                 child: Text(
                   '待安排\n${unscheduled.length} 项',
@@ -209,14 +209,18 @@ final class CalendarTaskBand extends StatelessWidget {
                   ),
                 ),
               ),
-            ),
-          ),
-      ],
-    ),
-  );
+          ],
+        ),
+      ),
+    );
+    return hasUnscheduled
+        ? Tooltip(message: '待安排：${unscheduled.length} 项无截止任务', child: cell)
+        : cell;
+  }
 
   Widget _dayCell(DateTime day, List<TaskRecord> dayTasks) {
     final remaining = dayTasks.length - 1;
+    final paddedTarget = height >= 48;
     return Container(
       decoration: const BoxDecoration(
         color: Colors.white,
@@ -225,7 +229,10 @@ final class CalendarTaskBand extends StatelessWidget {
           bottom: BorderSide(color: Color(0xFFE3E9E5)),
         ),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 2),
+      padding: EdgeInsets.symmetric(
+        horizontal: 3,
+        vertical: paddedTarget ? 0 : 2,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -235,14 +242,15 @@ final class CalendarTaskBand extends StatelessWidget {
             const Expanded(child: SizedBox.shrink()),
           if (remaining > 0)
             SizedBox(
-              width: 28,
+              width: paddedTarget ? 48 : 28,
               child: TextButton(
                 key: ValueKey('calendar-task-overflow-${_dayKey(day)}'),
                 style: TextButton.styleFrom(
-                  minimumSize: Size.zero,
+                  minimumSize: paddedTarget ? const Size(48, 48) : Size.zero,
                   padding: const EdgeInsets.symmetric(horizontal: 2),
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: paddedTarget
+                      ? MaterialTapTargetSize.padded
+                      : MaterialTapTargetSize.shrinkWrap,
                 ),
                 onPressed: () => onOverflow(day, dayTasks),
                 child: Tooltip(

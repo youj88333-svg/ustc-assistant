@@ -75,32 +75,37 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
                   const SizedBox(height: 8),
                   _sharedPasswordNote(context),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      ChoiceChip(
-                        key: const ValueKey('source-settings-jw'),
-                        selected: _selectedSource == _SelectedSource.jw,
-                        avatar: const Icon(Icons.school_outlined, size: 18),
-                        label: const Text('教务'),
-                        onSelected: (_) => setState(
-                          () => _selectedSource = _SelectedSource.jw,
+                  SingleChildScrollView(
+                    key: const ValueKey('source-settings-tabs-scroll'),
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        ChoiceChip(
+                          key: const ValueKey('source-settings-jw'),
+                          selected: _selectedSource == _SelectedSource.jw,
+                          avatar: const Icon(Icons.school_outlined, size: 18),
+                          label: const Text('教务'),
+                          materialTapTargetSize: MaterialTapTargetSize.padded,
+                          onSelected: (_) => setState(
+                            () => _selectedSource = _SelectedSource.jw,
+                          ),
                         ),
-                      ),
-                      ChoiceChip(
-                        key: const ValueKey('source-settings-young'),
-                        selected: _selectedSource == _SelectedSource.young,
-                        avatar: const Icon(
-                          Icons.event_available_outlined,
-                          size: 18,
+                        const SizedBox(width: 8),
+                        ChoiceChip(
+                          key: const ValueKey('source-settings-young'),
+                          selected: _selectedSource == _SelectedSource.young,
+                          avatar: const Icon(
+                            Icons.event_available_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('二课'),
+                          materialTapTargetSize: MaterialTapTargetSize.padded,
+                          onSelected: (_) => setState(
+                            () => _selectedSource = _SelectedSource.young,
+                          ),
                         ),
-                        label: const Text('二课'),
-                        onSelected: (_) => setState(
-                          () => _selectedSource = _SelectedSource.young,
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                   const SizedBox(height: 8),
                   LayoutBuilder(

@@ -7,6 +7,13 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <application android:networkSecurityConfig="@xml/qa_network_security">
+        <activity
+            android:name=".files.FilesBridgeHostActivity"
+            android:exported="false" />
+        <provider
+            android:name=".files.SyntheticFilesProvider"
+            android:authorities="cn.ustcassistant.mobile.qa.synthetic-files"
+            android:exported="false" />
         <!-- Flutter is the A1 launcher; fixed A0 probes remain explicitly addressable. -->
         <activity
             android:name=".qa.QaProbeActivity"

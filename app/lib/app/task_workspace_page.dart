@@ -85,6 +85,7 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
         context,
         widget.port.taskView,
         constraints.maxWidth,
+        constraints.maxHeight,
         nowUtc: _nowUtc,
       ),
     ),
@@ -103,7 +104,8 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
   Widget _workspace(
     BuildContext context,
     TaskWorkspaceView view,
-    double width, {
+    double width,
+    double height, {
     required DateTime nowUtc,
   }) {
     final wide = width >= 820;
@@ -111,7 +113,39 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _toolbarArea(view, width),
+        _toolbarArea(view, width, height),
+        const SizedBox(height: 8),
+        if (wide)
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SizedBox(
+                  width: math
+                      .min(390.0, math.max(300.0, width * .37))
+                      .toDouble(),
+                  child: _taskList(view, nowUtc),
+                ),
+                const SizedBox(width: 10),
+                Expanded(child: _detailPanel(view, detail, nowUtc: nowUtc)),
+              ],
+            ),
+          )
+        else
+          Expanded(
+            child: _selected == null
+                ? _taskList(view, nowUtc)
+                : _detailPanel(view, detail, nowUtc: nowUtc, compact: true),
+          ),
+      ],
+    );
+  }
+
+  Widget _toolbarArea(TaskWorkspaceView view, double width, double height) {
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _toolbar(view, width),
         if (!view.undo.canUndo) ...[
           const SizedBox(height: 5),
           _TaskStatusLine(
@@ -148,46 +182,23 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
           const SizedBox(height: 6),
           const LinearProgressIndicator(minHeight: 2),
         ],
-        const SizedBox(height: 8),
-        if (wide)
-          Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                SizedBox(
-                  width: math
-                      .min(390.0, math.max(300.0, width * .37))
-                      .toDouble(),
-                  child: _taskList(view, nowUtc),
-                ),
-                const SizedBox(width: 10),
-                Expanded(child: _detailPanel(view, detail, nowUtc: nowUtc)),
-              ],
-            ),
-          )
-        else
-          Expanded(
-            child: _selected == null
-                ? _taskList(view, nowUtc)
-                : _detailPanel(view, detail, nowUtc: nowUtc, compact: true),
-          ),
       ],
     );
-  }
-
-  Widget _toolbarArea(TaskWorkspaceView view, double width) {
-    final toolbar = _toolbar(view, width);
-    if (width >= 620) return toolbar;
-    final screenHeight = MediaQuery.sizeOf(context).height;
+    final media = MediaQuery.of(context);
+    final availableHeight = math
+        .min(height, media.size.height - media.viewInsets.vertical)
+        .clamp(0.0, media.size.height)
+        .toDouble();
+    if (width >= 620 && availableHeight >= 520) return header;
     return ConstrainedBox(
       constraints: BoxConstraints(
         maxHeight: math
-            .min(width < 390 ? 210.0 : 170.0, screenHeight * .36)
+            .min(width < 390 ? 260.0 : 230.0, availableHeight * .55)
             .toDouble(),
       ),
       child: SingleChildScrollView(
         key: const ValueKey('task-workspace-toolbar-scroll'),
-        child: toolbar,
+        child: header,
       ),
     );
   }
@@ -280,9 +291,10 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
               ? () => _undo(widget.port, view.undo)
               : null,
           icon: const Icon(Icons.undo_rounded, size: 18),
-          label: const Text('撤销最近修改'),
+          label: Text(width < 390 ? '撤销' : '撤销最近修改'),
           style: OutlinedButton.styleFrom(
-            visualDensity: VisualDensity.compact,
+            minimumSize: const Size(64, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
             foregroundColor: _green,
           ),
         ),
@@ -291,6 +303,10 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
           onPressed: canAdd ? () => _createTask(widget.port, view) : null,
           icon: const Icon(Icons.add_rounded, size: 19),
           label: Text(width < 390 ? '新建' : '新建任务'),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(64, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
+          ),
         ),
       ],
     );
@@ -312,40 +328,47 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
         busy: view.loading,
       );
     }
+    final prefixCount = window.truncated ? 2 : 1;
+    final contentCount = window.items.isEmpty ? 1 : window.items.length;
     return Card(
       key: const ValueKey('task-workspace-list-card'),
       clipBehavior: Clip.antiAlias,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(13, 10, 13, 8),
-            child: Row(
-              children: [
-                const Icon(Icons.checklist_rounded, size: 18, color: _green),
-                const SizedBox(width: 7),
-                Expanded(
-                  child: Text(
-                    '任务 · ${window.matched}',
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-                if (window.truncated)
-                  const Tooltip(
-                    message: '当前结果已截断，仍有任务未显示。',
-                    child: Icon(
-                      Icons.warning_amber_rounded,
-                      size: 19,
-                      color: Color(0xFF9B2C2C),
+      child: ListView.separated(
+        key: const ValueKey('task-workspace-list'),
+        padding: const EdgeInsets.fromLTRB(7, 4, 7, 8),
+        itemCount: prefixCount + contentCount,
+        separatorBuilder: (_, _) => const SizedBox(height: 4),
+        itemBuilder: (context, index) {
+          if (index == 0) {
+            return Padding(
+              padding: const EdgeInsets.fromLTRB(6, 6, 6, 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.checklist_rounded, size: 18, color: _green),
+                  const SizedBox(width: 7),
+                  Expanded(
+                    child: Text(
+                      '任务 · ${window.matched}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
                     ),
                   ),
-              ],
-            ),
-          ),
-          if (window.truncated)
-            Container(
+                  if (window.truncated)
+                    const Tooltip(
+                      message: '当前结果已截断，仍有任务未显示。',
+                      child: Icon(
+                        Icons.warning_amber_rounded,
+                        size: 19,
+                        color: Color(0xFF9B2C2C),
+                      ),
+                    ),
+                ],
+              ),
+            );
+          }
+          if (window.truncated && index == 1) {
+            return Container(
               color: const Color(0xFFFFF7E8),
-              padding: const EdgeInsets.fromLTRB(13, 7, 10, 7),
+              padding: const EdgeInsets.fromLTRB(7, 7, 8, 7),
               child: Row(
                 children: [
                   const Expanded(
@@ -374,31 +397,24 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                   ),
                 ],
               ),
-            ),
-          Expanded(
-            child: window.items.isEmpty
-                ? _EmptyTaskPanel(
-                    icon: Icons.task_alt_rounded,
-                    title: _query.keyword.isEmpty ? '当前没有匹配任务' : '没有找到匹配标题',
-                    detail: _query.keyword.isEmpty
-                        ? '可新建任务，或调整状态筛选。'
-                        : '试试缩短关键词或调整状态筛选。',
-                  )
-                : ListView.separated(
-                    key: const ValueKey('task-workspace-list'),
-                    padding: const EdgeInsets.fromLTRB(7, 4, 7, 8),
-                    itemCount: window.items.length,
-                    separatorBuilder: (_, _) => const SizedBox(height: 4),
-                    itemBuilder: (context, index) => _taskTile(
-                      window.items[index],
-                      selected:
-                          _selected?.localId ==
-                          window.items[index].reference.localId,
-                      nowUtc: nowUtc,
-                    ),
-                  ),
-          ),
-        ],
+            );
+          }
+          if (window.items.isEmpty) {
+            return _EmptyTaskPanel(
+              icon: Icons.task_alt_rounded,
+              title: _query.keyword.isEmpty ? '当前没有匹配任务' : '没有找到匹配标题',
+              detail: _query.keyword.isEmpty
+                  ? '可新建任务，或调整状态筛选。'
+                  : '试试缩短关键词或调整状态筛选。',
+            );
+          }
+          final task = window.items[index - prefixCount];
+          return _taskTile(
+            task,
+            selected: _selected?.localId == task.reference.localId,
+            nowUtc: nowUtc,
+          );
+        },
       ),
     );
   }
@@ -929,6 +945,10 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     },
     icon: const Icon(Icons.arrow_back_rounded, size: 17),
     label: const Text('任务列表'),
+    style: TextButton.styleFrom(
+      minimumSize: const Size(0, 48),
+      tapTargetSize: MaterialTapTargetSize.padded,
+    ),
   );
 
   void _onSearchChanged(String value) {
@@ -1234,6 +1254,7 @@ final class _ToolbarButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Container(
+    constraints: const BoxConstraints(minHeight: 48),
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     decoration: BoxDecoration(
       border: Border.all(color: _line),
@@ -1279,12 +1300,19 @@ final class _TaskTag extends StatelessWidget {
           Icon(icon, size: 13, color: textColor),
           const SizedBox(width: 4),
         ],
-        Text(
-          label,
-          style: TextStyle(
-            color: textColor,
-            fontSize: 10,
-            fontWeight: FontWeight.w600,
+        Flexible(
+          child: Tooltip(
+            message: label,
+            child: Text(
+              label,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: textColor,
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ),
       ],

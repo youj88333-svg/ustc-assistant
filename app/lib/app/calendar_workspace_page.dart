@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
@@ -29,6 +30,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
     this.initialTasks = false,
     this.initialSelection,
     this.onInitialNavigationConsumed,
+    this.onViewModeSelected,
   });
 
   final CalendarWorkspacePort controller;
@@ -39,6 +41,7 @@ final class CalendarWorkspacePage extends StatefulWidget {
   final bool initialTasks;
   final CalendarReference? initialSelection;
   final VoidCallback? onInitialNavigationConsumed;
+  final Future<void> Function(CalendarViewMode mode)? onViewModeSelected;
 
   @override
   State<CalendarWorkspacePage> createState() => _CalendarWorkspacePageState();
@@ -55,6 +58,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   int _loadGeneration = 0;
   int _actionGeneration = 0;
   int _selectionGeneration = 0;
+  int _viewModePreferenceGeneration = 0;
+  bool _viewModePreferenceBusy = false;
   bool _hasPendingInitialNavigation = false;
   bool _initialNavigationConsumed = false;
   bool _initialTasksWasConsumed = false;
@@ -98,6 +103,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       _loadGeneration++;
       _actionGeneration++;
       _selectionGeneration++;
+      _viewModePreferenceGeneration++;
+      _viewModePreferenceBusy = false;
       _hasPendingInitialNavigation =
           widget.initialTasks || widget.initialSelection != null;
       _initialNavigationConsumed = false;
@@ -194,6 +201,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     _loadGeneration++;
     _actionGeneration++;
     _selectionGeneration++;
+    _viewModePreferenceGeneration++;
     _selectedReference = null;
     _notice = null;
     _actionFeedback.dispose();
@@ -279,12 +287,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
 
   Widget _toolbarArea(CalendarWorkspaceView view, double width, double height) {
     final toolbar = _toolbar(view, width);
-    if (width >= 620) return toolbar;
+    if (width >= 620 && height >= 460) return toolbar;
     return ConstrainedBox(
       constraints: BoxConstraints(
-        maxHeight: width < 380
-            ? (height < 460 ? 160 : 220)
-            : (height < 640 ? 150 : 170),
+        maxHeight: math.min(170.0, math.max(48.0, height * .30)),
       ),
       child: SingleChildScrollView(
         key: const ValueKey('calendar-workspace-toolbar-scroll'),
@@ -308,7 +314,6 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         key: const ValueKey('calendar-workspace-tab-schedule'),
         label: const Text('日程'),
         selected: !_tasksSelected,
-        visualDensity: VisualDensity.compact,
         onSelected: (selected) {
           if (selected && _tasksSelected) {
             _selectionGeneration++;
@@ -320,7 +325,6 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         key: const ValueKey('calendar-workspace-tab-tasks'),
         label: const Text('任务'),
         selected: _tasksSelected,
-        visualDensity: VisualDensity.compact,
         onSelected: (selected) {
           if (selected && !_tasksSelected) {
             _selectionGeneration++;
@@ -371,6 +375,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       children: [
         SegmentedButton<CalendarViewMode>(
           key: const ValueKey('calendar-workspace-view-mode'),
+          style: const ButtonStyle(
+            minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+          ),
           segments: const [
             ButtonSegment(
               value: CalendarViewMode.day,
@@ -384,9 +391,11 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             ),
           ],
           selected: {view.mode},
-          onSelectionChanged: view.loading
+          onSelectionChanged: view.loading || _viewModePreferenceBusy
               ? null
-              : (selection) => _load(widget.controller, mode: selection.first),
+              : (selection) => unawaited(
+                  _selectViewMode(selection.first, port, generation),
+                ),
         ),
         IconButton(
           key: const ValueKey('calendar-workspace-prev'),
@@ -402,6 +411,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ),
         OutlinedButton.icon(
           key: const ValueKey('calendar-workspace-date-picker'),
+          style: OutlinedButton.styleFrom(
+            minimumSize: const Size(48, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
+          ),
           onPressed: () => _pickWorkspaceDate(view),
           icon: const Icon(Icons.calendar_month_outlined, size: 18),
           label: Text(
@@ -413,8 +426,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         TextButton(
           key: const ValueKey('calendar-workspace-today'),
           style: TextButton.styleFrom(
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.symmetric(horizontal: 7),
+            minimumSize: const Size(48, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
+            padding: const EdgeInsets.symmetric(horizontal: 12),
           ),
           onPressed: () =>
               _load(widget.controller, day: _dateOnly(widget.controller.today)),
@@ -511,7 +525,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             ),
           ],
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            constraints: const BoxConstraints(minHeight: 48),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 12),
             decoration: BoxDecoration(
               border: Border.all(color: const Color(0xFFD4DDD7)),
               borderRadius: BorderRadius.circular(9),
@@ -555,6 +570,10 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
               : null,
           icon: const Icon(Icons.add_rounded),
           label: Text(narrow ? '新建' : '新建个人安排'),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(48, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
+          ),
         ),
       ],
     );
@@ -575,7 +594,8 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
           icon: const Icon(Icons.undo_rounded, size: 18),
           label: Text(undo.canUndo ? '撤销最近修改' : '暂无可撤销写入'),
           style: OutlinedButton.styleFrom(
-            visualDensity: VisualDensity.compact,
+            minimumSize: const Size(48, 48),
+            tapTargetSize: MaterialTapTargetSize.padded,
             foregroundColor: _green,
           ),
         ),
@@ -819,7 +839,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
 
   double _dayTaskBandHeight(BuildContext context) {
     final scale = MediaQuery.textScalerOf(context).scale(1).clamp(1.0, 1.8);
-    return (38 * scale).clamp(38.0, 68.0).toDouble();
+    return (38 * scale).clamp(49.0, 68.0).toDouble();
   }
 
   Future<void> _loadCalendarTaskProjection() async {
@@ -2316,6 +2336,43 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       return;
     }
     await _load(port, day: DateTime.utc(result.year, result.month, result.day));
+  }
+
+  Future<void> _selectViewMode(
+    CalendarViewMode mode,
+    CalendarWorkspacePort port,
+    int controllerGeneration,
+  ) async {
+    if (!_currentController(port, controllerGeneration)) return;
+    final persistPreference = widget.onViewModeSelected;
+    if (persistPreference == null) {
+      unawaited(_load(port, mode: mode));
+      return;
+    }
+
+    final preferenceGeneration = ++_viewModePreferenceGeneration;
+    setState(() {
+      _viewModePreferenceBusy = true;
+      _notice = null;
+    });
+    try {
+      await persistPreference(mode);
+    } catch (_) {
+      if (_currentController(port, controllerGeneration) &&
+          preferenceGeneration == _viewModePreferenceGeneration) {
+        setState(() {
+          _viewModePreferenceBusy = false;
+          _notice = '视图偏好未保存，请重试';
+        });
+      }
+      return;
+    }
+    if (!_currentController(port, controllerGeneration) ||
+        preferenceGeneration != _viewModePreferenceGeneration) {
+      return;
+    }
+    setState(() => _viewModePreferenceBusy = false);
+    unawaited(_load(port, mode: mode));
   }
 
   Future<void> _load(

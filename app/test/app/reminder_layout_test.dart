@@ -172,6 +172,126 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'mobile reminder editor exposes confirm and cancel above keyboard',
+    (tester) async {
+      tester.view.physicalSize = const Size(320, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetViewInsets);
+      final data = _LayoutReminderData();
+      const target = ReminderTarget(
+        _LayoutReminderData._context,
+        ReminderKind.taskDeadline,
+        7,
+        0,
+        12,
+      );
+      await tester.pumpWidget(
+        MaterialApp(
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
+          supportedLocales: const [Locale('zh', 'CN')],
+          locale: const Locale('zh', 'CN'),
+          home: Builder(
+            builder: (context) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(2)),
+              child: Scaffold(
+                body: Center(
+                  child: TextButton(
+                    key: const ValueKey('open-mobile-reminder-editor'),
+                    onPressed: () => showReminderEditor(
+                      context,
+                      data: data,
+                      target: target,
+                      allDay: false,
+                    ),
+                    child: const Text('打开提醒'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('open-mobile-reminder-editor')),
+      );
+      await tester.pumpAndSettle();
+
+      final customChoice = find.byKey(
+        const ValueKey('reminder-editor-slot-1-before-30'),
+      );
+      await tester.ensureVisible(customChoice);
+      final choiceRect = tester.getRect(customChoice);
+      expect(choiceRect.height, greaterThanOrEqualTo(48));
+      expect(choiceRect.left, greaterThanOrEqualTo(0));
+      expect(choiceRect.right, lessThanOrEqualTo(320));
+      await tester.tap(customChoice);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自定义…').last);
+      await tester.pumpAndSettle();
+
+      tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+      await tester.pumpAndSettle();
+      final confirm = find.byKey(const ValueKey('reminder-custom-confirm'));
+      final cancelCustom = find.byKey(const ValueKey('reminder-custom-cancel'));
+      for (final targetFinder in [confirm, cancelCustom]) {
+        final rect = tester.getRect(targetFinder);
+        expect(rect.height, greaterThanOrEqualTo(48));
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(320));
+        expect(rect.bottom, lessThanOrEqualTo(520));
+        expect(targetFinder.hitTestable(), findsOneWidget);
+      }
+      await tester.tap(cancelCustom);
+      await tester.pumpAndSettle();
+      tester.view.resetViewInsets();
+      await tester.pumpAndSettle();
+      expect(find.text('提前 30 分钟'), findsOneWidget);
+
+      await tester.tap(customChoice);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('自定义…').last);
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('reminder-custom-minutes')),
+        '45',
+      );
+      await tester.tap(confirm);
+      await tester.pumpAndSettle();
+      expect(find.text('自定义（45 分钟）'), findsOneWidget);
+      expect(
+        tester
+            .widget<ReminderPairControls>(find.byType(ReminderPairControls))
+            .pair
+            .first
+            .minutesBefore,
+        45,
+      );
+
+      final saveEditor = find.byKey(const ValueKey('reminder-editor-save'));
+      final cancelEditor = find.byKey(const ValueKey('reminder-editor-cancel'));
+      for (final targetFinder in [saveEditor, cancelEditor]) {
+        await tester.ensureVisible(targetFinder);
+        final rect = tester.getRect(targetFinder);
+        expect(rect.height, greaterThanOrEqualTo(48));
+        expect(rect.left, greaterThanOrEqualTo(0));
+        expect(rect.right, lessThanOrEqualTo(320));
+        expect(rect.bottom, lessThanOrEqualTo(800));
+        expect(targetFinder.hitTestable(), findsOneWidget);
+      }
+      await tester.tap(cancelEditor);
+      await tester.pumpAndSettle();
+      expect(data.savePairCalls, 0);
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('optional synthetic reminder preview', (tester) async {
     if (!_writePolishPreview) return;
 
@@ -387,12 +507,28 @@ final class _LayoutReminderData implements ReminderDataPort {
     briefEpoch: 1,
     preferences: ReminderPreferences(enabled: true),
   );
+  int savePairCalls = 0;
 
   @override
   Stream<int> get changes => const Stream<int>.empty();
 
   @override
   Future<ReminderSettings> inspectReminders() async => _settings;
+
+  @override
+  Future<ReminderPair?> readReminderPair(
+    ReminderTarget target, {
+    bool series = false,
+  }) async => null;
+
+  @override
+  Future<void> saveReminderPair(
+    ReminderTarget target,
+    ReminderPair? pair, {
+    bool series = false,
+  }) async {
+    savePairCalls++;
+  }
 
   @override
   dynamic noSuchMethod(Invocation invocation) => throw StateError(

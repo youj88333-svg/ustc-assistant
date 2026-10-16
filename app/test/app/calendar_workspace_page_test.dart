@@ -1538,6 +1538,18 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byKey(const ValueKey('calendar-task-band')), findsOneWidget);
       expect(
+        tester
+            .getSize(find.byKey(const ValueKey('calendar-task-2026-10-12-803')))
+            .height,
+        greaterThanOrEqualTo(48),
+      );
+      expect(
+        tester
+            .getSize(find.byKey(const ValueKey('calendar-task-unscheduled')))
+            .height,
+        greaterThanOrEqualTo(48),
+      );
+      expect(
         tester.takeException(),
         isNull,
         reason: 'layout at ${scenario.size}',
@@ -1546,6 +1558,193 @@ void main() {
       calendar.dispose();
       tasks.dispose();
     }
+  });
+
+  testWidgets('phone and landscape calendar layouts keep controls reachable', (
+    tester,
+  ) async {
+    for (final scenario in const [
+      (size: Size(320, 640), scale: 1.0),
+      (size: Size(360, 720), scale: 1.5),
+      (size: Size(412, 720), scale: 2.0),
+      (size: Size(600, 360), scale: 1.5),
+      (size: Size(800, 360), scale: 1.5),
+      (size: Size(320, 420), scale: 2.0),
+    ]) {
+      await _setSize(tester, scenario.size);
+      final occurrence = _occurrence(
+        kind: CalendarKind.course,
+        id: scenario.size.width.toInt(),
+        title: '手机日程布局 ${scenario.size.width}',
+      );
+      final port = _FakeCalendarWorkspacePort(occurrences: [occurrence]);
+      await tester.pumpWidget(_host(port, textScale: scenario.scale));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const ValueKey('calendar-workspace-toolbar-scroll')),
+        findsOneWidget,
+        reason: 'toolbar scroll at ${scenario.size}, scale ${scenario.scale}',
+      );
+      final today = find.byKey(const ValueKey('calendar-workspace-today'));
+      await tester.ensureVisible(today);
+      expect(tester.getSize(today).height, greaterThanOrEqualTo(48));
+      expect(
+        find.byKey(const ValueKey('calendar-week-horizontal-scroll')),
+        findsOneWidget,
+      );
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'layout at ${scenario.size}, scale ${scenario.scale}',
+      );
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      port.dispose();
+    }
+  });
+
+  testWidgets('view mode saves its preference before reloading the calendar', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(360, 720));
+    final port = _FakeCalendarWorkspacePort();
+    addTearDown(port.dispose);
+    final saveGate = Completer<void>();
+    final savedModes = <CalendarViewMode>[];
+
+    await tester.pumpWidget(
+      _host(
+        port,
+        onViewModeSelected: (mode) {
+          savedModes.add(mode);
+          return saveGate.future;
+        },
+      ),
+    );
+    await tester.pumpAndSettle();
+    final initialLoadCalls = port.loadCalls;
+    final selector = find.byKey(const ValueKey('calendar-workspace-view-mode'));
+
+    await tester.tap(find.descendant(of: selector, matching: find.text('日')));
+    await tester.pump();
+    expect(savedModes, [CalendarViewMode.day]);
+    expect(port.loadCalls, initialLoadCalls);
+    expect(port.view.mode, CalendarViewMode.week);
+
+    saveGate.complete();
+    await tester.pumpAndSettle();
+    expect(port.loadCalls, initialLoadCalls + 1);
+    expect(port.view.mode, CalendarViewMode.day);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('failed view preference leaves the current mode in place', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(360, 720));
+    final port = _FakeCalendarWorkspacePort();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(
+      _host(
+        port,
+        onViewModeSelected: (_) async => throw StateError('synthetic failure'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final initialLoadCalls = port.loadCalls;
+    final selector = find.byKey(const ValueKey('calendar-workspace-view-mode'));
+
+    await tester.tap(find.descendant(of: selector, matching: find.text('日')));
+    await tester.pumpAndSettle();
+    expect(port.loadCalls, initialLoadCalls);
+    expect(port.view.mode, CalendarViewMode.week);
+    expect(find.text('视图偏好未保存，请重试'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('phone week browses horizontally and opens an offscreen detail', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(320, 640));
+    final sunday = _occurrence(
+      kind: CalendarKind.personal,
+      id: 990,
+      title: '周日离屏安排',
+      startsAtUtc: DateTime.utc(2026, 10, 18, 1),
+      endsAtUtc: DateTime.utc(2026, 10, 18, 2),
+    );
+    final mobileBands = _compressedBandOccurrences();
+    final port = _FakeCalendarWorkspacePort(
+      occurrences: [sunday, ...mobileBands],
+    );
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port, textScale: 2));
+    await tester.pumpAndSettle();
+
+    final weekScroll = find.byKey(
+      const ValueKey('calendar-week-horizontal-scroll'),
+    );
+    final horizontal = tester.state<ScrollableState>(
+      find.descendant(of: weekScroll, matching: find.byType(Scrollable)).first,
+    );
+    expect(horizontal.position.maxScrollExtent, greaterThan(0));
+    for (final bandOccurrence in [mobileBands.first, mobileBands[1]]) {
+      final tile = find.byKey(
+        ValueKey<CalendarReference>(bandOccurrence.reference),
+      );
+      expect(tester.getSize(tile).height, greaterThanOrEqualTo(48));
+    }
+    final sundayTile = find.byKey(
+      ValueKey<CalendarReference>(sunday.reference),
+    );
+    expect(tester.getRect(sundayTile).left, greaterThan(320));
+
+    await tester.ensureVisible(sundayTile);
+    await tester.pumpAndSettle();
+    expect(horizontal.position.pixels, greaterThan(0));
+    expect(tester.getSize(sundayTile).height, greaterThanOrEqualTo(48));
+    final visibleRect = tester.getRect(sundayTile);
+    expect(visibleRect.left, greaterThanOrEqualTo(0));
+    expect(visibleRect.right, lessThanOrEqualTo(320));
+
+    await tester.tap(sundayTile);
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('calendar-detail-card')), findsOneWidget);
+    expect(find.text('周日离屏安排'), findsWidgets);
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('event editor save remains reachable above a phone keyboard', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(320, 640));
+    final port = _FakeCalendarWorkspacePort();
+    addTearDown(port.dispose);
+
+    await tester.pumpWidget(_host(port, textScale: 2));
+    await tester.pumpAndSettle();
+    final create = find.byKey(const ValueKey('calendar-personal-create'));
+    await tester.ensureVisible(create);
+    await tester.tap(create);
+    await tester.pumpAndSettle();
+
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    await tester.pumpAndSettle();
+    await _enter(tester, 'calendar-event-title', '键盘下可保存的安排');
+    final save = find.byKey(const ValueKey('calendar-event-save'));
+    await tester.ensureVisible(save);
+    await tester.pumpAndSettle();
+    expect(tester.getSize(save).height, greaterThanOrEqualTo(48));
+    expect(tester.getRect(save).bottom, lessThanOrEqualTo(362));
+
+    await tester.tap(save);
+    await tester.pumpAndSettle();
+    expect(port.intents.single, isA<CreatePersonalEvent>());
+    expect(tester.takeException(), isNull);
+    tester.view.resetViewInsets();
   });
 }
 
@@ -1574,6 +1773,7 @@ Widget _host(
   TaskWorkspacePort? tasks,
   DateTime? calendarTaskNowUtc,
   double textScale = 1,
+  Future<void> Function(CalendarViewMode mode)? onViewModeSelected,
 }) => MaterialApp(
   theme: ThemeData(
     useMaterial3: true,
@@ -1589,6 +1789,7 @@ Widget _host(
           controller: controller,
           tasks: tasks,
           calendarTaskNowUtc: calendarTaskNowUtc,
+          onViewModeSelected: onViewModeSelected,
         ),
       ),
     ),
@@ -1601,6 +1802,7 @@ Future<void> _setSize(WidgetTester tester, Size size) async {
     await tester.pumpAndSettle();
     tester.view.resetPhysicalSize();
     tester.view.resetDevicePixelRatio();
+    tester.view.resetViewInsets();
   });
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;

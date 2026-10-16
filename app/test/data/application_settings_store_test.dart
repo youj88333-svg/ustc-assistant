@@ -20,6 +20,41 @@ final _clock = FixedClock(DateTime.utc(2026, 10, 12, 12));
 
 void main() {
   test(
+    'mobile day default applies only at creation and saved choice survives reopen',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('a4-default-view-');
+      addTearDown(() => temp.delete(recursive: true));
+      final file = File('${temp.path}/synthetic.sqlite');
+      final first = await _open(
+        file: file,
+        initialCalendarView: DefaultCalendarView.day,
+      );
+      final snapshot = await first.applicationSettings.inspectSettings();
+      expect(snapshot.preferences.calendarView, DefaultCalendarView.day);
+      await first.applicationSettings.savePreferences(
+        PreferencesWrite(
+          operationId: _preferencesId(42),
+          context: snapshot.context,
+          preferences: const DisplayPreferences(
+            calendarView: DefaultCalendarView.week,
+          ),
+        ),
+      );
+      await first.close();
+      final second = await _open(
+        file: file,
+        initialCalendarView: DefaultCalendarView.day,
+      );
+      expect(
+        (await second.applicationSettings.inspectSettings())
+            .preferences
+            .calendarView,
+        DefaultCalendarView.week,
+      );
+      expect(second.schemaVersion, 18);
+    },
+  );
+  test(
     'preferences persist both fields, replay exactly, and roll back atomically',
     () async {
       var failCheckpoint = false;
@@ -1214,12 +1249,17 @@ void main() {
   );
 }
 
-Future<JwStore> _open({File? file, Future<void> Function()? checkpoint}) async {
+Future<JwStore> _open({
+  File? file,
+  Future<void> Function()? checkpoint,
+  DefaultCalendarView initialCalendarView = DefaultCalendarView.week,
+}) async {
   final store = JwStore(
     file == null ? NativeDatabase.memory() : NativeDatabase(file),
     ownership: _TestOwnership(),
     clock: _clock,
     onSettingsCheckpoint: checkpoint,
+    initialCalendarView: initialCalendarView,
     knowledgeIdentity: _syntheticKnowledgeIdentity(),
   );
   try {

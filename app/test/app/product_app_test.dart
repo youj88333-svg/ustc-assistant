@@ -11,6 +11,43 @@ import 'package:ustc_assistant_m0/jobs/young_sync_port.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
+  testWidgets(
+    'phone has two destinations and preserves draft through settings and back',
+    (tester) async {
+      await _setSize(tester, const Size(360, 780));
+      final port = _FakeShellPort();
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        ProductApp(
+          controller: port,
+          agentBuilder: (_) => const TextField(key: ValueKey('retained-draft')),
+          agendaBuilder: (_) => const Center(child: Text('合成手机日历')),
+          settingsBuilder: (_) => const Center(child: Text('合成手机设置')),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(NavigationDestination), findsNWidgets(2));
+      expect(find.byType(Drawer), findsNothing);
+      await tester.enterText(
+        find.byKey(const ValueKey('retained-draft')),
+        '不能丢的草稿',
+      );
+      await tester.tap(find.byKey(const ValueKey('shell-nav-agenda')));
+      await tester.pumpAndSettle();
+      expect(find.text('合成手机日历'), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('shell-nav-settings')));
+      await tester.pumpAndSettle();
+      expect(find.text('合成手机设置'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('合成手机日历'), findsOneWidget);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('不能丢的草稿'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    },
+  );
+
   testWidgets('opens on Agent and keeps tasks inside the agenda page', (
     tester,
   ) async {
@@ -294,7 +331,8 @@ Future<void> _setSize(WidgetTester tester, Size size) async {
 }
 
 Future<void> _tapAgenda(WidgetTester tester) async {
-  if (tester.view.physicalSize.width < 760) {
+  if (tester.view.physicalSize.width >= 600 &&
+      tester.view.physicalSize.width < 760) {
     await tester.tap(find.byTooltip('打开导航'));
     await tester.pumpAndSettle();
   }

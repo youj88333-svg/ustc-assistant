@@ -196,6 +196,8 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
 
   @override
   Widget build(BuildContext context) => AlertDialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+    actionsOverflowButtonSpacing: 8,
     title: const Text('提醒设置'),
     content: SizedBox(
       width: 440,
@@ -280,6 +282,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
         child: const Text('恢复默认'),
       ),
       TextButton(
+        key: const ValueKey('reminder-editor-cancel'),
         onPressed: _saving ? null : () => Navigator.of(context).pop(false),
         child: const Text('取消'),
       ),
@@ -312,7 +315,7 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
 }
 
 /// Two bounded reminder slots shared by the object editor and global settings.
-final class ReminderPairControls extends StatelessWidget {
+final class ReminderPairControls extends StatefulWidget {
   const ReminderPairControls({
     super.key,
     required this.pair,
@@ -327,7 +330,19 @@ final class ReminderPairControls extends StatelessWidget {
   final ValueChanged<ReminderPair> onChanged;
   final String keyPrefix;
 
+  @override
+  State<ReminderPairControls> createState() => _ReminderPairControlsState();
+}
+
+final class _ReminderPairControlsState extends State<ReminderPairControls> {
+  ReminderPair get pair => widget.pair;
+  bool get allDay => widget.allDay;
+  bool get enabled => widget.enabled;
+  ValueChanged<ReminderPair> get onChanged => widget.onChanged;
+  String get keyPrefix => widget.keyPrefix;
+
   static const _timedChoices = <int>[0, 5, 10, 15, 30, 60, 1440];
+  int _customResetGeneration = 0;
 
   ReminderRule _ruleAt(int index) => index == 0 ? pair.first : pair.second;
 
@@ -418,46 +433,51 @@ final class ReminderPairControls extends StatelessWidget {
         ),
         if (!allDay && rule.kind == ReminderRuleKind.before) ...[
           const SizedBox(height: 8),
-          DropdownButtonFormField<int>(
+          KeyedSubtree(
             key: ValueKey('$key-before-${rule.minutesBefore}'),
-            isExpanded: true,
-            itemHeight: null,
-            initialValue: _timedChoices.contains(rule.minutesBefore)
-                ? rule.minutesBefore
-                : -1,
-            decoration: const InputDecoration(labelText: '提前时间'),
-            items: [
-              ..._timedChoices.map(
-                (minutes) => DropdownMenuItem(
-                  value: minutes,
-                  child: Text(_timedLabel(minutes)),
+            child: DropdownButtonFormField<int>(
+              key: ValueKey('$key-before-reset-$_customResetGeneration'),
+              isExpanded: true,
+              itemHeight: null,
+              initialValue: _timedChoices.contains(rule.minutesBefore)
+                  ? rule.minutesBefore
+                  : -1,
+              decoration: const InputDecoration(labelText: '提前时间'),
+              items: [
+                ..._timedChoices.map(
+                  (minutes) => DropdownMenuItem(
+                    value: minutes,
+                    child: Text(_timedLabel(minutes)),
+                  ),
                 ),
-              ),
-              DropdownMenuItem(
-                value: -1,
-                child: Text(
-                  _timedChoices.contains(rule.minutesBefore)
-                      ? '自定义…'
-                      : '自定义（${rule.minutesBefore} 分钟）',
+                DropdownMenuItem(
+                  value: -1,
+                  child: Text(
+                    _timedChoices.contains(rule.minutesBefore)
+                        ? '自定义…'
+                        : '自定义（${rule.minutesBefore} 分钟）',
+                  ),
                 ),
-              ),
-            ],
-            onChanged: enabled
-                ? (minutes) async {
-                    if (minutes == null) return;
-                    if (minutes == -1) {
-                      final custom = await _customMinutesDialog(
-                        context,
-                        rule.minutesBefore,
-                      );
-                      if (custom != null && context.mounted) {
-                        _replace(index, ReminderRule.before(custom));
+              ],
+              onChanged: enabled
+                  ? (minutes) async {
+                      if (minutes == null) return;
+                      if (minutes == -1) {
+                        final custom = await _customMinutesDialog(
+                          context,
+                          rule.minutesBefore,
+                        );
+                        if (custom != null && context.mounted) {
+                          _replace(index, ReminderRule.before(custom));
+                        } else if (context.mounted) {
+                          setState(() => _customResetGeneration++);
+                        }
+                      } else {
+                        _replace(index, ReminderRule.before(minutes));
                       }
-                    } else {
-                      _replace(index, ReminderRule.before(minutes));
                     }
-                  }
-                : null,
+                  : null,
+            ),
           ),
         ],
         if (allDay && rule.kind == ReminderRuleKind.dayTime) ...[
@@ -550,21 +570,62 @@ final class ReminderPairControls extends StatelessWidget {
       '${(minute ~/ 60).toString().padLeft(2, '0')}:'
       '${(minute % 60).toString().padLeft(2, '0')}';
 
-  Future<int?> _customMinutesDialog(BuildContext context, int current) async {
-    final controller = TextEditingController(text: '$current');
-    String? error;
-    final value = await showDialog<int>(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('自定义提前时间'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
+  Future<int?> _customMinutesDialog(BuildContext context, int current) =>
+      showDialog<int>(
+        context: context,
+        builder: (context) =>
+            _CustomReminderMinutesDialog(initialMinutes: current),
+      );
+}
+
+final class _CustomReminderMinutesDialog extends StatefulWidget {
+  const _CustomReminderMinutesDialog({required this.initialMinutes});
+
+  final int initialMinutes;
+
+  @override
+  State<_CustomReminderMinutesDialog> createState() =>
+      _CustomReminderMinutesDialogState();
+}
+
+final class _CustomReminderMinutesDialogState
+    extends State<_CustomReminderMinutesDialog> {
+  late final TextEditingController _minutes = TextEditingController(
+    text: '${widget.initialMinutes}',
+  );
+  String? _error;
+
+  @override
+  void dispose() {
+    _minutes.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Dialog(
+    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    child: ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: 480,
+        maxHeight: _reminderDialogAvailableHeight(context),
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 20, 22, 8),
+              child: Text(
+                '自定义提前时间',
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(22, 8, 22, 10),
+              child: TextField(
                 key: const ValueKey('reminder-custom-minutes'),
-                controller: controller,
+                controller: _minutes,
                 autofocus: true,
                 keyboardType: TextInputType.number,
                 inputFormatters: [FilteringTextInputFormatter.digitsOnly],
@@ -572,33 +633,54 @@ final class ReminderPairControls extends StatelessWidget {
                 decoration: InputDecoration(
                   labelText: '分钟',
                   helperText: '范围 0–10080 分钟',
-                  errorText: error,
+                  errorText: _error,
                 ),
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('取消'),
             ),
-            FilledButton(
-              key: const ValueKey('reminder-custom-confirm'),
-              onPressed: () {
-                final parsed = int.tryParse(controller.text);
-                if (parsed == null || parsed < 0 || parsed > 10080) {
-                  setDialogState(() => error = '请输入 0–10080 之间的整数。');
-                  return;
-                }
-                Navigator.of(context).pop(parsed);
-              },
-              child: const Text('确定'),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
+              child: Wrap(
+                alignment: WrapAlignment.end,
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  TextButton(
+                    key: const ValueKey('reminder-custom-cancel'),
+                    style: TextButton.styleFrom(
+                      minimumSize: const Size(64, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    onPressed: () => Navigator.of(context).pop(),
+                    child: const Text('取消'),
+                  ),
+                  FilledButton(
+                    key: const ValueKey('reminder-custom-confirm'),
+                    style: FilledButton.styleFrom(
+                      minimumSize: const Size(64, 48),
+                      tapTargetSize: MaterialTapTargetSize.padded,
+                    ),
+                    onPressed: () {
+                      final parsed = int.tryParse(_minutes.text);
+                      if (parsed == null || parsed < 0 || parsed > 10080) {
+                        setState(() => _error = '请输入 0–10080 之间的整数。');
+                        return;
+                      }
+                      Navigator.of(context).pop(parsed);
+                    },
+                    child: const Text('确定'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
       ),
-    );
-    controller.dispose();
-    return value;
-  }
+    ),
+  );
+}
+
+double _reminderDialogAvailableHeight(BuildContext context) {
+  final media = MediaQuery.of(context);
+  final available = media.size.height - media.viewInsets.vertical - 24;
+  return available.clamp(0.0, media.size.height * .94).toDouble();
 }

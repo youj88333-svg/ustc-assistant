@@ -71,6 +71,59 @@ void main() {
       expect(find.textContaining('正在接入'), findsNothing);
     });
 
+    testWidgets(
+      'mobile settings categories scroll horizontally and stay tappable',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        final settings = _FakeSettings();
+        final shell = _FakeShell();
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Builder(
+              builder: (context) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(2)),
+                child: Scaffold(
+                  body: ApplicationSettingsPage(
+                    settings: settings,
+                    controller: shell,
+                    agentBuilder: (_) => const Text('Agent 设置内容'),
+                    remindersBuilder: (_) => const Text('提醒设置内容'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final strip = find.byKey(const ValueKey('settings-sections-scroll'));
+        final source = find.byKey(const ValueKey('settings-section-sources'));
+        final sourceRect = tester.getRect(source);
+        expect(sourceRect.height, greaterThanOrEqualTo(48));
+        expect(sourceRect.left, greaterThanOrEqualTo(0));
+        expect(sourceRect.right, lessThanOrEqualTo(320));
+        expect(source.hitTestable(), findsOneWidget);
+
+        await tester.drag(strip, const Offset(-900, 0));
+        await tester.pumpAndSettle();
+        final about = find.byKey(const ValueKey('settings-section-about'));
+        final aboutRect = tester.getRect(about);
+        expect(aboutRect.height, greaterThanOrEqualTo(48));
+        expect(aboutRect.left, greaterThanOrEqualTo(0));
+        expect(aboutRect.right, lessThanOrEqualTo(320));
+        expect(about.hitTestable(), findsOneWidget);
+        await tester.tap(about);
+        await tester.pumpAndSettle();
+        expect(find.text('USTC Assistant · 1.00'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
     testWidgets('maintenance uses fixed scopes and two confirmations', (
       tester,
     ) async {

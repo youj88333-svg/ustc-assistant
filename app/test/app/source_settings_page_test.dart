@@ -394,6 +394,7 @@ void main() {
       (size: const Size(320, 600), textScale: 1),
       (size: const Size(320, 420), textScale: 1),
       (size: const Size(320, 420), textScale: 1.5),
+      (size: const Size(320, 800), textScale: 2),
       (size: const Size(1280, 720), textScale: 1),
     ];
     tester.view.devicePixelRatio = 1;
@@ -422,9 +423,18 @@ void main() {
 
       final jwSelector = find.byKey(const ValueKey('source-settings-jw'));
       await tester.ensureVisible(jwSelector);
+      final jwRect = tester.getRect(jwSelector);
+      expect(jwRect.height, greaterThanOrEqualTo(48));
+      expect(jwRect.left, greaterThanOrEqualTo(0));
+      expect(jwRect.right, lessThanOrEqualTo(scenario.size.width));
       expect(jwSelector.hitTestable(), findsOneWidget);
       final youngSelector = find.byKey(const ValueKey('source-settings-young'));
       await tester.ensureVisible(youngSelector);
+      final youngRect = tester.getRect(youngSelector);
+      expect(youngRect.height, greaterThanOrEqualTo(48));
+      expect(youngRect.left, greaterThanOrEqualTo(0));
+      expect(youngRect.right, lessThanOrEqualTo(scenario.size.width));
+      expect(youngSelector.hitTestable(), findsOneWidget);
       await tester.tap(youngSelector);
       await tester.pumpAndSettle();
 

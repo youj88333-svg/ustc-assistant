@@ -37,6 +37,8 @@ import 'app/young_sync_panel.dart';
 import 'app/public_validation_panel.dart';
 import 'core/contracts.dart';
 import 'core/calendar_contract.dart';
+import 'core/settings_contract.dart';
+import 'app/calendar_workspace_contract.dart';
 import 'core/agenda_contract.dart';
 import 'core/reminder_contract.dart';
 import 'app/m6_settings_panel.dart';
@@ -430,6 +432,21 @@ final class _OwnedAppState extends State<OwnedApplication> {
           controller: runtime.calendar,
           tasks: runtime.calendar,
           reminders: runtime.jwStore.features,
+          onViewModeSelected: (mode) async {
+            final snapshot = (await runtime.jwStore.applicationSettings
+                .inspectSettings());
+            final selected = mode == CalendarViewMode.day
+                ? DefaultCalendarView.day
+                : DefaultCalendarView.week;
+            if (snapshot.preferences.calendarView == selected) return;
+            await runtime.settings.saveDisplayPreferences(
+              snapshot.context,
+              DisplayPreferences(
+                calendarView: selected,
+                includeInactive: snapshot.preferences.includeInactive,
+              ),
+            );
+          },
           initialTasks: _evidenceTasks,
           initialSelection: _evidenceSelection,
           onInitialNavigationConsumed: () {

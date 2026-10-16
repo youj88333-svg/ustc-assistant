@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
 import '../core/diagnostics_contract.dart';
+import '../platform/android_file_access.dart';
 
 typedef DiagnosticLogSaver = Future<bool> Function(String contents);
 
@@ -356,6 +357,9 @@ final class _DiagnosticsExportButtonState
 }
 
 Future<bool> saveDiagnosticLog(String contents) async {
+  if (Platform.isAndroid) {
+    return const AndroidFileAccess().saveDiagnosticLog(contents);
+  }
   final location = await getSaveLocation(
     suggestedName: 'USTC-Assistant-diagnostics.json',
     acceptedTypeGroups: const [

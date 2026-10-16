@@ -8,6 +8,7 @@ import '../core/agenda_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
 import 'app_shell_contract.dart';
+import 'workspace_visibility.dart';
 
 const _green = Color(0xFF1F6B45);
 const _canvas = Color(0xFFF5F7F6);
@@ -49,6 +50,35 @@ final class ProductApp extends StatelessWidget {
       GlobalCupertinoLocalizations.delegate,
     ],
     theme: productTheme,
+    builder: (context, child) => !isPhoneWorkspace(context)
+        ? child!
+        : Theme(
+            data: productTheme.copyWith(
+              visualDensity: VisualDensity.standard,
+              materialTapTargetSize: MaterialTapTargetSize.padded,
+              filledButtonTheme: FilledButtonThemeData(
+                style: productTheme.filledButtonTheme.style?.copyWith(
+                  minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
+                ),
+              ),
+              iconButtonTheme: const IconButtonThemeData(
+                style: ButtonStyle(
+                  minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+                ),
+              ),
+              textButtonTheme: const TextButtonThemeData(
+                style: ButtonStyle(
+                  minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+                ),
+              ),
+              outlinedButtonTheme: const OutlinedButtonThemeData(
+                style: ButtonStyle(
+                  minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+                ),
+              ),
+            ),
+            child: child!,
+          ),
     home: _ProductShell(
       controller: controller,
       settingsBuilder: settingsBuilder,
@@ -148,6 +178,7 @@ final class _ProductShell extends StatefulWidget {
 
 final class _ProductShellState extends State<_ProductShell> {
   ShellDestination _destination = ShellDestination.agent;
+  ShellDestination _previousMainDestination = ShellDestination.agent;
   AgendaSection _agendaSection = AgendaSection.schedule;
   AgendaFilter _filter = AgendaFilter.all;
   DateTime? _selectedDay;
@@ -222,80 +253,176 @@ final class _ProductShellState extends State<_ProductShell> {
       builder: (context, constraints) {
         final width = constraints.maxWidth;
         final narrow = width < 760;
+        final phone = isPhoneWorkspace(context);
+        final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
         final wide = width >= 1100;
         final destination = _destination;
         final calendarCanvas =
             destination == ShellDestination.agenda &&
             widget.agendaBuilder != null;
-        return Scaffold(
-          backgroundColor: _canvas,
-          appBar: narrow
-              ? AppBar(
-                  leading: Builder(
-                    builder: (context) => IconButton(
-                      tooltip: '打开导航',
-                      icon: const Icon(Icons.menu_rounded),
-                      onPressed: () => Scaffold.of(context).openDrawer(),
+        return PopScope<Object?>(
+          canPop:
+              !phone ||
+              (_destination == ShellDestination.agent && !keyboardOpen),
+          onPopInvokedWithResult: (didPop, _) {
+            if (didPop) return;
+            if (MediaQuery.viewInsetsOf(context).bottom > 0) {
+              FocusManager.instance.primaryFocus?.unfocus();
+            } else {
+              _selectDestination(
+                _destination == ShellDestination.settings
+                    ? _previousMainDestination
+                    : ShellDestination.agent,
+              );
+            }
+          },
+          child: Scaffold(
+            backgroundColor: _canvas,
+            appBar: phone && keyboardOpen
+                ? null
+                : phone
+                ? AppBar(
+                    toolbarHeight: 48,
+                    leading: destination == ShellDestination.settings
+                        ? BackButton(
+                            onPressed: () =>
+                                _selectDestination(_previousMainDestination),
+                          )
+                        : null,
+                    title: Text(
+                      'USTC Assistant',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                      ),
                     ),
-                  ),
-                  title: const Text('校园事务'),
-                )
-              : null,
-          drawer: narrow
-              ? Drawer(
-                  child: SafeArea(
-                    child: _NavigationPanel(
+                    actions: [
+                      if (destination != ShellDestination.settings)
+                        IconButton(
+                          key: const ValueKey('shell-nav-settings'),
+                          tooltip: '设置',
+                          onPressed: () =>
+                              _selectDestination(ShellDestination.settings),
+                          icon: const Icon(Icons.settings_outlined),
+                        ),
+                    ],
+                  )
+                : narrow
+                ? AppBar(
+                    leading: Builder(
+                      builder: (context) => IconButton(
+                        tooltip: '打开导航',
+                        icon: const Icon(Icons.menu_rounded),
+                        onPressed: () => Scaffold.of(context).openDrawer(),
+                      ),
+                    ),
+                    title: const Text('校园事务'),
+                  )
+                : null,
+            drawer: narrow && !phone
+                ? Drawer(
+                    child: SafeArea(
+                      child: _NavigationPanel(
+                        selected: destination,
+                        mode: _NavigationMode.drawer,
+                        onSelected: (next) {
+                          Navigator.of(context).pop();
+                          _selectDestination(next);
+                        },
+                      ),
+                    ),
+                  )
+                : null,
+            bottomNavigationBar:
+                phone &&
+                    !keyboardOpen &&
+                    destination != ShellDestination.settings
+                ? NavigationBar(
+                    key: const ValueKey('shell-phone-navigation'),
+                    height: 64,
+                    selectedIndex: destination == ShellDestination.agenda
+                        ? 1
+                        : 0,
+                    onDestinationSelected: (index) => _selectDestination(
+                      index == 0
+                          ? ShellDestination.agent
+                          : ShellDestination.agenda,
+                    ),
+                    destinations: const [
+                      NavigationDestination(
+                        key: ValueKey('shell-nav-agent'),
+                        icon: Icon(Icons.auto_awesome_outlined),
+                        label: 'Agent',
+                      ),
+                      NavigationDestination(
+                        key: ValueKey('shell-nav-agenda'),
+                        icon: Icon(Icons.calendar_month_outlined),
+                        label: '日程',
+                      ),
+                    ],
+                  )
+                : null,
+            body: SafeArea(
+              top: !narrow || (phone && keyboardOpen),
+              child: Row(
+                children: [
+                  if (!narrow && !phone)
+                    _NavigationPanel(
                       selected: destination,
-                      mode: _NavigationMode.drawer,
-                      onSelected: (next) {
-                        Navigator.of(context).pop();
-                        _selectDestination(next);
-                      },
+                      calendarCanvas: calendarCanvas,
+                      mode: wide
+                          ? _NavigationMode.expanded
+                          : _NavigationMode.rail,
+                      onSelected: _selectDestination,
+                    ),
+                  Expanded(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        calendarCanvas
+                            ? 12
+                            : narrow
+                            ? 8
+                            : 28,
+                        calendarCanvas
+                            ? 8
+                            : narrow
+                            ? 4
+                            : 24,
+                        calendarCanvas
+                            ? 12
+                            : narrow
+                            ? 8
+                            : 28,
+                        calendarCanvas
+                            ? 12
+                            : narrow
+                            ? 4
+                            : 24,
+                      ),
+                      child: IndexedStack(
+                        index: destination == ShellDestination.agent ? 0 : 1,
+                        children: [
+                          WorkspaceVisibility(
+                            active: destination == ShellDestination.agent,
+                            child: ExcludeFocus(
+                              excluding: destination != ShellDestination.agent,
+                              child:
+                                  widget.agentBuilder?.call(context) ??
+                                  _buildAgentPage(context),
+                            ),
+                          ),
+                          if (destination != ShellDestination.agent)
+                            _buildDestination(context, destination, width)
+                          else
+                            const SizedBox.shrink(),
+                        ],
+                      ),
                     ),
                   ),
-                )
-              : null,
-          body: SafeArea(
-            top: !narrow,
-            child: Row(
-              children: [
-                if (!narrow)
-                  _NavigationPanel(
-                    selected: destination,
-                    calendarCanvas: calendarCanvas,
-                    mode: wide
-                        ? _NavigationMode.expanded
-                        : _NavigationMode.rail,
-                    onSelected: _selectDestination,
-                  ),
-                Expanded(
-                  child: Padding(
-                    padding: EdgeInsets.fromLTRB(
-                      calendarCanvas
-                          ? 12
-                          : narrow
-                          ? 16
-                          : 28,
-                      calendarCanvas
-                          ? 8
-                          : narrow
-                          ? 12
-                          : 24,
-                      calendarCanvas
-                          ? 12
-                          : narrow
-                          ? 16
-                          : 28,
-                      calendarCanvas
-                          ? 12
-                          : narrow
-                          ? 16
-                          : 24,
-                    ),
-                    child: _buildDestination(context, destination, width),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -304,7 +431,13 @@ final class _ProductShellState extends State<_ProductShell> {
   );
 
   void _selectDestination(ShellDestination next) {
+    if (next == _destination) return;
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
+      if (next == ShellDestination.settings &&
+          _destination != ShellDestination.settings) {
+        _previousMainDestination = _destination;
+      }
       _destination = next;
       _selectedReference = null;
       _actionMessage = null;
