@@ -29,5 +29,6 @@
 
 - 手工编辑使用 `apply_patch`，保留用户未提交修改。整理只读原文可复制归档并核验哈希，归档不再追加。
 - 若需 Python，优先 Conda `basic310`；既有手动登录跳转工具按用户专项偏好使用 `E:/conda/envs/ustc_assistant/python.exe`。
+- Android SDK、Gradle/Pub缓存、AVD和本轮临时目录优先留在E盘；A0使用 `tools/android-a0.ps1` 的进程级环境，不改用户/系统全局设置、不迁移或删除原有C盘资产。Windows系统功能本身仍由系统管理。
 - 本机代理端口为 7897，尊重已有环境变量；用户确认本机在校园网，遇明确校园 IP 限制时对已注册校园请求用本机直连复验。不改全局代理、降低 TLS、修改系统信任或浏览器宿主；实际登录限制仍按来源授权处理。
 - Windows 原生自动检查在本次进程使用 `USTC_NOTIFICATION_TEST_HOST=1`，结束还原；仅 Debug 生效，实际 OS 验核用独立身份，不登记生产通知。纯文档变更运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-docs.ps1` 与 `git diff --check`，执行策略只作用于本次进程；不为此重复运行 Flutter 或真实采集。

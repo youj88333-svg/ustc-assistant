@@ -1,6 +1,6 @@
 # USTC Assistant · Windows 应用
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android APK及可安装APK的鸿蒙仅完成[迁移调研](../docs/research/android-apk-migration.md)，还没有移动构建。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移已批准，现有独立A0 QA构建，仅验证原生能力，尚非可使用的手机版业务应用；详见[计划](../docs/milestones/android-apk/plan.md)与[实际记录](../docs/milestones/android-apk/records/00-a0-platform-probes.md)。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内，设置为侧边栏底部辅助入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 

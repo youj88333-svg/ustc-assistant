@@ -12,7 +12,7 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | 整体计划已批准，A0技术准入进行中 | [A0–A8完整计划](milestones/android-apk/plan.md)、[A0实施](milestones/android-apk/records/00-a0-platform-probes.md)与[研究依据](research/android-apk-migration.md)。暂无Android实机，先Android15/API35独立模拟器；鸿蒙版本及APK能力未验证，旧数据/双端同步不在首版范围 |
+| Android APK迁移 | 整体计划已批准，A0 QA构建/lint通过；运行待宿主加速 | [A0–A8完整计划](milestones/android-apk/plan.md)、[A0实施](milestones/android-apk/records/00-a0-platform-probes.md)与[研究依据](research/android-apk-migration.md)。API35独立模拟器软件模式未启动，用户同意自行启用WHPX并重启；原生用例未记通过。环境/缓存/AVD/临时目录优先E盘，暂无实机；鸿蒙及真实来源未验证，旧数据/双端同步不在首版范围 |
 | 后续 | 按A0→A1及各接口依赖推进 | 模拟器与目标实机分别验证；私有APK、原生鸿蒙及Windows公开发布分别定界 |
 
 ## 已批准范围与待验证
