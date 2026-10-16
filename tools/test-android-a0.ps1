@@ -2,7 +2,9 @@ param(
     [string]$SdkRoot = 'E:\Android\Sdk',
     [string]$Serial = 'emulator-5580',
     [int]$AdbServerPort = 5038,
-    [string]$ExpectedAvd = 'ustc_android_a0_api35'
+    [string]$ExpectedAvd = 'ustc_android_a0_api35',
+    [ValidateSet('All', 'Notifications')]
+    [string]$Scope = 'All'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,37 +12,50 @@ $adb = Join-Path $SdkRoot 'platform-tools/adb.exe'
 $qaPackage = 'cn.ustcassistant.mobile.qa'
 $qaActivity = "$qaPackage/cn.ustcassistant.mobile.qa.QaProbeActivity"
 $workspaceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-$reportRoot = Join-Path $workspaceRoot 'app/build/android-a0/reports'
-New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 
 function Invoke-QaAdb {
-    param([Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments)
+    # A basic function deliberately has no PowerShell common parameters: adb's -w/-W/-e
+    # must be forwarded literally rather than resolved as WarningAction/ErrorAction aliases.
+    $Arguments = $args
     $result = & $adb -P $AdbServerPort -s $Serial @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "Isolated QA adb operation failed: $($Arguments[0])" }
     return ($result -join "`n").Trim()
 }
 
 # A device explicitly created for this probe is mandatory. Never target a phone or other AVD.
-if ($Serial -ne 'emulator-5580' -or $ExpectedAvd -ne 'ustc_android_a0_api35') {
+$allowedTargets = @{ 'emulator-5580' = 'ustc_android_a0_api35'; 'emulator-5582' = 'ustc_android_a0_api36' }
+if (-not $allowedTargets.ContainsKey($Serial) -or $allowedTargets[$Serial] -ne $ExpectedAvd) {
     throw 'Only the isolated A0 emulator is accepted by this destructive QA runner.'
 }
 $avdName = Invoke-QaAdb shell getprop ro.boot.qemu.avd_name
 $isEmulator = Invoke-QaAdb shell getprop ro.kernel.qemu
 if ($avdName -ne $ExpectedAvd -or $isEmulator -ne '1') { throw 'Unexpected test target.' }
+$reportRoot = Join-Path $workspaceRoot "app/build/android-a0/reports/$ExpectedAvd"
+New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $installed = Invoke-QaAdb shell pm path $qaPackage
 if (-not $installed.StartsWith('package:')) { throw 'Install the isolated QA APK first.' }
 
 function Invoke-QaProbe {
     param([string]$Command, [string]$ExpectedKind)
+    $operation = [Guid]::NewGuid().ToString('N')
+    $sequence = [DateTime]::UtcNow.Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)
     # Delete only the fixed synthetic QA report, so an old result cannot satisfy a new operation.
     Invoke-QaAdb shell run-as $qaPackage rm -f files/qa-probe-report.json | Out-Null
-    Invoke-QaAdb shell am start -W -n $qaActivity --es qa_command $Command | Out-Null
+    Invoke-QaAdb shell am start -W -n $qaActivity --es qa_command $Command --es qa_operation $operation --el qa_sequence $sequence | Out-Null
     $deadline = [DateTime]::UtcNow.AddSeconds(65)
     while ([DateTime]::UtcNow -lt $deadline) {
-        $raw = & $adb -P $AdbServerPort -s $Serial shell run-as $qaPackage cat files/qa-probe-report.json 2>$null
-        if ($LASTEXITCODE -eq 0 -and $raw) {
+        # Windows PowerShell promotes redirected native stderr to an ErrorRecord.
+        # A report not written yet is expected while an asynchronous probe runs.
+        $previousErrorPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $raw = & $adb -P $AdbServerPort -s $Serial shell run-as $qaPackage cat files/qa-probe-report.json 2>$null
+            $readExitCode = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $previousErrorPreference }
+        if ($readExitCode -eq 0 -and $raw) {
             $report = ($raw -join "`n") | ConvertFrom-Json
-            if ($report.kind -ne $ExpectedKind) { throw 'Unexpected probe report kind.' }
+            if ($report.operation -ne $operation) { Start-Sleep -Milliseconds 200; continue }
+            if ($report.kind -ne $ExpectedKind) { throw "Unexpected probe report kind for $Command." }
             $safePath = Join-Path $reportRoot "$Command.json"
             [IO.File]::WriteAllText($safePath, ($report | ConvertTo-Json -Depth 12), [Text.UTF8Encoding]::new($false))
             if (-not $report.success) { throw "Probe $Command rejected: $($report.failure)" }
@@ -73,6 +88,9 @@ try {
     }
     Stop-QaForColdRestart
     $key = Invoke-QaProbe 'keystore' 'android-keystore-probe-v1'
+    $web = $null
+    $recovered = $null
+    if ($Scope -eq 'All') {
     Stop-QaForColdRestart
     $web = Invoke-QaProbe 'webview' 'android-webview-probe-v1'
     if (-not $web.checks.profileIsolation -or -not $web.checks.firstCleared -or
@@ -92,6 +110,7 @@ try {
     if (-not $recovered.checks.restartStorageRecovered) { throw 'Browser restart storage not recovered.' }
     Stop-QaForColdRestart
     Invoke-QaProbe 'webview_cleanup' 'android-webview-probe-v1' | Out-Null
+    }
 
     $capabilities = Invoke-QaProbe 'notification_report' 'android-notification-probe-v1'
     if (-not $capabilities.notificationsEnabled -or -not $capabilities.exactAlarmsAllowed) {
@@ -106,6 +125,7 @@ try {
     if ($posted.receiverCount -ne 1 -or -not $posted.notificationPosted) {
         throw 'Android did not report the expected notification after QA process exit.'
     }
+    [IO.File]::WriteAllText((Join-Path $reportRoot 'notification-after-exit.json'), ($posted | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     Invoke-QaProbe 'notification_clear' 'android-notification-probe-v1' | Out-Null
     Invoke-QaProbe 'notification_schedule' 'android-notification-probe-v1' | Out-Null
     Invoke-QaProbe 'notification_cancel' 'android-notification-probe-v1' | Out-Null
@@ -113,20 +133,25 @@ try {
     Start-Sleep -Seconds 20
     $cancelled = Invoke-QaProbe 'notification_report' 'android-notification-probe-v1'
     if ($cancelled.receiverCount -ne 0 -or $cancelled.notificationPosted) { throw 'Cancelled QA alarm fired.' }
+    [IO.File]::WriteAllText((Join-Path $reportRoot 'notification-after-cancel.json'), ($cancelled | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
 
     $summary = [ordered]@{
-        kind = 'android-a0-run-v1'; success = $true
+        kind = $(if ($Scope -eq 'All') { 'android-a0-run-v1' } else { 'android-a0-notification-run-v1' })
+        success = $true; webviewTested = ($Scope -eq 'All')
         api = (Invoke-QaAdb shell getprop ro.build.version.sdk)
         abi = (Invoke-QaAdb shell getprop ro.product.cpu.abi)
+        providerVersion = $web.providerVersion
         profileIsolation = $web.checks.profileIsolation
         profileClear = $web.checks.firstCleared
         profileRestart = $recovered.checks.restartStorageRecovered
         keystore = $key.success
+        keystoreHardwareBacked = $key.hardwareBacked
         notificationAfterProcessExit = $posted.notificationPosted
         notificationCancelled = (-not $cancelled.notificationPosted)
         realDevice = $false; schoolVerified = $false
     }
-    [IO.File]::WriteAllText((Join-Path $reportRoot 'summary.json'), ($summary | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
+    $summaryFilename = $(if ($Scope -eq 'All') { 'summary.json' } else { 'notification-summary.json' })
+    [IO.File]::WriteAllText((Join-Path $reportRoot $summaryFilename), ($summary | ConvertTo-Json), [Text.UTF8Encoding]::new($false))
     $summary | ConvertTo-Json
 } finally {
     # Fixed QA artifacts only; cleanup failure remains visible and never touches a production package.

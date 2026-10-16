@@ -1,6 +1,7 @@
 package cn.ustcassistant.mobile.qa
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
 import android.widget.LinearLayout
@@ -15,6 +16,7 @@ class QaProbeActivity : Activity() {
     private var webProbe: WebViewProbe? = null
     private lateinit var output: TextView
     private var busy = false
+    private var activeOperation: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,12 +48,12 @@ class QaProbeActivity : Activity() {
         output = TextView(this).apply { textSize = 13f; setTextIsSelectable(true) }
         content.addView(output)
         setContentView(ScrollView(this).apply { addView(content) })
-        val command = intent.getStringExtra("qa_command")
-        if (command != null) execute(command)
+        acceptIntent(intent)
     }
 
-    private fun execute(command: String) {
+    private fun execute(command: String, operation: String? = null) {
         if (busy) return
+        activeOperation = operation
         busy = true
         output.text = "正在验证…"
         when (command) {
@@ -73,8 +75,28 @@ class QaProbeActivity : Activity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptIntent(intent)
+    }
+
+    private fun acceptIntent(intent: Intent) {
+        val command = intent.getStringExtra("qa_command") ?: return
+        val operation = intent.getStringExtra("qa_operation") ?: return
+        val sequence = intent.getLongExtra("qa_sequence", 0)
+        if (!Regex("^[0-9a-f]{32}$").matches(operation) || sequence <= 0 || busy) return
+        val ledger = getSharedPreferences("a0_command_lifecycle", MODE_PRIVATE)
+        // Android may restore the task's original Intent after process death,
+        // even after later onNewIntent calls. Reject every older sequence.
+        if (sequence <= ledger.getLong("last_sequence", 0)) return
+        if (!ledger.edit().putLong("last_sequence", sequence).commit()) return
+        execute(command, operation)
+    }
+
     private fun complete(result: JSONObject) {
         if (isFinishing || isDestroyed) return
+        result.put("operation", activeOperation ?: JSONObject.NULL)
         // A fixed private QA file containing only allowlisted safe probe projections.
         try {
             val target = java.io.File(filesDir, "qa-probe-report.json")

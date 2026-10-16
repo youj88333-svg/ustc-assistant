@@ -14,6 +14,7 @@
             android:name=".qa.QaProbeActivity"
             android:label="USTC Assistant · Android QA"
             android:exported="true"
+            android:launchMode="singleTop"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

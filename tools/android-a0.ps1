@@ -1,11 +1,15 @@
 param(
-    [ValidateSet('Build', 'Start', 'Stop', 'Test', 'CheckAcceleration')]
+    [ValidateSet('Build', 'PrepareDevice', 'Start', 'Stop', 'Test', 'CheckAcceleration')]
     [string]$Action = 'CheckAcceleration',
     [string]$SdkRoot = 'E:\Android\Sdk',
     [string]$FlutterRoot = 'E:\flutter\flutter',
     [string]$JavaRoot = 'E:\Android\Android Studio\jbr',
     [string]$GradleHome = 'E:\Android\Gradle',
-    [string]$PubCache = 'E:\Android\pub_cache'
+    [string]$PubCache = 'E:\Android\pub_cache',
+    [ValidateSet('All', 'Notifications')]
+    [string]$TestScope = 'All',
+    [ValidateSet(35, 36)]
+    [int]$ApiLevel = 35
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,8 +18,9 @@ $appRoot = Join-Path $workspaceRoot 'app'
 $taskRoot = Join-Path $appRoot 'build/android-a0'
 $taskTemp = Join-Path $taskRoot 'temp'
 $avdHome = Join-Path $taskRoot 'avd-home'
-$avdName = 'ustc_android_a0_api35'
-$serial = 'emulator-5580'
+$avdName = "ustc_android_a0_api$ApiLevel"
+$emulatorPort = $(if ($ApiLevel -eq 35) { 5580 } else { 5582 })
+$serial = "emulator-$emulatorPort"
 $adb = Join-Path $SdkRoot 'platform-tools/adb.exe'
 $emulator = Join-Path $SdkRoot 'emulator/emulator.exe'
 $flutter = Join-Path $FlutterRoot 'bin/flutter.bat'
@@ -78,21 +83,28 @@ try {
                 } finally { Pop-Location }
             } finally { Pop-Location }
         }
+        'PrepareDevice' {
+            $imageMetadata = Join-Path $SdkRoot "system-images/android-$ApiLevel/google_apis/x86_64/package.xml"
+            if (-not (Test-Path -LiteralPath $imageMetadata)) {
+                & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/sdkmanager.bat') "--sdk_root=$SdkRoot" --proxy=http --proxy_host=127.0.0.1 --proxy_port=7897 "system-images;android-$ApiLevel;google_apis;x86_64"
+                Assert-ExitCode 'Official Google system image'
+            }
+        }
         'Start' {
             & $emulator -accel-check
             Assert-ExitCode 'Hardware acceleration; enable Windows Hypervisor Platform and reboot first'
             $avdPath = Join-Path $avdHome "$avdName.avd"
             if (-not (Test-Path -LiteralPath $avdPath)) {
-                'no' | & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/avdmanager.bat') create avd --name $avdName --package 'system-images;android-35;google_apis;x86_64' --device pixel_7 --path $avdPath
+                'no' | & (Join-Path $SdkRoot 'cmdline-tools/latest/bin/avdmanager.bat') create avd --name $avdName --package "system-images;android-$ApiLevel;google_apis;x86_64" --device pixel_7 --path $avdPath
                 Assert-ExitCode 'New isolated A0 AVD'
             }
             & $adb -P 5038 start-server
             Assert-ExitCode 'Dedicated QA ADB server'
-            $process = Start-Process -FilePath $emulator -ArgumentList @('-avd', $avdName, '-port', '5580',
+            $process = Start-Process -FilePath $emulator -ArgumentList @('-avd', $avdName, '-port', $emulatorPort,
                 '-accel', 'on', '-gpu', 'swiftshader', '-cores', '2', '-memory', '2048', '-no-window',
                 '-no-audio', '-no-boot-anim', '-no-snapshot', '-no-metrics') -WindowStyle Hidden -PassThru `
-                -RedirectStandardOutput (Join-Path $taskRoot 'emulator.stdout.log') `
-                -RedirectStandardError (Join-Path $taskRoot 'emulator.stderr.log')
+                -RedirectStandardOutput (Join-Path $taskRoot "emulator-api$ApiLevel.stdout.log") `
+                -RedirectStandardError (Join-Path $taskRoot "emulator-api$ApiLevel.stderr.log")
             Write-Output "Isolated QA emulator started: PID $($process.Id), $serial, ADB 5038."
         }
         'Stop' {
@@ -104,7 +116,7 @@ try {
             & $adb -P 5038 kill-server
         }
         'Test' {
-            & (Join-Path $PSScriptRoot 'test-android-a0.ps1') -SdkRoot $SdkRoot
+            & (Join-Path $PSScriptRoot 'test-android-a0.ps1') -SdkRoot $SdkRoot -Serial $serial -ExpectedAvd $avdName -Scope $TestScope
         }
     }
 } finally {
