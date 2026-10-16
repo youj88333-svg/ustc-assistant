@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准，现推进A0技术准入；暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准，[A1平台底座](milestones/android-apk/records/03-a1-platform-bootstrap.md)工程验证通过，下一步为A2；暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 

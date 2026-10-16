@@ -1,6 +1,6 @@
-# USTC Assistant · Windows 应用
+# USTC Assistant
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移已批准，现有独立A0 QA构建，仅验证原生能力，尚非可使用的手机版业务应用；详见[计划](../docs/milestones/android-apk/plan.md)与[实际记录](../docs/milestones/android-apk/records/00-a0-platform-probes.md)。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；A1 QA版已装配私有目录、数据库与本地启动，仍是模拟器开发验证包，不是完整手机版交付。具体结果见[A1记录](../docs/milestones/android-apk/records/03-a1-platform-bootstrap.md)。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内，设置为侧边栏底部辅助入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
@@ -28,6 +28,24 @@
 启动 `build/windows/x64/runner/Release/ustc_assistant_m0.exe`；分发保留整个 Release 目录的 DLL、`data/` 和资源。集成测试可能替换该目录中的测试助手，测试后再构建正式入口。
 
 私有交付前用`tools/package-windows-private.ps1`传入本工作树`app/build`内的正式Release目录和40位源码提交。脚本核验1.00版本、固定运行资产、模型/许可及ZIP逐文件摘要，生成全新的`app/build/private-releases/1.0.0+1-<短提交>/`；拒绝覆盖旧包，忽略静态构建库，不读取正式资料。版本号同时维护于`pubspec.yaml`和`lib/core/application_version.dart`，脚本会检查一致；PE产品名改善但EXE、包名、资料根与通知身份保留。脚本不构建、不安装、不公开上传。
+
+## Android本地开发验证
+
+在仓库根使用`tools/android-a0.ps1`。该脚本只为自身进程和子进程设置E盘SDK、Gradle/Pub缓存、AVD与临时目录，不修改用户/系统环境。API36独立AVD使用`emulator-5582`及ADB端口5038，不连接真实手机或默认ADB服务。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Build
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 36
+# 待独立模拟器完成开机后执行：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36
+# 已有合成样本时，严格要求日程和任务保留，不允许重新生成样本：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -VerifyRetained
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
+```
+
+集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
+
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥、系统提醒和语音分别在A2/A5/A6接入前明确不可用，手机布局/文件交互及真实设备仍待后续阶段，不将A1启动通过视为整体验收。
 
 ## 模型配置与对话
 

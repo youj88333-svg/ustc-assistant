@@ -78,4 +78,6 @@ V-02 的崩溃反例还包括：C3 已撤销认领许可、P 尚未标记删除�
 
 M0–M6已按各自证据及用户决定关闭，详见[阶段索引](../milestones/README.md)和[M6关闭依据](../milestones/m6/acceptance.md#阶段关闭2026-10-15)。整体关闭限于批准的阶段交付，不推断逐项真人结果；未观察项与已知语音问题仍登记，M6平台实证及根工程结果见[记录](../milestones/m6/records.md)。Windows已获[1.00私有基线认可](../milestones/windows-polish/acceptance.md)，[本地收尾](../milestones/windows-polish/records/05-windows-v1-private-release.md)已完成；公开发布、其他平台及完整V项没有据此通过。
 
+Android的A1本地底座已完成模拟器工程验证：私有目录/排他、数据库/诊断、Keystore、启动恢复，以及覆盖安装/进程回收后的日程任务保留；根相关Windows与Dart回归通过，具体失败、结果和边界见[A1记录](../milestones/android-apk/records/03-a1-platform-bootstrap.md)。可据此推进A2合成学校桥，不关闭完整V-02/V-04或手机版；目标实机、鸿蒙、真实来源/模型、语音和系统提醒整合仍按迁移计划分别验收。
+
 按 DR-ADR-09 的普通 WebView 边界验收保留控制，接受页面正常后台网络；身份、响应/完整性和必要保留能力不成立的来源仍不可用。历史 CAL/RTC 失败、前置实验和逐轮阶段过程通过 [档案](../archive/README.md)及实际阶段记录追溯，不追加到本登记。

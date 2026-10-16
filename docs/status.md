@@ -12,8 +12,8 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | A0模拟器准入通过，A1进行中 | [A0–A8完整计划](milestones/android-apk/plan.md)、[A0原生运行](milestones/android-apk/records/01-a0-runtime-probes.md)、[A1凭据端口](milestones/android-apk/records/02-a1-keystore-port.md)。重启后WHPX可用；API36/WebView133的Profile隔离/清理/重启、Keystore和退出OS提醒/取消通过，API35旧WebView124按缺少清理API拒绝。A1双用途Keystore端口通过原生与Dart检查，私有目录/平台工厂/启动链路仍待装配。环境/缓存/AVD/临时目录优先E盘；暂无实机，鸿蒙及真实来源未验证，旧数据/双端同步不在首版范围 |
-| 后续 | 按A0→A1及各接口依赖推进 | 模拟器与目标实机分别验证；私有APK、原生鸿蒙及Windows公开发布分别定界 |
+| Android APK迁移 | A1工程验证通过，可推进A2 | [A0–A8计划](milestones/android-apk/plan.md)、[A1底座与实际检查](milestones/android-apk/records/03-a1-platform-bootstrap.md)。私有目录排他、SQLite/诊断、Keystore、平台工厂与启动恢复已装配；模拟器覆盖安装/进程回收后日程任务保留，根相关回归及QA构建通过。API36已过[A0准入](milestones/android-apk/records/01-a0-runtime-probes.md)，API35旧WebView按缺少清理API拒绝。SDK/缓存/AVD/临时目录继续E盘；暂无实机，鸿蒙、真实来源/模型和完整手机版未验收，旧数据/双端同步不在首版范围 |
+| 后续 | A2学校原生桥及其合成链路，其他切片按依赖推进 | 模拟器与目标实机分别验证；私有APK、原生鸿蒙及Windows公开发布分别定界 |
 
 ## 已批准范围与待验证
 
