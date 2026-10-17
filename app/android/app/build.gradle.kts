@@ -26,7 +26,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a4"
+            versionNameSuffix = "-qa-a5"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -60,6 +60,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation("androidx.core:core:1.13.1")
     implementation("androidx.webkit:webkit:1.17.1")
     // Flutter's integration_test plugin contributes an older runner to debugRuntimeClasspath.
     // AGP applies consistent resolution to the instrumentation APK: keep both sides aligned.

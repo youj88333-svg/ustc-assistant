@@ -124,7 +124,7 @@ const agentChangeSpecs = <AgentChangeType, AgentChangeSpec>{
     },
     '至少一项。enabled是本应用系统提醒开关；private_display=true在通知/锁屏隐藏名称地点；'
     'morning_enabled单独开启/关闭自动晨报。timed/all_day_reminders为固定两槽默认规则，分别只用定时/全天规则。'
-    '省略保持原值，不改写现有单条或系列覆盖，不改变Windows全局通知设置。',
+    '省略保持原值，不改写现有单条或系列覆盖，不改变设备的系统通知设置。',
   ),
 };
 

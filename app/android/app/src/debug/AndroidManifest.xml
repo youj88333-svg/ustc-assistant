@@ -7,6 +7,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
     <application android:networkSecurityConfig="@xml/qa_network_security">
+        <activity android:name=".notifications.ReminderOsProbeActivity" android:exported="true" />
         <activity
             android:name=".files.FilesBridgeHostActivity"
             android:exported="false" />

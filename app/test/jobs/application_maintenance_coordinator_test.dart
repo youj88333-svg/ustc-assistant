@@ -15,6 +15,110 @@ const _context = SettingsContext(
 
 void main() {
   test(
+    'Android durable block precedes intent and remains through cleanup',
+    () async {
+      final data = _Data();
+      final runner = _runner(data, WorkLeasePool());
+      var blocked = false;
+      runner.prepareReminders = () async {
+        expect(data.begins, 0);
+        blocked = true;
+      };
+      data.beforeBegin = () {
+        expect(blocked, isTrue);
+      };
+      runner.drainReminders = () async {
+        expect(blocked, isTrue);
+        expect(data.pending, isNotNull);
+      };
+      runner.onRefresh = (_) async {
+        expect(data.pending, isNull);
+        blocked = false;
+      };
+      await runner.start(_context, MaintenanceKind.agenda, confirmed: true);
+      expect(runner.view.phase, MaintenancePhase.idle);
+      expect(blocked, isFalse);
+      await runner.close();
+    },
+  );
+  test(
+    'failed preblock never starts intent and confirmed abort rebinds C3',
+    () async {
+      final data = _Data();
+      final leases = WorkLeasePool();
+      final runner = _runner(data, leases);
+      var restored = 0;
+      runner.prepareReminders = () async {
+        throw const AppFailure(FailureCode.cleanupPending);
+      };
+      runner.resumeRemindersAfterAbort = () async {
+        expect(data.pending, isNull);
+        restored++;
+      };
+      await expectLater(
+        runner.start(_context, MaintenanceKind.agenda, confirmed: true),
+        throwsA(isA<SettingsFailure>()),
+      );
+      expect(data.begins, 0);
+      expect(restored, 1);
+      expect(leases.isBusy, isFalse);
+      await runner.close();
+    },
+  );
+  test(
+    'unknown intent outcome stays blocked until no-intent retry restores',
+    () async {
+      final data = _Data();
+      final leases = WorkLeasePool();
+      final runner = _runner(data, leases);
+      var restored = 0;
+      runner.prepareReminders = () async {};
+      runner.resumeRemindersAfterAbort = () async {
+        restored++;
+      };
+      data.beforeBegin = () {
+        data.badMetadata = true;
+        throw const SettingsFailure(SettingsFailureCode.storageFailed);
+      };
+      await runner.start(_context, MaintenanceKind.agenda, confirmed: true);
+      expect(runner.view.phase, MaintenancePhase.recovery);
+      expect(restored, 0);
+      expect(leases.isBusy, isTrue);
+      data.badMetadata = false;
+      await runner.retry();
+      expect(restored, 1);
+      expect(runner.view.phase, MaintenancePhase.idle);
+      expect(leases.isBusy, isFalse);
+      await runner.close();
+    },
+  );
+  test(
+    'abort rebind failure preserves recovery and retries without deletion',
+    () async {
+      final data = _Data();
+      final leases = WorkLeasePool();
+      final runner = _runner(data, leases);
+      var attempts = 0;
+      runner.prepareReminders = () async {};
+      runner.resumeRemindersAfterAbort = () async {
+        if (++attempts == 1) {
+          throw const SettingsFailure(SettingsFailureCode.cleanupPending);
+        }
+      };
+      data.beforeBegin = () {
+        throw const SettingsFailure(SettingsFailureCode.storageFailed);
+      };
+      await runner.start(_context, MaintenanceKind.agenda, confirmed: true);
+      expect(runner.view.phase, MaintenancePhase.recovery);
+      expect(leases.isBusy, isTrue);
+      await runner.retry();
+      expect(attempts, 2);
+      expect(data.completes, 0);
+      expect(runner.view.phase, MaintenancePhase.idle);
+      await runner.close();
+    },
+  );
+  test(
     'source busy and rejected confirmation cannot prepare durable intent',
     () async {
       final data = _Data();
@@ -251,6 +355,7 @@ final class _Data implements ApplicationSettingsDataPort {
   MaintenanceIntent? pending, lastCompleted;
   int prepares = 0, begins = 0, completes = 0;
   bool failComplete = false, badMetadata = false;
+  void Function()? beforeBegin;
   @override
   Stream<int> get changes => const Stream.empty();
   @override
@@ -294,6 +399,7 @@ final class _Data implements ApplicationSettingsDataPort {
   @override
   Future<MaintenanceIntent> beginMaintenance(MaintenanceRequest request) async {
     begins++;
+    beforeBegin?.call();
     context = SettingsContext(
       owner: context.owner,
       resetEpoch:

@@ -289,7 +289,7 @@ extension _AgentReminderStorage on LocalCalendarStore {
           '定时日程与任务截止默认：${_describeReminderPair(change.timed!)}',
         if (change.allDay != null)
           '全天日程默认：${_describeReminderPair(change.allDay!)}',
-        '其他设置保留；单条日程覆盖不被改写，Windows是否允许通知由系统设置决定',
+        '其他设置保留；单条日程覆盖不被改写，设备是否允许通知由系统设置决定',
       ].join('；');
     }
     final item = change as AgentReminderChange;

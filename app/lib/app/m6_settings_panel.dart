@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../core/morning_brief_contract.dart';
@@ -16,6 +17,7 @@ final class M6SettingsPanel extends StatefulWidget {
     required this.retryReminders,
     required this.regenerateMorning,
     this.testNotification,
+    this.configureSystemAccess,
   });
 
   final ReminderDataPort data;
@@ -25,6 +27,8 @@ final class M6SettingsPanel extends StatefulWidget {
   final Future<void> Function() retryReminders;
   final Future<void> Function() regenerateMorning;
   final Future<void> Function()? testNotification;
+  final Future<void> Function(NotificationAccessAction action)?
+  configureSystemAccess;
 
   @override
   State<M6SettingsPanel> createState() => _M6SettingsPanelState();
@@ -69,8 +73,20 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
       _retryBusy = false;
       _settingsMessage = null;
       _settingsMessageIsError = false;
+      _runtimeMessage = null;
       _watchSettingsChanges();
       unawaited(_readSettings());
+    }
+    if (!identical(
+      oldWidget.configureSystemAccess,
+      widget.configureSystemAccess,
+    )) {
+      if (identical(oldWidget.data, widget.data) &&
+          identical(oldWidget.briefs, widget.briefs)) {
+        _generation++;
+      }
+      _retryBusy = false;
+      _runtimeMessage = null;
     }
     if (!identical(oldWidget.reminderChanges, widget.reminderChanges)) {
       _runtimeSubscription?.cancel();
@@ -244,18 +260,52 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
     try {
       await widget.testNotification!();
       if (_isCurrent(generation)) {
-        setState(
-          () => _runtimeMessage = '测试提醒已登记，约 5 秒后投递；是否显示仍受 Windows 通知设置影响。',
-        );
+        setState(() => _runtimeMessage = _testNotificationSuccess());
       }
     } catch (_) {
       if (_isCurrent(generation)) {
-        setState(() => _runtimeMessage = '测试提醒未能登记，请查看 Windows 通知开关后重试。');
+        setState(() => _runtimeMessage = _testNotificationFailure());
       }
     } finally {
       if (_isCurrent(generation)) setState(() => _retryBusy = false);
     }
   }
+
+  Future<void> _configureSystemAccess(NotificationAccessAction action) async {
+    final configure = widget.configureSystemAccess;
+    if (_retryBusy || _runtime.busy || configure == null) return;
+    final generation = _generation;
+    setState(() {
+      _retryBusy = true;
+      _runtimeMessage = _systemAccessProgress(action);
+    });
+    try {
+      await configure(action);
+      if (_isCurrent(generation)) {
+        setState(() => _runtimeMessage = _systemAccessSuccess(action));
+      }
+    } on Object {
+      if (_isCurrent(generation)) {
+        setState(() => _runtimeMessage = _systemAccessFailure(action));
+      }
+    } finally {
+      if (_isCurrent(generation)) setState(() => _retryBusy = false);
+    }
+  }
+
+  Widget _systemAccessButton(
+    String label,
+    NotificationAccessAction action,
+    Key key,
+  ) => OutlinedButton.icon(
+    key: key,
+    style: OutlinedButton.styleFrom(minimumSize: const Size(0, 48)),
+    onPressed: _retryBusy || _runtime.busy
+        ? null
+        : () => _configureSystemAccess(action),
+    icon: const Icon(Icons.settings_outlined),
+    label: Text(label),
+  );
 
   Future<void> _regenerateMorning() async {
     if (_mutationBusy) return;
@@ -472,6 +522,40 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
                       const SizedBox(height: 6),
                       Text(_capabilityStatus(capability)),
                     ],
+                    if (widget.configureSystemAccess != null) ...[
+                      const Divider(height: 24),
+                      Text(
+                        '系统通知权限',
+                        style: Theme.of(context).textTheme.titleSmall,
+                      ),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _systemAccessButton(
+                            '检查系统权限',
+                            NotificationAccessAction.inspect,
+                            const ValueKey('m6-system-inspect'),
+                          ),
+                          _systemAccessButton(
+                            '允许通知',
+                            NotificationAccessAction.notifications,
+                            const ValueKey('m6-system-notifications'),
+                          ),
+                          _systemAccessButton(
+                            '允许精确提醒',
+                            NotificationAccessAction.exactAlarms,
+                            const ValueKey('m6-system-exact'),
+                          ),
+                          _systemAccessButton(
+                            '系统通知设置',
+                            NotificationAccessAction.settings,
+                            const ValueKey('m6-system-settings'),
+                          ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     Align(
                       alignment: Alignment.centerLeft,
@@ -570,14 +654,21 @@ String _queueStatus(ReminderRuntimeView view) {
   final coverage = view.throughDay == null
       ? '尚无覆盖日期'
       : '实际覆盖至 ${_dateOnly(view.throughDay!)}';
+  final localRegistration =
+      view.capability?.queueEvidence ==
+      NotificationQueueEvidence.localRegistration;
+  final accepted = localRegistration ? '本地已登记' : '系统已接受';
+  final evidenceNote = localRegistration
+      ? ' 本地“已登记”数量表示本地登记及系统调用回执，不代表 OS 队列独立枚举或通知已送达。'
+      : '';
   if (view.busy) {
-    return '提醒队列正在同步；系统已接受 ${view.accepted}/${view.desired} 项。$coverage';
+    return '提醒队列正在同步；$accepted ${view.accepted}/${view.desired} 项。$coverage$evidenceNote';
   }
   final state = view.complete && view.failure == null ? '队列完整' : '覆盖尚未完整';
   final failure = view.failure == null
       ? ''
       : '失败：${_reminderFailureLabel(view.failure!)}。';
-  return '$state；系统已接受 ${view.accepted}/${view.desired} 项；$coverage。$failure';
+  return '$state；$accepted ${view.accepted}/${view.desired} 项；$coverage。$failure$evidenceNote';
 }
 
 String _reminderFailureLabel(ReminderFailureCode code) => switch (code) {
@@ -595,10 +686,69 @@ String _reminderFailureLabel(ReminderFailureCode code) => switch (code) {
 
 String _capabilityStatus(NotificationCapability capability) {
   if (!capability.available) return '此设备暂不支持系统提醒。';
-  if (!capability.enabledBySystem) return '系统通知当前未开启。';
-  if (!capability.schedulesAfterExit) return '系统退出后投递能力尚未确认。';
-  return '系统通知已开启。';
+  if (capability.queueEvidence == NotificationQueueEvidence.operatingSystem &&
+      capability.exactScheduling == null) {
+    if (!capability.enabledBySystem) return '系统通知当前未开启。';
+    if (!capability.schedulesAfterExit) return '系统退出后投递能力尚未确认。';
+    return '系统通知已开启。';
+  }
+  final status = <String>[
+    capability.enabledBySystem ? '系统通知已开启。' : '系统通知当前未开启。',
+  ];
+  if (capability.exactScheduling == false) {
+    status.add('精确提醒未获授权，目前为非精确提醒，可能延后。');
+  } else if (capability.exactScheduling == true) {
+    status.add('系统已允许精确提醒，但仍可能延迟，也不能保证你一定看到通知。');
+  }
+  status.add(
+    capability.schedulesAfterExit
+        ? '系统报告应用退出后具备投递能力，实际投递仍受系统管理。'
+        : '应用退出后的提醒能力尚未确认。',
+  );
+  if (!capability.activationAvailable) {
+    status.add('通知点击后返回应用的能力尚未确认。');
+  }
+  return status.join(' ');
 }
+
+String _testNotificationSuccess() {
+  final platform = switch (defaultTargetPlatform) {
+    TargetPlatform.windows => 'Windows 通知设置',
+    TargetPlatform.android => 'Android 通知设置',
+    _ => '系统通知设置',
+  };
+  return '测试提醒已登记，5 秒后到期；实际显示可能延后，仍受$platform影响。';
+}
+
+String _testNotificationFailure() => switch (defaultTargetPlatform) {
+  TargetPlatform.windows => '测试提醒未能登记，请查看 Windows 通知开关后重试。',
+  TargetPlatform.android => '测试提醒未能登记，请检查系统通知权限后重试。',
+  _ => '测试提醒未能登记，请检查系统通知设置后重试。',
+};
+
+String _systemAccessProgress(NotificationAccessAction action) =>
+    switch (action) {
+      NotificationAccessAction.inspect => '正在检查系统权限…',
+      NotificationAccessAction.notifications => '正在处理通知权限…',
+      NotificationAccessAction.exactAlarms => '正在处理精确提醒权限…',
+      NotificationAccessAction.settings => '正在打开系统通知设置…',
+    };
+
+String _systemAccessSuccess(NotificationAccessAction action) =>
+    switch (action) {
+      NotificationAccessAction.inspect => '系统权限状态已回读。',
+      NotificationAccessAction.notifications => '通知权限操作已完成，状态已回读。',
+      NotificationAccessAction.exactAlarms => '精确提醒权限操作已完成，状态已回读。',
+      NotificationAccessAction.settings => '已请求打开系统通知设置；状态以系统回读为准。',
+    };
+
+String _systemAccessFailure(NotificationAccessAction action) =>
+    switch (action) {
+      NotificationAccessAction.inspect => '检查系统权限失败，请重试。',
+      NotificationAccessAction.notifications => '通知权限操作失败，请重试。',
+      NotificationAccessAction.exactAlarms => '精确提醒权限操作失败，请重试。',
+      NotificationAccessAction.settings => '打开系统通知设置失败，请重试。',
+    };
 
 String _dateOnly(DateTime value) =>
     '${value.year.toString().padLeft(4, '0')}-'

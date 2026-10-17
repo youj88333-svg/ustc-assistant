@@ -68,6 +68,202 @@ void main() {
     },
   );
 
+  testWidgets('system permission actions only run after the matching tap', (
+    tester,
+  ) async {
+    final data = _FakeReminderData();
+    final briefs = _FakeBriefData();
+    final actions = <NotificationAccessAction>[];
+    addTearDown(data.dispose);
+    addTearDown(briefs.dispose);
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        configureSystemAccess: (action) async => actions.add(action),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(actions, isEmpty);
+
+    const controls = <String, NotificationAccessAction>{
+      'm6-system-inspect': NotificationAccessAction.inspect,
+      'm6-system-notifications': NotificationAccessAction.notifications,
+      'm6-system-exact': NotificationAccessAction.exactAlarms,
+      'm6-system-settings': NotificationAccessAction.settings,
+    };
+    for (final entry in controls.entries) {
+      final button = find.byKey(ValueKey(entry.key));
+      await tester.ensureVisible(button);
+      await tester.tap(button);
+      await tester.pumpAndSettle();
+      expect(actions, [entry.value]);
+      actions.clear();
+    }
+  });
+
+  testWidgets('system permission action guards duplicates and late results', (
+    tester,
+  ) async {
+    final data = _FakeReminderData();
+    final briefs = _FakeBriefData();
+    final gate = Completer<void>();
+    var calls = 0;
+    Future<void> pendingAction(NotificationAccessAction _) {
+      calls++;
+      return gate.future;
+    }
+
+    addTearDown(data.dispose);
+    addTearDown(briefs.dispose);
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        configureSystemAccess: pendingAction,
+      ),
+    );
+    await tester.pumpAndSettle();
+    final button = find.byKey(const ValueKey('m6-system-inspect'));
+    await tester.ensureVisible(button);
+    await tester.tap(button);
+    await tester.pump();
+    expect(calls, 1);
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNull);
+    await tester.tap(button);
+    await tester.pump();
+    expect(calls, 1);
+
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        configureSystemAccess: (_) async {},
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(find.text('系统权限状态已回读。'), findsNothing);
+    expect(tester.widget<OutlinedButton>(button).onPressed, isNotNull);
+  });
+
+  testWidgets('queue evidence and exact scheduling are described precisely', (
+    tester,
+  ) async {
+    final data = _FakeReminderData();
+    final briefs = _FakeBriefData();
+    addTearDown(data.dispose);
+    addTearDown(briefs.dispose);
+    const localCapability = NotificationCapability(
+      available: true,
+      enabledBySystem: true,
+      schedulesAfterExit: true,
+      activationAvailable: true,
+      exactScheduling: false,
+      queueEvidence: NotificationQueueEvidence.localRegistration,
+      maximumPending: 480,
+    );
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        runtime: const ReminderRuntimeView(
+          accepted: 3,
+          desired: 4,
+          complete: false,
+          throughDay: null,
+          failure: ReminderFailureCode.publishFailed,
+          capability: localCapability,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('本地已登记 3/4 项'), findsOneWidget);
+    expect(find.textContaining('不代表 OS 队列独立枚举或通知已送达'), findsOneWidget);
+    expect(find.textContaining('非精确提醒，可能延后'), findsOneWidget);
+    expect(find.textContaining('系统报告应用退出后具备投递能力'), findsOneWidget);
+    expect(find.textContaining('系统已接受 3/4 项'), findsNothing);
+  });
+
+  testWidgets('OS queue evidence preserves the existing accepted wording', (
+    tester,
+  ) async {
+    final data = _FakeReminderData();
+    final briefs = _FakeBriefData();
+    addTearDown(data.dispose);
+    addTearDown(briefs.dispose);
+    const osCapability = NotificationCapability(
+      available: true,
+      enabledBySystem: true,
+      schedulesAfterExit: true,
+      activationAvailable: true,
+    );
+    await tester.pumpWidget(
+      _settingsHost(
+        data,
+        briefs,
+        runtime: const ReminderRuntimeView(
+          accepted: 3,
+          desired: 4,
+          complete: true,
+          capability: osCapability,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.textContaining('系统已接受 3/4 项'), findsOneWidget);
+    expect(find.text('系统通知已开启。'), findsOneWidget);
+    expect(find.textContaining('非精确提醒'), findsNothing);
+  });
+
+  testWidgets('system access controls stay reachable at phone sizes and large text', (
+    tester,
+  ) async {
+    tester.view.devicePixelRatio = 1;
+    for (final size in const [
+      Size(320, 640),
+      Size(360, 720),
+      Size(412, 820),
+      Size(640, 320),
+    ]) {
+      tester.view.physicalSize = size;
+      final data = _FakeReminderData();
+      final briefs = _FakeBriefData();
+      final actions = <NotificationAccessAction>[];
+      addTearDown(data.dispose);
+      addTearDown(briefs.dispose);
+      await tester.pumpWidget(
+        _settingsHost(
+          data,
+          briefs,
+          textScaleFactor: 2,
+          configureSystemAccess: (action) async => actions.add(action),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      for (final key in const [
+        'm6-system-inspect',
+        'm6-system-notifications',
+        'm6-system-exact',
+        'm6-system-settings',
+      ]) {
+        final button = find.byKey(ValueKey(key));
+        await tester.ensureVisible(button);
+        await tester.pumpAndSettle();
+        expect(tester.getSize(button).height, greaterThanOrEqualTo(48));
+        await tester.tap(button);
+        await tester.pumpAndSettle();
+      }
+      expect(tester.takeException(), isNull);
+      expect(actions, hasLength(4));
+    }
+    tester.view.resetPhysicalSize();
+    tester.view.resetDevicePixelRatio();
+  });
+
   testWidgets('timed reminder slot can be turned off and saved', (
     tester,
   ) async {
@@ -740,24 +936,37 @@ Widget _settingsHost(
   _FakeReminderData data,
   _FakeBriefData briefs, {
   Future<void> Function()? regenerate,
+  Future<void> Function(NotificationAccessAction action)?
+  configureSystemAccess,
+  ReminderRuntimeView? runtime,
+  double textScaleFactor = 1,
 }) => MaterialApp(
   localizationsDelegates: GlobalMaterialLocalizations.delegates,
   supportedLocales: const [Locale('zh', 'CN')],
   locale: const Locale('zh', 'CN'),
+  builder: (context, child) => MediaQuery(
+    data: MediaQuery.of(context).copyWith(
+      textScaler: TextScaler.linear(textScaleFactor),
+    ),
+    child: child!,
+  ),
   home: Scaffold(
     body: M6SettingsPanel(
       data: data,
       briefs: briefs,
       reminderChanges: Stream<ReminderRuntimeView>.empty(),
-      initialReminderView: ReminderRuntimeView(
-        accepted: 3,
-        desired: 4,
-        complete: false,
-        throughDay: DateTime.utc(2026, 10, 20),
-        failure: ReminderFailureCode.publishFailed,
-      ),
+      initialReminderView:
+          runtime ??
+          ReminderRuntimeView(
+            accepted: 3,
+            desired: 4,
+            complete: false,
+            throughDay: DateTime.utc(2026, 10, 20),
+            failure: ReminderFailureCode.publishFailed,
+          ),
       retryReminders: () async {},
       regenerateMorning: regenerate ?? () async {},
+      configureSystemAccess: configureSystemAccess,
     ),
   ),
 );

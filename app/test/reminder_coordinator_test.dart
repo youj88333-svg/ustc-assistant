@@ -19,6 +19,51 @@ const _token = 'bbbbbbbbbbbbbbbb';
 
 void main() {
   test(
+    'cold activation waits for UI navigation subscription and revalidates C3',
+    () async {
+      final data = _FakeReminderData(publication: _publication(enabled: false));
+      final platform = _FakeNotifications();
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+      coordinator.start();
+      const activation = NotificationActivation('cold_notice', _digest, _token);
+      platform.emit(activation);
+      await Future<void>.delayed(Duration.zero);
+      data.activationTargets['cold_notice|$_digest|$_token'] = _target;
+      expect(
+        await coordinator.navigation.first.timeout(const Duration(seconds: 1)),
+        _target,
+      );
+      await coordinator.close();
+      await data._changes.close();
+    },
+  );
+  test('Android binding precedes publish and capacity is honored', () async {
+    final data = _FakeReminderData(
+      publication: _publication(
+        desired: [
+          _mapping(_request()),
+          _mapping(_request(id: 'second')),
+        ],
+      ),
+    );
+    final platform = _ControlledNotifications();
+    final coordinator = ReminderCoordinator(data: data, platform: platform);
+    await coordinator.refresh();
+    expect(platform.calls.first, 'bind');
+    expect(platform.scheduleCalls, 1);
+    expect(coordinator.view.complete, isFalse);
+    await coordinator.prepareForMaintenance();
+    expect(platform.calls.last, 'block');
+    final before = platform.scheduleCalls;
+    await coordinator.refresh();
+    expect(platform.scheduleCalls, before);
+    await coordinator.resumeAfterAbortedMaintenance();
+    expect(platform.calls.where((call) => call == 'bind').length, 2);
+    await coordinator.close();
+    expect(platform.clearCalls, 0);
+    await data._changes.close();
+  });
+  test(
     'a running coordinator fills the next slot after OS delivery without a C3 edit',
     () {
       fakeAsync((time) {
@@ -278,8 +323,11 @@ void main() {
       final data = _FakeReminderData(
         publication: stalePublication,
         nextPublication: nextPublication,
-      )..invalidateAfterThreeChecks = stalePublication;
-      final platform = _FakeNotifications();
+      );
+      final platform = _FakeNotifications()
+        ..onSchedule = () {
+          data.invalidatedPublication = stalePublication;
+        };
       final coordinator = ReminderCoordinator(data: data, platform: platform);
 
       await coordinator.refresh();
@@ -543,8 +591,7 @@ final class _FakeReminderData implements ReminderDataPort {
 
   int ackFailuresRemaining = 0;
   int _prepareCount = 0;
-  int _staleCheckCount = 0;
-  ReminderPublication? invalidateAfterThreeChecks;
+  ReminderPublication? invalidatedPublication;
 
   @override
   Stream<int> get changes => _changes.stream;
@@ -572,11 +619,7 @@ final class _FakeReminderData implements ReminderDataPort {
   Future<bool> reminderPublicationCurrent(
     ReminderPublication publication,
   ) async {
-    if (identical(publication, invalidateAfterThreeChecks)) {
-      _staleCheckCount++;
-      return _staleCheckCount < 3;
-    }
-    return true;
+    return !identical(publication, invalidatedPublication);
   }
 
   @override
@@ -610,7 +653,7 @@ final class _FakeReminderData implements ReminderDataPort {
       throw UnimplementedError('Unexpected ReminderDataPort call');
 }
 
-final class _FakeNotifications implements NotificationPlatformPort {
+class _FakeNotifications implements NotificationPlatformPort {
   _FakeNotifications({
     this.capability = const NotificationCapability(
       available: true,
@@ -629,6 +672,7 @@ final class _FakeNotifications implements NotificationPlatformPort {
   int scheduleCalls = 0, cancelCalls = 0, clearCalls = 0, closeCalls = 0;
   int initializeCalls = 0;
   bool omitReadbackDetail = false, retainOnClear = false;
+  void Function()? onSchedule;
 
   @override
   Stream<NotificationActivation> get activations => _activations.stream;
@@ -663,6 +707,7 @@ final class _FakeNotifications implements NotificationPlatformPort {
     if (gate != null) await gate.future;
     pendingItems.removeWhere((item) => item.id == request.id);
     pendingItems.add(_pending(request));
+    onSchedule?.call();
   }
 
   @override
@@ -686,5 +731,29 @@ final class _FakeNotifications implements NotificationPlatformPort {
     closeCalls++;
     calls.add('close');
     await _activations.close();
+  }
+}
+
+final class _ControlledNotifications extends _FakeNotifications
+    implements NotificationPublicationControlPort {
+  _ControlledNotifications()
+    : super(
+        capability: const NotificationCapability(
+          available: true,
+          enabledBySystem: true,
+          schedulesAfterExit: true,
+          activationAvailable: true,
+          queueEvidence: NotificationQueueEvidence.localRegistration,
+          maximumPending: 1,
+        ),
+      );
+  @override
+  Future<void> bindPublication(ReminderPublication publication) async {
+    calls.add('bind');
+  }
+
+  @override
+  Future<void> blockDelivery() async {
+    calls.add('block');
   }
 }

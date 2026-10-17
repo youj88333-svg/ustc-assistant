@@ -20,6 +20,32 @@ final _key = Uint8List.fromList('synthetic-reminder-agent-key'.codeUnits);
 void main() {
   group('Agent reminder tools', () {
     test(
+      'Android registration reaches Agent without an OS queue claim',
+      () async {
+        final fixture = await _open();
+        final run = await fixture.run(
+          capability: const NotificationCapability(
+            available: true,
+            enabledBySystem: true,
+            schedulesAfterExit: true,
+            activationAvailable: true,
+            exactScheduling: false,
+            queueEvidence: NotificationQueueEvidence.localRegistration,
+            maximumPending: 480,
+          ),
+        );
+        final result = await run.call('query_reminders', const {});
+        final runtime = result.data['runtime'] as Map;
+        expect(runtime['registration_evidence'], 'localRegistration');
+        expect(runtime['exact_scheduling'], isFalse);
+        expect(runtime['maximum_pending'], 480);
+        expect(runtime['meaning'], contains('不是系统队列独立枚举'));
+        expect(runtime['meaning'], contains('不保证实际送达'));
+        await run.finish();
+        await fixture.store.close();
+      },
+    );
+    test(
       'mixed time-kind changes validate and apply reminder rules against the final target shape',
       () async {
         for (final reminderFirst in [false, true]) {
@@ -635,6 +661,12 @@ final class _Fixture {
     Map<String, CalendarReference> events = const {},
     Map<String, TaskReference> tasks = const {},
     bool adviceOnly = false,
+    NotificationCapability capability = const NotificationCapability(
+      available: true,
+      enabledBySystem: false,
+      schedulesAfterExit: true,
+      activationAvailable: true,
+    ),
   }) async {
     final (_, revision) = await (store.localCalendar as AgentLocalPlanPort)
         .readPlanContext();
@@ -653,16 +685,8 @@ final class _Fixture {
       preferences: store.agent,
       preferenceProposals: store.agent,
       reminders: store.features,
-      reminderRuntime: () => const ReminderRuntimeView(
-        accepted: 2,
-        desired: 4,
-        capability: NotificationCapability(
-          available: true,
-          enabledBySystem: false,
-          schedulesAfterExit: true,
-          activationAvailable: true,
-        ),
-      ),
+      reminderRuntime: () =>
+          ReminderRuntimeView(accepted: 2, desired: 4, capability: capability),
       clock: _clock,
     );
     final session = tools.openSession();

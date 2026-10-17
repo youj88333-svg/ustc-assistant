@@ -288,17 +288,27 @@ final class NotificationActivation {
   String toString() => 'NotificationActivation';
 }
 
+enum NotificationQueueEvidence { operatingSystem, localRegistration }
+
+enum NotificationAccessAction { inspect, notifications, exactAlarms, settings }
+
 final class NotificationCapability {
   const NotificationCapability({
     required this.available,
     required this.enabledBySystem,
     required this.schedulesAfterExit,
     required this.activationAvailable,
+    this.exactScheduling,
+    this.queueEvidence = NotificationQueueEvidence.operatingSystem,
+    this.maximumPending = 512,
   });
   final bool available,
       enabledBySystem,
       schedulesAfterExit,
       activationAvailable;
+  final bool? exactScheduling;
+  final NotificationQueueEvidence queueEvidence;
+  final int maximumPending;
 }
 
 abstract interface class NotificationPlatformPort {
@@ -313,6 +323,20 @@ abstract interface class NotificationPlatformPort {
 
 abstract interface class NotificationActivationStatusPort {
   Stream<ReminderFailure> get activationFailures;
+}
+
+/// Optional Android handoff. Only a current C3 publication may reopen delivery
+/// after a durable maintenance block. Initialization and ordinary close cannot.
+abstract interface class NotificationPublicationControlPort {
+  Future<void> bindPublication(ReminderPublication publication);
+  Future<void> blockDelivery();
+}
+
+/// System permission surfaces are invoked only by an explicit UI action.
+abstract interface class NotificationSystemControlPort {
+  Future<NotificationCapability> requestNotifications();
+  Future<NotificationCapability> requestExactAlarms();
+  Future<void> openSystemSettings();
 }
 
 final class ReminderMapping {

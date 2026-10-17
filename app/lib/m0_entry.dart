@@ -473,6 +473,9 @@ final class _OwnedAppState extends State<OwnedApplication> {
             initialReminderView: runtime.reminders.view,
             retryReminders: runtime.reminders.refresh,
             testNotification: runtime.reminders.testNotification,
+            configureSystemAccess: runtime.reminders.supportsSystemAccess
+                ? runtime.reminders.configureSystemAccess
+                : null,
             regenerateMorning: () => runtime.morning.check(manual: true),
           ),
           diagnosticsBuilder:

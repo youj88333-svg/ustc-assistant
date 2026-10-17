@@ -6,12 +6,25 @@ import cn.ustcassistant.mobile.credentials.CredentialChannel
 import cn.ustcassistant.mobile.browser.ObservationBridge
 import android.content.Intent
 import cn.ustcassistant.mobile.files.FilesChannel
+import cn.ustcassistant.mobile.notifications.NotificationsChannel
+import android.os.Bundle
 
 class MainActivity : FlutterActivity() {
     private var credentials: CredentialChannel? = null
     private var platform: PlatformChannel? = null
     private var observation: ObservationBridge? = null
     private var files: FilesChannel? = null
+    private var notifications: NotificationsChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        notifications?.onIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        notifications?.onIntent(intent)
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -19,9 +32,12 @@ class MainActivity : FlutterActivity() {
         platform = PlatformChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
         observation = ObservationBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         files = FilesChannel(this, flutterEngine.dartExecutor.binaryMessenger)
+        notifications = NotificationsChannel(this, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        notifications?.dispose()
+        notifications = null
         files?.dispose()
         files = null
         observation?.dispose()
@@ -43,5 +59,10 @@ class MainActivity : FlutterActivity() {
         files?.onHostStopped()
         observation?.onHostStopped()
         super.onStop()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        if (notifications?.onPermissionResult(requestCode) == true) return
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
     }
 }

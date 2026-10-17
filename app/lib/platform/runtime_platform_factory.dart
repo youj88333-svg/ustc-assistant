@@ -10,6 +10,7 @@ import '../core/reminder_contract.dart';
 import '../core/speech_input_contract.dart';
 import 'android_credential_protector.dart';
 import 'android_directory.dart';
+import 'android_notifications.dart';
 import 'demo_directory.dart';
 import 'jw_directory_path.dart';
 import 'native_observation_browser.dart';
@@ -135,7 +136,7 @@ final class AndroidRuntimePlatformFactory implements RuntimePlatformFactory {
   NativeObservationBrowser createBrowser() => NativeObservationBrowser();
   @override
   NotificationPlatformPort createNotifications() =>
-      UnavailableMobileNotifications();
+      AndroidNotifications();
   @override
   SpeechInputPort createSpeech(DiagnosticsPort diagnostics) =>
       UnavailableMobileSpeechInput();

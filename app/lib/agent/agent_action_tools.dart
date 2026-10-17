@@ -623,6 +623,9 @@ final class _AgentActionToolSession
           'system_available': capability?.available,
           'system_enabled': capability?.enabledBySystem,
           'schedules_after_exit': capability?.schedulesAfterExit,
+          'registration_evidence': capability?.queueEvidence.name,
+          'exact_scheduling': capability?.exactScheduling,
+          'maximum_pending': capability?.maximumPending,
           'accepted': runtime?.accepted,
           'desired': runtime?.desired,
           'complete': runtime?.complete,
@@ -630,7 +633,11 @@ final class _AgentActionToolSession
               ? null
               : _dateOnly(runtime!.throughDay!),
           'failure': runtime?.failure?.name,
-          'meaning': '本应用当前对账状态；已登记不保证用户一定看到通知，系统设置仍有效。',
+          'meaning':
+              capability?.queueEvidence ==
+                  NotificationQueueEvidence.localRegistration
+              ? '已登记表示本地持久登记和系统调用回执，不是系统队列独立枚举；精确权限不足时可能延后，不保证实际送达。'
+              : '本应用当前对账状态；已登记不保证用户一定看到通知，系统设置仍有效。',
         },
         if (inspection != null)
           'target': {

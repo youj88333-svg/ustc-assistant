@@ -20,6 +20,8 @@ final class ApplicationMaintenanceCoordinator {
   final Future<void> Function() drainForExit;
   Future<void> Function()? drainAgent;
   Future<void> Function()? drainReminders;
+  Future<void> Function()? prepareReminders;
+  Future<void> Function()? resumeRemindersAfterAbort;
   Future<void> Function(MaintenanceKind)? onRefresh;
   final _changes = StreamController<MaintenanceProgress>.broadcast();
   MaintenanceProgress _view = const MaintenanceProgress();
@@ -31,6 +33,7 @@ final class ApplicationMaintenanceCoordinator {
   MaintenanceKind? _kind;
   Future<void>? _work;
   bool _closed = false;
+  bool _remindersPrepared = false;
   bool get isClosed => _closed;
   Future<void>? _closing;
 
@@ -138,6 +141,10 @@ final class ApplicationMaintenanceCoordinator {
           kind,
           confirmed: true,
         );
+        if (prepareReminders != null) {
+          _remindersPrepared = true;
+          await prepareReminders!();
+        }
         _intent = await data.beginMaintenance(request);
         await _settle();
       } catch (error) {
@@ -157,6 +164,15 @@ final class ApplicationMaintenanceCoordinator {
           _publish(MaintenancePhase.recovery, failure: failureCode(error));
           return;
         }
+        try {
+          await _resumeAfterAbort();
+        } catch (restoreError) {
+          _publish(
+            MaintenancePhase.recovery,
+            failure: failureCode(restoreError),
+          );
+          return;
+        }
         _release();
         _publish(MaintenancePhase.idle);
         throw SettingsFailure(failureCode(error));
@@ -174,6 +190,7 @@ final class ApplicationMaintenanceCoordinator {
         if (_receipt == null && _intent == null) {
           _intent = await data.bootstrapMaintenance();
           if (_intent == null) {
+            await _resumeAfterAbort();
             _release();
             _publish(MaintenancePhase.idle);
             return;
@@ -207,8 +224,16 @@ final class ApplicationMaintenanceCoordinator {
     }
     _publish(MaintenancePhase.refreshing);
     await onRefresh?.call(_kind!);
+    _remindersPrepared = false;
     _release();
     _publish(MaintenancePhase.idle);
+  }
+
+  Future<void> _resumeAfterAbort() async {
+    if (_remindersPrepared) {
+      await resumeRemindersAfterAbort?.call();
+      _remindersPrepared = false;
+    }
   }
 
   void _release() {

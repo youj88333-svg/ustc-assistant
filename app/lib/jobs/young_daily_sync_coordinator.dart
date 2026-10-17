@@ -18,6 +18,7 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
     this.clock = const SystemClock(),
     this.checkInterval = const Duration(minutes: 1),
     this.jobTimeout = const Duration(minutes: 5),
+    this.cancelOnBackground = false,
   });
   final YoungDailySyncDataPort data;
   final YoungSyncPort source;
@@ -29,6 +30,7 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
   final bool Function() isForegroundBusy, adviceOnly;
   final AppClock clock;
   final Duration checkInterval, jobTimeout;
+  final bool cancelOnBackground;
   final _changes = StreamController<YoungDailySyncView>.broadcast();
   bool get isClosed => _closed;
   @override
@@ -69,7 +71,13 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
 
   void onForeground(bool foreground) {
     _foreground = foreground;
-    if (foreground) _schedule();
+    if (!foreground && cancelOnBackground && _grant != null) {
+      unawaited(
+        _stop(YoungDailySyncOutcome.interrupted).catchError((Object _) {}),
+      );
+    } else if (foreground) {
+      _schedule();
+    }
   }
 
   void onAgentStateChanged() {
@@ -125,11 +133,11 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
         _publish(decision.phase);
         return;
       }
-      if ((!manual && !_foreground) ||
+      if (((!manual || cancelOnBackground) && !_foreground) ||
           isForegroundBusy() ||
           source.syncView.busy) {
         _publish(
-          !_foreground && !manual
+          !_foreground && (!manual || cancelOnBackground)
               ? YoungDailySyncPhase.paused
               : YoungDailySyncPhase.waitingForIdle,
         );
@@ -144,6 +152,10 @@ final class YoungDailySyncCoordinator implements YoungDailySyncControlPort {
       _grant = grant;
       _interactive = manual;
       _terminal = null;
+      if (cancelOnBackground && !_foreground) {
+        await _stop(YoungDailySyncOutcome.interrupted);
+        return;
+      }
       if (_closed ||
           _paused ||
           (!manual && !_foreground) ||

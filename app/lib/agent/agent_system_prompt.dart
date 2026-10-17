@@ -1,7 +1,7 @@
 import 'model_gateway_contract.dart';
 import 'student_language_prompt.dart';
 
-const agentPromptVersion = 'ustc-student-agent-v10';
+const agentPromptVersion = 'ustc-student-agent-v11';
 
 String buildAgentSystemPrompt({
   required String day,
@@ -37,8 +37,10 @@ String buildAgentSystemPrompt({
             '只改变用户要求的设置，不顺带开启其他开关。新建日程、任务截止和时间块会自动沿用已有默认；需单独规则时取得新对象引用后继续设置。'
             '任务无截止不猜提醒时刻，可按用户条件设置截止或安排时间块。个人重复安排分清本次和整组。'
             '如用户说“这节课提前十分钟提醒”，按这个意思准备，不让用户输入工具字段。'
-            'committed只证明本地规则保存；系统登记、Windows开关与投递是另一个状态。已过时刻、已完成、隐藏或不参加的安排可能不提醒。'
-            '未知系统状态保持未知，不承诺一定弹出；只有查看到当前登记结果才说系统已接收。回复用“提前十分钟提醒你”“通知里不显示课程名”等日常话，除排错需要不复述枚举或数据结构。'
+            'committed只证明本地规则保存；系统登记、设备通知开关与实际投递是另一个状态。已过时刻、已完成、隐藏或不参加的安排可能不提醒。'
+            '按query_reminders的registration_evidence区分系统队列回读与本地登记加系统调用回执；后者不代表独立核验系统队列。'
+            'Android未允许精确提醒时可能延后。未知系统状态保持未知，不承诺一定弹出；当前登记结果只能说明已登记，不能说已送达。'
+            '回复用“提前十分钟提醒你”“通知里不显示课程名”等日常话，除排错需要不复述枚举或数据结构。'
       : '';
   final attendanceGuidance = adviceOnly
       ? '明确表示本人不参加某节课时，可以说明这是个人本地出勤计划；学校网站和学校业务记录始终只读。'

@@ -13,7 +13,9 @@ final class ReminderCoordinator {
     required this.platform,
     this.diagnostics,
     this.clock = const SystemClock(),
-  });
+  }) {
+    _navigation.onListen = () => unawaited(_drainNavigation());
+  }
   final ReminderDataPort data;
   final NotificationPlatformPort platform;
   final DiagnosticsPort? diagnostics;
@@ -37,6 +39,50 @@ final class ReminderCoordinator {
   Timer? _timer, _rollTimer;
   ReminderPublication? _lastPublication;
   NotificationCapability? _capability;
+  final _waitingNavigation = <NotificationActivation>[];
+  Future<void>? _navigationWork;
+
+  Future<void> _drainNavigation() async {
+    if (_navigationWork != null ||
+        !_navigation.hasListener ||
+        _closed ||
+        _paused) {
+      return;
+    }
+    final done = Completer<void>();
+    _navigationWork = done.future;
+    try {
+      while (_waitingNavigation.isNotEmpty &&
+          _navigation.hasListener &&
+          !_closed &&
+          !_paused) {
+        final activation = _waitingNavigation.removeAt(0);
+        final generation = _generation;
+        try {
+          // Revalidate with C3 when the UI can actually receive it; a startup
+          // click must not disappear into an unsubscribed broadcast stream.
+          final target = await data.resolveNotification(activation);
+          if (!_live(generation)) return;
+          if (!_navigation.hasListener) {
+            _waitingNavigation.insert(0, activation);
+            return;
+          }
+          if (target != null) _navigation.add(target);
+        } catch (_) {
+          /* Obsolete/untrusted navigation is not a business write. */
+        }
+      }
+    } finally {
+      _navigationWork = null;
+      done.complete();
+      if (_waitingNavigation.isNotEmpty &&
+          _navigation.hasListener &&
+          !_closed &&
+          !_paused) {
+        scheduleMicrotask(() => unawaited(_drainNavigation()));
+      }
+    }
+  }
 
   void _publish({
     bool busy = false,
@@ -61,14 +107,11 @@ final class ReminderCoordinator {
   void start() {
     if (_closed || _subscription != null) return;
     _subscription = data.changes.listen((_) => _scheduleRefresh());
-    _activations = platform.activations.listen((activation) async {
+    _activations = platform.activations.listen((activation) {
       if (_closed || _paused) return;
-      try {
-        final target = await data.resolveNotification(activation);
-        if (target != null && !_closed && !_paused) _navigation.add(target);
-      } catch (_) {
-        /* Untrusted/obsolete navigation never becomes a write. */
-      }
+      if (_waitingNavigation.length == 32) _waitingNavigation.removeAt(0);
+      _waitingNavigation.add(activation);
+      unawaited(_drainNavigation());
     });
     final status = platform;
     if (status is NotificationActivationStatusPort) {
@@ -133,6 +176,51 @@ final class ReminderCoordinator {
 
   void onForeground() => _scheduleRefresh();
 
+  bool get supportsSystemAccess => platform is NotificationSystemControlPort;
+
+  Future<void> configureSystemAccess(NotificationAccessAction action) async {
+    if (_closed || _paused || _closing || _work != null) {
+      throw const ReminderFailure(ReminderFailureCode.maintenance);
+    }
+    final control = platform;
+    if (control is! NotificationSystemControlPort) return;
+    final done = Completer<void>();
+    _work = done.future;
+    try {
+      switch (action) {
+        case NotificationAccessAction.inspect:
+          await _ensurePlatform();
+        case NotificationAccessAction.notifications:
+          _capability = await (control as NotificationSystemControlPort)
+              .requestNotifications();
+        case NotificationAccessAction.exactAlarms:
+          _capability = await (control as NotificationSystemControlPort)
+              .requestExactAlarms();
+        case NotificationAccessAction.settings:
+          await (control as NotificationSystemControlPort).openSystemSettings();
+      }
+      _publish(
+        accepted: _view.accepted,
+        desired: _view.desired,
+        complete: _view.complete,
+        through: _view.throughDay,
+      );
+    } finally {
+      _work = null;
+      done.complete();
+      _scheduleRefresh();
+    }
+  }
+
+  Future<void> _bind(ReminderPublication publication) async {
+    final control = platform;
+    if (control is NotificationPublicationControlPort) {
+      await (control as NotificationPublicationControlPort).bindPublication(
+        publication,
+      );
+    }
+  }
+
   Future<void> _ensurePlatform() async {
     _capability = await platform.initialize();
     if (_capability?.available != true) {
@@ -192,6 +280,13 @@ final class ReminderCoordinator {
       return;
     }
     await _ensurePlatform();
+    if (!_live(generation) ||
+        !await data.reminderPublicationCurrent(publication)) {
+      _again = true;
+      return;
+    }
+    await _bind(publication);
+    if (!_live(generation)) return;
     _log(
       DiagnosticEventName.reminderReconcileStarted,
       DiagnosticOutcome.started,
@@ -244,10 +339,14 @@ final class ReminderCoordinator {
         accepted++;
         continue;
       }
+      if (mapping.accepted) {
+        await data.recordReminderCancelled(mapping.request.id);
+      }
       if (_capability?.enabledBySystem != true) {
         throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
       }
-      if (accepted + retained >= 512) {
+      if (accepted + retained >=
+          (_capability?.maximumPending ?? 512).clamp(1, 512)) {
         complete = false;
         break;
       }
@@ -259,7 +358,8 @@ final class ReminderCoordinator {
         _again = true;
         break;
       }
-      // Readback is the acceptance evidence, not merely method completion.
+      // Windows reads its OS queue; Android confirms durable local registration
+      // plus a successful AlarmManager call. Neither proves actual delivery.
       final verified = (await platform.pending())
           .where((p) => p.id == mapping.request.id)
           .toList();
@@ -287,6 +387,7 @@ final class ReminderCoordinator {
   Future<void> clearForMaintenance({bool nativeCleanupRequired = true}) async {
     _paused = true;
     _generation++;
+    _waitingNavigation.clear();
     _timer?.cancel();
     _rollTimer?.cancel();
     await _work;
@@ -304,6 +405,31 @@ final class ReminderCoordinator {
     _publish(complete: true);
   }
 
+  /// Android's independent receiver must lose delivery authority durably before
+  /// C3 commits a maintenance intent. This is outside the business transaction.
+  Future<void> prepareForMaintenance() async {
+    _paused = true;
+    _generation++;
+    _waitingNavigation.clear();
+    _timer?.cancel();
+    _rollTimer?.cancel();
+    await _work;
+    final control = platform;
+    if (control is NotificationPublicationControlPort) {
+      // Even a lost block acknowledgement may have touched an old mirror.
+      // A later maintenance clear must not skip native cleanup merely because
+      // this process has not previously initialized the notification UI.
+      _initialized = true;
+      await (control as NotificationPublicationControlPort).blockDelivery();
+    }
+  }
+
+  Future<void> resumeAfterAbortedMaintenance() async {
+    resumeAfterMaintenance();
+    await refresh();
+    if (_view.failure != null) throw ReminderFailure(_view.failure!);
+  }
+
   /// Explicit user-operated OS check. It contains no business data and grants
   /// no navigable target; ordinary reconciliation treats it as an orphan.
   Future<void> testNotification() async {
@@ -317,6 +443,11 @@ final class ReminderCoordinator {
     _work = done.future;
     try {
       await _ensurePlatform();
+      final publication = await data.prepareReminderPublication();
+      if (_paused || !await data.reminderPublicationCurrent(publication)) {
+        throw const ReminderFailure(ReminderFailureCode.stale);
+      }
+      await _bind(publication);
       if (_capability?.enabledBySystem != true) {
         throw const ReminderFailure(ReminderFailureCode.disabledBySystem);
       }
@@ -358,6 +489,7 @@ final class ReminderCoordinator {
     if (!_closed) {
       _closing = false;
       _paused = false;
+      unawaited(_drainNavigation());
       _scheduleRefresh();
     }
   }
@@ -374,6 +506,8 @@ final class ReminderCoordinator {
     await _subscription?.cancel();
     await _activations?.cancel();
     await _activationFailures?.cancel();
+    await _navigationWork;
+    _waitingNavigation.clear();
     await platform.close();
     _closed = true;
     await _changes.close();

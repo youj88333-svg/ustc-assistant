@@ -83,6 +83,135 @@ void main() {
     );
 
     test(
+      'Android background revokes and drains its running automatic grant',
+      () async {
+        final harness = _Harness(cancelOnBackground: true);
+        harness.source.holdCancel();
+        addTearDown(harness.dispose);
+        harness.start();
+        await _eventually(() => harness.source.startCalls == 1);
+        final grant = harness.data.lastIssuedGrant!;
+
+        harness.coordinator.onForeground(false);
+        await _eventually(() => harness.source.cancelCalls == 1);
+        expect(grant.revoked, isTrue);
+        expect(harness.data.activeGrant, isNull);
+        expect(harness.data.outcomes, <YoungDailySyncOutcome>[
+          YoungDailySyncOutcome.interrupted,
+        ]);
+        expect(harness.source.syncView.busy, isTrue);
+        expect(
+          () => harness.data.recordCommittedCalendar(grant),
+          throwsA(isA<AppFailure>()),
+        );
+        expect(harness.data.lastSuccessAtUtc, isNull);
+
+        // A foreground transition while this drain is outstanding cannot
+        // re-use the revoked grant or admit a second one concurrently.
+        harness.coordinator.onForeground(true);
+        await _settle();
+        expect(harness.data.issuedGrants, 1);
+        expect(harness.source.cancelCalls, 1);
+
+        harness.source.releaseCancel();
+        await _eventually(() => !harness.source.syncView.busy);
+        await _eventually(
+          () => harness.coordinator.view.phase == YoungDailySyncPhase.scheduled,
+        );
+        harness.coordinator.onForeground(true);
+        await _eventually(() => harness.data.issuedGrants == 2);
+        expect(identical(harness.data.lastIssuedGrant, grant), isFalse);
+        expect(harness.data.lastSuccessAtUtc, isNull);
+      },
+    );
+
+    test(
+      'Android background during claim finishes the grant without launching',
+      () async {
+        final harness = _Harness(cancelOnBackground: true);
+        harness.data.holdClaim();
+        addTearDown(harness.dispose);
+        harness.start();
+        await harness.data.claimStarted;
+        final claimed = harness.data.lastIssuedGrant!;
+
+        harness.coordinator.onForeground(false);
+        expect(harness.source.cancelCalls, 0);
+        expect(harness.source.startCalls, 0);
+        expect(harness.data.activeGrant, same(claimed));
+
+        harness.data.releaseClaim();
+        await _eventually(() => harness.data.outcomes.isNotEmpty);
+        expect(harness.data.outcomes.last, YoungDailySyncOutcome.interrupted);
+        expect(claimed.revoked, isTrue);
+        expect(harness.data.activeGrant, isNull);
+        expect(harness.source.startCalls, 0);
+        expect(harness.source.cancelCalls, 0);
+      },
+    );
+
+    test(
+      'Android hidden transition never cancels a source job it does not own',
+      () async {
+        final harness = _Harness(cancelOnBackground: true);
+        harness.source.emit(YoungSyncView(phase: YoungSyncPhase.collecting));
+        addTearDown(harness.dispose);
+        harness.start();
+        await _settle();
+
+        harness.coordinator.onForeground(false);
+        await _settle();
+        expect(harness.source.cancelCalls, 0);
+        expect(harness.data.issuedGrants, 0);
+        expect(harness.source.syncView.busy, isTrue);
+      },
+    );
+
+    test(
+      'Android background cancel failure stays recoverable without duplicate stops',
+      () async {
+        final harness = _Harness(cancelOnBackground: true);
+        harness.source.holdCancel();
+        final failure = const AppFailure(FailureCode.storageFailed);
+        harness.source.cancelError = failure;
+        addTearDown(harness.dispose);
+        harness.start();
+        await _eventually(() => harness.source.startCalls == 1);
+        final grant = harness.data.lastIssuedGrant!;
+
+        harness.coordinator.onForeground(false);
+        await _eventually(() => harness.source.cancelCalls == 1);
+        harness.coordinator.onForeground(false);
+        await _settle();
+        expect(harness.source.cancelCalls, 1);
+        expect(harness.data.outcomes, <YoungDailySyncOutcome>[
+          YoungDailySyncOutcome.interrupted,
+        ]);
+
+        harness.source.releaseCancel();
+        await _eventually(
+          () => harness.coordinator.view.phase == YoungDailySyncPhase.failed,
+        );
+        expect(grant.revoked, isTrue);
+        expect(harness.data.activeGrant, isNull);
+        expect(harness.source.syncView.busy, isTrue);
+
+        harness.coordinator.onForeground(true);
+        await _settle();
+        expect(harness.data.issuedGrants, 1);
+
+        harness.source.cancelError = null;
+        await harness.coordinator.cancel();
+        expect(harness.source.cancelCalls, 2);
+        expect(harness.source.syncView.busy, isFalse);
+        expect(
+          harness.coordinator.view.phase,
+          isNot(YoungDailySyncPhase.failed),
+        );
+      },
+    );
+
+    test(
       'a job deferred for a competing operation refunds its automatic try',
       () async {
         final harness = _Harness();
@@ -156,6 +285,79 @@ void main() {
         await harness.coordinator.cancel();
         expect(harness.data.outcomes.last, YoungDailySyncOutcome.interrupted);
         expect(harness.source.cancelCalls, 1);
+      },
+    );
+
+    test(
+      'Android background also interrupts manual source work and needs a new grant',
+      () async {
+        final harness = _Harness(
+          credentialSaved: false,
+          cancelOnBackground: true,
+        )..source.behavior = _StartBehavior.loginChallenge;
+        addTearDown(harness.dispose);
+        harness.start();
+        await _settle();
+        expect(harness.data.issuedGrants, 0);
+
+        await harness.coordinator.syncNow();
+        final grant = harness.data.lastIssuedGrant!;
+        expect(harness.coordinator.view.phase, YoungDailySyncPhase.needsLogin);
+        harness.source.holdCancel();
+
+        harness.coordinator.onForeground(false);
+        await _eventually(() => harness.source.cancelCalls == 1);
+        expect(grant.revoked, isTrue);
+        expect(harness.data.activeGrant, isNull);
+        expect(harness.data.outcomes.last, YoungDailySyncOutcome.interrupted);
+
+        harness.source.releaseCancel();
+        await _eventually(
+          () =>
+              !harness.source.syncView.busy &&
+              !harness.coordinator.view.interactive,
+        );
+        harness.coordinator.onForeground(true);
+        await _settle();
+        expect(harness.data.issuedGrants, 1);
+
+        await harness.coordinator.syncNow();
+        expect(harness.data.issuedGrants, 2);
+        expect(identical(harness.data.lastIssuedGrant, grant), isFalse);
+        expect(harness.source.backgroundValues, <bool>[false, false]);
+      },
+    );
+
+    test(
+      'default foreground handling leaves existing host jobs unchanged',
+      () async {
+        final automatic = _Harness();
+        addTearDown(automatic.dispose);
+        automatic.start();
+        await _eventually(() => automatic.source.startCalls == 1);
+        final automaticGrant = automatic.data.lastIssuedGrant!;
+
+        automatic.coordinator.onForeground(false);
+        await _settle();
+        expect(automatic.data.activeGrant, same(automaticGrant));
+        expect(automatic.source.cancelCalls, 0);
+        expect(automatic.source.syncView.busy, isTrue);
+        await automatic.coordinator.cancel();
+
+        final manual = _Harness()
+          ..source.behavior = _StartBehavior.loginChallenge;
+        addTearDown(manual.dispose);
+        manual.start(foreground: false);
+        await _settle();
+        await manual.coordinator.syncNow();
+        final manualGrant = manual.data.lastIssuedGrant!;
+
+        manual.coordinator.onForeground(false);
+        await _settle();
+        expect(manual.data.activeGrant, same(manualGrant));
+        expect(manual.source.cancelCalls, 0);
+        expect(manual.coordinator.view.phase, YoungDailySyncPhase.needsLogin);
+        await manual.coordinator.cancel();
       },
     );
 
@@ -480,6 +682,7 @@ final class _Harness {
     bool accountBound = true,
     bool credentialSaved = true,
     bool adviceOnly = false,
+    bool cancelOnBackground = false,
     Duration checkInterval = const Duration(hours: 1),
     Duration jobTimeout = const Duration(seconds: 10),
   }) : clock = _MutableClock(nowUtc ?? _initialTime),
@@ -504,6 +707,7 @@ final class _Harness {
       clock: clock,
       checkInterval: checkInterval,
       jobTimeout: jobTimeout,
+      cancelOnBackground: cancelOnBackground,
     );
   }
 
@@ -590,6 +794,9 @@ final class _FakeData implements YoungDailySyncDataPort {
   void Function()? onClaim;
   Object? finishError;
   Completer<void>? finishStarted;
+  Completer<void>? _claimGate;
+  Completer<void>? _claimStarted;
+  Future<void> get claimStarted => _claimStarted!.future;
 
   @override
   Stream<int> get changes => _changes.stream;
@@ -667,7 +874,20 @@ final class _FakeData implements YoungDailySyncDataPort {
     lastIssuedGrant = grant;
     issuedGrants++;
     _emitChange();
+    final started = _claimStarted;
+    if (started != null && !started.isCompleted) started.complete();
+    await _claimGate?.future;
     return grant;
+  }
+
+  void holdClaim() {
+    _claimGate = Completer<void>();
+    _claimStarted = Completer<void>();
+  }
+
+  void releaseClaim() {
+    final gate = _claimGate;
+    if (gate != null && !gate.isCompleted) gate.complete();
   }
 
   @override
@@ -741,6 +961,7 @@ final class _FakeYoungSource implements YoungSyncPort {
   Completer<void>? _cancelStarted;
   Completer<void>? _continueGate;
   Completer<void>? _continueStarted;
+  Object? cancelError;
   Object? continueError;
   Future<void> get continueStarted => _continueStarted!.future;
 
@@ -830,6 +1051,8 @@ final class _FakeYoungSource implements YoungSyncPort {
     final started = _cancelStarted;
     if (started != null && !started.isCompleted) started.complete();
     await _cancelGate?.future;
+    final error = cancelError;
+    if (error != null) throw error;
     emit(YoungSyncView());
   }
 

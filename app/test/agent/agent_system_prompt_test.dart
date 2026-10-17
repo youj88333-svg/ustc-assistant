@@ -3,6 +3,18 @@ import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 
 void main() {
+  test('reminder guidance distinguishes Android registration and delivery', () {
+    final prompt = buildAgentSystemPrompt(
+      day: '2026-10-17',
+      receivedAt: '2026-10-17 08:00:00+08:00',
+      definitions: [_tool('query_reminders'), _tool('propose_local_changes')],
+    );
+    expect(prompt, contains('registration_evidence'));
+    expect(prompt, contains('后者不代表独立核验系统队列'));
+    expect(prompt, contains('Android未允许精确提醒时可能延后'));
+    expect(prompt, contains('不能说已送达'));
+    expect(prompt, isNot(contains('Windows开关')));
+  });
   test(
     'warm conversation guidance is assembled without changing action policy',
     () {
@@ -12,7 +24,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-student-agent-v10');
+      expect(agentPromptVersion, 'ustc-student-agent-v11');
       expect(prompt, contains('热心、靠谱的学长'));
       expect(prompt, contains('不编造自己在科大读书'));
       expect(prompt, contains('围绕当前问题选信息'));
