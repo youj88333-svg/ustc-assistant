@@ -1606,7 +1606,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
     FailureCode.unsafeDirectory => '本地观测目录不安全，已停止操作。',
     FailureCode.ownershipLost => '观测窗口归属已变化，已停止操作。',
     FailureCode.unsupportedPlatform =>
-      '系统网页组件不支持学校同步。请更新 Android System WebView，或使用受支持的环境；更改模拟机型不会更新网页组件。',
+      '学校同步需要 Android 9.0 或以上及可用的 Android System WebView。请在系统设置中检查网页组件是否已停用。',
     FailureCode.closed => '本次作业已关闭。',
   };
 

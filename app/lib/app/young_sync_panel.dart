@@ -1034,7 +1034,7 @@ String _failureLabel(FailureCode failure) => switch (failure) {
   FailureCode.unsafeDirectory => '应用数据目录不安全，操作已停止。',
   FailureCode.ownershipLost => '应用数据所有权已变化，操作已停止。',
   FailureCode.unsupportedPlatform =>
-    '系统网页组件不支持学校同步。请更新 Android System WebView，或使用受支持的环境；更改模拟机型不会更新网页组件。',
+    '学校同步需要 Android 9.0 或以上及可用的 Android System WebView。请在系统设置中检查网页组件是否已停用。',
   FailureCode.closed => '应用已关闭，无法继续本次作业。',
 };
 

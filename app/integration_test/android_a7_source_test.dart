@@ -1,5 +1,6 @@
-// A7 API34 old-provider rejection. Architecture07/09, quality13 V-07 and
-// workflow15: unavailable isolation must not become a shared browser fallback.
+// A7 ordinary WebView boundary: synthetic source-preflight failure is tested
+// separately from real Android availability. Architecture07/09, quality13 and
+// workflow15; neither path loads a school URL or claims collection.
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -20,10 +21,14 @@ import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
+const _syntheticObservationChannel = MethodChannel(
+  'ustc_assistant/a7_synthetic_observation_v1',
+);
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
   testWidgets(
-    'unsupported formal source attempts leave local work available without staging credentials or partitions',
+    'synthetic source preflight rejection leaves local work available with cleanup pending',
     (tester) async {
       await tester.runAsync(() async {
         final root = await const MethodChannel(
@@ -31,12 +36,39 @@ void main() {
         ).invokeMethod<String>('privateDataRoot');
         expect(root, contains('/cn.ustcassistant.mobile.qa/no_backup/'));
         final fixture = await Directory(root!).createTemp('a7_source_');
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        final observationCalls = <String>[];
+        messenger.setMockMethodCallHandler(_syntheticObservationChannel, (
+          call,
+        ) async {
+          observationCalls.add(call.method);
+          switch (call.method) {
+            case 'checkSupport':
+              throw PlatformException(
+                code: 'app_failure',
+                details: FailureCode.unsupportedPlatform.name,
+              );
+            case 'getCleanupStatus':
+              return <String, Object>{
+                'backend': ObservationCleanupStatus.backend,
+                'pending': true,
+                'count': 1,
+              };
+            default:
+              throw StateError('Unexpected synthetic observation RPC.');
+          }
+        });
         RuntimeBootstrap? bootstrap;
         try {
           bootstrap = await RuntimeBootstrap.open(
-            platformFactory: _SourceFixturePlatform(fixture.path),
+            platformFactory: _SourceFixturePlatform(
+              fixture.path,
+              _syntheticObservationChannel,
+            ),
           );
           final runtime = bootstrap.runtime!;
+          expect(bootstrap.settings.settingsView.browserCleanupPendingCount, 1);
           await runtime.jwSync.startSync(
             expectedAccountCode: 'SYNTH0001',
             password: 'synthetic-password',
@@ -60,6 +92,10 @@ void main() {
           );
           expect(bootstrap.leases.isBusy, isFalse);
           expect((await runtime.jwStore.readView()).credentialSaved, isFalse);
+          expect(
+            runtime.youngSync.syncView.data?.credentialSaved ?? false,
+            isFalse,
+          );
           for (final namespace in ['jw_partitions_v1', 'young_partitions_v1']) {
             final entries = await Directory(
               '${runtime.jwDirectory.path}/$namespace',
@@ -79,73 +115,52 @@ void main() {
             ),
           );
           await runtime.jwStore.localCalendar.commit(plan);
+          expect(bootstrap.settings.settingsView.browserCleanupPendingCount, 1);
+          expect(observationCalls, contains('getCleanupStatus'));
+          expect(
+            observationCalls.where((method) => method == 'checkSupport'),
+            hasLength(2),
+          );
+          expect(
+            observationCalls.every(
+              (method) =>
+                  method == 'checkSupport' || method == 'getCleanupStatus',
+            ),
+            isTrue,
+          );
           binding.reportData = {
             'kind': 'android-a7-formal-preflight-v1',
             'bothSourcesRejectedBeforeStaging': true,
             'localWriteStillAvailable': true,
+            'cleanupPendingCount': 1,
+            'sourceRequestsIssued': false,
             'realSchool': false,
           };
         } finally {
-          await bootstrap?.close();
-          await fixture.delete(recursive: true);
+          try {
+            await bootstrap?.close();
+          } finally {
+            messenger.setMockMethodCallHandler(
+              _syntheticObservationChannel,
+              null,
+            );
+            await fixture.delete(recursive: true);
+          }
         }
       });
     },
     skip: !Platform.isAndroid,
   );
   testWidgets(
-    'a provider missing profiles rejects both acquisition and cleanup without claiming deletion',
+    'actual ordinary Android WebView preflight succeeds without a source request',
     (tester) async {
       await tester.runAsync(() async {
-        final root = await const MethodChannel(
-          'ustc_assistant/platform_v1',
-        ).invokeMethod<String>('privateDataRoot');
-        expect(root, contains('/cn.ustcassistant.mobile.qa/no_backup/'));
-        final fixture = await Directory(root!).createTemp('a7_source_');
-        final owned = await AndroidDirectories.acquire(fixture.path);
         final browser = NativeObservationBrowser(
           requiresAvailabilityCheck: true,
         );
         try {
-          owned.formal.createPlainChildDirectory('jw_partitions_v1');
-          final path = owned.formal.createPlainChildDirectory(
-            'jw_partitions_v1/jwp-${'a' * 32}',
-          );
-          // Fixed loopback only. Feature rejection occurs before any load.
-          final target = ObservationTarget.fixture(
-            Uri.parse('http://127.0.0.1:43127/cas/login'),
-          );
-          await expectLater(
-            browser.ensureAvailable(),
-            throwsA(
-              isA<AppFailure>().having(
-                (error) => error.code,
-                'preflight',
-                FailureCode.unsupportedPlatform,
-              ),
-            ),
-          );
-          for (final recovery in [false, true]) {
-            final session = recovery ? 2 : 1;
-            await expectLater(
-              browser.open(
-                session: session,
-                profilePath: path,
-                target: target,
-                recoveryOnly: recovery,
-              ),
-              throwsA(
-                isA<AppFailure>().having(
-                  (error) => error.code,
-                  'code',
-                  FailureCode.unsupportedPlatform,
-                ),
-              ),
-            );
-            await browser.close(session);
-            expect(await browser.drained(session), isTrue);
-            expect(await browser.drained(99), isFalse);
-          }
+          await browser.ensureAvailable();
+          expect(await browser.drained(99), isFalse);
           await expectLater(
             browser.close(99),
             throwsA(
@@ -157,19 +172,17 @@ void main() {
             ),
           );
           binding.reportData = {
-            'kind': 'android-a7-old-provider-v1',
-            'acquisitionRejected': true,
-            'cleanupUnavailableReported': true,
-            'rejectedSessionDrained': true,
-            'oldProfilesCleared': false,
+            'kind': 'android-a7-ordinary-webview-boundary-v1',
+            'ordinaryAvailabilityCheckPassed': true,
+            'unknownSessionNotDrained': true,
+            'unknownSessionCloseRejected': true,
+            'sourceRequestsIssued': false,
             'sourceAvailable': false,
+            'webViewCollectionNotClaimed': true,
             'realSchool': false,
           };
         } finally {
           await browser.dispose();
-          await owned.demo.release();
-          await owned.formal.release();
-          await fixture.delete(recursive: true);
         }
       });
     },
@@ -178,8 +191,9 @@ void main() {
 }
 
 final class _SourceFixturePlatform implements RuntimePlatformFactory {
-  const _SourceFixturePlatform(this.path);
+  const _SourceFixturePlatform(this.path, this.channel);
   final String path;
+  final MethodChannel channel;
   static const _delegate = AndroidRuntimePlatformFactory();
   @override
   Future<RuntimeDirectories> acquireDirectories({
@@ -195,7 +209,11 @@ final class _SourceFixturePlatform implements RuntimePlatformFactory {
   @override
   ModelCredentialProtector get modelCredentials => _delegate.modelCredentials;
   @override
-  NativeObservationBrowser createBrowser() => _delegate.createBrowser();
+  NativeObservationBrowser createBrowser() => NativeObservationBrowser(
+    channel: channel,
+    requiresAvailabilityCheck: true,
+    supportsIsolatedCleanupPending: true,
+  );
   @override
   NotificationPlatformPort createNotifications() =>
       _delegate.createNotifications();

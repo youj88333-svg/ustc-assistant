@@ -13,6 +13,94 @@ import 'package:ustc_assistant_m0/jobs/public_query_coordinator.dart';
 
 void main() {
   test(
+    'cleanup pending count is visible without blocking settings writes',
+    () async {
+      final store = JwStore(
+        NativeDatabase.memory(),
+        ownership: _Owner(),
+        clock: FixedClock(DateTime.utc(2026, 10, 12, 4)),
+      );
+      await store.initialize();
+      final leases = WorkLeasePool();
+      var pendingCount = 3;
+      var retries = 0;
+      var failCleanupStatusRead = false;
+      final maintenance = ApplicationMaintenanceCoordinator(
+        data: store.applicationSettings,
+        leases: leases,
+        cleanProfiles: (_) async {},
+        drainForExit: () async {},
+        readBrowserCleanupPendingCount: () async {
+          if (failCleanupStatusRead) throw StateError('synthetic status fault');
+          return pendingCount;
+        },
+        retryBrowserCleanup: (_) async {
+          retries++;
+          pendingCount = 0;
+          return pendingCount;
+        },
+      );
+      final knowledge = KnowledgeService(
+        store: store.publicStore,
+        loader: () async =>
+            throw StateError('No asset loader should run in this scenario.'),
+      );
+      final queries = PublicQueryCoordinator(
+        store: store.publicStore,
+        leases: leases,
+      );
+      final controller = ApplicationSettingsController(
+        data: store.applicationSettings,
+        maintenance: maintenance,
+        knowledge: knowledge,
+        queries: queries,
+        leases: leases,
+        applyPreferences: (_) async {},
+      );
+      try {
+        await controller.refreshSettings();
+        expect(controller.settingsView.browserCleanupPendingCount, 3);
+        expect(controller.settingsView.canWrite, isTrue);
+        failCleanupStatusRead = true;
+        await controller.refreshSettings();
+        expect(controller.settingsView.browserCleanupPendingCount, 3);
+        expect(controller.settingsView.canWrite, isTrue);
+        failCleanupStatusRead = false;
+
+        final busyWork = leases.acquire();
+        await expectLater(
+          controller.retryBrowserCleanup(),
+          throwsA(
+            isA<SettingsFailure>().having(
+              (error) => error.code,
+              'code',
+              SettingsFailureCode.busy,
+            ),
+          ),
+        );
+        expect(retries, 0);
+        busyWork.release();
+
+        await controller.retryBrowserCleanup();
+        expect(retries, 1);
+        expect(controller.settingsView.browserCleanupPendingCount, 0);
+        expect(
+          controller.settingsView.maintenance.phase,
+          MaintenancePhase.idle,
+        );
+        expect(leases.isBusy, isFalse);
+      } finally {
+        await controller.shutdown();
+        await maintenance.close();
+        await queries.close();
+        await knowledge.close();
+        controller.dispose();
+        await store.close();
+      }
+    },
+  );
+
+  test(
     'failed native exit resumes settings progress and same-intent recovery',
     () async {
       final store = JwStore(

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Build', 'PrepareDevice', 'Start', 'Stop', 'Test', 'IntegrationTest', 'CheckAcceleration')]
+    [ValidateSet('Build', 'Analyze', 'DartTest', 'PrepareDevice', 'Start', 'Stop', 'Test', 'IntegrationTest', 'CheckAcceleration')]
     [string]$Action = 'CheckAcceleration',
     [string]$SdkRoot = 'E:\Android\Sdk',
     [string]$FlutterRoot = 'E:\flutter\flutter',
@@ -8,7 +8,7 @@ param(
     [string]$PubCache = 'E:\Android\pub_cache',
     [ValidateSet('All', 'Notifications')]
     [string]$TestScope = 'All',
-    [ValidateSet(34, 35, 36, 37)]
+    [ValidateSet(28, 29, 32, 34, 35, 36, 37)]
     [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
     [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source')]
@@ -28,7 +28,9 @@ $avdHome = Join-Path $taskRoot 'avd-home'
 $avdName = "ustc_android_a0_api$ApiLevel"
 $imageApi = $(if ($ApiLevel -eq 37) { '37.0' } else { "$ApiLevel" })
 $imageTag = 'google_apis'
-$emulatorPort = $(if ($ApiLevel -eq 34) { 5588 } elseif ($ApiLevel -eq 35) { 5580 } elseif ($ApiLevel -eq 36) { 5582 } else { 5584 })
+$emulatorPort = switch ($ApiLevel) {
+    28 { 5590 }; 29 { 5592 }; 32 { 5594 }; 34 { 5588 }; 35 { 5580 }; 36 { 5582 }; 37 { 5584 }
+}
 if ($CurrentProvider) {
     if ($ApiLevel -ne 37) { throw 'The current-provider probe requires the separate API 37 QA image.' }
     $avdName = 'ustc_android_a2_current_provider'
@@ -58,6 +60,23 @@ function Assert-ExitCode([string]$Operation) {
     if ($LASTEXITCODE -ne 0) { throw "$Operation failed (exit $LASTEXITCODE)." }
 }
 
+function Assert-QaEmulator {
+    $actualAvd = ((& $adb -P 5038 -s $serial shell getprop ro.boot.qemu.avd_name) -join '').Trim()
+    Assert-ExitCode 'QA emulator identity'
+    if (-not $actualAvd) {
+        $actualAvd = ((& $adb -P 5038 -s $serial shell getprop ro.kernel.qemu.avd_name) -join '').Trim()
+        Assert-ExitCode 'Legacy QA emulator identity'
+    }
+    $consoleName = @(& $adb -P 5038 -s $serial emu avd name)
+    Assert-ExitCode 'QA emulator console identity'
+    $qemu = ((& $adb -P 5038 -s $serial shell getprop ro.kernel.qemu) -join '').Trim()
+    Assert-ExitCode 'QA emulator environment'
+    if ($actualAvd -ne $avdName -or $consoleName.Count -lt 2 -or
+        $consoleName[0].Trim() -ne $avdName -or $qemu -ne '1') {
+        throw 'Unexpected AVD; refusing to operate on it.'
+    }
+}
+
 try {
     # Only this script process and its children use these paths. User/machine settings are untouched.
     foreach ($directory in @($taskRoot, $taskTemp, $avdHome, $environmentValues.ANDROID_USER_HOME,
@@ -71,6 +90,20 @@ try {
         [Environment]::SetEnvironmentVariable($environmentName, $environmentValues[$environmentName], 'Process')
     }
     switch ($Action) {
+        'Analyze' {
+            Push-Location $appRoot
+            try {
+                & $flutter analyze --no-pub
+                Assert-ExitCode 'Flutter analyzer'
+            } finally { Pop-Location }
+        }
+        'DartTest' {
+            Push-Location $appRoot
+            try {
+                & $flutter test --no-pub --reporter expanded
+                Assert-ExitCode 'Shared Dart and widget tests'
+            } finally { Pop-Location }
+        }
         'CheckAcceleration' {
             & $emulator -accel-check
             Assert-ExitCode 'Android emulator hardware acceleration'
@@ -131,9 +164,7 @@ try {
             Write-Output "Isolated QA emulator started: PID $($process.Id), $serial, ADB 5038."
         }
         'Stop' {
-            $actualAvd = & $adb -P 5038 -s $serial shell getprop ro.boot.qemu.avd_name 2>$null
-            Assert-ExitCode 'QA emulator identity check'
-            if (($actualAvd -join '').Trim() -ne $avdName) { throw 'Unexpected AVD; refusing to stop it.' }
+            Assert-QaEmulator
             & $adb -P 5038 -s $serial emu kill
             Assert-ExitCode 'Stop isolated emulator'
             & $adb -P 5038 kill-server
@@ -145,12 +176,10 @@ try {
             if ($IntegrationSuite -in @('A7', 'A7_Source') -and $ApiLevel -ne 34) {
                 throw 'A7 notification routing seeds only the new independent API34 QA sandbox.'
             }
-            $actualAvd = & $adb -P 5038 -s $serial shell getprop ro.boot.qemu.avd_name
-            Assert-ExitCode 'Integration QA identity'
-            if (($actualAvd -join '').Trim() -ne $avdName) { throw 'Unexpected AVD; refusing integration tests.' }
+            Assert-QaEmulator
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4003) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4004) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
             }
             $restoreNotificationDenial = $false

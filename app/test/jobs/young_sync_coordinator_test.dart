@@ -113,6 +113,159 @@ void main() {
     );
 
     test(
+      'stale Young backend is revoked before a new job, drains only Young, and reuses saved credentials',
+      () async {
+        final browser = _AutomatedBrowser(
+          loginStates: <JwLoginState>[
+            JwLoginState.businessReady,
+            JwLoginState.formReady,
+            JwLoginState.businessReady,
+          ],
+          loginSubmitState: JwLoginState.submitted,
+          calendarByDay: <String, List<Map<String, Object?>>>{
+            _firstDay: <Map<String, Object?>>[
+              _calendarEntry('backend-migration-1', itemId: 'activity-1'),
+            ],
+          },
+        )..expectedSyntheticPassword = 'synthetic-password';
+        final harness = await _Harness.create(browser: browser);
+        addTearDown(harness.dispose);
+        final jw = await harness.seedJw();
+
+        await harness.sync.startCalendar(
+          expectedAccountCode: _account,
+          firstDay: DateTime.utc(2026, 10, 1),
+          lastDay: DateTime.utc(2026, 10, 1),
+          password: 'synthetic-password',
+          savePassword: true,
+        );
+        expect(harness.sync.syncView.phase, YoungSyncPhase.idle);
+        expect(harness.sync.syncView.committed, isTrue);
+        expect(harness.sync.syncView.data!.credentialSaved, isTrue);
+        final originalEvent = harness.sync.syncView.data!.events.single;
+        await harness.sync.setHidden(
+          localId: originalEvent.localId,
+          expectedVersion: originalEvent.version,
+          hidden: true,
+        );
+        final oldPermit = (await harness.store.readYoungPermits()).single;
+        final oldPath = browser.businessProfilePaths.single;
+        final originalJwPermit =
+            (await harness.store.readCommittedPermits()).single;
+
+        browser.checkPartitionBackend = true;
+        browser.backendCurrent = false;
+        browser.resetPartitionBackendCheckWaiter();
+        browser.holdPartitionBackendCheck = true;
+        browser.onRecoveryOpen = (path) async {
+          expect(path, oldPath);
+          expect(await harness.store.readYoungPermits(), isEmpty);
+          final jwPermits = await harness.store.readCommittedPermits();
+          expect(jwPermits, hasLength(1));
+          expect(jwPermits.single.partition.sameAs(jw.partition), isTrue);
+        };
+        final jobsBeforeMigration = await _youngJobCount(harness.store);
+        final migration = harness.sync.startCalendar(
+          firstDay: DateTime.utc(2026, 10, 1),
+          lastDay: DateTime.utc(2026, 10, 1),
+        );
+        await browser.partitionBackendCheckEntered.future.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(await _youngJobCount(harness.store), jobsBeforeMigration);
+        final checksWhileBusy = browser.backendCheckPaths.length;
+        expect(
+          () => harness.sync.startActivities(),
+          throwsA(
+            isA<AppFailure>().having(
+              (failure) => failure.code,
+              'code',
+              FailureCode.busy,
+            ),
+          ),
+        );
+        expect(browser.backendCheckPaths, hasLength(checksWhileBusy));
+        expect(await _youngJobCount(harness.store), jobsBeforeMigration);
+        browser.releasePartitionBackendCheck();
+        await migration;
+
+        final freshPermit = (await harness.store.readYoungPermits()).single;
+        final freshPath = browser.businessProfilePaths.last;
+        expect(freshPermit.partition.sameAs(oldPermit.partition), isFalse);
+        expect(freshPath, isNot(oldPath));
+        expect(browser.recoveryOnlyPaths, contains(oldPath));
+        expect(await Directory(oldPath).exists(), isFalse);
+        expect(await Directory(freshPath).exists(), isTrue);
+        expect(browser.loginSubmissions, hasLength(1));
+        expect(browser.verifiedSyntheticPassword, isTrue);
+        expect(harness.sync.syncView.committed, isTrue);
+        final youngData = await harness.store.readYoungView();
+        expect(youngData.importCount, 2);
+        expect(youngData.events.single.localId, originalEvent.localId);
+        expect(youngData.events.single.hidden, isTrue);
+        expect(
+          (await harness.store.readCommittedPermits()).single.partition.sameAs(
+            originalJwPermit.partition,
+          ),
+          isTrue,
+        );
+        final jwData = await harness.store.readView();
+        expect(jwData.events.single.title, _jwCourseTitle);
+        expect(jwData.credentialSaved, isTrue);
+        final currentJob = await harness.store
+            .customSelect(
+              'SELECT status FROM young_jobs ORDER BY rowid DESC LIMIT 1',
+            )
+            .getSingle();
+        expect(currentJob.read<String>('status'), 'committed');
+        expect(
+          browser.backendSources.every(
+            (source) => source == ObservationSource.young,
+          ),
+          isTrue,
+        );
+        expect(browser.backendFixtures.every((fixture) => !fixture), isTrue);
+
+        browser.backendCurrent = true;
+        browser.backendFailure = const AppFailure(FailureCode.storageFailed);
+        final jobsBeforeBackendError = await _youngJobCount(harness.store);
+        await harness.sync.startCalendar(
+          firstDay: DateTime.utc(2026, 10, 1),
+          lastDay: DateTime.utc(2026, 10, 1),
+        );
+        expect(harness.sync.syncView.phase, YoungSyncPhase.recovery);
+        expect(await _youngJobCount(harness.store), jobsBeforeBackendError);
+        expect(
+          (await harness.store.readYoungPermits()).single.partition.sameAs(
+            freshPermit.partition,
+          ),
+          isTrue,
+        );
+        expect(
+          (await harness.store.readYoungView()).events.single.hidden,
+          isTrue,
+        );
+        expect(
+          (await harness.store.readCommittedPermits()).single.partition.sameAs(
+            originalJwPermit.partition,
+          ),
+          isTrue,
+        );
+        browser.backendFailure = null;
+        await harness.sync.retryRecovery();
+        expect(harness.sync.syncView.phase, YoungSyncPhase.idle);
+        expect(
+          (await harness.store.readYoungPermits()).single.partition.sameAs(
+            freshPermit.partition,
+          ),
+          isTrue,
+        );
+        expect((await harness.store.readYoungView()).importCount, 2);
+      },
+      skip: !Platform.isWindows,
+    );
+
+    test(
       'shutdown during a pending preflight prevents its late result from creating work',
       () async {
         final browser = _AutomatedBrowser()
@@ -1423,6 +1576,7 @@ final class _Harness {
     if (_disposed) return;
     _disposed = true;
     browser.releaseAvailability();
+    browser.releasePartitionBackendCheck();
     browser.releasePoll();
     browser.releaseDrain();
     final automatic = browser;
@@ -1566,7 +1720,8 @@ class _SyntheticBrowser
     implements
         ObservationBrowserPort,
         ObservationAvailabilityBrowserPort,
-        YoungBusinessBrowserPort {
+        YoungBusinessBrowserPort,
+        ObservationPartitionBackendBrowserPort {
   _SyntheticBrowser({
     this.activityPlans = const <List<Object?>>[],
     this.calendarByDay = const <String, List<Map<String, Object?>>>{},
@@ -1595,7 +1750,18 @@ class _SyntheticBrowser
   final Map<int, _StepCall> _steps = <int, _StepCall>{};
   final List<String> profilePaths = <String>[];
   final List<String> businessProfilePaths = <String>[];
+  final List<String> recoveryOnlyPaths = <String>[];
+  final List<String> backendCheckPaths = <String>[];
+  final List<ObservationSource> backendSources = <ObservationSource>[];
+  final List<bool> backendFixtures = <bool>[];
   final List<_StepCall> dispatched = <_StepCall>[];
+  bool checkPartitionBackend = false;
+  bool backendCurrent = true;
+  AppFailure? backendFailure;
+  bool holdPartitionBackendCheck = false;
+  Completer<void> partitionBackendCheckEntered = Completer<void>();
+  final Completer<void> _partitionBackendCheckGate = Completer<void>();
+  Future<void> Function(String path)? onRecoveryOpen;
   int session = 0;
   int document = 0;
   int openCalls = 0;
@@ -1625,6 +1791,37 @@ class _SyntheticBrowser
   @override
   bool get requiresAvailabilityCheck => checkAvailability;
 
+  @override
+  bool get requiresPartitionBackendCheck => checkPartitionBackend;
+
+  @override
+  Future<bool> isCurrentPartitionBackend({
+    required String profilePath,
+    required ObservationSource source,
+    required bool fixture,
+  }) async {
+    backendCheckPaths.add(profilePath);
+    backendSources.add(source);
+    backendFixtures.add(fixture);
+    if (!partitionBackendCheckEntered.isCompleted) {
+      partitionBackendCheckEntered.complete();
+    }
+    if (holdPartitionBackendCheck) await _partitionBackendCheckGate.future;
+    final failure = backendFailure;
+    if (failure != null) throw failure;
+    return backendCurrent;
+  }
+
+  void releasePartitionBackendCheck() {
+    if (!_partitionBackendCheckGate.isCompleted) {
+      _partitionBackendCheckGate.complete();
+    }
+  }
+
+  void resetPartitionBackendCheckWaiter() {
+    partitionBackendCheckEntered = Completer<void>();
+  }
+
   void releaseAvailability() {
     if (!_availabilityGate.isCompleted) _availabilityGate.complete();
   }
@@ -1651,6 +1848,10 @@ class _SyntheticBrowser
     _closed = false;
     ++openCalls;
     profilePaths.add(profilePath);
+    if (recoveryOnly) {
+      recoveryOnlyPaths.add(profilePath);
+      await onRecoveryOpen?.call(profilePath);
+    }
     if (!recoveryOnly) {
       businessProfilePaths.add(profilePath);
       _emit(BrowserEventKind.ready, document: document, origin: _origin);
@@ -1889,6 +2090,7 @@ class _SyntheticBrowser
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    releasePartitionBackendCheck();
     releasePoll();
     releaseDrain();
     await _events.close();
@@ -1901,7 +2103,9 @@ final class _AutomatedBrowser extends _SyntheticBrowser
         YoungBusinessPreparationBrowserPort {
   _AutomatedBrowser({
     super.activityPlans = const <List<Object?>>[],
+    super.calendarByDay = const <String, List<Map<String, Object?>>>{},
     this.loginStates = const <JwLoginState>[JwLoginState.businessReady],
+    this.loginSubmitState = JwLoginState.challengeRequired,
     this.helperAvailable = true,
     this.holdInitialReady = false,
     this.changeDocumentOnFirstPreparation = false,
@@ -1915,6 +2119,7 @@ final class _AutomatedBrowser extends _SyntheticBrowser
   });
 
   final List<JwLoginState> loginStates;
+  final JwLoginState loginSubmitState;
   final bool helperAvailable;
   final bool holdInitialReady;
   final bool changeDocumentOnFirstPreparation;
@@ -1943,6 +2148,8 @@ final class _AutomatedBrowser extends _SyntheticBrowser
   int acceptedNavigationCalls = 0;
   bool _initialReadyReleased = false;
   JwSecretLease? lastSubmittedLease;
+  String? expectedSyntheticPassword;
+  bool verifiedSyntheticPassword = false;
 
   int get preparationCalls => preparationDocuments.length;
 
@@ -2006,6 +2213,10 @@ final class _AutomatedBrowser extends _SyntheticBrowser
     _closed = false;
     ++openCalls;
     profilePaths.add(profilePath);
+    if (recoveryOnly) {
+      recoveryOnlyPaths.add(profilePath);
+      await onRecoveryOpen?.call(profilePath);
+    }
     if (!recoveryOnly) {
       businessProfilePaths.add(profilePath);
       if (holdInitialReady) {
@@ -2064,12 +2275,24 @@ final class _AutomatedBrowser extends _SyntheticBrowser
     lastSubmittedLease = credentials;
     if (!submissionEntered.isCompleted) submissionEntered.complete();
     if (holdSubmission) await _submissionGate.future;
+    final expectedPassword = expectedSyntheticPassword;
+    if (expectedPassword != null) {
+      final plain = credentials.take();
+      try {
+        final decoded = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+        expect(decoded['username'], _account);
+        expect(decoded['password'], expectedPassword);
+        verifiedSyntheticPassword = true;
+      } finally {
+        plain.fillRange(0, plain.length, 0);
+      }
+    }
     if (ambiguousSubmission) {
       // The fake native boundary accepted a one-shot submit before its reply
       // was lost. The driver must treat stale as ambiguous, never resubmit.
       throw const AppFailure(FailureCode.staleResult);
     }
-    return JwLoginState.challengeRequired;
+    return loginSubmitState;
   }
 
   @override

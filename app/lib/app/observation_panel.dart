@@ -262,7 +262,7 @@ class _ObservationPanelState extends State<ObservationPanel> {
 
   Widget _status(BuildContext context, ObservationView view) {
     final message = switch (view.phase) {
-      ObservationPhase.idle || ObservationPhase.closed => '观测窗口未打开或已清理',
+      ObservationPhase.idle || ObservationPhase.closed => '观测窗口未打开或已关闭',
       ObservationPhase.opening =>
         _inFlight.containsKey(_ObservationAction.cancel)
             ? '正在请求取消并清理教务观测窗口。'

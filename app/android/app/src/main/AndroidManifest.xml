@@ -7,7 +7,7 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application
         android:label="USTC Assistant"
-        android:name="${applicationName}"
+        android:name=".SchoolApplication"
         android:allowBackup="false"
         android:fullBackupContent="@xml/backup_rules"
         android:dataExtractionRules="@xml/data_extraction_rules"
@@ -36,6 +36,16 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <activity
+            android:name=".browser.SchoolHostActivity"
+            android:exported="false"
+            android:process=":school_host"
+            android:theme="@style/SchoolHostTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:excludeFromRecents="true"
+            android:windowSoftInputMode="adjustResize" />
+        <service android:name=".browser.SchoolHostService" android:exported="false" android:process=":school_host" />
         <receiver android:name=".notifications.ReminderAlarmReceiver" android:exported="false" />
         <receiver android:name=".notifications.ReminderRestoreReceiver" android:exported="false">
             <intent-filter>

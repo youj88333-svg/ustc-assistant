@@ -37,7 +37,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a7-fix1"
+            versionNameSuffix = "-qa-a7-webview2"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -119,7 +119,7 @@ androidComponents {
         val splitQa = project.findProperty("split-per-abi") == "true"
         // A7 adds a forward-compatible pending-click field. A higher QA code
         // prevents accidentally reinstalling an older strict mirror reader.
-        variant.outputs.forEach { it.versionCode.set(if (splitQa) 3 else 4003) }
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 4 else 4004) }
     }
 }
 

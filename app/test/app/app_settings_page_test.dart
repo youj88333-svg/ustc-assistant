@@ -69,7 +69,64 @@ void main() {
       expect(find.textContaining('private-sentinel'), findsNothing);
     });
   }
+  testWidgets(
+    'committed reset receipt keeps browser cleanup pending explicit',
+    (tester) async {
+      final settings = _FakeSettings(
+        browserCleanupPendingCount: 2,
+        maintenance: const MaintenanceProgress(
+          phase: MaintenancePhase.recovery,
+          kind: MaintenanceKind.reset,
+          committed: true,
+        ),
+      );
+      await tester.pumpWidget(
+        MaterialApp(home: MaintenanceRecoveryPage(settings: settings)),
+      );
+      await tester.pumpAndSettle();
+      expect(find.textContaining('仍有 2 项待物理清理'), findsOneWidget);
+      expect(find.textContaining('重试清理不删除密码或本机业务数据'), findsOneWidget);
+      expect(find.textContaining('全部重置'), findsNothing);
+    },
+  );
+
   group('ApplicationSettingsPage', () {
+    testWidgets(
+      'pending retired browser cleanup is nonblocking and retryable',
+      (tester) async {
+        final settings = _FakeSettings(browserCleanupPendingCount: 2);
+        await _pumpSettings(tester, settings, _FakeShell());
+
+        expect(
+          find.textContaining('教务与二课旧登录资料已停用，仍有 2 项待物理清理'),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const ValueKey('settings-retry-browser-cleanup')),
+          findsOneWidget,
+        );
+        await _tap(
+          tester,
+          find.byKey(const ValueKey('settings-section-dataPrivacy')),
+        );
+        expect(
+          find.byKey(const ValueKey('settings-reset')),
+          findsOneWidget,
+          reason: 'Pending physical cleanup must not gate C3 maintenance.',
+        );
+
+        await _tap(
+          tester,
+          find.byKey(const ValueKey('settings-retry-browser-cleanup')),
+        );
+        expect(settings.browserCleanupCalls, 1);
+        expect(
+          find.byKey(const ValueKey('settings-browser-cleanup-pending')),
+          findsNothing,
+        );
+      },
+    );
+
     testWidgets('shows four sections and saves display defaults immediately', (
       tester,
     ) async {
@@ -327,7 +384,7 @@ void main() {
       final resetAction = find.byKey(const ValueKey('settings-reset'));
       await _tap(tester, resetAction);
       expect(find.text('完全重置本应用数据？'), findsOneWidget);
-      expect(find.textContaining('不会删除旧工程、系统浏览器或任意目录'), findsOneWidget);
+      expect(find.textContaining('不会删除旧工程或任意目录'), findsOneWidget);
       await _tap(tester, find.text('继续确认'));
       expect(find.text('再次确认完全重置'), findsOneWidget);
       await _tap(tester, find.text('确认完全重置'));
@@ -762,10 +819,12 @@ final class _FakeSettings extends ChangeNotifier
     MaintenanceProgress maintenance = const MaintenanceProgress(),
     bool snapshotAvailable = true,
     SettingsFailureCode? failure,
+    int? browserCleanupPendingCount,
   }) : _view = ApplicationSettingsView(
          snapshot: snapshotAvailable ? _snapshot(materials: materials) : null,
          knowledgeLoading: knowledgeLoading,
          maintenance: maintenance,
+         browserCleanupPendingCount: browserCleanupPendingCount,
          failure: failure,
        );
 
@@ -781,6 +840,7 @@ final class _FakeSettings extends ChangeNotifier
   int cancelCalls = 0;
   int clearKnowledgeCalls = 0;
   int retryCalls = 0;
+  int browserCleanupCalls = 0;
   final List<(SettingsContext, DisplayPreferences)> preferenceWrites = [];
   final List<(SettingsContext, MaintenanceKind, bool)> maintenanceWrites = [];
   final List<(SettingsContext, bool, bool)> consentWrites = [];
@@ -895,6 +955,19 @@ final class _FakeSettings extends ChangeNotifier
     _view = ApplicationSettingsView(
       snapshot: _view.snapshot,
       maintenance: const MaintenanceProgress(phase: MaintenancePhase.cleaning),
+    );
+    notifyListeners();
+  }
+
+  @override
+  Future<void> retryBrowserCleanup() async {
+    browserCleanupCalls++;
+    _view = ApplicationSettingsView(
+      snapshot: _view.snapshot,
+      maintenance: _view.maintenance,
+      browserCleanupPendingCount: 0,
+      knowledgeLoading: _view.knowledgeLoading,
+      loadOutcome: _view.loadOutcome,
     );
     notifyListeners();
   }

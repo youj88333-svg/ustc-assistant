@@ -18,6 +18,8 @@ final class NativeObservationBrowser
     implements
         ObservationBrowserPort,
         ObservationAvailabilityBrowserPort,
+        ObservationCleanupStatusBrowserPort,
+        ObservationPartitionBackendBrowserPort,
         BackgroundObservationBrowserPort,
         JwProbeBrowserPort,
         JwDataProbeBrowserPort,
@@ -31,6 +33,7 @@ final class NativeObservationBrowser
   NativeObservationBrowser({
     MethodChannel? channel,
     this.requiresAvailabilityCheck = false,
+    this.supportsIsolatedCleanupPending = false,
     this.fixtureDeniedUri,
     this.fixtureUpgradeFromOrigin,
     this.fixtureUpgradeToOrigin,
@@ -42,6 +45,48 @@ final class NativeObservationBrowser
   final MethodChannel _channel;
   @override
   final bool requiresAvailabilityCheck;
+
+  @override
+  final bool supportsIsolatedCleanupPending;
+
+  @override
+  bool get requiresPartitionBackendCheck => supportsIsolatedCleanupPending;
+
+  @override
+  Future<bool> isCurrentPartitionBackend({
+    required String profilePath,
+    required ObservationSource source,
+    required bool fixture,
+  }) async {
+    if (!requiresPartitionBackendCheck) return true;
+    final value = await _invoke<Object>('isCurrentPartitionBackend', {
+      'profilePath': profilePath,
+      'source': source.name,
+      'testMode': fixture,
+    });
+    if (value is! bool) {
+      throw const AppFailure(FailureCode.invalidSnapshot);
+    }
+    return value;
+  }
+
+  @override
+  Future<ObservationCleanupStatus> getCleanupStatus() async {
+    if (!supportsIsolatedCleanupPending) {
+      throw const AppFailure(FailureCode.unsupportedPlatform);
+    }
+    final result = await _invoke<Object>('getCleanupStatus', const {});
+    return ObservationCleanupStatus.decode(result);
+  }
+
+  @override
+  Future<ObservationCleanupStatus> retryBrowserCleanup() async {
+    if (!supportsIsolatedCleanupPending) {
+      throw const AppFailure(FailureCode.unsupportedPlatform);
+    }
+    final result = await _invoke<Object>('retryBrowserCleanup', const {});
+    return ObservationCleanupStatus.decode(result);
+  }
 
   @override
   Future<void> ensureAvailable() async {

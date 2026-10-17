@@ -350,7 +350,7 @@ class _YoungObservationPanelState extends State<YoungObservationPanel> {
 
   Widget _status(BuildContext context, ObservationView view) {
     final message = switch (view.phase) {
-      ObservationPhase.idle => '二课观测窗口未打开或已清理。来源能力仍不可用。',
+      ObservationPhase.idle => '二课观测窗口未打开或已关闭。来源能力仍不可用。',
       ObservationPhase.closed => '二课观测端口已关闭，不能再次打开。来源能力仍不可用。',
       ObservationPhase.opening =>
         _inFlight.containsKey(_YoungAction.cancel)

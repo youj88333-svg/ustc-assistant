@@ -23,6 +23,10 @@
             android:launchMode="singleTop"
             android:theme="@android:style/Theme.Material.Light.NoActionBar">
         </activity>
+        <service
+            android:name=".qa.QaBrowserParentService"
+            android:exported="false"
+            android:process=":qa_browser_parent" />
         <receiver android:name=".qa.QaAlarmReceiver" android:exported="false" />
     </application>
 </manifest>

@@ -1,8 +1,7 @@
 (function(expectedSource, casOrigin, jwOrigin, externalCurrent) {
   'use strict';
-  const root = globalThis;
+  const root = window;
   const doc = root.document;
-  const historyLength = root.history.length;
   const apply = Reflect.apply;
   const freeze = Object.freeze;
   const query = Document.prototype.querySelectorAll;
@@ -22,7 +21,7 @@
   function current() {
     return typeof externalCurrent === 'function' && externalCurrent() &&
         root === root.top && root.document === doc &&
-        root.location.href === expectedSource && root.history.length === historyLength;
+        root.location.href === expectedSource;
   }
   function cas() {
     return current() && root.location.origin === casOrigin &&

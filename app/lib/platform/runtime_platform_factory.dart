@@ -76,7 +76,8 @@ final class WindowsRuntimePlatformFactory implements RuntimePlatformFactory {
   ModelCredentialProtector get modelCredentials =>
       const WindowsModelCredentialProtector();
   @override
-  NativeObservationBrowser createBrowser() => NativeObservationBrowser();
+  NativeObservationBrowser createBrowser() =>
+      NativeObservationBrowser(supportsIsolatedCleanupPending: false);
   @override
   NotificationPlatformPort createNotifications() => WindowsNotifications();
   @override
@@ -134,8 +135,10 @@ final class AndroidRuntimePlatformFactory implements RuntimePlatformFactory {
   ModelCredentialProtector get modelCredentials =>
       const AndroidModelCredentialProtector();
   @override
-  NativeObservationBrowser createBrowser() =>
-      NativeObservationBrowser(requiresAvailabilityCheck: true);
+  NativeObservationBrowser createBrowser() => NativeObservationBrowser(
+    requiresAvailabilityCheck: true,
+    supportsIsolatedCleanupPending: true,
+  );
   @override
   NotificationPlatformPort createNotifications() => AndroidNotifications();
   @override

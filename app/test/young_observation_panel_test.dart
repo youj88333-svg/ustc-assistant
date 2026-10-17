@@ -355,7 +355,7 @@ void main() {
     expect(_button(tester, '取消并清理二课窗口').onPressed, isNotNull);
 
     await tester.pumpWidget(_host(newPort));
-    expect(find.text('二课观测窗口未打开或已清理。来源能力仍不可用。'), findsOneWidget);
+    expect(find.text('二课观测窗口未打开或已关闭。来源能力仍不可用。'), findsOneWidget);
     oldPort.failHeldOpen = true;
     oldPort.completeHeldOpen();
     await tester.pump();

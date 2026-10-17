@@ -51,7 +51,7 @@ void main() {
     expect(find.text('页面就绪不等于身份核验；尚未采集或导入真实数据'), findsOneWidget);
     expect(find.text('账号、密码和验证码请在学校窗口中手填'), findsOneWidget);
     expect(find.text('登录后用下面两个入口打开独立页面，无需在学校首页内部切换标签。'), findsOneWidget);
-    expect(find.text('观测窗口未打开或已清理'), findsOneWidget);
+    expect(find.text('观测窗口未打开或已关闭'), findsOneWidget);
     expect(find.text('打开教务观测窗口'), findsOneWidget);
     expect(_button(tester, '打开课表页面').onPressed, isNull);
     expect(_button(tester, '打开考试安排').onPressed, isNull);
@@ -239,7 +239,7 @@ void main() {
     await tester.pumpWidget(_host(port));
     expect(find.text('重试清理'), findsOneWidget);
     expect(find.textContaining('清理未完成'), findsOneWidget);
-    expect(find.text('观测窗口未打开或已清理'), findsNothing);
+    expect(find.text('观测窗口未打开或已关闭'), findsNothing);
 
     await tester.tap(find.text('重试清理'));
     await tester.pumpAndSettle();

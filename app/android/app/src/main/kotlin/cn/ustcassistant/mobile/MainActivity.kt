@@ -66,6 +66,11 @@ class MainActivity : FlutterActivity() {
         super.onStop()
     }
 
+    override fun onStart() {
+        super.onStart()
+        observation?.onHostStarted()
+    }
+
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         if (notifications?.onPermissionResult(requestCode) == true) return
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)

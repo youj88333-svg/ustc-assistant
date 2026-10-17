@@ -51,6 +51,7 @@ final class _ApplicationSettingsPageState
   int _generation = 0;
   bool _localPending = false;
   bool _cancelPending = false;
+  bool _cleanupRetryPending = false;
   SettingsFailureCode? _localFailure;
   DisplayPreferences? _preferenceDraft;
   SettingsContext? _preferenceDraftContext;
@@ -69,6 +70,7 @@ final class _ApplicationSettingsPageState
       _generation++;
       _localPending = false;
       _cancelPending = false;
+      _cleanupRetryPending = false;
       _localFailure = null;
       _preferenceDraft = null;
       _preferenceDraftContext = null;
@@ -222,6 +224,10 @@ final class _ApplicationSettingsPageState
                 ),
                 isError: true,
               ),
+            ],
+            if ((view.browserCleanupPendingCount ?? 0) > 0) ...[
+              const SizedBox(height: 8),
+              _browserCleanupNotice(context, view),
             ],
             if (snapshot != null &&
                 !writable &&
@@ -702,7 +708,9 @@ final class _ApplicationSettingsPageState
                 '个人安排与例外、任务与时间块、关系、撤销状态、资料库、旧审计回执、'
                 '模型 Key、模型配置和对话历史、联网同意、显示偏好及本应用正式/观测登记的来源分区。\n\n'
                 '保留安装文件、数据库容器、目录所有权、单调世代与 ID 高水位及最小恢复账本。'
-                '不会删除旧工程、系统浏览器或任意目录。重置完成后回到默认 Agent，可重新绑定账号。'
+                'Android 系统 WebView 的教务与二课旧登录资料会停用；若物理清理待完成，可在设置重试。'
+                '重置按前述范围删除本应用密码和业务数据；之后的浏览器清理只处理已停用登录资料，不再改动这些数据。'
+                '不会删除旧工程或任意目录。重置完成后回到默认 Agent，可重新绑定账号。'
           : '将删除教务与二课日程及覆盖、个人安排与例外、任务与时间块、关系、撤销状态，'
                 '以及相关作业、回执和审计记录。\n\n'
                 '账号、共享密码、来源目录与成功学期/日期范围、来源分区与许可、资料库、'
@@ -830,6 +838,77 @@ final class _ApplicationSettingsPageState
       ),
     );
     return second == true && _canStart(port, generation, context);
+  }
+
+  Widget _browserCleanupNotice(
+    BuildContext context,
+    ApplicationSettingsView view,
+  ) {
+    final count = view.browserCleanupPendingCount!;
+    return Container(
+      key: const ValueKey('settings-browser-cleanup-pending'),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '教务与二课旧登录资料已停用，仍有 $count 项待物理清理。此项清理不阻塞新分区使用；重试只处理旧浏览器登录资料，不删除已保存密码或本机业务数据。',
+            style: const TextStyle(height: 1.4),
+          ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(
+              key: const ValueKey('settings-retry-browser-cleanup'),
+              onPressed:
+                  _cleanupRetryPending ||
+                      view.actionPending ||
+                      view.maintenance.blocksProduct
+                  ? null
+                  : _retryBrowserCleanup,
+              icon: _cleanupRetryPending
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_sweep_outlined, size: 18),
+              label: Text(_cleanupRetryPending ? '正在重试…' : '重试清理已停用浏览器资料'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _retryBrowserCleanup() async {
+    final port = widget.settings;
+    final generation = _generation;
+    if (!_sameInstallation(port, generation) ||
+        port.settingsView.browserCleanupPendingCount == null ||
+        _cleanupRetryPending ||
+        port.settingsView.maintenance.blocksProduct) {
+      return;
+    }
+    setState(() {
+      _cleanupRetryPending = true;
+      _localFailure = null;
+    });
+    try {
+      await port.retryBrowserCleanup();
+    } on Object catch (error) {
+      if (_sameInstallation(port, generation)) {
+        setState(() => _localFailure = _failureCode(error));
+      }
+    } finally {
+      if (_sameInstallation(port, generation)) {
+        setState(() => _cleanupRetryPending = false);
+      }
+    }
   }
 
   Widget _aboutSection() => _sectionScroll(

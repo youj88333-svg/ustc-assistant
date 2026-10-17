@@ -13,12 +13,16 @@ final class ApplicationSettingsView {
     this.knowledgeLoading = false,
     this.progressUnavailable = false,
     this.maintenance = const MaintenanceProgress(),
+    this.browserCleanupPendingCount,
     this.failure,
     this.loadOutcome,
   });
   final SettingsSnapshot? snapshot;
   final bool loading, actionPending, knowledgeLoading, progressUnavailable;
   final MaintenanceProgress maintenance;
+
+  /// Null means this platform has no isolated old-profile cleanup capability.
+  final int? browserCleanupPendingCount;
   final SettingsFailureCode? failure;
   final KnowledgeLoadOutcome? loadOutcome;
   bool get canWrite =>
@@ -44,6 +48,7 @@ abstract interface class ApplicationSettingsPort implements Listenable {
     required bool confirmed,
   });
   Future<void> retryMaintenance();
+  Future<void> retryBrowserCleanup();
   Future<void> loadKnowledge();
   Future<void> cancelKnowledgeLoad();
   Future<void> clearKnowledge(

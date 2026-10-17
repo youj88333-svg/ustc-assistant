@@ -11,6 +11,7 @@ import 'package:ustc_assistant_m0/core/jw_academic_details.dart';
 import 'package:ustc_assistant_m0/core/jw_work_contract.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/work_lease.dart';
+import 'package:ustc_assistant_m0/data/jw_import_contract.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_coordinator.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_port.dart';
@@ -244,6 +245,144 @@ void main() {
       expect(h.sync.syncView.data!.credentialSaved, isFalse);
       expect(h.sync.syncView.data!.events.map((e) => e.localId), localIds);
       expect(h.sync.syncView.data!.lastSemesterId, _semester);
+    },
+  );
+
+  test(
+    'backend migration revokes and drains stale JW claims before a fresh credentialed job',
+    () async {
+      final h = await _Harness.create(credentialProtector: _TestProtector());
+      addTearDown(h.dispose);
+      h.browser.authenticationRequired = true;
+      await h.sync.startSync(
+        expectedAccountCode: _account,
+        password: 'synthetic-password',
+        savePassword: true,
+      );
+      expect(h.sync.syncView.importCommitted, isTrue);
+      JwStoredEvent courseEvent() => h.sync.syncView.data!.events.singleWhere(
+        (event) => event.kind == JwEventKind.course,
+      );
+      final originalEvent = courseEvent();
+      await h.sync.setHidden(
+        localId: originalEvent.localId,
+        expectedVersion: originalEvent.version,
+        hidden: true,
+      );
+      final oldPermit = (await h.store.readCommittedPermits()).single;
+      final oldPath = h.profile(oldPermit.partition);
+
+      h.browser.checkPartitionBackend = true;
+      h.browser.backendCurrent = true;
+      await h.restartCoordinator();
+      expect(
+        (await h.store.readCommittedPermits()).single.partition.sameAs(
+          oldPermit.partition,
+        ),
+        isTrue,
+      );
+      expect(await Directory(oldPath).exists(), isTrue);
+      expect(h.browser.recoveryOnlyPaths, isEmpty);
+      expect(h.browser.backendCheckPaths.last, oldPath);
+
+      h.browser.backendCurrent = false;
+      h.browser.onRecoveryOpen = (path) async {
+        expect(path, oldPath);
+        expect(await h.store.readCommittedPermits(), isEmpty);
+      };
+      await h.restartCoordinator();
+      expect(await h.store.readCommittedPermits(), isEmpty);
+      expect(h.browser.recoveryOnlyPaths, contains(oldPath));
+      expect(await Directory(oldPath).exists(), isFalse);
+      expect(h.sync.syncView.data!.credentialSaved, isTrue);
+      expect(courseEvent().hidden, isTrue);
+
+      await h.sync.startSync();
+      final firstFreshPermit = (await h.store.readCommittedPermits()).single;
+      final firstFreshPath = h.profile(firstFreshPermit.partition);
+      expect(firstFreshPath, isNot(oldPath));
+      expect(h.browser.submitCount, 2);
+      expect(h.sync.syncView.importCommitted, isTrue);
+      expect(h.sync.syncView.data!.credentialSaved, isTrue);
+      expect(courseEvent().localId, originalEvent.localId);
+      expect(courseEvent().hidden, isTrue);
+
+      h.browser.backendCurrent = false;
+      h.browser.resetPartitionBackendCheckWaiter();
+      h.browser.holdPartitionBackendCheck = true;
+      h.browser.onRecoveryOpen = (path) async {
+        expect(path, firstFreshPath);
+        expect(await h.store.readCommittedPermits(), isEmpty);
+      };
+      final jobsBeforeSecondMigration = await _jwJobCount(h.store);
+      final migratingJob = h.sync.startSync();
+      await h.browser.partitionBackendCheckEntered.future.timeout(
+        const Duration(seconds: 2),
+      );
+      final checksWhileBusy = h.browser.backendCheckPaths.length;
+      await expectLater(
+        h.sync.startSync(),
+        throwsA(
+          isA<AppFailure>().having(
+            (failure) => failure.code,
+            'code',
+            FailureCode.busy,
+          ),
+        ),
+      );
+      expect(h.browser.backendCheckPaths, hasLength(checksWhileBusy));
+      expect(await _jwJobCount(h.store), jobsBeforeSecondMigration);
+      h.browser.releasePartitionBackendCheck();
+      await migratingJob;
+
+      final freshPermit = (await h.store.readCommittedPermits()).single;
+      final freshPath = h.profile(freshPermit.partition);
+      expect(freshPath, isNot(firstFreshPath));
+      expect(h.browser.recoveryOnlyPaths, contains(firstFreshPath));
+      expect(await Directory(firstFreshPath).exists(), isFalse);
+      expect(await Directory(freshPath).exists(), isTrue);
+      expect(h.browser.submitCount, 3);
+      expect(h.sync.syncView.importCommitted, isTrue);
+      expect(h.sync.syncView.data!.importCount, 3);
+      expect(courseEvent().localId, originalEvent.localId);
+      expect(courseEvent().hidden, isTrue);
+      final currentJob = await h.store
+          .customSelect(
+            'SELECT status FROM jw_jobs ORDER BY rowid DESC LIMIT 1',
+          )
+          .getSingle();
+      expect(currentJob.read<String>('status'), 'committed');
+      expect(
+        h.browser.backendSources.every(
+          (source) => source == ObservationSource.jw,
+        ),
+        isTrue,
+      );
+      expect(h.browser.backendFixtures.every((fixture) => !fixture), isTrue);
+
+      h.browser.backendCurrent = true;
+      h.browser.backendFailure = const AppFailure(FailureCode.storageFailed);
+      final jobsBeforeBackendFailure = await _jwJobCount(h.store);
+      await h.sync.startSync();
+      expect(h.sync.syncView.phase, JwSyncPhase.recovery);
+      expect(await _jwJobCount(h.store), jobsBeforeBackendFailure);
+      expect(
+        (await h.store.readCommittedPermits()).single.partition.sameAs(
+          freshPermit.partition,
+        ),
+        isTrue,
+      );
+      expect(courseEvent().hidden, isTrue);
+      h.browser.backendFailure = null;
+      await h.sync.retryRecovery();
+      expect(h.sync.syncView.phase, JwSyncPhase.idle);
+      expect(
+        (await h.store.readCommittedPermits()).single.partition.sameAs(
+          freshPermit.partition,
+        ),
+        isTrue,
+      );
+      expect(h.sync.syncView.data!.importCount, 3);
     },
   );
 
@@ -887,10 +1026,10 @@ final class _Harness {
   final Directory root;
   final DemoDirectory owner;
   final JwStore store;
-  final JwPartitionRegistry registry;
+  JwPartitionRegistry registry;
   final _Browser browser;
   final WorkLeasePool leases;
-  final JwSyncCoordinator sync;
+  JwSyncCoordinator sync;
   final _Faults? interceptor;
   Directory get ledger =>
       Directory(p.windows.join(owner.path, 'jw_partitions_v1'));
@@ -957,9 +1096,27 @@ final class _Harness {
     expect(sync.syncView.importCommitted, isTrue);
   }
 
+  JwSyncCoordinator _newCoordinator() => JwSyncCoordinator(
+    store: store,
+    registry: registry,
+    browser: browser,
+    leases: leases,
+    clock: FixedClock(DateTime.utc(2026, 10, 10)),
+    loginWaitTimeout: const Duration(milliseconds: 100),
+    automationPollInterval: const Duration(milliseconds: 1),
+  );
+
+  Future<void> restartCoordinator() async {
+    await sync.shutdown();
+    registry = JwPartitionRegistry(owner);
+    sync = _newCoordinator();
+    await sync.initialize();
+  }
+
   Future<void> dispose() async {
     browser.releaseAvailability();
     browser.releaseCollection();
+    browser.releasePartitionBackendCheck();
     interceptor?.releaseHidden();
     if (await fault.exists()) await fault.delete();
     if (sync.syncView.phase == JwSyncPhase.recovery) await sync.retryRecovery();
@@ -984,9 +1141,21 @@ final class _Browser
         ObservationAvailabilityBrowserPort,
         JwProbeBrowserPort,
         JwCollectionBrowserPort,
-        JwAuthenticationBrowserPort {
+        JwAuthenticationBrowserPort,
+        ObservationPartitionBackendBrowserPort {
   final eventsController = StreamController<BrowserEvent>.broadcast(sync: true);
   final profilePaths = <String>[];
+  final recoveryOnlyPaths = <String>[];
+  final backendCheckPaths = <String>[];
+  final backendSources = <ObservationSource>[];
+  final backendFixtures = <bool>[];
+  bool checkPartitionBackend = false;
+  bool backendCurrent = true;
+  AppFailure? backendFailure;
+  bool holdPartitionBackendCheck = false;
+  Completer<void> partitionBackendCheckEntered = Completer<void>();
+  final _partitionBackendCheckGate = Completer<void>();
+  Future<void> Function(String path)? onRecoveryOpen;
   bool checkAvailability = false;
   bool holdAvailability = false;
   AppFailure? availabilityFailure;
@@ -1028,6 +1197,37 @@ final class _Browser
   @override
   bool get requiresAvailabilityCheck => checkAvailability;
 
+  @override
+  bool get requiresPartitionBackendCheck => checkPartitionBackend;
+
+  @override
+  Future<bool> isCurrentPartitionBackend({
+    required String profilePath,
+    required ObservationSource source,
+    required bool fixture,
+  }) async {
+    backendCheckPaths.add(profilePath);
+    backendSources.add(source);
+    backendFixtures.add(fixture);
+    if (!partitionBackendCheckEntered.isCompleted) {
+      partitionBackendCheckEntered.complete();
+    }
+    if (holdPartitionBackendCheck) await _partitionBackendCheckGate.future;
+    final failure = backendFailure;
+    if (failure != null) throw failure;
+    return backendCurrent;
+  }
+
+  void releasePartitionBackendCheck() {
+    if (!_partitionBackendCheckGate.isCompleted) {
+      _partitionBackendCheckGate.complete();
+    }
+  }
+
+  void resetPartitionBackendCheckWaiter() {
+    partitionBackendCheckEntered = Completer<void>();
+  }
+
   void releaseAvailability() {
     if (!_availabilityGate.isCompleted) _availabilityGate.complete();
   }
@@ -1052,6 +1252,10 @@ final class _Browser
     _session = session;
     _origin = target.initialUri.origin;
     profilePaths.add(profilePath);
+    if (recoveryOnly) {
+      recoveryOnlyPaths.add(profilePath);
+      await onRecoveryOpen?.call(profilePath);
+    }
     _document = 1;
     _authenticated = !authenticationRequired;
     if (failOpenOnce) {

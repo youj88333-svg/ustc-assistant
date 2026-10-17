@@ -50,29 +50,38 @@ void main() {
   });
 
   testWidgets(
-    'an older provider rejects acquisition but can still clear and drain a registered partition',
+    'ordinary provider opens without advanced gates and recovery drains without opening the source',
     (tester) async {
       await tester.runAsync(() async {
         final root = await _createFixtureRoot();
         final owned = await AndroidDirectories.acquire(root.directory.path);
         final fixture = await JwSyncFixture.start();
-        final browser = NativeObservationBrowser();
+        final browser = NativeObservationBrowser(
+          requiresAvailabilityCheck: true,
+          supportsIsolatedCleanupPending: true,
+        );
         try {
           owned.formal.createPlainChildDirectory('jw_partitions_v1');
           final path = owned.formal.createPlainChildDirectory(
             'jw_partitions_v1/jwp-${'a' * 32}',
           );
           final target = ObservationTarget.fixture(fixture.initialUri);
-          await expectLater(
-            browser.open(session: 1, profilePath: path, target: target),
-            throwsA(
-              isA<AppFailure>().having(
-                (e) => e.code,
-                'code',
-                FailureCode.unsupportedPlatform,
-              ),
-            ),
+          final ready = browser.events.firstWhere(
+            (event) =>
+                event.session == 1 && event.kind == BrowserEventKind.ready,
           );
+          await browser.openBackground(
+            session: 1,
+            profilePath: path,
+            target: target,
+          );
+          final stamp = await ready.timeout(const Duration(seconds: 20));
+          expect(
+            (await browser.inspect(session: 1, document: stamp.document)).ready,
+            isTrue,
+          );
+          await browser.close(1);
+          expect(await browser.drained(1), isTrue);
           await browser.open(
             session: 2,
             profilePath: path,
@@ -81,8 +90,8 @@ void main() {
           );
           await browser.close(2);
           expect(await browser.drained(2), isTrue);
-          _reportData['missingIsolationRejected'] = true;
-          _reportData['cleanupWithoutAuthenticationCapability'] = true;
+          _reportData['ordinaryProviderOpenedWithoutAdvancedGate'] = true;
+          _reportData['recoveryWithoutSourceNavigation'] = true;
         } finally {
           await fixture.close();
           await browser.dispose();
@@ -96,7 +105,7 @@ void main() {
   );
 
   testWidgets(
-    'Android top/frame navigation, unsolicited popup and external protocol remain blocked',
+    'Android observable navigation controls remain blocked and opaque frame coverage is reported honestly',
     (tester) async {
       await tester.runAsync(() async {
         final harness = await _AndroidA2Harness.create();
@@ -104,9 +113,12 @@ void main() {
         final denied = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
         var deniedRequests = 0;
         var script = '';
+        var pageNativeBridgeAbsent = false;
         final malformedSent = Completer<void>();
         source.listen((request) async {
           if (request.uri.path == '/fixture-malformed-sent') {
+            pageNativeBridgeAbsent =
+                request.uri.queryParameters['bridge'] == 'absent';
             if (!malformedSent.isCompleted) malformedSent.complete();
             request.response.statusCode = HttpStatus.noContent;
             await request.response.close();
@@ -139,8 +151,6 @@ void main() {
           final cases = <BrowserDiagnosticCode, String>{
             BrowserDiagnosticCode.topNavigationBlocked:
                 'location.href="$rejected"',
-            BrowserDiagnosticCode.frameNavigationBlocked:
-                'const f=document.createElement("iframe");f.src="$rejected";document.body.appendChild(f)',
             BrowserDiagnosticCode.popupBlocked: 'window.open("$rejected")',
             BrowserDiagnosticCode.externalProtocolBlocked:
                 'location.href="mailto:fixture@example.invalid"',
@@ -153,7 +163,13 @@ void main() {
             script = entry.value;
             final session = ++sequence;
             final diagnostics = <String>[];
+            BrowserEvent? latestDocument;
             final subscription = harness.browser.events.listen((e) {
+              if (e.session == session &&
+                  (latestDocument == null ||
+                      e.document >= latestDocument!.document)) {
+                latestDocument = e;
+              }
               if (diagnostics.length < 20) {
                 diagnostics.add(
                   '${e.kind.name}:${e.diagnostic?.code.name ?? "none"}',
@@ -169,11 +185,7 @@ void main() {
             final blocked = harness.browser.events.firstWhere(
               (e) =>
                   e.kind == BrowserEventKind.diagnostic &&
-                  (e.diagnostic?.code == entry.key ||
-                      (entry.key ==
-                              BrowserDiagnosticCode.frameNavigationBlocked &&
-                          e.diagnostic?.code ==
-                              BrowserDiagnosticCode.documentRequestBlocked)),
+                  e.diagnostic?.code == entry.key,
             );
             await harness.browser.openBackground(
               session: session,
@@ -187,12 +199,27 @@ void main() {
                   'Control ${entry.key.name}: $diagnostics; rejected requests $deniedRequests',
                 ),
               );
-              final initial = observed.first;
-              final current = await harness.browser.inspect(
+              // A blocked attachment navigation can still produce a native
+              // document callback. Inspect its latest stamp rather than reuse
+              // the ready event emitted before the attempted navigation.
+              var current = await harness.browser.inspect(
                 session: session,
-                document: initial.document,
+                document: (latestDocument ?? observed.first).document,
               );
-              expect(current.ready, isTrue);
+              final settling = Stopwatch()..start();
+              while (!current.ready &&
+                  settling.elapsed < const Duration(seconds: 5)) {
+                await Future<void>.delayed(const Duration(milliseconds: 50));
+                current = await harness.browser.inspect(
+                  session: session,
+                  document: latestDocument!.document,
+                );
+              }
+              expect(
+                current.ready,
+                isTrue,
+                reason: 'Control ${entry.key.name}: $diagnostics',
+              );
               expect(current.origin, origin);
               expect(
                 deniedRequests,
@@ -206,13 +233,12 @@ void main() {
               await subscription.cancel();
             }
           }
-          // The page-visible Young reply object is not an authority. Wrong
-          // payload types, malformed JSON and forged capabilities are ignored.
+          // Ordinary scripts return through native evaluation callbacks. There
+          // is no page-to-Java entry point accepting unsolicited response data.
           script = '''
-            __ustcSourcePage.postMessage(new ArrayBuffer(8));
-            __ustcSourcePage.postMessage('{');
-            __ustcSourcePage.postMessage('{"reply":"forged","call":1,"value":{}}');
-            fetch('/fixture-malformed-sent');
+            const bridge = typeof __ustcSourcePage === 'undefined' &&
+              typeof __ustcSourceNative === 'undefined' ? 'absent' : 'present';
+            fetch('/fixture-malformed-sent?bridge='+bridge);
           ''';
           harness.directories.demo.createPlainChildDirectory(
             'young_observation_v1',
@@ -233,6 +259,7 @@ void main() {
           try {
             final stamp = await youngReady.timeout(const Duration(seconds: 10));
             await malformedSent.future.timeout(const Duration(seconds: 10));
+            expect(pageNativeBridgeAbsent, isTrue);
             await Future<void>.delayed(const Duration(milliseconds: 100));
             expect(
               (await harness.browser.inspect(
@@ -246,8 +273,44 @@ void main() {
             expect(await harness.browser.drained(sequence), isTrue);
           }
           _reportData['documentAndPopupControls'] = true;
-          _reportData['malformedPageMessagesIgnored'] = true;
+          _reportData['pageNativeBridgeAbsent'] = true;
           _reportData['rejectedDestinationRequests'] = deniedRequests;
+          // Ordinary WebView does not expose every embedded-document load to
+          // native callbacks. The approved contract retains observable controls,
+          // and explicitly makes no all-frame or zero-network guarantee here.
+          script =
+              'const f=document.createElement("iframe");f.src="$rejected";document.body.appendChild(f)';
+          final frameSession = ++sequence;
+          final frameProfile = harness.directories.demo.createPlainChildDirectory(
+            'observation_v1/obs-${frameSession.toRadixString(16).padLeft(32, '0')}',
+          );
+          final frameReady = harness.browser.events.firstWhere(
+            (event) =>
+                event.session == frameSession &&
+                event.kind == BrowserEventKind.ready,
+          );
+          await harness.browser.openBackground(
+            session: frameSession,
+            profilePath: frameProfile,
+            target: ObservationTarget.fixture(Uri.parse('$origin/sandbox')),
+          );
+          try {
+            final stamp = await frameReady.timeout(const Duration(seconds: 10));
+            await Future<void>.delayed(const Duration(seconds: 1));
+            expect(
+              (await harness.browser.inspect(
+                session: frameSession,
+                document: stamp.document,
+              )).origin,
+              origin,
+            );
+            expect(deniedRequests, inInclusiveRange(0, 1));
+            _reportData['allFrameInterceptionClaimed'] = false;
+            _reportData['opaqueFrameDestinationRequests'] = deniedRequests;
+          } finally {
+            await harness.browser.close(frameSession);
+            expect(await harness.browser.drained(frameSession), isTrue);
+          }
         } finally {
           await source.close(force: true);
           await denied.close(force: true);
@@ -813,8 +876,24 @@ void main() {
           );
           expect(rejected.committed, isFalse, reason: rejected.safeSummary);
           expect(rejected.collectionStage, isNotNull);
-          expect(rejected.collectionReason, isNotNull);
-          expect(rejected.safeSummary, contains('collectionReason'));
+          // Either the native history callback or the page-side guard can
+          // observe this route change first. Both must reject the old result;
+          // only the latter carries an additional page-side reason.
+          expect(
+            rejected.failure,
+            FailureCode.staleResult,
+            reason: rejected.safeSummary,
+          );
+          if (rejected.collectionReason != null) {
+            expect(
+              rejected.collectionReason,
+              anyOf(
+                YoungBusinessRejection.stampChanged,
+                YoungBusinessRejection.mainRoute,
+              ),
+            );
+            expect(rejected.safeSummary, contains('collectionReason'));
+          }
           expect(rejected.data!.queryCount, beforeQueryCount);
           expect(rejected.data!.importCount, beforeImportCount);
           expect(rejected.data!.events, hasLength(1));
@@ -901,7 +980,10 @@ final class _AndroidA2Harness {
         credentialProtector: const AndroidJwCredentialProtector(),
       );
       await store.initialize().timeout(const Duration(seconds: 45));
-      browser = NativeObservationBrowser(requiresAvailabilityCheck: true);
+      browser = NativeObservationBrowser(
+        requiresAvailabilityCheck: true,
+        supportsIsolatedCleanupPending: true,
+      );
       return _AndroidA2Harness(
         fixtureRoot: fixtureRoot,
         directories: directories,

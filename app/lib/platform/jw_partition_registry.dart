@@ -85,6 +85,17 @@ final class JwPartitionRegistry {
     return _path(ref.id, directory: true);
   }
 
+  /// Metadata-only path for a committed permit before reconciliation. This
+  /// grants no open/claim authority and does not bypass _requireReady.
+  String backendCheckPath(JwClaimPermit permit) {
+    _ensureOpen();
+    if (permit.accountId != 1) {
+      throw const AppFailure(FailureCode.staleResult);
+    }
+    _validateRef(permit.partition);
+    return _path(permit.partition.id, directory: true);
+  }
+
   Future<JwPartitionRef> createProvisional({
     required String ownerId,
     required JwPartitionPurpose purpose,

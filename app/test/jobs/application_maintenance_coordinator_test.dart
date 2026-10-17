@@ -15,6 +15,45 @@ const _context = SettingsContext(
 
 void main() {
   test(
+    'retired browser cleanup is independent and acquires the C2 lease',
+    () async {
+      final data = _Data();
+      final leases = WorkLeasePool();
+      var pendingCount = 2;
+      var retries = 0;
+      final runner = ApplicationMaintenanceCoordinator(
+        data: data,
+        leases: leases,
+        cleanProfiles: (_) async {},
+        drainForExit: () async {},
+        readBrowserCleanupPendingCount: () async => pendingCount,
+        retryBrowserCleanup: (lease) async {
+          expect(lease.isHeld, isTrue);
+          expect(lease.belongsTo(leases), isTrue);
+          retries++;
+          pendingCount = 0;
+          return pendingCount;
+        },
+      );
+
+      expect(await runner.browserCleanupPendingCount(), 2);
+      final schoolOrModelWork = leases.acquire();
+      await expectLater(
+        runner.retryRetiredBrowserCleanup(),
+        throwsA(_failure(SettingsFailureCode.busy)),
+      );
+      expect(retries, 0);
+      schoolOrModelWork.release();
+
+      expect(await runner.retryRetiredBrowserCleanup(), 0);
+      expect(retries, 1);
+      expect(runner.view.phase, MaintenancePhase.idle);
+      expect(leases.isBusy, isFalse);
+      await runner.close();
+    },
+  );
+
+  test(
     'Android durable block precedes intent and remains through cleanup',
     () async {
       final data = _Data();

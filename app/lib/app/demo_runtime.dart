@@ -526,6 +526,8 @@ final class RuntimeBootstrap extends ChangeNotifier {
         leases: leases,
         cleanProfiles: profiles.clean,
         drainForExit: profiles.drainForExit,
+        readBrowserCleanupPendingCount: profiles.browserCleanupPendingCount,
+        retryBrowserCleanup: profiles.retryBrowserCleanup,
       );
       final ownedSpeech = speechInput;
       maintenance.drainAgent = () async {

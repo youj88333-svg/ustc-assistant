@@ -1,4 +1,4 @@
-(function(expectedOrigin, capability, replyCapability, selfRouteId, externalCurrent) {
+(function(expectedOrigin, capability, replyCapability, selfRouteId, externalCurrent, initialGeneration) {
   'use strict';
   if (this !== this.top || this.location.origin !== expectedOrigin) return;
   const root = this;
@@ -22,9 +22,16 @@
   const responseBody = Object.getOwnPropertyDescriptor(Response.prototype, 'body').get;
   const responseHeaders = Object.getOwnPropertyDescriptor(Response.prototype, 'headers').get;
   const headerGet = Headers.prototype.get;
-  const getReader = ReadableStream.prototype.getReader;
-  const read = ReadableStreamDefaultReader.prototype.read;
-  const cancelReader = ReadableStreamDefaultReader.prototype.cancel;
+  // Older Chromium builds can expose the reader methods only through a
+  // reader instance, without a global ReadableStreamDefaultReader constructor.
+  const NativeReadableStream = ReadableStream;
+  const getReader = NativeReadableStream.prototype.getReader;
+  const readerProbe = apply(getReader, new NativeReadableStream(), []);
+  const readerPrototype = Object.getPrototypeOf(readerProbe);
+  const read = readerPrototype.read;
+  const cancelReader = readerPrototype.cancel;
+  const releaseReader = readerPrototype.releaseLock;
+  apply(releaseReader, readerProbe, []);
   const Decoder = TextDecoder;
   const decode = TextDecoder.prototype.decode;
   const queryDocument = Document.prototype.querySelectorAll;
@@ -47,16 +54,11 @@
   const safeInteger = Number.isSafeInteger;
   const timer = root.setTimeout.bind(root);
   const clearTimer = root.clearTimeout.bind(root);
-  const worker = root.navigator.serviceWorker;
-  const workerController = worker ?
-      Object.getOwnPropertyDescriptor(ServiceWorkerContainer.prototype, 'controller').get : null;
-  const addListener = EventTarget.prototype.addEventListener;
-  const workerControlled = () => worker !== undefined && worker !== null &&
-      call(workerController, worker, []) !== null;
   // Capture rather than consulting page-replaced JSON or DOM methods later.
   void stringifyJson;
   let slot = null;
   let lastOperation = 0;
+  let currentGeneration = Number.isSafeInteger(initialGeneration) && initialGeneration >= 0 ? initialGeneration : 0;
   const call = (fn, receiver, args) => apply(fn, receiver, args);
   const record = () => create(null);
   const array = () => setPrototype([], null);
@@ -104,7 +106,7 @@
     'identity_http', 'identity_mime', 'identity_too_large', 'identity_schema',
     'course_http', 'course_mime', 'course_too_large', 'course_schema',
     'exams_http', 'exams_mime', 'exams_too_large', 'exams_schema',
-    'network_failed', 'timed_out', 'helper_unavailable', 'stale_result', 'service_worker_controlled',
+    'network_failed', 'timed_out', 'helper_unavailable', 'stale_result',
     'index_http', 'index_mime', 'index_too_large', 'index_schema',
     'datum_http', 'datum_mime', 'datum_too_large', 'datum_schema', 'semester_unknown', 'identity_changed'];
   const stages = ['identity', 'course', 'exams'];
@@ -149,19 +151,9 @@
     return summary;
   };
   const bounded = (value, maximum) => safeInteger(value) && value >= 0 && value <= maximum;
-  const invalidateWorker = state => {
-    state.blockedByWorker = true;
-    state.identity = null; state.semesters = null; state.summary = null; state.diagnostics = null;
-    if (!state.cancelled) {
-      state.phase = state.settled ? 'failed' : 'running';
-      state.code = 'service_worker_controlled';
-    }
-    if (state.controller) call(abort, state.controller, []);
-  };
   // All exported objects have null prototypes and freshly copied primitives;
   // page mutations of prototypes/toJSON cannot replace or extend the result.
   const project = state => {
-    if (state === slot && (state.blockedByWorker || workerControlled())) invalidateWorker(state);
     if (state.dataProbe) return projectData(state);
     const out = record();
     out.operation = state.operation;
@@ -247,6 +239,8 @@
   const failure = (operation, code, trusted = true) => {
     const state = record();
     state.operation = safeInteger(operation) && operation > 0 ? operation : 0;
+    state.documentGeneration = currentGeneration;
+    state.href = root.location.href;
     state.phase = 'failed';
     state.code = trusted ? code : 'helper_unavailable';
     state.settled = true;
@@ -257,16 +251,13 @@
     }
     return reply(state);
   };
-  const current = state => typeof externalCurrent === 'function' && externalCurrent() &&
+  const current = state => typeof externalCurrent === 'function' &&
+      externalCurrent(state.documentGeneration, state.href) &&
       root.location.origin === expectedOrigin &&
       root.location.pathname === state.pathname && root.location.search === state.search &&
       root.location.hash === state.hash;
   const requireCurrent = state => {
     if (state.cancelled || !current(state)) throw 'stale_result';
-    if (state.blockedByWorker || workerControlled()) {
-      invalidateWorker(state);
-      throw 'service_worker_controlled';
-    }
   };
   const readHtml = async (state, stage, path) => {
     requireCurrent(state);
@@ -319,7 +310,6 @@
         try { await call(cancelReader, reader, []); } catch (_) {}
       }
       if (state.cancelled) throw 'cancelled';
-      if (state.blockedByWorker || workerControlled()) throw 'service_worker_controlled';
       if (state.timedOut) throw 'timed_out';
       if (!current(state)) throw 'stale_result';
       if (typeof error === 'string' && contains(codes, error)) throw error;
@@ -773,7 +763,7 @@
     out.phase = contains(phases, state.phase) ? state.phase : 'failed';
     out.code = contains(codes, state.code) ? state.code : 'helper_unavailable';
     if (contains(dataStages, state.stage)) out.stage = state.stage;
-    if (state.cancelled || state.blockedByWorker || !current(state) || !state.diagnostics) return out;
+    if (state.cancelled || !current(state) || !state.diagnostics) return out;
     const diagnostic = emptyDataDiagnostics();
     diagnostic.reason = contains(dataReasons, state.diagnostics.reason)
         ? state.diagnostics.reason : 'field_conflict';
@@ -887,7 +877,6 @@
         try { await call(cancelReader, reader, []); } catch (_) {}
       }
       if (state.cancelled) throw 'cancelled';
-      if (state.blockedByWorker || workerControlled()) throw 'service_worker_controlled';
       if (state.timedOut) throw 'timed_out';
       if (!current(state)) throw 'stale_result';
       if (typeof error === 'string' && contains(codes, error)) throw error;
@@ -1121,7 +1110,7 @@
         await action(); requireCurrent(state);
         state.diagnostics.checks[stage] = 'ok';
       } catch (error) {
-        if (state.cancelled || !current(state) || state.blockedByWorker || workerControlled()) throw error;
+        if (state.cancelled || !current(state)) throw error;
         const code = typeof error === 'string' && contains(codes, error) ? error : 'helper_unavailable';
         state.diagnostics.checks[stage] = 'error';
         if (!firstFailure) { firstFailure = code; firstStage = stage; }
@@ -1192,7 +1181,7 @@
       if (state.phase !== 'done' || state.code !== 'ok') {
         state.courses = null; state.exams = null;
       }
-      if (state.cancelled || !current(state) || state.blockedByWorker || workerControlled()) {
+      if (state.cancelled || !current(state)) {
         state.identity = null; state.diagnostics = null;
       }
     }
@@ -1206,9 +1195,9 @@
         requireCurrent(state);
         state.summary.stageResults[stage] = 'ok';
       } catch (error) {
-        // Cancellation, document changes and Worker control invalidate the
+        // Cancellation and document changes invalidate the
         // operation. Ordinary read/schema failures stay specific to one item.
-        if (state.cancelled || !current(state) || state.blockedByWorker || workerControlled()) throw error;
+        if (state.cancelled || !current(state)) throw error;
         const code = typeof error === 'string' && contains(codes, error) ? error : 'helper_unavailable';
         state.summary.stageResults[stage] = code;
         if (!firstFailure) { firstFailure = code; firstStage = stage; }
@@ -1239,13 +1228,19 @@
     } finally {
       state.settled = true;
       state.controller = null;
-      if (state.cancelled || !current(state) || state.blockedByWorker || workerControlled()) {
+      if (state.cancelled || !current(state)) {
         state.identity = null; state.semesters = null; state.summary = null;
       }
     }
   };
   const authorized = (key, operation) => key === capability && safeInteger(operation) && operation > 0;
   const api = record();
+  api.bindGeneration = function(key, generation) {
+    if (key !== capability || !safeInteger(generation) || generation < currentGeneration)
+      throw 'stale_result';
+    currentGeneration = generation;
+    return currentGeneration;
+  };
   api.start = function(key, operation) {
     if (!authorized(key, operation)) return failure(operation, 'helper_unavailable', false);
     if (slot && !slot.settled) return failure(operation, 'helper_unavailable');
@@ -1254,15 +1249,13 @@
     const match = exec(/^\/for-std\/(?:course-table|exam-arrange|student-info)\/info\/([0-9]{1,12})\/?$/, root.location.pathname);
     const state = record();
     state.operation = operation;
+    state.documentGeneration = currentGeneration;
+    state.href = root.location.href;
     state.phase = 'running'; state.code = 'pending'; state.settled = false;
     state.cancelled = false; state.controller = null; state.summary = emptySummary();
-    state.blockedByWorker = false;
     state.pathname = root.location.pathname; state.search = root.location.search; state.hash = root.location.hash;
     slot = state;
-    if (workerControlled()) {
-      state.phase = 'failed'; state.code = 'service_worker_controlled'; state.settled = true;
-      state.blockedByWorker = true; state.summary = null;
-    } else if (root.location.origin !== expectedOrigin || !match) {
+    if (root.location.origin !== expectedOrigin || !match) {
       state.phase = 'failed'; state.code = 'student_context_missing'; state.settled = true;
     } else {
       state.dataId = match[1];
@@ -1280,16 +1273,15 @@
     state.collecting = collecting;
     state.courses = array(); state.exams = array();
     state.operation = operation;
+    state.documentGeneration = currentGeneration;
+    state.href = root.location.href;
     state.phase = 'running'; state.code = 'pending'; state.settled = false;
-    state.cancelled = false; state.blockedByWorker = false; state.controller = null;
+    state.cancelled = false; state.controller = null;
     state.pathname = root.location.pathname; state.search = root.location.search; state.hash = root.location.hash;
     state.diagnostics = emptyDataDiagnostics();
     slot = state;
     const match = exec(/^\/for-std\/(?:course-table|exam-arrange|student-info)\/info\/([0-9]{1,12})\/?$/, state.pathname);
-    if (workerControlled()) {
-      state.phase = 'failed'; state.code = 'service_worker_controlled'; state.settled = true;
-      state.blockedByWorker = true; state.diagnostics = null;
-    } else if (root.location.origin !== expectedOrigin || !match) {
+    if (root.location.origin !== expectedOrigin || !match) {
       state.phase = 'failed'; state.code = 'student_context_missing'; state.settled = true;
     } else if (!positiveId(semesterId)) {
       state.phase = 'failed'; state.code = 'semester_unknown'; state.settled = true;
@@ -1329,11 +1321,7 @@
     if (slot.controller) call(abort, slot.controller, []);
     return reply(slot);
   };
-  freeze(api.start); freeze(api.data); freeze(api.collect); freeze(api.poll); freeze(api.cancel); freeze(api);
+  freeze(api.bindGeneration); freeze(api.start); freeze(api.data); freeze(api.collect); freeze(api.poll); freeze(api.cancel); freeze(api);
   define(root, '__ustcJwProbeV1', {value: api, writable: false, configurable: false, enumerable: false});
-  if (worker) call(addListener, worker, ['controllerchange', () => {
-    // A controller appearing/disappearing during a read invalidates the entire
-    // candidate operation; it cannot be repaired by later uncontrolled state.
-    if (slot) invalidateWorker(slot);
-  }]);
+  return api;
 })

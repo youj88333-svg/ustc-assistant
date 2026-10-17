@@ -48,6 +48,7 @@ final class ApplicationSettingsController extends ChangeNotifier
   Future<void>? _action;
   KnowledgeLoadOutcome? _loadOutcome;
   MaintenanceProgress? _readiness;
+  int? _browserCleanupPendingCount;
 
   void _subscribe() {
     if (_subscriptionsActive) {
@@ -99,6 +100,7 @@ final class ApplicationSettingsController extends ChangeNotifier
     actionPending: _pending,
     knowledgeLoading: knowledge.isLoading,
     maintenance: _readiness ?? maintenance.view,
+    browserCleanupPendingCount: _browserCleanupPendingCount,
     failure: _failure,
     loadOutcome: _loadOutcome,
     progressUnavailable: _progressUnavailable || _closing,
@@ -162,8 +164,21 @@ final class ApplicationSettingsController extends ChangeNotifier
     final generation = ++_readGeneration;
     _loading = true;
     _notify();
+    final cleanupCountRead = _readBrowserCleanupPendingCount();
+    unawaited(
+      cleanupCountRead.then((count) {
+        if (!_closing && generation == _readGeneration) {
+          _browserCleanupPendingCount = count;
+          _notify();
+        }
+      }),
+    );
     try {
       final snapshot = await data.inspectSettings();
+      if (_closing || generation != _readGeneration) {
+        return;
+      }
+      final cleanupPendingCount = await cleanupCountRead;
       if (_closing || generation != _readGeneration) {
         return;
       }
@@ -171,6 +186,7 @@ final class ApplicationSettingsController extends ChangeNotifier
         _loadOutcome = null;
       }
       _snapshot = snapshot;
+      _browserCleanupPendingCount = cleanupPendingCount;
     } catch (error) {
       if (!_closing && generation == _readGeneration) {
         _failure = ApplicationMaintenanceCoordinator.failureCode(error);
@@ -181,6 +197,15 @@ final class ApplicationSettingsController extends ChangeNotifier
         _loading = false;
         _notify();
       }
+    }
+  }
+
+  Future<int?> _readBrowserCleanupPendingCount() async {
+    try {
+      return await maintenance.browserCleanupPendingCount();
+    } catch (_) {
+      // Keep the last known count; a status-read failure does not clear it.
+      return _browserCleanupPendingCount;
     }
   }
 
@@ -272,6 +297,15 @@ final class ApplicationSettingsController extends ChangeNotifier
       if (!maintenance.view.blocksProduct) {
         await onRecovered?.call();
       }
+    });
+  }
+
+  @override
+  Future<void> retryBrowserCleanup() {
+    _ready();
+    return _maintenanceAction(() async {
+      _browserCleanupPendingCount = await maintenance
+          .retryRetiredBrowserCleanup();
     });
   }
 

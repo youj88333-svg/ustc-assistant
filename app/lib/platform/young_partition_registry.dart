@@ -88,6 +88,16 @@ final class YoungPartitionRegistry {
     return _path(ref.id, directory: true);
   }
 
+  /// Metadata inspection only; opening still requires a current claimed ref.
+  String backendCheckPath(YoungClaimPermit permit) {
+    _ensureOpen();
+    if (permit.accountId != 1) {
+      throw const AppFailure(FailureCode.staleResult);
+    }
+    _validateRef(permit.partition);
+    return _path(permit.partition.id, directory: true);
+  }
+
   Future<YoungPartitionRef> createProvisional({
     required String ownerId,
     required YoungPartitionPurpose purpose,

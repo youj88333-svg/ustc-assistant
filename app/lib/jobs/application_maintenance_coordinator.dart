@@ -13,11 +13,15 @@ final class ApplicationMaintenanceCoordinator {
     required this.leases,
     required this.cleanProfiles,
     required this.drainForExit,
+    this.readBrowserCleanupPendingCount,
+    this.retryBrowserCleanup,
   });
   final ApplicationSettingsDataPort data;
   final WorkLeasePool leases;
   final Future<void> Function(WorkLease) cleanProfiles;
   final Future<void> Function() drainForExit;
+  final Future<int?> Function()? readBrowserCleanupPendingCount;
+  final Future<int?> Function(WorkLease)? retryBrowserCleanup;
   Future<void> Function()? drainAgent;
   Future<void> Function()? drainReminders;
   Future<void> Function()? prepareReminders;
@@ -74,7 +78,7 @@ final class ApplicationMaintenanceCoordinator {
     }
   }
 
-  Future<void> _track(Future<void> Function() body) {
+  Future<T> _track<T>(Future<T> Function() body) {
     if (_closed || _closing != null) {
       throw const SettingsFailure(SettingsFailureCode.closed);
     }
@@ -85,12 +89,45 @@ final class ApplicationMaintenanceCoordinator {
     _work = done.future;
     return () async {
       try {
-        await body();
+        return await body();
       } finally {
         _work = null;
         done.complete();
       }
     }();
+  }
+
+  Future<int?> browserCleanupPendingCount() async {
+    final read = readBrowserCleanupPendingCount;
+    if (read == null) return null;
+    return read();
+  }
+
+  /// This maintenance is independent of C3 reset state. Its private C2 lease
+  /// prevents a cleanup retry from competing with school, Agent, or model work.
+  Future<int?> retryRetiredBrowserCleanup() {
+    if (_closed || _closing != null) {
+      throw const SettingsFailure(SettingsFailureCode.closed);
+    }
+    final retry = retryBrowserCleanup;
+    if (retry == null) {
+      throw const SettingsFailure(SettingsFailureCode.busy);
+    }
+    if (_view.blocksProduct || _work != null || _lease != null) {
+      throw const SettingsFailure(SettingsFailureCode.busy);
+    }
+    return _track<int?>(() async {
+      try {
+        _lease = leases.acquire();
+      } on AppFailure catch (error) {
+        throw SettingsFailure(failureCode(error));
+      }
+      try {
+        return await retry(_lease!);
+      } finally {
+        _release();
+      }
+    });
   }
 
   /// Startup never enters ordinary initialize until this returns ready.

@@ -190,6 +190,57 @@ abstract interface class ObservationAvailabilityBrowserPort {
   Future<void> ensureAvailable();
 }
 
+/// Fixed lifecycle metadata for retired Android system WebView profiles.
+/// It deliberately exposes only a bounded count, never a path or profile ID.
+final class ObservationCleanupStatus {
+  const ObservationCleanupStatus._({
+    required this.pending,
+    required this.count,
+  });
+
+  static const maxCount = 2049;
+  static const backend = 'system-directory-v1';
+
+  final bool pending;
+  final int count;
+
+  static ObservationCleanupStatus decode(Object? value) {
+    if (value is! Map ||
+        value.length != 3 ||
+        value['backend'] != backend ||
+        value['pending'] is! bool ||
+        value['count'] is! int) {
+      throw const AppFailure(FailureCode.invalidSnapshot);
+    }
+    final pending = value['pending'] as bool;
+    final count = value['count'] as int;
+    if (count < 0 || count > maxCount || pending != (count > 0)) {
+      throw const AppFailure(FailureCode.invalidSnapshot);
+    }
+    return ObservationCleanupStatus._(pending: pending, count: count);
+  }
+}
+
+/// Optional Android-only operations over already revoked, isolated old roots.
+/// Implementations must not expose paths, credentials, cookies, or business data.
+abstract interface class ObservationCleanupStatusBrowserPort {
+  bool get supportsIsolatedCleanupPending;
+  Future<ObservationCleanupStatus> getCleanupStatus();
+  Future<ObservationCleanupStatus> retryBrowserCleanup();
+}
+
+/// Optional backend identity check for a fixed, already-owned profile path.
+/// A false result requires callers to revoke old-backend permits before
+/// recovering their placeholder and creating a fresh partition.
+abstract interface class ObservationPartitionBackendBrowserPort {
+  bool get requiresPartitionBackendCheck;
+  Future<bool> isCurrentPartitionBackend({
+    required String profilePath,
+    required ObservationSource source,
+    required bool fixture,
+  });
+}
+
 /// Presentation only; the same source, profile and native request boundary
 /// remain in force. Ordinary callers continue to open a visible window.
 abstract interface class BackgroundObservationBrowserPort {

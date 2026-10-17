@@ -62,6 +62,8 @@ void main() {
       });
 
       expect(android.requiresAvailabilityCheck, isTrue);
+      expect(android.supportsIsolatedCleanupPending, isTrue);
+      expect(android.requiresPartitionBackendCheck, isTrue);
       await android.ensureAvailable();
       expect(calls, hasLength(1));
       expect(calls.single.method, 'checkSupport');
@@ -135,9 +137,94 @@ void main() {
       const windowsFactory = WindowsRuntimePlatformFactory();
       final windowsBrowser = windowsFactory.createBrowser();
       expect(windowsBrowser.requiresAvailabilityCheck, isFalse);
+      expect(windowsBrowser.supportsIsolatedCleanupPending, isFalse);
+      expect(windowsBrowser.requiresPartitionBackendCheck, isFalse);
       await windowsBrowser.ensureAvailable();
+      expect(
+        await windowsBrowser.isCurrentPartitionBackend(
+          profilePath: r'C:\synthetic-profile',
+          source: ObservationSource.jw,
+          fixture: false,
+        ),
+        isTrue,
+      );
+      await expectLater(
+        windowsBrowser.getCleanupStatus(),
+        code(FailureCode.unsupportedPlatform),
+      );
+      await expectLater(
+        windowsBrowser.retryBrowserCleanup(),
+        code(FailureCode.unsupportedPlatform),
+      );
       expect(calls, isEmpty);
       await windowsBrowser.dispose();
+    },
+  );
+
+  test(
+    'Android cleanup status and backend checks use fixed metadata RPCs',
+    () async {
+      final calls = <MethodCall>[];
+      final android = const AndroidRuntimePlatformFactory().createBrowser();
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return switch (call.method) {
+          'getCleanupStatus' || 'retryBrowserCleanup' => {
+            'backend': 'system-directory-v1',
+            'pending': true,
+            'count': 2,
+          },
+          'isCurrentPartitionBackend' => true,
+          _ => null,
+        };
+      });
+
+      final status = await android.getCleanupStatus();
+      expect(status.pending, isTrue);
+      expect(status.count, 2);
+      expect(calls.single.method, 'getCleanupStatus');
+      expect(calls.single.arguments, isEmpty);
+
+      final retryStatus = await android.retryBrowserCleanup();
+      expect(retryStatus.count, 2);
+      expect(calls.last.method, 'retryBrowserCleanup');
+      expect(calls.last.arguments, isEmpty);
+
+      final current = await android.isCurrentPartitionBackend(
+        profilePath: r'C:\synthetic-profile',
+        source: ObservationSource.young,
+        fixture: true,
+      );
+      expect(current, isTrue);
+      expect(calls.last.method, 'isCurrentPartitionBackend');
+      expect(calls.last.arguments, {
+        'profilePath': r'C:\synthetic-profile',
+        'source': 'young',
+        'testMode': true,
+      });
+      await android.dispose();
+    },
+  );
+
+  test(
+    'cleanup status rejects malformed, inconsistent, and out-of-range values',
+    () async {
+      final calls = <MethodCall>[];
+      final android = const AndroidRuntimePlatformFactory().createBrowser();
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return {
+          'backend': 'system-directory-v1',
+          'pending': true,
+          'count': 2050,
+        };
+      });
+      await expectLater(
+        android.getCleanupStatus(),
+        code(FailureCode.invalidSnapshot),
+      );
+      expect(calls.single.method, 'getCleanupStatus');
+      await android.dispose();
     },
   );
 

@@ -75,6 +75,10 @@ final class _MaintenanceRecoveryPageState
       final progress = view.maintenance;
       final failure = progress.failure ?? view.failure ?? _localFailure;
       final recovery = progress.phase == MaintenancePhase.recovery;
+      final cleanupCount = view.browserCleanupPendingCount ?? 0;
+      final committedText = cleanupCount > 0
+          ? '本应用数据清理已提交，正在恢复页面。教务与二课旧登录资料仍有 $cleanupCount 项待物理清理；重试恢复只刷新显示。'
+          : '本应用数据清理已提交，正在恢复页面。重试只刷新显示。';
       final canRetry =
           recovery && !_retryPending && !view.actionPending && !view.loading;
 
@@ -110,7 +114,7 @@ final class _MaintenanceRecoveryPageState
                           progress.activating
                               ? '应用页面尚未载入，可以重试读取本机状态。'
                               : progress.committed
-                              ? '数据清理已提交，正在恢复页面。重试只刷新显示。'
+                              ? committedText
                               : _recoveryPhaseText(progress.phase),
                           textAlign: TextAlign.center,
                           style: const TextStyle(
@@ -123,6 +127,7 @@ final class _MaintenanceRecoveryPageState
                           _RecoveryScope(
                             kind: progress.kind!,
                             committed: progress.committed,
+                            browserCleanupPendingCount: cleanupCount,
                           ),
                         ],
                         if (failure != null) ...[
@@ -172,18 +177,27 @@ final class _MaintenanceRecoveryPageState
 }
 
 final class _RecoveryScope extends StatelessWidget {
-  const _RecoveryScope({required this.kind, this.committed = false});
+  const _RecoveryScope({
+    required this.kind,
+    this.committed = false,
+    this.browserCleanupPendingCount = 0,
+  });
   final MaintenanceKind kind;
   final bool committed;
+  final int browserCleanupPendingCount;
 
   @override
   Widget build(BuildContext context) {
     final text = committed
-        ? '数据清理已提交，原确认范围不再重复执行。'
+        ? '本应用数据清理已提交，原确认范围不再重复执行。'
         : switch (kind) {
             MaintenanceKind.agenda => '待恢复范围：日程与任务。账号、密码和资料库按原规则保留。',
-            MaintenanceKind.reset => '待恢复范围：本应用数据完全重置。安装文件、数据库容器和恢复账本保留。',
+            MaintenanceKind.reset =>
+              '待恢复范围：本应用数据完全重置。Android 系统 WebView 的教务和二课旧登录资料单独清理；安装文件、数据库容器和恢复账本保留。',
           };
+    final cleanupText = browserCleanupPendingCount > 0
+        ? '\n教务与二课旧登录资料还有 $browserCleanupPendingCount 项待物理清理；它们已停用，不阻塞新分区，重试清理不删除密码或本机业务数据。'
+        : '';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -191,7 +205,7 @@ final class _RecoveryScope extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: const Color(0xFFE3E9E5)),
       ),
-      child: Text(text, softWrap: true),
+      child: Text('$text$cleanupText', softWrap: true),
     );
   }
 }

@@ -1,10 +1,9 @@
 (function(expectedOrigin, capability, replyCapability) {
   'use strict';
 
-  // Install once, in the top page world at DOCUMENT_START, before page code.
-  // The owner retains this API in its private closure. Neither capability is
-  // placed on window, a DOM node, an event, a request, or a page-visible reply.
-  // Native session/document/operation checks remain mandatory at every call.
+  // Install once in the ordinary top-page world after the business document
+  // loads. Same-origin school code is trusted by the approved Android boundary;
+  // native session/document/operation checks still reject stale returned data.
   const win = window;
   const doc = document;
   const apply = Reflect.apply;
@@ -14,7 +13,6 @@
   const define = Object.defineProperty;
   const create = Object.create;
   const freeze = Object.freeze;
-  const fnSource = Function.prototype.toString;
   const stringSlice = String.prototype.slice;
   const stringCode = String.prototype.charCodeAt;
   const stringLower = String.prototype.toLowerCase;
@@ -58,10 +56,23 @@
   const xhrHeader = xhrProto.getResponseHeader;
   const responseClone = Response.prototype.clone;
   const headersGet = Headers.prototype.get;
-  const streamReader = ReadableStream.prototype.getReader;
-  const readChunk = ReadableStreamDefaultReader.prototype.read;
-  const cancelReader = ReadableStreamDefaultReader.prototype.cancel;
-  const releaseReader = ReadableStreamDefaultReader.prototype.releaseLock;
+  // Some Chromium versions expose readers only through native stream instances.
+  const NativeReadableStream = win.ReadableStream;
+  const streamProto = NativeReadableStream && NativeReadableStream.prototype;
+  const streamReader = streamProto && streamProto.getReader;
+  if (typeof streamReader !== 'function') throw rejection('sourceFailed', 'nativeContext');
+  let readerProbe;
+  try { readerProbe = apply(streamReader, new NativeReadableStream(), []); }
+  catch (_) { throw rejection('sourceFailed', 'nativeContext'); }
+  // Older implementations can place generic reader methods one prototype
+  // higher. Read data descriptors through the same bounded lookup used below.
+  const readChunk = dataValue(readerProbe, 'read');
+  const cancelReader = dataValue(readerProbe, 'cancel');
+  const releaseReader = dataValue(readerProbe, 'releaseLock');
+  try { if (typeof releaseReader === 'function') apply(releaseReader, readerProbe, []); }
+  catch (_) {}
+  if (typeof readChunk !== 'function' || typeof cancelReader !== 'function' ||
+      typeof releaseReader !== 'function') throw rejection('sourceFailed', 'nativeContext');
   const historyObject = win.history;
   const historyProto = History.prototype;
   const historyPush = historyProto.pushState;
@@ -74,7 +85,6 @@
   const NAMESPACE = '/login/sc-wisdom-group-learning/';
   const ACTIVITIES_ROUTE = NAMESPACE + 'myproject/SignUp';
   const CALENDAR_ROUTE = NAMESPACE + 'personalInformation/mySchedule';
-  const HELPER_SOURCE = 'function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}';
 
   function ownValue(object, key) {
     const descriptor = getOwn(object, key);
@@ -103,6 +113,20 @@
       throw rejection('sourceFailed', 'nativeContext');
     }
     return descriptor.get;
+  }
+
+  // Window/Location used data descriptors for some live properties on older
+  // Chromium. Their descriptor representation is not a source identity proof.
+  function browserProperty(object, key) {
+    const descriptor = getOwn(object, key);
+    if (descriptor && typeof descriptor.get === 'function') return descriptor.get;
+    if (descriptor && getOwn(descriptor, 'value')) {
+      return function() {
+        if (this !== object) throw rejection('sourceFailed', 'nativeContext');
+        return object[key];
+      };
+    }
+    throw rejection('sourceFailed', 'nativeContext');
   }
 
   function put(object, key, value) {
@@ -145,23 +169,12 @@
   const documentRoot = nativeGetter(Document.prototype, 'documentElement');
   const documentReady = nativeGetter(Document.prototype, 'readyState');
   const locationObject = win.location;
-  const locationOrigin = nativeGetter(locationObject, 'origin');
-  const locationPath = nativeGetter(locationObject, 'pathname');
-  const locationHref = nativeGetter(locationObject, 'href');
+  const locationOrigin = browserProperty(locationObject, 'origin');
+  const locationPath = browserProperty(locationObject, 'pathname');
+  const locationHref = browserProperty(locationObject, 'href');
   const progressLoaded = nativeGetter(ProgressEvent.prototype, 'loaded');
-  const winDocument = nativeGetter(win, 'document');
-  const winTop = nativeGetter(win, 'top');
-  let serviceWorker = null;
-  let workerController = null;
-  if (typeof ServiceWorkerContainer === 'function') {
-    // Do not enumerate registrations, read storage, or disable page workers.
-    const navigatorWorker = getOwn(Navigator.prototype, 'serviceWorker');
-    if (navigatorWorker && typeof navigatorWorker.get === 'function') {
-      serviceWorker = apply(navigatorWorker.get, navigator, []);
-      workerController = nativeGetter(ServiceWorkerContainer.prototype, 'controller');
-    }
-  }
-
+  const winDocument = browserProperty(win, 'document');
+  const winTop = browserProperty(win, 'top');
   if (typeof expectedOrigin !== 'string' || expectedOrigin.length > 512 ||
       typeof capability !== 'string' || capability.length < 16 ||
       typeof replyCapability !== 'string' || replyCapability.length < 16 ||
@@ -260,10 +273,6 @@
       } else if (!intact()) {
         integrityFailure = true;
         fail(state, 'staleResult', 'compiledScript');
-      } else if (serviceWorker && apply(workerController, serviceWorker, []) !== null) {
-        // This fixed read cannot prove a worker-created response is a server
-        // response. Other page networking and worker use remain unaffected.
-        fail(state, 'sourceFailed', 'sourceFailure');
       }
     } catch (_) { fail(state, 'staleResult', 'nativeContext'); }
     return !state.failure;
@@ -526,13 +535,9 @@
   }
 
   function trustedEvent(event) {
-    // Chromium's unforgeable own getter reads the Event internal slot.
-    // dispatchEvent-created events are false even on a genuine native XHR.
-    const descriptor = getOwn(event, 'isTrusted');
-    return !!descriptor && descriptor.configurable === false &&
-      typeof descriptor.get === 'function' &&
-      apply(fnSource, descriptor.get, []) === 'function get isTrusted() { [native code] }' &&
-      apply(descriptor.get, event, []) === true;
+    // Browser-created completion events are trusted; dispatchEvent-created
+    // events are false. The reader does not gate on function source text.
+    return !!event && event.isTrusted === true;
   }
 
   function sendWithScope(body) {
@@ -759,7 +764,7 @@
     const exported = apply(push, webpack, [[[], {}, [['0fea']]]]);
     if (!exported || (typeof exported !== 'object' && typeof exported !== 'function')) return null;
     const candidate = dataValue(exported, 'e');
-    return typeof candidate === 'function' && apply(fnSource, candidate, []) === HELPER_SOURCE ? candidate : null;
+    return typeof candidate === 'function' ? candidate : null;
   }
 
   function validDay(day) {

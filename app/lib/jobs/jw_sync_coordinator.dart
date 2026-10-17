@@ -233,6 +233,7 @@ final class JwSyncCoordinator implements JwSyncPort {
   }
 
   Future<List<JwPartitionRef>> _reconcile() async {
+    if (_ticket == null) await _retirePreviousBrowserBackend();
     final authority = await store.readAuthority();
     return registry.reconcile(
       await store.readCommittedPermits(),
@@ -240,6 +241,27 @@ final class JwSyncCoordinator implements JwSyncPort {
       resetEpoch: authority.resetEpoch,
       drain: _drain,
     );
+  }
+
+  Future<void> _retirePreviousBrowserBackend() async {
+    final port = browser;
+    if (port is! ObservationPartitionBackendBrowserPort) {
+      return;
+    }
+    final backend = port as ObservationPartitionBackendBrowserPort;
+    if (!backend.requiresPartitionBackendCheck) return;
+    for (final permit in await store.readCommittedPermits()) {
+      if (!await backend.isCurrentPartitionBackend(
+        profilePath: registry.backendCheckPath(permit),
+        source: target.source,
+        fixture: target.isFixture,
+      )) {
+        // Revoke before platform recovery or a new attempt. An old backend's
+        // permit cannot claim a new directory merely because the account exists.
+        await store.revokePermits();
+        return;
+      }
+    }
   }
 
   @override
@@ -328,6 +350,8 @@ final class JwSyncCoordinator implements JwSyncPort {
             return;
           }
         }
+        await _retirePreviousBrowserBackend();
+        if (_cancelled) throw const AppFailure(FailureCode.cancelled);
         _ticket = await store.beginJob(
           expectedAccountCode: expectedAccountCode,
         );

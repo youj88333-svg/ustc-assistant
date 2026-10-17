@@ -244,6 +244,7 @@ final class YoungSyncCoordinator implements YoungSyncPort {
   }
 
   Future<List<YoungPartitionRef>> _reconcile() async {
+    if (_ticket == null) await _retirePreviousBrowserBackend();
     final authority = await store.readYoungAuthority();
     final retained = await registry.reconcile(
       await store.readYoungPermits(),
@@ -253,6 +254,25 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     );
     _initialized = true;
     return retained;
+  }
+
+  Future<void> _retirePreviousBrowserBackend() async {
+    final port = browser;
+    if (port is! ObservationPartitionBackendBrowserPort) {
+      return;
+    }
+    final backend = port as ObservationPartitionBackendBrowserPort;
+    if (!backend.requiresPartitionBackendCheck) return;
+    for (final permit in await store.readYoungPermits()) {
+      if (!await backend.isCurrentPartitionBackend(
+        profilePath: registry.backendCheckPath(permit),
+        source: target.source,
+        fixture: target.isFixture,
+      )) {
+        await store.revokeYoungPermits();
+        return;
+      }
+    }
   }
 
   @override
@@ -347,6 +367,8 @@ final class YoungSyncCoordinator implements YoungSyncPort {
             return;
           }
         }
+        await _retirePreviousBrowserBackend();
+        if (_cancelled) throw const AppFailure(FailureCode.cancelled);
         _ticket = await store.beginYoungJob(
           kind: kind,
           expectedAccountCode: expectedAccountCode,

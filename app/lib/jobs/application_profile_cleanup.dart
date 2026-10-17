@@ -80,6 +80,33 @@ final class ApplicationProfileCleanup {
     await youngObservation.close();
   }
 
+  Future<int?> browserCleanupPendingCount() async {
+    final cleanup = browser;
+    if (cleanup is! ObservationCleanupStatusBrowserPort) {
+      return null;
+    }
+    final statusPort = cleanup as ObservationCleanupStatusBrowserPort;
+    if (!statusPort.supportsIsolatedCleanupPending) {
+      return null;
+    }
+    return (await statusPort.getCleanupStatus()).count;
+  }
+
+  Future<int?> retryBrowserCleanup(WorkLease lease) async {
+    if (!lease.belongsTo(leases) || !lease.isHeld) {
+      throw const AppFailure(FailureCode.busy);
+    }
+    final cleanup = browser;
+    if (cleanup is! ObservationCleanupStatusBrowserPort) {
+      throw const AppFailure(FailureCode.unsupportedPlatform);
+    }
+    final statusPort = cleanup as ObservationCleanupStatusBrowserPort;
+    if (!statusPort.supportsIsolatedCleanupPending) {
+      throw const AppFailure(FailureCode.unsupportedPlatform);
+    }
+    return (await statusPort.retryBrowserCleanup()).count;
+  }
+
   Future<void> drainForExit() async {
     final helper = _helper;
     if (helper == null) {

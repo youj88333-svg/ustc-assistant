@@ -7,8 +7,6 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import androidx.webkit.WebViewCompat
-import androidx.webkit.WebViewFeature
 import cn.ustcassistant.mobile.browser.SchoolPolicy
 import cn.ustcassistant.mobile.browser.ScriptCatalog
 import org.json.JSONObject
@@ -25,12 +23,10 @@ import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 
 /** Exercises Young transport correlation using only synthetic loopback responses. */
 @RunWith(AndroidJUnit4::class)
@@ -218,44 +214,44 @@ class A2YoungTransportTest {
         private val scripts = ScriptCatalog(context)
         private val pageLoaded = CountDownLatch(1)
         private val nextCall = AtomicInteger(0)
-        private val pending = ConcurrentHashMap<Long, PendingReply>()
-        private val protocolFailure = AtomicReference<String?>(null)
         private var webView: WebView? = null
         @Volatile private var finishedUrl = ""
+        @Volatile private var bootstrapResult: String? = null
 
         @SuppressLint("SetJavaScriptEnabled")
         fun open() {
-            assertTrue(WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT))
-            assertTrue(WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER))
             server.start()
             instrumentation.runOnMainSync {
                 webView = WebView(context).also { view ->
                     view.settings.javaScriptEnabled = true
-                    WebViewCompat.addWebMessageListener(
-                        view,
-                        "__ustcSourcePage",
-                        policy.origins,
-                    ) { _, message, sourceOrigin, mainFrame, _ ->
-                        if (!mainFrame || sourceOrigin.toString() != policy.businessOrigin) {
-                            return@addWebMessageListener
-                        }
-                        receivePageReply(message.data)
-                    }
-                    WebViewCompat.addDocumentStartJavaScript(
-                        view,
-                        scripts.pageBootstrap(policy),
-                        policy.origins,
-                    )
                     view.webViewClient = object : WebViewClient() {
                         override fun onPageFinished(view: WebView, url: String) {
-                            finishedUrl = url
-                            pageLoaded.countDown()
+                            if (url != initialUrl) return
+                            val guardedBootstrap = "(function(){try{" +
+                                scripts.bootstrap(policy, url, DOCUMENT) +
+                                ";return true;}catch(error){" +
+                                "const specs=[[Response.prototype,['url','status','redirected','type','headers','body']]," +
+                                "[Request.prototype,['url','method']],[URL.prototype,['href','origin','pathname','hash','username','password','searchParams']]," +
+                                "[XMLHttpRequest.prototype,['readyState','status','responseURL','responseType','responseText']]," +
+                                "[Document.prototype,['documentElement','readyState']],[location,['origin','pathname','href']]," +
+                                "[ProgressEvent.prototype,['loaded']],[window,['document','top']]];" +
+                                "const missing=[];specs.forEach((s,i)=>s[1].forEach(k=>{const d=Object.getOwnPropertyDescriptor(s[0],k);" +
+                                "if(!d||typeof d.get!=='function')missing.push(i+':'+k);}));" +
+                                "return 'bootstrap-exception:'+(error&&typeof error.name==='string'?error.name:" +
+                                "error&&error.reason==='nativeContext'?'nativeContext':'unknown')+';missing='+missing.join(',');}})()"
+                            view.evaluateJavascript(guardedBootstrap) { result ->
+                                bootstrapResult = result
+                                finishedUrl = url
+                                pageLoaded.countDown()
+                            }
                         }
                     }
                     view.loadUrl(initialUrl)
                 }
             }
             assertTrue("Synthetic Young page did not load.", pageLoaded.await(15, TimeUnit.SECONDS))
+            assertEquals("Synthetic Young bootstrap failed (exception name only): $bootstrapResult",
+                "true", bootstrapResult)
             assertEquals(initialUrl, finishedUrl)
         }
 
@@ -277,49 +273,20 @@ class A2YoungTransportTest {
             pageNumber?.let { args.put("page", it) }
             day?.let { args.put("day", it) }
 
-            val waiting = PendingReply()
-            pending[id] = waiting
-            try {
-                instrumentation.runOnMainSync {
-                    checkNotNull(webView).evaluateJavascript(scripts.pageCall(args), null)
+            args.put("document", DOCUMENT)
+            val done = CountDownLatch(1)
+            var reply: JSONObject? = null
+            var failure: String? = null
+            instrumentation.runOnMainSync {
+                checkNotNull(webView).evaluateJavascript(scripts.pageCall(args)) { raw ->
+                    try { reply = scripts.unwrap(raw, page = true) }
+                    catch (error: Exception) { failure = error.message ?: "Invalid synthetic page envelope" }
+                    done.countDown()
                 }
-                val reply = waiting.await()
-                protocolFailure.get()?.let { throw AssertionError(it) }
-                assertEquals(scripts.pageReply, reply.getString("reply"))
-                assertEquals(id, reply.getLong("call"))
-                return reply
-            } finally {
-                pending.remove(id)
             }
-        }
-
-        private fun receivePageReply(raw: String?) {
-            if (raw == null || raw.length > 2 * 1024 * 1024) {
-                protocolFailure.compareAndSet(null, "Invalid synthetic page envelope")
-                pending.values.firstOrNull()?.fail("Invalid synthetic page envelope")
-                return
-            }
-            try {
-                val envelope = JSONObject(raw)
-                val id = envelope.optLong("call", -1)
-                if (id <= 0) {
-                    protocolFailure.compareAndSet(null, "Missing synthetic call id")
-                    pending.values.firstOrNull()?.fail("Missing synthetic call id")
-                    return
-                }
-                val waiting = pending[id] ?: return
-                if (envelope.optString("reply") != scripts.pageReply || envelope.length() != 3 ||
-                    (envelope.has("value") == envelope.has("error"))
-                ) {
-                    protocolFailure.compareAndSet(null, "Invalid synthetic page envelope")
-                    waiting.fail("Invalid synthetic page envelope")
-                    return
-                }
-                waiting.complete(envelope)
-            } catch (_: Exception) {
-                protocolFailure.compareAndSet(null, "Invalid synthetic page envelope")
-                pending.values.firstOrNull()?.fail("Invalid synthetic page envelope")
-            }
+            assertTrue("Synthetic page call timed out", done.await(15, TimeUnit.SECONDS))
+            failure?.let { throw AssertionError(it) }
+            return reply ?: throw AssertionError("Synthetic page call had no reply")
         }
 
         override fun close() {
@@ -332,34 +299,8 @@ class A2YoungTransportTest {
                     webView = null
                 }
             } finally {
-                pending.values.forEach { it.fail("Synthetic page closed") }
-                pending.clear()
                 server.close()
             }
-        }
-    }
-
-    private class PendingReply {
-        private val ready = CountDownLatch(1)
-        @Volatile private var value: JSONObject? = null
-        @Volatile private var failure: String? = null
-
-        fun complete(envelope: JSONObject) {
-            value = envelope
-            ready.countDown()
-        }
-
-        fun fail(reason: String) {
-            failure = reason
-            ready.countDown()
-        }
-
-        fun await(): JSONObject {
-            if (!ready.await(15, TimeUnit.SECONDS)) {
-                throw AssertionError("Synthetic page call timed out")
-            }
-            failure?.let { throw AssertionError(it) }
-            return value ?: throw AssertionError("Synthetic page call had no reply")
         }
     }
 
@@ -530,5 +471,6 @@ class A2YoungTransportTest {
 
     private companion object {
         const val OPERATION = 1L
+        const val DOCUMENT = 1L
     }
 }
