@@ -1,6 +1,6 @@
 # USTC Assistant
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；底座、学校桥、Agent/公开能力及手机界面/文件已完成[A4及前序工程/合成验证](../docs/milestones/android-apk/records/07-a4-phone-files.md)，仍是模拟器开发包，目标手机和真实文件/模型/来源未验收。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；底座、学校桥、Agent/公开能力、手机界面/文件及提醒已完成[A5及前序工程/合成验证](../docs/milestones/android-apk/records/08-a5-reminders-and-foreground.md)，仍是模拟器开发包，目标手机和真实文件/通知/模型/来源未验收。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
@@ -47,6 +47,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3_Public
 # A4手机壳/日程/任务/偏好/诊断的私有合成集成：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A4
+# A5临时C3与真实Android提醒桥，禁止真实网络：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A5
+# 普通QA包已覆盖安装后，固定QA通知的退出/取消/权限/模拟器重启检查：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-android-a5.ps1
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
 # A2学校桥仅运行loopback，不登录学校：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 37 -CurrentProvider
@@ -56,7 +60,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 
 集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；可附加`-BuildRevision <40位源码SHA>`，Flutter与后续Gradle均保留该诊断定义。集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
 
-Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。系统提醒/晨报/每日同步及语音整合仍待A5/A6，真实设备另行验证。最新普通包位于`build/android-a4/artifacts/USTC-Assistant-Android-A4-QA-x86_64.apk`，仅用于模拟器，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音整合仍待A6，真实设备另行验证。最新普通包位于`build/android-a5/artifacts/USTC-Assistant-Android-A5-QA-x86_64.apk`，仅用于模拟器，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
+
+系统提醒默认关闭，在“设置→晨报与提醒”主动启用，并点击系统权限入口。未允许精确提醒时可能延后；“本地已登记”不代表系统队列独立核验或已送达。普通退出保留未来提醒；强制停止、系统节电及厂商限制另行处理。晨报与每日二课均独立默认关闭，晨报异步生成；二课只在前台空闲采集，Android退后台撤销当次尝试。A5系统投递仅在独立模拟器验证，真实通知栏点击、权限界面和厂商策略仍待A7。
 
 手机新资料默认日视图，可改为横向浏览的周视图并记住；已有视图偏好保留。切页保留Agent未发送草稿；返回先关闭键盘/弹层，设置回到原主页、日程回到Agent。图片通过系统照片/文档选择器主动选择，最多三张，原图单张10MiB/1600万像素；去元数据、单帧规范化后单张3MiB、合计6MiB，不缓存原图或取得整个媒体库权限。“设置 → 数据与隐私 → 导出日志”使用系统创建JSON文档，先经现有脱敏白名单，取消不表示保存成功。真实相册、保存目录、系统键盘与触摸体验留待A7。
 

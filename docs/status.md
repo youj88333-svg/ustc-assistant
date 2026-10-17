@@ -1,6 +1,6 @@
 # 项目当前状态
 
-更新时间：2026-10-16。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
+更新时间：2026-10-17。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
@@ -12,8 +12,8 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | A4手机界面/文件工程与合成验证通过；目标实机待验 | [A0–A8计划](milestones/android-apk/plan.md)、[A2学校桥](milestones/android-apk/records/04-a2-school-bridges.md)、[A3 Agent/公开能力](milestones/android-apk/records/06-a3-agent-public.md)、[A4实际记录](milestones/android-apk/records/07-a4-phone-files.md)。手机双主页导航、草稿/返回、日/周记忆、大字/键盘布局、原生有界选图和SAF脱敏导出已装配。analyze、1471项/1跳过、Android UI1组/原生22项、Windows五套16组及普通QA构建通过。SDK/缓存/AVD/临时目录继续E盘，[空间清理](milestones/android-apk/records/05-generated-cleanup.md)保留。旧WebView提供方缺隔离能力仍拒绝学校采集，不以API36本地通过推断学校认证可用；暂无实机，鸿蒙、真实选图/导出、来源/模型和完整手机版未验收，旧数据/双端同步不在首版范围 |
-| 后续 | A5 提醒、晨报与前台每日二课同步；A2–A4真实条件保留 | 模拟器与目标实机分别验证，本地语音按A6推进、手机体验集中A7；私有APK、原生鸿蒙及Windows公开发布分别定界 |
+| Android APK迁移 | A5提醒/前台自动作业工程与合成验证通过；目标实机待验 | [A0–A8计划](milestones/android-apk/plan.md)、[A4手机界面/文件](milestones/android-apk/records/07-a4-phone-files.md)、[A5实际记录](milestones/android-apk/records/08-a5-reminders-and-foreground.md)。两槽Android系统提醒、持久撤销屏障、重启恢复及冷点击守卫已装配；晨报异步，Android退后台撤销每日二课尝试。最终analyze、1498项/1跳过、Android业务1组/原生32项、API36实际退出/重启提醒、Windows六套20组通过。SDK/缓存/AVD/临时目录继续E盘。旧WebView提供方缺隔离能力仍拒绝学校采集；目标手机、Android14、鸿蒙、真实文件/通知交互、模型/学校仍待A7，不以模拟器结论作真人关闭；旧资料/双端同步不在首版范围 |
+| 后续 | A6本地中文语音；A2–A5真实条件保留 | 模拟器与目标实机分别验证，手机体验集中A7；私有APK、原生鸿蒙及Windows公开发布分别定界 |
 
 ## 已批准范围与待验证
 
