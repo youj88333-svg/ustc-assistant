@@ -2,6 +2,7 @@ package cn.ustcassistant.mobile.notifications
 
 import android.app.Activity
 import android.app.NotificationManager
+import android.app.Notification
 import android.os.Bundle
 import org.json.JSONObject
 import java.io.File
@@ -32,6 +33,19 @@ class ReminderOsProbeActivity : Activity() {
                     "initialize" -> core.initialize()
                     "clear" -> core.clear()
                     "report" -> Unit
+                    "click-a7-event", "click-a7-task" -> {
+                        // Fixed synthetic titles only. A shell UI driver uses
+                        // this ordinary Activity because am instrument would
+                        // force-stop the target and cancel the tested alarms.
+                        val title = if (command == "click-a7-event") "A7合成日程定位" else "A7合成任务定位"
+                        val matches = getSystemService(NotificationManager::class.java).activeNotifications.filter {
+                            it.tag?.startsWith(AndroidNotificationDriver.TAG_PREFIX) == true &&
+                                it.notification.extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString() == title
+                        }
+                        if (matches.size != 1) throw NotificationFailure("qa_notification_absent")
+                        (matches.single().notification.contentIntent ?: throw NotificationFailure("qa_notification_absent")).send()
+                        result.put("a7Click", if (command == "click-a7-event") "event" else "task")
+                    }
                     else -> throw NotificationFailure("invalid_input")
                 }
                 val mirror = NotificationLedger.forApplication(this).read()

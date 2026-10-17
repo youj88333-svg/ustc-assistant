@@ -3,6 +3,7 @@
 // actual OS notification clicks against C3. No school/model/microphone IO.
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -30,28 +31,60 @@ void main() {
           final calendar = runtime.jwStore.localCalendar;
           final now = DateTime.now().toUtc();
           final day = DateTime.utc(now.year, now.month, now.day);
-          // Retain A1's synthetic upgrade baseline. Refuse an unknown sandbox
-          // or a repeated A7 seed instead of clearing or duplicating records.
+          // Retain A1's upgrade baseline. A launcher can lose its stdout after
+          // a successful seed; retry only our exact synthetic A7 C3 objects.
           final existing = await calendar.query(
             CalendarQuery(
               firstDay: day.subtract(const Duration(days: 1)),
               endDayExclusive: day.add(const Duration(days: 2)),
             ),
           );
+          final tasks = await calendar.queryTasks(const TaskQuery());
+          final oldEvents = existing.items
+              .where((item) => item.title == 'A7合成日程定位')
+              .toList();
+          final oldTasks = tasks.items
+              .where((item) => item.draft.title == 'A7合成任务定位')
+              .toList();
+          debugPrint(
+            'a7_seed_existing {events: ${existing.items.length}, a7Events: ${oldEvents.length}, tasks: ${tasks.items.length}, a7Tasks: ${oldTasks.length}}',
+          );
           expect(
             existing.items.every(
-              (item) => item.title == 'A1 synthetic local event',
+              (item) =>
+                  item.title == 'A1 synthetic local event' ||
+                  item.title == 'A7合成日程定位',
             ),
             isTrue,
           );
-          final tasks = await calendar.queryTasks(const TaskQuery());
           expect(
             tasks.items.every(
-              (item) => item.draft.title == 'A1 synthetic local task',
+              (item) =>
+                  item.draft.title == 'A1 synthetic local task' ||
+                  item.draft.title == 'A7合成任务定位',
             ),
             isTrue,
           );
           final context = (await calendar.readPlanContext()).$1;
+          expect(oldEvents.length, lessThanOrEqualTo(1));
+          expect(oldTasks.length, lessThanOrEqualTo(1));
+          for (final item in oldEvents) {
+            expect(item.reference.identity.kind, CalendarKind.personal);
+            await calendar.commit(
+              await calendar.prepare(
+                context,
+                DeletePersonalSeries(item.reference, confirmed: true),
+              ),
+            );
+          }
+          for (final item in oldTasks) {
+            await calendar.commit(
+              await calendar.prepare(
+                context,
+                DeleteTask(item.reference, confirmed: true),
+              ),
+            );
+          }
           final due = now.add(const Duration(seconds: 90));
           await calendar.commit(
             await calendar.prepare(

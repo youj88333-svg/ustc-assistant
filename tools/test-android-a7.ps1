@@ -1,7 +1,8 @@
 param(
     [string]$SdkRoot = 'E:\Android\Sdk',
     [ValidateSet(34, 37)]
-    [int]$ApiLevel = 34
+    [int]$ApiLevel = 34,
+    [switch]$LowBattery
 )
 
 # A7 / architecture 07-12, quality13 and workflow15. Synthetic QA only.
@@ -65,6 +66,8 @@ $metadata = Invoke-QaAdb shell dumpsys package $qa
 $notificationWasGranted = $metadata -match 'android.permission.POST_NOTIFICATIONS: granted=true'
 $exactWasAllowed = (Invoke-QaAdb shell cmd appops get $qa SCHEDULE_EXACT_ALARM) -match ': allow'
 $forcedIdle = $false
+$batteryOverridden = $false
+$oldPowerSave = $null
 try {
     Save-Json 'environment' ([ordered]@{
         kind = 'android-a7-environment-v1'; avd = $expectedAvd
@@ -78,6 +81,19 @@ try {
     Invoke-QaAdb shell pm grant $qa android.permission.POST_NOTIFICATIONS | Out-Null
     Invoke-QaAdb shell appops set $qa SCHEDULE_EXACT_ALARM allow | Out-Null
     Invoke-Probe 'clear' 'initial-clear' | Out-Null
+    if ($LowBattery) {
+        $oldPowerSave = Invoke-QaAdb shell settings get global low_power
+        if ($oldPowerSave -notin @('0', '1')) { throw 'Unknown emulator power-save state.' }
+        $batteryOverridden = $true
+        Invoke-QaAdb shell dumpsys battery unplug | Out-Null
+        Invoke-QaAdb shell dumpsys battery set level 10 | Out-Null
+        Invoke-QaAdb shell cmd power set-mode 1 | Out-Null
+        if ((Invoke-QaAdb shell dumpsys battery) -notmatch 'level: 10' -or
+            (Invoke-QaAdb shell settings get global low_power) -ne '1') {
+            throw 'Emulator low battery and power saver were not observed.'
+        }
+        Save-Json 'power-state' ([ordered]@{ simulatedBattery = 10; emulatorPowerSaver = $true; realDevice = $false })
+    }
 
     # Run idle first to avoid consuming this UID's allow-while-idle quota in
     # another scenario. No battery-optimization allowlist is added.
@@ -122,11 +138,16 @@ try {
         kind = 'android-a7-system-boundaries-v1'; success = $true
         forceStopObserved = $true; futureValidAfterExplicitReopen = $true
         expiredNotReplayed = $true; exactDeliveredInEmulatorDeepIdle = $true
+        simulatedLowBatteryAndPowerSaver = $LowBattery.IsPresent
         realDevice = $false; muMuTouched = $false
     })
     Write-Output "A7 API$ApiLevel system boundaries passed: force-stop/reopen, expiry and emulator deep idle."
 } finally {
     if ($forcedIdle) { Invoke-QaAdb shell dumpsys deviceidle unforce | Out-Null }
+    if ($batteryOverridden) {
+        Invoke-QaAdb shell cmd power set-mode $oldPowerSave | Out-Null
+        Invoke-QaAdb shell dumpsys battery reset | Out-Null
+    }
     Invoke-Probe 'clear' 'final-clear' | Out-Null
     if (-not $notificationWasGranted) { Invoke-QaAdb shell pm revoke $qa android.permission.POST_NOTIFICATIONS | Out-Null }
     if (-not $exactWasAllowed) { Invoke-QaAdb shell appops set $qa SCHEDULE_EXACT_ALARM default | Out-Null }
