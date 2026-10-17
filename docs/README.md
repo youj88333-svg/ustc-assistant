@@ -21,6 +21,7 @@
 | 长期知识资料的 Markdown 制作与样稿 | [知识材料目录](../knowledge/README.md) |
 | 如何启动和使用应用 | [应用说明](../app/README.md) |
 | Windows 1.00 私有包与移动方向 | [交付说明](releases/windows-1.00.md) · [已知问题](releases/windows-1.00-known-issues.md) · [APK迁移评估](research/android-apk-migration.md) · [完整迁移计划](milestones/android-apk/plan.md) |
+| Android / APK鸿蒙的WebView覆盖、限制与兼容候选 | [WebView兼容性调研](research/android-webview-compatibility.md) |
 | 前置实验、诊断与证据在哪里 | [verification](../verification/README.md) |
 | 旧设计和整理前原文 | [只读档案](archive/README.md) |
 | 以后文档怎样维护 | [维护规则](maintaining.md) |
