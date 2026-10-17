@@ -1,7 +1,18 @@
+import java.nio.file.Files
+import java.security.MessageDigest
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.DirectoryProperty
+import org.gradle.api.tasks.OutputDirectory
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+abstract class PrepareSpeechAssetsTask : DefaultTask() {
+    @get:OutputDirectory
+    abstract val outputDirectory: DirectoryProperty
 }
 
 android {
@@ -26,7 +37,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a5"
+            versionNameSuffix = "-qa-a6"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -44,6 +55,57 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+// Public model assets stay outside Git. An offline build must verify the exact
+// approved files rather than quietly ship a microphone that cannot recognize.
+val speechAssetsDirectory = layout.buildDirectory.dir("generated/speechAssets")
+val speechModelSource = rootProject.projectDir.resolve("../build/speech_models/sensevoice")
+val speechNotices = rootProject.projectDir.resolve("../resources/speech")
+val speechFiles = mapOf(
+    "model.int8.onnx" to (239233841L to "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"),
+    "tokens.txt" to (315894L to "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"),
+    "LICENSE" to (71L to "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"),
+)
+val prepareSpeechAssets = tasks.register<PrepareSpeechAssetsTask>("prepareSpeechAssets") {
+    outputDirectory.set(speechAssetsDirectory)
+    inputs.files(speechFiles.keys.map { speechModelSource.resolve(it) })
+    inputs.dir(speechNotices)
+    outputs.dir(speechAssetsDirectory)
+    doLast {
+        val destination = speechAssetsDirectory.get().asFile
+        speechFiles.forEach { (name, expected) ->
+            val source = speechModelSource.resolve(name)
+            check(source.isFile && source.length() == expected.first &&
+                !Files.isSymbolicLink(source.toPath())) {
+                "Run tools/prepare-speech-assets.ps1; fixed speech asset missing."
+            }
+            val digest = MessageDigest.getInstance("SHA-256")
+            source.inputStream().use { stream ->
+                val buffer = ByteArray(65536)
+                while (true) {
+                    val count = stream.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            check(digest.digest().joinToString("") { "%02x".format(it) } == expected.second) {
+                "Fixed speech asset checksum differs."
+            }
+            val target = destination.resolve("speech/sensevoice/$name")
+            target.parentFile.mkdirs()
+            source.copyTo(target, overwrite = true)
+        }
+        listOf("NOTICE.txt", "FUNASR-MODEL-LICENSE.txt", "RECORD-LICENSE.txt",
+            "SHERPA-ONNX-LICENSE.txt", "ONNXRUNTIME-LICENSE.txt").forEach { name ->
+            val target = destination.resolve("speech/licenses/$name")
+            target.parentFile.mkdirs()
+            speechNotices.resolve(name).copyTo(target, overwrite = true)
+        }
+    }
+}
+androidComponents.onVariants { variant ->
+    variant.sources.assets?.addGeneratedSourceDirectory(prepareSpeechAssets) { it.outputDirectory }
 }
 
 // Split ABI output codes must not turn a later non-split integration build

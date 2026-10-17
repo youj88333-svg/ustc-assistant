@@ -22,34 +22,47 @@ final class SpeechModelBundle {
         p.absolute(
           executableDirectory ?? p.dirname(Platform.resolvedExecutable),
         ),
-      );
+      ),
+      androidAssets = false;
+  SpeechModelBundle.android({required String directory})
+    : executableDirectory = p.posix.normalize(p.posix.absolute(directory)),
+      androidAssets = true;
   final String executableDirectory;
-  String get modelDirectory =>
-      p.join(executableDirectory, 'data', 'speech', 'sensevoice');
+  final bool androidAssets;
+  String get modelDirectory => androidAssets
+      ? executableDirectory
+      : p.join(executableDirectory, 'data', 'speech', 'sensevoice');
   String get libraryPath =>
       p.join(executableDirectory, 'sherpa-onnx-c-api.dll');
-  String get modelPath => p.join(modelDirectory, 'model.int8.onnx');
-  String get tokensPath => p.join(modelDirectory, 'tokens.txt');
+  String get modelPath => (androidAssets ? p.posix : p.context).join(
+    modelDirectory,
+    'model.int8.onnx',
+  );
+  String get tokensPath =>
+      (androidAssets ? p.posix : p.context).join(modelDirectory, 'tokens.txt');
 
   Future<void> validate() async {
-    if (!Platform.isWindows) {
+    if (androidAssets ? !Platform.isAndroid : !Platform.isWindows) {
       throw const SpeechInputFailure(
         SpeechInputFailureCode.unsupportedPlatform,
       );
     }
     try {
       await _plain(executableDirectory, directory: true);
-      for (final directory in [
-        p.join(executableDirectory, 'data'),
-        p.join(executableDirectory, 'data', 'speech'),
-        modelDirectory,
-      ]) {
+      for (final directory
+          in androidAssets
+              ? <String>[]
+              : [
+                  p.join(executableDirectory, 'data'),
+                  p.join(executableDirectory, 'data', 'speech'),
+                  modelDirectory,
+                ]) {
         await _plain(directory, directory: true);
       }
-      for (final library in [
-        libraryPath,
-        p.join(executableDirectory, 'onnxruntime.dll'),
-      ]) {
+      for (final library
+          in androidAssets
+              ? <String>[]
+              : [libraryPath, p.join(executableDirectory, 'onnxruntime.dll')]) {
         await _plain(library, directory: false);
         final size = await File(library).length();
         if (size == 0 || size > 100 * 1024 * 1024) {
@@ -94,6 +107,7 @@ final class SpeechModelBundle {
         )) {
       throw const FormatException('speech_asset_path');
     }
+    if (androidAssets) return;
     final attributes = _attributes(canonical);
     if (attributes == null ||
         attributes & (0x400 | 0x40) != 0 ||

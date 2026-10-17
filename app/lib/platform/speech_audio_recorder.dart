@@ -15,6 +15,12 @@ abstract interface class SpeechAudioRecorderBackend {
   Future<void> dispose();
 }
 
+/// Optional state seam. Existing synthetic backends need not implement it;
+/// Android enables it to turn recorder interruptions into a terminal input.
+abstract interface class SpeechAudioRecorderStateBackend {
+  Stream<RecordState> onStateChanged();
+}
+
 typedef SpeechAudioRecorderBackendFactory =
     SpeechAudioRecorderBackend Function();
 typedef SpeechInputDeviceResolver = Future<InputDevice?> Function();
@@ -27,6 +33,8 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
   SpeechAudioRecorder({
     SpeechAudioRecorderBackendFactory? backendFactory,
     SpeechInputDeviceResolver? inputDeviceResolver,
+    this.cancelOnInterruption = false,
+    this.androidManageBluetooth = true,
   }) : _backendFactory = backendFactory ?? _RecordBackend.new,
        _inputDeviceResolver =
            inputDeviceResolver ??
@@ -38,10 +46,13 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
     encoder: AudioEncoder.pcm16bits,
     sampleRate: speechSampleRate,
     numChannels: 1,
+    audioInterruption: AudioInterruptionMode.pause,
   );
 
   final SpeechAudioRecorderBackendFactory _backendFactory;
   final SpeechInputDeviceResolver _inputDeviceResolver;
+  final bool cancelOnInterruption;
+  final bool androidManageBluetooth;
   SpeechAudioRecorderBackend? _backend;
   Future<bool>? _permissionOperation;
   bool? _permissionGranted;
@@ -149,46 +160,96 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
       );
     }
     if (_stopRequested || _closing) {
-      return _RecorderSession()..stream = const Stream<Uint8List>.empty();
+      return _RecorderSession.empty();
+    }
+
+    final session = _RecorderSession(
+      monitorInterruption:
+          cancelOnInterruption && backend is SpeechAudioRecorderStateBackend,
+    )..forwarding = !_stopRequested && !_closing;
+    if (session.monitorInterruption) {
+      try {
+        session.stateSubscription = (backend as SpeechAudioRecorderStateBackend)
+            .onStateChanged()
+            .listen(
+              (state) => _handleState(session, state),
+              onError: (Object _, StackTrace _) => _interrupt(session),
+              onDone: () {
+                if (session.forwarding && !session.stopRequested) {
+                  _interrupt(session);
+                }
+              },
+            );
+      } on Object {
+        session.closeOutput();
+        throw const SpeechInputFailure(
+          SpeechInputFailureCode.microphoneUnavailable,
+        );
+      }
+    }
+
+    if (session.interrupted || _stopRequested || _closing) {
+      await session.cancelStateSubscription();
+      if (_stopRequested || _closing) session.closeOutput();
+      return session;
     }
 
     _captureMayBeActive = true;
     final Stream<Uint8List> source;
     try {
       source = await backend.startStream(
-        _recordConfig.copyWith(device: (value: device)),
+        _recordConfig.copyWith(
+          device: (value: device),
+          androidConfig: AndroidRecordConfig(
+            manageBluetooth: androidManageBluetooth,
+          ),
+        ),
       );
     } on Object {
+      session.forwarding = false;
+      await session.cancelStateSubscription();
+      session.closeOutput();
       await _cleanUpFailedStart(backend);
       throw const SpeechInputFailure(
         SpeechInputFailureCode.microphoneUnavailable,
       );
     }
 
-    final session = _RecorderSession();
+    session.forwarding =
+        session.forwarding &&
+        !_stopRequested &&
+        !_closing &&
+        !session.interrupted;
+    session.attachSource(source);
     _session = session;
-    session.forwarding = !_stopRequested && !_closing;
-    session.stream = source.transform(
-      StreamTransformer<Uint8List, Uint8List>.fromHandlers(
-        handleData: (bytes, sink) {
-          if (session.forwarding) sink.add(bytes);
-        },
-        handleError: (Object _, StackTrace _, sink) {
-          if (session.forwarding) {
-            sink.addError(
-              const SpeechInputFailure(
-                SpeechInputFailureCode.microphoneUnavailable,
-              ),
-            );
-          }
-        },
-        handleDone: (sink) {
-          session.forwarding = false;
-          sink.close();
-        },
-      ),
-    );
     return session;
+  }
+
+  void _handleState(_RecorderSession session, RecordState state) {
+    if (!session.forwarding ||
+        session.stopRequested ||
+        _stopRequested ||
+        _closing ||
+        _closed) {
+      return;
+    }
+    if (state == RecordState.pause || state == RecordState.stop) {
+      _interrupt(session);
+    }
+  }
+
+  void _interrupt(_RecorderSession session) {
+    if (!session.forwarding ||
+        session.stopRequested ||
+        _stopRequested ||
+        _closing ||
+        _closed) {
+      return;
+    }
+    session.interrupted = true;
+    session.forwarding = false;
+    session.addFailure();
+    session.closeOutput();
   }
 
   Future<void> _cleanUpFailedStart(SpeechAudioRecorderBackend backend) async {
@@ -240,6 +301,7 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
     try {
       // Windows posts captured PCM chunks asynchronously. Keep forwarding
       // while the platform stop call is in flight so queued chunks are kept.
+      if (session != null) session.stopRequested = true;
       await backend.stop();
     } on Object {
       if (session != null) session.forwarding = false;
@@ -248,6 +310,9 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
     }
 
     if (session != null) session.forwarding = false;
+    await session?.cancelStateSubscription();
+    await session?.cancelSourceSubscription();
+    session?.closeOutput();
     _session = null;
     _captureMayBeActive = false;
     _needsStop = false;
@@ -293,11 +358,109 @@ final class SpeechAudioRecorder implements SpeechRecorderPort {
 }
 
 final class _RecorderSession {
+  _RecorderSession({required this.monitorInterruption}) {
+    if (monitorInterruption) {
+      _output = StreamController<Uint8List>();
+      stream = _output!.stream;
+    }
+  }
+
+  _RecorderSession.empty() : monitorInterruption = false {
+    stream = const Stream<Uint8List>.empty();
+  }
+
+  StreamController<Uint8List>? _output;
+  StreamSubscription<Uint8List>? _sourceSubscription;
+  StreamSubscription<RecordState>? stateSubscription;
   late final Stream<Uint8List> stream;
   bool forwarding = false;
+  bool monitorInterruption;
+  bool stopRequested = false;
+  bool interrupted = false;
+  bool _outputClosed = false;
+
+  void attachSource(Stream<Uint8List> source) {
+    if (!monitorInterruption) {
+      stream = source.transform(
+        StreamTransformer<Uint8List, Uint8List>.fromHandlers(
+          handleData: (bytes, sink) {
+            if (forwarding) sink.add(bytes);
+          },
+          handleError: (Object _, StackTrace _, sink) {
+            if (forwarding) {
+              sink.addError(
+                const SpeechInputFailure(
+                  SpeechInputFailureCode.microphoneUnavailable,
+                ),
+              );
+            }
+          },
+          handleDone: (sink) {
+            forwarding = false;
+            sink.close();
+          },
+        ),
+      );
+      return;
+    }
+
+    _sourceSubscription = source.listen(
+      (bytes) {
+        if (forwarding && !_outputClosed) _output!.add(bytes);
+      },
+      onError: (Object _, StackTrace _) {
+        if (!forwarding || _outputClosed) return;
+        addFailure();
+        if (monitorInterruption) {
+          interrupted = true;
+          forwarding = false;
+          closeOutput();
+        }
+      },
+      onDone: () {
+        if (monitorInterruption && forwarding && !stopRequested) {
+          interrupted = true;
+          forwarding = false;
+          addFailure();
+        } else {
+          forwarding = false;
+        }
+        closeOutput();
+      },
+    );
+  }
+
+  void addFailure() {
+    if (!_outputClosed) {
+      _output!.addError(
+        const SpeechInputFailure(SpeechInputFailureCode.microphoneUnavailable),
+      );
+    }
+  }
+
+  void closeOutput() {
+    if (_outputClosed) return;
+    _outputClosed = true;
+    final output = _output;
+    if (output != null) unawaited(output.close());
+  }
+
+  Future<void> cancelStateSubscription() async {
+    monitorInterruption = false;
+    final subscription = stateSubscription;
+    stateSubscription = null;
+    await subscription?.cancel();
+  }
+
+  Future<void> cancelSourceSubscription() async {
+    final subscription = _sourceSubscription;
+    _sourceSubscription = null;
+    await subscription?.cancel();
+  }
 }
 
-final class _RecordBackend implements SpeechAudioRecorderBackend {
+final class _RecordBackend
+    implements SpeechAudioRecorderBackend, SpeechAudioRecorderStateBackend {
   _RecordBackend() : _recorder = AudioRecorder();
 
   final AudioRecorder _recorder;
@@ -309,6 +472,9 @@ final class _RecordBackend implements SpeechAudioRecorderBackend {
   @override
   Future<Stream<Uint8List>> startStream(RecordConfig config) =>
       _recorder.startStream(config);
+
+  @override
+  Stream<RecordState> onStateChanged() => _recorder.onStateChanged();
 
   @override
   Future<void> stop() async {

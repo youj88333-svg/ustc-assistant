@@ -8,6 +8,7 @@ import android.content.Intent
 import cn.ustcassistant.mobile.files.FilesChannel
 import cn.ustcassistant.mobile.notifications.NotificationsChannel
 import android.os.Bundle
+import cn.ustcassistant.mobile.speech.SpeechModelChannel
 
 class MainActivity : FlutterActivity() {
     private var credentials: CredentialChannel? = null
@@ -15,6 +16,7 @@ class MainActivity : FlutterActivity() {
     private var observation: ObservationBridge? = null
     private var files: FilesChannel? = null
     private var notifications: NotificationsChannel? = null
+    private var speechModel: SpeechModelChannel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,9 +35,12 @@ class MainActivity : FlutterActivity() {
         observation = ObservationBridge(this, flutterEngine.dartExecutor.binaryMessenger)
         files = FilesChannel(this, flutterEngine.dartExecutor.binaryMessenger)
         notifications = NotificationsChannel(this, flutterEngine.dartExecutor.binaryMessenger)
+        speechModel = SpeechModelChannel(applicationContext, flutterEngine.dartExecutor.binaryMessenger)
     }
 
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
+        speechModel?.dispose()
+        speechModel = null
         notifications?.dispose()
         notifications = null
         files?.dispose()

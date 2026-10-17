@@ -10,10 +10,12 @@ final class OfflineSpeechInput implements SpeechInputPort {
     required this.recorder,
     required this.recognizer,
     this.diagnostics,
+    this.permissionFirst = false,
   });
   final SpeechRecorderPort recorder;
   final SpeechRecognizerPort recognizer;
   final DiagnosticsPort? diagnostics;
+  final bool permissionFirst;
   // A subscriber may cancel in response to a stage. Async delivery prevents
   // reentrant broadcast.add while the current immutable view changes at once.
   final _changes = StreamController<SpeechInputView>.broadcast();
@@ -102,16 +104,29 @@ final class OfflineSpeechInput implements SpeechInputPort {
     }
     final work = Future<void>.microtask(() => _start(revision));
     _starting = work;
-    _publish(SpeechInputPhase.preparing);
+    _publish(
+      permissionFirst
+          ? SpeechInputPhase.requestingPermission
+          : SpeechInputPhase.preparing,
+    );
     return work.whenComplete(() => _starting = null);
   }
 
   Future<void> _start(int revision) async {
     try {
       _current(revision);
+      if (permissionFirst) {
+        if (!await recorder.hasPermission()) {
+          throw const SpeechInputFailure(
+            SpeechInputFailureCode.permissionDenied,
+          );
+        }
+        _current(revision);
+        _publish(SpeechInputPhase.preparing);
+      }
       await recognizer.prepare();
       _current(revision);
-      if (!await recorder.hasPermission()) {
+      if (!permissionFirst && !await recorder.hasPermission()) {
         throw const SpeechInputFailure(SpeechInputFailureCode.permissionDenied);
       }
       _current(revision);

@@ -336,6 +336,55 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('permission dialog inactive is harmless but background revokes', (
+    tester,
+  ) async {
+    final agent = _FakeAgentPort();
+    final speech = _FakeSpeechInputPort();
+    addTearDown(agent.dispose);
+    addTearDown(speech.dispose);
+    await _mount(tester, agent, speech);
+    await _startRecording(tester);
+    speech._emit(
+      SpeechInputView(
+        phase: SpeechInputPhase.requestingPermission,
+        revision: speech._revision,
+      ),
+    );
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    await tester.pump();
+    expect(speech.cancelCalls, 0);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    speech.complete('权限允许后的合成文字');
+    await tester.pumpAndSettle();
+    final field = tester.widget<TextField>(
+      find.byKey(const ValueKey('agent-composer')),
+    );
+    expect(field.controller!.text, '权限允许后的合成文字');
+    expect(agent.sent, isEmpty);
+    await _startRecording(tester);
+    speech._emit(
+      SpeechInputView(
+        phase: SpeechInputPhase.requestingPermission,
+        revision: speech._revision,
+      ),
+    );
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(speech.cancelCalls, greaterThan(0));
+    speech.lateResult('后台旧文字');
+    await tester.pumpAndSettle();
+    expect(field.controller!.text, '权限允许后的合成文字');
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+  });
+
   testWidgets('recognition failure preserves the draft and keyboard sending', (
     tester,
   ) async {

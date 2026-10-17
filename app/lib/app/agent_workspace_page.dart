@@ -237,6 +237,12 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       if (mounted) setState(() {});
       return;
     }
+    // Android's explicit permission dialog temporarily removes focus before
+    // any capture exists. A real background transition still revokes below.
+    if (state == AppLifecycleState.inactive &&
+        _speechPort?.view.phase == SpeechInputPhase.requestingPermission) {
+      return;
+    }
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.hidden ||
         state == AppLifecycleState.paused ||
@@ -2241,7 +2247,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                         : null,
                     icon: speechView.phase == SpeechInputPhase.recording
                         ? const Icon(Icons.stop_circle_outlined)
-                        : speechView.phase == SpeechInputPhase.preparing ||
+                        : speechView.phase ==
+                                  SpeechInputPhase.requestingPermission ||
+                              speechView.phase == SpeechInputPhase.preparing ||
                               speechView.phase == SpeechInputPhase.stopping ||
                               speechView.phase ==
                                   SpeechInputPhase.recognizing ||
@@ -3225,6 +3233,7 @@ String _speechStatusText(SpeechInputView view) {
   }
   return switch (view.phase) {
     SpeechInputPhase.idle => '',
+    SpeechInputPhase.requestingPermission => '请允许麦克风权限，语音只在本机识别。',
     SpeechInputPhase.preparing => '正在准备语音输入…',
     SpeechInputPhase.recording =>
       '正在录音 · ${_formatSpeechElapsed(view.elapsedMilliseconds)} / 00:30',

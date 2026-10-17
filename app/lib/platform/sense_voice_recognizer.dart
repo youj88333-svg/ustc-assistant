@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi';
 import 'dart:isolate';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
@@ -13,9 +14,10 @@ import 'speech_model_bundle.dart';
 
 /// One lazy, persistent CPU worker. No microphone, network or business access.
 final class SenseVoiceRecognizer implements SpeechRecognizerPort {
-  SenseVoiceRecognizer({SpeechModelBundle? bundle})
+  SenseVoiceRecognizer({SpeechModelBundle? bundle, this.bundleLoader})
     : bundle = bundle ?? SpeechModelBundle();
   final SpeechModelBundle bundle;
+  final Future<SpeechModelBundle> Function()? bundleLoader;
   Future<_SpeechWorker>? _preparing;
   Future<String>? _active;
   Future<void>? _closing;
@@ -24,7 +26,7 @@ final class SenseVoiceRecognizer implements SpeechRecognizerPort {
   @override
   Future<void> prepare() async {
     if (_closed) throw const SpeechInputFailure(SpeechInputFailureCode.closed);
-    final future = _preparing ??= _SpeechWorker.open(bundle);
+    final future = _preparing ??= _openWorker();
     try {
       await future;
     } catch (_) {
@@ -34,6 +36,12 @@ final class SenseVoiceRecognizer implements SpeechRecognizerPort {
       throw const SpeechInputFailure(SpeechInputFailureCode.modelUnavailable);
     }
     if (_closed) throw const SpeechInputFailure(SpeechInputFailureCode.closed);
+  }
+
+  Future<_SpeechWorker> _openWorker() async {
+    final assets = await (bundleLoader?.call() ?? Future.value(bundle));
+    if (_closed) throw const SpeechInputFailure(SpeechInputFailureCode.closed);
+    return _SpeechWorker.open(assets);
   }
 
   @override
@@ -135,7 +143,11 @@ final class _SpeechWorker {
     try {
       await Isolate.spawn<List<Object>>(
         _runSpeechWorker,
-        [worker._messages.sendPort, bundle.executableDirectory],
+        [
+          worker._messages.sendPort,
+          bundle.executableDirectory,
+          bundle.androidAssets,
+        ],
         onError: worker._errors.sendPort,
         onExit: worker._exit.sendPort,
         errorsAreFatal: true,
@@ -230,13 +242,18 @@ Future<void> _runSpeechWorker(List<Object> arguments) async {
   final commands = ReceivePort();
   sherpa.OfflineRecognizer? recognizer;
   try {
-    final bundle = SpeechModelBundle(
-      executableDirectory: arguments[1] as String,
-    );
+    final bundle = arguments[2] as bool
+        ? SpeechModelBundle.android(directory: arguments[1] as String)
+        : SpeechModelBundle(executableDirectory: arguments[1] as String);
     await bundle.validate();
-    _loadOnnxRuntime(bundle);
-    // sherpa's optional argument is a directory; it appends the platform DLL.
-    sherpa.initBindings(bundle.executableDirectory);
+    if (bundle.androidAssets && Platform.isAndroid) {
+      // Android resolves the pinned packaged .so and its dependencies via the
+      // app's native library namespace, never through a desktop DLL path.
+      sherpa.initBindings();
+    } else {
+      _loadOnnxRuntime(bundle);
+      sherpa.initBindings(bundle.executableDirectory);
+    }
     recognizer = sherpa.OfflineRecognizer(
       buildSenseVoiceRecognizerConfig(bundle),
     );

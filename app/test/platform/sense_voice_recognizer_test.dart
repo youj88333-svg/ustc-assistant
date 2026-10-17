@@ -69,6 +69,23 @@ void main() {
   });
 
   test(
+    'Android bundle uses fixed private model paths and Chinese CPU configuration',
+    () {
+      final bundle = SpeechModelBundle.android(
+        directory: '/data/speech_v1/sensevoice-int8-2024-07-17',
+      );
+      final config = buildSenseVoiceRecognizerConfig(bundle);
+      expect(
+        bundle.modelPath,
+        '/data/speech_v1/sensevoice-int8-2024-07-17/model.int8.onnx',
+      );
+      expect(config.model.senseVoice.language, 'zh');
+      expect(config.model.numThreads, 2);
+      expect(config.model.provider, 'cpu');
+    },
+  );
+
+  test(
     'missing public assets fail safely, worker failure drains and can retry',
     () async {
       final root = await Directory.systemTemp.createTemp('ustc-m58-missing-');

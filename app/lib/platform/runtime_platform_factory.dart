@@ -11,6 +11,8 @@ import '../core/speech_input_contract.dart';
 import 'android_credential_protector.dart';
 import 'android_directory.dart';
 import 'android_notifications.dart';
+import 'android_speech_model.dart';
+import 'android_speech_recorder.dart';
 import 'demo_directory.dart';
 import 'jw_directory_path.dart';
 import 'native_observation_browser.dart';
@@ -18,7 +20,6 @@ import 'offline_speech_input.dart';
 import 'owned_directory.dart';
 import 'sense_voice_recognizer.dart';
 import 'speech_audio_recorder.dart';
-import 'unavailable_mobile_services.dart';
 import 'windows_jw_credential_protector.dart';
 import 'windows_model_credential_protector.dart';
 import 'windows_notifications.dart';
@@ -135,9 +136,15 @@ final class AndroidRuntimePlatformFactory implements RuntimePlatformFactory {
   @override
   NativeObservationBrowser createBrowser() => NativeObservationBrowser();
   @override
-  NotificationPlatformPort createNotifications() =>
-      AndroidNotifications();
+  NotificationPlatformPort createNotifications() => AndroidNotifications();
   @override
   SpeechInputPort createSpeech(DiagnosticsPort diagnostics) =>
-      UnavailableMobileSpeechInput();
+      OfflineSpeechInput(
+        recorder: AndroidSpeechRecorder(),
+        recognizer: SenseVoiceRecognizer(
+          bundleLoader: const AndroidSpeechModel().prepare,
+        ),
+        permissionFirst: true,
+        diagnostics: diagnostics,
+      );
 }

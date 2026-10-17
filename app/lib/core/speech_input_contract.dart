@@ -9,6 +9,7 @@ const speechMaximumTextCharacters = 2000;
 
 enum SpeechInputPhase {
   idle,
+  requestingPermission,
   preparing,
   recording,
   stopping,

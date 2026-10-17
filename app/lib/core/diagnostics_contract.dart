@@ -386,6 +386,7 @@ enum DiagnosticStage {
 }
 
 enum DiagnosticPhase {
+  requestingPermission,
   idle,
   opening,
   login,

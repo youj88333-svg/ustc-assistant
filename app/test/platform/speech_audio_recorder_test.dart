@@ -38,6 +38,27 @@ void main() {
     });
 
     test(
+      'Android interruption config pauses without Bluetooth management',
+      () async {
+        final backend = _FakeBackend();
+        final recorder = SpeechAudioRecorder(
+          backendFactory: () => backend,
+          inputDeviceResolver: () async => null,
+          cancelOnInterruption: true,
+          androidManageBluetooth: false,
+        );
+
+        await recorder.start();
+
+        final config = backend.configs.single;
+        expect(config.audioInterruption, AudioInterruptionMode.pause);
+        expect(config.androidConfig.manageBluetooth, isFalse);
+        expect(config.device, isNull);
+        await recorder.close();
+      },
+    );
+
+    test(
       'returns a denied permission result without starting capture',
       () async {
         final backend = _FakeBackend()..permissionGranted = false;
@@ -312,6 +333,125 @@ void main() {
       ]);
       await recorder.close();
     });
+
+    for (final interruptState in [RecordState.pause, RecordState.stop]) {
+      test(
+        'terminates input on plugin $interruptState without resuming',
+        () async {
+          final backend = _FakeBackend();
+          final recorder = SpeechAudioRecorder(
+            backendFactory: () => backend,
+            cancelOnInterruption: true,
+          );
+          final stream = await recorder.start();
+          final received = <Uint8List>[];
+          final errors = <Object>[];
+          final streamDone = Completer<void>();
+          stream.listen(
+            received.add,
+            onError: (Object error, StackTrace _) => errors.add(error),
+            onDone: streamDone.complete,
+          );
+          backend.source.add(Uint8List.fromList([1, 2]));
+          await Future<void>.delayed(Duration.zero);
+
+          backend.states.add(interruptState);
+          await Future<void>.delayed(Duration.zero);
+          backend.states.add(RecordState.record);
+          backend.source.add(Uint8List.fromList([3, 4]));
+          await streamDone.future;
+
+          expect(received, [
+            [1, 2],
+          ]);
+          expect(errors, hasLength(1));
+          expect(errors.single, isA<SpeechInputFailure>());
+          expect(
+            (errors.single as SpeechInputFailure).code,
+            SpeechInputFailureCode.microphoneUnavailable,
+          );
+          expect(
+            errors.single.toString(),
+            'SpeechInputFailure(microphoneUnavailable)',
+          );
+
+          await recorder.stop();
+          expect(backend.states.hasListener, isFalse);
+          await recorder.close();
+          expect(backend.calls, ['startStream', 'stop', 'dispose']);
+        },
+      );
+    }
+
+    test(
+      'state stream errors terminate with a fixed microphone failure',
+      () async {
+        final backend = _FakeBackend();
+        final recorder = SpeechAudioRecorder(
+          backendFactory: () => backend,
+          cancelOnInterruption: true,
+        );
+        final stream = await recorder.start();
+        final errors = <Object>[];
+        final streamDone = Completer<void>();
+        stream.listen(
+          (_) {},
+          onError: (Object error, StackTrace _) => errors.add(error),
+          onDone: streamDone.complete,
+        );
+
+        backend.states.addError(StateError('private platform detail'));
+        await streamDone.future;
+        expect(errors, hasLength(1));
+        expect(errors.single, isA<SpeechInputFailure>());
+        expect(
+          errors.single.toString(),
+          'SpeechInputFailure(microphoneUnavailable)',
+        );
+
+        await recorder.stop();
+        await recorder.close();
+      },
+    );
+
+    test(
+      'normal Android stop keeps tail frames and ignores its own stop state',
+      () async {
+        final backend = _FakeBackend();
+        final recorder = SpeechAudioRecorder(
+          backendFactory: () => backend,
+          cancelOnInterruption: true,
+        );
+        final stream = await recorder.start();
+        final received = <Uint8List>[];
+        final errors = <Object>[];
+        final streamDone = Completer<void>();
+        stream.listen(
+          received.add,
+          onError: (Object error, StackTrace _) => errors.add(error),
+          onDone: streamDone.complete,
+        );
+        backend.source.add(Uint8List.fromList([1, 2]));
+        await Future<void>.delayed(Duration.zero);
+        backend.stopFrames = [
+          Uint8List.fromList([3, 4]),
+        ];
+
+        await recorder.stop();
+        await streamDone.future;
+
+        expect(received, [
+          [1, 2],
+          [3, 4],
+        ]);
+        expect(errors, isEmpty);
+        expect(backend.states.hasListener, isFalse);
+        backend.states.add(
+          RecordState.pause,
+        ); // A late state cannot reopen or fail it.
+        await recorder.close();
+      },
+    );
   });
 }
 
@@ -337,7 +477,8 @@ Future<void> _expectFailure(
   );
 }
 
-final class _FakeBackend implements SpeechAudioRecorderBackend {
+final class _FakeBackend
+    implements SpeechAudioRecorderBackend, SpeechAudioRecorderStateBackend {
   bool permissionGranted = true;
   Object? startError;
   Object? stopError;
@@ -349,6 +490,8 @@ final class _FakeBackend implements SpeechAudioRecorderBackend {
   final Completer<void> stopEntered = Completer<void>();
   final StreamController<Uint8List> source =
       StreamController<Uint8List>.broadcast();
+  final StreamController<RecordState> states =
+      StreamController<RecordState>.broadcast();
   final List<String> calls = [];
   final List<bool> permissionRequests = [];
   final List<RecordConfig> configs = [];
@@ -373,9 +516,13 @@ final class _FakeBackend implements SpeechAudioRecorderBackend {
   }
 
   @override
+  Stream<RecordState> onStateChanged() => states.stream;
+
+  @override
   Future<void> stop() async {
     calls.add('stop');
     if (!stopEntered.isCompleted) stopEntered.complete();
+    if (states.hasListener) states.add(RecordState.stop);
     final gate = stopGate;
     if (gate != null) await gate.future;
     final error = stopError;
@@ -391,5 +538,7 @@ final class _FakeBackend implements SpeechAudioRecorderBackend {
     calls.add('dispose');
     final error = disposeError;
     if (error != null) throw error;
+    if (!states.isClosed) await states.close();
+    if (!source.isClosed) await source.close();
   }
 }

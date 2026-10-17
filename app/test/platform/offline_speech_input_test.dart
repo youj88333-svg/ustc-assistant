@@ -12,6 +12,46 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('OfflineSpeechInput', () {
+    test(
+      'Android permission precedes model loading and denial keeps it lazy',
+      () async {
+        final harness = _SpeechHarness(permissionFirst: true);
+        addTearDown(harness.close);
+        harness.recorder.permissionGranted = false;
+        final pending = harness.input.start();
+        expect(harness.input.view.phase, SpeechInputPhase.requestingPermission);
+        await pending;
+        expect(
+          harness.input.view.failure,
+          SpeechInputFailureCode.permissionDenied,
+        );
+        expect(harness.recognizer.prepareCalls, 0);
+        expect(harness.recorder.startCalls, 0);
+        harness.recorder.permissionGranted = true;
+        await harness.input.start();
+        expect(harness.input.view.phase, SpeechInputPhase.recording);
+        expect(harness.recognizer.prepareCalls, 1);
+      },
+    );
+
+    test(
+      'revoking a pending Android permission never starts late capture',
+      () async {
+        final harness = _SpeechHarness(permissionFirst: true);
+        addTearDown(harness.close);
+        harness.recorder.permissionGate = Completer<void>();
+        final starting = harness.input.start();
+        await Future<void>.delayed(Duration.zero);
+        final cancelled = harness.input.cancel();
+        harness.recorder.permissionGate!.complete();
+        await Future.wait([starting, cancelled]);
+        expect(harness.input.view.phase, SpeechInputPhase.idle);
+        expect(harness.recognizer.prepareCalls, 0);
+        expect(harness.recorder.startCalls, 0);
+        expect(harness.input.view.transcript, isNull);
+      },
+    );
+
     test('prepares on demand, combines odd chunks, decodes PCM16', () async {
       final harness = _SpeechHarness();
       addTearDown(harness.close);
@@ -582,14 +622,17 @@ List<Uint8List> _oddSizedChunks(Uint8List pcm) {
 }
 
 final class _SpeechHarness {
-  _SpeechHarness({bool singleSubscriptionRecorder = false})
-    : recorder = _FakeSpeechRecorder(
-        singleSubscription: singleSubscriptionRecorder,
-      ) {
+  _SpeechHarness({
+    bool singleSubscriptionRecorder = false,
+    bool permissionFirst = false,
+  }) : recorder = _FakeSpeechRecorder(
+         singleSubscription: singleSubscriptionRecorder,
+       ) {
     input = OfflineSpeechInput(
       recorder: recorder,
       recognizer: recognizer,
       diagnostics: diagnostics,
+      permissionFirst: permissionFirst,
     );
   }
 
@@ -639,6 +682,7 @@ final class _FakeSpeechRecorder implements SpeechRecorderPort {
 
   late final StreamController<Uint8List> source;
   bool permissionGranted = true;
+  Completer<void>? permissionGate;
   Object? startError, stopError, closeError;
   int permissionCalls = 0,
       startCalls = 0,
@@ -654,6 +698,7 @@ final class _FakeSpeechRecorder implements SpeechRecorderPort {
   @override
   Future<bool> hasPermission() async {
     permissionCalls++;
+    await permissionGate?.future;
     return permissionGranted;
   }
 
