@@ -1,6 +1,6 @@
 # USTC Assistant
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；A1–A6工程/合成验证已完成，最新为[A6本地中文听写](../docs/milestones/android-apk/records/09-a6-local-speech.md)，仍是模拟器开发包，目标手机和真实麦克风/文件/通知/模型服务/来源未验收。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；A7模拟器部分已完成，见[A7根记录](../docs/milestones/android-apk/records/10-a7-emulator-validation.md)与[MuMu人工说明](../docs/milestones/android-apk/manual-validation.md)。QA包用于集中体验，目标手机/鸿蒙和真实学校/模型/麦克风/文件/通知手势仍未验收，A8正式私有发行待办。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
@@ -64,7 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 
 集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；可附加`-BuildRevision <40位源码SHA>`，Flutter与后续Gradle均保留该诊断定义。集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
 
-Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音有独立的前台/权限规则，见下文。最新普通包位于`build/android-a6/artifacts/USTC-Assistant-Android-A6-QA-x86_64.apk`，仅用于模拟器，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音有独立的前台/权限规则，见下文。最新普通包位于`build/android-a7/artifacts/USTC-Assistant-Android-A7-QA-x86_64.apk`，QA版本4002，仅x86_64，供模拟器体验，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
 
 系统提醒默认关闭，在“设置→晨报与提醒”主动启用，并点击系统权限入口。未允许精确提醒时可能延后；“本地已登记”不代表系统队列独立核验或已送达。普通退出保留未来提醒；强制停止、系统节电及厂商限制另行处理。晨报与每日二课均独立默认关闭，晨报异步生成；二课只在前台空闲采集，Android退后台撤销当次尝试。A5系统投递仅在独立模拟器验证，真实通知栏点击、权限界面和厂商策略仍待A7。
 
@@ -74,7 +74,7 @@ Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业�
 
 进入“设置 → Agent”或 Agent 页的“去设置”。Key 只在应用里主动输入，不在聊天正文中提供。勾选发送同意，点击“获取模型”，从学校服务返回的目录选择模型，再点击“验证并保存”；获取目录后 Key 输入清空，但本次候选 Key 最多在内存保留三分钟供验证，超时或停止后清除。验证使用合成问题和固定 echo_probe，不读取业务数据；只通过文本与流式时标记 chatOnly，完成工具调用和工具结果续答才标记 toolReady。
 
-学校网关固定为 `https://api.llm.ustc.edu.cn/v1`，无自定义地址。模型 Key 采用独立用途的 Windows DPAPI CurrentUser 保护，与学校密码分开。已保存后可留空；取消发送同意会立即撤销授权并停止相关运行，Key/历史继续保留，重新勾选可恢复授权。删除 Key 需确认，保留其他数据。
+学校网关固定为 `https://api.llm.ustc.edu.cn/v1`，无自定义地址。模型 Key 在Windows采用DPAPI CurrentUser、在Android采用Keystore封套保护，用途与学校密码分开，密文不跨设备复制。已保存后可留空；取消发送同意会立即撤销授权并停止相关运行，Key/历史继续保留，重新勾选可恢复授权。删除 Key 需确认，保留其他数据。
 
 回到 Agent 页直接在唯一持续对话中发送问题，回复逐步显示；“停止”保留已经安全保存的片段并标注终态。toolReady模型稳定获得20个固定工具，按需要查询日程、任务、提醒、知识库、评课与校园公开资料或准备本地操作，例如“明天有哪些课”“哪些任务快截止”“缓考怎么办”。问题真正缺少对象或范围时才澄清，短答和“第二个”等指代结合安全历史理解。个人备注、任务正文不会默认发送；在“Agent 使用权限”单独允许后，才按需读取所选范围。学校身份/密码不发送给模型。评课须先在设置允许第三方查询，知识未载入时由用户在设置主动载入，不自动获取资料。
 
