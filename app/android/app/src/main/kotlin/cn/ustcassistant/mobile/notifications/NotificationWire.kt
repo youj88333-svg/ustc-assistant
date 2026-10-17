@@ -82,18 +82,28 @@ internal enum class DeliveryState { pending, delivered, revoked }
 
 internal data class NativeEntry(val request: NativeRequest, val nonce: String, val generation: Long,
     val state: DeliveryState = DeliveryState.pending, val registered: Boolean = false,
-    val exact: Boolean = false, val clicked: Boolean = false) {
+    val exact: Boolean = false, val clicked: Boolean = false, val activationPending: Boolean = false) {
     fun json() = JSONObject(mapOf("request" to request.json(), "nonce" to nonce, "generation" to generation,
-        "state" to state.name, "registered" to registered, "exact" to exact, "clicked" to clicked))
+        "state" to state.name, "registered" to registered, "exact" to exact, "clicked" to clicked,
+        "activationPending" to activationPending))
     companion object {
         fun parse(raw: JSONObject): NativeEntry {
             val map = jsonMap(raw)
-            exactKeys(map, setOf("request", "nonce", "generation", "state", "registered", "exact", "clicked"))
+            val previous = setOf("request", "nonce", "generation", "state", "registered", "exact", "clicked")
+            exactKeys(map, if (map.containsKey("activationPending")) previous + "activationPending" else previous)
+            val state = DeliveryState.valueOf(map["state"] as? String ?: "")
+            val clicked = map["clicked"] as? Boolean ?: throw NotificationFailure("invalid_input")
+            // V1 entries from earlier QA builds remain consumed. Never invent
+            // a fresh activation for a click whose handoff was not recorded.
+            val activationPending = if (map.containsKey("activationPending")) {
+                map["activationPending"] as? Boolean ?: throw NotificationFailure("invalid_input")
+            } else false
+            if (activationPending && (!clicked || state != DeliveryState.delivered)) throw NotificationFailure("invalid_input")
             return NativeEntry(NativeRequest.parse(jsonMap(raw.getJSONObject("request"))), opaque(map["nonce"], 32, 32),
-                integer(map["generation"]), DeliveryState.valueOf(map["state"] as? String ?: ""),
+                integer(map["generation"]), state,
                 map["registered"] as? Boolean ?: throw NotificationFailure("invalid_input"),
                 map["exact"] as? Boolean ?: throw NotificationFailure("invalid_input"),
-                map["clicked"] as? Boolean ?: throw NotificationFailure("invalid_input"))
+                clicked, activationPending)
         }
     }
 }

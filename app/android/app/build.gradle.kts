@@ -37,7 +37,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a6"
+            versionNameSuffix = "-qa-a7"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -117,7 +117,9 @@ androidComponents {
         // A1's isolated emulator builds use that ABI; non-split integration
         // builds need the same final code to preserve their synthetic data.
         val splitQa = project.findProperty("split-per-abi") == "true"
-        variant.outputs.forEach { it.versionCode.set(if (splitQa) 1 else 4001) }
+        // A7 adds a forward-compatible pending-click field. A higher QA code
+        // prevents accidentally reinstalling an older strict mirror reader.
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 2 else 4002) }
     }
 }
 

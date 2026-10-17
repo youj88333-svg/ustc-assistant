@@ -29,6 +29,7 @@ class ReminderOsProbeActivity : Activity() {
                     "cancel" -> core.cancel("a5-os-probe")
                     "block" -> core.block()
                     "restore" -> core.restore()
+                    "initialize" -> core.initialize()
                     "clear" -> core.clear()
                     "report" -> Unit
                     else -> throw NotificationFailure("invalid_input")

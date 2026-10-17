@@ -8,10 +8,10 @@ param(
     [string]$PubCache = 'E:\Android\pub_cache',
     [ValidateSet('All', 'Notifications')]
     [string]$TestScope = 'All',
-    [ValidateSet(35, 36, 37)]
+    [ValidateSet(34, 35, 36, 37)]
     [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
-    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6')]
+    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source')]
     [string]$IntegrationSuite = 'A1',
     [switch]$UnsupportedSourceOnly,
     [switch]$VerifyRetained,
@@ -28,7 +28,7 @@ $avdHome = Join-Path $taskRoot 'avd-home'
 $avdName = "ustc_android_a0_api$ApiLevel"
 $imageApi = $(if ($ApiLevel -eq 37) { '37.0' } else { "$ApiLevel" })
 $imageTag = 'google_apis'
-$emulatorPort = $(if ($ApiLevel -eq 35) { 5580 } elseif ($ApiLevel -eq 36) { 5582 } else { 5584 })
+$emulatorPort = $(if ($ApiLevel -eq 34) { 5588 } elseif ($ApiLevel -eq 35) { 5580 } elseif ($ApiLevel -eq 36) { 5582 } else { 5584 })
 if ($CurrentProvider) {
     if ($ApiLevel -ne 37) { throw 'The current-provider probe requires the separate API 37 QA image.' }
     $avdName = 'ustc_android_a2_current_provider'
@@ -142,13 +142,24 @@ try {
             & (Join-Path $PSScriptRoot 'test-android-a0.ps1') -SdkRoot $SdkRoot -Serial $serial -ExpectedAvd $avdName -Scope $TestScope
         }
         'IntegrationTest' {
+            if ($IntegrationSuite -in @('A7', 'A7_Source') -and $ApiLevel -ne 34) {
+                throw 'A7 notification routing seeds only the new independent API34 QA sandbox.'
+            }
             $actualAvd = & $adb -P 5038 -s $serial shell getprop ro.boot.qemu.avd_name
             Assert-ExitCode 'Integration QA identity'
             if (($actualAvd -join '').Trim() -ne $avdName) { throw 'Unexpected AVD; refusing integration tests.' }
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4001) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4002) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
+            }
+            $restoreNotificationDenial = $false
+            if ($IntegrationSuite -eq 'A5') {
+                # A5 tests publication, with permission as an explicit test
+                # prerequisite; permission denial is covered separately.
+                $restoreNotificationDenial = ($installedMetadata -join "`n") -notmatch 'android.permission.POST_NOTIFICATIONS: granted=true'
+                & $adb -P 5038 -s $serial shell pm grant cn.ustcassistant.mobile.qa android.permission.POST_NOTIFICATIONS
+                Assert-ExitCode 'Isolated A5 notification prerequisite'
             }
             Push-Location $appRoot
             try {
@@ -157,7 +168,8 @@ try {
                 # which would invalidate the cross-process retention checks.
                 $integrationFile = "integration_test/android_$($IntegrationSuite.ToLowerInvariant())_test.dart"
                 $gateValue = $UnsupportedSourceOnly.IsPresent.ToString().ToLowerInvariant()
-                & $flutter test $integrationFile -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue" "--dart-define=USTC_A2_UNSUPPORTED_SOURCE_ONLY=$gateValue"
+                $routeValue = ($IntegrationSuite -eq 'A7').ToString().ToLowerInvariant()
+                & $flutter test $integrationFile -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue" "--dart-define=USTC_A2_UNSUPPORTED_SOURCE_ONLY=$gateValue" "--dart-define=USTC_A7_SEED_OS_ROUTE=$routeValue"
                 $integrationExitCode = $LASTEXITCODE
                 $installedPaths = & $adb -P 5038 -s $serial shell pm path cn.ustcassistant.mobile.qa
                 Assert-ExitCode 'QA package retention check'
@@ -166,7 +178,13 @@ try {
                 }
                 Write-Output "$IntegrationSuite QA package remains installed after the integration runner."
                 if ($integrationExitCode -ne 0) { throw "Android $IntegrationSuite integration failed ($integrationExitCode)." }
-            } finally { Pop-Location }
+            } finally {
+                Pop-Location
+                if ($restoreNotificationDenial) {
+                    & $adb -P 5038 -s $serial shell pm revoke cn.ustcassistant.mobile.qa android.permission.POST_NOTIFICATIONS
+                    Assert-ExitCode 'Restore isolated A5 notification denial'
+                }
+            }
         }
     }
 } finally {

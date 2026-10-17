@@ -31,16 +31,34 @@ void main() {
   testWidgets(
     'phone shell and local calendar/task/settings share the owned Android runtime',
     (tester) async {
+      final previousErrorHandler = FlutterError.onError;
+      FlutterError.onError = (details) {
+        // Keep render-object diagnostics for cross-version layout failures.
+        debugPrint(details.toString());
+        previousErrorHandler?.call(details);
+      };
+      addTearDown(() => FlutterError.onError = previousErrorHandler);
       final fixture = await tester.runAsync(_fixture);
       RuntimeBootstrap? bootstrap;
       final network = _NoNetwork();
       final previousNetwork = HttpOverrides.current;
       HttpOverrides.global = network;
+      debugPrint(
+        'A4 native insets: top=${tester.view.padding.top}, '
+        'bottom=${tester.view.padding.bottom}, '
+        'viewBottom=${tester.view.viewPadding.bottom}',
+      );
       tester.view.physicalSize = const Size(360, 780);
       tester.view.devicePixelRatio = 1;
+      // Own every viewport metric. Otherwise an API34 physical navigation
+      // inset from a 1080px/DPR2.625 display survives a synthetic DPR1 resize.
+      tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
+      tester.view.viewPadding = const FakeViewPadding(top: 24, bottom: 24);
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
       addTearDown(tester.view.resetViewInsets);
+      addTearDown(tester.view.resetPadding);
+      addTearDown(tester.view.resetViewPadding);
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       try {
         bootstrap = await tester.runAsync(
@@ -97,10 +115,12 @@ void main() {
         expect(find.text('A4合成截止任务'), findsWidgets);
         tester.view.physicalSize = const Size(800, 360);
         tester.platformDispatcher.textScaleFactorTestValue = 2;
+        tester.view.padding = const FakeViewPadding(top: 24);
         tester.view.viewInsets = const FakeViewPadding(bottom: 180);
         await _settle(tester);
         expect(tester.takeException(), isNull);
         tester.view.viewInsets = const FakeViewPadding();
+        tester.view.padding = const FakeViewPadding(top: 24, bottom: 24);
         tester.platformDispatcher.textScaleFactorTestValue = 1;
         tester.view.physicalSize = const Size(360, 780);
         await _settle(tester);

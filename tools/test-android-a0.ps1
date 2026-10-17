@@ -24,6 +24,7 @@ function Invoke-QaAdb {
 
 # A device explicitly created for this probe is mandatory. Never target a phone or other AVD.
 $allowedTargets = @{
+    'emulator-5588' = 'ustc_android_a0_api34'
     'emulator-5580' = 'ustc_android_a0_api35'
     'emulator-5582' = 'ustc_android_a0_api36'
     'emulator-5584' = 'ustc_android_a0_api37'

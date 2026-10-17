@@ -453,6 +453,193 @@ void main() {
     },
   );
 
+  test('temporary C3 resolve failures retry after one second', () {
+    for (final failure in <Object>[
+      const ReminderFailure(ReminderFailureCode.storageFailed),
+      StateError('synthetic unexpected C3 failure'),
+    ]) {
+      fakeAsync((time) {
+        const activation = NotificationActivation(
+          'retry_notice',
+          _digest,
+          _token,
+        );
+        final data =
+            _FakeReminderData(publication: _publication(enabled: false))
+              ..activationTargets['retry_notice|$_digest|$_token'] = _target
+              ..resolveFailuresRemaining = 1
+              ..resolveFailure = failure;
+        final platform = _FakeNotifications();
+        final coordinator = ReminderCoordinator(data: data, platform: platform);
+        final navigated = <ReminderTarget>[];
+        final navigation = coordinator.navigation.listen(navigated.add);
+        coordinator.start();
+
+        // Let the startup refresh finish so only the activation retry timer
+        // remains under observation.
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        platform.emit(activation);
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 1);
+        expect(navigated, isEmpty);
+        expect(time.pendingTimers, hasLength(1));
+
+        time.elapse(const Duration(milliseconds: 999));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 1);
+        time.elapse(const Duration(milliseconds: 1));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 2);
+        expect(navigated, [_target]);
+
+        unawaited(navigation.cancel());
+        unawaited(coordinator.close());
+        time.flushMicrotasks();
+        expect(time.pendingTimers, isEmpty);
+        unawaited(data._changes.close());
+        time.flushMicrotasks();
+      });
+    }
+  });
+
+  test(
+    'retries are bounded and foreground can retry the retained activation',
+    () {
+      fakeAsync((time) {
+        const activation = NotificationActivation(
+          'bounded_notice',
+          _digest,
+          _token,
+        );
+        final data =
+            _FakeReminderData(publication: _publication(enabled: false))
+              ..activationTargets['bounded_notice|$_digest|$_token'] = _target
+              ..resolveFailuresRemaining = 4;
+        final platform = _FakeNotifications();
+        final coordinator = ReminderCoordinator(data: data, platform: platform);
+        final navigated = <ReminderTarget>[];
+        final navigation = coordinator.navigation.listen(navigated.add);
+        coordinator.start();
+
+        time.elapse(const Duration(milliseconds: 200));
+        time.flushMicrotasks();
+        platform.emit(activation);
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 1);
+        time.elapse(const Duration(seconds: 1));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 2);
+        time.elapse(const Duration(milliseconds: 1999));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 2);
+        time.elapse(const Duration(milliseconds: 1));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 3);
+        time.elapse(const Duration(milliseconds: 3999));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 3);
+        time.elapse(const Duration(milliseconds: 1));
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 4);
+        expect(navigated, isEmpty);
+        expect(time.pendingTimers, isEmpty);
+
+        coordinator.onForeground();
+        time.flushMicrotasks();
+        expect(data.resolveCalls, 5);
+        expect(navigated, [_target]);
+
+        unawaited(navigation.cancel());
+        unawaited(coordinator.close());
+        time.flushMicrotasks();
+        expect(time.pendingTimers, isEmpty);
+        unawaited(data._changes.close());
+        time.flushMicrotasks();
+      });
+    },
+  );
+
+  test('maintenance and close cancel a pending activation retry', () async {
+    Future<void> verifyCancellation({required bool close}) async {
+      const activation = NotificationActivation(
+        'cancel_notice',
+        _digest,
+        _token,
+      );
+      final data = _FakeReminderData(publication: _publication(enabled: false))
+        ..activationTargets['cancel_notice|$_digest|$_token'] = _target
+        ..resolveFailuresRemaining = 1;
+      final platform = _FakeNotifications();
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+      final navigated = <ReminderTarget>[];
+      final navigation = coordinator.navigation.listen(navigated.add);
+      coordinator.start();
+
+      await Future<void>.delayed(const Duration(milliseconds: 220));
+      platform.emit(activation);
+      await Future<void>.delayed(Duration.zero);
+      expect(data.resolveCalls, 1);
+
+      if (close) {
+        await coordinator.close();
+      } else {
+        await coordinator.prepareForMaintenance();
+      }
+
+      // Cross the first real retry deadline after cancellation. Await the
+      // actual stream shutdown rather than a fake-zone completion flag.
+      await Future<void>.delayed(const Duration(milliseconds: 1100));
+      expect(data.resolveCalls, 1);
+      expect(navigated, isEmpty);
+      if (!close) {
+        await coordinator.close();
+      }
+      await navigation.cancel();
+      await data._changes.close();
+    }
+
+    await verifyCancellation(close: false);
+    await verifyCancellation(close: true);
+  });
+
+  test('explicit null and stale C3 results are discarded without retry', () {
+    fakeAsync((time) {
+      const stale = NotificationActivation('stale_result', _digest, _token);
+      const absent = NotificationActivation('absent_result', _digest, _token);
+      final data = _FakeReminderData(publication: _publication(enabled: false))
+        ..resolveFailuresRemaining = 1
+        ..resolveFailure = const ReminderFailure(ReminderFailureCode.stale)
+        ..activationTargets['absent_result|$_digest|$_token'] = null;
+      final platform = _FakeNotifications();
+      final coordinator = ReminderCoordinator(data: data, platform: platform);
+      final navigated = <ReminderTarget>[];
+      final navigation = coordinator.navigation.listen(navigated.add);
+      coordinator.start();
+
+      time.elapse(const Duration(milliseconds: 200));
+      time.flushMicrotasks();
+      platform.emit(stale);
+      platform.emit(absent);
+      time.flushMicrotasks();
+      expect(data.resolveCalls, 2);
+      expect(navigated, isEmpty);
+      expect(time.pendingTimers, isEmpty);
+
+      time.elapse(const Duration(seconds: 10));
+      time.flushMicrotasks();
+      expect(data.resolveCalls, 2);
+      expect(navigated, isEmpty);
+
+      unawaited(navigation.cancel());
+      unawaited(coordinator.close());
+      time.flushMicrotasks();
+      unawaited(data._changes.close());
+      time.flushMicrotasks();
+      expect(time.pendingTimers, isEmpty);
+    });
+  });
+
   test('forged and stale-context activations do not navigate', () async {
     const currentContext = CalendarContext(
       owner: 'synthetic-owner',
@@ -590,6 +777,11 @@ final class _FakeReminderData implements ReminderDataPort {
   final Map<String, ReminderTarget?> activationTargets = {};
 
   int ackFailuresRemaining = 0;
+  int resolveFailuresRemaining = 0;
+  int resolveCalls = 0;
+  Object resolveFailure = const ReminderFailure(
+    ReminderFailureCode.storageFailed,
+  );
   int _prepareCount = 0;
   ReminderPublication? invalidatedPublication;
 
@@ -643,6 +835,11 @@ final class _FakeReminderData implements ReminderDataPort {
   Future<ReminderTarget?> resolveNotification(
     NotificationActivation activation,
   ) async {
+    resolveCalls++;
+    if (resolveFailuresRemaining > 0) {
+      resolveFailuresRemaining--;
+      throw resolveFailure;
+    }
     final key = '${activation.id}|${activation.digest}|${activation.token}';
     final target = activationTargets[key];
     return target?.context == currentContext ? target : null;

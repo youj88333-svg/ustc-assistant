@@ -26,7 +26,6 @@ internal interface NotificationDriver {
 internal class NotificationManagerCore(private val ledger: NotificationLedger, private val driver: NotificationDriver,
     private val now: () -> Long = System::currentTimeMillis) {
     companion object { const val MAX_PENDING = 480; private const val DAY = 86_400_000L }
-    private val activations = ArrayDeque<Map<String, String>>()
     private var restoredAccess: Pair<Boolean, Boolean>? = null
 
     fun initialize(): Map<String, Any> = synchronized(NotificationSerialization.monitor) {
@@ -59,7 +58,7 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
         state = state.copy(generation = generation, blocked = false, authority = authority, allowed = allowed.associateBy { it.id })
         state = state.copy(entries = state.entries.mapValues { (_, entry) ->
             if (!state.allows(entry) || entry.request.identity.due < now() - 30 * DAY ||
-                (entry.state == DeliveryState.pending && entry.request.identity.due < now() - DAY)) entry.copy(state = DeliveryState.revoked, registered = false)
+                (entry.state == DeliveryState.pending && entry.request.identity.due < now() - DAY)) entry.copy(state = DeliveryState.revoked, registered = false, activationPending = false)
             else entry
         })
         // An old intent loses authority durably before any OS cancellation.
@@ -70,7 +69,6 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
     fun block() = synchronized(NotificationSerialization.monitor) {
         val state = ledger.read()
         ledger.write(state.copy(blocked = true, generation = state.generation + 1))
-        activations.clear()
     }
 
     fun schedule(request: NativeRequest) = synchronized(NotificationSerialization.monitor) {
@@ -125,7 +123,7 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
 
     private fun revoke(state: NotificationMirror, id: String): NotificationMirror {
         val entry = state.entries[id] ?: return state
-        val revoked = state.copy(entries = state.entries + (id to entry.copy(state = DeliveryState.revoked, registered = false)))
+        val revoked = state.copy(entries = state.entries + (id to entry.copy(state = DeliveryState.revoked, registered = false, activationPending = false)))
         ledger.write(revoked)
         return revoked
     }
@@ -147,9 +145,8 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
     fun clear() = synchronized(NotificationSerialization.monitor) {
         var state = ledger.read()
         state = state.copy(blocked = true, generation = state.generation + 1,
-            deliveryFailures = 0, allowed = emptyMap(), entries = state.entries.mapValues { (_, entry) -> entry.copy(state = DeliveryState.revoked, registered = false) })
+            deliveryFailures = 0, allowed = emptyMap(), entries = state.entries.mapValues { (_, entry) -> entry.copy(state = DeliveryState.revoked, registered = false, activationPending = false) })
         ledger.write(state)
-        activations.clear()
         try {
             cleanupRevoked(state)
             driver.clearDisplayed()
@@ -169,7 +166,7 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
         val exact = driver.exactAllowed()
         state = state.copy(entries = state.entries.mapValues { (_, entry) ->
             if (entry.state != DeliveryState.pending) entry
-            else if (!state.allows(entry) || entry.request.identity.due <= now()) entry.copy(state = DeliveryState.revoked, registered = false)
+            else if (!state.allows(entry) || entry.request.identity.due <= now()) entry.copy(state = DeliveryState.revoked, registered = false, activationPending = false)
             else entry.copy(registered = false, exact = exact)
         })
         // One durable revocation batch before OS work, one acknowledgement
@@ -212,15 +209,31 @@ internal class NotificationManagerCore(private val ledger: NotificationLedger, p
         val entry = state.entries[id] ?: return@synchronized false
         if (!state.allows(entry) || entry.state != DeliveryState.delivered || entry.clicked ||
             entry.nonce != nonce || entry.generation != generation || entry.request.identity.due < now() - 30 * DAY) return@synchronized false
-        ledger.write(state.copy(entries = state.entries + (id to entry.copy(clicked = true))))
-        if (activations.size == 32) activations.removeFirst()
-        activations.addLast(mapOf("id" to id, "digest" to entry.request.identity.digest, "token" to entry.request.identity.token))
+        val pending = state.entries.values.filter { it.activationPending }
+        val entries = state.entries.toMutableMap()
+        if (pending.size >= 32) {
+            // Keep the bounded handoff queue in the existing minimal mirror.
+            val oldest = pending.minBy { it.request.identity.due }
+            entries[oldest.request.identity.id] = oldest.copy(activationPending = false)
+        }
+        entries[id] = entry.copy(clicked = true, activationPending = true)
+        ledger.write(state.copy(entries = entries))
         true
     }
 
     fun takeActivations(): List<Map<String, String>> = synchronized(NotificationSerialization.monitor) {
-        val result = activations.toList()
-        activations.clear()
-        result
+        val state = ledger.read()
+        val pending = state.entries.values.filter { it.activationPending }
+        if (pending.isEmpty()) return@synchronized emptyList()
+        val current = pending.filter { state.allows(it) && it.state == DeliveryState.delivered &&
+            it.request.identity.due >= now() - 30 * DAY }.take(32)
+        // Crash before this durable handoff can retry after a cold restart.
+        // After handing to Dart, routing is best effort and revalidated by C3;
+        // this deliberately does not claim exactly-once UI navigation.
+        ledger.write(state.copy(entries = state.entries.mapValues { (_, entry) ->
+            if (entry.activationPending) entry.copy(activationPending = false) else entry
+        }))
+        current.map { mapOf("id" to it.request.identity.id,
+            "digest" to it.request.identity.digest, "token" to it.request.identity.token) }
     }
 }

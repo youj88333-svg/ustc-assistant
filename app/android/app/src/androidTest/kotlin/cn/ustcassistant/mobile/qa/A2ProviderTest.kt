@@ -7,6 +7,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import org.json.JSONObject
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -22,7 +23,8 @@ import cn.ustcassistant.mobile.browser.ScriptCatalog
 @RunWith(AndroidJUnit4::class)
 class A2ProviderTest {
     @Test fun sameUrlReplaceInsideUsernameEventStopsBeforePasswordDelivery() {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD)) return
+        assumeTrue("A missing private-world provider is not a passed navigation check.",
+            WebViewFeature.isFeatureSupported(WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD))
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         assertTrue(context.packageName == "cn.ustcassistant.mobile.qa")
@@ -93,7 +95,8 @@ class A2ProviderTest {
     }
 
     @Test fun oldFrameProxyCannotDeliverIntoAReplacementDocument() {
-        if (!WebViewFeature.isFeatureSupported(WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD)) return
+        assumeTrue("A missing private-world provider is not a passed stale-proxy check.",
+            WebViewFeature.isFeatureSupported(WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD))
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         assertTrue(context.packageName == "cn.ustcassistant.mobile.qa")

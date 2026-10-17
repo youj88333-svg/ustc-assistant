@@ -14,7 +14,7 @@ final class ReminderCoordinator {
     this.diagnostics,
     this.clock = const SystemClock(),
   }) {
-    _navigation.onListen = () => unawaited(_drainNavigation());
+    _navigation.onListen = _resumeNavigation;
   }
   final ReminderDataPort data;
   final NotificationPlatformPort platform;
@@ -41,11 +41,32 @@ final class ReminderCoordinator {
   NotificationCapability? _capability;
   final _waitingNavigation = <NotificationActivation>[];
   Future<void>? _navigationWork;
+  Timer? _navigationRetryTimer;
+  int _navigationRetryAttempts = 0;
+  bool _navigationBlocked = false;
+
+  void _resumeNavigation() {
+    if (_closed || _closing || _paused) return;
+    _navigationRetryTimer?.cancel();
+    _navigationRetryTimer = null;
+    _navigationRetryAttempts = 0;
+    _navigationBlocked = false;
+    unawaited(_drainNavigation());
+  }
+
+  void _cancelNavigationRetry() {
+    _navigationRetryTimer?.cancel();
+    _navigationRetryTimer = null;
+    _navigationRetryAttempts = 0;
+    _navigationBlocked = false;
+  }
 
   Future<void> _drainNavigation() async {
     if (_navigationWork != null ||
         !_navigation.hasListener ||
         _closed ||
+        _closing ||
+        _navigationBlocked ||
         _paused) {
       return;
     }
@@ -55,6 +76,7 @@ final class ReminderCoordinator {
       while (_waitingNavigation.isNotEmpty &&
           _navigation.hasListener &&
           !_closed &&
+          !_closing &&
           !_paused) {
         final activation = _waitingNavigation.removeAt(0);
         final generation = _generation;
@@ -62,14 +84,37 @@ final class ReminderCoordinator {
           // Revalidate with C3 when the UI can actually receive it; a startup
           // click must not disappear into an unsubscribed broadcast stream.
           final target = await data.resolveNotification(activation);
-          if (!_live(generation)) return;
+          if (!_live(generation) || _closing) return;
           if (!_navigation.hasListener) {
             _waitingNavigation.insert(0, activation);
             return;
           }
           if (target != null) _navigation.add(target);
-        } catch (_) {
-          /* Obsolete/untrusted navigation is not a business write. */
+          _navigationRetryAttempts = 0;
+        } on Object catch (error) {
+          if (!_live(generation) || _closing) return;
+          if (error is ReminderFailure &&
+              error.code != ReminderFailureCode.storageFailed) {
+            // C3 explicitly rejects an obsolete/untrusted target.
+            _navigationRetryAttempts = 0;
+            continue;
+          }
+          _waitingNavigation.insert(0, activation);
+          _navigationBlocked = true;
+          _log(
+            DiagnosticEventName.reminderFailed,
+            DiagnosticOutcome.failure,
+            ReminderFailureCode.storageFailed.name,
+          );
+          if (_navigationRetryAttempts < 3) {
+            final delay = Duration(seconds: 1 << _navigationRetryAttempts++);
+            _navigationRetryTimer = Timer(delay, () {
+              _navigationRetryTimer = null;
+              _navigationBlocked = false;
+              unawaited(_drainNavigation());
+            });
+          }
+          return;
         }
       }
     } finally {
@@ -78,6 +123,8 @@ final class ReminderCoordinator {
       if (_waitingNavigation.isNotEmpty &&
           _navigation.hasListener &&
           !_closed &&
+          !_closing &&
+          !_navigationBlocked &&
           !_paused) {
         scheduleMicrotask(() => unawaited(_drainNavigation()));
       }
@@ -111,7 +158,7 @@ final class ReminderCoordinator {
       if (_closed || _paused) return;
       if (_waitingNavigation.length == 32) _waitingNavigation.removeAt(0);
       _waitingNavigation.add(activation);
-      unawaited(_drainNavigation());
+      _resumeNavigation();
     });
     final status = platform;
     if (status is NotificationActivationStatusPort) {
@@ -174,7 +221,10 @@ final class ReminderCoordinator {
     });
   }
 
-  void onForeground() => _scheduleRefresh();
+  void onForeground() {
+    _resumeNavigation();
+    _scheduleRefresh();
+  }
 
   bool get supportsSystemAccess => platform is NotificationSystemControlPort;
 
@@ -388,6 +438,7 @@ final class ReminderCoordinator {
     _paused = true;
     _generation++;
     _waitingNavigation.clear();
+    _cancelNavigationRetry();
     _timer?.cancel();
     _rollTimer?.cancel();
     await _work;
@@ -411,6 +462,7 @@ final class ReminderCoordinator {
     _paused = true;
     _generation++;
     _waitingNavigation.clear();
+    _cancelNavigationRetry();
     _timer?.cancel();
     _rollTimer?.cancel();
     await _work;
@@ -497,6 +549,7 @@ final class ReminderCoordinator {
   Future<void> close() async {
     if (_closed) return;
     _closing = true;
+    _cancelNavigationRetry();
     _again = false;
     _timer?.cancel();
     _rollTimer?.cancel();
