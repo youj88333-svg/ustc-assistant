@@ -193,6 +193,20 @@ Android13+通知许可和精确闹钟能力分开申请/反馈；首选用户授
 
 平台依据：[Android照片选择器](https://developer.android.com/training/data-storage/shared/photopicker)、[SAF创建文档](https://developer.android.com/training/data-storage/shared/documents-files)、[Flutter预测返回](https://docs.flutter.dev/platform-integration/android/predictive-back)。不增加GMS回移依赖；不支持照片选择器的设备继续用系统文档选择。
 
+### A5提醒、晨报与日常同步实施契约
+
+依据07用户主权、08 C2/C3/C5/P分工、09持久事务/许可、10提醒/维护/晨报/每日同步、11组件、12诊断与平台边界、13 V-08及14/15，依赖A1私有根、A2固定学校桥、A3模型与A4手机界面。本切不改schema18、20工具或Windows1.00交付，不增加退出后学校采集、推送服务器或常驻服务，默认开关保持关闭。
+
+- 评估`flutter_local_notifications`的当前公开实现后，本切采用固定Android原生端口的AlarmManager/NotificationCompat。插件普通能力成熟，但其待处理列表来自自身缓存、默认启动接收器按缓存重建，缺少本项目C3维护屏障/登记授权的交接；使用它仍需另写受控镜像和接收器。这里复用Android官方API，不复制插件私有格式，不替换Windows实现，也不新增Dart依赖。
+- 保留`NotificationPlatformPort`；可选扩展明确Android本机镜像证据、精确能力与队列上限（480，Windows默认512）。通知许可、精确闹钟特殊许可和系统设置只由用户点击请求；启动与恢复仅回读。已允许通知但未授精确许可时可登记非精确提醒，并明确可能延后；不冒称准点或已独立枚举OS队列。使用`SCHEDULE_EXACT_ALARM`，不索取自动授予的`USE_EXACT_ALARM`。
+- 固定`ustc_assistant/android_notifications_v1`只接受初始化、C3发布授权绑定、登记/撤销/本应用清理、激活读取及上述系统访问动作。C3发布上下文/修订和有界有效ID/摘要/token/UTC时刻组成原生允许集合；只登记匹配请求。原生私有no-backup镜像不是业务权威，接收器不开业务库、不初始化Flutter/Agent/学校，逐次复验允许集合、原生唯一登记戳、撤销和已投递状态。参数严格有界；日程文本不进入Intent、日志或模型。
+- 原生撤销先持久化不可投递状态，再取消Alarm/PendingIntent/已显示通知；失败保留撤销待办。维护在持久C3意图之前，通过可选Android交接停止协调、排空在途、持久阻止投递；未知结果保留屏障，无意图失败或C3恢复完成后才全量重新绑定。普通退出只断开活动宿主，保留已接受登记；普通业务事务与OS发布仍是既有事务外对账，崩溃窗口明确待恢复，不承诺跨存储exactly-once或零延迟撤销。
+- 冷启动/已有实例点击都只携带有界原生ID/摘要/token/登记戳；应用在取得目录所有权和维护恢复后，仍由C3复验当前目标/世代，再导航日程或任务，不提交修改。重复、旧戳、已撤销或恢复的旧任务Intent不能重放点击。重启/升级/时钟或精确许可变化仅从未阻止、仍有效的未来登记恢复；不重放过期提醒，不绕过系统强制停止。相同进程串行化投递、撤销、镜像和维护屏障。
+- 晨报复用现有独立低优先级通道：北京时间06:00后前台先显示本地事实/小入口，通知和模型异步；缓存命中不重复生成，失败/覆盖不足不说没有公告，Agent抢占和退后台会停止本轮。每日二课仅用户启用后在前台空闲运行昨天起31天，沿用每天3次、至少15分钟退避及挑战暂停；Android退后台撤销并排空当次自有许可，回前台重新准入，不恢复旧提交。手动历史范围、来源租约及Windows原策略保留。
+- Sol单写共享契约、原生镜像/调度/Receiver、Manifest/MainActivity、维护交接和组合根；Luna分别修改已定接口下的设置展示/合成测试和每日同步后台策略，文件不重叠。根执行analyze、全套Dart、Android原生/集成与退出后实际OS投递/取消合成验证、相关Windows回归及普通QA包/生产Manifest/lint。真实学校、模型、手机锁屏/省电/系统手势及鸿蒙仍由A7分别验收，不据模拟器通过关闭。
+
+平台依据：[Android闹钟与精确许可](https://developer.android.com/develop/background-work/services/alarms)、[通知运行时许可](https://developer.android.com/develop/ui/views/notifications/notification-permission)、[插件启动接收器](https://github.com/MaikuB/flutter_local_notifications/blob/master/flutter_local_notifications/android/src/main/java/com/dexterous/flutterlocalnotifications/ScheduledNotificationBootReceiver.java)及[插件当前实现](https://github.com/MaikuB/flutter_local_notifications/blob/master/flutter_local_notifications/android/src/main/java/com/dexterous/flutterlocalnotifications/FlutterLocalNotificationsPlugin.java)。厂商投递仍须目标设备验证，不将API调用成功等同用户已看到通知。
+
 ### A6/A7/A8实施要点
 
 - 语音保留`record`/sherpa路线，中文、16kHz单声道PCM16、0.5秒最短/30秒最长、内存中短音频、不自动发送；录音许可在用户点麦克风时请求，拒绝不影响键盘。移除Windows默认设备依赖，Android`.so`和模型按ABI加载，推理/哈希/解包不占UI线程。
