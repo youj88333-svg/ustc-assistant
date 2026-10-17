@@ -20,7 +20,7 @@
 
 ### Android A7当前证据
 
-V-07/V-08/V-09的模拟器证据补充见[A7根记录](../milestones/android-apk/records/10-a7-emulator-validation.md)和[设备矩阵](../milestones/android-apk/device-matrix.md)：Android14旧提供方正确拒绝学校能力，当前提供方完成合成学校链路及16KB运行；已修复通知待交接持久化/临时解析重试，并通过真实合成通知PendingIntent到普通入口日程/任务详情、模拟深度休眠及低电量/省电检查；两环境均通过包内ASR与合成中文草稿。程序触发PendingIntent不等于真人通知栏手势，合成声音不等于实际麦克风。MuMu人工体验、目标手机/鸿蒙、真实学校/模型/声音/文件、厂商省电及A8发布仍待验证，不关闭完整风险项或覆盖既有失败。
+V-07/V-08/V-09的模拟器证据补充见[A7根记录](../milestones/android-apk/records/10-a7-emulator-validation.md)和[设备矩阵](../milestones/android-apk/device-matrix.md)：Android14旧提供方正确拒绝学校能力，当前提供方完成合成学校链路及16KB运行；已修复通知待交接持久化/临时解析重试，并通过真实合成通知PendingIntent到普通入口日程/任务详情、模拟深度休眠及低电量/省电检查；两环境均通过包内ASR与合成中文草稿。程序触发PendingIntent不等于真人通知栏手势，合成声音不等于实际麦克风。MuMu首轮已反馈学校建窗失败；实际Android12/WebView110缺能力，后续错误覆盖与诊断可达性修复见[记录11](../milestones/android-apk/records/11-mumu-source-and-diagnostics.md)，不记学校可用。MuMu剩余人工体验、目标手机/鸿蒙、真实学校/模型/声音/文件、厂商省电及A8发布仍待验证，不关闭完整风险项或覆盖既有失败。
 
 ### V-06 M5.9 验收增补（工程完成，M5 整体已关闭，未观察项保留）
 

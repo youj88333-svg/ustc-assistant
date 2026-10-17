@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准，A7模拟器部分完成，最新见[A7根记录](milestones/android-apk/records/10-a7-emulator-validation.md)、[设备矩阵](milestones/android-apk/device-matrix.md)与[MuMu人工说明](milestones/android-apk/manual-validation.md)。目标手机/鸿蒙、真实学校/模型、麦克风/文件/通知手势及厂商策略仍待验，A7未真人关闭、A8尚未正式交付，暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准，A7模拟器部分完成；MuMu首轮学校入口失败，最新见[预检与诊断修复](milestones/android-apk/records/11-mumu-source-and-diagnostics.md)、[设备矩阵](milestones/android-apk/device-matrix.md)与[修订QA人工说明](milestones/android-apk/manual-validation.md)。旧WebView能力不足仍保留，目标手机/鸿蒙、真实学校/模型、麦克风/文件/通知手势及厂商策略仍待验，A7未真人关闭、A8尚未正式交付，暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 

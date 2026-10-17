@@ -2,11 +2,13 @@
 
 这是A7人工体验用的QA包，正式签名与移动版发布属于A8。阶段依据见[迁移计划](plan.md)，本轮自动结果见[A7记录](records/10-a7-emulator-validation.md)，实际设备结论见[能力矩阵](device-matrix.md)。没有Android或鸿蒙实机的项目继续保留，MuMu体验不代替真机通知、省电、语音和厂商兼容性。
 
-本轮文件位于工程内`app/build/android-a7/artifacts/USTC-Assistant-Android-A7-QA-x86_64.apk`，版本`1.0.0-qa-a7`/4002，普通`lib/main.dart`入口，代码来源`7d3005bc3077c42cc43cd12e5b631bf679a574e2`。大小290827173字节（约277.35MiB），SHA256为`adb073e65d60ce2fd1182abdff1d33ee7aae7f884366bc371132350230307df8`；同目录有manifest、签名和摘要报告。文件是本机构建产物，不入Git；仅有源码的新检出需要重新构建。
+最新修订包位于工程内`app/build/android-a7-fix1/artifacts/USTC-Assistant-Android-A7-QA-fix1-x86_64.apk`，版本`1.0.0-qa-a7-fix1`/4003，普通`lib/main.dart`入口，代码来源`d3fe74556c57a1e10cfe43bcfe7f720ac1326978`。大小290833683字节（约277.36MiB），SHA256为`650636254ea8dad2aef546cad962f6e7698f06048e3e2e832287470ba3463700`；同目录有manifest、签名和摘要报告。原4002包另行保留，具体修复和根回归见[记录11](records/11-mumu-source-and-diagnostics.md)。文件是本机构建产物，不入Git；仅有源码的新检出需要重新构建。
+
+本机MuMu首轮已经启动应用，但学校入口失败：实际Android12/API32、系统WebView110不具备所需能力。新版会明确原因，避免新尝试误入关闭恢复，并把“导出日志”放到设置标题旁；**安装新版不会升级MuMu的WebView，学校同步仍不可用**。已有待恢复分区保持，需受支持提供方才能继续恢复；不要靠反复登录、修改模拟机型或清除应用数据尝试解决。未核验MuMu专用组件升级路径，优先按厂商正式支持方式处理或选择具备能力的环境；本项目不会自动安装未知组件或降低隔离要求。
 
 ## 在已有MuMu安装
 
-无需上传APK或建立下载站。启动MuMu，把本地`USTC-Assistant-Android-A7-QA-x86_64.apk`拖入模拟器窗口，或用工具栏的“安装APK”选择同一文件。安装后打开USTC Assistant。MuMu也支持[本地APK安装](https://www.mumuplayer.com/help/win/developers-essentials-manual.html)；本项目不会自动操作或清理你的MuMu实例。
+无需上传APK或建立下载站。启动MuMu，把本地`USTC-Assistant-Android-A7-QA-fix1-x86_64.apk`拖入模拟器窗口，或用工具栏的“安装APK”选择同一文件。直接覆盖旧QA，不卸载；安装后打开USTC Assistant。MuMu也支持[本地APK安装](https://www.mumuplayer.com/help/win/developers-essentials-manual.html)；本项目不会自动操作或清理你的MuMu实例。
 
 - 包名`cn.ustcassistant.mobile.qa`，x86_64，含离线中文语音模型，因此体积较大。它与Windows资料独立，手机/模拟器的学校凭据、模型Key和许可需在应用重新提供。不要复制Windows数据库或密文。
 - 后续QA更新用同一签名直接覆盖，保留资料。若安装提示签名或架构不匹配，反馈提示即可，不通过卸载解决。正式身份与QA不同，首版不承诺自动搬迁QA资料。
@@ -21,4 +23,4 @@
 2. 创建一个测试日程和截止任务，试提醒两槽、改期/取消、退出应用后通知及点击定位；同时体验手机日历、任务、设置、图片选择和日志保存。提醒需主动启用并允许系统通知；若未允许精确提醒，可能延迟，不视为准点承诺。
 3. 点击麦克风，说3–10秒中文，确认文字可改且不会自动发送；再试一次停止/取消和离开应用。若失败，仍可继续用键盘。设备真实收音、来电、发热和耗电另留真机。
 
-问题只需提供设备/Android/WebView版本、操作与现象，以及应用“设置→数据与隐私”主动导出的最近安全日志。Key、密码、学校页面原文、录音和私人日程不发到聊天。没有问题可集中反馈“MuMu三组通过”，不要求重复已经完成的机械测试；这只登记该MuMu环境的实际体验。
+问题只需提供设备/Android/WebView版本、操作与现象，以及设置标题旁“导出日志”主动保存的最近安全日志；“设置→数据与隐私”仍保留日志卡，维护恢复页也可导出。取消保存不会报成功，文件需由你主动发送。Key、密码、学校页面原文、录音和私人日程不发到聊天。已明确缺能力的学校入口无需反复登录；其余实际体验仍可集中反馈，不要求重复已经完成的机械测试。这只登记该MuMu环境的实际结果，不替代目标机验收。

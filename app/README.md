@@ -1,6 +1,6 @@
 # USTC Assistant
 
-当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；A7模拟器部分已完成，见[A7根记录](../docs/milestones/android-apk/records/10-a7-emulator-validation.md)与[MuMu人工说明](../docs/milestones/android-apk/manual-validation.md)。QA包用于集中体验，目标手机/鸿蒙和真实学校/模型/麦克风/文件/通知手势仍未验收，A8正式私有发行待办。
+当前为1.00（工程版本`1.0.0+1`）Windows x64私有交付基线，尚未公开发布。可直接使用的说明见[交付说明](../docs/releases/windows-1.00.md)，限制见[已知问题](../docs/releases/windows-1.00-known-issues.md)。当前范围见[状态页](../docs/status.md)，历史失败/检查和用户关闭见[阶段索引](../docs/milestones/README.md)。Android迁移按[批准计划](../docs/milestones/android-apk/plan.md)推进；A7模拟器部分已完成，最新[MuMu预检/诊断修复](../docs/milestones/android-apk/records/11-mumu-source-and-diagnostics.md)已导出4003版QA，安装及现有WebView110学校入口限制见[人工说明](../docs/milestones/android-apk/manual-validation.md)。QA包用于集中体验，目标手机/鸿蒙和真实学校/模型/麦克风/文件/通知手势仍未验收，A8正式私有发行待办。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 

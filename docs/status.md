@@ -12,8 +12,8 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | A7模拟器可验部分完成；MuMu和实机待验 | [A0–A8计划](milestones/android-apk/plan.md)、[A7根记录](milestones/android-apk/records/10-a7-emulator-validation.md)、[设备矩阵](milestones/android-apk/device-matrix.md)。已修复通知冷启动交接/临时解析失败丢失；Android14本地链路、缺能力拒绝、两类普通入口通知定位，以及当前提供方完整合成学校桥、16KB本地ASR、模拟低电量/深度休眠通过。analyze、1517项/1平台跳过、相关Windows5组及构建通过，原生按提供方分别记录。普通入口x86_64 QA 4002已导出，SDK/缓存/AVD/临时仍在E盘；MuMu未自动操作，真实学校/模型、手机/鸿蒙、麦克风/文件/通知手势与厂商策略未验收 |
-| 后续 | A7集中人工/实机收口；A8正式私有发行待办 | 先按[人工说明](milestones/android-apk/manual-validation.md)在现有MuMu体验；当前无目标实机，不能用模拟器替代目标设备，也不提前关闭完整风险项。原生鸿蒙及Windows公开发布另行定界 |
+| Android APK迁移 | A7模拟器可验部分完成；MuMu学校能力不足，修订QA待真人 | [A0–A8计划](milestones/android-apk/plan.md)、[A7根记录](milestones/android-apk/records/10-a7-emulator-validation.md)、[MuMu首轮修复](milestones/android-apk/records/11-mumu-source-and-diagnostics.md)、[设备矩阵](milestones/android-apk/device-matrix.md)。MuMu实际Android12/WebView110导致拒绝，后续过期错误覆盖原因；已在暂存前预检并保留旧恢复约束，增加设置/维护日志入口。最新analyze、1528项/1平台跳过、Windows15组、API34来源失败2组/手机1组、当前提供方学校6组/1分支跳过及构建通过；原生分别67通过/9能力跳过和76全通过。普通入口x86_64 QA 4003已导出，不能令旧WebView支持学校同步。SDK/缓存/AVD/临时仍在E盘；未自动安装或清理MuMu，真实学校/模型、手机/鸿蒙、麦克风/文件/通知手势与厂商策略未验收 |
+| 后续 | A7集中人工/实机收口；A8正式私有发行待办 | 按[人工说明](milestones/android-apk/manual-validation.md)覆盖QA、使用设置日志入口；现有MuMu学校入口仍需受支持提供方，旧恢复资料保留。当前无目标实机，不能用模拟器替代目标设备，也不提前关闭完整风险项。原生鸿蒙及Windows公开发布另行定界 |
 
 ## 已批准范围与待验证
 
