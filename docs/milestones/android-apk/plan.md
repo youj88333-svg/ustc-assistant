@@ -216,6 +216,18 @@ Android13+通知许可和精确闹钟能力分开申请/反馈；首选用户授
 - 签名身份在长期预览包前冻结，密钥/密码由用户在本机受控工具中创建或提供并保管，不进入聊天、日志或Git。QA与正式身份分离；密钥未准备好时只交内部Debug包，不把它当可升级的正式身份。[Flutter打包/签名](https://docs.flutter.dev/deployment/android)
 - 升级用独立合成旧包验证安装覆盖、schema连续、历史/设置/许可及提醒映射保留；不对正式资料执行adb clear/uninstall/强停故障演练。生产Manifest无测试Activity/调试证书/泛化明文通道/开发开关，无无关敏感权限；清单、依赖/模型版本与许可、文件hash、签名指纹和已知问题随私有包提供。
 
+### A6本地中文语音实施契约
+
+依据07/09/12、13 V-09及15工作流，复用既有短时听写、草稿守卫与固定依赖，不引入云识别、持续监听、Agent录音工具、数据库迁移或新网络目标。A1/A4/A5工程底座已具备；本切只完成工程、合成音频及模拟器证据，真实手机3–10秒中文、术语效果、来电、发热与实际体验留A7，不覆盖Windows既有真人失败记录。
+
+- 保留`SpeechInputPort`及16kHz/单声道/PCM16、0.5秒下限、30秒/960000字节上限、停止尾帧、先撤销再排空、不自动发送和文字/图片草稿守卫。Android首次点麦克风才申请`RECORD_AUDIO`；增加明确的请求权限阶段，该阶段无录音，只有系统权限弹窗造成的inactive可等待；hidden/paused/detached仍撤销，返回前台不自动重新录音。权限返回后仅当前前台请求继续。来电/音频焦点中断按插件pause/stop事件终止本次输入，禁止自动resume。
+- 固定`record 7.1.2`、`record_android 2.2.0`、`sherpa_onnx 1.13.8`和既有SenseVoice INT8 2024-07-17哈希/许可。Android用系统默认输入，流式PCM只进内存。CPU识别继续双线程isolate；Android从包内固定`.so`加载，不套用Windows DLL路径或Windows ONNX版本检查。模型仅首次需要时加载，失败不影响键盘/图片/日程。
+- Gradle只打包经摘要核验的模型、tokens、许可；约228MiB权重保持在忽略的build目录，不入Git。固定`android_speech_v1.prepareModel`无参数、无文件选择/下载功能；原生工作线程流式提取至`noBackupFilesDir/speech_v1/sensevoice-int8-2024-07-17`，固定文件大小/摘要、拒符号链接、写临时再替换，失败不宣称ready；返回固定版本与目录给P，音频/转写/设备标签不进入该通道。公共模型缓存不作为C3业务权威，重启可复用/重建。
+- Sol单写共享契约、识别器/模型装配、Agent生命周期、Manifest/Gradle/工具、根集成和交付。Luna/max承接不重叠的原生模型缓存/测试与录音适配/测试；测试不打开真实麦克风、不访问学校或模型服务。原生缓存读取失败、截断/损坏、并发准备、取消/后台迟到、权限拒绝/撤销、焦点中断、模型缺失、中文回填/可编辑/无自动发送均需行为证据。
+- 根运行analyze/全套Dart、Android原生与固定合成WAV识别/草稿集成、相关Windows集成及QA构建/许可/资产检查。实测模拟器冷/热加载、解码、进程内存和APK大小并说明环境限制，不把模拟器温度当手机发热；保留A0–A5和Windows交付及QA资料，不清库/卸载。阶段结果写`records/09-a6-local-speech.md`，实机项保持待验。
+
+技术依据：[Android录音共享/抢占](https://developer.android.com/media/platform/sharing-audio-input)、[运行时权限](https://developer.android.com/training/permissions/requesting)、[record配置](https://github.com/llfbandit/record/blob/main/record_platform_interface/lib/src/types/record_config.dart)、[sherpa Flutter](https://k2-fsa.github.io/sherpa/onnx/flutter/index.html)。具体行为以本机锁定包源码及测试为准，不用上游新版本说明冒充当前依赖。
+
 ## 6. 验证分工与完成条件
 
 ### 每切片的根检查
