@@ -228,6 +228,16 @@ Android13+通知许可和精确闹钟能力分开申请/反馈；首选用户授
 
 技术依据：[Android录音共享/抢占](https://developer.android.com/media/platform/sharing-audio-input)、[运行时权限](https://developer.android.com/training/permissions/requesting)、[record配置](https://github.com/llfbandit/record/blob/main/record_platform_interface/lib/src/types/record_config.dart)、[sherpa Flutter](https://k2-fsa.github.io/sherpa/onnx/flutter/index.html)。具体行为以本机锁定包源码及测试为准，不用上游新版本说明冒充当前依赖。
 
+### A7模拟器先行与人工交付契约
+
+用户于2026-10-17要求先完成模拟器可验证部分，实机项保留，并希望在已有MuMu上人工验收。本切依据07–12、13 V-02/V-05/V-06/V-07/V-08/V-09、14/15及本计划A1–A6契约，不提前宣告A7实机关闭或A8正式交付。
+
+- 建立按实际环境分别记录的能力矩阵：补Android14/API34独立官方AVD，保留API36旧提供方样本与API37.2/16KB当前提供方。只报告实际运行的安装/启动、私有目录/密钥/SQL、学校隔离能力与合成链路、Agent/日历/任务/提醒联动、文件和合成语音；提供方缺能力继续拒绝学校采集，不降为共享Profile或页面世界注入。目标实机、鸿蒙、真实学校/模型/声音、实际触摸、省电/发热/厂商策略仍待验。
+- Sol负责环境、脚本、包与集成及跨层修复；Luna/max只读复核A1–A6覆盖缺口，在规格明确后承担独立测试文件。新检查优先验证尚缺的系统生命周期/权限/跨功能边界，不按数量复跑全部既有检查。发生代码修改后根执行相关analyze/test、Android原生/集成与构建；共享产品代码变动补Windows回归。最终全套/正式签名与发布检查仍按A8执行。
+- 自动检查限独立QA身份、合成/loopback及临时资料，故障演练不得操作真实学校/模型、Windows正式资料或用户MuMu既有业务。API34 AVD/下载、Pub/Gradle/ADB、临时与报告继续放E盘且只设进程环境；不改全局代理、系统设置或已有模拟器安装。
+- MuMu现有实例只读盘点宿主版本/启动状态，不遍历其应用/账号/虚拟磁盘。提供普通入口x86_64 QA APK及hash、签名/版本/来源提交、可用条件和简短人工步骤，供用户自行拖入/选文件安装，无需公开上传。未经核验的MuMu Android版本、ABI和WebView能力标为待验；不为取得结论自动创建默认落盘位置不明的新实例，或对用户实例执行清除/卸载/故障命令。
+- QA包与正式身份分开，无正式签名时保持Debug私有测试包，不称正式移动1.00；保留A0–A6、Windows1.00包、既有QA资料和模型缓存。升级只使用同签名覆盖，不通过卸载解决降级问题。结果写`records/10-a7-emulator-validation.md`，人工说明与设备矩阵独立归档，不增加产品检索或开发入口。
+
 ## 6. 验证分工与完成条件
 
 ### 每切片的根检查
