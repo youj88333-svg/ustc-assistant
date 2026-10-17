@@ -1,8 +1,8 @@
-# Android 普通系统 WebView 兼容修订（提案）
+# Android 普通系统 WebView 兼容修订
 
-状态：**待用户批准，尚未实施**。日期：2026-10-17。本提案只修改 Android 学校浏览器的实现与相应信任边界，不改变 Windows1.00，也不代替 A7 真人验收或 A8 发行准入。
+状态：**用户已批准，实施中**。编制与批准日期：2026-10-17。用户原话：“approve，请按项目工作流和修订后的兼容性修复计划开始实施，保留自动登录和采集功能。”本决定只修改 Android 学校浏览器的实现与相应信任边界，不改变 Windows1.00，也不代替 A7 真人验收或 A8 发行准入。
 
-批准后由[Android迁移计划](../milestones/android-apk/plan.md)中的 A7-W1–W6实施；本文件记录取舍，不另立第二份任务单。现行规则仍见[07](../architecture/07-constitution.md)、[09 K-01–K-05](../architecture/09-contracts.md)及[DR-ADR-09](dr-adr-09-browser-boundary.md)。
+按[Android迁移计划](../milestones/android-apk/plan.md)中的 A7-W1–W6实施；本文件记录取舍，不另立第二份任务单。现行规则见[07](../architecture/07-constitution.md)、[09 K-01–K-05](../architecture/09-contracts.md)及[DR-ADR-09](dr-adr-09-browser-boundary.md)，冲突部分仅在本决定明确的Android映射内替代。
 
 ## 背景与依据
 

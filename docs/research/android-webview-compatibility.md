@@ -121,7 +121,7 @@ AppAuth-Android 面向 OAuth2/OIDC 客户端授权。本项目实际学校链路
 
 ## 6. 对本项目的推荐推进顺序
 
-后续状态：用户于2026-10-17要求重新评估高级能力限制，优先普通系统WebView并保留自动登录/采集。新的推荐已写入[待批准的A7修订计划](../milestones/android-apk/plan.md#a7普通系统webview兼容修订待批准)及[边界提案](../decisions/android-system-webview-compatibility.md)，不再以GeckoView原型作为下一步首选。下文保留原研究时点的建议及其所依据的强契约；批准前不把新取舍记为现行规范或已有实现。
+后续状态：用户于2026-10-17批准重新评估高级能力限制的方案，优先普通系统WebView并保留自动登录/采集。现行方向见[已批准的A7修订计划](../milestones/android-apk/plan.md#a7普通系统webview兼容修订已批准)及[边界决定](../decisions/android-system-webview-compatibility.md)，不再以GeckoView原型作为下一步首选。下文保留原研究时点的建议及其所依据的强契约；新路线的实现和验证不能由本研究推导为已完成。
 
 ### 先把兼容目标说清楚
 

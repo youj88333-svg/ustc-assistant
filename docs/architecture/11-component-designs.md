@@ -54,7 +54,7 @@ matchesExpected 才继续采集；unverified 与 evidenceConflict 终止交付�
 
 ### 分区归属与回收
 
-P 的分区登记在创建资产之前提交，包含 purpose=initial/recovery、attempt、partition、owner 和 resetEpoch，登记状态与浏览器运行状态分开。归属状态为 provisional、claimed、deletePending、removed；运行状态为 closed、opening、open、draining、drainFailed。隔离或 deletePending 禁止打开和复用，恢复候选创建前先完成既有待删除清理。C3 核验成功的首登/重认证事务持久提交绑定具体 partition、attempt、owner、resetEpoch 的认领许可，P 只凭有效许可认领；账号存在不能替代许可。
+P 的分区登记在创建资产之前提交，包含 purpose=initial/recovery、attempt、partition、owner 和 resetEpoch，登记状态与浏览器运行状态分开。归属状态为 provisional、claimed、deletePending、removed；Android 另有条件受限的 `isolatedCleanupPending`，见下文。运行状态为 closed、opening、open、draining、drainFailed。隔离或 deletePending 禁止打开和复用，恢复候选创建前先完成既有待删除清理；Android 只有已证明隔离的旧物理残留可另开独立新分区。C3 核验成功的首登/重认证事务持久提交绑定具体 partition、attempt、owner、resetEpoch 的认领许可，P 只凭有效许可认领；账号存在不能替代许可。
 
 | 当前归属 | 事件 | 次态与动作 |
 |---|---|---|
@@ -64,13 +64,16 @@ P 的分区登记在创建资产之前提交，包含 purpose=initial/recovery�
 | provisional | 启动调和发现有效已提交许可 | 按具体 partition/attempt/owner/resetEpoch 幂等 claim；失败保持恢复页 |
 | provisional | 启动发现无有效许可 | deletePending；排空清理，失败保留待办；不得仅凭已有账号认领 |
 | claimed | 启动调和发现匹配且未撤销、属于当前 resetEpoch 的具体许可 | 保持 claimed；后续作业仍重新核验来源身份 |
-| claimed | 启动发现许可缺失、撤销或不匹配 | 持久隔离/标记 deletePending → 排空 → 真清理；完成前不恢复正常启动，覆盖 C3 已撤销但 P 尚未标记删除便退出的窗口 |
+| claimed | 启动发现许可缺失、不匹配或撤销状态未知 | 持久隔离/标记 deletePending → 排空 → 真清理；Windows 及其他平台在必要恢复完成前不恢复正常启动，Android 普通 deletePending 也保持启动屏障；仅满足下行全部正面隔离条件的 Android 旧物理残留可例外。覆盖 C3 已撤销但 P 尚未标记删除便退出的窗口 |
+| claimed（Android且满足已批准例外） | C3 明确已持久撤销，旧宿主/renderer 已停止并排空、旧提交资格终止，新分区所有权及唯一随机后缀已登记；平台契约和合成证据正面证明新认证存储不与旧/遗留认证存储共享，唯一未完成工作是旧物理删除 | 转入独立 `isolatedCleanupPending`；旧分区永久禁复用、保留可见重试；旧 owner/backend 或全部遗留文件位置未知时不猜删、不报清理完成，可另建独立新分区 |
 | claimed | 无法核验/证据冲突 | 保持 claimed；仅关闭当前句柄，下次重新核验 |
 | claimed | 确证串号/用户清会话/reset | 先隔离或 deletePending，撤销对应认领许可，再排空并真清理 |
 | deletePending | 清理失败/进程退出 | 保持持久禁复用状态，启动或用户重试 |
 | deletePending | 资源已释放且真删除成功 | removed；移除对应登记，重复清理幂等 |
 
 运行态 open → draining → closed 必须确认资源释放；失败转 drainFailed 并允许重试 draining。关闭成功不删除归属；删除不能绕过资源排空。启动调和检查全部登记分区，不能凭 P 的 claimed 标志或账号存在复用。登记损坏或无法验证归属的孤立分区禁止认领和复用，必须先由本应用受控目录调和；正常登记的 provisional 可以凭 C3 已提交有效许可直接认领。不得清理其他 worktree 或系统浏览器目录。
+
+Android 的 `isolatedCleanupPending` 与 `deletePending` 不可互换：前者仅表示撤销、执行体停止和新分区与旧/遗留认证存储的隔离已有正面证据，剩余工作仅是旧物理清理；它不表示已删除或允许复用。无须可靠限定旧 owner/backend、完整布局或全部旧文件位置；未知归属/位置的残留仍保持可见待办，禁止猜删或报清理完成。若撤销未落盘、宿主或 renderer 仍存活、排空失败、新分区所有权/后缀或认证存储隔离未证实、提交资格未终止或数据库/密钥/恢复权威不可用，必要恢复仍阻止正常启动并拒绝新学校宿主。新分区有新的登记、随机后缀、来源许可及宿主生命周期；本地日程和与故障学校通道无关且已证明独立的能力不必等待该物理删除。此为 Android A7-W1–W6 例外；Windows 继续采用既有严格清理语义和必要恢复启动屏障。
 
 ### 导航就绪与受控动作
 
@@ -87,9 +90,11 @@ P 的分区登记在创建资产之前提交，包含 purpose=initial/recovery�
 | 取消/关闭/超时终止 | token 失效，撤销动作；后续回调不能恢复 ready |
 | fill/click/extract | 执行前验证当前文档、origin、操作；返回时复验，切文档即丢弃 |
 
-targetReady 只完成本次等待，不能对之后的导航保持永久就绪。秘密投递必须由 P 保证目标文档关联；能力不足时由用户手填，不以不完整守卫尝试自动填入。
+targetReady 只完成本次等待，不能对之后的导航保持永久就绪。Windows 等既有强绑定平台的秘密投递必须由 P 保证目标文档关联；Android 按 K-03 已批准的同源信任例外，不能宣称具体文档级秘密隔离。未获 Android 例外的平台能力不足时由用户手填，不以不完整守卫尝试自动填入。
 
-浏览器装配按 07 DR-ADR-09 保留导航/frame、弹窗、下载、权限申请和外部协议控制，不主动注入 CAL 或安装全协议防护扩展，不一律禁 Worker，也不替换 WebRTC；页面既有安全策略保持。正常后台网络活动不改变 readyBits、身份判定或作业状态，全协议漏拦也不单独触发来源 unavailable。已登记的保留控制若失效仍按稳定失败处理，不以接受后台网络为由放宽它们。
+Android 普通系统 WebView 不要求完整 frameReady/CSP 握手。宿主只根据平台可观察的主文档/导航回调维护本地文档代际，固定脚本在主文档与来源就绪后安装于普通页面世界。文档标记、nonce、代际和 operationId 用于关联及拒旧，不是防同源伪造的身份凭证；不保证捕获全部子 frame、POST、中间重定向、opaque/blob/srcdoc 导航。见 [09 K-03 Android 映射](09-contracts.md#android-普通页面世界与可观察导航)。
+
+浏览器装配按 07 DR-ADR-09 保留平台可执行的导航、弹窗、下载、权限申请和外部协议控制，不主动注入 CAL 或安装全协议防护扩展，不一律禁 Worker，也不替换 WebRTC；页面既有安全策略保持。Android 只覆盖其原生可观察的导航，不声称全 frame 封闭。正常后台网络活动不改变 readyBits、身份判定或作业状态，全协议漏拦也不单独触发来源 unavailable。已登记且平台承诺的保留控制若失效仍按稳定失败处理，不以接受后台网络为由放宽它们。
 
 实际渲染进程故障立即使所属 DocumentToken/OperationToken 失效，丢弃未完成提取并进入收口；C2 按已提交/未提交事实分别处理，资源释放失败保持 recovery。此项是普通产品故障出口，验收不要求主动运行 CAL 崩溃套件或先取得补丁运行时。
 
