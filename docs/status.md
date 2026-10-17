@@ -17,6 +17,8 @@
 
 ## 已批准范围与待验证
 
+用户要求以普通系统WebView重订兼容修复方案。当前已形成[A7-W1–W6待批准计划](milestones/android-apk/plan.md#a7普通系统webview兼容修订待批准)和[边界提案](decisions/android-system-webview-compatibility.md)，拟取消四高级API统一门槛、保留自动认证/采集并明确新的执行环境与清理取舍。本轮只改文档，未改代码/APK、未操作MuMu或正式资料；原实现及既有失败/通过结论保持，批准后才落实修订。
+
 五条来源、本地日程、任务和 Agent 的总体范围保留。评课/校园内部能力已按 M3 关闭，Agent 接入前的 Windows 应用已按 M4 验收。M5 已装配单 Agent、查询/证据/图片、本地修改/撤销、有界规划、固定学校来源协调、单一持续对话与 compact/clear、可撤销的记住授权、任务截止栏、安全诊断/导出及本地中文听写。§23 已落实完整安全交互、稳定 19 工具、跨轮目标定位、独立私人读取/17 类日常许可、仅建议硬模式、当前卡文字确认、估算预算与实际回执恢复，并完成根全套/Windows/Release，详见[记录 12](milestones/m5/records/12-context-and-permission-implementation.md)。用户于 2026-10-15 明确确认关闭 M5 和 M6；这是阶段整体关闭，不推断前述清单逐项操作、新业务计数或独立模型评分。原确认后失去目标的失败记录保留；可选合成模型核验需用户在应用主动启动，根未运行真实模型。真实听写“I.”及“未识别出语言”未取得新修复/复验反馈，继续作为已知问题，不由阶段关闭改写为通过。
 
 M6 已按批准范围完成晨报、系统提醒与后续修订，工程/原生证据及未观察项见[记录](milestones/m6/records.md)，用户关闭见[验收](milestones/m6/acceptance.md#阶段关闭2026-10-15)。Windows收尾包含已反馈的体验问题、Agent提醒扩充、[整体联动终审](milestones/windows-polish/records/02-windows-integration-review.md)、用户批准的[来源失效修订](decisions/source-occurrence-retirement.md)及[每日二课同步](milestones/windows-polish/records/04-young-daily-sync.md)，实际结果见[研究与实施](milestones/windows-polish/records.md)。每日同步需独立启用，不消耗模型额度、退出后不运行，挑战或无保存凭据不循环登录；未取得真实每日自动同步的新人工反馈。用户现已认可Windows 1.00基线，同时明确暂不公开发布。移动实现、公开部署和完整V项仍未完成；已知问题随私有包列明，不伪造清零。

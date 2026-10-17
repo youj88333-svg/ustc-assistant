@@ -121,6 +121,8 @@ AppAuth-Android 面向 OAuth2/OIDC 客户端授权。本项目实际学校链路
 
 ## 6. 对本项目的推荐推进顺序
 
+后续状态：用户于2026-10-17要求重新评估高级能力限制，优先普通系统WebView并保留自动登录/采集。新的推荐已写入[待批准的A7修订计划](../milestones/android-apk/plan.md#a7普通系统webview兼容修订待批准)及[边界提案](../decisions/android-system-webview-compatibility.md)，不再以GeckoView原型作为下一步首选。下文保留原研究时点的建议及其所依据的强契约；批准前不把新取舍记为现行规范或已有实现。
+
 ### 先把兼容目标说清楚
 
 建议把普通 Android 10 及以上、包括无 Google Play 的国内 ROM，作为下一轮完整学校能力的重点覆盖目标；这是研究建议，不是已经验证的最低可用承诺。现有 API24 构建下限暂不因这份报告改变，较旧系统保留可成立的功能，但完整学校支持单独登记。APK 鸿蒙按实际容器和提供方单列，原生 ArkWeb 不混入 Android 通过率。
