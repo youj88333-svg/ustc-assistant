@@ -322,6 +322,31 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     );
     return _track(() async {
       try {
+        final availability = browser is ObservationAvailabilityBrowserPort
+            ? browser as ObservationAvailabilityBrowserPort
+            : null;
+        if (availability != null && availability.requiresAvailabilityCheck) {
+          try {
+            await availability.ensureAvailable();
+            if (_cancelled) throw const AppFailure(FailureCode.cancelled);
+          } catch (error) {
+            if (_ticket != null || _inner != null || _partition != null) {
+              rethrow;
+            }
+            password = null;
+            _lease?.release();
+            _lease = null;
+            _publish(
+              YoungSyncPhase.idle,
+              ready: false,
+              automation: YoungAutomationState.none,
+              error: _cancelled
+                  ? const AppFailure(FailureCode.cancelled)
+                  : _safeError(error),
+            );
+            return;
+          }
+        }
         _ticket = await store.beginYoungJob(
           kind: kind,
           expectedAccountCode: expectedAccountCode,

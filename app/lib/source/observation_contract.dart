@@ -183,6 +183,13 @@ abstract interface class ObservationBrowserPort {
   Future<bool> drained(int session);
 }
 
+/// Optional, value-free platform check before admitting a new source job.
+/// It creates no session/profile and does not prove that old assets were cleared.
+abstract interface class ObservationAvailabilityBrowserPort {
+  bool get requiresAvailabilityCheck;
+  Future<void> ensureAvailable();
+}
+
 /// Presentation only; the same source, profile and native request boundary
 /// remain in force. Ordinary callers continue to open a visible window.
 abstract interface class BackgroundObservationBrowserPort {

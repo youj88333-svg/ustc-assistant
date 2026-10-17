@@ -7,6 +7,7 @@ import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/source/jw_authentication_contract.dart';
 import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
+import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/source/jw_probe_contract.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 import 'package:ustc_assistant_m0/source/young_observation_contract.dart';
@@ -49,6 +50,96 @@ void main() {
   );
   Matcher code(FailureCode value) =>
       throwsA(isA<AppFailure>().having((e) => e.code, 'code', value));
+
+  test(
+    'availability preflight uses the empty fixed RPC and maps platform failures safely',
+    () async {
+      final calls = <MethodCall>[];
+      final android = const AndroidRuntimePlatformFactory().createBrowser();
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return null;
+      });
+
+      expect(android.requiresAvailabilityCheck, isTrue);
+      await android.ensureAvailable();
+      expect(calls, hasLength(1));
+      expect(calls.single.method, 'checkSupport');
+      expect(calls.single.arguments, isEmpty);
+
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        throw PlatformException(
+          code: 'app_failure',
+          details: 'unsupportedPlatform',
+          message: 'synthetic unavailable feature',
+        );
+      });
+      await expectLater(
+        android.ensureAvailable(),
+        code(FailureCode.unsupportedPlatform),
+      );
+
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        throw PlatformException(
+          code: 'app_failure',
+          details: 'synthetic private platform text',
+          message: 'synthetic private platform text',
+        );
+      });
+      await expectLater(
+        android.ensureAvailable(),
+        code(FailureCode.sourceFailed),
+      );
+      expect(
+        calls.skip(1).every((call) => call.method == 'checkSupport'),
+        isTrue,
+      );
+
+      await android.dispose();
+
+      final openOnly = NativeObservationBrowser(
+        channel: channel,
+        requiresAvailabilityCheck: true,
+      );
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        throw PlatformException(
+          code: 'app_failure',
+          details: 'unsupportedPlatform',
+          message: 'synthetic unavailable feature',
+        );
+      });
+      await expectLater(
+        openOnly.open(
+          session: 7,
+          profilePath: r'C:\synthetic-profile',
+          target: ObservationTarget.jw(),
+        ),
+        code(FailureCode.unsupportedPlatform),
+      );
+      expect(calls.last.method, 'open');
+      await openOnly.dispose();
+    },
+  );
+
+  test(
+    'Windows factory keeps the default browser preflight disabled',
+    () async {
+      final calls = <MethodCall>[];
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        calls.add(call);
+        return null;
+      });
+      const windowsFactory = WindowsRuntimePlatformFactory();
+      final windowsBrowser = windowsFactory.createBrowser();
+      expect(windowsBrowser.requiresAvailabilityCheck, isFalse);
+      await windowsBrowser.ensureAvailable();
+      expect(calls, isEmpty);
+      await windowsBrowser.dispose();
+    },
+  );
 
   test(
     'fixed authentication RPC consumes and wipes a one-use secret on success and failure',

@@ -47,8 +47,117 @@ const _secondDay = '2026-10-02';
 const _calendarTitle = 'Synthetic linked activity schedule';
 const _jwCourseTitle = 'Synthetic preserved JW course';
 
+Future<int> _youngJobCount(JwStore store) async =>
+    (await store
+            .customSelect('SELECT COUNT(*) AS count FROM young_jobs')
+            .getSingle())
+        .read<int>('count');
+
 void main() {
   group('Young C2 coordinator', () {
+    test(
+      'unsupported availability preflight creates no Young work and a later retry succeeds',
+      () async {
+        final browser = _AutomatedBrowser(
+          activityPlans: <List<Object?>>[
+            <Object?>[
+              _page(<Map<String, Object?>>[_activity('preflight-retry-1')], 1),
+            ],
+          ],
+        )..checkAvailability = true;
+        browser.availabilityFailure = const AppFailure(
+          FailureCode.unsupportedPlatform,
+        );
+        final harness = await _Harness.create(
+          browser: browser,
+          businessStability: const Duration(milliseconds: 2),
+        );
+        addTearDown(harness.dispose);
+
+        await harness.sync.startActivities(
+          expectedAccountCode: _account,
+          password: 'synthetic-password',
+          savePassword: true,
+        );
+
+        expect(harness.sync.syncView.phase, YoungSyncPhase.idle);
+        expect(harness.sync.syncView.failure, FailureCode.unsupportedPlatform);
+        expect((await harness.store.readYoungView()).credentialSaved, isFalse);
+        expect(await _youngJobCount(harness.store), 0);
+        expect(await harness.store.readYoungPermits(), isEmpty);
+        expect(
+          await harness.youngLedger.list(followLinks: false).toList(),
+          isEmpty,
+        );
+        expect(browser.openCalls, 0);
+        expect(browser.profilePaths, isEmpty);
+        expect(browser.availabilityCalls, 1);
+        expect(harness.leases.isBusy, isFalse);
+
+        final otherJob = harness.leases.acquire();
+        expect(harness.leases.isBusy, isTrue);
+        otherJob.release();
+
+        browser.availabilityFailure = null;
+        await harness.sync.startActivities(expectedAccountCode: _account);
+
+        expect(harness.sync.syncView.phase, YoungSyncPhase.idle);
+        expect(harness.sync.syncView.failure, isNull);
+        expect(harness.sync.syncView.committed, isTrue);
+        expect(harness.sync.syncView.activityResults, hasLength(1));
+        expect(browser.availabilityCalls, greaterThan(1));
+        expect(browser.openCalls, 1);
+        expect(await _youngJobCount(harness.store), 1);
+      },
+      skip: !Platform.isWindows,
+    );
+
+    test(
+      'shutdown during a pending preflight prevents its late result from creating work',
+      () async {
+        final browser = _AutomatedBrowser()
+          ..checkAvailability = true
+          ..holdAvailability = true
+          ..availabilityFailure = const AppFailure(
+            FailureCode.unsupportedPlatform,
+          );
+        final harness = await _Harness.create(browser: browser);
+        addTearDown(harness.dispose);
+
+        final opening = harness.sync.startActivities(
+          expectedAccountCode: _account,
+        );
+        await browser.availabilityEntered.future.timeout(
+          const Duration(seconds: 2),
+        );
+        var shutdownDone = false;
+        final shutdown = harness.sync.shutdown().then((_) {
+          shutdownDone = true;
+        });
+        await Future<void>.delayed(Duration.zero);
+        expect(shutdownDone, isFalse);
+        expect(harness.sync.syncView.phase, YoungSyncPhase.closing);
+        expect(harness.leases.isBusy, isTrue);
+
+        browser.releaseAvailability();
+        await Future.wait([opening, shutdown]);
+
+        expect(harness.sync.syncView.phase, YoungSyncPhase.closed);
+        expect(harness.sync.syncView.failure, FailureCode.cancelled);
+        expect(await _youngJobCount(harness.store), 0);
+        expect((await harness.store.readYoungView()).credentialSaved, isFalse);
+        expect(await harness.store.readYoungPermits(), isEmpty);
+        expect(
+          await harness.youngLedger.list(followLinks: false).toList(),
+          isEmpty,
+        );
+        expect(browser.openCalls, 0);
+        expect(browser.profilePaths, isEmpty);
+        expect(harness.leases.isBusy, isFalse);
+      },
+      skip: !Platform.isWindows,
+    );
+
     test(
       'automated query waits for the ready helper on the final document before starting reads',
       () async {
@@ -1206,6 +1315,8 @@ final class _Harness {
   final _SyntheticBrowser browser;
   final WorkLeasePool leases;
   final YoungSyncCoordinator sync;
+  Directory get youngLedger =>
+      Directory(p.windows.join(owner.path, 'young_partitions_v1'));
   bool _jwRegistryReady = false;
   bool _disposed = false;
 
@@ -1311,6 +1422,7 @@ final class _Harness {
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
+    browser.releaseAvailability();
     browser.releasePoll();
     browser.releaseDrain();
     final automatic = browser;
@@ -1451,7 +1563,10 @@ final class _SyntheticOwnership implements AssetOwnership {
 }
 
 class _SyntheticBrowser
-    implements ObservationBrowserPort, YoungBusinessBrowserPort {
+    implements
+        ObservationBrowserPort,
+        ObservationAvailabilityBrowserPort,
+        YoungBusinessBrowserPort {
   _SyntheticBrowser({
     this.activityPlans = const <List<Object?>>[],
     this.calendarByDay = const <String, List<Map<String, Object?>>>{},
@@ -1469,6 +1584,12 @@ class _SyntheticBrowser
       StreamController<BrowserEvent>.broadcast(sync: true);
   final Completer<void> pollEntered = Completer<void>();
   final Completer<void> drainEntered = Completer<void>();
+  bool checkAvailability = false;
+  bool holdAvailability = false;
+  AppFailure? availabilityFailure;
+  int availabilityCalls = 0;
+  final Completer<void> availabilityEntered = Completer<void>();
+  final Completer<void> _availabilityGate = Completer<void>();
   final Completer<void> _pollGate = Completer<void>();
   final Completer<void> _drainGate = Completer<void>();
   final Map<int, _StepCall> _steps = <int, _StepCall>{};
@@ -1500,6 +1621,22 @@ class _SyntheticBrowser
 
   @override
   Stream<BrowserEvent> get events => _events.stream;
+
+  @override
+  bool get requiresAvailabilityCheck => checkAvailability;
+
+  void releaseAvailability() {
+    if (!_availabilityGate.isCompleted) _availabilityGate.complete();
+  }
+
+  @override
+  Future<void> ensureAvailable() async {
+    availabilityCalls++;
+    if (!availabilityEntered.isCompleted) availabilityEntered.complete();
+    if (holdAvailability) await _availabilityGate.future;
+    final failure = availabilityFailure;
+    if (failure != null) throw failure;
+  }
 
   @override
   Future<void> open({

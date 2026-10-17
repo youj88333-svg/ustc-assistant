@@ -34,6 +34,12 @@ const _duplicateNormalization = {
   'duplicateExams': 0,
 };
 
+Future<int> _jwJobCount(JwStore store) async =>
+    (await store
+            .customSelect('SELECT COUNT(*) AS count FROM jw_jobs')
+            .getSingle())
+        .read<int>('count');
+
 void main() {
   for (final state in [
     JwLoginState.pageStructureChanged,
@@ -86,6 +92,113 @@ void main() {
         h.sync.syncView.loginPauseReason,
         JwLoginPauseReason.noCredentials,
       );
+    },
+  );
+
+  test(
+    'unsupported browser preflight admits no job or secret and preserves an old profile',
+    () async {
+      final h = await _Harness.create(credentialProtector: _TestProtector());
+      addTearDown(h.dispose);
+      h.browser.checkAvailability = true;
+      h.browser.availabilityFailure = const AppFailure(
+        FailureCode.unsupportedPlatform,
+      );
+
+      await h.sync.startSync(
+        expectedAccountCode: _account,
+        password: 'synthetic-password',
+        savePassword: true,
+      );
+
+      expect(h.sync.syncView.phase, JwSyncPhase.idle);
+      expect(h.sync.syncView.failure, FailureCode.unsupportedPlatform);
+      expect(h.sync.syncView.failureStage, JwSyncPhase.opening);
+      expect(h.sync.syncView.data!.credentialSaved, isFalse);
+      expect(await _jwJobCount(h.store), 0);
+      expect(await h.store.readCommittedPermits(), isEmpty);
+      expect(await h.ledger.list(followLinks: false).toList(), isEmpty);
+      expect(h.browser.openCalls, 0);
+      expect(h.browser.profilePaths, isEmpty);
+      expect(h.leases.isBusy, isFalse);
+
+      final otherJob = h.leases.acquire();
+      expect(h.leases.isBusy, isTrue);
+      otherJob.release();
+
+      h.browser.availabilityFailure = null;
+      await h.importOnce();
+      final priorPermit = (await h.store.readCommittedPermits()).single;
+      final priorPath = h.profile(priorPermit.partition);
+      expect(await Directory(priorPath).exists(), isTrue);
+      final jobsBeforeRecoveryAttempt = await _jwJobCount(h.store);
+
+      h.browser.availabilityFailure = const AppFailure(
+        FailureCode.unsupportedPlatform,
+      );
+      await h.sync.open();
+
+      expect(h.sync.syncView.phase, JwSyncPhase.idle);
+      expect(h.sync.syncView.failure, FailureCode.unsupportedPlatform);
+      expect(await _jwJobCount(h.store), jobsBeforeRecoveryAttempt);
+      expect(h.browser.openCalls, 1);
+      expect(
+        (await h.store.readCommittedPermits()).single.partition.sameAs(
+          priorPermit.partition,
+        ),
+        isTrue,
+      );
+      expect(await Directory(priorPath).exists(), isTrue);
+    },
+  );
+
+  test(
+    'busy preflight rejects a second open, cancellation beats a late result, and retry imports',
+    () async {
+      final h = await _Harness.create();
+      addTearDown(h.dispose);
+      h.browser.checkAvailability = true;
+      h.browser.holdAvailability = true;
+      h.browser.availabilityFailure = const AppFailure(
+        FailureCode.unsupportedPlatform,
+      );
+
+      final firstOpen = h.sync.open(expectedAccountCode: _account);
+      await h.browser.availabilityEntered.future.timeout(
+        const Duration(seconds: 2),
+      );
+      expect(h.leases.isBusy, isTrue);
+      await expectLater(
+        () => h.sync.open(expectedAccountCode: _account),
+        throwsA(
+          isA<AppFailure>().having(
+            (failure) => failure.code,
+            'code',
+            FailureCode.busy,
+          ),
+        ),
+      );
+
+      final cancellation = h.sync.cancel();
+      expect(h.sync.syncView.phase, JwSyncPhase.closing);
+      h.browser.releaseAvailability();
+      await Future.wait([firstOpen, cancellation]);
+
+      expect(h.sync.syncView.phase, JwSyncPhase.idle);
+      expect(h.sync.syncView.failure, FailureCode.cancelled);
+      expect(await _jwJobCount(h.store), 0);
+      expect(await h.store.readCommittedPermits(), isEmpty);
+      expect(await h.ledger.list(followLinks: false).toList(), isEmpty);
+      expect(h.browser.openCalls, 0);
+      expect(h.browser.profilePaths, isEmpty);
+      expect(h.leases.isBusy, isFalse);
+
+      h.browser.availabilityFailure = null;
+      await h.importOnce();
+      expect(h.sync.syncView.phase, JwSyncPhase.idle);
+      expect(h.sync.syncView.importCommitted, isTrue);
+      expect(h.browser.openCalls, 1);
+      expect(await h.store.readCommittedPermits(), hasLength(1));
     },
   );
 
@@ -845,6 +958,7 @@ final class _Harness {
   }
 
   Future<void> dispose() async {
+    browser.releaseAvailability();
     browser.releaseCollection();
     interceptor?.releaseHidden();
     if (await fault.exists()) await fault.delete();
@@ -867,11 +981,19 @@ final class _Harness {
 final class _Browser
     implements
         ObservationBrowserPort,
+        ObservationAvailabilityBrowserPort,
         JwProbeBrowserPort,
         JwCollectionBrowserPort,
         JwAuthenticationBrowserPort {
   final eventsController = StreamController<BrowserEvent>.broadcast(sync: true);
   final profilePaths = <String>[];
+  bool checkAvailability = false;
+  bool holdAvailability = false;
+  AppFailure? availabilityFailure;
+  int availabilityCalls = 0;
+  int openCalls = 0;
+  final availabilityEntered = Completer<void>();
+  final _availabilityGate = Completer<void>();
   final collectionEntered = Completer<void>();
   Completer<JwCollectionReply>? _heldCollection;
   int? _heldOperation;
@@ -902,6 +1024,23 @@ final class _Browser
 
   @override
   Stream<BrowserEvent> get events => eventsController.stream;
+
+  @override
+  bool get requiresAvailabilityCheck => checkAvailability;
+
+  void releaseAvailability() {
+    if (!_availabilityGate.isCompleted) _availabilityGate.complete();
+  }
+
+  @override
+  Future<void> ensureAvailable() async {
+    availabilityCalls++;
+    if (!availabilityEntered.isCompleted) availabilityEntered.complete();
+    if (holdAvailability) await _availabilityGate.future;
+    final failure = availabilityFailure;
+    if (failure != null) throw failure;
+  }
+
   @override
   Future<void> open({
     required int session,
@@ -909,6 +1048,7 @@ final class _Browser
     required ObservationTarget target,
     bool recoveryOnly = false,
   }) async {
+    openCalls++;
     _session = session;
     _origin = target.initialUri.origin;
     profilePaths.add(profilePath);

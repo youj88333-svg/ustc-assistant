@@ -1,16 +1,74 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/app/app_settings_page.dart';
+import 'package:ustc_assistant_m0/app/diagnostics_panel.dart';
 import 'package:ustc_assistant_m0/app/app_shell_contract.dart';
 import 'package:ustc_assistant_m0/app/maintenance_recovery_page.dart';
 import 'package:ustc_assistant_m0/app/settings_contract.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
+import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/core/knowledge_contract.dart';
 import 'package:ustc_assistant_m0/core/public_query_contract.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_port.dart';
 import 'package:ustc_assistant_m0/jobs/young_sync_port.dart';
+import 'package:ustc_assistant_m0/platform/transient_diagnostics.dart';
 
 void main() {
+  for (final outcome in ['saved', 'cancelled', 'failed']) {
+    testWidgets('maintenance recovery diagnostics remain usable: $outcome', (
+      tester,
+    ) async {
+      final settings = _FakeSettings(
+        maintenance: const MaintenanceProgress(
+          phase: MaintenancePhase.recovery,
+          failure: SettingsFailureCode.cleanupPending,
+        ),
+      );
+      final diagnostics = TransientDiagnostics();
+      addTearDown(diagnostics.close);
+      diagnostics.record(
+        const DiagnosticEvent(
+          name: DiagnosticEventName.applicationFailed,
+          code: DiagnosticCode.unsupportedPlatform,
+          outcome: DiagnosticOutcome.failure,
+        ),
+      );
+      var saves = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MaintenanceRecoveryPage(
+            settings: settings,
+            diagnosticsBuilder: (_) => DiagnosticsExportButton(
+              diagnostics: diagnostics,
+              save: (contents) async {
+                saves++;
+                expect(contents, contains('unsupportedPlatform'));
+                if (outcome == 'failed') throw StateError('private-sentinel');
+                return outcome == 'saved';
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('diagnostics-export-button')),
+      );
+      await tester.tap(find.byKey(const ValueKey('diagnostics-export-button')));
+      await tester.pumpAndSettle();
+      expect(saves, 1);
+      expect(settings.retryCalls, 0);
+      expect(
+        find.text('日志已导出，请自行发送给维护者。'),
+        outcome == 'saved' ? findsOneWidget : findsNothing,
+      );
+      expect(
+        find.text('未能导出日志，请稍后重试。'),
+        outcome == 'failed' ? findsOneWidget : findsNothing,
+      );
+      expect(find.textContaining('private-sentinel'), findsNothing);
+    });
+  }
   group('ApplicationSettingsPage', () {
     testWidgets('shows four sections and saves display defaults immediately', (
       tester,
@@ -80,6 +138,7 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         final settings = _FakeSettings();
         final shell = _FakeShell();
+        var logsActionCalls = 0;
         await tester.pumpWidget(
           MaterialApp(
             home: Builder(
@@ -91,6 +150,12 @@ void main() {
                   body: ApplicationSettingsPage(
                     settings: settings,
                     controller: shell,
+                    logsActionBuilder: (_) => OutlinedButton.icon(
+                      key: const ValueKey('settings-logs-action'),
+                      onPressed: () => logsActionCalls++,
+                      icon: const Icon(Icons.download_outlined),
+                      label: const Text('导出最近运行诊断日志'),
+                    ),
                     agentBuilder: (_) => const Text('Agent 设置内容'),
                     remindersBuilder: (_) => const Text('提醒设置内容'),
                   ),
@@ -100,6 +165,15 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
+
+        final logsAction = find.byKey(const ValueKey('settings-logs-action'));
+        final logsActionRect = tester.getRect(logsAction);
+        expect(logsActionRect.left, greaterThanOrEqualTo(0));
+        expect(logsActionRect.right, lessThanOrEqualTo(320));
+        expect(logsAction.hitTestable(), findsOneWidget);
+        await tester.tap(logsAction);
+        await tester.pumpAndSettle();
+        expect(logsActionCalls, 1);
 
         final strip = find.byKey(const ValueKey('settings-sections-scroll'));
         final source = find.byKey(const ValueKey('settings-section-sources'));
@@ -123,6 +197,107 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets(
+      'diagnostics action and privacy log remain available without a snapshot and after recovery',
+      (tester) async {
+        final settings = _FakeSettings(
+          snapshotAvailable: false,
+          failure: SettingsFailureCode.storageFailed,
+        );
+        final shell = _FakeShell();
+        var logsActionCalls = 0;
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Scaffold(
+              body: ApplicationSettingsPage(
+                settings: settings,
+                controller: shell,
+                logsActionBuilder: (_) => OutlinedButton.icon(
+                  key: const ValueKey('settings-logs-action'),
+                  onPressed: () => logsActionCalls++,
+                  icon: const Icon(Icons.download_outlined),
+                  label: const Text('导出运行日志'),
+                ),
+                logsBuilder: (_) => const Card(
+                  key: ValueKey('settings-logs-card'),
+                  child: Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('运行诊断日志'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final logsAction = find.byKey(const ValueKey('settings-logs-action'));
+        expect(logsAction.hitTestable(), findsOneWidget);
+        await tester.tap(logsAction);
+        await tester.pumpAndSettle();
+        expect(logsActionCalls, 1);
+
+        await _tap(
+          tester,
+          find.byKey(const ValueKey('settings-section-dataPrivacy')),
+        );
+        expect(
+          find.byKey(const ValueKey('settings-logs-card')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text('运行诊断日志'), findsOneWidget);
+        expect(find.textContaining('数据计数和维护操作暂不可用'), findsOneWidget);
+        expect(find.text('本机数据计数'), findsNothing);
+        expect(
+          find.byKey(const ValueKey('settings-clear-agenda')),
+          findsNothing,
+        );
+
+        settings.recoverSnapshot();
+        await tester.pumpAndSettle();
+        expect(logsAction.hitTestable(), findsOneWidget);
+        await tester.tap(logsAction);
+        await tester.pumpAndSettle();
+        expect(logsActionCalls, 2);
+        expect(
+          find.byKey(const ValueKey('settings-logs-card')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text('本机数据计数'), findsOneWidget);
+        expect(find.textContaining('数据计数和维护操作暂不可用'), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('privacy logs remain the first reachable content item', (
+      tester,
+    ) async {
+      final settings = _FakeSettings();
+      final shell = _FakeShell();
+      await _pumpSettings(
+        tester,
+        settings,
+        shell,
+        logsBuilder: (_) => const Card(
+          key: ValueKey('settings-logs-card'),
+          child: Padding(padding: EdgeInsets.all(16), child: Text('运行诊断日志')),
+        ),
+      );
+      await _tap(
+        tester,
+        find.byKey(const ValueKey('settings-section-dataPrivacy')),
+      );
+
+      final logsCard = find.byKey(const ValueKey('settings-logs-card'));
+      final accountTitle = find.text('账号与本机凭据');
+      expect(logsCard.hitTestable(), findsOneWidget);
+      expect(
+        tester.getRect(logsCard).top,
+        lessThan(tester.getRect(accountTitle).top),
+      );
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets('maintenance uses fixed scopes and two confirmations', (
       tester,
@@ -342,6 +517,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       final settings = _FakeSettings();
       final shell = _FakeShell();
+      var logsActionCalls = 0;
       await tester.pumpWidget(
         MaterialApp(
           home: Builder(
@@ -353,6 +529,12 @@ void main() {
                 body: ApplicationSettingsPage(
                   settings: settings,
                   controller: shell,
+                  logsActionBuilder: (_) => OutlinedButton.icon(
+                    key: const ValueKey('settings-logs-action'),
+                    onPressed: () => logsActionCalls++,
+                    icon: const Icon(Icons.download_outlined),
+                    label: const Text('导出运行日志'),
+                  ),
                 ),
               ),
             ),
@@ -360,6 +542,14 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
+      final logsAction = find.byKey(const ValueKey('settings-logs-action'));
+      final logsActionRect = tester.getRect(logsAction);
+      expect(logsActionRect.left, greaterThanOrEqualTo(0));
+      expect(logsActionRect.right, lessThanOrEqualTo(360));
+      expect(logsAction.hitTestable(), findsOneWidget);
+      await tester.tap(logsAction);
+      await tester.pumpAndSettle();
+      expect(logsActionCalls, 1);
       await _tap(
         tester,
         find.byKey(const ValueKey('settings-section-display')),
@@ -523,12 +713,19 @@ void main() {
 Future<void> _pumpSettings(
   WidgetTester tester,
   _FakeSettings settings,
-  _FakeShell shell,
-) async {
+  _FakeShell shell, {
+  WidgetBuilder? logsBuilder,
+  WidgetBuilder? logsActionBuilder,
+}) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: ApplicationSettingsPage(settings: settings, controller: shell),
+        body: ApplicationSettingsPage(
+          settings: settings,
+          controller: shell,
+          logsBuilder: logsBuilder,
+          logsActionBuilder: logsActionBuilder,
+        ),
       ),
     ),
   );
@@ -563,10 +760,13 @@ final class _FakeSettings extends ChangeNotifier
     int materials = 0,
     bool knowledgeLoading = false,
     MaintenanceProgress maintenance = const MaintenanceProgress(),
+    bool snapshotAvailable = true,
+    SettingsFailureCode? failure,
   }) : _view = ApplicationSettingsView(
-         snapshot: _snapshot(materials: materials),
+         snapshot: snapshotAvailable ? _snapshot(materials: materials) : null,
          knowledgeLoading: knowledgeLoading,
          maintenance: maintenance,
+         failure: failure,
        );
 
   SettingsContext context = const SettingsContext(
@@ -716,6 +916,16 @@ final class _FakeSettings extends ChangeNotifier
         credentialSaved: old.credentialSaved,
         icourseConsent: old.icourseConsent,
       ),
+      maintenance: _view.maintenance,
+      knowledgeLoading: _view.knowledgeLoading,
+      loadOutcome: _view.loadOutcome,
+    );
+    notifyListeners();
+  }
+
+  void recoverSnapshot() {
+    _view = ApplicationSettingsView(
+      snapshot: _snapshot(),
       maintenance: _view.maintenance,
       knowledgeLoading: _view.knowledgeLoading,
       loadOutcome: _view.loadOutcome,

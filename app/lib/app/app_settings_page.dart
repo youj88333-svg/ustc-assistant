@@ -27,6 +27,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
     this.agentBuilder,
     this.remindersBuilder,
     this.logsBuilder,
+    this.logsActionBuilder,
     this.dailySync,
   });
 
@@ -36,6 +37,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
   final WidgetBuilder? agentBuilder;
   final WidgetBuilder? remindersBuilder;
   final WidgetBuilder? logsBuilder;
+  final WidgetBuilder? logsActionBuilder;
   final YoungDailySyncControlPort? dailySync;
 
   @override
@@ -150,11 +152,21 @@ final class _ApplicationSettingsPageState
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              '设置',
-              style: Theme.of(
-                context,
-              ).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 4,
+              children: [
+                Text(
+                  '设置',
+                  style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                if (widget.logsActionBuilder != null)
+                  widget.logsActionBuilder!.call(context),
+              ],
             ),
             const SizedBox(height: 8),
             SingleChildScrollView(
@@ -392,7 +404,17 @@ final class _ApplicationSettingsPageState
     SettingsSnapshot? snapshot,
     bool writable,
   ) {
-    if (snapshot == null) return _loadingSection('正在读取本地状态…');
+    if (snapshot == null) {
+      return _sectionScroll(
+        children: [
+          if (widget.logsBuilder != null) ...[
+            widget.logsBuilder!.call(context),
+            const SizedBox(height: 12),
+          ],
+          const _SettingsNotice(message: '本机状态尚未读取；数据计数和维护操作暂不可用。'),
+        ],
+      );
+    }
     final counts = snapshot.counts;
     return _sectionScroll(
       children: [

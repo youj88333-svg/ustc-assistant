@@ -126,6 +126,14 @@ void main() {
         await _settle(tester);
         await tester.tap(find.byKey(const ValueKey('shell-nav-settings')));
         await _settle(tester);
+        final logsAction = find.byKey(
+          const ValueKey('diagnostics-export-button'),
+        );
+        expect(logsAction.hitTestable(), findsOneWidget);
+        final logsRect = tester.getRect(logsAction);
+        expect(logsRect.left, greaterThanOrEqualTo(0));
+        expect(logsRect.right, lessThanOrEqualTo(360));
+        expect(tester.takeException(), isNull);
         await tester.binding.handlePopRoute();
         await _settle(tester);
         await tester.binding.handlePopRoute();

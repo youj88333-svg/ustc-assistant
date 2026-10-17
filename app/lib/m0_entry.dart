@@ -329,7 +329,11 @@ final class _OwnedAppState extends State<OwnedApplication> {
             GlobalCupertinoLocalizations.delegate,
           ],
           theme: productTheme,
-          home: MaintenanceRecoveryPage(settings: bootstrap.settings),
+          home: MaintenanceRecoveryPage(
+            settings: bootstrap.settings,
+            diagnosticsBuilder: (context) =>
+                DiagnosticsExportButton(diagnostics: bootstrap.diagnostics),
+          ),
         );
       }
       final resetEpoch = view.snapshot?.context.resetEpoch;
@@ -466,6 +470,8 @@ final class _OwnedAppState extends State<OwnedApplication> {
               AgentSettingsPanel(controller: runtime.agent),
           logsBuilder: (context) =>
               DiagnosticsPanel(diagnostics: runtime.diagnostics),
+          logsActionBuilder: (context) =>
+              DiagnosticsExportButton(diagnostics: runtime.diagnostics),
           remindersBuilder: (context) => M6SettingsPanel(
             data: runtime.jwStore.features,
             briefs: runtime.jwStore.briefs,

@@ -150,7 +150,7 @@ try {
             if (($actualAvd -join '').Trim() -ne $avdName) { throw 'Unexpected AVD; refusing integration tests.' }
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4002) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4003) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
             }
             $restoreNotificationDenial = $false

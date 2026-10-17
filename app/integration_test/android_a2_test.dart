@@ -901,7 +901,7 @@ final class _AndroidA2Harness {
         credentialProtector: const AndroidJwCredentialProtector(),
       );
       await store.initialize().timeout(const Duration(seconds: 45));
-      browser = NativeObservationBrowser();
+      browser = NativeObservationBrowser(requiresAvailabilityCheck: true);
       return _AndroidA2Harness(
         fixtureRoot: fixtureRoot,
         directories: directories,

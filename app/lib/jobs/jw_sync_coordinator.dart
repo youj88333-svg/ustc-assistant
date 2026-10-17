@@ -300,6 +300,34 @@ final class JwSyncCoordinator implements JwSyncPort {
     );
     return _track(() async {
       try {
+        final availability = browser is ObservationAvailabilityBrowserPort
+            ? browser as ObservationAvailabilityBrowserPort
+            : null;
+        if (availability != null && availability.requiresAvailabilityCheck) {
+          try {
+            await availability.ensureAvailable();
+            if (_cancelled) throw const AppFailure(FailureCode.cancelled);
+          } catch (error) {
+            // The lease is held, but this attempt has staged no persistent
+            // job, secret or partition. Do not run recovery as a side effect.
+            if (_ticket != null || _inner != null || _partition != null) {
+              rethrow;
+            }
+            password = null;
+            _automatic = false;
+            _lease?.release();
+            _lease = null;
+            _publish(
+              JwSyncPhase.idle,
+              ready: false,
+              automation: JwAutomationState.none,
+              error: _cancelled
+                  ? const AppFailure(FailureCode.cancelled)
+                  : _safeError(error),
+            );
+            return;
+          }
+        }
         _ticket = await store.beginJob(
           expectedAccountCode: expectedAccountCode,
         );

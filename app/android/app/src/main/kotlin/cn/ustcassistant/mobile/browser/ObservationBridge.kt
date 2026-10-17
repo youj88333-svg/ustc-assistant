@@ -120,6 +120,7 @@ internal class ObservationBridge(private val activity: Activity, messenger: Bina
             val a = args(call)
             validateArguments(call.method, a)
             when (call.method) {
+                "checkSupport" -> { ensureFeatures(false); result.success(null) }
                 "open" -> open(a, result)
                 "close" -> {
                     val id = number(a, "session")
@@ -194,6 +195,7 @@ internal class ObservationBridge(private val activity: Activity, messenger: Bina
 
     private fun validateArguments(method: String, args: Map<*, *>) {
         val fields = when (method) {
+            "checkSupport" -> emptySet()
             "open" -> setOf("session", "profilePath", "initialUrl", "source", "allowedOrigins", "testMode", "recoveryOnly", "background")
             "close", "drained", "navigateInitial" -> setOf("session")
             "navigateJwPage", "navigateYoungBusinessPage", "prepareYoungBusinessPage" -> setOf("session", "document", "page")
@@ -222,11 +224,13 @@ internal class ObservationBridge(private val activity: Activity, messenger: Bina
         val id = number(a, "session")
         val policy = SchoolPolicy.fromArguments(a, qa)
         val recovery = a["recoveryOnly"] as Boolean
-        val features = mutableListOf(WebViewFeature.MULTI_PROFILE, WebViewFeature.DELETE_BROWSING_DATA)
-        if (!recovery) features.addAll(listOf(WebViewFeature.DOCUMENT_START_SCRIPT,
-            WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD))
-        for (feature in features) {
-            if (!WebViewFeature.isFeatureSupported(feature)) throw Failure("unsupportedPlatform")
+        try {
+            ensureFeatures(recovery)
+        } catch (error: Exception) {
+            // This call created no source session. Its idempotent drain proof
+            // says nothing about clearing an existing SDK profile or ledger.
+            closedSession = id
+            throw error
         }
         processOwner = this
         // Cold deletion never enumerates or deletes a profile absent from our durable ledger.
@@ -277,6 +281,15 @@ internal class ObservationBridge(private val activity: Activity, messenger: Bina
             view.destroy()
             // Preserve the entry for recovery; never claim a failed setup was cleared.
             throw error
+        }
+    }
+
+    private fun ensureFeatures(recovery: Boolean) {
+        val features = mutableListOf(WebViewFeature.MULTI_PROFILE, WebViewFeature.DELETE_BROWSING_DATA)
+        if (!recovery) features.addAll(listOf(WebViewFeature.DOCUMENT_START_SCRIPT,
+            WebViewFeature.JS_INJECTION_IN_FRAME_AND_WORLD))
+        for (feature in features) {
+            if (!WebViewFeature.isFeatureSupported(feature)) throw Failure("unsupportedPlatform")
         }
     }
 

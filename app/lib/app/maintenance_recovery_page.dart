@@ -7,9 +7,14 @@ const _recoveryMuted = Color(0xFF66736C);
 /// Startup recovery surface for one already-persisted fixed-scope maintenance
 /// intent. The root runtime owns exit handling and durable recovery metadata.
 final class MaintenanceRecoveryPage extends StatefulWidget {
-  const MaintenanceRecoveryPage({super.key, required this.settings});
+  const MaintenanceRecoveryPage({
+    super.key,
+    required this.settings,
+    this.diagnosticsBuilder,
+  });
 
   final ApplicationSettingsPort settings;
+  final WidgetBuilder? diagnosticsBuilder;
 
   @override
   State<MaintenanceRecoveryPage> createState() =>
@@ -149,6 +154,10 @@ final class _MaintenanceRecoveryPageState
                         const _RecoveryNotice(
                           message: '如果需要关闭应用，请使用系统窗口关闭按钮。下次启动会继续检查并恢复本地数据。',
                         ),
+                        if (widget.diagnosticsBuilder != null) ...[
+                          const SizedBox(height: 12),
+                          widget.diagnosticsBuilder!.call(context),
+                        ],
                       ],
                     ),
                   ),

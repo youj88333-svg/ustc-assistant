@@ -17,6 +17,7 @@ import '../source/young_active_contract.dart';
 final class NativeObservationBrowser
     implements
         ObservationBrowserPort,
+        ObservationAvailabilityBrowserPort,
         BackgroundObservationBrowserPort,
         JwProbeBrowserPort,
         JwDataProbeBrowserPort,
@@ -29,6 +30,7 @@ final class NativeObservationBrowser
         YoungBusinessPreparationBrowserPort {
   NativeObservationBrowser({
     MethodChannel? channel,
+    this.requiresAvailabilityCheck = false,
     this.fixtureDeniedUri,
     this.fixtureUpgradeFromOrigin,
     this.fixtureUpgradeToOrigin,
@@ -38,6 +40,18 @@ final class NativeObservationBrowser
     _channel.setMethodCallHandler(_onMethod);
   }
   final MethodChannel _channel;
+  @override
+  final bool requiresAvailabilityCheck;
+
+  @override
+  Future<void> ensureAvailable() async {
+    if (!requiresAvailabilityCheck) return;
+    await _invoke<void>('checkSupport', const {}).timeout(
+      const Duration(seconds: 5),
+      onTimeout: () => throw const AppFailure(FailureCode.sourceFailed),
+    );
+  }
+
   // The native Debug build validates this fixed loopback test destination.
   final Uri? fixtureDeniedUri;
   final Uri? fixtureUpgradeFromOrigin;

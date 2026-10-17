@@ -957,6 +957,9 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
     if (_view.phase == JwSyncPhase.recovery && _view.importCommitted) {
       return '数据已保存，窗口关闭待恢复。';
     }
+    if (_view.failure == FailureCode.unsupportedPlatform) {
+      return '当前设备暂不能打开教务网页。';
+    }
     if (_view.phase == JwSyncPhase.recovery) return '教务登录窗口需要恢复。';
     if (_view.phase == JwSyncPhase.idle && _view.importCommitted) {
       return '课表与考试日程已保存。';
@@ -1081,7 +1084,13 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         FilledButton.icon(
           onPressed: _canRetryRecovery ? _retryRecovery : null,
           icon: const Icon(Icons.refresh),
-          label: Text(widget.productMode ? '重试关闭窗口' : '重试收口/认领'),
+          label: Text(
+            widget.productMode
+                ? _view.failure == FailureCode.unsupportedPlatform
+                      ? '检查环境并重试恢复'
+                      : '重试关闭窗口'
+                : '重试收口/认领',
+          ),
         ),
       );
     }
@@ -1596,7 +1605,8 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
     FailureCode.ownerConflict => '本地作业归属冲突，已停止操作。',
     FailureCode.unsafeDirectory => '本地观测目录不安全，已停止操作。',
     FailureCode.ownershipLost => '观测窗口归属已变化，已停止操作。',
-    FailureCode.unsupportedPlatform => '当前平台不支持此项教务操作。',
+    FailureCode.unsupportedPlatform =>
+      '系统网页组件不支持学校同步。请更新 Android System WebView，或使用受支持的环境；更改模拟机型不会更新网页组件。',
     FailureCode.closed => '本次作业已关闭。',
   };
 

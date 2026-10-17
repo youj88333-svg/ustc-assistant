@@ -635,6 +635,9 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
     if (_view.phase == YoungSyncPhase.recovery && _view.committed) {
       return '数据已保存，窗口关闭待恢复。';
     }
+    if (_view.failure == FailureCode.unsupportedPlatform) {
+      return '当前设备暂不能打开二课网页。';
+    }
     if (_view.phase == YoungSyncPhase.recovery) return '二课登录窗口需要恢复。';
     if (_view.phase == YoungSyncPhase.idle && _view.committed) {
       return _view.kind == YoungJobKind.activities
@@ -754,7 +757,13 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
             key: const ValueKey('young-sync-retry-recovery'),
             onPressed: _canRetryRecovery ? _retryRecovery : null,
             icon: const Icon(Icons.refresh),
-            label: Text(widget.productMode ? '重试关闭窗口' : '重试二课收口'),
+            label: Text(
+              widget.productMode
+                  ? _view.failure == FailureCode.unsupportedPlatform
+                        ? '检查环境并重试恢复'
+                        : '重试关闭窗口'
+                  : '重试二课收口',
+            ),
           ),
         if (_isIdle)
           OutlinedButton.icon(
@@ -1024,7 +1033,8 @@ String _failureLabel(FailureCode failure) => switch (failure) {
   FailureCode.ownerConflict => '本机数据所有权冲突，操作已停止。',
   FailureCode.unsafeDirectory => '应用数据目录不安全，操作已停止。',
   FailureCode.ownershipLost => '应用数据所有权已变化，操作已停止。',
-  FailureCode.unsupportedPlatform => '当前设备暂不支持此二课操作。',
+  FailureCode.unsupportedPlatform =>
+    '系统网页组件不支持学校同步。请更新 Android System WebView，或使用受支持的环境；更改模拟机型不会更新网页组件。',
   FailureCode.closed => '应用已关闭，无法继续本次作业。',
 };
 

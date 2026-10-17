@@ -328,6 +328,13 @@ final class ObservationCoordinator
       try {
         await assets.recoverPending(_drainCandidate);
         if (_cancelled) return;
+        final availability = browser is ObservationAvailabilityBrowserPort
+            ? browser as ObservationAvailabilityBrowserPort
+            : null;
+        if (availability != null && availability.requiresAvailabilityCheck) {
+          await availability.ensureAvailable();
+          if (_cancelled) return;
+        }
         final path = await assets.register();
         if (_cancelled) return;
         _session = ++_sequence;
