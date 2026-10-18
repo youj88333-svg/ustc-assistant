@@ -9,7 +9,7 @@
 | 操作 | 契约 |
 |---|---|
 | 获取模型 | `GET /v1/models`，JSON `data[]`，每项有字符串 `id`；去重，最多 256 项、1 MiB；目录不证明该模型支持工具 |
-| 对话/合成验核 | `POST /v1/chat/completions`，`model/messages/stream:true/max_tokens`；能力验核只附 echo_probe，toolReady 的业务运行按当前人类问题附固定只读定义；不接受模型产生的新定义或任意附加参数 |
+| 对话/合成验核 | `POST /v1/chat/completions`，`model/messages/stream:true/max_tokens`；能力验核只附 echo_probe，toolReady 的业务运行按当前人类问题附固定定义；思考强度仅按下述固定策略，不接受模型产生的新定义或任意附加参数 |
 | 主动图片 | 仅本轮 user 消息的 `content` 数组，文字及 `image_url:{url:"data:image/png;base64,…",detail:"auto"}`；规范图片最多 3 张/合计 6 MiB，同一固定目标，无远程图片 URL、Files API 或浏览器资产 |
 | 流式输出 | SSE `data:` JSON，单 choice/index 0，累积文本/结构化 `delta.tool_calls`；finish_reason 与 `[DONE]`/正常 EOF 完整成立后才交付工具完成事件 |
 | 计数 | 可选 usage；缺失或 null 表示未知，实际对象中的非负 prompt/completion tokens 才接受。缺计费依据时不声称精确费用 |
@@ -19,6 +19,14 @@ Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 
 连接期限 15 秒、读取空闲 20 秒、单请求总期限 60 秒。流解压后最多 2 MiB，单行/事件最多 64 KiB，文本最多 24000 字符，工具参数 16 KiB、单次最多 8 个调用；跨层采用更严上限。EOF 截断、坏 UTF-8/JSON、重复终结、未声明工具、缺/重复/非连续调用标识等拒绝。`length/content_filter/refusal` 与正常 stop 分开，不据部分结果执行工具。
 
 取消关闭在途 HTTP 并等待排空；排空期间拒绝新请求，完成后可发新一轮，永久关闭后拒新。自动网络测试仅显式装配 `127.0.0.1` HTTP 测试构造，生产组合根始终使用固定 HTTPS 构造。
+
+## 固定思考策略与人格前缀
+
+按用户偏好，精确模型 ID `deepseek-flash` 的全部请求统一发送顶层 `reasoning_effort:"high"`，包括验证、工具续答、compact 和晨报；其他 ID（含相近别名）保持服务默认，不推断能力。设置及安全能力摘要显示同一派生策略，不另增数据库事实或任意参数入口；不设置 `thinking`、数字预算或 `chat_template_kwargs`。服务明确以结构化 `error.param=reasoning_effort` 拒绝时映射为 `reasoningRejected`，不删参或改强度自动重试；无法识别的拒绝仍保留原固定协议错误。请求成功不证明服务器确实采用该强度。
+
+依据为[学校模型目录](https://llm.ustc.edu.cn/)公开列出的精确部署别名、[学校技术更新](https://llm.ustc.edu.cn/guide/technical-updates/)的推理参数适配及归一化说明，以及 [DeepSeek 自家 API](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)的顶层参数定义。它们支持此实施选择，但学校具体 Key/路由接受 `high` 仍待应用内核验；不将 DeepSeek 自家路由的全部行为套用到学校部署。思考仍仅用于有界本次展示，不进入后续请求；学校是否要求工具续轮回传思考尚未证实，不据其他提供方规则扩大出站。
+
+全部应用自有模型请求的首条 system 统一以共享 `【PERSONA LOAD】` 标签块开头：成年专属女仆、中文、聪明体贴且自然，表达不改变工具能力、许可或真实回执。对话、晨报、compact、能力探针共用前缀；探针精确标记、摘要事实与晨报 JSON 格式各自优先，不输出标签。人格只影响新生成，历史及既有晨报不改写。
 
 ## 能力与状态
 
