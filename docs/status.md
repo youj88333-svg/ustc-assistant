@@ -13,7 +13,8 @@
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
 | Android APK迁移 | QA4005反馈修复与根回归完成；A7真人待验 | [A0–A8计划](milestones/android-apk/plan.md)、[反馈记录13](milestones/android-apk/records/13-mumu-navigation-approval-and-reasoning.md)、[设备矩阵](milestones/android-apk/device-matrix.md)。修复Young首页准备阻塞、当前审批可达和手机整周，新增独立模型思考展示。analyze、1552项/1平台跳过、Windows相关12组/独立Release、Android构建/lint通过；本轮API32/34学校完整六组通过，原生分别24/1与85/8，跳过均按来源记录；Agent/手机合成及启动截图异常/复验见记录。已导出同QA签名x86_64/4005；旧4004、仅前轮打包的arm64/2004和Windows1.00保留。SDK/缓存/AVD/临时仍在E盘，未操作用户MuMu。真实学校/模型、手机/鸿蒙及原未观察项未验收；整体UI重构未开始 |
-| 后续 | A7使用反馈/实机收口；A8正式私有发行待办 | 按[人工说明](milestones/android-apk/manual-validation.md)主动同签名覆盖x86_64 QA4005，确认Young自动同步、当前审批/竖屏与模型实际返回的思考。前端skill仅完成[选型调研](research/frontend-skill-selection.md)，推荐组合尚未安装或执行重构。当前无目标实机，不用模拟器替代目标设备，不提前关闭完整风险项；原生鸿蒙及Windows公开发布另行定界 |
+| 跨端界面重构 | 已批准并开始，尚未体验验收 | [任务单](milestones/ui-refresh/plan.md)已明确风格、布局、接口不变量和验收条件；两项推荐Skill已安装，见[记录](milestones/ui-refresh/records.md)。简化Agent、日程任务与设置层级，保留既有功能；合成验证、独立构建和真人体验分别记录 |
+| 后续 | A7使用反馈/实机收口；A8正式私有发行待办 | 按[人工说明](milestones/android-apk/manual-validation.md)主动同签名覆盖QA，确认Young自动同步、当前审批/竖屏与模型实际返回的思考。本轮整体UI重构单独跟踪，不替代A7验收。当前无目标实机，不用模拟器替代目标设备，不提前关闭完整风险项；原生鸿蒙及Windows公开发布另行定界 |
 
 ## 已批准范围与待验证
 
