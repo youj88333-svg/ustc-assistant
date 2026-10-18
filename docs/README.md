@@ -23,6 +23,7 @@
 | Windows 1.00 私有包与移动方向 | [交付说明](releases/windows-1.00.md) · [已知问题](releases/windows-1.00-known-issues.md) · [APK迁移评估](research/android-apk-migration.md) · [完整迁移计划](milestones/android-apk/plan.md) |
 | Android / APK鸿蒙的WebView覆盖、限制与兼容候选 | [兼容性调研](research/android-webview-compatibility.md) · [2024年后国内机型核对](research/android-webview-domestic-models.md) |
 | 普通系统WebView兼容修复的已批准路线 | [A7修订计划](milestones/android-apk/plan.md#a7普通系统webview兼容修订已批准) · [安全与恢复取舍](decisions/android-system-webview-compatibility.md) |
+| 跨端前端Skill候选、选型依据及使用边界 | [前端Skill调研](research/frontend-skill-selection.md)，只读选型，尚未安装或开始整体重构 |
 | 前置实验、诊断与证据在哪里 | [verification](../verification/README.md) |
 | 旧设计和整理前原文 | [只读档案](archive/README.md) |
 | 以后文档怎样维护 | [维护规则](maintaining.md) |
