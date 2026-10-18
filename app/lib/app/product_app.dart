@@ -72,9 +72,9 @@ final class ProductApp extends StatelessWidget {
                   minimumSize: WidgetStatePropertyAll(Size(48, 48)),
                 ),
               ),
-              outlinedButtonTheme: const OutlinedButtonThemeData(
-                style: ButtonStyle(
-                  minimumSize: WidgetStatePropertyAll(Size(48, 48)),
+              outlinedButtonTheme: OutlinedButtonThemeData(
+                style: productTheme.outlinedButtonTheme.style?.copyWith(
+                  minimumSize: const WidgetStatePropertyAll(Size(48, 48)),
                 ),
               ),
             ),
@@ -134,6 +134,15 @@ final ThemeData productTheme = ThemeData(
       borderRadius: BorderRadius.circular(AppUi.dialogRadius),
     ),
   ),
+  bottomSheetTheme: const BottomSheetThemeData(
+    backgroundColor: AppUi.canvas,
+    surfaceTintColor: Colors.transparent,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(
+        top: Radius.circular(AppUi.dialogRadius),
+      ),
+    ),
+  ),
   navigationBarTheme: NavigationBarThemeData(
     backgroundColor: Colors.white,
     surfaceTintColor: Colors.transparent,
@@ -175,6 +184,16 @@ final ThemeData productTheme = ThemeData(
     side: const BorderSide(color: _line),
     labelStyle: const TextStyle(fontSize: 13, color: Color(0xFF1D2922)),
     secondaryLabelStyle: const TextStyle(fontSize: 13, color: _green),
+  ),
+  segmentedButtonTheme: SegmentedButtonThemeData(
+    style: ButtonStyle(
+      shape: WidgetStatePropertyAll(
+        RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(AppUi.radius),
+        ),
+      ),
+      side: const WidgetStatePropertyAll(BorderSide(color: AppUi.controlLine)),
+    ),
   ),
   filledButtonTheme: FilledButtonThemeData(
     style: FilledButton.styleFrom(

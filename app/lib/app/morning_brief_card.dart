@@ -59,6 +59,7 @@ final class MorningBriefCard extends StatelessWidget {
           child: Row(
             children: [
               Expanded(
+                flex: 3,
                 child: TextButton(
                   key: const ValueKey('morning-brief-open'),
                   style: TextButton.styleFrom(
@@ -85,14 +86,17 @@ final class MorningBriefCard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Flexible(
-                child: Text(
-                  _compactStatus(view, phase, noticeBatch),
-                  key: const ValueKey('morning-brief-phase'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  textAlign: TextAlign.end,
-                  style: Theme.of(context).textTheme.bodySmall,
+              Expanded(
+                child: Tooltip(
+                  message: _compactStatus(view, phase, noticeBatch),
+                  child: Text(
+                    _compactStatus(view, phase, noticeBatch),
+                    key: const ValueKey('morning-brief-phase'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               ),
               if (canRetry)

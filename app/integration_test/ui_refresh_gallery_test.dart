@@ -33,6 +33,15 @@ void uiRefreshGalleryScenarios({bool? phoneLayout}) {
       tester.view.devicePixelRatio = 1;
       addTearDown(tester.view.resetPhysicalSize);
       addTearDown(tester.view.resetDevicePixelRatio);
+      // The gallery changes DPR to capture a deterministic logical canvas.
+      // Supply matching logical safe areas rather than reusing the emulator's
+      // physical-pixel notch insets at that artificial DPR.
+      tester.view.padding = phone
+          ? const FakeViewPadding(top: 24, bottom: 16)
+          : FakeViewPadding.zero;
+      tester.view.viewPadding = tester.view.padding;
+      addTearDown(tester.view.resetPadding);
+      addTearDown(tester.view.resetViewPadding);
 
       await tester.pumpWidget(fixture.buildApp());
       await tester.pumpAndSettle();
@@ -258,9 +267,20 @@ Future<void> _captureSyntheticUi(WidgetTester tester, String name) async {
 
 Future<Directory> _uiRefreshGalleryDirectory() async {
   if (Platform.isAndroid) {
-    final directory = Directory(
-      p.join(Directory.systemTemp.path, 'ui-refresh-gallery'),
+    // Android can expose code_cache through /data/data while resolving it to
+    // /data/user/0. Anchor the QA child to the canonical private temp root;
+    // continue rejecting links or replacement directories below that root.
+    final tempRoot = p.posix.normalize(
+      await Directory.systemTemp.resolveSymbolicLinks(),
     );
+    if (p.posix.basename(p.posix.dirname(tempRoot)) !=
+            'cn.ustcassistant.mobile.qa' ||
+        !{'cache', 'code_cache'}.contains(p.posix.basename(tempRoot)) ||
+        await FileSystemEntity.type(tempRoot, followLinks: false) !=
+            FileSystemEntityType.directory) {
+      throw StateError('Android captures require the QA private temp root.');
+    }
+    final directory = Directory(p.posix.join(tempRoot, 'ui-refresh-gallery'));
     final initialType = await FileSystemEntity.type(
       directory.path,
       followLinks: false,

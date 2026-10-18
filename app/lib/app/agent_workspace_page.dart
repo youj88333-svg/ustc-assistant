@@ -1681,12 +1681,13 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
               : availableHeight * .85;
           return Padding(
             padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
-            child: SizedBox(
+            child: ConstrainedBox(
               key: const ValueKey('agent-current-approval-panel'),
-              height: height,
+              constraints: BoxConstraints(maxHeight: height),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
                 child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Align(
@@ -1698,7 +1699,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                         icon: const Icon(Icons.close),
                       ),
                     ),
-                    Expanded(
+                    Flexible(
                       child: AnimatedBuilder(
                         animation: Listenable.merge([
                           port,
@@ -2835,6 +2836,7 @@ final class _AgentActionCard extends StatelessWidget {
           padding: const EdgeInsets.all(12),
           child: fit(
             Column(
+              mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(

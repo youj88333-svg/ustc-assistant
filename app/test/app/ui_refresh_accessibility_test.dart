@@ -144,6 +144,7 @@ void main() {
     addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
 
     const cases = [
+      (size: Size(360, 780), scale: 1.0, keyboard: 0.0),
       (size: Size(320, 640), scale: 1.5, keyboard: 220.0),
       (size: Size(412, 780), scale: 2.0, keyboard: 240.0),
       (size: Size(720, 360), scale: 1.5, keyboard: 180.0),
@@ -175,6 +176,17 @@ void main() {
       final reject = find.byKey(ValueKey('agent-action-reject-$actionId'));
       expect(approve, findsOneWidget);
       expect(reject, findsOneWidget);
+      if (item.scale == 1 && item.keyboard == 0) {
+        expect(
+          tester
+              .getSize(
+                find.byKey(const ValueKey('agent-current-approval-panel')),
+              )
+              .height,
+          lessThan(item.size.height * .65),
+          reason: 'A short plan should not stretch into an almost full sheet.',
+        );
+      }
       await tester.ensureVisible(approve);
       expect(
         tester.getRect(approve).bottom,
