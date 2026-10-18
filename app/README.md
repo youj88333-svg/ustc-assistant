@@ -49,6 +49,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3_Public
 # A4手机壳/日程/任务/偏好/诊断的私有合成集成：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A4
+# 跨端UI合成场景与原生字体截图；仍只操作独立QA AVD：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 34 -IntegrationSuite UIRefresh
 # A5临时C3与真实Android提醒桥，禁止真实网络：
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A5
 # 普通QA包已覆盖安装后，固定QA通知的退出/取消/权限/模拟器重启检查：
@@ -64,11 +66,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 
 集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；可附加`-BuildRevision <40位源码SHA>`，Flutter与后续Gradle均保留该诊断定义。集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
 
-Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥要求实际提供方同时支持多Profile、独立清理、DOCUMENT_START和私有执行世界；只升级SDK依赖不足以满足，缺能力时来源不可用，本地日程继续。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音有独立的前台/权限规则，见下文。最新普通包位于`build/android-a7/artifacts/USTC-Assistant-Android-A7-QA-x86_64.apk`，QA版本4002，仅x86_64，供模拟器体验，不是手机arm64私有发行包；七份知识仍经设置主动载入，公开能力通过Agent使用。
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥按已批准的[普通系统WebView路线](../docs/decisions/android-system-webview-compatibility.md)使用API28+的基础能力，保留导航/权限、来源分区、凭据与清理控制，不再以多Profile、独立删除、DOCUMENT_START或私有执行世界为门槛；具体提供方是否可用仍由运行结果裁决。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音有独立的前台/权限规则，见下文。当前QA包、ABI、版本及哈希只查[人工体验说明](../docs/milestones/android-apk/manual-validation.md)，不把旧构建目录当成最新交付；七份知识仍经设置主动载入，公开能力通过Agent使用。
 
 系统提醒默认关闭，在“设置→晨报与提醒”主动启用，并点击系统权限入口。未允许精确提醒时可能延后；“本地已登记”不代表系统队列独立核验或已送达。普通退出保留未来提醒；强制停止、系统节电及厂商限制另行处理。晨报与每日二课均独立默认关闭，晨报异步生成；二课只在前台空闲采集，Android退后台撤销当次尝试。A5系统投递仅在独立模拟器验证，真实通知栏点击、权限界面和厂商策略仍待A7。
 
-手机新资料默认日视图，可改为横向浏览的周视图并记住；已有视图偏好保留。切页保留Agent未发送草稿；返回先关闭键盘/弹层，设置回到原主页、日程回到Agent。图片通过系统照片/文档选择器主动选择，最多三张，原图单张10MiB/1600万像素；去元数据、单帧规范化后单张3MiB、合计6MiB，不缓存原图或取得整个媒体库权限。“设置 → 数据与隐私 → 导出日志”使用系统创建JSON文档，先经现有脱敏白名单，取消不表示保存成功。真实相册、保存目录、系统键盘与触摸体验留待A7。
+手机新资料默认日视图，可改为周视图并记住；正常字号尽量显示整周，大字号保留必要的滚动和日期详情，短横屏不会挤掉顶部操作。已有视图偏好保留。切页保留Agent未发送草稿；返回先关闭键盘/弹层，设置回到原主页、日程回到Agent。图片通过系统照片/文档选择器主动选择，最多三张，原图单张10MiB/1600万像素；去元数据、单帧规范化后单张3MiB、合计6MiB，不缓存原图或取得整个媒体库权限。“设置 → 数据与隐私 → 导出日志”使用系统创建JSON文档，先经现有脱敏白名单，取消不表示保存成功。真实相册、保存目录、系统键盘与触摸体验留待A7。
 
 ## 模型配置与对话
 

@@ -14,7 +14,7 @@
 | Windows 收尾与1.00 | 已批准修复、每日二课及本地私有交付收口 | [任务单](windows-polish/plan.md) | [研究与实施](windows-polish/records.md) · [1.00交付记录](windows-polish/records/05-windows-v1-private-release.md) | [用户认可1.00基线](windows-polish/acceptance.md)，暂不公开发布；APK另按下行迁移计划推进 |
 | Android APK迁移（A0–A8） | 同一Flutter核心、Android平台/手机体验及APK鸿蒙实证 | [完整计划](android-apk/plan.md)，2026-10-16已批准 | [A0原生准入](android-apk/records/01-a0-runtime-probes.md) · [A1底座](android-apk/records/03-a1-platform-bootstrap.md) · [A2学校桥](android-apk/records/04-a2-school-bridges.md) · [A3 Agent/公开能力](android-apk/records/06-a3-agent-public.md) · [A4手机界面/文件](android-apk/records/07-a4-phone-files.md) · [A5提醒/前台作业](android-apk/records/08-a5-reminders-and-foreground.md) · [A6本地听写](android-apk/records/09-a6-local-speech.md) · [A7模拟器/QA交付](android-apk/records/10-a7-emulator-validation.md) · [MuMu首轮修复](android-apk/records/11-mumu-source-and-diagnostics.md)；[研究依据](../research/android-apk-migration.md) | A7模拟器部分完成，未真人关闭；[设备矩阵](android-apk/device-matrix.md)与[MuMu人工说明](android-apk/manual-validation.md)记录旧提供方阻塞，并保留目标机/鸿蒙及真实学校/模型/声音/文件/通知手势，A8未正式交付 |
 
-跨端界面重构已获用户批准，正在按[任务单](ui-refresh/plan.md)实施；[安装与工程记录](ui-refresh/records.md)单独维护，尚未体验关闭。该阶段简化 Agent、日程任务、设置的层级，不改变 Android 迁移范围或 Windows1.00 的原交付结论。
+跨端界面重构已按[任务单](ui-refresh/plan.md)完成工程、根自动验证、实际图像复核和独立体验构建；[安装与交付记录](ui-refresh/records.md)单独维护，尚未体验关闭。该阶段简化 Agent、日程任务、设置的层级，不改变 Android 迁移范围或 Windows1.00 的原交付结论。
 
 M5/M6 的批准范围、接口、分切片和验收条件统一见各任务单，实际工程与真人结论分开记录。两阶段已由用户整体确认关闭；未单独反馈的真人项目、Windows重启/睡眠等保持未观察，不把阶段关闭当完整 V 项已关闭。Windows收尾保留原数据、工具与权限行为，具体体验修订见当前任务单。
 

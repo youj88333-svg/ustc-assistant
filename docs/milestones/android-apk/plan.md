@@ -326,7 +326,7 @@ Android原生关键范围为`app/android/app/src/main/kotlin/cn/ustcassistant/mo
 
 依据用户主动导出的两份安全日志排查，只读取固定导出文件；重复文件保留，不上传或纳入Git。真实学校和实际模型返回格式、MuMu升级后效果仍由用户集中复验；合成结果不覆盖真人失败。根负责analyze/全套Dart、相关Android原生/loopback、共享部分Windows回归和独立构建，导出同签名升级QA及摘要；实现、失败、实际检查写`records/13-mumu-navigation-approval-and-reasoning.md`，不关闭A7或冒称实机通过。
 
-F1–F4工程、根检查和x86_64 QA4005交付已完成，当前结果及保留的模拟器异常统一见[记录13](records/13-mumu-navigation-approval-and-reasoning.md)。前端skill仅完成选型，不将其并入已延期的整体UI重构。
+F1–F4工程、根检查和x86_64 QA4005交付已完成，当前结果及保留的模拟器异常统一见[记录13](records/13-mumu-navigation-approval-and-reasoning.md)。该切片结束时前端skill仅完成选型，未包含整体UI重构；用户后续已批准安装并另按[跨端界面任务单](../ui-refresh/plan.md)实施，不把后续结果回填成本切原有验收。
 
 ## 6. 验证分工与完成条件
 

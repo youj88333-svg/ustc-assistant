@@ -96,4 +96,6 @@ M0–M6已按各自证据及用户决定关闭，详见[阶段索引](../milesto
 
 Android的[A1本地底座](../milestones/android-apk/records/03-a1-platform-bootstrap.md)、[原A2学校桥](../milestones/android-apk/records/04-a2-school-bridges.md)及[普通WebView修订](../milestones/android-apk/records/12-ordinary-system-webview.md)已有各自范围的根证据。新路线保留固定认证/读取、身份与事务、隔离/排空及清理投影，改为普通页面世界同源信任和原生可观察导航边界；不是旧隔离世界保证的等价替代，旧失败保留。目标实机、鸿蒙、真实来源/模型、语音和提醒整合仍按迁移计划分别验收；不关闭完整V-02/V-04/V-07或手机版。Windows既有文档绑定不因Android取舍而弱化。
 
+后续[跨端界面重构](../milestones/ui-refresh/plan.md)的响应式、当前审批及日程/任务/设置可达性证据另见[根记录](../milestones/ui-refresh/records.md)。只调整展示，不迁移业务或恢复旧WebView高级门槛；合成原生图像与交互通过不代表本轮真人体验通过，也不关闭A7/A8或上述完整V项。
+
 按 DR-ADR-09 的普通 WebView 边界验收保留控制，接受页面正常后台网络；身份、响应/完整性和必要保留能力不成立的来源仍不可用。历史 CAL/RTC 失败、前置实验和逐轮阶段过程通过 [档案](../archive/README.md)及实际阶段记录追溯，不追加到本登记。
