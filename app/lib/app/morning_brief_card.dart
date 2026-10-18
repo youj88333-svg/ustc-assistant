@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../core/morning_brief_contract.dart';
 import '../core/morning_notice_contract.dart';
 import '../core/public_query_contract.dart';
+import 'app_design.dart';
 import 'assistant_markdown.dart';
 
 final class MorningBriefCard extends StatelessWidget {
@@ -46,24 +47,41 @@ final class MorningBriefCard extends StatelessWidget {
         view.failure != null ||
         (noticeBatch != null && !noticeBatch.complete);
 
-    return Card(
+    return DecoratedBox(
       key: const ValueKey('morning-brief-card'),
-      margin: EdgeInsets.zero,
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppUi.line)),
+      ),
       child: SizedBox(
         height: 48,
         child: Padding(
-          padding: const EdgeInsets.only(left: 12, right: 4),
+          padding: EdgeInsets.zero,
           child: Row(
             children: [
-              const Icon(Icons.wb_twilight_outlined, size: 20),
-              const SizedBox(width: 8),
               Expanded(
-                child: Text(
-                  '晨报 · ${_dateOnly(today)}',
-                  key: const ValueKey('morning-brief-date'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.titleSmall,
+                child: TextButton(
+                  key: const ValueKey('morning-brief-open'),
+                  style: TextButton.styleFrom(
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    minimumSize: const Size(48, 48),
+                  ),
+                  onPressed: () => _showDetails(context),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.wb_twilight_outlined, size: 20),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          '晨报 · ${_dateOnly(today)}',
+                          key: const ValueKey('morning-brief-date'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
               const SizedBox(width: 8),
@@ -77,26 +95,14 @@ final class MorningBriefCard extends StatelessWidget {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-              IconButton(
-                key: const ValueKey('morning-brief-open'),
-                tooltip: '查看晨报',
-                visualDensity: VisualDensity.compact,
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                padding: EdgeInsets.zero,
-                onPressed: () => _showDetails(context),
-                icon: const Icon(Icons.open_in_full_rounded, size: 19),
-              ),
               if (canRetry)
                 IconButton(
                   key: const ValueKey('morning-brief-retry'),
                   tooltip: '重试晨报',
-                  visualDensity: VisualDensity.compact,
+                  visualDensity: VisualDensity.standard,
                   constraints: const BoxConstraints.tightFor(
-                    width: 36,
-                    height: 36,
+                    width: 48,
+                    height: 48,
                   ),
                   padding: EdgeInsets.zero,
                   onPressed: view.busy ? null : onRetry,
@@ -105,10 +111,10 @@ final class MorningBriefCard extends StatelessWidget {
               IconButton(
                 key: const ValueKey('morning-brief-hide'),
                 tooltip: '隐藏今天的晨报',
-                visualDensity: VisualDensity.compact,
+                visualDensity: VisualDensity.standard,
                 constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
+                  width: 48,
+                  height: 48,
                 ),
                 padding: EdgeInsets.zero,
                 onPressed: onHideToday,
@@ -200,7 +206,7 @@ final class _MorningBriefDetailsDialog extends StatelessWidget {
       surfaceTintColor: Colors.transparent,
       child: ConstrainedBox(
         constraints: BoxConstraints(
-          maxWidth: 560,
+          maxWidth: 640,
           maxHeight: MediaQuery.sizeOf(context).height * .88,
         ),
         child: Padding(
@@ -478,13 +484,11 @@ final class _MorningBriefDetailsDialog extends StatelessWidget {
   Widget _attentionItem(BuildContext context, _Attention item) {
     final isError = item.level == _AttentionLevel.error;
     final foreground = isError ? Colors.red.shade900 : Colors.brown.shade900;
-    final background = isError ? Colors.red.shade50 : Colors.amber.shade100;
     return Container(
       key: ValueKey('morning-brief-attention-${item.message}'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
       decoration: BoxDecoration(
-        color: background,
-        borderRadius: BorderRadius.circular(10),
+        border: Border(left: BorderSide(color: foreground, width: 2)),
       ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:ustc_assistant_m0/app/product_app.dart';
 import 'package:ustc_assistant_m0/app/app_shell_contract.dart';
 import 'package:ustc_assistant_m0/app/source_settings_page.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
@@ -336,6 +337,7 @@ void main() {
     expect(oldJw.startCalls, 1);
     await tester.pumpWidget(
       MaterialApp(
+        theme: productTheme,
         home: Scaffold(body: SourceSettingsPage(controller: newShell)),
       ),
     );
@@ -362,6 +364,7 @@ void main() {
     addTearDown(tester.view.resetDevicePixelRatio);
     await tester.pumpWidget(
       MaterialApp(
+        theme: productTheme,
         home: Scaffold(
           body: SourceSettingsPage(
             controller: shell,
@@ -409,6 +412,7 @@ void main() {
       );
       await tester.pumpWidget(
         MaterialApp(
+          theme: productTheme,
           home: Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(
@@ -463,6 +467,7 @@ void main() {
 Future<void> _pump(WidgetTester tester, _FakeShell shell) async {
   await tester.pumpWidget(
     MaterialApp(
+      theme: productTheme,
       home: Scaffold(body: SourceSettingsPage(controller: shell)),
     ),
   );

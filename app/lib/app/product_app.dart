@@ -7,13 +7,14 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import '../core/agenda_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
+import 'app_design.dart';
 import 'app_shell_contract.dart';
 import 'workspace_visibility.dart';
 
-const _green = Color(0xFF1F6B45);
-const _canvas = Color(0xFFF5F7F6);
-const _line = Color(0xFFE3E9E5);
-const _muted = Color(0xFF66736C);
+const _green = AppUi.accent;
+const _canvas = AppUi.canvas;
+const _line = AppUi.line;
+const _muted = AppUi.muted;
 const _blockedWriteMessage = '当前来源作业或恢复尚未完成，暂不能修改显示状态。';
 const _failedWriteMessage = '未能更新显示状态，请稍后重试。';
 
@@ -101,46 +102,76 @@ final ThemeData productTheme = ThemeData(
         primary: _green,
         onPrimary: Colors.white,
         surface: Colors.white,
-        onSurface: const Color(0xFF1D2922),
-        outline: _line,
-        surfaceContainerHighest: const Color(0xFFF0F3F1),
+        onSurface: AppUi.ink,
+        onSurfaceVariant: AppUi.muted,
+        outline: AppUi.controlLine,
+        outlineVariant: _line,
+        surfaceContainerHighest: AppUi.subtle,
+        surfaceContainerLow: Colors.white,
+        surfaceTint: Colors.transparent,
       ),
   scaffoldBackgroundColor: _canvas,
   dividerColor: _line,
   appBarTheme: const AppBarTheme(
     backgroundColor: _canvas,
-    foregroundColor: Color(0xFF1D2922),
+    foregroundColor: AppUi.ink,
     elevation: 0,
+    scrolledUnderElevation: 0,
     centerTitle: false,
+  ),
+  textTheme: const TextTheme(
+    headlineSmall: TextStyle(fontSize: 24, fontWeight: FontWeight.w600),
+    titleLarge: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
+    titleMedium: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+    bodyLarge: TextStyle(fontSize: 16, height: 1.5),
+    bodyMedium: TextStyle(fontSize: 14, height: 1.5),
+    bodySmall: TextStyle(fontSize: 12, height: 1.45),
+  ),
+  dialogTheme: DialogThemeData(
+    backgroundColor: Colors.white,
+    surfaceTintColor: Colors.transparent,
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(AppUi.dialogRadius),
+    ),
+  ),
+  navigationBarTheme: NavigationBarThemeData(
+    backgroundColor: Colors.white,
+    surfaceTintColor: Colors.transparent,
+    indicatorColor: AppUi.selection,
+    indicatorShape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(AppUi.radius),
+    ),
   ),
   cardTheme: CardThemeData(
     color: Colors.white,
     elevation: 0,
     margin: EdgeInsets.zero,
     shape: RoundedRectangleBorder(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(AppUi.radius),
       side: const BorderSide(color: _line),
     ),
   ),
   inputDecorationTheme: InputDecorationTheme(
-    filled: true,
-    fillColor: const Color(0xFFF5F7F6),
+    filled: false,
+    fillColor: Colors.white,
     border: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
-      borderSide: const BorderSide(color: _line),
+      borderRadius: BorderRadius.circular(AppUi.radius),
+      borderSide: const BorderSide(color: AppUi.controlLine),
     ),
     enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
-      borderSide: const BorderSide(color: _line),
+      borderRadius: BorderRadius.circular(AppUi.radius),
+      borderSide: const BorderSide(color: AppUi.controlLine),
     ),
     disabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(14),
+      borderRadius: BorderRadius.circular(AppUi.radius),
       borderSide: const BorderSide(color: _line),
     ),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
   ),
   chipTheme: ChipThemeData(
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    shape: RoundedRectangleBorder(
+      borderRadius: BorderRadius.circular(AppUi.radius),
+    ),
     side: const BorderSide(color: _line),
     labelStyle: const TextStyle(fontSize: 13, color: Color(0xFF1D2922)),
     secondaryLabelStyle: const TextStyle(fontSize: 13, color: _green),
@@ -150,7 +181,18 @@ final ThemeData productTheme = ThemeData(
       disabledBackgroundColor: const Color(0xFFE8ECE9),
       disabledForegroundColor: const Color(0xFF87928B),
       minimumSize: const Size(44, 44),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppUi.radius),
+      ),
+    ),
+  ),
+  outlinedButtonTheme: OutlinedButtonThemeData(
+    style: OutlinedButton.styleFrom(
+      minimumSize: const Size(44, 44),
+      side: const BorderSide(color: AppUi.controlLine),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(AppUi.radius),
+      ),
     ),
   ),
 );
@@ -371,7 +413,6 @@ final class _ProductShellState extends State<_ProductShell> {
                   if (!narrow && !phone)
                     _NavigationPanel(
                       selected: destination,
-                      calendarCanvas: calendarCanvas,
                       mode: wide
                           ? _NavigationMode.expanded
                           : _NavigationMode.rail,
@@ -384,22 +425,22 @@ final class _ProductShellState extends State<_ProductShell> {
                             ? 12
                             : narrow
                             ? 8
-                            : 28,
+                            : 24,
                         calendarCanvas
                             ? 8
                             : narrow
                             ? 4
-                            : 24,
+                            : 16,
                         calendarCanvas
                             ? 12
                             : narrow
                             ? 8
-                            : 28,
+                            : 24,
                         calendarCanvas
                             ? 12
                             : narrow
                             ? 4
-                            : 24,
+                            : 16,
                       ),
                       child: IndexedStack(
                         index: destination == ShellDestination.agent ? 0 : 1,
@@ -764,17 +805,15 @@ final class _NavigationPanel extends StatelessWidget {
     required this.selected,
     required this.mode,
     required this.onSelected,
-    this.calendarCanvas = false,
   });
 
   final ShellDestination selected;
   final _NavigationMode mode;
   final ValueChanged<ShellDestination> onSelected;
-  final bool calendarCanvas;
 
   bool get _expanded => mode != _NavigationMode.rail;
   double get _width => switch (mode) {
-    _NavigationMode.expanded => calendarCanvas ? 184 : 216,
+    _NavigationMode.expanded => 184,
     _NavigationMode.rail => 72,
     _NavigationMode.drawer => 264,
   };
@@ -783,19 +822,19 @@ final class _NavigationPanel extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     width: _width,
     decoration: const BoxDecoration(
-      color: Colors.white,
+      color: AppUi.navigation,
       border: Border(right: BorderSide(color: _line)),
     ),
     child: Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: _expanded ? 14 : 8,
-        vertical: 18,
+        horizontal: _expanded ? 12 : 8,
+        vertical: 16,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           _BrandMark(expanded: _expanded),
-          const SizedBox(height: 26),
+          const SizedBox(height: 24),
           _NavigationButton(
             key: const ValueKey('shell-nav-agent'),
             title: 'Agent',
@@ -847,10 +886,6 @@ final class _BrandMark extends StatelessWidget {
     final mark = Container(
       width: 38,
       height: 38,
-      decoration: BoxDecoration(
-        color: const Color(0xFFEAF3ED),
-        borderRadius: BorderRadius.circular(12),
-      ),
       alignment: Alignment.center,
       child: const Icon(Icons.school_outlined, color: _green, size: 21),
     );
@@ -895,11 +930,11 @@ final class _NavigationButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final button = Material(
-      color: selected ? const Color(0xFFEAF3ED) : Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
+      color: selected ? AppUi.selection : Colors.transparent,
+      borderRadius: BorderRadius.circular(AppUi.radius),
       child: InkWell(
         onTap: onPressed,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(AppUi.radius),
         child: SizedBox(
           height: 48,
           child: Padding(
@@ -936,7 +971,11 @@ final class _NavigationButton extends StatelessWidget {
         ),
       ),
     );
-    return expanded ? button : Tooltip(message: title, child: button);
+    return Semantics(
+      selected: selected,
+      button: true,
+      child: expanded ? button : Tooltip(message: title, child: button),
+    );
   }
 }
 

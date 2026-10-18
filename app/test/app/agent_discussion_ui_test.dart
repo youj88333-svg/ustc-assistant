@@ -417,14 +417,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        tester
-            .widget<ChoiceChip>(
-              find.byKey(const ValueKey('calendar-workspace-tab-tasks')),
-            )
-            .selected,
-        isTrue,
-      );
-      expect(
         find.byKey(const ValueKey('task-workspace-detail-content')),
         findsOneWidget,
       );
@@ -434,12 +426,8 @@ void main() {
       await tester.pumpWidget(page(initialTasks: false));
       await tester.pumpAndSettle();
       expect(
-        tester
-            .widget<ChoiceChip>(
-              find.byKey(const ValueKey('calendar-workspace-tab-tasks')),
-            )
-            .selected,
-        isTrue,
+        find.byKey(const ValueKey('task-workspace-detail-content')),
+        findsOneWidget,
       );
 
       await tester.tap(
@@ -449,12 +437,8 @@ void main() {
       await tester.pumpWidget(page(initialTasks: true));
       await tester.pumpAndSettle();
       expect(
-        tester
-            .widget<ChoiceChip>(
-              find.byKey(const ValueKey('calendar-workspace-tab-tasks')),
-            )
-            .selected,
-        isTrue,
+        find.byKey(const ValueKey('task-workspace-detail-content')),
+        findsOneWidget,
       );
       expect(consumed, 2);
       await tester.tap(
@@ -464,12 +448,12 @@ void main() {
       await tester.pumpWidget(page(initialTasks: true));
       await tester.pumpAndSettle();
       expect(
-        tester
-            .widget<ChoiceChip>(
-              find.byKey(const ValueKey('calendar-workspace-tab-schedule')),
-            )
-            .selected,
-        isTrue,
+        find.byKey(const ValueKey('task-workspace-detail-content')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const ValueKey('calendar-day-list')),
+        findsOneWidget,
       );
       expect(consumed, 2);
     },

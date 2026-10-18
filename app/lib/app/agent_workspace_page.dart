@@ -5,6 +5,7 @@ import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 
 import 'agent_workspace_contract.dart';
+import 'app_design.dart';
 import 'agent_reasoning_panel.dart';
 import 'assistant_markdown.dart';
 import '../core/agent_context_contract.dart';
@@ -16,9 +17,8 @@ import 'diagnostics_panel.dart';
 import 'morning_brief_card.dart';
 import 'workspace_visibility.dart';
 
-const _agentGreen = Color(0xFF1F6B45);
-const _agentMuted = Color(0xFF66736C);
-const _agentLine = Color(0xFFE3E9E5);
+const _agentGreen = AppUi.accent;
+const _agentMuted = AppUi.muted;
 const _morningHiddenDayStorageKey = ValueKey<String>(
   'agent-morning-brief-hidden-day',
 );
@@ -1849,98 +1849,36 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       final morningHiddenToday = _morningHiddenDay == morningDayKey;
       final phone = isPhoneWorkspace(context);
       final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (phone && !keyboardOpen)
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'Agent',
-                    key: ValueKey('agent-page-title'),
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
-                  ),
-                ),
-                if (status != null)
-                  Flexible(
-                    child: Text(
-                      status,
-                      key: const ValueKey('agent-phase'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(color: _agentMuted),
-                    ),
-                  ),
-                if (morning != null && morning.enabled && morningHiddenToday)
-                  IconButton(
-                    key: const ValueKey('morning-brief-restore'),
-                    tooltip: '恢复今日晨报',
-                    onPressed: _restoreMorningToday,
-                    icon: const Icon(Icons.wb_twilight_outlined),
-                  ),
-                IconButton(
-                  key: const ValueKey('agent-settings-open'),
-                  tooltip: 'Agent 设置与使用权限',
-                  constraints: const BoxConstraints(
-                    minWidth: 48,
-                    minHeight: 48,
-                  ),
-                  onPressed: () => unawaited(_openUsePolicySettings()),
-                  icon: const Icon(Icons.tune_rounded),
-                ),
-              ],
-            ),
-          if (!phone)
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 12,
-              runSpacing: 8,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+      return Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppUi.readingWidth),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (phone && !keyboardOpen)
+                Row(
                   children: [
-                    Text(
-                      'Agent',
-                      key: const ValueKey('agent-page-title'),
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+                    const Expanded(
+                      child: Text(
+                        'Agent',
+                        key: ValueKey('agent-page-title'),
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
                     ),
-                    const Text(
-                      '你的校园事务助手',
-                      style: TextStyle(color: _agentMuted),
-                    ),
-                  ],
-                ),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
                     if (status != null)
-                      Chip(
-                        key: const ValueKey('agent-phase'),
-                        avatar: const Icon(Icons.more_horiz_rounded, size: 18),
-                        label: Text(status),
+                      Flexible(
+                        child: Text(
+                          status,
+                          key: const ValueKey('agent-phase'),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(color: _agentMuted),
+                        ),
                       ),
-                    Chip(
-                      key: const ValueKey('agent-operation-policy'),
-                      avatar: Icon(
-                        view.adviceOnly
-                            ? Icons.lightbulb_outline_rounded
-                            : view.dailyOperationsAllowed
-                            ? Icons.task_alt_rounded
-                            : Icons.verified_user_outlined,
-                        size: 18,
-                      ),
-                      label: Text(
-                        view.adviceOnly
-                            ? '仅建议 · 不提交'
-                            : view.dailyOperationsAllowed
-                            ? '日常操作已授权'
-                            : '按各类许可处理',
-                      ),
-                    ),
                     if (morning != null &&
                         morning.enabled &&
                         morningHiddenToday)
@@ -1952,59 +1890,122 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       ),
                     IconButton(
                       key: const ValueKey('agent-settings-open'),
-                      tooltip: 'Agent 设置',
+                      tooltip: 'Agent 设置与使用权限',
+                      constraints: const BoxConstraints(
+                        minWidth: 48,
+                        minHeight: 48,
+                      ),
                       onPressed: () => unawaited(_openUsePolicySettings()),
-                      icon: const Icon(Icons.settings_outlined),
+                      icon: const Icon(Icons.tune_rounded),
                     ),
                   ],
                 ),
+              if (!phone)
+                Wrap(
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 12,
+                  runSpacing: 8,
+                  children: [
+                    Text(
+                      'Agent',
+                      key: const ValueKey('agent-page-title'),
+                      style: Theme.of(context).textTheme.titleLarge,
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 6,
+                      children: [
+                        if (status != null)
+                          Padding(
+                            key: const ValueKey('agent-phase'),
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            child: Text(
+                              status,
+                              style: const TextStyle(color: _agentMuted),
+                            ),
+                          ),
+                        Padding(
+                          key: const ValueKey('agent-operation-policy'),
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Text(
+                            view.adviceOnly
+                                ? '仅建议 · 不提交'
+                                : view.dailyOperationsAllowed
+                                ? '日常操作已授权'
+                                : '按各类许可处理',
+                            style: const TextStyle(
+                              color: _agentMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ),
+                        if (morning != null &&
+                            morning.enabled &&
+                            morningHiddenToday)
+                          IconButton(
+                            key: const ValueKey('morning-brief-restore'),
+                            tooltip: '恢复今日晨报',
+                            onPressed: _restoreMorningToday,
+                            icon: const Icon(Icons.wb_twilight_outlined),
+                          ),
+                        IconButton(
+                          key: const ValueKey('agent-settings-open'),
+                          tooltip: 'Agent 设置',
+                          onPressed: () => unawaited(_openUsePolicySettings()),
+                          icon: const Icon(Icons.settings_outlined),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              if (_message != null || view.failure != null) ...[
+                const SizedBox(height: 8),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: phone ? 96 : 180),
+                  child: SingleChildScrollView(
+                    child: _AgentNotice(
+                      message:
+                          view.failure == AgentFailureCode.invalidInput &&
+                              view.parameterIssue != null
+                          ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
+                          : _message ?? _failureText(view.failure!),
+                      isError:
+                          _messageIsError ||
+                          (_message == null && view.failure != null),
+                    ),
+                  ),
+                ),
+                if (widget.diagnostics != null && view.failure != null)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: DiagnosticsExportButton(
+                      diagnostics: widget.diagnostics!,
+                    ),
+                  ),
               ],
-            ),
-          if (_message != null || view.failure != null) ...[
-            const SizedBox(height: 8),
-            ConstrainedBox(
-              constraints: BoxConstraints(maxHeight: phone ? 96 : 180),
-              child: SingleChildScrollView(
-                child: _AgentNotice(
-                  message:
-                      view.failure == AgentFailureCode.invalidInput &&
-                          view.parameterIssue != null
-                      ? '模型生成的操作参数未能通过检查：${view.parameterIssue!.userMessage}请重新发送要求；也可导出日志帮助排查。'
-                      : _message ?? _failureText(view.failure!),
-                  isError:
-                      _messageIsError ||
-                      (_message == null && view.failure != null),
+              if (morning != null &&
+                  morning.enabled &&
+                  !morningHiddenToday &&
+                  !keyboardOpen) ...[
+                const SizedBox(height: 8),
+                MorningBriefCard(
+                  view: morning,
+                  nowUtc: morningNowUtc,
+                  onRetry: () {
+                    final retry = widget.onMorningRetry;
+                    if (retry != null) unawaited(retry());
+                  },
+                  onHideToday: () => _hideMorningToday(morningDayKey),
+                  openSource: widget.openMorningSource ?? (uri) async {},
+                  changes: widget.morningChanges,
                 ),
-              ),
-            ),
-            if (widget.diagnostics != null && view.failure != null)
-              Align(
-                alignment: Alignment.centerRight,
-                child: DiagnosticsExportButton(
-                  diagnostics: widget.diagnostics!,
-                ),
-              ),
-          ],
-          if (morning != null &&
-              morning.enabled &&
-              !morningHiddenToday &&
-              !keyboardOpen) ...[
-            const SizedBox(height: 8),
-            MorningBriefCard(
-              view: morning,
-              nowUtc: morningNowUtc,
-              onRetry: () {
-                final retry = widget.onMorningRetry;
-                if (retry != null) unawaited(retry());
-              },
-              onHideToday: () => _hideMorningToday(morningDayKey),
-              openSource: widget.openMorningSource ?? (uri) async {},
-              changes: widget.morningChanges,
-            ),
-          ],
-          SizedBox(height: phone ? 4 : 12),
-          Expanded(child: _conversation(view)),
-        ],
+              ],
+              const SizedBox(height: 4),
+              Expanded(child: _conversation(view)),
+            ],
+          ),
+        ),
       );
     },
   );
@@ -2122,13 +2123,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(
-              child: Card(
-                child: view.conversationId == null
-                    ? _emptyConversation(configured)
-                    : _messages(view),
-              ),
+              child: view.conversationId == null
+                  ? _emptyConversation(configured)
+                  : _messages(view),
             ),
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             if (phone && view.pendingAction != null)
               SizedBox(
                 height: 48,
@@ -2271,7 +2270,10 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       child: ListView.builder(
         key: const ValueKey('agent-message-list'),
         controller: _messageScroll,
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.symmetric(
+          horizontal: isPhoneWorkspace(context) ? 4 : 8,
+          vertical: 16,
+        ),
         itemCount: view.messages.length + prefix.length,
         itemBuilder: (context, index) {
           if (index < prefix.length) return prefix[index];
@@ -2290,7 +2292,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
               message.role == AgentMessageRole.assistant &&
               message.status == AgentMessageStatus.complete;
           return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.only(bottom: 24),
             child: _MessageBubble(
               message: message,
               reasoning: view.reasoningByMessage[message.id],
@@ -2366,6 +2368,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                 ? '输入消息…'
                 : '输入消息…（Enter 发送，Shift+Enter 换行）',
             border: InputBorder.none,
+            enabledBorder: InputBorder.none,
+            focusedBorder: InputBorder.none,
+            disabledBorder: InputBorder.none,
             filled: false,
             contentPadding: const EdgeInsets.symmetric(
               horizontal: 8,
@@ -2375,7 +2380,11 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         ),
       ),
     );
-    return Card(
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: AppUi.controlLine),
+        borderRadius: BorderRadius.circular(AppUi.radius),
+      ),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
         child: Column(
@@ -2384,19 +2393,21 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             if (usePolicyAvailable && !phone) ...[
               Row(
                 children: [
-                  FilterChip(
-                    key: const ValueKey('agent-advice-only-toggle'),
-                    selected: view.adviceOnly,
-                    avatar: Icon(
-                      view.adviceOnly
-                          ? Icons.lightbulb_rounded
-                          : Icons.lightbulb_outline_rounded,
-                      size: 18,
+                  Semantics(
+                    toggled: view.adviceOnly,
+                    child: TextButton.icon(
+                      key: const ValueKey('agent-advice-only-toggle'),
+                      icon: Icon(
+                        view.adviceOnly
+                            ? Icons.check_box_outlined
+                            : Icons.check_box_outline_blank,
+                        size: 18,
+                      ),
+                      label: const Text('仅建议'),
+                      onPressed: view.busy || _pending || _actionPending
+                          ? null
+                          : () => unawaited(_setAdviceOnly(!view.adviceOnly)),
                     ),
-                    label: const Text('仅建议'),
-                    onSelected: view.busy || _pending || _actionPending
-                        ? null
-                        : (value) => unawaited(_setAdviceOnly(value)),
                   ),
                   const SizedBox(width: 8),
                   Expanded(
@@ -2529,7 +2540,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                       onPressed: _cancelSpeechFromButton,
                       style: TextButton.styleFrom(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: const Size(0, 32),
+                        minimumSize: Size(0, phone ? 48 : 32),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
                       child: const Text('取消'),
@@ -2628,11 +2639,9 @@ final class _SetupPrompt extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const ValueKey('agent-model-setup-prompt'),
-    padding: const EdgeInsets.all(12),
-    decoration: BoxDecoration(
-      color: const Color(0xFFFFF5E8),
-      borderRadius: BorderRadius.circular(12),
-      border: Border.all(color: const Color(0xFFF0E0C7)),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+    decoration: const BoxDecoration(
+      border: Border(left: BorderSide(color: AppUi.warning, width: 2)),
     ),
     child: Row(
       children: [
@@ -2654,10 +2663,11 @@ final class _AgentNotice extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     key: const ValueKey('agent-page-notice'),
-    padding: const EdgeInsets.all(12),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
     decoration: BoxDecoration(
-      color: isError ? const Color(0xFFFFF0F0) : const Color(0xFFEAF3ED),
-      borderRadius: BorderRadius.circular(12),
+      border: Border(
+        left: BorderSide(color: isError ? AppUi.error : AppUi.accent, width: 2),
+      ),
     ),
     child: Text(message, style: const TextStyle(height: 1.4)),
   );
@@ -2682,12 +2692,7 @@ final class _AgentRunProgress extends StatelessWidget {
         : null;
     return Container(
       key: const ValueKey('agent-run-progress'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF5F7F6),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: _agentLine),
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -2730,21 +2735,28 @@ final class _ToolStepList extends StatelessWidget {
     children: [
       const Text('查询步骤', style: TextStyle(color: _agentMuted, fontSize: 12)),
       const SizedBox(height: 4),
-      Wrap(
-        spacing: 6,
-        runSpacing: 4,
-        children: [
-          for (var index = 0; index < steps.length; index++)
-            Chip(
-              key: ValueKey('agent-tool-step-$index'),
-              visualDensity: VisualDensity.compact,
-              label: Text(
-                '${_toolLabel(steps[index].tool) ?? '只读查询'} · '
-                '${_toolStatusLabel(steps[index].status)}',
+      for (var index = 0; index < steps.length; index++)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.subdirectory_arrow_right_rounded,
+                size: 16,
+                color: _agentMuted,
               ),
-            ),
-        ],
-      ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${_toolLabel(steps[index].tool) ?? '只读查询'} · '
+                  '${_toolStatusLabel(steps[index].status)}',
+                  key: ValueKey('agent-tool-step-$index'),
+                  style: const TextStyle(color: _agentMuted, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ),
     ],
   );
 }
@@ -3020,126 +3032,118 @@ final class _EvidenceCardState extends State<_EvidenceCard> {
       if (evidence.publishedOn != null) '发布 ${evidence.publishedOn}',
       if (evidence.updatedOn != null) '更新 ${evidence.updatedOn}',
     ].join(' · ');
-    return Card(
+    return WorkspaceSection(
       key: ValueKey('agent-evidence-${evidence.id}'),
-      margin: EdgeInsets.zero,
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(
-                  Icons.verified_outlined,
-                  size: 18,
-                  color: _agentGreen,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    '${_providerLabel(evidence.provider)} · '
-                    '${widget.historical ? '历史材料，下轮须重新查询' : '本次回答读取，下轮须重新查询'}',
-                    style: const TextStyle(
-                      color: _agentMuted,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.verified_outlined, size: 18, color: _agentGreen),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  '${_providerLabel(evidence.provider)} · '
+                  '${widget.historical ? '历史材料，下轮须重新查询' : '本次回答读取，下轮须重新查询'}',
+                  style: const TextStyle(
+                    color: _agentMuted,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
                   ),
                 ),
-                Text(
-                  '出处 ${widget.number}',
-                  key: ValueKey('agent-evidence-id-${evidence.id}'),
-                  style: const TextStyle(color: _agentMuted, fontSize: 11),
-                ),
-              ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              evidence.title,
-              key: ValueKey('agent-evidence-title-${evidence.id}'),
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 3),
-            Text(
-              '读取于北京时间 ${_beijingTime(evidence.observedAtUtc)} · '
-              '${evidence.complete ? '覆盖完整' : '覆盖不完整'} · 适用性未核验',
-              style: const TextStyle(color: _agentMuted, fontSize: 12),
-            ),
-            if (dates.isNotEmpty ||
-                evidence.revision != null ||
-                evidence.sourceVersion != null ||
-                evidence.locator != null) ...[
-              const SizedBox(height: 3),
+              ),
               Text(
-                [
-                  if (dates.isNotEmpty) dates,
-                  if (evidence.revision != null) '修订 ${evidence.revision}',
-                  if (evidence.sourceVersion != null)
-                    '来源版本 ${evidence.sourceVersion}',
-                  if (evidence.locator != null) '位置 ${evidence.locator}',
-                ].join(' · '),
-                style: const TextStyle(color: _agentMuted, fontSize: 12),
+                '出处 ${widget.number}',
+                key: ValueKey('agent-evidence-id-${evidence.id}'),
+                style: const TextStyle(color: _agentMuted, fontSize: 11),
               ),
             ],
+          ),
+          const SizedBox(height: 4),
+          Text(
+            evidence.title,
+            key: ValueKey('agent-evidence-title-${evidence.id}'),
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            '读取于北京时间 ${_beijingTime(evidence.observedAtUtc)} · '
+            '${evidence.complete ? '覆盖完整' : '覆盖不完整'} · 适用性未核验',
+            style: const TextStyle(color: _agentMuted, fontSize: 12),
+          ),
+          if (dates.isNotEmpty ||
+              evidence.revision != null ||
+              evidence.sourceVersion != null ||
+              evidence.locator != null) ...[
             const SizedBox(height: 3),
             Text(
-              '范围：${evidence.scope}',
+              [
+                if (dates.isNotEmpty) dates,
+                if (evidence.revision != null) '修订 ${evidence.revision}',
+                if (evidence.sourceVersion != null)
+                  '来源版本 ${evidence.sourceVersion}',
+                if (evidence.locator != null) '位置 ${evidence.locator}',
+              ].join(' · '),
               style: const TextStyle(color: _agentMuted, fontSize: 12),
             ),
-            if (evidence.snippet.isNotEmpty) ...[
-              const SizedBox(height: 5),
-              TextButton.icon(
-                key: ValueKey('agent-evidence-expand-${evidence.id}'),
-                onPressed: () => setState(() => _expanded = !_expanded),
-                icon: Icon(
-                  _expanded
-                      ? Icons.expand_less_rounded
-                      : Icons.expand_more_rounded,
-                  size: 18,
-                ),
-                label: Text(_expanded ? '收起已读取片段' : '展开已读取片段'),
+          ],
+          const SizedBox(height: 3),
+          Text(
+            '范围：${evidence.scope}',
+            style: const TextStyle(color: _agentMuted, fontSize: 12),
+          ),
+          if (evidence.snippet.isNotEmpty) ...[
+            const SizedBox(height: 5),
+            TextButton.icon(
+              key: ValueKey('agent-evidence-expand-${evidence.id}'),
+              onPressed: () => setState(() => _expanded = !_expanded),
+              icon: Icon(
+                _expanded
+                    ? Icons.expand_less_rounded
+                    : Icons.expand_more_rounded,
+                size: 18,
               ),
-              if (_expanded)
-                Container(
-                  key: ValueKey('agent-evidence-snippet-${evidence.id}'),
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5F7F6),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(evidence.snippet),
+              label: Text(_expanded ? '收起已读取片段' : '展开已读取片段'),
+            ),
+            if (_expanded)
+              Container(
+                key: ValueKey('agent-evidence-snippet-${evidence.id}'),
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF5F7F6),
+                  borderRadius: BorderRadius.circular(8),
                 ),
-            ],
-            if (widget.onOpenLocalEvidence != null &&
-                evidence.provider == 'local' &&
-                ((evidence.eventReference != null) !=
-                    (evidence.taskReference != null)))
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: ValueKey('agent-evidence-open-local-${evidence.id}'),
-                  onPressed: () => widget.onOpenLocalEvidence?.call(evidence),
-                  icon: const Icon(Icons.open_in_new_rounded, size: 16),
-                  label: Text(
-                    evidence.eventReference != null ? '在日程中查看' : '在任务中查看',
-                  ),
-                ),
-              ),
-            if (source != null)
-              Align(
-                alignment: Alignment.centerLeft,
-                child: TextButton.icon(
-                  key: ValueKey('agent-evidence-copy-${evidence.id}'),
-                  onPressed: () => unawaited(_copySource(source)),
-                  icon: const Icon(Icons.copy_rounded, size: 16),
-                  label: const Text('复制已核验出处链接'),
-                ),
+                child: Text(evidence.snippet),
               ),
           ],
-        ),
+          if (widget.onOpenLocalEvidence != null &&
+              evidence.provider == 'local' &&
+              ((evidence.eventReference != null) !=
+                  (evidence.taskReference != null)))
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: ValueKey('agent-evidence-open-local-${evidence.id}'),
+                onPressed: () => widget.onOpenLocalEvidence?.call(evidence),
+                icon: const Icon(Icons.open_in_new_rounded, size: 16),
+                label: Text(
+                  evidence.eventReference != null ? '在日程中查看' : '在任务中查看',
+                ),
+              ),
+            ),
+          if (source != null)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                key: ValueKey('agent-evidence-copy-${evidence.id}'),
+                onPressed: () => unawaited(_copySource(source)),
+                icon: const Icon(Icons.copy_rounded, size: 16),
+                label: const Text('复制已核验出处链接'),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -3271,14 +3275,15 @@ final class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: user ? Alignment.centerRight : Alignment.centerLeft,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 760),
+        constraints: const BoxConstraints(maxWidth: AppUi.readingWidth),
         child: Container(
           key: ValueKey('agent-message-${message.id}'),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+          padding: user
+              ? const EdgeInsets.symmetric(horizontal: 14, vertical: 10)
+              : const EdgeInsets.symmetric(vertical: 4),
           decoration: BoxDecoration(
-            color: user ? const Color(0xFFE7F1EA) : const Color(0xFFF5F7F6),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(color: _agentLine),
+            color: user ? AppUi.selection : Colors.transparent,
+            borderRadius: BorderRadius.circular(AppUi.radius),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -3342,7 +3347,7 @@ final class _MessageBubble extends StatelessWidget {
                   onPressed: onToggleQueryDetails,
                   style: TextButton.styleFrom(
                     padding: EdgeInsets.zero,
-                    minimumSize: const Size(0, 32),
+                    minimumSize: Size(0, isPhoneWorkspace(context) ? 48 : 32),
                     tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   ),
                   icon: Icon(

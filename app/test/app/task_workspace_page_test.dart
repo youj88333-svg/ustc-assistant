@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -41,6 +42,58 @@ void main() {
     expect(intent.draft.deadlineAtUtc, isNull);
     expect(port.intents.single.expectedContext, port.context);
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('selected task row exposes its selected semantics state', (
+    tester,
+  ) async {
+    await _setSize(tester, const Size(1000, 820));
+    final seed = _taskWithBlocks();
+    final port = _FakeTaskWorkspacePort(tasks: [seed.task]);
+    addTearDown(port.dispose);
+    final semantics = tester.ensureSemantics();
+
+    try {
+      await tester.pumpWidget(_host(port));
+      await tester.pumpAndSettle();
+
+      final tile = find.byKey(const ValueKey('task-tile-7'));
+      final tileSemantics = find.byKey(const ValueKey('task-tile-semantics-7'));
+      expect(tile, findsOneWidget);
+      expect(tileSemantics, findsOneWidget);
+      expect(
+        tester
+            .getSemantics(tileSemantics)
+            .getSemanticsData()
+            .flagsCollection
+            .isButton,
+        isTrue,
+      );
+      expect(
+        tester
+            .getSemantics(tileSemantics)
+            .getSemanticsData()
+            .flagsCollection
+            .isSelected,
+        ui.Tristate.isFalse,
+      );
+
+      await tester.tap(tile);
+      await tester.pumpAndSettle();
+
+      expect(
+        tester
+            .getSemantics(tileSemantics)
+            .getSemanticsData()
+            .flagsCollection
+            .isSelected,
+        ui.Tristate.isTrue,
+      );
+      expect(port.intents, isEmpty);
+      expect(tester.takeException(), isNull);
+    } finally {
+      semantics.dispose();
+    }
   });
 
   testWidgets('date-only deadline defaults to 23:59 Beijing time', (

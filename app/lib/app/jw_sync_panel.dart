@@ -13,6 +13,7 @@ import '../source/jw_collection_failure.dart';
 import '../source/jw_data_probe_contract.dart';
 import '../source/jw_probe_contract.dart';
 import '../source/observation_contract.dart';
+import 'app_design.dart';
 
 /// The user-facing entry point for a complete local JW collection and import.
 final class JwSyncPanel extends StatefulWidget {
@@ -703,153 +704,140 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
       builder: (context, constraints) {
         final content = Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: Card(
-              child: Padding(
-                padding: EdgeInsets.all(constraints.maxWidth < 560 ? 16 : 22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      widget.productMode ? '教务课表与考试' : 'M1 教务采集与本地日程',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
+            constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
+            child: WorkspaceSection(
+              title: widget.productMode ? '教务课表与考试' : 'M1 教务采集与本地日程',
+              description: widget.productMode
+                  ? '同步所选学期的课表和学校实际返回的考试安排。需要验证码或额外授权时，请在学校窗口完成；学校数据只读，保存后可在日程中查看。'
+                  : '应用会自动进入登录流程并准备学期目录。需要验证码或额外授权时，请在学校窗口完成。来源数据只读，导入结果保存为本地日程。',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _operationStatus(context),
+                  if (!_view.accountBound && _isIdle) ...[
+                    const SizedBox(height: 14),
+                    TextField(
+                      key: const ValueKey('jw-sync-expected-account'),
+                      controller: _accountCodeController,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      enableIMEPersonalizedLearning: false,
+                      autofillHints: const [],
+                      enabled: _canEditAccount,
+                      textInputAction: TextInputAction.done,
+                      onSubmitted: (_) => _startSync(),
+                      decoration: const InputDecoration(
+                        labelText: '本次预期学号',
+                        hintText: '输入5至24位英文字母或数字',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.productMode
-                          ? '同步所选学期的课表和学校实际返回的考试安排。需要验证码或额外授权时，请在学校窗口完成；学校数据只读，保存后可在日程中查看。'
-                          : '应用会自动进入登录流程并准备学期目录。需要验证码或额外授权时，请在学校窗口完成。来源数据只读，导入结果保存为本地日程。',
-                      style: Theme.of(context).textTheme.bodyLarge,
-                    ),
-                    const SizedBox(height: 16),
-                    _operationStatus(context),
-                    if (!_view.accountBound && _isIdle) ...[
-                      const SizedBox(height: 14),
-                      TextField(
-                        key: const ValueKey('jw-sync-expected-account'),
-                        controller: _accountCodeController,
-                        obscureText: true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        autofillHints: const [],
-                        enabled: _canEditAccount,
-                        textInputAction: TextInputAction.done,
-                        onSubmitted: (_) => _startSync(),
-                        decoration: const InputDecoration(
-                          labelText: '本次预期学号',
-                          hintText: '输入5至24位英文字母或数字',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ],
-                    if (_isIdle) ...[
-                      const SizedBox(height: 12),
-                      TextField(
-                        key: const ValueKey('jw-sync-password'),
-                        controller: _passwordController,
-                        obscureText: true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        autofillHints: const [],
-                        enabled: _canOpen,
-                        textInputAction: TextInputAction.done,
-                        onChanged: (value) => setState(() {
-                          if (value.isEmpty) _savePassword = false;
-                        }),
-                        onSubmitted: (_) => _startSync(),
-                        decoration: const InputDecoration(
-                          labelText: '学校密码（可留空）',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                      CheckboxListTile(
-                        key: const ValueKey('jw-sync-save-password'),
-                        contentPadding: EdgeInsets.zero,
-                        controlAffinity: ListTileControlAffinity.leading,
-                        title: const Text('在本机加密保存密码'),
-                        subtitle: Text(
-                          widget.productMode
-                              ? '仅在本次身份核验与日程导入成功后加密保存；学校窗口手动输入的密码不会被读取或保存。'
-                              : '仅在本次身份核验与日程导入成功后保存。',
-                        ),
-                        value: _savePassword,
-                        onChanged:
-                            _canOpen && _passwordController.text.isNotEmpty
-                            ? (value) =>
-                                  setState(() => _savePassword = value ?? false)
-                            : null,
-                      ),
-                      _preSyncSemesterPicker(context),
-                      Text(
-                        _credentialSaved ? '本机已有加密保存的密码，不会回填显示。' : '尚未保存密码。',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                      if (_credentialSaved) ...[
-                        const SizedBox(height: 6),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const ValueKey(
-                              'jw-sync-delete-saved-credential',
-                            ),
-                            onPressed: _canDeleteSavedCredential
-                                ? _deleteSavedCredential
-                                : null,
-                            icon: const Icon(Icons.key_off_outlined),
-                            label: const Text('删除保存的密码'),
-                          ),
-                        ),
-                        Text(
-                          widget.productMode
-                              ? '删除后教务和二课都不能再自动使用这份密码；账号绑定、日程和浏览器登录资料会保留。'
-                              : '只删除本机加密密码，保留账号绑定、本地日程和浏览器登录资料。',
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                    ],
-                    if (_inputMessage != null) ...[
-                      const SizedBox(height: 8),
-                      _message(context, _inputMessage!, error: true),
-                    ],
+                  ],
+                  if (_isIdle) ...[
                     const SizedBox(height: 12),
-                    _primaryActions(context),
-                    if (_canCancel) ...[
-                      const SizedBox(height: 10),
-                      OutlinedButton.icon(
-                        onPressed: _cancel,
-                        icon: const Icon(Icons.stop_circle_outlined),
-                        label: Text(
-                          widget.productMode
-                              ? _cancelPending
-                                    ? '正在取消本次同步'
-                                    : '取消本次同步'
-                              : _cancelPending
-                              ? '正在关闭本次作业'
-                              : '关闭本次作业',
+                    TextField(
+                      key: const ValueKey('jw-sync-password'),
+                      controller: _passwordController,
+                      obscureText: true,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      enableIMEPersonalizedLearning: false,
+                      autofillHints: const [],
+                      enabled: _canOpen,
+                      textInputAction: TextInputAction.done,
+                      onChanged: (value) => setState(() {
+                        if (value.isEmpty) _savePassword = false;
+                      }),
+                      onSubmitted: (_) => _startSync(),
+                      decoration: const InputDecoration(
+                        labelText: '学校密码（可留空）',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    CheckboxListTile(
+                      key: const ValueKey('jw-sync-save-password'),
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text('在本机加密保存密码'),
+                      subtitle: Text(
+                        widget.productMode
+                            ? '仅在本次身份核验与日程导入成功后加密保存；学校窗口手动输入的密码不会被读取或保存。'
+                            : '仅在本次身份核验与日程导入成功后保存。',
+                      ),
+                      value: _savePassword,
+                      onChanged: _canOpen && _passwordController.text.isNotEmpty
+                          ? (value) =>
+                                setState(() => _savePassword = value ?? false)
+                          : null,
+                    ),
+                    _preSyncSemesterPicker(context),
+                    Text(
+                      _credentialSaved ? '本机已有加密保存的密码，不会回填显示。' : '尚未保存密码。',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    if (_credentialSaved) ...[
+                      const SizedBox(height: 6),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          key: const ValueKey(
+                            'jw-sync-delete-saved-credential',
+                          ),
+                          onPressed: _canDeleteSavedCredential
+                              ? _deleteSavedCredential
+                              : null,
+                          icon: const Icon(Icons.key_off_outlined),
+                          label: const Text('删除保存的密码'),
                         ),
                       ),
-                    ],
-                    if (_actionMessage != null) ...[
-                      const SizedBox(height: 10),
-                      _message(context, _actionMessage!, error: true),
-                    ],
-                    const SizedBox(height: 18),
-                    if (!widget.productMode) ...[
-                      _localCounts(context),
-                      const SizedBox(height: 12),
-                      _localSchedule(context),
-                      const SizedBox(height: 12),
-                      OutlinedButton.icon(
-                        onPressed: _canCopy ? _copySafeSummary : null,
-                        icon: const Icon(Icons.copy_outlined),
-                        label: const Text('复制导入脱敏摘要'),
+                      Text(
+                        widget.productMode
+                            ? '删除后教务和二课都不能再自动使用这份密码；账号绑定、日程和浏览器登录资料会保留。'
+                            : '只删除本机加密密码，保留账号绑定、本地日程和浏览器登录资料。',
+                        style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
                   ],
-                ),
+                  if (_inputMessage != null) ...[
+                    const SizedBox(height: 8),
+                    _message(context, _inputMessage!, error: true),
+                  ],
+                  const SizedBox(height: 12),
+                  _primaryActions(context),
+                  if (_canCancel) ...[
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: _cancel,
+                      icon: const Icon(Icons.stop_circle_outlined),
+                      label: Text(
+                        widget.productMode
+                            ? _cancelPending
+                                  ? '正在取消本次同步'
+                                  : '取消本次同步'
+                            : _cancelPending
+                            ? '正在关闭本次作业'
+                            : '关闭本次作业',
+                      ),
+                    ),
+                  ],
+                  if (_actionMessage != null) ...[
+                    const SizedBox(height: 10),
+                    _message(context, _actionMessage!, error: true),
+                  ],
+                  const SizedBox(height: 18),
+                  if (!widget.productMode) ...[
+                    _localCounts(context),
+                    const SizedBox(height: 12),
+                    _localSchedule(context),
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      onPressed: _canCopy ? _copySafeSummary : null,
+                      icon: const Icon(Icons.copy_outlined),
+                      label: const Text('复制导入脱敏摘要'),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
@@ -867,6 +855,14 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
 
   Widget _operationStatus(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
+    final hasFailure =
+        _view.credentialFailure != null ||
+        _view.failure != null ||
+        _view.identityFailure != null ||
+        (!widget.productMode &&
+            (_view.sourceFailure != null ||
+                _view.collectionValidation != null));
+    final isRecovery = _view.phase == JwSyncPhase.recovery;
     final messages = <String>[
       widget.productMode ? _productPhaseMessage() : _phaseMessage(),
       if (_view.automation != JwAutomationState.none && !widget.productMode)
@@ -887,10 +883,22 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
     ];
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.symmetric(
+        horizontal: hasFailure || isRecovery ? 12 : 0,
+        vertical: 10,
+      ),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: hasFailure
+            ? colorScheme.errorContainer.withValues(alpha: 0.55)
+            : isRecovery
+            ? colorScheme.tertiaryContainer.withValues(alpha: 0.5)
+            : null,
+        borderRadius: hasFailure || isRecovery
+            ? BorderRadius.circular(AppUi.radius)
+            : null,
+        border: hasFailure || isRecovery
+            ? null
+            : const Border(bottom: BorderSide(color: AppUi.line)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

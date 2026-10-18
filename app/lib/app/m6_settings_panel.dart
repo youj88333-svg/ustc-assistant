@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../core/morning_brief_contract.dart';
 import '../core/reminder_contract.dart';
+import 'app_design.dart';
 import 'reminder_editor.dart';
 
 final class M6SettingsPanel extends StatefulWidget {
@@ -379,264 +380,283 @@ final class _M6SettingsPanelState extends State<M6SettingsPanel> {
   @override
   Widget build(BuildContext context) {
     final settings = _settings;
-    return SingleChildScrollView(
-      key: const ValueKey('m6-settings-scroll'),
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text('晨报与提醒', style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          if (_loading && settings == null)
-            const Padding(
-              padding: EdgeInsets.all(20),
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (settings == null)
-            _errorNotice(
-              _settingsMessage ?? '无法读取提醒设置，请重试。',
-              onRetry: _readSettings,
-            )
-          else ...[
-            Card(
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    key: const ValueKey('m6-system-reminders-enabled'),
-                    title: const Text('系统日程提醒'),
-                    subtitle: const Text('允许提醒显示在系统通知和锁屏中；系统设置仍可随时关闭通知。'),
-                    value: settings.preferences.enabled,
-                    onChanged: _mutationBusy
-                        ? null
-                        : (value) => _updatePreferences(
-                            (current) => current.copyWith(enabled: value),
-                          ),
-                  ),
-                  const Divider(height: 1),
-                  SwitchListTile(
-                    key: const ValueKey('m6-morning-enabled'),
-                    title: const Text('自动晨报'),
-                    subtitle: const Text(
-                      '晨报会把昨天的公开通知和今天的基本日程发给你已同意的模型服务并产生用量。开启后不需每天确认；模型 Key 尚未就绪时仍可查看本地事实。',
-                    ),
-                    value: settings.preferences.morningEnabled,
-                    onChanged: _mutationBusy
-                        ? null
-                        : (value) => _updatePreferences(
-                            (current) =>
-                                current.copyWith(morningEnabled: value),
-                          ),
-                  ),
-                ],
-              ),
-            ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '全局默认提醒',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 4),
-                    const Text('单条日程可单独覆盖；恢复默认会重新继承这里的规则。'),
-                    const SizedBox(height: 12),
-                    Text('定时日程', style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 8),
-                    ReminderPairControls(
-                      key: const ValueKey('m6-default-timed-pair'),
-                      pair: settings.preferences.timed,
-                      allDay: false,
-                      enabled: !_mutationBusy,
-                      keyPrefix: 'm6-timed-default',
-                      onChanged: (pair) => _updatePreferences(
-                        (current) => current.copyWith(timed: pair),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Text('全天日程', style: Theme.of(context).textTheme.titleSmall),
-                    const SizedBox(height: 8),
-                    ReminderPairControls(
-                      key: const ValueKey('m6-default-all-day-pair'),
-                      pair: settings.preferences.allDay,
-                      allDay: true,
-                      enabled: !_mutationBusy,
-                      keyPrefix: 'm6-all-day-default',
-                      onChanged: (pair) => _updatePreferences(
-                        (current) => current.copyWith(allDay: pair),
-                      ),
-                    ),
-                    const Divider(height: 24),
-                    SwitchListTile(
-                      key: const ValueKey('m6-private-display'),
-                      contentPadding: EdgeInsets.zero,
-                      title: const Text('通知中隐藏日程标题'),
-                      subtitle: const Text('开启后系统通知不显示日程标题。'),
-                      value: settings.preferences.privateDisplay,
-                      onChanged: _mutationBusy
-                          ? null
-                          : (value) => _updatePreferences(
-                              (current) =>
-                                  current.copyWith(privateDisplay: value),
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '提醒队列',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(_queueStatus(_runtime)),
-                    if (widget.testNotification != null)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: TextButton.icon(
-                          key: const ValueKey('m6-test-notification'),
-                          onPressed:
-                              settings.preferences.enabled &&
-                                  !_mutationBusy &&
-                                  !_retryBusy &&
-                                  !_runtime.busy
-                              ? _testNotification
-                              : null,
-                          icon: const Icon(Icons.notifications_active_outlined),
-                          label: const Text('发送测试通知'),
-                        ),
-                      ),
-                    if (_runtimeMessage != null) ...[
-                      const SizedBox(height: 6),
-                      Text(_runtimeMessage!),
-                    ],
-                    if (_runtime.capability case final capability?) ...[
-                      const SizedBox(height: 6),
-                      Text(_capabilityStatus(capability)),
-                    ],
-                    if (widget.configureSystemAccess != null) ...[
-                      const Divider(height: 24),
-                      Text(
-                        '系统通知权限',
-                        style: Theme.of(context).textTheme.titleSmall,
-                      ),
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          _systemAccessButton(
-                            '检查系统权限',
-                            NotificationAccessAction.inspect,
-                            const ValueKey('m6-system-inspect'),
-                          ),
-                          _systemAccessButton(
-                            '允许通知',
-                            NotificationAccessAction.notifications,
-                            const ValueKey('m6-system-notifications'),
-                          ),
-                          _systemAccessButton(
-                            '允许精确提醒',
-                            NotificationAccessAction.exactAlarms,
-                            const ValueKey('m6-system-exact'),
-                          ),
-                          _systemAccessButton(
-                            '系统通知设置',
-                            NotificationAccessAction.settings,
-                            const ValueKey('m6-system-settings'),
-                          ),
-                        ],
-                      ),
-                    ],
-                    const SizedBox(height: 10),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: OutlinedButton.icon(
-                        key: const ValueKey('m6-retry-reminders'),
-                        onPressed: _retryBusy || _runtime.busy
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
+        child: SingleChildScrollView(
+          key: const ValueKey('m6-settings-scroll'),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('晨报与提醒', style: Theme.of(context).textTheme.titleLarge),
+              const SizedBox(height: 8),
+              if (_loading && settings == null)
+                const Padding(
+                  padding: EdgeInsets.all(20),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (settings == null)
+                _errorNotice(
+                  _settingsMessage ?? '无法读取提醒设置，请重试。',
+                  onRetry: _readSettings,
+                )
+              else ...[
+                WorkspaceSection(
+                  child: Column(
+                    children: [
+                      SwitchListTile(
+                        key: const ValueKey('m6-system-reminders-enabled'),
+                        title: const Text('系统日程提醒'),
+                        subtitle: const Text('允许提醒显示在系统通知和锁屏中；系统设置仍可随时关闭通知。'),
+                        value: settings.preferences.enabled,
+                        onChanged: _mutationBusy
                             ? null
-                            : _retryReminderQueue,
-                        icon: _retryBusy
-                            ? const SizedBox.square(
-                                dimension: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
-                              )
-                            : const Icon(Icons.refresh_rounded),
-                        label: Text(_retryBusy ? '正在重试…' : '重试提醒队列'),
+                            : (value) => _updatePreferences(
+                                (current) => current.copyWith(enabled: value),
+                              ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(14),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      '晨报维护',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
-                    const Text('重新生成只在你点击后发起；清除晨报不会清除日程或聊天。'),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        OutlinedButton.icon(
-                          key: const ValueKey('m6-regenerate-morning'),
-                          onPressed: _mutationBusy ? null : _regenerateMorning,
-                          icon: const Icon(Icons.auto_awesome_outlined),
-                          label: const Text('重新生成晨报'),
+                      const Divider(height: 1),
+                      SwitchListTile(
+                        key: const ValueKey('m6-morning-enabled'),
+                        title: const Text('自动晨报'),
+                        subtitle: const Text(
+                          '晨报会把昨天的公开通知和今天的基本日程发给你已同意的模型服务并产生用量。开启后不需每天确认；模型 Key 尚未就绪时仍可查看本地事实。',
                         ),
-                        TextButton.icon(
-                          key: const ValueKey('m6-clear-morning'),
-                          onPressed: _mutationBusy
+                        value: settings.preferences.morningEnabled,
+                        onChanged: _mutationBusy
+                            ? null
+                            : (value) => _updatePreferences(
+                                (current) =>
+                                    current.copyWith(morningEnabled: value),
+                              ),
+                      ),
+                    ],
+                  ),
+                ),
+                WorkspaceSection(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '全局默认提醒',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        const Text('单条日程可单独覆盖；恢复默认会重新继承这里的规则。'),
+                        const SizedBox(height: 12),
+                        Text(
+                          '定时日程',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        ReminderPairControls(
+                          key: const ValueKey('m6-default-timed-pair'),
+                          pair: settings.preferences.timed,
+                          allDay: false,
+                          enabled: !_mutationBusy,
+                          keyPrefix: 'm6-timed-default',
+                          onChanged: (pair) => _updatePreferences(
+                            (current) => current.copyWith(timed: pair),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          '全天日程',
+                          style: Theme.of(context).textTheme.titleSmall,
+                        ),
+                        const SizedBox(height: 8),
+                        ReminderPairControls(
+                          key: const ValueKey('m6-default-all-day-pair'),
+                          pair: settings.preferences.allDay,
+                          allDay: true,
+                          enabled: !_mutationBusy,
+                          keyPrefix: 'm6-all-day-default',
+                          onChanged: (pair) => _updatePreferences(
+                            (current) => current.copyWith(allDay: pair),
+                          ),
+                        ),
+                        const Divider(height: 24),
+                        SwitchListTile(
+                          key: const ValueKey('m6-private-display'),
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('通知中隐藏日程标题'),
+                          subtitle: const Text('开启后系统通知不显示日程标题。'),
+                          value: settings.preferences.privateDisplay,
+                          onChanged: _mutationBusy
                               ? null
-                              : _confirmAndClearMorning,
-                          icon: const Icon(Icons.delete_outline_rounded),
-                          label: const Text('清除晨报'),
+                              : (value) => _updatePreferences(
+                                  (current) =>
+                                      current.copyWith(privateDisplay: value),
+                                ),
                         ),
                       ],
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-            if (_settingsMessage != null)
-              _notice(context, _settingsMessage!, _settingsMessageIsError),
-          ],
-        ],
+                WorkspaceSection(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '提醒队列',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(_queueStatus(_runtime)),
+                        if (widget.testNotification != null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const ValueKey('m6-test-notification'),
+                              onPressed:
+                                  settings.preferences.enabled &&
+                                      !_mutationBusy &&
+                                      !_retryBusy &&
+                                      !_runtime.busy
+                                  ? _testNotification
+                                  : null,
+                              icon: const Icon(
+                                Icons.notifications_active_outlined,
+                              ),
+                              label: const Text('发送测试通知'),
+                            ),
+                          ),
+                        if (_runtimeMessage != null) ...[
+                          const SizedBox(height: 6),
+                          Text(_runtimeMessage!),
+                        ],
+                        if (_runtime.capability case final capability?) ...[
+                          const SizedBox(height: 6),
+                          Text(_capabilityStatus(capability)),
+                        ],
+                        if (widget.configureSystemAccess != null) ...[
+                          const Divider(height: 24),
+                          Text(
+                            '系统通知权限',
+                            style: Theme.of(context).textTheme.titleSmall,
+                          ),
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _systemAccessButton(
+                                '检查系统权限',
+                                NotificationAccessAction.inspect,
+                                const ValueKey('m6-system-inspect'),
+                              ),
+                              _systemAccessButton(
+                                '允许通知',
+                                NotificationAccessAction.notifications,
+                                const ValueKey('m6-system-notifications'),
+                              ),
+                              _systemAccessButton(
+                                '允许精确提醒',
+                                NotificationAccessAction.exactAlarms,
+                                const ValueKey('m6-system-exact'),
+                              ),
+                              _systemAccessButton(
+                                '系统通知设置',
+                                NotificationAccessAction.settings,
+                                const ValueKey('m6-system-settings'),
+                              ),
+                            ],
+                          ),
+                        ],
+                        const SizedBox(height: 10),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            key: const ValueKey('m6-retry-reminders'),
+                            onPressed: _retryBusy || _runtime.busy
+                                ? null
+                                : _retryReminderQueue,
+                            icon: _retryBusy
+                                ? const SizedBox.square(
+                                    dimension: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : const Icon(Icons.refresh_rounded),
+                            label: Text(_retryBusy ? '正在重试…' : '重试提醒队列'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                WorkspaceSection(
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          '晨报维护',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('重新生成只在你点击后发起；清除晨报不会清除日程或聊天。'),
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            OutlinedButton.icon(
+                              key: const ValueKey('m6-regenerate-morning'),
+                              onPressed: _mutationBusy
+                                  ? null
+                                  : _regenerateMorning,
+                              icon: const Icon(Icons.auto_awesome_outlined),
+                              label: const Text('重新生成晨报'),
+                            ),
+                            TextButton.icon(
+                              key: const ValueKey('m6-clear-morning'),
+                              onPressed: _mutationBusy
+                                  ? null
+                                  : _confirmAndClearMorning,
+                              icon: const Icon(Icons.delete_outline_rounded),
+                              label: const Text('清除晨报'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                if (_settingsMessage != null)
+                  _notice(context, _settingsMessage!, _settingsMessageIsError),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
 
-  Widget _errorNotice(String message, {required VoidCallback onRetry}) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(message),
-          const SizedBox(height: 8),
-          TextButton(onPressed: onRetry, child: const Text('重试读取')),
-        ],
-      ),
-    ),
-  );
+  Widget _errorNotice(String message, {required VoidCallback onRetry}) =>
+      Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF4F3),
+          border: Border.all(color: AppUi.error),
+          borderRadius: BorderRadius.circular(AppUi.radius),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(message),
+            const SizedBox(height: 8),
+            TextButton(onPressed: onRetry, child: const Text('重试读取')),
+          ],
+        ),
+      );
 
   Widget _notice(BuildContext context, String text, bool error) => Padding(
     padding: const EdgeInsets.only(top: 8),

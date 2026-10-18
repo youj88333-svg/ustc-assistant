@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../core/agenda_contract.dart';
 import '../core/calendar_contract.dart';
 import 'calendar_display_style.dart';
+import 'app_design.dart';
 
 enum CalendarTaskDeadlineWarning { none, dueToday, overdue }
 
@@ -178,8 +179,8 @@ final class CalendarTaskBand extends StatelessWidget {
         decoration: const BoxDecoration(
           color: Color(0xFFF8FAF9),
           border: Border(
-            right: BorderSide(color: Color(0xFFE3E9E5)),
-            bottom: BorderSide(color: Color(0xFFE3E9E5)),
+            right: BorderSide(color: AppUi.line),
+            bottom: BorderSide(color: AppUi.line),
           ),
         ),
         child: Column(
@@ -233,8 +234,8 @@ final class CalendarTaskBand extends StatelessWidget {
       decoration: const BoxDecoration(
         color: Colors.white,
         border: Border(
-          right: BorderSide(color: Color(0xFFE3E9E5)),
-          bottom: BorderSide(color: Color(0xFFE3E9E5)),
+          right: BorderSide(color: AppUi.line),
+          bottom: BorderSide(color: AppUi.line),
         ),
       ),
       padding: EdgeInsets.symmetric(

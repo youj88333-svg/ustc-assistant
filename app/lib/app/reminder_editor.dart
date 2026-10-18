@@ -199,8 +199,8 @@ final class _ReminderEditorDialogState extends State<_ReminderEditorDialog> {
     insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
     actionsOverflowButtonSpacing: 8,
     title: const Text('提醒设置'),
-    content: SizedBox(
-      width: 440,
+    content: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 480),
       child: _loading
           ? const Padding(
               padding: EdgeInsets.symmetric(vertical: 24),
@@ -359,11 +359,7 @@ final class _ReminderPairControlsState extends State<ReminderPairControls> {
   @override
   Widget build(BuildContext context) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: [
-      _slot(context, 0),
-      const SizedBox(height: 16),
-      _slot(context, 1),
-    ],
+    children: [_slot(context, 0), const Divider(height: 28), _slot(context, 1)],
   );
 
   Widget _slot(BuildContext context, int index) {
@@ -380,7 +376,9 @@ final class _ReminderPairControlsState extends State<ReminderPairControls> {
           child: Text(
             label,
             key: ValueKey('$key-label'),
-            style: Theme.of(context).textTheme.labelLarge,
+            style: Theme.of(
+              context,
+            ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
           ),
         ),
         const SizedBox(height: 8),

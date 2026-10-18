@@ -424,7 +424,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
               builder: (context) => Scaffold(
                 appBar: AppBar(title: const Text('Agent 设置')),
                 body: Padding(
-                  padding: const EdgeInsets.all(24),
+                  padding: const EdgeInsets.all(16),
                   child: AgentSettingsPanel(controller: runtime.agent),
                 ),
               ),

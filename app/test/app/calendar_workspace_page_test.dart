@@ -581,13 +581,13 @@ void main() {
     await tester.tap(find.text('日'));
     await tester.pumpAndSettle();
     Color dayFill(CalendarOccurrence occurrence) => tester
-        .widget<Card>(
+        .widget<Material>(
           find
               .ancestor(
                 of: find.byKey(
                   ValueKey<CalendarReference>(occurrence.reference),
                 ),
-                matching: find.byType(Card),
+                matching: find.byType(Material),
               )
               .first,
         )
@@ -750,6 +750,7 @@ void main() {
       const ValueKey('calendar-academic-details-panel'),
     );
     expect(detailsPanel, findsOneWidget);
+    await _tapKey(tester, 'calendar-academic-more-course-322');
     expect(
       find.descendant(of: detailsPanel, matching: find.text('地点：本次来源未提供')),
       findsOneWidget,
@@ -861,6 +862,8 @@ void main() {
     await tester.pumpAndSettle();
     final panel = find.byKey(const ValueKey('calendar-academic-details-panel'));
     expect(panel, findsOneWidget);
+    expect(find.text('校区：东区'), findsNothing);
+    await _tapKey(tester, 'calendar-academic-more-course-325');
     for (final text in [
       '地点：A301 · 教学楼 · 东区',
       '校区：东区',
@@ -1812,6 +1815,16 @@ Future<void> _setSize(WidgetTester tester, Size size) async {
   tester.view.devicePixelRatio = 1;
   tester.view.physicalSize = size;
   await tester.pump();
+}
+
+Future<void> _tapKey(WidgetTester tester, String key) async {
+  final target = find.byKey(ValueKey(key));
+  expect(target, findsOneWidget);
+  await tester.ensureVisible(target);
+  await tester.pumpAndSettle();
+  expect(target.hitTestable(), findsOneWidget);
+  await tester.tap(target);
+  await tester.pumpAndSettle();
 }
 
 Future<void> _enter(WidgetTester tester, String key, String value) async {

@@ -4,6 +4,7 @@ import '../core/young_daily_sync_contract.dart';
 import '../core/young_work_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
+import 'app_design.dart';
 import 'app_shell_contract.dart';
 import 'jw_sync_panel.dart';
 import 'young_daily_sync_panel.dart';
@@ -52,6 +53,9 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
       final currentSourceIdle = _selectedSource == _SelectedSource.jw
           ? !view.jw.busy
           : !view.young.busy;
+      final horizontalInset = MediaQuery.sizeOf(context).width < 560
+          ? 16.0
+          : 24.0;
 
       return Scrollbar(
         controller: _scrollController,
@@ -59,10 +63,15 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
         child: SingleChildScrollView(
           key: const ValueKey('source-settings-scroll'),
           controller: _scrollController,
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 12),
+          padding: EdgeInsets.fromLTRB(
+            horizontalInset,
+            16,
+            horizontalInset,
+            12,
+          ),
           child: Center(
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 1100),
+              constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
@@ -72,79 +81,46 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
                       fontWeight: FontWeight.w700,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  _sharedPasswordNote(context),
-                  const SizedBox(height: 12),
-                  SingleChildScrollView(
-                    key: const ValueKey('source-settings-tabs-scroll'),
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      children: [
-                        ChoiceChip(
-                          key: const ValueKey('source-settings-jw'),
-                          selected: _selectedSource == _SelectedSource.jw,
-                          avatar: const Icon(Icons.school_outlined, size: 18),
-                          label: const Text('教务'),
-                          materialTapTargetSize: MaterialTapTargetSize.padded,
-                          onSelected: (_) => setState(
-                            () => _selectedSource = _SelectedSource.jw,
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ChoiceChip(
-                          key: const ValueKey('source-settings-young'),
-                          selected: _selectedSource == _SelectedSource.young,
-                          avatar: const Icon(
-                            Icons.event_available_outlined,
-                            size: 18,
-                          ),
-                          label: const Text('二课'),
-                          materialTapTargetSize: MaterialTapTargetSize.padded,
-                          onSelected: (_) => setState(
-                            () => _selectedSource = _SelectedSource.young,
-                          ),
-                        ),
-                      ],
-                    ),
+                  _sharedPasswordNote(),
+                  const SizedBox(height: 4),
+                  Wrap(
+                    key: const ValueKey('source-settings-tabs'),
+                    spacing: 4,
+                    children: [
+                      _sourceOption(
+                        _SelectedSource.jw,
+                        const ValueKey('source-settings-jw'),
+                        '教务',
+                      ),
+                      _sourceOption(
+                        _SelectedSource.young,
+                        const ValueKey('source-settings-young'),
+                        '二课',
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 8),
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final width = constraints.maxWidth < 520
-                          ? constraints.maxWidth
-                          : (constraints.maxWidth - 12) / 2;
-                      return Wrap(
-                        spacing: 12,
-                        runSpacing: 8,
-                        children: [
-                          SizedBox(
-                            width: width,
-                            child: _sourceStatus(
-                              context,
-                              title: '教务',
-                              status: _jwStatus(view.jw),
-                              recovery: view.jw.phase == JwSyncPhase.recovery,
-                              busy: view.jw.busy,
-                            ),
-                          ),
-                          SizedBox(
-                            width: width,
-                            child: _sourceStatus(
-                              context,
-                              title: '二课',
-                              status: _youngStatus(view.young),
-                              recovery:
-                                  view.young.phase == YoungSyncPhase.recovery,
-                              busy: view.young.busy,
-                            ),
-                          ),
-                        ],
-                      );
-                    },
+                  const SizedBox(height: 2),
+                  Column(
+                    children: [
+                      _sourceStatus(
+                        context,
+                        title: '教务',
+                        status: _jwStatus(view.jw),
+                        recovery: view.jw.phase == JwSyncPhase.recovery,
+                        busy: view.jw.busy,
+                      ),
+                      _sourceStatus(
+                        context,
+                        title: '二课',
+                        status: _youngStatus(view.young),
+                        recovery: view.young.phase == YoungSyncPhase.recovery,
+                        busy: view.young.busy,
+                      ),
+                    ],
                   ),
                   if (_selectedSource == _SelectedSource.young &&
                       widget.dailySync != null) ...[
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 8),
                     YoungDailySyncPanel(controller: widget.dailySync!),
                   ],
                   if (view.progressUnavailable ||
@@ -189,22 +165,59 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
     },
   );
 
-  Widget _sharedPasswordNote(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: scheme.secondaryContainer.withValues(alpha: 0.46),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
+  Widget _sourceOption(_SelectedSource source, Key key, String label) {
+    final selected = _selectedSource == source;
+    return Semantics(
+      selected: selected,
+      child: IntrinsicWidth(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextButton(
+              key: key,
+              style: TextButton.styleFrom(
+                foregroundColor: selected ? AppUi.accent : AppUi.ink,
+                minimumSize: const Size(64, 48),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                tapTargetSize: MaterialTapTargetSize.padded,
+                textStyle: TextStyle(
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                ),
+              ),
+              onPressed: () => setState(() => _selectedSource = source),
+              child: Text(label),
+            ),
+            Container(
+              height: 2,
+              width: double.infinity,
+              color: selected ? AppUi.accent : Colors.transparent,
+            ),
+          ],
+        ),
       ),
-      child: const Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.lock_outline, size: 20),
-          SizedBox(width: 9),
-          Expanded(child: Text('教务和二课共用本机加密学校密码，仅用于学校登录；删除影响两个来源。')),
-        ],
+    );
+  }
+
+  Widget _sharedPasswordNote() {
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppUi.line)),
+      ),
+      child: const Padding(
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(Icons.lock_outline, size: 18, color: AppUi.muted),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '教务和二课共用本机加密学校密码，仅用于学校登录；删除会影响两个来源。',
+                style: TextStyle(color: AppUi.muted),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -222,40 +235,36 @@ final class _SourceSettingsPageState extends State<SourceSettingsPage> {
         : busy
         ? scheme.tertiary
         : scheme.primary;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(color: scheme.outlineVariant),
+    return DecoratedBox(
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppUi.line)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(top: 2),
-            child: Icon(
-              recovery
-                  ? Icons.error_outline
-                  : busy
-                  ? Icons.sync
-                  : Icons.check_circle_outline,
-              color: color,
-              size: 18,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 7),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(top: 2),
+              child: Icon(
+                recovery
+                    ? Icons.error_outline
+                    : busy
+                    ? Icons.sync
+                    : Icons.check_circle_outline,
+                color: color,
+                size: 18,
+              ),
             ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: Theme.of(context).textTheme.labelLarge),
-                const SizedBox(height: 2),
-                Text(status, style: Theme.of(context).textTheme.bodySmall),
-              ],
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 52,
+              child: Text(title, style: Theme.of(context).textTheme.labelLarge),
             ),
-          ),
-        ],
+            const SizedBox(width: 8),
+            Expanded(child: Text(status, softWrap: true)),
+          ],
+        ),
       ),
     );
   }

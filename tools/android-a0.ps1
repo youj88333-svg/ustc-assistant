@@ -11,7 +11,7 @@ param(
     [ValidateSet(28, 29, 32, 34, 35, 36, 37)]
     [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
-    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source')]
+    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source', 'UIRefresh')]
     [string]$IntegrationSuite = 'A1',
     [switch]$UnsupportedSourceOnly,
     [switch]$VerifyRetained,
@@ -179,7 +179,7 @@ try {
             Assert-QaEmulator
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4005) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4006) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
             }
             $restoreNotificationDenial = $false
@@ -195,10 +195,15 @@ try {
                 $retainedValue = $VerifyRetained.IsPresent.ToString().ToLowerInvariant()
                 # Flutter test otherwise uninstalls even after a successful run,
                 # which would invalidate the cross-process retention checks.
-                $integrationFile = "integration_test/android_$($IntegrationSuite.ToLowerInvariant())_test.dart"
+                $integrationFile = if ($IntegrationSuite -eq 'UIRefresh') {
+                    'integration_test/ui_refresh_gallery_test.dart'
+                } else {
+                    "integration_test/android_$($IntegrationSuite.ToLowerInvariant())_test.dart"
+                }
+                $galleryValue = ($IntegrationSuite -eq 'UIRefresh').ToString().ToLowerInvariant()
                 $gateValue = $UnsupportedSourceOnly.IsPresent.ToString().ToLowerInvariant()
                 $routeValue = ($IntegrationSuite -eq 'A7').ToString().ToLowerInvariant()
-                & $flutter test $integrationFile -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue" "--dart-define=USTC_A2_UNSUPPORTED_SOURCE_ONLY=$gateValue" "--dart-define=USTC_A7_SEED_OS_ROUTE=$routeValue"
+                & $flutter test $integrationFile -d $serial --no-pub --no-uninstall --reporter expanded "--dart-define=USTC_A1_VERIFY_RETAINED=$retainedValue" "--dart-define=USTC_A2_UNSUPPORTED_SOURCE_ONLY=$gateValue" "--dart-define=USTC_A7_SEED_OS_ROUTE=$routeValue" "--dart-define=USTC_UI_QA=$galleryValue"
                 $integrationExitCode = $LASTEXITCODE
                 $installedPaths = & $adb -P 5038 -s $serial shell pm path cn.ustcassistant.mobile.qa
                 Assert-ExitCode 'QA package retention check'

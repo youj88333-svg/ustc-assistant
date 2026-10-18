@@ -13,6 +13,7 @@ import 'calendar_display_style.dart';
 import 'calendar_task_band.dart';
 import 'calendar_week_view.dart';
 import 'calendar_workspace_contract.dart';
+import 'app_design.dart';
 import 'reminder_editor.dart';
 import 'task_workspace_contract.dart';
 import 'task_workspace_editor.dart';
@@ -304,29 +305,23 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     runSpacing: 2,
     crossAxisAlignment: WrapCrossAlignment.center,
     children: [
-      Text(
-        '日程',
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-      ),
-      ChoiceChip(
+      _workspaceTab(
         key: const ValueKey('calendar-workspace-tab-schedule'),
-        label: const Text('日程'),
+        label: '日程',
         selected: !_tasksSelected,
-        onSelected: (selected) {
-          if (selected && _tasksSelected) {
+        onPressed: () {
+          if (_tasksSelected) {
             _selectionGeneration++;
             setState(() => _tasksSelected = false);
           }
         },
       ),
-      ChoiceChip(
+      _workspaceTab(
         key: const ValueKey('calendar-workspace-tab-tasks'),
-        label: const Text('任务'),
+        label: '任务',
         selected: _tasksSelected,
-        onSelected: (selected) {
-          if (selected && !_tasksSelected) {
+        onPressed: () {
+          if (!_tasksSelected) {
             _selectionGeneration++;
             setState(() => _tasksSelected = true);
           }
@@ -335,30 +330,63 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     ],
   );
 
-  Widget _tasksPlaceholder(BuildContext context) => Card(
-    child: Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.task_alt_rounded, size: 42, color: _green),
-            const SizedBox(height: 12),
-            Text(
-              '任务服务暂不可用',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              textAlign: TextAlign.center,
+  Widget _workspaceTab({
+    required Key key,
+    required String label,
+    required bool selected,
+    required VoidCallback onPressed,
+  }) => Semantics(
+    selected: selected,
+    child: IntrinsicWidth(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          TextButton(
+            key: key,
+            onPressed: onPressed,
+            style: TextButton.styleFrom(
+              foregroundColor: selected ? AppUi.accent : AppUi.ink,
+              minimumSize: const Size(48, 48),
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              textStyle: TextStyle(
+                fontSize: 14,
+                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+              ),
             ),
-            const SizedBox(height: 6),
-            const Text(
-              '任务列表和时间规划当前没有可用的本地业务端口。',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _muted, height: 1.5),
-            ),
-          ],
-        ),
+            child: Text(label),
+          ),
+          Container(
+            height: 2,
+            width: double.infinity,
+            color: selected ? AppUi.accent : Colors.transparent,
+          ),
+        ],
+      ),
+    ),
+  );
+
+  Widget _tasksPlaceholder(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.task_alt_rounded, size: 42, color: _green),
+          const SizedBox(height: 12),
+          Text(
+            '任务服务暂不可用',
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '任务列表和时间规划当前没有可用的本地业务端口。',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _muted, height: 1.5),
+          ),
+        ],
       ),
     ),
   );
@@ -554,7 +582,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
             ),
           ),
         ),
-        if (widget.tasks != null) _undoButton(widget.tasks!),
+        if (widget.tasks != null) _undoButton(widget.tasks!, compact: narrow),
         FilledButton.icon(
           key: const ValueKey('calendar-personal-create'),
           onPressed: view.canWrite && !_actionBusy
@@ -579,29 +607,38 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     );
   }
 
-  Widget _undoButton(TaskWorkspacePort port) => AnimatedBuilder(
-    animation: port,
-    builder: (context, _) {
-      final taskView = port.taskView;
-      final undo = taskView.undo;
-      final canUndo = undo.canUndo && taskView.canWrite && !_actionBusy;
-      final reason = _undoReason(undo);
-      return Tooltip(
-        message: undo.canUndo ? '撤销最近一次成功的本地修改。' : reason,
-        child: OutlinedButton.icon(
-          key: const ValueKey('calendar-workspace-undo'),
-          onPressed: canUndo ? () => _undoTaskWrite(port, undo) : null,
-          icon: const Icon(Icons.undo_rounded, size: 18),
-          label: Text(undo.canUndo ? '撤销最近修改' : '暂无可撤销写入'),
-          style: OutlinedButton.styleFrom(
-            minimumSize: const Size(48, 48),
-            tapTargetSize: MaterialTapTargetSize.padded,
-            foregroundColor: _green,
-          ),
-        ),
+  Widget _undoButton(TaskWorkspacePort port, {required bool compact}) =>
+      AnimatedBuilder(
+        animation: port,
+        builder: (context, _) {
+          final taskView = port.taskView;
+          final undo = taskView.undo;
+          final canUndo = undo.canUndo && taskView.canWrite && !_actionBusy;
+          final reason = _undoReason(undo);
+          return Tooltip(
+            message: undo.canUndo ? '撤销最近一次成功的本地修改。' : reason,
+            child: OutlinedButton.icon(
+              key: const ValueKey('calendar-workspace-undo'),
+              onPressed: canUndo ? () => _undoTaskWrite(port, undo) : null,
+              icon: const Icon(Icons.undo_rounded, size: 18),
+              label: Text(
+                compact
+                    ? undo.canUndo
+                          ? '撤销'
+                          : '无可撤销'
+                    : undo.canUndo
+                    ? '撤销最近修改'
+                    : '暂无可撤销写入',
+              ),
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size(48, 48),
+                tapTargetSize: MaterialTapTargetSize.padded,
+                foregroundColor: _green,
+              ),
+            ),
+          );
+        },
       );
-    },
-  );
 
   PopupMenuItem<_CalendarToolbarAction> _filterMenuItem(
     _CalendarToolbarAction action,
@@ -1217,35 +1254,27 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       key: const ValueKey('calendar-day-list'),
       padding: const EdgeInsets.only(bottom: 10),
       itemCount: items.length,
-      separatorBuilder: (_, _) => const SizedBox(height: 8),
+      separatorBuilder: (_, _) => const Divider(height: 1, color: AppUi.line),
       itemBuilder: (context, index) {
         final occurrence = items[index];
         final selected = occurrence.reference == _selectedReference;
         final colors = calendarColorsForTitle(occurrence.title);
-        return Card(
-          clipBehavior: Clip.antiAlias,
+        return Material(
           color: colors.fill,
-          shape: RoundedRectangleBorder(
-            side: BorderSide(color: colors.edge.withValues(alpha: .28)),
-            borderRadius: BorderRadius.circular(12),
-          ),
           child: InkWell(
             key: ValueKey<CalendarReference>(occurrence.reference),
             onTap: () => _selectOccurrence(occurrence, showSheet: showSheet),
             child: Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 4,
+                  SizedBox(
+                    width: 3,
                     height: 56,
-                    decoration: BoxDecoration(
-                      color: colors.edge,
-                      borderRadius: BorderRadius.circular(4),
-                    ),
+                    child: ColoredBox(color: colors.edge),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 10),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -1307,7 +1336,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         selected != null &&
         detail.occurrence.reference == selected;
     final content = Padding(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -1341,9 +1370,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
       ),
     );
 
-    return Card(
+    return Material(
       key: const ValueKey('calendar-detail-card'),
-      clipBehavior: Clip.antiAlias,
+      color: AppUi.canvas,
       child: compact
           ? ConstrainedBox(
               constraints: BoxConstraints(
@@ -1354,7 +1383,15 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                 child: content,
               ),
             )
-          : content,
+          : DecoratedBox(
+              decoration: const BoxDecoration(
+                border: Border(left: BorderSide(color: AppUi.line)),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.only(left: 12),
+                child: content,
+              ),
+            ),
     );
   }
 
@@ -1623,43 +1660,58 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
   Widget _academicDetailsPanel(CalendarOccurrence occurrence) {
     final facts = _academicFacts(occurrence);
     if (occurrence.academicDetails == null) {
-      return Container(
+      return WorkspaceSection(
         key: const ValueKey('calendar-academic-details-uncollected'),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: const Color(0xFFF5F7F5),
-          border: Border.all(color: const Color(0xFFE3E9E5)),
-          borderRadius: BorderRadius.circular(10),
-        ),
         child: const Text(
           '尚未采集教务信息，重新同步补充',
           style: TextStyle(color: _muted, height: 1.4),
         ),
       );
     }
-    return Container(
+    const primaryKeys = {'teachers', 'semester', 'exam-type', 'exam-note'};
+    return WorkspaceSection(
       key: const ValueKey('calendar-academic-details-panel'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAF9),
-        border: Border.all(color: const Color(0xFFE3E9E5)),
-        borderRadius: BorderRadius.circular(10),
-      ),
+      padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Text(
-            '已采集的教务信息',
-            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-          ),
-          const SizedBox(height: 6),
-          for (final fact in facts)
+          for (final fact in facts.where(
+            (fact) => primaryKeys.contains(fact.key),
+          ))
             _AcademicFactLine(
               key: ValueKey('calendar-academic-${fact.key}'),
               label: fact.label,
               value: fact.value,
               maxLines: fact.key == 'teachers' ? 4 : 2,
               tooltipValue: fact.tooltipValue,
+              emphasized: true,
+            ),
+          if (facts.any((fact) => !primaryKeys.contains(fact.key)))
+            ExpansionTile(
+              key: ValueKey(
+                'calendar-academic-more-${occurrence.reference.identity.kind.name}-${occurrence.reference.identity.localId}',
+              ),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 8),
+              title: Text(
+                occurrence.reference.identity.kind == CalendarKind.exam
+                    ? '更多考试信息'
+                    : '更多课程信息',
+              ),
+              children: [
+                for (final fact in facts.where(
+                  (fact) => !primaryKeys.contains(fact.key),
+                ))
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: _AcademicFactLine(
+                      key: ValueKey('calendar-academic-${fact.key}'),
+                      label: fact.label,
+                      value: fact.value,
+                      tooltipValue: fact.tooltipValue,
+                    ),
+                  ),
+              ],
             ),
         ],
       ),
@@ -1870,9 +1922,9 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
                   vertical: 8,
                 ),
                 decoration: BoxDecoration(
-                  border: Border.all(color: const Color(0xFFD4DDD7)),
-                  borderRadius: BorderRadius.circular(9),
-                  color: Colors.white,
+                  border: Border.all(color: AppUi.line),
+                  borderRadius: BorderRadius.circular(AppUi.radius),
+                  color: AppUi.canvas,
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
@@ -2173,67 +2225,64 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         : conflict.left;
     final relation = conflict.relation;
     final status = conflict.status;
-    return Card(
-      color: const Color(0xFFF8FAF9),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              other.title,
-              softWrap: true,
-              style: TextStyle(
-                color: calendarColorsForTitle(other.title).ink,
-                fontWeight: FontWeight.w600,
-              ),
+    return WorkspaceSection(
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            other.title,
+            softWrap: true,
+            style: TextStyle(
+              color: calendarColorsForTitle(other.title).ink,
+              fontWeight: FontWeight.w600,
             ),
-            const SizedBox(height: 4),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '${_kindLabel(other.reference.identity.kind)} · ${_occurrenceTime(other)}${_presenceSuffix(other)}',
+            style: const TextStyle(color: _muted, fontSize: 12),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '判定：${_conflictSummaryLabel(conflict)}',
+            style: TextStyle(
+              color: _conflictStatusColor(status),
+              fontWeight: FontWeight.w600,
+              fontSize: 12,
+            ),
+          ),
+          if (relation != null) ...[
+            const SizedBox(height: 5),
             Text(
-              '${_kindLabel(other.reference.identity.kind)} · ${_occurrenceTime(other)}${_presenceSuffix(other)}',
+              '${relation.kind == CalendarRelationKind.legacyUndecided ? '旧说明已保留' : '已保存判定：${_relationKindLabel(relation.kind)}'}'
+              '${relation.note.trim().isEmpty ? '' : ' · ${relation.note}'}',
+              softWrap: true,
               style: const TextStyle(color: _muted, fontSize: 12),
             ),
+          ],
+          if (relation?.kind == CalendarRelationKind.legacyUndecided) ...[
             const SizedBox(height: 4),
-            Text(
-              '判定：${_conflictSummaryLabel(conflict)}',
-              style: TextStyle(
-                color: _conflictStatusColor(status),
-                fontWeight: FontWeight.w600,
-                fontSize: 12,
-              ),
-            ),
-            if (relation != null) ...[
-              const SizedBox(height: 5),
-              Text(
-                '${relation.kind == CalendarRelationKind.legacyUndecided ? '旧说明已保留' : '已保存判定：${_relationKindLabel(relation.kind)}'}'
-                '${relation.note.trim().isEmpty ? '' : ' · ${relation.note}'}',
-                softWrap: true,
-                style: const TextStyle(color: _muted, fontSize: 12),
-              ),
-            ],
-            if (relation?.kind == CalendarRelationKind.legacyUndecided) ...[
-              const SizedBox(height: 4),
-              const Text(
-                '旧说明已保留；当前按重叠默认显示冲突。',
-                style: TextStyle(color: _muted, fontSize: 11),
-              ),
-            ],
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: ValueKey(
-                  'calendar-relation-edit-${other.reference.identity.kind.name}-${other.reference.identity.ordinal}',
-                ),
-                onPressed: view.canWrite && !_actionBusy
-                    ? () => _editRelation(conflict, widget.controller)
-                    : null,
-                icon: const Icon(Icons.link_rounded),
-                label: Text(conflict.hasExplicitDecision ? '修改判定' : '确认判定'),
-              ),
+            const Text(
+              '旧说明已保留；当前按重叠默认显示冲突。',
+              style: TextStyle(color: _muted, fontSize: 11),
             ),
           ],
-        ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: ValueKey(
+                'calendar-relation-edit-${other.reference.identity.kind.name}-${other.reference.identity.ordinal}',
+              ),
+              onPressed: view.canWrite && !_actionBusy
+                  ? () => _editRelation(conflict, widget.controller)
+                  : null,
+              icon: const Icon(Icons.link_rounded),
+              label: Text(conflict.hasExplicitDecision ? '修改判定' : '确认判定'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2247,41 +2296,35 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
         ? relation.right
         : relation.left;
     final canWrite = view.canWrite && !_actionBusy;
-    return Card(
-      color: const Color(0xFFF8FAF9),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              relation.kind == CalendarRelationKind.legacyUndecided
-                  ? '旧说明已保留；未保存明确判断'
-                  : '已保存判定：${_relationKindLabel(relation.kind)}',
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '另一条${_kindLabel(other.kind)}安排；当前是否重叠以候选列表为准。',
-              style: const TextStyle(color: _muted, fontSize: 11),
-            ),
-            if (relation.note.trim().isNotEmpty) ...[
-              const SizedBox(height: 5),
-              Text(relation.note, softWrap: true),
-            ],
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                key: const ValueKey('calendar-relation-delete'),
-                onPressed: canWrite
-                    ? () => _confirmDeleteRelation(relation, widget.controller)
-                    : null,
-                icon: const Icon(Icons.link_off_rounded),
-                label: const Text('删除这条判定说明'),
-              ),
-            ),
+    return WorkspaceSection(
+      title: relation.kind == CalendarRelationKind.legacyUndecided
+          ? '旧说明已保留；未保存明确判断'
+          : '已保存判定：${_relationKindLabel(relation.kind)}',
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            '另一条${_kindLabel(other.kind)}安排；当前是否重叠以候选列表为准。',
+            style: const TextStyle(color: _muted, fontSize: 11),
+          ),
+          if (relation.note.trim().isNotEmpty) ...[
+            const SizedBox(height: 5),
+            Text(relation.note, softWrap: true),
           ],
-        ),
+          const SizedBox(height: 8),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('calendar-relation-delete'),
+              onPressed: canWrite
+                  ? () => _confirmDeleteRelation(relation, widget.controller)
+                  : null,
+              icon: const Icon(Icons.link_off_rounded),
+              label: const Text('删除这条判定说明'),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2291,7 +2334,7 @@ final class _CalendarWorkspacePageState extends State<CalendarWorkspacePage> {
     decoration: BoxDecoration(
       color: const Color(0xFFFFF6E6),
       border: Border.all(color: const Color(0xFFF0D9A8)),
-      borderRadius: BorderRadius.circular(12),
+      borderRadius: BorderRadius.circular(AppUi.radius),
     ),
     child: Row(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3408,37 +3451,35 @@ final class _EmptyState extends StatelessWidget {
   final bool busy;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (busy)
-              const SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              )
-            else
-              Icon(icon, size: 38, color: _green),
-            const SizedBox(height: 12),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: _muted, height: 1.45),
-            ),
-          ],
-        ),
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (busy)
+            const SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            )
+          else
+            Icon(icon, size: 38, color: _green),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            detail,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _muted, height: 1.45),
+          ),
+        ],
       ),
     ),
   );
@@ -3502,12 +3543,14 @@ final class _AcademicFactLine extends StatelessWidget {
     required this.value,
     this.tooltipValue,
     this.maxLines = 2,
+    this.emphasized = false,
   });
 
   final String label;
   final String value;
   final String? tooltipValue;
   final int maxLines;
+  final bool emphasized;
 
   @override
   Widget build(BuildContext context) => Tooltip(
@@ -3519,7 +3562,11 @@ final class _AcademicFactLine extends StatelessWidget {
         maxLines: maxLines,
         overflow: TextOverflow.ellipsis,
         softWrap: true,
-        style: const TextStyle(color: _muted, fontSize: 12, height: 1.4),
+        style: TextStyle(
+          color: emphasized ? AppUi.ink : _muted,
+          fontSize: emphasized ? 14 : 12,
+          height: 1.4,
+        ),
       ),
     ),
   );
@@ -3565,8 +3612,8 @@ final class _SmallTag extends StatelessWidget {
   );
 }
 
-const _green = Color(0xFF1F6B45);
-const _muted = Color(0xFF66736C);
+const _green = AppUi.accent;
+const _muted = AppUi.muted;
 
 enum _CalendarToolbarAction {
   allSources,

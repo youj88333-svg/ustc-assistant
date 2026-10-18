@@ -4,6 +4,7 @@ import 'package:ustc_assistant_m0/app/app_settings_page.dart';
 import 'package:ustc_assistant_m0/app/diagnostics_panel.dart';
 import 'package:ustc_assistant_m0/app/app_shell_contract.dart';
 import 'package:ustc_assistant_m0/app/maintenance_recovery_page.dart';
+import 'package:ustc_assistant_m0/app/product_app.dart';
 import 'package:ustc_assistant_m0/app/settings_contract.dart';
 import 'package:ustc_assistant_m0/core/agenda_contract.dart';
 import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
@@ -198,6 +199,7 @@ void main() {
         var logsActionCalls = 0;
         await tester.pumpWidget(
           MaterialApp(
+            theme: productTheme,
             home: Builder(
               builder: (context) => MediaQuery(
                 data: MediaQuery.of(
@@ -402,7 +404,9 @@ void main() {
         final knowledgeCard = find
             .ancestor(
               of: find.byKey(const ValueKey('settings-clear-knowledge')),
-              matching: find.byType(Card),
+              matching: find.byKey(
+                const ValueKey('settings-knowledge-section'),
+              ),
             )
             .first;
         expect(
@@ -577,6 +581,7 @@ void main() {
       var logsActionCalls = 0;
       await tester.pumpWidget(
         MaterialApp(
+          theme: productTheme,
           home: Builder(
             builder: (context) => MediaQuery(
               data: MediaQuery.of(
@@ -776,6 +781,7 @@ Future<void> _pumpSettings(
 }) async {
   await tester.pumpWidget(
     MaterialApp(
+      theme: productTheme,
       home: Scaffold(
         body: ApplicationSettingsPage(
           settings: settings,

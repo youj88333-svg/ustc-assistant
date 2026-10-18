@@ -7,6 +7,7 @@ import '../core/knowledge_contract.dart';
 import '../core/application_version.dart';
 import '../core/young_daily_sync_contract.dart';
 import 'app_shell_contract.dart';
+import 'app_design.dart';
 import 'settings_contract.dart';
 import 'source_settings_page.dart';
 
@@ -176,43 +177,14 @@ final class _ApplicationSettingsPageState
               scrollDirection: Axis.horizontal,
               child: Row(
                 children: [
-                  _sectionChip(
-                    _SettingsSection.sources,
-                    '来源',
-                    Icons.school_outlined,
-                  ),
-                  const SizedBox(width: 8),
+                  _sectionOption(_SettingsSection.sources, '来源'),
                   if (widget.agentBuilder != null)
-                    _sectionChip(
-                      _SettingsSection.agent,
-                      'Agent',
-                      Icons.auto_awesome_outlined,
-                    ),
-                  if (widget.agentBuilder != null) const SizedBox(width: 8),
+                    _sectionOption(_SettingsSection.agent, 'Agent'),
                   if (widget.remindersBuilder != null)
-                    _sectionChip(
-                      _SettingsSection.reminders,
-                      '晨报与提醒',
-                      Icons.notifications_active_outlined,
-                    ),
-                  if (widget.remindersBuilder != null) const SizedBox(width: 8),
-                  _sectionChip(
-                    _SettingsSection.display,
-                    '显示',
-                    Icons.tune_rounded,
-                  ),
-                  const SizedBox(width: 8),
-                  _sectionChip(
-                    _SettingsSection.dataPrivacy,
-                    '数据与隐私',
-                    Icons.shield_outlined,
-                  ),
-                  const SizedBox(width: 8),
-                  _sectionChip(
-                    _SettingsSection.about,
-                    '关于',
-                    Icons.info_outline,
-                  ),
+                    _sectionOption(_SettingsSection.reminders, '晨报与提醒'),
+                  _sectionOption(_SettingsSection.display, '显示'),
+                  _sectionOption(_SettingsSection.dataPrivacy, '数据与隐私'),
+                  _sectionOption(_SettingsSection.about, '关于'),
                 ],
               ),
             ),
@@ -273,15 +245,41 @@ final class _ApplicationSettingsPageState
     ),
   );
 
-  Widget _sectionChip(_SettingsSection section, String label, IconData icon) =>
-      ChoiceChip(
-        key: ValueKey('settings-section-${section.name}'),
-        selected: _section == section,
-        avatar: Icon(icon, size: 18),
-        label: Text(label),
-        materialTapTargetSize: MaterialTapTargetSize.padded,
-        onSelected: (_) => _selectSection(section),
-      );
+  Widget _sectionOption(_SettingsSection section, String label) {
+    final selected = _section == section;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: Semantics(
+        selected: selected,
+        child: IntrinsicWidth(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextButton(
+                key: ValueKey('settings-section-${section.name}'),
+                style: TextButton.styleFrom(
+                  foregroundColor: selected ? AppUi.accent : AppUi.ink,
+                  minimumSize: const Size(0, 48),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  tapTargetSize: MaterialTapTargetSize.padded,
+                  textStyle: TextStyle(
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
+                ),
+                onPressed: () => _selectSection(section),
+                child: Text(label),
+              ),
+              Container(
+                height: 2,
+                width: double.infinity,
+                color: selected ? AppUi.accent : Colors.transparent,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   Widget _displaySection(
     BuildContext context,
@@ -488,6 +486,7 @@ final class _ApplicationSettingsPageState
     final outcome = view.loadOutcome;
     final loading = view.knowledgeLoading;
     return _SettingsCard(
+      key: const ValueKey('settings-knowledge-section'),
       title: '精选资料',
       subtitle: '首批固定载入 7 项，仅管理本地资料；此处没有搜索或阅读入口。',
       child: Column(
@@ -962,6 +961,7 @@ final class _ApplicationSettingsPageState
 
 final class _SettingsCard extends StatelessWidget {
   const _SettingsCard({
+    super.key,
     required this.title,
     required this.child,
     this.subtitle,
@@ -974,30 +974,15 @@ final class _SettingsCard extends StatelessWidget {
   final Widget? footer;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            title,
-            style: Theme.of(
-              context,
-            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          if (subtitle != null) ...[
-            const SizedBox(height: 5),
-            Text(
-              subtitle!,
-              style: const TextStyle(color: _settingsMuted, height: 1.4),
-            ),
-          ],
-          const SizedBox(height: 12),
-          child,
-          if (footer != null) ...[const SizedBox(height: 10), footer!],
-        ],
-      ),
+  Widget build(BuildContext context) => WorkspaceSection(
+    title: title,
+    description: subtitle,
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        child,
+        if (footer != null) ...[const SizedBox(height: 10), footer!],
+      ],
     ),
   );
 }

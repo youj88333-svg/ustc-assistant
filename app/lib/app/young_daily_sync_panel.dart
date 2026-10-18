@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../core/contracts.dart';
 import '../core/young_daily_sync_contract.dart';
+import 'app_design.dart';
 
 /// Compact controls for the separately authorized daily Young calendar sync.
 final class YoungDailySyncPanel extends StatefulWidget {
@@ -177,39 +178,29 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
         ? _syncStartBlockedReason(_view)
         : null;
 
-    return Container(
+    return WorkspaceSection(
       key: const ValueKey('young-daily-sync-panel'),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.42),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: scheme.outlineVariant),
-      ),
+      title: '每日二课自动同步',
+      description:
+          '开启后，每天北京时间 06:00 后，应用在前台空闲时同步昨天起 31 天的二课个人日历（仅活动关联记录）。可使用已保存的学校密码，不消耗模型额度；应用退出后不会运行。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Text(
-            '每日二课自动同步',
-            style: Theme.of(
-              context,
-            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 4),
-          const Text(
-            '启用后，每天北京时间 06:00 后，应用在前台空闲时同步昨天起 31 天的二课个人日历（仅活动关联记录）。可使用已保存的学校密码，不消耗模型额度；应用退出后不会运行。',
-          ),
           Material(
             type: MaterialType.transparency,
             child: SwitchListTile.adaptive(
               key: const ValueKey('young-daily-sync-toggle'),
               contentPadding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
+              visualDensity: VisualDensity.standard,
               title: const Text('开启每日自动同步'),
               value: _view.enabled,
               onChanged: _settingEnabled ? null : _setEnabled,
             ),
           ),
-          Text(_rangeLabel(_view)),
+          Text(
+            _rangeLabel(_view),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
           const SizedBox(height: 3),
           Text(
             _view.lastSuccessAtUtc == null
@@ -223,7 +214,10 @@ final class _YoungDailySyncPanelState extends State<YoungDailySyncPanel> {
             ),
           ],
           const SizedBox(height: 4),
-          Text(_statusLabel(_view)),
+          Text(
+            _statusLabel(_view),
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
           if (!_view.configured) ...[
             const SizedBox(height: 3),
             Text(

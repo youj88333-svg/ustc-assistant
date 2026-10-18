@@ -7,6 +7,7 @@ import '../core/calendar_contract.dart';
 import 'calendar_display_style.dart';
 import 'calendar_task_band.dart';
 import 'calendar_teaching_axis.dart';
+import 'app_design.dart';
 import 'workspace_visibility.dart';
 
 final class CalendarWeekView extends StatelessWidget {
@@ -57,9 +58,13 @@ final class CalendarWeekView extends StatelessWidget {
         final availableWidth = constraints.maxWidth.isFinite
             ? constraints.maxWidth
             : baselineWidth;
-        final availableHeight = constraints.maxHeight.isFinite
+        final viewportHeight = constraints.maxHeight.isFinite
             ? constraints.maxHeight
             : 680.0;
+        // Keep the board usable when a keyboard or a short window leaves less
+        // room than its pinned headings. The outer viewport can then scroll
+        // through the bands without squeezing away their 48dp actions.
+        final availableHeight = math.max(240.0, viewportHeight);
         final mobile = isPhoneWorkspace(context) || availableWidth < 620;
         final textScale = MediaQuery.textScalerOf(context).scale(1);
         final gutterWidth = mobile
@@ -139,84 +144,92 @@ final class CalendarWeekView extends StatelessWidget {
         );
 
         return SingleChildScrollView(
-          key: const ValueKey('calendar-week-horizontal-scroll'),
-          scrollDirection: Axis.horizontal,
-          child: SizedBox(
-            width: contentWidth,
-            height: availableHeight,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                _dayHeadings(
-                  days,
-                  dayWidth: dayWidth,
-                  gutterWidth: gutterWidth,
-                  height: headingHeight,
-                  mobile: mobile,
-                ),
-                if (hasBands)
-                  SizedBox(
-                    height: bandViewportHeight,
+          key: const ValueKey('calendar-week-compact-height-scroll'),
+          primary: false,
+          physics: availableHeight > viewportHeight
+              ? const ClampingScrollPhysics()
+              : const NeverScrollableScrollPhysics(),
+          child: SingleChildScrollView(
+            key: const ValueKey('calendar-week-horizontal-scroll'),
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: contentWidth,
+              height: availableHeight,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _dayHeadings(
+                    days,
+                    dayWidth: dayWidth,
+                    gutterWidth: gutterWidth,
+                    height: headingHeight,
+                    mobile: mobile,
+                  ),
+                  if (hasBands)
+                    SizedBox(
+                      height: bandViewportHeight,
+                      child: SingleChildScrollView(
+                        key: const ValueKey('calendar-week-bands-scroll'),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (showAllDay)
+                              _compactBand(
+                                days,
+                                allDay,
+                                dayWidth: dayWidth,
+                                gutterWidth: gutterWidth,
+                                height: allDayHeight,
+                                label: '全天',
+                                textScale: textScale,
+                              ),
+                            if (showTasks)
+                              CalendarTaskBand(
+                                days: days,
+                                tasks: tasks,
+                                nowUtc: nowUtc,
+                                height: taskHeight,
+                                gutterWidth: gutterWidth,
+                                dayWidth: dayWidth,
+                                onSelectTask: onSelectTask,
+                                onOpenUnscheduledTasks: onOpenUnscheduledTasks,
+                                onOverflow: onTaskOverflow,
+                              ),
+                            if (showEarly)
+                              _compactBand(
+                                days,
+                                earlyMorning,
+                                dayWidth: dayWidth,
+                                gutterWidth: gutterWidth,
+                                height: earlyHeight,
+                                label: '凌晨 00:00–07:00',
+                                textScale: textScale,
+                                earlyMorning: true,
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (separatorHeight > 0)
+                    const Divider(height: 5, thickness: 1),
+                  Expanded(
                     child: SingleChildScrollView(
-                      key: const ValueKey('calendar-week-bands-scroll'),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (showAllDay)
-                            _compactBand(
-                              days,
-                              allDay,
-                              dayWidth: dayWidth,
-                              gutterWidth: gutterWidth,
-                              height: allDayHeight,
-                              label: '全天',
-                              textScale: textScale,
-                            ),
-                          if (showTasks)
-                            CalendarTaskBand(
-                              days: days,
-                              tasks: tasks,
-                              nowUtc: nowUtc,
-                              height: taskHeight,
-                              gutterWidth: gutterWidth,
-                              dayWidth: dayWidth,
-                              onSelectTask: onSelectTask,
-                              onOpenUnscheduledTasks: onOpenUnscheduledTasks,
-                              onOverflow: onTaskOverflow,
-                            ),
-                          if (showEarly)
-                            _compactBand(
-                              days,
-                              earlyMorning,
-                              dayWidth: dayWidth,
-                              gutterWidth: gutterWidth,
-                              height: earlyHeight,
-                              label: '凌晨 00:00–07:00',
-                              textScale: textScale,
-                              earlyMorning: true,
-                            ),
-                        ],
+                      key: const ValueKey('calendar-week-time-scroll'),
+                      child: SizedBox(
+                        height: axis.height,
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            _axisLabels(axis, gutterWidth),
+                            for (final day in days)
+                              _dayTimeline(day, dayWidth, axis),
+                          ],
+                        ),
                       ),
                     ),
                   ),
-                if (separatorHeight > 0) const Divider(height: 5, thickness: 1),
-                Expanded(
-                  child: SingleChildScrollView(
-                    key: const ValueKey('calendar-week-time-scroll'),
-                    child: SizedBox(
-                      height: axis.height,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          _axisLabels(axis, gutterWidth),
-                          for (final day in days)
-                            _dayTimeline(day, dayWidth, axis),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         );
@@ -257,9 +270,7 @@ final class CalendarWeekView extends StatelessWidget {
     final hasEntries = occurrences.isNotEmpty;
     final isToday = _sameDay(day, today);
     final fullDate = '${day.year}年${day.month}月${day.day}日';
-    final textColor = isToday
-        ? const Color(0xFF1F6B45)
-        : const Color(0xFF1D2922);
+    final textColor = isToday ? AppUi.accent : AppUi.ink;
     final label =
         '${_weekday(day.weekday)}，$fullDate'
         '${mobile && hasEntries ? '，打开当日日程列表' : ''}';
@@ -282,8 +293,8 @@ final class CalendarWeekView extends StatelessWidget {
           child: Container(
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: isToday ? const Color(0xFFE5F1E9) : Colors.white,
-              border: const Border(right: BorderSide(color: Color(0xFFE3E9E5))),
+              color: isToday ? AppUi.selection : AppUi.canvas,
+              border: const Border(right: BorderSide(color: AppUi.line)),
             ),
             child: mobile
                 ? Column(
@@ -298,6 +309,7 @@ final class CalendarWeekView extends StatelessWidget {
                             overflow: TextOverflow.clip,
                             style: TextStyle(
                               fontSize: 11,
+                              height: 1.2,
                               fontWeight: FontWeight.w700,
                               color: textColor,
                             ),
@@ -318,6 +330,7 @@ final class CalendarWeekView extends StatelessWidget {
                         overflow: TextOverflow.clip,
                         style: TextStyle(
                           fontSize: 10,
+                          height: 1.2,
                           fontWeight: FontWeight.w600,
                           color: textColor,
                         ),
@@ -370,7 +383,7 @@ final class CalendarWeekView extends StatelessWidget {
                 textAlign: TextAlign.center,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
-                style: TextStyle(fontSize: 9, color: const Color(0xFF66736C)),
+                style: TextStyle(fontSize: 9, color: AppUi.muted),
               ),
             ),
           ),
@@ -381,7 +394,7 @@ final class CalendarWeekView extends StatelessWidget {
             child: Container(
               decoration: const BoxDecoration(
                 color: Colors.white,
-                border: Border(right: BorderSide(color: Color(0xFFE3E9E5))),
+                border: Border(right: BorderSide(color: AppUi.line)),
               ),
               child: _bandItems(
                 label,
@@ -549,7 +562,7 @@ final class CalendarWeekView extends StatelessWidget {
       child: DecoratedBox(
         decoration: const BoxDecoration(
           color: Colors.white,
-          border: Border(right: BorderSide(color: Color(0xFFE3E9E5))),
+          border: Border(right: BorderSide(color: AppUi.line)),
         ),
         child: Stack(
           clipBehavior: Clip.hardEdge,
@@ -564,7 +577,7 @@ final class CalendarWeekView extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: _bandColor(band),
                     border: const Border(
-                      bottom: BorderSide(color: Color(0xFFE8ECE9), width: .7),
+                      bottom: BorderSide(color: AppUi.line, width: .7),
                     ),
                   ),
                 ),
@@ -602,9 +615,9 @@ final class CalendarWeekView extends StatelessWidget {
   }
 
   Color _bandColor(TeachingAxisBand band) {
-    if (band.period != null) return const Color(0xFFFCFDFC);
+    if (band.period != null) return AppUi.canvas;
     final duration = band.endMinute - band.startMinute;
-    return duration >= 30 ? const Color(0xFFF2F5F3) : const Color(0xFFF9FAF9);
+    return duration >= 30 ? AppUi.subtle : AppUi.canvas;
   }
 
   Widget _eventTile(
@@ -892,11 +905,7 @@ final class CalendarWeekView extends StatelessWidget {
       ));
     }
     if (hasNotConflict) {
-      statuses.add((
-        tooltip: '已判定不冲突',
-        shortLabel: '否',
-        color: const Color(0xFF2F6848),
-      ));
+      statuses.add((tooltip: '已判定不冲突', shortLabel: '否', color: AppUi.accent));
     }
     if (occurrence.presence == AgendaPresence.missingWithinScope) {
       statuses.add((
@@ -909,29 +918,25 @@ final class CalendarWeekView extends StatelessWidget {
       statuses.add((
         tooltip: '当前记录不在来源观察范围内',
         shortLabel: '外',
-        color: const Color(0xFF66736C),
+        color: AppUi.muted,
       ));
     }
     if (occurrence.reference.identity.kind == CalendarKind.planBlock) {
-      statuses.add((
-        tooltip: '类别：任务时间块',
-        shortLabel: '块',
-        color: const Color(0xFF66736C),
-      ));
+      statuses.add((tooltip: '类别：任务时间块', shortLabel: '块', color: AppUi.muted));
     }
     switch (occurrence.planBlockStatus) {
       case PlanBlockStatus.planned:
         statuses.add((
           tooltip: '时间块状态：待执行',
           shortLabel: '待',
-          color: const Color(0xFF66736C),
+          color: AppUi.muted,
         ));
         break;
       case PlanBlockStatus.done:
         statuses.add((
           tooltip: '时间块状态：已执行',
           shortLabel: '完',
-          color: const Color(0xFF2F6848),
+          color: AppUi.accent,
         ));
         break;
       case PlanBlockStatus.skipped:
@@ -949,7 +954,7 @@ final class CalendarWeekView extends StatelessWidget {
         statuses.add((
           tooltip: '关联任务状态：进行中',
           shortLabel: '任',
-          color: const Color(0xFF2F6848),
+          color: AppUi.accent,
         ));
         break;
       case TaskStatus.blocked:
@@ -963,14 +968,14 @@ final class CalendarWeekView extends StatelessWidget {
         statuses.add((
           tooltip: '关联任务状态：已完成',
           shortLabel: '任✓',
-          color: const Color(0xFF2F6848),
+          color: AppUi.accent,
         ));
         break;
       case TaskStatus.cancelled:
         statuses.add((
           tooltip: '关联任务状态：已取消',
           shortLabel: '销',
-          color: const Color(0xFF66736C),
+          color: AppUi.muted,
         ));
         break;
       case null:

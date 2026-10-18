@@ -7,13 +7,14 @@ import '../core/agent_discussion_contract.dart';
 import '../core/calendar_contract.dart';
 import '../core/reminder_contract.dart';
 import 'calendar_display_style.dart';
+import 'app_design.dart';
 import 'reminder_editor.dart';
 import 'task_workspace_contract.dart';
 import 'task_workspace_editor.dart';
 
-const _green = Color(0xFF2F6848);
-const _muted = Color(0xFF66736C);
-const _line = Color(0xFFE3E9E5);
+const _green = AppUi.accent;
+const _muted = AppUi.muted;
+const _line = AppUi.line;
 
 /// Task and PlanBlock UI. The port owns reads, writes, busy state and refresh.
 final class TaskWorkspacePage extends StatefulWidget {
@@ -234,11 +235,11 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
                       icon: const Icon(Icons.close_rounded, size: 18),
                     ),
               border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(9),
+                borderRadius: BorderRadius.circular(AppUi.radius),
                 borderSide: const BorderSide(color: _line),
               ),
               enabledBorder: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(9),
+                borderRadius: BorderRadius.circular(AppUi.radius),
                 borderSide: const BorderSide(color: _line),
               ),
               contentPadding: const EdgeInsets.symmetric(
@@ -330,14 +331,14 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
     }
     final prefixCount = window.truncated ? 2 : 1;
     final contentCount = window.items.isEmpty ? 1 : window.items.length;
-    return Card(
+    return Material(
       key: const ValueKey('task-workspace-list-card'),
-      clipBehavior: Clip.antiAlias,
+      color: AppUi.canvas,
       child: ListView.separated(
         key: const ValueKey('task-workspace-list'),
         padding: const EdgeInsets.fromLTRB(7, 4, 7, 8),
         itemCount: prefixCount + contentCount,
-        separatorBuilder: (_, _) => const SizedBox(height: 4),
+        separatorBuilder: (_, _) => const Divider(height: 1, color: AppUi.line),
         itemBuilder: (context, index) {
           if (index == 0) {
             return Padding(
@@ -438,49 +439,65 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
       if (deadline == null) '无截止',
       '${task.blockCount} 个时间块',
     ].join(' · ');
+    void selectTask() => _selectTask(widget.port, task.reference);
     return Material(
-      color: selected ? const Color(0xFFE8F1EB) : Colors.white,
-      borderRadius: BorderRadius.circular(9),
+      color: selected ? AppUi.selection : AppUi.canvas,
       child: InkWell(
         key: ValueKey('task-tile-${task.reference.localId}'),
-        borderRadius: BorderRadius.circular(9),
-        onTap: () => _selectTask(widget.port, task.reference),
-        child: Container(
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: selected ? const Color(0xFF9DB9A6) : _line,
+        excludeFromSemantics: true,
+        onTap: selectTask,
+        child: Semantics(
+          key: ValueKey('task-tile-semantics-${task.reference.localId}'),
+          button: true,
+          selected: selected,
+          onTap: selectTask,
+          child: Container(
+            constraints: const BoxConstraints(minHeight: 64),
+            decoration: BoxDecoration(
+              border: Border(
+                left: BorderSide(
+                  color: selected ? AppUi.accent : Colors.transparent,
+                  width: 3,
+                ),
+              ),
             ),
-            borderRadius: BorderRadius.circular(9),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Tooltip(
-                message: task.draft.title,
-                child: Text(
-                  task.draft.title,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    color: calendarColorsForTitle(task.draft.title).ink,
-                    fontWeight: FontWeight.w700,
-                    height: 1.3,
+            padding: const EdgeInsets.fromLTRB(9, 9, 10, 9),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Tooltip(
+                        message: task.draft.title,
+                        child: Text(
+                          task.draft.title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: calendarColorsForTitle(task.draft.title).ink,
+                            fontWeight: FontWeight.w700,
+                            height: 1.3,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: overdue ? const Color(0xFF9B2C2C) : _muted,
+                          fontSize: 11,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: overdue ? const Color(0xFF9B2C2C) : _muted,
-                  fontSize: 11,
-                  height: 1.35,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -533,9 +550,9 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
         (left, right) =>
             left.draft.startsAtUtc.compareTo(right.draft.startsAtUtc),
       );
-    return Card(
+    return Material(
       key: const ValueKey('task-workspace-detail-card'),
-      clipBehavior: Clip.antiAlias,
+      color: AppUi.canvas,
       child: Column(
         children: [
           if (compact)
@@ -764,88 +781,68 @@ final class _TaskWorkspacePageState extends State<TaskWorkspacePage> {
         deadline != null &&
         !block.draft.startsAtUtc.isAfter(deadline) &&
         block.draft.endsAtUtc.isAfter(deadline);
-    return Container(
+    return WorkspaceSection(
       key: ValueKey('task-block-${block.reference.identity.localId}'),
-      padding: const EdgeInsets.fromLTRB(11, 10, 7, 9),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFAFBFA),
-        border: Border.all(color: _line),
-        borderRadius: BorderRadius.circular(10),
+      title: _blockTimeLabel(block.draft),
+      padding: const EdgeInsets.symmetric(vertical: 12),
+      trailing: PopupMenuButton<_BlockAction>(
+        key: ValueKey('task-block-actions-${block.reference.identity.localId}'),
+        tooltip: '时间块操作',
+        enabled: _canWrite(view),
+        onSelected: (action) {
+          switch (action) {
+            case _BlockAction.edit:
+              unawaited(_editBlock(widget.port, detail, block));
+              break;
+            case _BlockAction.delete:
+              unawaited(_confirmDeleteBlock(widget.port, block));
+              break;
+          }
+        },
+        itemBuilder: (context) => [
+          const PopupMenuItem(
+            value: _BlockAction.edit,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.edit_calendar_outlined),
+              title: Text('移动或编辑'),
+            ),
+          ),
+          const PopupMenuDivider(),
+          for (final status in PlanBlockStatus.values)
+            if (status != block.status)
+              PopupMenuItem(
+                onTap: () => WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) {
+                    unawaited(_setBlockStatus(widget.port, block, status));
+                  }
+                }),
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(_blockStatusIcon(status)),
+                  title: Text('设为${_blockStatusLabel(status)}'),
+                ),
+              ),
+          const PopupMenuDivider(),
+          const PopupMenuItem(
+            value: _BlockAction.delete,
+            child: ListTile(
+              dense: true,
+              contentPadding: EdgeInsets.zero,
+              leading: Icon(Icons.delete_outline_rounded),
+              title: Text('删除时间块…'),
+            ),
+          ),
+        ],
+        icon: const Icon(Icons.more_vert_rounded, size: 20),
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(
-                child: Text(
-                  _blockTimeLabel(block.draft),
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
-              ),
-              PopupMenuButton<_BlockAction>(
-                key: ValueKey(
-                  'task-block-actions-${block.reference.identity.localId}',
-                ),
-                tooltip: '时间块操作',
-                enabled: _canWrite(view),
-                onSelected: (action) {
-                  switch (action) {
-                    case _BlockAction.edit:
-                      unawaited(_editBlock(widget.port, detail, block));
-                      break;
-                    case _BlockAction.delete:
-                      unawaited(_confirmDeleteBlock(widget.port, block));
-                      break;
-                  }
-                },
-                itemBuilder: (context) => [
-                  const PopupMenuItem(
-                    value: _BlockAction.edit,
-                    child: ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.edit_calendar_outlined),
-                      title: Text('移动或编辑'),
-                    ),
-                  ),
-                  const PopupMenuDivider(),
-                  for (final status in PlanBlockStatus.values)
-                    if (status != block.status)
-                      PopupMenuItem(
-                        onTap: () =>
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              if (mounted) {
-                                unawaited(
-                                  _setBlockStatus(widget.port, block, status),
-                                );
-                              }
-                            }),
-                        child: ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          leading: Icon(_blockStatusIcon(status)),
-                          title: Text('设为${_blockStatusLabel(status)}'),
-                        ),
-                      ),
-                  const PopupMenuDivider(),
-                  const PopupMenuItem(
-                    value: _BlockAction.delete,
-                    child: ListTile(
-                      dense: true,
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(Icons.delete_outline_rounded),
-                      title: Text('删除时间块…'),
-                    ),
-                  ),
-                ],
-                icon: const Icon(Icons.more_vert_rounded, size: 20),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 42),
-              ),
-            ],
-          ),
           Wrap(
             spacing: 5,
             runSpacing: 5,
@@ -1258,8 +1255,8 @@ final class _ToolbarButton extends StatelessWidget {
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
     decoration: BoxDecoration(
       border: Border.all(color: _line),
-      borderRadius: BorderRadius.circular(9),
-      color: Colors.white,
+      borderRadius: BorderRadius.circular(AppUi.radius),
+      color: AppUi.canvas,
     ),
     child: Row(
       mainAxisSize: MainAxisSize.min,
@@ -1341,13 +1338,8 @@ final class _InlineNote extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.all(11),
-    decoration: BoxDecoration(
-      color: const Color(0xFFF6F8F6),
-      border: Border.all(color: _line),
-      borderRadius: BorderRadius.circular(9),
-    ),
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 8),
     child: Text(text, style: const TextStyle(color: _muted, height: 1.4)),
   );
 }
@@ -1367,38 +1359,36 @@ final class _EmptyTaskPanel extends StatelessWidget {
   final Widget? leading;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(22),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (leading != null) ...[leading!, const SizedBox(height: 8)],
-            if (busy)
-              const SizedBox(
-                width: 32,
-                height: 32,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              )
-            else
-              Icon(icon, size: 38, color: _green),
-            const SizedBox(height: 11),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-            ),
-            const SizedBox(height: 5),
-            Text(
-              detail,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: _muted, height: 1.45),
-            ),
-          ],
-        ),
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(22),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (leading != null) ...[leading!, const SizedBox(height: 8)],
+          if (busy)
+            const SizedBox(
+              width: 32,
+              height: 32,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
+            )
+          else
+            Icon(icon, size: 38, color: _green),
+          const SizedBox(height: 11),
+          Text(
+            title,
+            textAlign: TextAlign.center,
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            detail,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _muted, height: 1.45),
+          ),
+        ],
       ),
     ),
   );
@@ -1410,24 +1400,15 @@ final class _TaskStatusLine extends StatelessWidget {
   final String text;
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-    decoration: BoxDecoration(
-      color: const Color(0xFFF5F7F5),
-      borderRadius: BorderRadius.circular(8),
-    ),
-    child: Row(
-      children: [
-        Icon(icon, size: 15, color: _muted),
-        const SizedBox(width: 6),
-        Expanded(
-          child: Text(
-            text,
-            style: const TextStyle(color: _muted, fontSize: 12),
-          ),
-        ),
-      ],
-    ),
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(icon, size: 15, color: _muted),
+      const SizedBox(width: 6),
+      Expanded(
+        child: Text(text, style: const TextStyle(color: _muted, fontSize: 12)),
+      ),
+    ],
   );
 }
 
@@ -1436,7 +1417,7 @@ Widget _messageCard(String text, {required IconData icon}) => Container(
   decoration: BoxDecoration(
     color: const Color(0xFFFFF0DA),
     border: Border.all(color: const Color(0xFFF0DDB7)),
-    borderRadius: BorderRadius.circular(8),
+    borderRadius: BorderRadius.circular(AppUi.radius),
   ),
   child: Row(
     children: [

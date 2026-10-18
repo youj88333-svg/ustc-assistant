@@ -7,6 +7,7 @@ import 'agent_workspace_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_permission_contract.dart';
+import 'app_design.dart';
 
 const _settingsMuted = Color(0xFF66736C);
 const _settingsGreen = Color(0xFF1F6B45);
@@ -405,300 +406,315 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           selectedModel != null &&
           (keySaved || view.pendingKeyProvided || _key.text.isNotEmpty);
 
-      return ListView(
-        key: const ValueKey('agent-settings-panel'),
-        padding: const EdgeInsets.fromLTRB(4, 4, 4, 20),
-        children: [
-          _SettingsCard(
-            title: '学校模型服务',
-            subtitle: '服务地址由应用固定管理；只读查询按本次问题需要调用。',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const _FixedServiceRow(),
-                const SizedBox(height: 14),
-                TextField(
-                  key: const ValueKey('agent-settings-key'),
-                  controller: _key,
-                  obscureText: !_showKey,
-                  enableSuggestions: false,
-                  autocorrect: false,
-                  decoration: InputDecoration(
-                    labelText: '模型 Key',
-                    hintText: keySaved ? '留空以使用已保存的 Key' : '输入模型 Key',
-                    helperText: keySaved
-                        ? '已保存的 Key 不会回填到此处。'
-                        : '输入内容只在本次页面操作中暂存。',
-                    suffixIcon: IconButton(
-                      tooltip: _showKey ? '隐藏 Key' : '显示 Key',
-                      onPressed: () => setState(() => _showKey = !_showKey),
-                      icon: Icon(
-                        _showKey ? Icons.visibility_off : Icons.visibility,
-                      ),
-                    ),
-                  ),
-                  onChanged: (_) => setState(() {}),
-                ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFF5F7F6),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE3E9E5)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        '发送前说明',
-                        style: TextStyle(fontWeight: FontWeight.w700),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到学校模型服务。图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。',
-                        style: TextStyle(color: _settingsMuted, height: 1.45),
-                      ),
-                      Material(
-                        color: Colors.transparent,
-                        child: CheckboxListTile(
-                          key: const ValueKey('agent-settings-consent'),
-                          contentPadding: EdgeInsets.zero,
-                          value: consent,
-                          controlAffinity: ListTileControlAffinity.leading,
-                          title: const Text('我已了解并同意按上述说明发送必要内容'),
-                          onChanged: portBusy
-                              ? null
-                              : (value) =>
-                                    unawaited(_setConsent(value ?? false)),
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
+          child: ListView(
+            key: const ValueKey('agent-settings-panel'),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            children: [
+              _SettingsCard(
+                title: '学校模型服务',
+                subtitle: '服务地址由应用固定管理；只读查询按本次问题需要调用。',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    const _FixedServiceRow(),
+                    const SizedBox(height: 14),
+                    TextField(
+                      key: const ValueKey('agent-settings-key'),
+                      controller: _key,
+                      obscureText: !_showKey,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: '模型 Key',
+                        hintText: keySaved ? '留空以使用已保存的 Key' : '输入模型 Key',
+                        helperText: keySaved
+                            ? '已保存的 Key 不会回填到此处。'
+                            : '输入内容只在本次页面操作中暂存。',
+                        suffixIcon: IconButton(
+                          tooltip: _showKey ? '隐藏 Key' : '显示 Key',
+                          onPressed: () => setState(() => _showKey = !_showKey),
+                          icon: Icon(
+                            _showKey ? Icons.visibility_off : Icons.visibility,
+                          ),
                         ),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '发送前说明',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到学校模型服务。图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。',
+                          style: TextStyle(color: _settingsMuted, height: 1.45),
+                        ),
+                        Material(
+                          color: Colors.transparent,
+                          child: CheckboxListTile(
+                            key: const ValueKey('agent-settings-consent'),
+                            contentPadding: EdgeInsets.zero,
+                            value: consent,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('我已了解并同意按上述说明发送必要内容'),
+                            onChanged: portBusy
+                                ? null
+                                : (value) =>
+                                      unawaited(_setConsent(value ?? false)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const ValueKey('agent-settings-load-models'),
+                          onPressed: canLoad
+                              ? () => _loadModels(consent)
+                              : null,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('获取模型'),
+                        ),
+                        FilledButton.icon(
+                          key: const ValueKey('agent-settings-verify-save'),
+                          onPressed: canVerify
+                              ? () => _verifyAndSave(consent, selectedModel)
+                              : null,
+                          icon: const Icon(Icons.verified_outlined),
+                          label: const Text('验证并保存'),
+                        ),
+                        if (keySaved)
+                          TextButton.icon(
+                            key: const ValueKey('agent-settings-delete-key'),
+                            onPressed: portBusy ? null : _deleteKey,
+                            icon: const Icon(Icons.delete_outline_rounded),
+                            label: const Text('删除 Key'),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      key: const ValueKey('agent-settings-model'),
+                      isExpanded: true,
+                      initialValue: selectedModel,
+                      decoration: const InputDecoration(
+                        labelText: '模型',
+                        helperText: '从服务返回或本机已保存的模型中选择。',
+                      ),
+                      items: [
+                        for (final model in models)
+                          DropdownMenuItem(
+                            value: model,
+                            child: Text(
+                              model,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: portBusy || models.isEmpty
+                          ? null
+                          : (value) => setState(() => _selectedModel = value),
+                    ),
+                    if (view.phase != AgentPhase.idle &&
+                        view.phase != AgentPhase.closed) ...[
+                      const SizedBox(height: 10),
+                      _PhaseNotice(phase: view.phase),
+                    ],
+                    if (view.pendingKeyProvided) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        '模型目录已获取，可以继续选择模型并验证设置。',
+                        style: TextStyle(color: _settingsMuted),
                       ),
                     ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 8,
-                  children: [
-                    OutlinedButton.icon(
-                      key: const ValueKey('agent-settings-load-models'),
-                      onPressed: canLoad ? () => _loadModels(consent) : null,
-                      icon: const Icon(Icons.refresh_rounded),
-                      label: const Text('获取模型'),
-                    ),
-                    FilledButton.icon(
-                      key: const ValueKey('agent-settings-verify-save'),
-                      onPressed: canVerify
-                          ? () => _verifyAndSave(consent, selectedModel)
-                          : null,
-                      icon: const Icon(Icons.verified_outlined),
-                      label: const Text('验证并保存'),
-                    ),
-                    if (keySaved)
-                      TextButton.icon(
-                        key: const ValueKey('agent-settings-delete-key'),
-                        onPressed: portBusy ? null : _deleteKey,
-                        icon: const Icon(Icons.delete_outline_rounded),
-                        label: const Text('删除 Key'),
+                    if (_message != null || view.failure != null) ...[
+                      const SizedBox(height: 10),
+                      _SettingsNotice(
+                        message: _message ?? _failureText(view.failure!),
+                        isError:
+                            _messageIsError ||
+                            (_message == null && view.failure != null),
                       ),
+                    ],
                   ],
                 ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  key: const ValueKey('agent-settings-model'),
-                  isExpanded: true,
-                  initialValue: selectedModel,
-                  decoration: const InputDecoration(
-                    labelText: '模型',
-                    helperText: '从服务返回或本机已保存的模型中选择。',
-                  ),
-                  items: [
-                    for (final model in models)
-                      DropdownMenuItem(
-                        value: model,
-                        child: Text(
-                          model,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                  ],
-                  onChanged: portBusy || models.isEmpty
-                      ? null
-                      : (value) => setState(() => _selectedModel = value),
+              ),
+              const SizedBox(height: 14),
+              if (preferencesPort != null) ...[
+                _SettingsCard(
+                  title: '时间规划偏好',
+                  subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
+                  child: _PlanningPreferencesEditor(port: preferencesPort),
                 ),
-                if (view.phase != AgentPhase.idle &&
-                    view.phase != AgentPhase.closed) ...[
-                  const SizedBox(height: 10),
-                  _PhaseNotice(phase: view.phase),
-                ],
-                if (view.pendingKeyProvided) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    '模型目录已获取，可以继续选择模型并验证设置。',
-                    style: TextStyle(color: _settingsMuted),
-                  ),
-                ],
-                if (_message != null || view.failure != null) ...[
-                  const SizedBox(height: 10),
-                  _SettingsNotice(
-                    message: _message ?? _failureText(view.failure!),
-                    isError:
-                        _messageIsError ||
-                        (_message == null && view.failure != null),
-                  ),
-                ],
+                const SizedBox(height: 14),
               ],
-            ),
-          ),
-          const SizedBox(height: 14),
-          if (preferencesPort != null) ...[
-            _SettingsCard(
-              title: '时间规划偏好',
-              subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
-              child: _PlanningPreferencesEditor(port: preferencesPort),
-            ),
-            const SizedBox(height: 14),
-          ],
-          if (permissionPort != null) ...[
-            _SettingsCard(
-              title: '已记住的操作授权',
-              subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  if (_permissionsLoading) ...[
-                    const LinearProgressIndicator(),
-                    const SizedBox(height: 8),
-                    const Text(
-                      '正在读取授权…',
-                      style: TextStyle(color: _settingsMuted),
-                    ),
-                  ],
-                  if (_permissionsError != null) ...[
-                    Text(
-                      _permissionsError!,
-                      key: const ValueKey('agent-permissions-error'),
-                      style: const TextStyle(color: Color(0xFF9B2C2C)),
-                    ),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        key: const ValueKey('agent-permissions-reload'),
-                        onPressed:
-                            _permissionsLoading ||
-                                _revokingPermissionKey != null
-                            ? null
-                            : () => unawaited(
-                                _readActionPermissions(
-                                  permissionPort,
-                                  _permissionGeneration,
-                                ),
-                              ),
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('重新读取'),
-                      ),
-                    ),
-                  ] else if (!_permissionsLoading &&
-                      _actionPermissions.isEmpty) ...[
-                    const Text(
-                      '尚未记住任何操作授权。',
-                      key: ValueKey('agent-permissions-empty'),
-                      style: TextStyle(color: _settingsMuted),
-                    ),
-                  ],
-                  for (final reference in _actionPermissions)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.verified_user_outlined,
-                            color: _settingsGreen,
-                            size: 19,
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              reference.category.label,
-                              key: ValueKey(
-                                'agent-permission-${_permissionKey(reference)}',
-                              ),
-                            ),
-                          ),
-                          TextButton(
-                            key: ValueKey(
-                              'agent-permission-revoke-${_permissionKey(reference)}',
-                            ),
+              if (permissionPort != null) ...[
+                _SettingsCard(
+                  title: '已记住的操作授权',
+                  subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_permissionsLoading) ...[
+                        const LinearProgressIndicator(),
+                        const SizedBox(height: 8),
+                        const Text(
+                          '正在读取授权…',
+                          style: TextStyle(color: _settingsMuted),
+                        ),
+                      ],
+                      if (_permissionsError != null) ...[
+                        Text(
+                          _permissionsError!,
+                          key: const ValueKey('agent-permissions-error'),
+                          style: const TextStyle(color: Color(0xFF9B2C2C)),
+                        ),
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            key: const ValueKey('agent-permissions-reload'),
                             onPressed:
                                 _permissionsLoading ||
                                     _revokingPermissionKey != null
                                 ? null
                                 : () => unawaited(
-                                    _revokeActionPermission(reference),
+                                    _readActionPermissions(
+                                      permissionPort,
+                                      _permissionGeneration,
+                                    ),
                                   ),
-                            child: Text(
-                              _revokingPermissionKey ==
-                                      _permissionKey(reference)
-                                  ? '正在撤销…'
-                                  : '撤销',
-                            ),
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('重新读取'),
                           ),
-                        ],
-                      ),
-                    ),
-                  if (_permissionsError == null)
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        key: const ValueKey('agent-permissions-refresh'),
-                        onPressed:
-                            _permissionsLoading ||
-                                _revokingPermissionKey != null
-                            ? null
-                            : () => unawaited(
-                                _readActionPermissions(
-                                  permissionPort,
-                                  _permissionGeneration,
+                        ),
+                      ] else if (!_permissionsLoading &&
+                          _actionPermissions.isEmpty) ...[
+                        const Text(
+                          '尚未记住任何操作授权。',
+                          key: ValueKey('agent-permissions-empty'),
+                          style: TextStyle(color: _settingsMuted),
+                        ),
+                      ],
+                      for (final reference in _actionPermissions)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.verified_user_outlined,
+                                color: _settingsGreen,
+                                size: 19,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  reference.category.label,
+                                  key: ValueKey(
+                                    'agent-permission-${_permissionKey(reference)}',
+                                  ),
                                 ),
                               ),
-                        icon: const Icon(Icons.refresh_rounded),
-                        label: const Text('刷新授权列表'),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-          ],
-          _SettingsCard(
-            title: '能力状态',
-            subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                              TextButton(
+                                key: ValueKey(
+                                  'agent-permission-revoke-${_permissionKey(reference)}',
+                                ),
+                                onPressed:
+                                    _permissionsLoading ||
+                                        _revokingPermissionKey != null
+                                    ? null
+                                    : () => unawaited(
+                                        _revokeActionPermission(reference),
+                                      ),
+                                child: Text(
+                                  _revokingPermissionKey ==
+                                          _permissionKey(reference)
+                                      ? '正在撤销…'
+                                      : '撤销',
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      if (_permissionsError == null)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            key: const ValueKey('agent-permissions-refresh'),
+                            onPressed:
+                                _permissionsLoading ||
+                                    _revokingPermissionKey != null
+                                ? null
+                                : () => unawaited(
+                                    _readActionPermissions(
+                                      permissionPort,
+                                      _permissionGeneration,
+                                    ),
+                                  ),
+                            icon: const Icon(Icons.refresh_rounded),
+                            label: const Text('刷新授权列表'),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+              ],
+              _SettingsCard(
+                title: '能力状态',
+                subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
+                child: ExpansionTile(
+                  key: const ValueKey('agent-settings-capability-details'),
+                  tilePadding: EdgeInsets.zero,
+                  title: const Text('查看能力状态'),
                   children: [
-                    _CapabilityChip(label: '文本', enabled: report.text),
-                    _CapabilityChip(label: '流式', enabled: report.streaming),
-                    _CapabilityChip(label: '工具调用', enabled: report.toolCall),
-                    _CapabilityChip(label: '工具结果', enabled: report.toolResult),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            _CapabilityChip(label: '文本', enabled: report.text),
+                            _CapabilityChip(
+                              label: '流式',
+                              enabled: report.streaming,
+                            ),
+                            _CapabilityChip(
+                              label: '工具调用',
+                              enabled: report.toolCall,
+                            ),
+                            _CapabilityChip(
+                              label: '工具结果',
+                              enabled: report.toolResult,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        OutlinedButton.icon(
+                          key: const ValueKey('agent-settings-copy-summary'),
+                          onPressed: _pending ? null : _copySummary,
+                          icon: const Icon(Icons.copy_rounded),
+                          label: const Text('复制安全能力摘要'),
+                        ),
+                      ],
+                    ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  key: const ValueKey('agent-settings-copy-summary'),
-                  onPressed: _pending ? null : _copySummary,
-                  icon: const Icon(Icons.copy_rounded),
-                  label: const Text('复制安全能力摘要'),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       );
     },
   );
@@ -744,21 +760,8 @@ final class _SettingsCard extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 4),
-          Text(subtitle, style: const TextStyle(color: _settingsMuted)),
-          const SizedBox(height: 14),
-          child,
-        ],
-      ),
-    ),
-  );
+  Widget build(BuildContext context) =>
+      WorkspaceSection(title: title, description: subtitle, child: child);
 }
 
 final class _PlanningPreferencesEditor extends StatefulWidget {

@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 
 import '../core/diagnostics_contract.dart';
 import '../platform/android_file_access.dart';
+import 'app_design.dart';
 
 typedef DiagnosticLogSaver = Future<bool> Function(String contents);
 
@@ -173,86 +174,81 @@ final class _DiagnosticsPanelState extends State<DiagnosticsPanel> {
   }
 
   @override
-  Widget build(BuildContext context) => Card(
-    child: Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('本地诊断日志', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
-          const Text(
-            '日志只保存在本地，最近 7 天最多 4 段、每段 256 KiB（合计 1 MiB）；每次导出最多 1000 条。',
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            '内容限于固定事件、阶段、工具类别、结果、错误码、计数和耗时等安全字段；不含账号、密码、模型 Key 或私人对话正文。不会自动上传。',
-          ),
-          const SizedBox(height: 12),
-          Semantics(
-            key: const ValueKey('diagnostics-health'),
-            label:
-                '日志${_view.available ? '可用' : '不可用'}，丢弃 ${_view.dropped} 条，非法 ${_view.invalid} 条',
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('状态：${_view.available ? '可用' : '不可用'}'),
-                const SizedBox(height: 4),
-                Text('丢弃记录：${_view.dropped}　非法记录：${_view.invalid}'),
-              ],
-            ),
-          ),
-          if (_notice != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _notice!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
+  Widget build(BuildContext context) => WorkspaceSection(
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text('本地诊断日志', style: Theme.of(context).textTheme.titleMedium),
+        const SizedBox(height: 8),
+        const Text('日志只保存在本地，最近 7 天最多 4 段、每段 256 KiB（合计 1 MiB）；每次导出最多 1000 条。'),
+        const SizedBox(height: 6),
+        const Text(
+          '内容限于固定事件、阶段、工具类别、结果、错误码、计数和耗时等安全字段；不含账号、密码、模型 Key 或私人对话正文。不会自动上传。',
+        ),
+        const SizedBox(height: 12),
+        Semantics(
+          key: const ValueKey('diagnostics-health'),
+          label:
+              '日志${_view.available ? '可用' : '不可用'}，丢弃 ${_view.dropped} 条，非法 ${_view.invalid} 条',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              DiagnosticsExportButton(
-                diagnostics: widget.diagnostics,
-                save: widget.save,
-              ),
-              OutlinedButton.icon(
-                key: const ValueKey('diagnostics-refresh-button'),
-                onPressed: _refreshing || _clearing
-                    ? null
-                    : () => _refresh(
-                        widget.diagnostics,
-                        _generation,
-                        showBusy: true,
-                      ),
-                icon: _refreshing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.refresh_rounded),
-                label: const Text('刷新状态'),
-              ),
-              TextButton.icon(
-                key: const ValueKey('diagnostics-clear-button'),
-                onPressed: _clearing || _refreshing ? null : _confirmAndClear,
-                icon: _clearing
-                    ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.delete_outline_rounded),
-                label: const Text('清除诊断日志'),
-              ),
+              Text('状态：${_view.available ? '可用' : '不可用'}'),
+              const SizedBox(height: 4),
+              Text('丢弃记录：${_view.dropped}　非法记录：${_view.invalid}'),
             ],
           ),
+        ),
+        if (_notice != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _notice!,
+            style: TextStyle(color: Theme.of(context).colorScheme.error),
+          ),
         ],
-      ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            DiagnosticsExportButton(
+              diagnostics: widget.diagnostics,
+              save: widget.save,
+            ),
+            OutlinedButton.icon(
+              key: const ValueKey('diagnostics-refresh-button'),
+              onPressed: _refreshing || _clearing
+                  ? null
+                  : () => _refresh(
+                      widget.diagnostics,
+                      _generation,
+                      showBusy: true,
+                    ),
+              icon: _refreshing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh_rounded),
+              label: const Text('刷新状态'),
+            ),
+            TextButton.icon(
+              key: const ValueKey('diagnostics-clear-button'),
+              onPressed: _clearing || _refreshing ? null : _confirmAndClear,
+              icon: _clearing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_outline_rounded),
+              label: const Text('清除诊断日志'),
+            ),
+          ],
+        ),
+      ],
     ),
   );
 }

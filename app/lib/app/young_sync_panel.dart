@@ -9,6 +9,7 @@ import '../core/young_work_contract.dart';
 import '../data/young_import_contract.dart';
 import '../jobs/young_sync_port.dart';
 import '../source/jw_authentication_contract.dart';
+import 'app_design.dart';
 
 /// M2.3 UI for Young's independent activity query and linked-calendar sync.
 final class YoungSyncPanel extends StatefulWidget {
@@ -413,49 +414,21 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
       builder: (context, constraints) {
         final content = Center(
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 900),
-            child: Card(
-              child: Padding(
-                padding: EdgeInsets.all(constraints.maxWidth < 560 ? 16 : 22),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      widget.productMode ? '二课日程与活动' : 'M2 二课日程与报名查询',
-                      style: Theme.of(context).textTheme.headlineSmall
-                          ?.copyWith(fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      widget.productMode
-                          ? '同步二课个人日历中的活动关联记录，或只读查询报名活动。未关联日历记录不会导入；活动关联不单独证明本人报名成功或取消。'
-                          : '个人日历中与活动关联的记录用于日程同步，未关联记录会排除。活动列表只读查询；活动关联不代表已独立验证本人报名成功或取消。',
-                    ),
-                    const SizedBox(height: 14),
-                    _statusCard(context),
-                    const SizedBox(height: 14),
-                    if (!_accountBound) ...[
-                      TextField(
-                        key: const ValueKey('young-sync-expected-account'),
-                        controller: _expectedAccountController,
-                        obscureText: true,
-                        autocorrect: false,
-                        enableSuggestions: false,
-                        enableIMEPersonalizedLearning: false,
-                        autofillHints: const [],
-                        enabled: _canEditInputs,
-                        onChanged: (_) => _clearInputMessage(),
-                        textInputAction: TextInputAction.done,
-                        decoration: const InputDecoration(
-                          labelText: '首次绑定时的预期学号',
-                          border: OutlineInputBorder(),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(height: 10),
+            constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
+            child: WorkspaceSection(
+              title: widget.productMode ? '二课日程与活动' : 'M2 二课日程与报名查询',
+              description: widget.productMode
+                  ? '同步二课个人日历中的活动关联记录，或只读查询报名活动。未关联日历记录不会导入；活动关联不单独证明本人报名成功或取消。'
+                  : '个人日历中与活动关联的记录用于日程同步，未关联记录会排除。活动列表只读查询；活动关联不代表已独立验证本人报名成功或取消。',
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _statusCard(context),
+                  const SizedBox(height: 12),
+                  if (!_accountBound) ...[
                     TextField(
-                      key: const ValueKey('young-sync-password'),
-                      controller: _passwordController,
+                      key: const ValueKey('young-sync-expected-account'),
+                      controller: _expectedAccountController,
                       obscureText: true,
                       autocorrect: false,
                       enableSuggestions: false,
@@ -464,79 +437,94 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                       enabled: _canEditInputs,
                       onChanged: (_) => _clearInputMessage(),
                       textInputAction: TextInputAction.done,
-                      decoration: InputDecoration(
-                        labelText: _credentialSaved
-                            ? '学校密码（可留空使用已保存密码）'
-                            : '学校密码（可留空并在学校窗口手动登录）',
-                        border: const OutlineInputBorder(),
+                      decoration: const InputDecoration(
+                        labelText: '首次绑定时的预期学号',
+                        border: OutlineInputBorder(),
                       ),
                     ),
-                    CheckboxListTile(
-                      key: const ValueKey('young-sync-save-password'),
-                      contentPadding: EdgeInsets.zero,
-                      controlAffinity: ListTileControlAffinity.leading,
-                      title: const Text('成功后加密保存学校密码'),
-                      subtitle: widget.productMode
-                          ? const Text(
-                              '仅在本次身份核验和查询成功后加密保存；学校窗口手动输入的密码不会被读取或保存。',
-                            )
-                          : null,
-                      value: _savePassword,
-                      onChanged: _canEditInputs
-                          ? (value) =>
-                                setState(() => _savePassword = value ?? false)
-                          : null,
+                  ],
+                  const SizedBox(height: 10),
+                  TextField(
+                    key: const ValueKey('young-sync-password'),
+                    controller: _passwordController,
+                    obscureText: true,
+                    autocorrect: false,
+                    enableSuggestions: false,
+                    enableIMEPersonalizedLearning: false,
+                    autofillHints: const [],
+                    enabled: _canEditInputs,
+                    onChanged: (_) => _clearInputMessage(),
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      labelText: _credentialSaved
+                          ? '学校密码（可留空使用已保存密码）'
+                          : '学校密码（可留空并在学校窗口手动登录）',
+                      border: const OutlineInputBorder(),
                     ),
-                    Text(
-                      widget.productMode
-                          ? _credentialSaved
-                                ? '教务和二课共用此密码；本机已保存且不会回填。清除二课登录资料会保留密码和日程。'
-                                : '教务和二课共用此密码。清除二课登录资料会保留密码和日程。'
-                          : _credentialSaved
-                          ? '教务和二课共用这份加密学校密码；本机已保存，可留空使用。清除二课登录资料会保留密码和日程。'
-                          : '教务和二课共用一份加密学校密码；输入后可选择在本机加密保存，或在学校窗口手动登录。清除二课登录资料会保留已保存密码和日程。',
-                    ),
-                    const SizedBox(height: 12),
-                    _dateInputs(context),
-                    if (_inputMessage != null) ...[
-                      const SizedBox(height: 8),
-                      _message(context, _inputMessage!, error: true),
-                    ],
-                    const SizedBox(height: 12),
-                    _actions(context),
-                    if (_actionMessage != null) ...[
-                      const SizedBox(height: 10),
-                      _message(context, _actionMessage!, error: true),
-                    ],
-                    if (_view.profileRetained) ...[
-                      const SizedBox(height: 10),
-                      const Text('已保留二课登录资料，学校仍可能要求重新登录。'),
-                    ],
-                    if (!widget.productMode) ...[
-                      const SizedBox(height: 18),
-                      _localCalendar(context),
-                    ],
+                  ),
+                  CheckboxListTile(
+                    key: const ValueKey('young-sync-save-password'),
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: const Text('成功后加密保存学校密码'),
+                    subtitle: widget.productMode
+                        ? const Text('仅在本次身份核验和查询成功后加密保存；学校窗口手动输入的密码不会被读取或保存。')
+                        : null,
+                    value: _savePassword,
+                    onChanged: _canEditInputs
+                        ? (value) =>
+                              setState(() => _savePassword = value ?? false)
+                        : null,
+                  ),
+                  Text(
+                    widget.productMode
+                        ? _credentialSaved
+                              ? '教务和二课共用此密码；本机已保存且不会回填。清除二课登录资料会保留密码和日程。'
+                              : '教务和二课共用此密码。清除二课登录资料会保留密码和日程。'
+                        : _credentialSaved
+                        ? '教务和二课共用这份加密学校密码；本机已保存，可留空使用。清除二课登录资料会保留密码和日程。'
+                        : '教务和二课共用一份加密学校密码；输入后可选择在本机加密保存，或在学校窗口手动登录。清除二课登录资料会保留已保存密码和日程。',
+                  ),
+                  const SizedBox(height: 12),
+                  _dateInputs(context),
+                  if (_inputMessage != null) ...[
+                    const SizedBox(height: 8),
+                    _message(context, _inputMessage!, error: true),
+                  ],
+                  const SizedBox(height: 12),
+                  _actions(context),
+                  if (_actionMessage != null) ...[
+                    const SizedBox(height: 10),
+                    _message(context, _actionMessage!, error: true),
+                  ],
+                  if (_view.profileRetained) ...[
+                    const SizedBox(height: 10),
+                    const Text('已保留二课登录资料，学校仍可能要求重新登录。'),
+                  ],
+                  if (!widget.productMode) ...[
                     const SizedBox(height: 18),
-                    _activityResults(context),
-                    if (!widget.productMode) ...[
-                      const SizedBox(height: 14),
-                      OutlinedButton.icon(
-                        key: const ValueKey('young-sync-copy-summary'),
-                        onPressed: _copyPending ? null : _copySummary,
-                        icon: const Icon(Icons.copy_outlined),
-                        label: Text(_copyPending ? '正在复制摘要' : '复制二课同步摘要'),
+                    _localCalendar(context),
+                  ],
+                  const SizedBox(height: 18),
+                  _activityResults(context),
+                  if (!widget.productMode) ...[
+                    const SizedBox(height: 14),
+                    OutlinedButton.icon(
+                      key: const ValueKey('young-sync-copy-summary'),
+                      onPressed: _copyPending ? null : _copySummary,
+                      icon: const Icon(Icons.copy_outlined),
+                      label: Text(_copyPending ? '正在复制摘要' : '复制二课同步摘要'),
+                    ),
+                    if (_copyMessage != null) ...[
+                      const SizedBox(height: 8),
+                      _message(
+                        context,
+                        _copyMessage!,
+                        error: _copyMessageIsError,
                       ),
-                      if (_copyMessage != null) ...[
-                        const SizedBox(height: 8),
-                        _message(
-                          context,
-                          _copyMessage!,
-                          error: _copyMessageIsError,
-                        ),
-                      ],
                     ],
                   ],
-                ),
+                ],
               ),
             ),
           ),
@@ -593,12 +581,30 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
       );
     }
     final colorScheme = Theme.of(context).colorScheme;
+    final hasFailure =
+        _view.identityFailure != null ||
+        _view.credentialFailure != null ||
+        _view.failure != null ||
+        (!widget.productMode && _view.collectionReason != null);
+    final isRecovery = _view.phase == YoungSyncPhase.recovery;
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.symmetric(
+        horizontal: hasFailure || isRecovery ? 12 : 0,
+        vertical: 10,
+      ),
       decoration: BoxDecoration(
-        color: colorScheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(12),
+        color: hasFailure
+            ? colorScheme.errorContainer.withValues(alpha: 0.55)
+            : isRecovery
+            ? colorScheme.tertiaryContainer.withValues(alpha: 0.5)
+            : null,
+        borderRadius: hasFailure || isRecovery
+            ? BorderRadius.circular(AppUi.radius)
+            : null,
+        border: hasFailure || isRecovery
+            ? null
+            : const Border(bottom: BorderSide(color: AppUi.line)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -821,11 +827,14 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
 
   Widget _calendarTile(BuildContext context, YoungStoredEvent event) {
     final pending = _pendingHiddenChanges.contains(event.localId);
-    return Card(
+    return Container(
       key: ValueKey('young-local-event-${event.localId}'),
       margin: const EdgeInsets.only(top: 8),
+      decoration: const BoxDecoration(
+        border: Border(bottom: BorderSide(color: AppUi.line)),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.fromLTRB(0, 8, 0, 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -898,16 +907,19 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
     BuildContext context,
     YoungActivityView activity,
     int index,
-  ) => Card(
+  ) => DecoratedBox(
     key: ValueKey('young-activity-result-$index'),
-    margin: const EdgeInsets.only(top: 8),
+    decoration: const BoxDecoration(
+      border: Border(bottom: BorderSide(color: AppUi.line)),
+    ),
     child: ExpansionTile(
+      tilePadding: EdgeInsets.zero,
       title: Text(activity.title),
       subtitle: Text(
         '活动时间：${formatBeijing(activity.startsAtUtc)} — '
         '${formatBeijing(activity.endsAtUtc)}',
       ),
-      childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      childrenPadding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
       children: [
         Align(
           alignment: Alignment.centerLeft,
