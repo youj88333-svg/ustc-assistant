@@ -1,6 +1,6 @@
 # Android 普通系统 WebView 兼容修订
 
-状态：**用户已批准，实施中**。编制与批准日期：2026-10-17。用户原话：“approve，请按项目工作流和修订后的兼容性修复计划开始实施，保留自动登录和采集功能。”本决定只修改 Android 学校浏览器的实现与相应信任边界，不改变 Windows1.00，也不代替 A7 真人验收或 A8 发行准入。
+状态：**用户已批准，工程与根合成回归完成**。编制与批准日期：2026-10-17；实现证据见[记录12](../milestones/android-apk/records/12-ordinary-system-webview.md)。用户原话：“approve，请按项目工作流和修订后的兼容性修复计划开始实施，保留自动登录和采集功能。”本决定只修改 Android 学校浏览器的实现与相应信任边界，不改变 Windows1.00，也不代替 A7 真人验收或 A8 发行准入。
 
 按[Android迁移计划](../milestones/android-apk/plan.md)中的 A7-W1–W6实施；本文件记录取舍，不另立第二份任务单。现行规则见[07](../architecture/07-constitution.md)、[09 K-01–K-05](../architecture/09-contracts.md)及[DR-ADR-09](dr-adr-09-browser-boundary.md)，冲突部分仅在本决定明确的Android映射内替代。
 
@@ -8,7 +8,7 @@
 
 用户要求以普通系统 WebView 优先扩大兼容性，同时保留自动登录和采集。此前[兼容调研](../research/android-webview-compatibility.md)及[国内机型核对](../research/android-webview-domestic-models.md)说明，支持网页并不代表支持本工程设置的四项高级 API；不能从手机品牌、伪装机型、Android版本或 Chrome 版本推断这些 API 已具备。
 
-当前 `ObservationBridge.ensureFeatures` 将 `MULTI_PROFILE`、`DELETE_BROWSING_DATA`、`DOCUMENT_START_SCRIPT`、`JS_INJECTION_IN_FRAME_AND_WORLD` 作为正常学校入口的必要条件；`ready` 又要求私有世界与全 frame 策略确认。`ScriptCatalog` 还依赖 Navigation API。MuMu实际为 Android12/API32、WebView110，之前的 API34/WebView113 样本同样缺少部分高级能力。SDK升级或改善报错不能让这些提供方自动获得完整学校通道。
+修订前的 `ObservationBridge.ensureFeatures` 将 `MULTI_PROFILE`、`DELETE_BROWSING_DATA`、`DOCUMENT_START_SCRIPT`、`JS_INJECTION_IN_FRAME_AND_WORLD` 作为正常学校入口的必要条件；`ready` 又要求私有世界与全 frame 策略确认。原 `ScriptCatalog` 还依赖 Navigation API。MuMu当时实测为 Android12/API32、WebView110，之前的 API34/WebView113 样本同样缺少部分高级能力。SDK升级或改善报错不能让这些提供方自动获得原高级学校通道，因此改用本决定的普通路线。
 
 因此，修复对象是浏览器宿主、就绪状态、脚本和恢复契约；不能只删除四项判断，沿用依赖它们的实现。
 
