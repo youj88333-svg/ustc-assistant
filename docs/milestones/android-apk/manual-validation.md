@@ -1,23 +1,23 @@
 # Android A7人工体验说明
 
-本说明对应A7私有QA包；正式签名和移动版发布属于A8。Android学校自动认证与采集按API28+普通系统WebView路线实施，实际可用性仍以具体系统和WebView提供方的检查结果为准，不能从安装成功或Android版本推断。普通路线不再要求提供方具备多Profile、独立删除、私有脚本世界或document-start能力；这不表示任一旧版MuMu、新版MuMu、目标手机或鸿蒙已通过。根已完成五个官方模拟器环境的合成回归，实际证据见[普通WebView记录12](records/12-ordinary-system-webview.md)及[设备能力矩阵](device-matrix.md)。
+本说明对应A7私有QA包；正式签名和移动版发布属于A8。Android学校自动认证与采集按API28+普通系统WebView路线实施，实际可用性仍以具体系统和WebView提供方的检查结果为准，不能从安装成功或Android版本推断。普通路线不再要求提供方具备多Profile、独立删除、私有脚本世界或document-start能力；这不表示任一旧版MuMu、新版MuMu、目标手机或鸿蒙已通过。前轮五个官方环境见[记录12](records/12-ordinary-system-webview.md)，本轮跳转、审批、竖屏和思考展示见[记录13](records/13-mumu-navigation-approval-and-reasoning.md)及[设备能力矩阵](device-matrix.md)。
 
 ## 当前QA包
 
-文件位于工程内：`app/build/android-webview2/artifacts/USTC-Assistant-Android-A7-WebView2-QA-x86_64.apk`。这是x86_64私有QA包，不是A8正式版，也不是arm64手机包。
+文件位于工程内：`app/build/android-feedback/artifacts/USTC-Assistant-Android-A7-QA4005-x86_64.apk`。这是x86_64私有QA包，不是A8正式版，也不是arm64手机包。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4004` |
-| ABI / 文件大小 | `x86_64` / `290903300` bytes |
-| SHA-256 | `f351d1e446891cfd9128c77f6704a930626545040c8827a32e0762f909ef41a4` |
-| 源码修订 | `e36ccb58933650e514aad79ab1f60e8038047219` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4005` |
+| ABI / 文件大小 | `x86_64` / `290953716` bytes |
+| SHA-256 | `67e954747c19893329be146d47d10f56ec97237304c709d42d2519dc824494ff` |
+| 源码修订 | `3f70518fca306947d0b20117392a6e0ae3a0f944` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003版QA包。旧4003交付和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003/4004版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-同目录另有`arm64-v8a` QA2004，仅完成打包核验、尚无实机运行证据。当前MuMu请选择上表x86_64/4004，不用ARM64包降级覆盖。
+旧`android-webview2/artifacts`目录另有`arm64-v8a` QA2004，仅完成前轮打包核验，未包含本轮反馈修复、尚无实机运行证据。当前MuMu请选择上表x86_64/4005，不用ARM64包降级覆盖。
 
 ## 安装
 
@@ -36,4 +36,6 @@
 2. 需要验证取消时，启动一次同步并取消，再对同一来源重试；确认取消后可以重新发起，重试没有重复导入或沿用旧结果。若来源状态明确报告兼容或宿主故障，停止重复登录，保留已有资料并导出日志。
 3. 在设置页使用标题旁的“导出日志”主动打开系统保存界面，由你选择位置并确认保存。取消保存或保存失败不算导出成功。反馈问题时可提供设备、Android/WebView版本、操作步骤和安全日志；日志不应包含密码、Key、学校响应正文或认证资产。
 
-本轮用户体验集中于两来源自动认证/采集、取消后重试和日志主动导出；机械兼容、分区隔离、进程退出、清理/恢复和其他合成故障已有[根记录12](records/12-ordinary-system-webview.md)。这个说明及APK元数据不代表真实学校、MuMu新版、手机或鸿蒙已验收，也不替代目标设备的后续记录。
+本轮集中确认已反馈的行为即可：Young能从首页自动进入目标页并完成同步；请求“提醒我明天下午两点半坐校车”等本地修改时，手机自动展开当前审批、关闭后输入框旁仍有入口；竖屏周视图可看整周、点击日期查看完整条目，大字允许必要滚动。已有模型配置且模型实际返回思考字段时，生成中可见“正在思考”，正文开始后默认收起；无字段不伪造思考。思考只保留本次进程，不进入聊天存储、导出或下一轮请求，撤销私人读取后清除。
+
+机械兼容、分区隔离、进程退出、清理/恢复和其他合成故障已有[根记录12](records/12-ordinary-system-webview.md)及[反馈记录13](records/13-mumu-navigation-approval-and-reasoning.md)。这个说明及APK元数据不代表真实学校、MuMu新版、手机或鸿蒙已验收，也不替代目标设备的后续记录。
