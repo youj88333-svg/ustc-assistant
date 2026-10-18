@@ -21,6 +21,7 @@
   const jsonStringify = JSON.stringify;
   const finite = Number.isFinite;
   const safeInteger = Number.isSafeInteger;
+  const nativeArrayPush = Array.prototype.push;
   const NativePromise = Promise;
   const promiseProto = NativePromise.prototype;
   const nativeThen = promiseProto.then;
@@ -189,6 +190,8 @@
   let routeSerial = 0;
   let latestOperation = 0;
   let integrityFailure = false;
+  let registeredHelper = null;
+  let registeredModuleLookup = null;
   const xhrStates = new NativeWeakMap();
 
   function utf8Size(text) {
@@ -757,14 +760,46 @@
   }
 
   function helper() {
+    if (registeredHelper) return registeredHelper;
     const webpack = dataValue(win, 'webpackJsonp');
     if (!webpack || (typeof webpack !== 'object' && typeof webpack !== 'function')) return null;
     const push = dataValue(webpack, 'push');
     if (typeof push !== 'function') return null;
-    const exported = apply(push, webpack, [[[], {}, [['0fea']]]]);
+    if (push === nativeArrayPush) return null;
+    if (!registeredModuleLookup) {
+      // A fixed, uniquely named code-only module obtains the Webpack 4 loader.
+      // Check only the registered GET module's factory before evaluating it:
+      // requiring a not-yet-loaded module can poison Webpack's module cache.
+      // The factory may be in the initial bundle, not in the JSONP chunk list.
+      const probeId = 'ustc_readonly_' + capability;
+      const factories = dto();
+      put(factories, probeId, function(module, exports, require) {
+        module.exports = function() {
+          const modules = ownValue(require, 'm');
+          if (!modules || typeof ownValue(modules, '0fea') !== 'function') return null;
+          return apply(require, undefined, ['0fea']);
+        };
+      });
+      const lookup = apply(push, webpack, [[[], factories, [[probeId]]]]);
+      if (typeof lookup !== 'function') throw rejection('sourceFailed', 'helperUnavailable');
+      registeredModuleLookup = lookup;
+    }
+    const exported = apply(registeredModuleLookup, undefined, []);
     if (!exported || (typeof exported !== 'object' && typeof exported !== 'function')) return null;
-    const candidate = dataValue(exported, 'e');
-    return typeof candidate === 'function' ? candidate : null;
+    // Webpack harmony exports normally use an own getter. This is the fixed
+    // registered module's code export, not a response object or identity fact.
+    // The trusted school page may evaluate that getter; every returned business
+    // value must still be correlated with this operation's actual fetch/XHR.
+    const descriptor = getOwn(exported, 'e');
+    if (!descriptor) return null;
+    const candidate = getOwn(descriptor, 'value')
+      ? descriptor.value
+      : (typeof descriptor.get === 'function' ? apply(descriptor.get, exported, []) : null);
+    // Retain this document's fixed code export. Repeated JSONP executions add
+    // entries to the school's chunk queue; neither identity nor response data
+    // are cached here. start/dispatch still revalidate the live document.
+    if (typeof candidate === 'function') registeredHelper = candidate;
+    return registeredHelper;
   }
 
   function validDay(day) {
@@ -797,11 +832,16 @@
     try {
       drainDocumentChanges();
       const route = page === 'activities' ? ACTIVITIES_ROUTE : CALENDAR_ROUTE;
-      return intact() && apply(winDocument, win, []) === doc && apply(winTop, win, []) === win &&
-        apply(locationOrigin, locationObject, []) === expectedOrigin &&
-        apply(locationPath, locationObject, []) === route &&
+      if (!intact()) throw rejection('sourceFailed', 'compiledScript');
+      if (apply(winDocument, win, []) !== doc || apply(winTop, win, []) !== win ||
+          apply(locationOrigin, locationObject, []) !== expectedOrigin)
+        throw rejection('staleResult', 'contextLost');
+      return apply(locationPath, locationObject, []) === route &&
         apply(documentReady, doc, []) === 'complete' && !!apply(documentRoot, doc, []) && !!helper();
-    } catch (_) { return false; }
+    } catch (error) {
+      if (apply(weakHas, errors, [error])) throw error;
+      throw rejection('sourceFailed', 'helperUnavailable');
+    }
   }
 
   function start(operation) {

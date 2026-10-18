@@ -213,7 +213,11 @@ void main() {
             YoungSyncPhase.idle,
             reason: harness.sync.syncView.safeSummary,
           );
-          expect(harness.sync.syncView.committed, isTrue);
+          expect(
+            harness.sync.syncView.committed,
+            isTrue,
+            reason: harness.sync.syncView.safeSummary,
+          );
           expect(harness.sync.syncView.activityResults, hasLength(11));
           expect(harness.sync.syncView.normalization!.activityPages, 2);
           expect(harness.sync.syncView.data!.queryCount, 1);

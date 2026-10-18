@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_context_budget.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/agent/student_language_prompt.dart';
 import 'package:ustc_assistant_m0/core/agent_context_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_conversation_contract.dart';
@@ -50,6 +51,11 @@ void main() {
       expect(coordinator.view.contextCompacted, isTrue);
       expect(gateway.requests, hasLength(1));
       final compactRequest = gateway.requests.single;
+      expect(compactRequest.messages.first.role, 'system');
+      expect(
+        compactRequest.messages.first.content,
+        startsWith(assistantPersonaPrefix),
+      );
       expect(compactRequest.tools, isEmpty);
       expect(compactRequest.messages, hasLength(2));
       final compactInput = compactRequest.messages.last.content!;

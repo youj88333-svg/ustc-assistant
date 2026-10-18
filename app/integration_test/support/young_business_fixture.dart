@@ -11,6 +11,7 @@ final class YoungBusinessFixture {
     required this.homeHasReader,
     required this.delayBusinessReadiness,
     required this.businessReadinessDelay,
+    required this.keepTargetRouteWhilePreparing,
   });
 
   static const syntheticPassword = 'young-fixture-only-\\"-42';
@@ -26,6 +27,7 @@ final class YoungBusinessFixture {
   final bool homeHasReader;
   final bool delayBusinessReadiness;
   final Duration businessReadinessDelay;
+  final bool keepTargetRouteWhilePreparing;
   String mode = 'good';
   String username = 'FIXTURE_ACCOUNT';
   int profiles = 0;
@@ -36,6 +38,7 @@ final class YoungBusinessFixture {
   int unexpectedAuthenticationSubmissions = 0;
   int successfulAuthenticationSubmissions = 0;
   int prematureBusinessNavigations = 0;
+  int prematureModuleEvaluations = 0;
   int bootstrapCompletions = 0;
   bool bootstrapQueryCleared = false;
   int frameRequests = 0;
@@ -54,6 +57,7 @@ final class YoungBusinessFixture {
     bool homeHasReader = true,
     bool delayBusinessReadiness = false,
     Duration businessReadinessDelay = const Duration(milliseconds: 800),
+    bool keepTargetRouteWhilePreparing = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fixture = YoungBusinessFixture._(
@@ -63,6 +67,7 @@ final class YoungBusinessFixture {
       homeHasReader: homeHasReader,
       delayBusinessReadiness: delayBusinessReadiness,
       businessReadinessDelay: businessReadinessDelay,
+      keepTargetRouteWhilePreparing: keepTargetRouteWhilePreparing,
     );
     server.listen(fixture._serve);
     return fixture;
@@ -80,6 +85,9 @@ final class YoungBusinessFixture {
     if (request.method == 'POST') {
       ++unexpectedAuthenticationSubmissions;
       request.response.statusCode = HttpStatus.notFound;
+    } else if (path == '/fixture/premature-module') {
+      ++prematureModuleEvaluations;
+      request.response.statusCode = HttpStatus.noContent;
     } else if (realisticLoginRedirects &&
         path == '/fixture/bootstrap-complete') {
       ++bootstrapCompletions;
@@ -242,14 +250,15 @@ final class YoungBusinessFixture {
 <body><script>
 const namespace='$_youngNamespacePath';
 const defaultChild=namespace+'portal/home';
-function installHelper(){
+function installHomeReader(){
   const r={b:function(options){return Promise.resolve().then(()=>fetch('/login/wisdom-group-learning-bg'+options.url+'?'+new URLSearchParams(options.params))).then(x=>x.json())}};
   function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
-  window.webpackJsonp=[];window.webpackJsonp.push=function(){return {e:l}};
+  ${_webpackRuntime()}
+  installHelper();
 }
 setTimeout(async()=>{
   history.replaceState(null,'',namespace);
-  ${homeHasReader ? 'installHelper();' : '// Reader module is lazy-loaded only by the target business page.'}
+  ${homeHasReader ? 'installHomeReader();' : '// Reader module is lazy-loaded only by the target business page.'}
   await fetch('/fixture/bootstrap-complete?queryCleared='+String(location.search.length===0),{cache:'no-store'});
   history.pushState(null,'',defaultChild);
 },900);
@@ -273,8 +282,8 @@ setTimeout(async()=>{
       const r={b:function(options){return Promise.resolve().then(()=>fetch('/login/wisdom-group-learning-bg'+options.url+'?'+new URLSearchParams(options.params))).then(x=>x.json()).then(value=>{if(window.__youngRouteAfterBody&&options.url==='/personal/scCalendar/getPageUserList')history.pushState(null,'',location.href);return value})}};
       function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
       window.__youngRouteAfterBody=$routeAfterBody;
-      function installHelper(){window.webpackJsonp=[];window.webpackJsonp.push=function(){return {e:l}};}
-      if($delay>0){history.replaceState(null,'','/login/sc-wisdom-group-learning/preparing');setTimeout(()=>history.replaceState(null,'',$expectedPath),Math.floor($delay/2));setTimeout(installHelper,$delay)}else{installHelper()}
+      ${_webpackRuntime()}
+      if($delay>0){if(!$keepTargetRouteWhilePreparing){history.replaceState(null,'','/login/sc-wisdom-group-learning/preparing');setTimeout(()=>history.replaceState(null,'',$expectedPath),Math.floor($delay/2));setTimeout(installHelper,$delay)}}else{installHelper()}
       // An unrelated frame also changes history near reader setup. The
       // precise Page/main-frame guard must distinguish it from the route test.
       if($delay>0)setTimeout(()=>{document.getElementById('fixture-frame').src='/frame?late=1'},$delay+600);
@@ -283,6 +292,29 @@ setTimeout(async()=>{
       setInterval(()=>fetch('/login/wisdom-group-learning-bg/mobile/item/enrolmentList?pageNo=1&pageSize=10&background=1'),150);
       </script></body></html>''';
   }
+
+  // Model Webpack 4's initial module table, JSONP registration and cache. The
+  // cache deliberately retains a failed require so premature evaluation is a
+  // user-visible failure rather than being hidden by the fixture.
+  String _webpackRuntime() =>
+      '''
+      const fixtureModules=Object.create(null), fixtureCache=Object.create(null);
+      function fixtureRequire(id){
+        if(fixtureCache[id])return fixtureCache[id].exports;
+        const module=fixtureCache[id]={exports:{}};
+        if(typeof fixtureModules[id]!=='function'){fetch('/fixture/premature-module');throw new Error('synthetic-module-not-yet-registered')}
+        fixtureModules[id](module,module.exports,fixtureRequire);return module.exports;
+      }
+      fixtureRequire.m=fixtureModules;
+      let fixtureReadinessTimer=false;
+      window.webpackJsonp=[];
+      window.webpackJsonp.push=function(data){
+        Object.keys(data[1]).forEach(id=>fixtureModules[id]=data[1][id]);
+        if(${keepTargetRouteWhilePreparing && delayBusinessReadiness}&&!fixtureReadinessTimer){fixtureReadinessTimer=true;setTimeout(installHelper,${businessReadinessDelay.inMilliseconds})}
+        let value;for(const entry of (data[2]||[]))value=fixtureRequire(entry[0]);return value;
+      };
+      function installHelper(){fixtureModules['0fea']=function(module){Object.defineProperty(module.exports,'e',{enumerable:true,get:function(){return l}})};}
+      ''';
 
   Future<void> _acceptAuthentication(HttpRequest request) async {
     ++authenticationSubmissions;

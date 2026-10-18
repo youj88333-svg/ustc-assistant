@@ -156,7 +156,12 @@ internal class SchoolBrowserEngine(
                     if (!route) {
                         result.success(false)
                     } else {
-                        prepareYoung(s, page, result, System.currentTimeMillis() + PREPARE_BUDGET_MS)
+                        // C2 owns the bounded readiness wait. One native call
+                        // samples this document once; nesting a 12s native poll
+                        // inside C1's 12s drain deadline used to race to timeout.
+                        pageCall(s, JSONObject().put("method", "prepare").put("page", page), result) {
+                            it.getBoolean("value")
+                        }
                     }
                 }
                 "startYoungBusiness", "dispatchYoungBusinessStep", "pollYoungBusinessStep", "finishYoungBusiness" ->
@@ -837,45 +842,6 @@ internal class SchoolBrowserEngine(
         }
     }
 
-    private fun prepareYoung(
-        s: Session,
-        page: String,
-        result: BrowserResult,
-        deadline: Long,
-        existingId: Long? = null,
-    ) {
-        if (!ready(s)) throw Failure("staleResult")
-        val id = existingId ?: ++s.callSequence
-        val document = s.document
-        val args = JSONObject().put("method", "prepare").put("page", page).put("document", document).put("call", id)
-        if (existingId == null) {
-            s.pending[id] = Pending(document, result, page = true, consume = { it.getBoolean("value") })
-            timeout(s, id, PREPARE_BUDGET_MS + 500)
-        }
-        s.view.evaluateJavascript(s.scripts.pageCall(args)) { raw ->
-            if (id !in s.pending || active !== s || s.closing || s.document != document) return@evaluateJavascript
-            try {
-                val envelope = s.scripts.unwrap(raw, page = true)
-                if (envelope.getLong("call") != id) throw Failure("invalidSnapshot")
-                if (envelope.has("error")) {
-                    complete(s, id, envelope)
-                    return@evaluateJavascript
-                }
-                if (envelope.getBoolean("value")) {
-                    complete(s, id, envelope)
-                } else if (System.currentTimeMillis() < deadline) {
-                    ui.postDelayed({ prepareYoung(s, page, result, deadline, id) }, PREPARE_POLL_MS)
-                } else {
-                    complete(s, id, envelope)
-                }
-            } catch (failure: Failure) {
-                completeError(s, id, failure.code, failure.reason)
-            } catch (_: Exception) {
-                completeError(s, id, "invalidSnapshot")
-            }
-        }
-    }
-
     private fun youngRoute(url: String, page: String): Boolean {
         val expected = when (page) {
             "activities" -> "/login/sc-wisdom-group-learning/myproject/SignUp"
@@ -959,8 +925,6 @@ internal class SchoolBrowserEngine(
         private const val CALL_TIMEOUT_MS = 5000L
         private const val SECRET_ACK_BUDGET_MS = 5000L
         private const val SECRET_POLL_MS = 100L
-        private const val PREPARE_BUDGET_MS = 12000L
-        private const val PREPARE_POLL_MS = 200L
         private val LOGIN_STATES = setOf(
             "waiting", "portalActivated", "formReady", "businessReady", "manualRequired",
             "pageStructureChanged", "challengeRequired", "contextUnavailable", "submitted",

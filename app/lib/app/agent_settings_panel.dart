@@ -7,6 +7,7 @@ import 'agent_workspace_contract.dart';
 import '../core/agent_action_contract.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_permission_contract.dart';
+import '../agent/model_reasoning_policy.dart';
 import 'app_design.dart';
 
 const _settingsMuted = Color(0xFF66736C);
@@ -525,6 +526,14 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                       onChanged: portBusy || models.isEmpty
                           ? null
                           : (value) => setState(() => _selectedModel = value),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      modelReasoningEffort(selectedModel) == 'high'
+                          ? '思考强度：高（high）。对话、晨报和能力验证统一使用。'
+                          : '思考强度：服务默认。当前模型未设置额外思考参数。',
+                      key: const ValueKey('agent-settings-reasoning-policy'),
+                      style: Theme.of(context).textTheme.bodySmall,
                     ),
                     if (view.phase != AgentPhase.idle &&
                         view.phase != AgentPhase.closed) ...[
@@ -1284,6 +1293,8 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
   AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
   AgentFailureCode.contextLimit => '模型服务的上下文容量不足，请降低上下文预算或换用更大容量的模型。',
+  AgentFailureCode.reasoningRejected =>
+    '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
   AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
   AgentFailureCode.consentRequired => '请先阅读发送说明并明确勾选同意。',
   AgentFailureCode.keyRequired => '请提供模型 Key，或使用本机已保存的 Key。',

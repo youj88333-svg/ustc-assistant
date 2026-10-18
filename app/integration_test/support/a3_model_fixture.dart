@@ -136,8 +136,8 @@ final class A3ModelFixture {
           messages.isNotEmpty &&
           messages.first is Map &&
           (messages.first as Map)['role'] == 'system' &&
-          ((messages.first as Map)['content'] as String? ?? '').startsWith(
-            '把所提供的完整历史交互整理为简体中文会话摘要',
+          ((messages.first as Map)['content'] as String? ?? '').contains(
+            '\nTASK CONTEXT_SUMMARY\n',
           )) {
         _summaryRequests++;
         await text(request, 'A3合成摘要：此前查询过日程，复习安排以真实提交回执为准。');

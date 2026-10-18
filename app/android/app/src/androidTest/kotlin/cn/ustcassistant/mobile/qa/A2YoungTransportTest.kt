@@ -32,6 +32,46 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(AndroidJUnit4::class)
 class A2YoungTransportTest {
     @Test
+    fun anArrayBeforeRuntimeInstallationDoesNotAccumulateProbeEntries() =
+        withHarness(Scenario.NATIVE_ARRAY) { harness ->
+            repeat(3) {
+                assertEquals(false, assertSuccess(harness.call(method = "prepare", pageName = "calendar")).get("value"))
+            }
+            assertEquals(0, harness.chunkQueueLength())
+            assertEquals(0, harness.server.apiRequestCount.get())
+        }
+
+    @Test
+    fun webpackHarmonyGetterCanExposeTheRegisteredHelperWithoutGrantingResponseAuthority() =
+        withHarness(Scenario.GETTER) { harness ->
+            prepareAndStart(harness)
+            assertEquals(0, harness.server.apiRequestCount.get())
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertEquals(1, harness.server.apiRequestCount.get())
+        }
+
+    @Test
+    fun getterExportReturningAFakePromiseStillCannotSupplyBusinessFacts() =
+        withHarness(Scenario.GETTER_FAKE) { harness ->
+            prepareAndStart(harness)
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertClosedError(awaitPoll(harness, step = 1), "sourceFailed")
+            assertEquals(0, harness.server.apiRequestCount.get())
+        }
+
+    @Test
+    fun throwingModuleExportIsAClosedHelperFailureRatherThanASilentReadinessWait() =
+        withHarness(Scenario.THROWING_GETTER) { harness ->
+            val reply = harness.call(method = "prepare", pageName = "calendar")
+            assertClosedError(reply, "sourceFailed")
+            assertEquals("helperUnavailable", reply.getJSONObject("error").getString("reason"))
+            assertEquals(0, harness.server.apiRequestCount.get())
+        }
+
+    @Test
     fun fixedNavigationDoesNotRequireTheDestinationsLazyReaderOnTheLandingPage() =
         withHarness(Scenario.NO_HELPER) { harness ->
             assertEquals(true, assertSuccess(harness.call(method = "navigationReady")).get("value"))
@@ -196,6 +236,10 @@ class A2YoungTransportTest {
     }
 
     private enum class Scenario {
+        NATIVE_ARRAY,
+        GETTER,
+        GETTER_FAKE,
+        THROWING_GETTER,
         NO_HELPER,
         SEQUENCE,
         FAKE,
@@ -300,6 +344,19 @@ class A2YoungTransportTest {
             return reply ?: throw AssertionError("Synthetic page call had no reply")
         }
 
+        fun chunkQueueLength(): Int {
+            val done = CountDownLatch(1)
+            var value = -1
+            instrumentation.runOnMainSync {
+                checkNotNull(webView).evaluateJavascript("window.webpackJsonp.length") { raw ->
+                    value = raw.toIntOrNull() ?: -1
+                    done.countDown()
+                }
+            }
+            assertTrue(done.await(15, TimeUnit.SECONDS))
+            return value
+        }
+
         override fun close() {
             try {
                 instrumentation.runOnMainSync {
@@ -395,9 +452,10 @@ class A2YoungTransportTest {
         private fun pageHtml(): String {
             val mode = when (scenario) {
                 Scenario.SEQUENCE -> "sequence"
-                Scenario.FAKE -> "fake"
+                Scenario.FAKE, Scenario.GETTER_FAKE -> "fake"
                 Scenario.BACKGROUND -> "background"
-                Scenario.REDIRECT, Scenario.DUPLICATE, Scenario.NO_HELPER -> "fetch"
+                Scenario.REDIRECT, Scenario.DUPLICATE, Scenario.NO_HELPER,
+                Scenario.GETTER, Scenario.THROWING_GETTER, Scenario.NATIVE_ARRAY -> "fetch"
             }
             val backgroundFetch = if (scenario == Scenario.BACKGROUND) {
                 "window.__backgroundFetch = fetch(${JSONObject.quote("http://127.0.0.1:$port$PROFILE_PATH")});"
@@ -430,7 +488,26 @@ class A2YoungTransportTest {
                   });
                 }};
                 function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
-                ${if (scenario == Scenario.NO_HELPER) "" else "window.webpackJsonp = {push:function() { return {e:l}; }};"}
+                var factories=Object.create(null), moduleCache=Object.create(null);
+                function fixtureRequire(id){
+                  if(moduleCache[id])return moduleCache[id].exports;
+                  var module=moduleCache[id]={exports:{}};
+                  if(typeof factories[id]!=='function')throw new Error('synthetic-module-not-yet-registered');
+                  factories[id](module,module.exports,fixtureRequire);return module.exports;
+                }
+                fixtureRequire.m=factories;
+                window.webpackJsonp=[];
+                window.webpackJsonp.push=function(data){
+                  Object.keys(data[1]).forEach(function(id){factories[id]=data[1][id]});
+                  var value;(data[2]||[]).forEach(function(entry){value=fixtureRequire(entry[0])});return value;
+                };
+                ${when (scenario) {
+                    Scenario.NATIVE_ARRAY -> "window.webpackJsonp=[];"
+                    Scenario.NO_HELPER -> ""
+                    Scenario.GETTER, Scenario.GETTER_FAKE -> "factories['0fea']=function(module){Object.defineProperty(module.exports,'e',{enumerable:true,get:function(){return l}})};"
+                    Scenario.THROWING_GETTER -> "factories['0fea']=function(module){Object.defineProperty(module.exports,'e',{get:function(){throw new Error('synthetic-private-detail')}})};"
+                    else -> "factories['0fea']=function(module){module.exports={e:l}};"
+                }}
                 $backgroundFetch
                 </script>
                 </body></html>

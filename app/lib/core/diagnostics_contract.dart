@@ -154,6 +154,7 @@ enum DiagnosticCode {
   closed,
   toolUnavailable,
   imageRejected,
+  reasoningRejected,
   invalidRequest,
   staleReference,
   unavailable,

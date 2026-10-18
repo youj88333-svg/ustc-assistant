@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/agent_tool_contract.dart';
+import 'package:ustc_assistant_m0/agent/student_language_prompt.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/settings_contract.dart';
@@ -680,11 +681,11 @@ void main() {
 
         final textProbe = rig.gateway.generations[0].request;
         expect(textProbe.tools, isEmpty);
-        expect(textProbe.messages.single.content, contains('USTC_TEXT_PROBE'));
+        expect(textProbe.messages.last.content, contains('USTC_TEXT_PROBE'));
         final callProbe = rig.gateway.generations[1].request;
         expect(callProbe.toolChoice, 'echo_probe');
         expect(callProbe.tools.map((tool) => tool.name), ['echo_probe']);
-        expect(callProbe.messages.single.role, 'user');
+        expect(callProbe.messages.last.role, 'user');
         final proofProbe = rig.gateway.generations[2].request;
         expect(proofProbe.toolChoice, 'none');
         expect(proofProbe.messages.last.role, 'tool');
@@ -702,6 +703,13 @@ void main() {
         expect(saved.modelId, 'synthetic-chat-model');
         expect(saved.modelIds, ['synthetic-chat-model']);
         expect(saved.report.capability, ModelCapability.toolReady);
+        for (final generation in rig.gateway.generations) {
+          expect(generation.request.messages.first.role, 'system');
+          expect(
+            generation.request.messages.first.content,
+            startsWith(assistantPersonaPrefix),
+          );
+        }
         final lease = await rig.store.agent.leaseModelKey(saved.authority);
         final bytes = lease.take();
         expect(utf8.decode(bytes), 'synthetic-candidate-key');

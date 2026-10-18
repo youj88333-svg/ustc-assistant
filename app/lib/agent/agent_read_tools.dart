@@ -2496,6 +2496,7 @@ AgentToolResult _agentFailureResult(AgentFailure failure) {
     AgentFailureCode.storageFailed ||
     AgentFailureCode.protectionFailed => ('failure', 'storageFailed'),
     AgentFailureCode.protocol ||
+    AgentFailureCode.reasoningRejected ||
     AgentFailureCode.redirectRejected => ('failure', 'sourceSchema'),
     AgentFailureCode.unauthorized ||
     AgentFailureCode.forbidden => ('accessRestricted', 'accessRestricted'),

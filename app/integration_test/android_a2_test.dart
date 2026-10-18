@@ -595,9 +595,15 @@ void main() {
             requireAuthentication: true,
             realisticLoginRedirects: true,
             homeHasReader: false,
+            // A module arriving after the former nested 12s deadline must be
+            // handled by the single C2 readiness budget, not misreported as SQL.
+            delayBusinessReadiness: true,
+            businessReadinessDelay: const Duration(seconds: 13),
+            keepTargetRouteWhilePreparing: true,
           );
           youngFixture.username = _account;
           final young = await harness.openYoung(youngFixture);
+          final preparationElapsed = Stopwatch()..start();
           await young
               .startActivities(expectedAccountCode: _account)
               .timeout(_operationTimeout);
@@ -608,11 +614,16 @@ void main() {
             reason: activities.safeSummary,
           );
           expect(activities.committed, isTrue, reason: activities.safeSummary);
+          expect(
+            preparationElapsed.elapsed,
+            greaterThanOrEqualTo(const Duration(seconds: 13)),
+          );
           expect(activities.accountBound, isTrue);
           expect(activities.data!.credentialSaved, isTrue);
           expect(activities.activityResults, hasLength(11));
           expect(activities.normalization!.activityPages, 2);
           expect(youngFixture.activityRequests, 2);
+          expect(youngFixture.prematureModuleEvaluations, 0);
           expect(youngFixture.authenticationSubmissions, 1);
           expect(youngFixture.successfulAuthenticationSubmissions, 1);
           expect(youngFixture.credentialsMatched, isTrue);

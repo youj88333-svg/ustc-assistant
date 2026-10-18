@@ -27,6 +27,7 @@ enum AgentFailureCode {
   toolUnavailable,
   imageRejected,
   contextLimit,
+  reasoningRejected,
 }
 
 final class AgentFailure implements Exception {

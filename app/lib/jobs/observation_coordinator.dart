@@ -623,7 +623,13 @@ final class ObservationCoordinator
             document: document,
             page: page,
           )
-          .timeout(drainTimeout);
+          .timeout(
+            drainTimeout,
+            onTimeout: () => throw const YoungBusinessException(
+              FailureCode.sourceFailed,
+              YoungBusinessRejection.preparationTimedOut,
+            ),
+          );
       if (_session != session ||
           _document != document ||
           view.phase != ObservationPhase.open) {
@@ -633,6 +639,13 @@ final class ObservationCoordinator
         );
       }
       return ready && _businessAvailable;
+    } on YoungBusinessException catch (error) {
+      if (error.reason == YoungBusinessRejection.preparationTimedOut) {
+        // A native call with no acknowledgement must drain before another
+        // preparation/read is admitted. A timeout is a source failure, not SQL.
+        await closeSession();
+      }
+      rethrow;
     } finally {
       _youngPreparePending = false;
     }

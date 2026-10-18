@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import '../core/agent_contract.dart';
 import 'model_gateway_contract.dart';
+import 'model_reasoning_policy.dart';
 
 /// Fixed USTC model gateway. The only non-production destination is the
 /// explicit 127.0.0.1 test constructor.
@@ -241,8 +242,13 @@ final class UstcModelGateway implements ModelGatewayPort {
       // and echoed request content are never retained or put in diagnostics.
       final bytes = await _readLimited(response, 8192, operation);
       try {
-        if (_isContextLimit(jsonDecode(utf8.decode(bytes)))) {
+        final error = jsonDecode(utf8.decode(bytes));
+        if (_isContextLimit(error)) {
           throw const AgentFailure(AgentFailureCode.contextLimit);
+        }
+        if (modelReasoningEffort(modelRequest.modelId) != null &&
+            _isReasoningRejection(error)) {
+          throw const AgentFailure(AgentFailureCode.reasoningRejected);
         }
       } on FormatException {
         // An unknown error remains a normal image/protocol rejection below.
@@ -272,6 +278,11 @@ final class UstcModelGateway implements ModelGatewayPort {
           'max_context_length_exceeded',
         }.contains(error['code']);
   }
+
+  static bool _isReasoningRejection(Object? value) =>
+      value is Map<String, dynamic> &&
+      value['error'] is Map<String, dynamic> &&
+      (value['error'] as Map<String, dynamic>)['param'] == 'reasoning_effort';
 
   Future<HttpClientResponse> _send(
     _OwnedRequest operation, {
@@ -519,6 +530,7 @@ final class UstcModelGateway implements ModelGatewayPort {
       'messages': messages,
       'stream': true,
       'max_tokens': request.maxTokens,
+      'reasoning_effort': ?modelReasoningEffort(request.modelId),
     };
     if (request.tools.isNotEmpty) {
       body['tools'] = request.tools

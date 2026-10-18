@@ -616,6 +616,41 @@ void main() {
     );
 
     test(
+      'unacknowledged preparation is a source timeout and drains before returning idle',
+      () async {
+        final browser = _AutomatedBrowser(holdPreparation: true);
+        final harness = await _Harness.create(
+          browser: browser,
+          drainTimeout: const Duration(milliseconds: 60),
+        );
+        addTearDown(harness.dispose);
+        await _seedDeferredYoungEvent(harness.store);
+        await harness.sync.startActivities(expectedAccountCode: _account);
+
+        final view = harness.sync.syncView;
+        expect(view.phase, YoungSyncPhase.idle);
+        expect(view.failure, FailureCode.sourceFailed);
+        expect(view.failureStage, YoungSyncPhase.login);
+        expect(
+          view.collectionReason,
+          YoungBusinessRejection.preparationTimedOut,
+        );
+        expect(view.committed, isFalse);
+        expect(browser.trueDrainCount, greaterThan(0));
+        expect(browser.startCalls, 0);
+        final data = await harness.store.readYoungView();
+        expect(data.events, hasLength(1));
+        expect(data.importCount, 0);
+        expect(data.queryCount, 0);
+        // A late readiness reply cannot start reading or revive the closed job.
+        browser.releasePreparation();
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(browser.startCalls, 0);
+      },
+      skip: !Platform.isWindows,
+    );
+
+    test(
       'cancel during business preparation preserves prior Young facts and creates no receipt',
       () async {
         final browser = _AutomatedBrowser(holdPreparation: true);
@@ -1477,6 +1512,7 @@ final class _Harness {
     required _SyntheticBrowser browser,
     bool initialize = true,
     Duration navigationTimeout = const Duration(seconds: 2),
+    Duration drainTimeout = const Duration(seconds: 5),
     Duration loginWaitTimeout = const Duration(seconds: 90),
     Duration businessStability = const Duration(milliseconds: 500),
     Future<void> Function(
@@ -1511,7 +1547,7 @@ final class _Harness {
       clock: FixedClock(DateTime.utc(2026, 10, 11, 12)),
       navigationTimeout: navigationTimeout,
       pollInterval: const Duration(milliseconds: 1),
-      drainTimeout: const Duration(seconds: 5),
+      drainTimeout: drainTimeout,
       loginWaitTimeout: loginWaitTimeout,
       businessStability: businessStability,
     );

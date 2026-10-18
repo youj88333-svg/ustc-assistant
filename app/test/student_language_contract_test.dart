@@ -38,6 +38,18 @@ void main() {
         morning.messages.first.content,
         contains(studentLanguageInstruction),
       );
+      expect(assistantPersonaPrefix, startsWith('【PERSONA LOAD】'));
+      expect(assistantPersonaPrefix, endsWith('【PERSONA END】'));
+      expect(studentLanguageInstruction, startsWith(assistantPersonaPrefix));
+      expect(chat, startsWith(assistantPersonaPrefix));
+      expect(
+        morning.messages.first.content,
+        startsWith(assistantPersonaPrefix),
+      );
+      expect(chat, isNot(contains('学长')));
+      expect(chat, isNot(contains('同学')));
+      expect(morning.messages.first.content, isNot(contains('学长')));
+      expect(morning.messages.first.content, isNot(contains('同学')));
       // The assembly is tested; a fake model cannot certify conversational tone.
       expect(chat, contains('普通问候、闲聊就自然接话'));
       expect(chat, contains('明确在续接事情时'));
@@ -46,6 +58,14 @@ void main() {
       expect(morning.toolChoice, 'none');
       expect(morning.tools, isEmpty);
       expect(morning.messages.first.content, contains('仅供应用解析的交付格式'));
+      expect(
+        morning.messages.first.content,
+        contains('恰有today和notices两个字符串字段'),
+      );
+      expect(
+        morning.messages.first.content,
+        contains('notices必须为空字符串'),
+      );
     },
   );
 

@@ -19,6 +19,8 @@ import 'agent_context_budget.dart';
 import 'agent_invocation_fingerprint.dart';
 import 'agent_system_prompt.dart';
 import 'model_gateway_contract.dart';
+import 'student_language_prompt.dart';
+import 'model_reasoning_policy.dart';
 
 /// Only active work consumes this budget; waiting for a human never does.
 final class _AgentRunBudget {
@@ -689,6 +691,13 @@ final class AgentCoordinator {
             modelId: modelId,
             messages: [
               ModelChatMessage(
+                role: 'system',
+                content:
+                    '$assistantPersonaPrefix\nTASK CAPABILITY_PROBE\n'
+                    'OUTPUT EXACT_TASK_FORMAT\n'
+                    '本次只验证文本协议，按用户指定的合成标记回复。',
+              ),
+              ModelChatMessage(
                 role: 'user',
                 content: '只回复 USTC_TEXT_PROBE。这是合成文本与流式能力测试。',
               ),
@@ -707,6 +716,13 @@ final class AgentCoordinator {
         _publish();
         try {
           final toolMessages = [
+            ModelChatMessage(
+              role: 'system',
+              content:
+                  '$assistantPersonaPrefix\nTASK TOOL_CAPABILITY_PROBE\n'
+                  'OUTPUT EXACT_TASK_FORMAT\n'
+                  '本次只验证工具调用与结果续答，严格按合成任务要求输出。',
+            ),
             ModelChatMessage(
               role: 'user',
               content:
@@ -2123,6 +2139,7 @@ final class AgentCoordinator {
     int g,
   ) async {
     const instruction =
+        '$assistantPersonaPrefix\nTASK CONTEXT_SUMMARY\nOUTPUT FACTUAL_HISTORY_ONLY\n'
         '把所提供的完整历史交互整理为简体中文会话摘要，不超过3000字。'
         '保留用户的目标、已选对象和候选顺序、明确日期与单次/系列范围、限制、未解决问题、最近结果及真实提交/拒绝/中断状态。'
         '需要时保留会话目标别名，以便继续定位；别名与旧批准不授予权限，当前读取或修改由应用重新核验。'
@@ -2646,6 +2663,8 @@ final class AgentCoordinator {
     'vision': 'unverified',
     'registry': agentToolRegistryVersion,
     'promptVersion': agentPromptVersion,
+    'reasoningEffort':
+        modelReasoningEffort(_settings?.modelId) ?? 'serverDefault',
     if (_diagnosticTrace != null) 'diagnosticTrace': _diagnosticTrace!.value,
     if (_parameterIssue != null)
       'parameterValidation': _parameterIssue!.toSafeMap(),

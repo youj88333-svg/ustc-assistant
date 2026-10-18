@@ -21,6 +21,109 @@ void main() {
     });
 
     test(
+      'only the registered school alias receives high on every request',
+      () async {
+        final bodies = <Map<String, dynamic>>[];
+        await server.start((request) async {
+          bodies.add(
+            jsonDecode(await utf8.decoder.bind(request).join())
+                as Map<String, dynamic>,
+          );
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          request.response.write(
+            'data: {"choices":[{"index":0,"delta":{"content":"合成回复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        addTearDown(gateway.close);
+        for (final model in [
+          'deepseek-flash',
+          'deepseek-flash-2',
+          'deepseek-v4-flash',
+          'synthetic-model',
+          'DeepSeek-Flash',
+          'deepseek-flash-unverified',
+        ]) {
+          await gateway
+              .generate(
+                ModelRequest(
+                  modelId: model,
+                  messages: [
+                    ModelChatMessage(role: 'system', content: '合成任务'),
+                    ModelChatMessage(role: 'user', content: '合成输入'),
+                  ],
+                ),
+                _key(),
+              )
+              .drain<void>();
+        }
+        expect(bodies.first['reasoning_effort'], 'high');
+        expect(
+          bodies.skip(1).every((body) => !body.containsKey('reasoning_effort')),
+          isTrue,
+        );
+        for (final body in bodies) {
+          expect(
+            body.keys.toSet(),
+            body['model'] == 'deepseek-flash'
+                ? {
+                    'model',
+                    'messages',
+                    'stream',
+                    'max_tokens',
+                    'reasoning_effort',
+                  }
+                : {'model', 'messages', 'stream', 'max_tokens'},
+          );
+          expect(body.containsKey('thinking'), isFalse);
+          expect(body.containsKey('chat_template_kwargs'), isFalse);
+        }
+      },
+    );
+
+    test(
+      'an explicit effort rejection is visible and is never retried at another level',
+      () async {
+        var requests = 0;
+        await server.start((request) async {
+          requests++;
+          await utf8.decoder.bind(request).join();
+          request.response.statusCode = 400;
+          request.response.write(
+            jsonEncode({
+              'error': {
+                'param': 'reasoning_effort',
+                'code': 'unsupported_parameter',
+                'message': 'PRIVATE_PROVIDER_TEXT',
+              },
+            }),
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        addTearDown(gateway.close);
+        await expectLater(
+          gateway
+              .generate(
+                ModelRequest(
+                  modelId: 'deepseek-flash',
+                  messages: [ModelChatMessage(role: 'user', content: '合成请求')],
+                ),
+                _key(),
+              )
+              .toList(),
+          throwsA(_failure(AgentFailureCode.reasoningRejected)),
+        );
+        expect(requests, 1);
+      },
+    );
+
+    test(
       'active PNG input uses a data URL in user content without another upload endpoint',
       () async {
         const png =
@@ -557,6 +660,7 @@ void main() {
         request.response.headers.contentType = ContentType(
           'text',
           'event-stream',
+          charset: 'utf-8',
         );
         for (var i = 0; i < 9; i++) {
           request.response.write(

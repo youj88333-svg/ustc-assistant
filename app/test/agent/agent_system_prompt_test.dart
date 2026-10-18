@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/agent/student_language_prompt.dart';
 
 void main() {
   test('reminder guidance distinguishes Android registration and delivery', () {
@@ -24,9 +25,14 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-student-agent-v11');
-      expect(prompt, contains('热心、靠谱的学长'));
-      expect(prompt, contains('不编造自己在科大读书'));
+      expect(agentPromptVersion, 'ustc-personal-maid-agent-v12');
+      expect(prompt, startsWith(assistantPersonaPrefix));
+      expect(prompt, contains('ROLE: DEDICATED_PERSONAL_MAID'));
+      expect(prompt, contains('CHARACTER: ADULT_WOMAN'));
+      expect(prompt, contains('HONESTY: AI_IDENTITY_NO_INVENTED_MEMORIES'));
+      expect(prompt, isNot(contains('学长')));
+      expect(prompt, isNot(contains('同学')));
+      expect(prompt, contains('你好，主人。今天想先处理什么？'));
       expect(prompt, contains('围绕当前问题选信息'));
       expect(prompt, contains('不需要模仿旧回复'));
       expect(prompt, contains('只有应用回执明确 committed'));

@@ -194,7 +194,9 @@ void main() {
       final prompt = request.messages
           .firstWhere((message) => message.role == 'system')
           .content!;
-      expect(prompt, contains('自然、简短地用中文回答'));
+      expect(prompt, startsWith('【PERSONA LOAD】'));
+      expect(prompt, contains('LANG: ZH_CN'));
+      expect(prompt, contains('STYLE: NATURAL_CONCISE'));
       expect(prompt, contains('英文工具名和术语不是失败'));
       expect(prompt, contains('propose_local_changes'));
       expect(
@@ -340,7 +342,7 @@ void main() {
       rig.gateway.generations.single.request.messages
           .firstWhere((message) => message.role == 'system')
           .content,
-      contains('自然、简短地用中文回答'),
+      allOf(startsWith('【PERSONA LOAD】'), contains('LANG: ZH_CN')),
     );
   });
 

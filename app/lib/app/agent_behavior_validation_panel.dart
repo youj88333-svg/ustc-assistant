@@ -423,6 +423,7 @@ String _failureLabel(AgentFailureCode failure) => switch (failure) {
   AgentFailureCode.consentRequired => '尚未同意模型调用。',
   AgentFailureCode.modelRequired => '当前模型能力未就绪。',
   AgentFailureCode.contextLimit => '当前模型服务的上下文容量不足。',
+  AgentFailureCode.reasoningRejected => '模型服务拒绝了本次 high 思考参数。',
   AgentFailureCode.cancelled => '核验已停止。',
   AgentFailureCode.timeout => '核验超时。',
   _ => '核验未能完成。',

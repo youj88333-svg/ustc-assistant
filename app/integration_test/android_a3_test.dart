@@ -220,6 +220,9 @@ void main() {
 
           for (final request in model.chatRequests) {
             expect((request['tools'] as List).length, 20);
+            final first = (request['messages'] as List).first as Map;
+            expect(first['role'], 'system');
+            expect(first['content'], startsWith('【PERSONA LOAD】'));
             _expectPairedHistory(request);
           }
           results['keystoreToolReady'] = true;

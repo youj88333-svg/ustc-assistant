@@ -1209,10 +1209,25 @@ struct State : std::enable_shared_from_this<State> {
     if (pending_operations != 0 || (young_observer &&
         (young_observer->Busy() || young_observer->snapshot().listening)) ||
         (young_reader && young_reader->Busy())) { Error(result, "busy"); return; }
+    const std::wstring lookup_key = L"__ustc_young_ready_" +
+        std::to_wstring(session) + L"_" + std::to_wstring(requested_document);
     const std::wstring script = L"(()=>{'use strict';try{if(location.origin!==" +
         ScriptString(probe_origin) + L"||location.pathname!==" + ScriptString(path) +
         L"||document.readyState!=='complete'||!window.webpackJsonp)return false;"
-        L"const m=window.webpackJsonp.push([[],{},[['0fea']]]);const f=m&&m.e;"
+        // Readiness is not a business read. Avoid requiring a lazy module
+        // before its factory exists: Webpack can cache that failed execution.
+        // This fixed lookup reads only 0fea; CDP dispatch/identity/network
+        // correlation remains independently enforced by BusinessReader.
+        L"const w=window.webpackJsonp;if(typeof w.push!=='function'||w.push===Array.prototype.push)return false;"
+        L"const key=" + ScriptString(lookup_key) + L";const saved=Object.getOwnPropertyDescriptor(window,key);"
+        L"let lookup=saved&&saved.value;if(typeof lookup!=='function'){const factories=Object.create(null);"
+        L"factories[key]=function(module,exports,require){module.exports=function(){"
+        L"const md=Object.getOwnPropertyDescriptor(require,'m');const modules=md&&md.value;"
+        L"const fd=modules&&Object.getOwnPropertyDescriptor(modules,'0fea');"
+        L"if(!fd||typeof fd.value!=='function')return null;return require('0fea');};};"
+        L"lookup=w.push([[],factories,[[key]]]);if(typeof lookup!=='function')return false;"
+        L"Object.defineProperty(window,key,{value:lookup});}"
+        L"const m=lookup();const f=m&&m.e;"
         L"return typeof f==='function'&&Function.prototype.toString.call(f)==="
         L"'function l(e,t){return Object(r[\"b\"])({url:e,method:\"get\",params:t,timeout:36e5})}'"
         L"}catch(_){return false}})()";
