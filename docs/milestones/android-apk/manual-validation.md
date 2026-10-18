@@ -4,20 +4,20 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/ui-refresh/artifacts/USTC-Assistant-Android-UI-QA4006-x86_64.apk`。这是包含[跨端界面重构](../ui-refresh/plan.md)的x86_64私有QA包，不是A8正式版，也不是arm64手机包；本轮工程与图像证据见[记录](../ui-refresh/records.md)。
+文件位于工程内：`app/build/qa4007/artifacts/USTC-Assistant-Android-QA4007-x86_64.apk`。这是沿用[跨端界面重构](../ui-refresh/plan.md)、修复二课准备并统一模型策略的x86_64私有QA包，不是A8正式版，也不是arm64手机包；本轮证据见[记录14](records/14-qa4006-young-and-model-policy.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4006` |
-| ABI / 文件大小 | `x86_64` / `290965816` bytes |
-| SHA-256 | `b0a488c7708a917aa8c0943749432ab60f67faf6469a58f9178aa5a0aa380211` |
-| 源码修订 | `094a0560569989ad7350db83e9941e54a2f81ae3` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4007` |
+| ABI / 文件大小 | `x86_64` / `290976264` bytes |
+| SHA-256 | `db6b8c2bb2b8142bd370ab7a610ec0cc7feb62569333f12bdf50a6a455c7a498` |
+| 源码修订 | `29f3fe8d3e058e3c468fc6a7b1ade8297ecafc92` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003/4004/4005版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4006版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-另有同一源码的`app/build/ui-refresh/artifacts/USTC-Assistant-Android-UI-QA2006-arm64-v8a.apk`，279203767 bytes，SHA-256为`9bf7ebdbd9f9c91b1a2de34b00f76fca70f5e1512e39c0a0f2d2c9d09b7840c2`。它仅完成构建/签名/包内容检查，未在arm64实机运行。旧4004/4005和ARM64/2004均保留；当前MuMu请选择上表x86_64/4006，不用ARM64包覆盖。
+另有同一源码的`app/build/qa4007/artifacts/USTC-Assistant-Android-QA2007-arm64-v8a.apk`，279209275 bytes，SHA-256为`ff16185974c297ce2f6ae6254a79967a7478ad54c665ee170b5bc447a756df5c`。它仅完成构建/签名/包内容检查，未在arm64实机运行。旧QA及ARM64包均保留；当前MuMu请选择上表x86_64/4007，不用ARM64包覆盖。
 
 ## 安装
 
@@ -28,9 +28,17 @@
 - 此APK不会自动安装、升级或配置MuMu/WebView组件，也不会更改模拟设备资料。安装应用更新不等于更新系统WebView。
 - 本机MuMu此前记录为宿主5.30.1.3586、Android12/API32、`com.android.webview` 110.0.5481.154.1；这些只是已有环境信息，不是新版包已在该环境通过的结论。兼容验证以记录12为准，不要因一次失败反复登录或安装来源不明的组件。
 
-## 本轮界面体验
+## 本轮集中复验
 
-本轮只改变展示，学校认证/采集、工具、数据库和个人资料契约保留。可先简单查看：
+1. 覆盖安装后重试二课同步。成功则核对活动关联日程；若仍失败，导出这次最近安全日志或复制二课同步摘要，无需反复登录或提供学校页面原文。
+2. 使用精确模型名 `deepseek-flash` 时，设置页应显示“高（high）”；对话、晨报、压缩及能力验证由统一网关发送同一参数。其他模型显示服务默认。此处显示的是客户端策略，不能替代学校实际接受及采用参数的验证；明确拒参会给出固定错误，不静默换强度。
+3. 新回复和重新生成的晨报使用专属女仆标签人格，以自然中文交流，偶尔称呼“主人”；旧聊天和已缓存晨报保留，不为体验更新清除会话或资料。
+
+机械回归见记录14，真实MuMu同步、模型参数与语气效果待用户反馈；无需重做所有已通过的历史体验项。
+
+## 沿用的界面体验
+
+QA4006界面继续保留，学校只读边界、工具、数据库和个人资料契约不变。可按需要查看：
 
 1. Agent正文是否突出，展开/收起过程与出处是否顺手；有当前方案时，短审批面板是否紧凑、长内容和按钮是否仍可达。
 2. 日程周表、课程详情和任务是否清楚，教室/教师等信息是否容易找到；手机七列保留，时间轴仍可纵向滚动，极大字号有必要的横向回退。
