@@ -369,6 +369,21 @@ abstract interface class AgentDataPort {
 }
 
 /// Safe UI projection, shared without Flutter dependencies in C4.
+/// Transient provider output: never persisted or included in model context.
+final class AgentReasoningView {
+  const AgentReasoningView({
+    required this.text,
+    this.active = false,
+    this.truncated = false,
+  });
+  static const maximumCharacters = 32000;
+  final String text;
+  final bool active, truncated;
+  @override
+  String toString() => 'AgentReasoningView';
+}
+
+/// Safe UI projection, shared without Flutter dependencies in C4.
 final class AgentRuntimeView {
   AgentRuntimeView({
     this.phase = AgentPhase.idle,
@@ -376,6 +391,7 @@ final class AgentRuntimeView {
     List<String> availableModels = const [],
     List<AgentConversation> conversations = const [],
     List<AgentMessage> messages = const [],
+    Map<int, AgentReasoningView> reasoningByMessage = const {},
     this.conversationId,
     this.failure,
     this.report = const AgentCapabilityReport(),
@@ -396,12 +412,14 @@ final class AgentRuntimeView {
     this.adviceOnly = false,
   }) : availableModels = List.unmodifiable(availableModels),
        conversations = List.unmodifiable(conversations),
-       messages = List.unmodifiable(messages);
+       messages = List.unmodifiable(messages),
+       reasoningByMessage = Map.unmodifiable(reasoningByMessage);
   final AgentPhase phase;
   final AgentSettingsSnapshot? settings;
   final List<String> availableModels;
   final List<AgentConversation> conversations;
   final List<AgentMessage> messages;
+  final Map<int, AgentReasoningView> reasoningByMessage;
   final String? conversationId;
   final AgentFailureCode? failure;
   final AgentCapabilityReport report;

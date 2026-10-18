@@ -71,6 +71,15 @@ final class ModelTextDelta extends ModelEvent {
   String toString() => 'ModelTextDelta';
 }
 
+/// Optional text explicitly supplied by the configured provider. Display only:
+/// never a conversation message, tool argument, action or reusable model input.
+final class ModelReasoningDelta extends ModelEvent {
+  const ModelReasoningDelta(this.text);
+  final String text;
+  @override
+  String toString() => 'ModelReasoningDelta';
+}
+
 final class ModelCompleted extends ModelEvent {
   ModelCompleted({
     required this.finishReason,

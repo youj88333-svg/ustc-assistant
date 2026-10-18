@@ -5,7 +5,9 @@ param(
     [string]$ExpectedAvd = '',
     [ValidateRange(1, 65535)]
     [int]$AdbServerPort = 5038,
-    [switch]$OrdinaryOnly
+    [switch]$OrdinaryOnly,
+    [ValidateSet('android-webview2', 'android-feedback')]
+    [string]$ReportFamily = 'android-webview2'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -106,7 +108,7 @@ if ([string]::IsNullOrWhiteSpace($abi)) {
 }
 $provider = Get-CurrentWebViewProvider -DumpsysText (Invoke-QaAdbText -Arguments @('shell', 'dumpsys', 'webviewupdate'))
 
-$reportRoot = Join-Path $workspaceRoot "app/build/android-webview2/reports/$ExpectedAvd"
+$reportRoot = Join-Path $workspaceRoot "app/build/$ReportFamily/reports/$ExpectedAvd"
 New-Item -ItemType Directory -Force -Path $reportRoot | Out-Null
 $nativePath = Join-Path $reportRoot 'native.txt'
 $summaryPath = Join-Path $reportRoot 'summary.json'

@@ -15,6 +15,122 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
   test(
+    'provider reasoning is live display only, never durable or next-turn input',
+    () async {
+      final rig = await _rig(configured: true);
+      final sending = rig.coordinator.send('合成思考展示问题');
+      final generation = await rig.gateway.nextGeneration();
+      await generation.started.future;
+      generation.emit(const ModelReasoningDelta('REASONING_ONLY_SENTINEL'));
+      await _until(() => rig.coordinator.view.reasoningByMessage.isNotEmpty);
+      final id = rig.coordinator.view.messages.last.id;
+      expect(rig.coordinator.view.messages.last.text, isEmpty);
+      expect(rig.coordinator.view.reasoningByMessage[id]!.active, isTrue);
+      expect(
+        rig.coordinator.view.reasoningByMessage[id].toString(),
+        'AgentReasoningView',
+      );
+      generation.emit(const ModelTextDelta('这是最终正文。'));
+      generation.emit(ModelCompleted(finishReason: 'stop'));
+      await generation.finish();
+      await sending;
+      expect(rig.coordinator.view.reasoningByMessage[id]!.active, isFalse);
+      final saved = await rig.store.agent.messages(
+        rig.coordinator.view.conversationId!,
+      );
+      expect(
+        saved.map((m) => m.text).join(),
+        isNot(contains('REASONING_ONLY_SENTINEL')),
+      );
+      rig.gateway.enqueueEvents([
+        const ModelTextDelta('下一轮正文'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await rig.coordinator.send('继续');
+      expect(
+        rig.gateway.generations.last.request.messages
+            .map((m) => m.content ?? '')
+            .join(),
+        isNot(contains('REASONING_ONLY_SENTINEL')),
+      );
+      final fresh = AgentCoordinator(
+        data: rig.store.agent,
+        gateway: _SyntheticGateway(),
+      );
+      await fresh.initialize();
+      expect(
+        fresh.view.reasoningByMessage,
+        isEmpty,
+        reason: 'reopening never reloads transient thinking',
+      );
+      await fresh.close();
+      await rig.coordinator.clearConversation();
+      expect(rig.coordinator.view.reasoningByMessage, isEmpty);
+    },
+  );
+
+  test(
+    'saving a private read revocation clears transient reasoning immediately',
+    () async {
+      final rig = await _rig(configured: true);
+      await rig.coordinator.saveUsePolicy(
+        personalContentAllowed: true,
+        dailyOperationsAllowed: false,
+      );
+      rig.gateway.enqueueEvents([
+        const ModelReasoningDelta('PRIVATE_REASONING_SENTINEL'),
+        const ModelTextDelta('合成正文'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await rig.coordinator.send('合成私人读取问题');
+      expect(rig.coordinator.view.reasoningByMessage, isNotEmpty);
+      final before = await rig.store.agent.inspectAgent();
+      await rig.coordinator.saveUsePolicy(
+        personalContentAllowed: false,
+        dailyOperationsAllowed: false,
+      );
+      final after = await rig.store.agent.inspectAgent();
+      expect(after.authority, before.authority);
+      expect(rig.coordinator.view.reasoningByMessage, isEmpty);
+      expect(rig.coordinator.view.messages.last.text, '合成正文');
+    },
+  );
+
+  test(
+    'reasoning is bounded, stops on cancellation, and cannot leak into a later reply',
+    () async {
+      final rig = await _rig(configured: true);
+      final sending = rig.coordinator.send('合成长思考问题');
+      final generation = await rig.gateway.nextGeneration();
+      await generation.started.future;
+      generation.emit(ModelReasoningDelta('想' * 40000));
+      await _until(() => rig.coordinator.view.reasoningByMessage.isNotEmpty);
+      final id = rig.coordinator.view.messages.last.id;
+      expect(
+        rig.coordinator.view.reasoningByMessage[id]!.text.length,
+        AgentReasoningView.maximumCharacters,
+      );
+      expect(rig.coordinator.view.reasoningByMessage[id]!.truncated, isTrue);
+      await rig.coordinator.stop();
+      await sending;
+      expect(rig.coordinator.view.reasoningByMessage[id]!.active, isFalse);
+      expect(generation.emit(const ModelReasoningDelta('迟到的片段')), isFalse);
+      rig.gateway.enqueueEvents([
+        const ModelReasoningDelta('password=synthetic-only-1234'),
+        const ModelTextDelta('可正常完成的正文'),
+        ModelCompleted(finishReason: 'stop'),
+      ]);
+      await rig.coordinator.send('新的合成问题');
+      final latest = rig.coordinator.view.messages.last;
+      expect(latest.text, '可正常完成的正文');
+      expect(latest.status, AgentMessageStatus.complete);
+      expect(rig.coordinator.view.reasoningByMessage[latest.id], isNull);
+      await rig.coordinator.setModelConsent(false);
+      expect(rig.coordinator.view.reasoningByMessage, isEmpty);
+    },
+  );
+
+  test(
     'a hidden mobile host drains a stream and never resumes it implicitly',
     () async {
       final rig = await _rig(configured: true);

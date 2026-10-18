@@ -1384,7 +1384,12 @@ void main() {
         await tester.ensureVisible(
           find.byKey(const ValueKey('calendar-workspace-view-mode')),
         );
-        await tester.tap(find.text('日'));
+        await tester.tap(
+          find.descendant(
+            of: find.byKey(const ValueKey('calendar-workspace-view-mode')),
+            matching: find.text('日'),
+          ),
+        );
         await tester.pumpAndSettle();
         final item = find.byKey(
           ValueKey<CalendarReference>(occurrence.reference),

@@ -930,17 +930,18 @@
     };
   }
   put(api, 'prepare', closed(prepare));
-  // This is a readiness check only, never an identity/permission grant. In
-  // particular the namespace callback document with a ticket is not ready for
-  // a new navigation: its natural SPA/bootstrap chain must first finish.
+  // Navigation must not depend on the destination's lazy-loaded GET module or
+  // intact transport wrappers on the landing page. A fixed full navigation
+  // creates a new document, where prepare/start still enforce those checks.
+  // The namespace callback (including its ticket) must finish naturally first.
   put(api, 'navigationReady', closed(function() {
     try {
       const path = apply(locationPath, locationObject, []);
-      return intact() && apply(winDocument, win, []) === doc && apply(winTop, win, []) === win &&
+      return apply(winDocument, win, []) === doc && apply(winTop, win, []) === win &&
         apply(locationOrigin, locationObject, []) === expectedOrigin &&
         path.indexOf(NAMESPACE) === 0 && path.length > NAMESPACE.length &&
         apply(locationHref, locationObject, []).indexOf('?') === -1 &&
-        apply(documentReady, doc, []) === 'complete' && !!helper();
+        apply(documentReady, doc, []) === 'complete';
     } catch (_) { return false; }
   }));
   put(api, 'start', closed(start));

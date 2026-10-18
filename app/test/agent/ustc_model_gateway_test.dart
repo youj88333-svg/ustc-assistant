@@ -206,6 +206,8 @@ void main() {
             'chunked',
           );
           final events = <String>[
+            'data: {"choices":[{"index":0,"delta":{"reasoning_content":"先核对","content":null},"finish_reason":null}]}\n\n',
+            'data: {"choices":[{"index":0,"delta":{"reasoning":"再查询","reasoning_content":"再查询"},"finish_reason":null}]}\n\n',
             'data: {"choices":[{"index":0,"delta":{"content":"中"},"finish_reason":null}],"usage":null}\n\n',
             'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_","type":"function","function":{"name":"echo_","arguments":"{\\"value\\":"}}]},"finish_reason":null}]}\n\n',
             'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"7","function":{"name":"probe","arguments":"\\"合成\\"}"}}]},"finish_reason":null}]}\n\n',
@@ -254,6 +256,10 @@ void main() {
           '中',
         );
         final completion = events.whereType<ModelCompleted>().single;
+        expect(
+          events.whereType<ModelReasoningDelta>().map((e) => e.text).join(),
+          '先核对再查询',
+        );
         expect(completion.finishReason, 'tool_calls');
         expect(completion.inputTokens, 12);
         expect(completion.outputTokens, 4);
@@ -517,6 +523,59 @@ void main() {
 
       await expectLater(
         gateway.listModels(_key()),
+        throwsA(_failure(AgentFailureCode.resourceLimit)),
+      );
+      await gateway.close();
+    });
+
+    test(
+      'rejects malformed reasoning without turning it into answer text',
+      () async {
+        await server.start((request) async {
+          await utf8.decoder.bind(request).join();
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: {"choices":[{"index":0,"delta":{"reasoning_content":{"text":"wrong shape"}},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        await expectLater(
+          gateway.generate(_request(), _key()).toList(),
+          throwsA(_failure(AgentFailureCode.protocol)),
+        );
+        await gateway.close();
+      },
+    );
+
+    test('bounds reasoning separately from final answer text', () async {
+      await server.start((request) async {
+        await utf8.decoder.bind(request).join();
+        request.response.headers.contentType = ContentType(
+          'text',
+          'event-stream',
+        );
+        for (var i = 0; i < 9; i++) {
+          request.response.write(
+            'data: ${jsonEncode({
+              'choices': [
+                {
+                  'index': 0,
+                  'delta': {'reasoning': 'x' * (16 * 1024)},
+                  'finish_reason': null,
+                },
+              ],
+            })}\n\n',
+          );
+        }
+        await request.response.close();
+      });
+      final gateway = server.gateway();
+      await expectLater(
+        gateway.generate(_request(), _key()).toList(),
         throwsA(_failure(AgentFailureCode.resourceLimit)),
       );
       await gateway.close();

@@ -125,6 +125,8 @@ final class AgentCoordinator {
   Uint8List? _candidateKey;
   Timer? _candidateExpiry;
   String _liveText = '';
+  final _reasoning = <int, AgentReasoningView>{};
+  final _suppressedReasoning = <int>{};
   int _requests = 0;
   int _toolCalls = 0, _modelCalls = 0, _imageRequests = 0;
   int _lastActiveMs = 0,
@@ -157,6 +159,7 @@ final class AgentCoordinator {
       availableModels: _models,
       conversations: _conversations,
       messages: _messages,
+      reasoningByMessage: _reasoning,
       conversationId: _conversation,
       failure: _failure,
       report: _report,
@@ -410,12 +413,25 @@ final class AgentCoordinator {
   }
 
   Future<void> _refresh() async {
+    final oldAuthority = _settings?.authority;
+    final oldPolicy = _usePolicy;
     _settings = await data.inspectAgent();
     _report = _settings!.report;
     final policyPort = data;
     if (policyPort is AgentUsePolicyPort) {
       _usePolicy = await (policyPort as AgentUsePolicyPort)
           .readAgentUsePolicy();
+    }
+    final authority = _settings!.authority;
+    if (oldAuthority != null &&
+        (oldAuthority.owner != authority.owner ||
+            oldAuthority.resetEpoch != authority.resetEpoch ||
+            oldAuthority.historyEpoch != authority.historyEpoch ||
+            oldAuthority.configRevision != authority.configRevision ||
+            !_settings!.consent ||
+            (oldPolicy.personalContentAllowed &&
+                !_usePolicy.personalContentAllowed))) {
+      _clearReasoning();
     }
     _conversations = await data.conversations();
     final chat = data;
@@ -448,6 +464,7 @@ final class AgentCoordinator {
         ...recent,
       ];
     } else {
+      _clearReasoning();
       _messages = List<AgentMessage>.of(recent);
       _historyExhausted = recent.length < 100;
       _loadedConversation = _conversation;
@@ -610,6 +627,9 @@ final class AgentCoordinator {
       await for (final event in _modelEvents(request, secret, g)) {
         _current(g);
         switch (event) {
+          case ModelReasoningDelta():
+            // Capability probes never display or persist provider reasoning.
+            break;
           case ModelTextDelta():
             text.write(event.text);
             AgentText.requireSafe(text.toString());
@@ -898,6 +918,51 @@ final class AgentCoordinator {
     _publish();
   }
 
+  void _clearReasoning() {
+    _reasoning.clear();
+    _suppressedReasoning.clear();
+  }
+
+  void _showReasoning(int messageId, String delta, {required bool newRound}) {
+    if (delta.isEmpty || _suppressedReasoning.contains(messageId)) return;
+    final previous = _reasoning[messageId];
+    final text =
+        '${previous?.text ?? ''}'
+        '${newRound && previous != null ? '\n\n' : ''}$delta';
+    try {
+      // Identifiable secrets do not become UI content or abort the answer.
+      AgentText.requireSafe(text, maxCharacters: 128 * 1024);
+    } on AgentFailure {
+      _reasoning.remove(messageId);
+      _suppressedReasoning.add(messageId);
+      _publish();
+      return;
+    }
+    final clipped = text.runes.length > AgentReasoningView.maximumCharacters;
+    _reasoning[messageId] = AgentReasoningView(
+      text: clipped
+          ? String.fromCharCodes(
+              text.runes.take(AgentReasoningView.maximumCharacters),
+            )
+          : text,
+      active: true,
+      truncated: previous?.truncated == true || clipped,
+    );
+    while (_reasoning.length > 12) {
+      _reasoning.remove(_reasoning.keys.first);
+    }
+    _publish();
+  }
+
+  void _finishReasoning(int messageId) {
+    final current = _reasoning[messageId];
+    if (current == null || !current.active) return;
+    _reasoning[messageId] = AgentReasoningView(
+      text: current.text,
+      truncated: current.truncated,
+    );
+  }
+
   Future<void> _validateRun(AgentRunTicket ticket, int g) async {
     _current(g);
     if (_budgetExpired) {
@@ -1032,6 +1097,10 @@ final class AgentCoordinator {
       _current(g);
       _usePolicy = await (port as AgentUsePolicyPort).readAgentUsePolicy();
       _current(g);
+      if (expected.personalContentAllowed &&
+          !_usePolicy.personalContentAllowed) {
+        _clearReasoning();
+      }
       _log(
         DiagnosticEventName.agentPolicyChanged,
         stage: DiagnosticStage.configuration,
@@ -1251,6 +1320,7 @@ final class AgentCoordinator {
       text,
     );
     _ticket = ticket;
+    _suppressedReasoning.clear();
     _runPolicyRevision = data is AgentUsePolicyPort
         ? _usePolicy.revision
         : null;
@@ -1469,6 +1539,7 @@ final class AgentCoordinator {
         final secret = await _secret(ticket.authority, g);
         ModelCompleted? completed;
         var roundText = '';
+        var firstReasoningDelta = true;
         final textBeforeRound = _liveText;
         try {
           await _validateRun(ticket, g);
@@ -1481,7 +1552,15 @@ final class AgentCoordinator {
           await for (final event in _modelEvents(request, secret, g)) {
             await _validateRun(ticket, g);
             switch (event) {
+              case ModelReasoningDelta():
+                _showReasoning(
+                  ticket.assistantMessageId,
+                  event.text,
+                  newRound: firstReasoningDelta,
+                );
+                firstReasoningDelta = false;
               case ModelTextDelta():
+                _finishReasoning(ticket.assistantMessageId);
                 final candidate = '$_liveText${event.text}';
                 AgentText.requireSafe(candidate);
                 _liveText = candidate;
@@ -1501,6 +1580,8 @@ final class AgentCoordinator {
                 }
                 completed = event;
                 _accumulateUsage(event);
+                _finishReasoning(ticket.assistantMessageId);
+                _publish();
             }
           }
         } on AgentFailure catch (failure) {
@@ -1821,6 +1902,7 @@ final class AgentCoordinator {
       rethrow;
     } finally {
       budget.dispose();
+      _finishReasoning(ticket.assistantMessageId);
       _lastActiveMs = budget.activeMilliseconds;
       _lastWaitingMs = budget.waitingMilliseconds;
       _runBudget = null;
@@ -2471,6 +2553,7 @@ final class AgentCoordinator {
 
   Future<void> quiesceForMaintenance() async {
     await _stop(maintenance: true);
+    _clearReasoning();
     _phase = AgentPhase.maintenance;
     _wipeCandidate();
     _publish();
@@ -2518,6 +2601,7 @@ final class AgentCoordinator {
         await readTools?.close();
         await gateway.close();
         _wipeCandidate();
+        _clearReasoning();
         _phase = AgentPhase.closed;
         _publish();
         _closed = true;

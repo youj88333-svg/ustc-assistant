@@ -94,23 +94,35 @@ void main() {
             expect(_lastResult(body)['status'], 'success');
             expect(jsonEncode(_lastResult(body)), contains('A3合成课程'));
             expect(jsonEncode(body), isNot(contains('A3默认不出站的个人备注')));
-            await A3ModelFixture.text(request, '今天下午有一节合成课程。');
+            await A3ModelFixture.text(
+              request,
+              '今天下午有一节合成课程。',
+              reasoning: 'A7_REASONING_DISPLAY_ONLY',
+            );
           });
           await agent.send('今天有什么安排？');
           expect(agent.view.failure, isNull);
           expect(agent.view.messages.last.evidence, isNotEmpty);
+          final thinking =
+              agent.view.reasoningByMessage[agent.view.messages.last.id]!;
+          expect(thinking.text, 'A7_REASONING_DISPLAY_ONLY');
+          expect(thinking.active, isFalse);
           final conversation = agent.view.conversationId;
 
           Map<String, Object?>? proposal;
-          model.replies.add(
-            (request, body) => A3ModelFixture.tool(request, 'find_free_slots', {
+          model.replies.add((request, body) {
+            expect(
+              jsonEncode(body),
+              isNot(contains('A7_REASONING_DISPLAY_ONLY')),
+            );
+            return A3ModelFixture.tool(request, 'find_free_slots', {
               'first_day': '2026-10-16',
               'end_day_exclusive': '2026-10-17',
               'block_minutes': 60,
               'start_minute': 780,
               'end_minute': 840,
-            }, id: 'a3-free'),
-          );
+            }, id: 'a3-free');
+          });
           model.replies.add((request, body) async {
             final result = _lastResult(body);
             expect(result['status'], 'success');

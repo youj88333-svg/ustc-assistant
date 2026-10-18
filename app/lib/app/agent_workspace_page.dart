@@ -1,9 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter/services.dart';
 
 import 'agent_workspace_contract.dart';
+import 'agent_reasoning_panel.dart';
 import 'assistant_markdown.dart';
 import '../core/agent_context_contract.dart';
 import '../core/agent_contract.dart';
@@ -133,6 +135,13 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
   String? _observedPendingActionId;
   bool _observedContextCompacted = false;
   bool _workspaceVisible = true;
+  final _messageScroll = ScrollController();
+  bool _followingMessages = true;
+  bool _followScheduled = false;
+  final _approvalSurfaceRevision = ValueNotifier<int>(0);
+  BuildContext? _approvalSheetContext;
+  bool _approvalSheetOpen = false;
+  String? _lastAutoApprovalId;
 
   @override
   void initState() {
@@ -183,6 +192,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
       _invalidateSpeech(cancel: true);
     }
     if (controllerChanged) {
+      _followingMessages = true;
       oldWidget.controller.removeListener(_onControllerChanged);
       _generation++;
       _clearDraftImages(update: false);
@@ -218,6 +228,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
 
   @override
   void dispose() {
+    _dismissApprovalSheet();
     _generation++;
     _morningGeneration++;
     _morningSubscription?.cancel();
@@ -228,6 +239,8 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _draft.removeListener(_onDraftValueChanged);
     _draft.dispose();
     _composerFocus.dispose();
+    _messageScroll.dispose();
+    _approvalSurfaceRevision.dispose();
     super.dispose();
   }
 
@@ -290,6 +303,20 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     final enteredApproval =
         view.phase == AgentPhase.waitingForApproval &&
         _observedPhase != AgentPhase.waitingForApproval;
+    if (enteredApproval && view.pendingAction != null) {
+      final id = view.pendingAction!.id;
+      if (id != _lastAutoApprovalId) {
+        _lastAutoApprovalId = id;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted &&
+              _workspaceVisible &&
+              isPhoneWorkspace(context) &&
+              widget.controller.view.pendingAction?.id == id) {
+            unawaited(_openApprovalSheet(id));
+          }
+        });
+      }
+    }
     final activeSend = _sending || _approvalReplySending;
     if (enteredApproval &&
         activeSend &&
@@ -324,6 +351,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         historyEpoch != null &&
         _observedHistoryEpoch != null &&
         historyEpoch != _observedHistoryEpoch;
+    if (historyChanged || view.conversationId != _observedConversationId) {
+      _followingMessages = true;
+    }
     final invalidated =
         view.phase == AgentPhase.closed ||
         view.busy ||
@@ -876,6 +906,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     _clearDraftImages(update: false);
     _pendingSendDraft = draftText;
     setState(() {
+      _followingMessages = true;
       if (approvalReply) {
         _approvalReplySending = true;
       } else {
@@ -1614,7 +1645,117 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     }
   }
 
-  Widget _actionCard(AgentActionView action, AgentWorkspaceView view) {
+  void _dismissApprovalSheet() {
+    final sheet = _approvalSheetContext;
+    _approvalSheetContext = null;
+    if (sheet == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (sheet.mounted && ModalRoute.of(sheet)?.isCurrent == true) {
+        Navigator.of(sheet).pop();
+      }
+    });
+  }
+
+  Future<void> _openApprovalSheet(String id) async {
+    if (_approvalSheetOpen || !mounted) return;
+    final port = widget.controller;
+    final conversation = port.view.conversationId;
+    if (port.view.pendingAction?.id != id) return;
+    _composerFocus.unfocus();
+    _approvalSheetOpen = true;
+    try {
+      await showModalBottomSheet<void>(
+        context: context,
+        useSafeArea: true,
+        isScrollControlled: true,
+        builder: (sheetContext) {
+          _approvalSheetContext = sheetContext;
+          final media = MediaQuery.of(sheetContext);
+          final availableHeight =
+              (media.size.height -
+                      media.viewInsets.bottom -
+                      media.padding.vertical)
+                  .clamp(0.0, media.size.height);
+          final height = availableHeight < 360
+              ? availableHeight
+              : availableHeight * .85;
+          return Padding(
+            padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
+            child: SizedBox(
+              key: const ValueKey('agent-current-approval-panel'),
+              height: height,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: IconButton(
+                        tooltip: '关闭方案',
+                        key: const ValueKey('agent-approval-sheet-close'),
+                        onPressed: () => Navigator.of(sheetContext).pop(),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ),
+                    Expanded(
+                      child: AnimatedBuilder(
+                        animation: Listenable.merge([
+                          port,
+                          _approvalSurfaceRevision,
+                        ]),
+                        builder: (context, _) {
+                          final view = port.view;
+                          if (!mounted ||
+                              !identical(port, widget.controller) ||
+                              view.conversationId != conversation ||
+                              view.pendingAction?.id != id) {
+                            return const Center(child: Text('方案状态已更新，请关闭此面板。'));
+                          }
+                          return LayoutBuilder(
+                            builder: (context, constraints) => _actionCard(
+                              view.pendingAction!,
+                              view,
+                              maxHeight: constraints.maxHeight - 8,
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    } finally {
+      _approvalSheetContext = null;
+      _approvalSheetOpen = false;
+    }
+  }
+
+  Future<void> _handlePresentedAction(
+    String id, {
+    required bool approve,
+  }) async {
+    final work = _handleAction(id, approve: approve);
+    if (mounted) _approvalSurfaceRevision.value++;
+    await work;
+    if (!mounted) return;
+    _approvalSurfaceRevision.value++;
+    if (!_messageIsError &&
+        (_submittedActionId == id ||
+            widget.controller.view.phase != AgentPhase.waitingForApproval)) {
+      _dismissApprovalSheet();
+    }
+  }
+
+  Widget _actionCard(
+    AgentActionView action,
+    AgentWorkspaceView view, {
+    double? maxHeight,
+  }) {
     final isCurrent = view.pendingAction?.id == action.id;
     final isWaitingForApproval =
         isCurrent &&
@@ -1643,15 +1784,18 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             isCurrent &&
                 canAct &&
                 widget.controller is AgentPermissionWorkspacePort
-            ? (remember) =>
-                  setState(() => _rememberActionChoices[action.id] = remember)
+            ? (remember) {
+                setState(() => _rememberActionChoices[action.id] = remember);
+                _approvalSurfaceRevision.value++;
+              }
             : null,
         onApprove: canAct
-            ? () => unawaited(_handleAction(action.id, approve: true))
+            ? () => unawaited(_handlePresentedAction(action.id, approve: true))
             : null,
         onReject: canAct
-            ? () => unawaited(_handleAction(action.id, approve: false))
+            ? () => unawaited(_handlePresentedAction(action.id, approve: false))
             : null,
+        maxHeight: maxHeight,
       ),
     );
   }
@@ -1913,23 +2057,12 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
         view.phase == AgentPhase.settling;
 
     final phone = isPhoneWorkspace(context);
-    final controls = Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        if (!configured)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: _SetupPrompt(onSettings: widget.onSettings),
-          ),
-        if (view.phase == AgentPhase.waitingForSchool)
-          _schoolContinuationControls(view),
-        if (_showRunProgress(view)) ...[
-          const SizedBox(height: 4),
-          _AgentRunProgress(view: view),
-          const SizedBox(height: 8),
-        ],
-        _composer(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final approvalCardMaxHeight = (constraints.maxHeight * .36)
+            .clamp(220.0, 360.0)
+            .toDouble();
+        final composer = _composer(
           enabled: canSend,
           canPick:
               view.canSend &&
@@ -1956,36 +2089,82 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
           speechVisible: speechVisible,
           canStartSpeech: canStartSpeech,
           speechView: _speechView,
-        ),
-      ],
-    );
-    return LayoutBuilder(
-      builder: (context, constraints) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Expanded(
-            child: Card(
-              child: view.conversationId == null
-                  ? _emptyConversation(configured)
-                  : _messages(view),
+        );
+        final controls = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (!configured)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _SetupPrompt(onSettings: widget.onSettings),
+              ),
+            if (view.phase == AgentPhase.waitingForSchool)
+              _schoolContinuationControls(view),
+            if (_showRunProgress(view) &&
+                !(phone && view.pendingAction != null)) ...[
+              const SizedBox(height: 4),
+              _AgentRunProgress(view: view),
+              const SizedBox(height: 8),
+            ],
+            if (!phone && view.pendingAction != null) ...[
+              _actionCard(
+                view.pendingAction!,
+                view,
+                maxHeight: approvalCardMaxHeight,
+              ),
+              const SizedBox(height: 8),
+            ],
+            composer,
+          ],
+        );
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Expanded(
+              child: Card(
+                child: view.conversationId == null
+                    ? _emptyConversation(configured)
+                    : _messages(view),
+              ),
             ),
-          ),
-          const SizedBox(height: 10),
-          if (phone)
-            ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: constraints.maxHeight * .62,
+            const SizedBox(height: 10),
+            if (phone && view.pendingAction != null)
+              SizedBox(
+                height: 48,
+                child: FilledButton.tonalIcon(
+                  key: const ValueKey('agent-current-approval-open'),
+                  onPressed: () =>
+                      unawaited(_openApprovalSheet(view.pendingAction!.id)),
+                  icon: const Icon(Icons.pending_actions_outlined),
+                  label: Text(
+                    _submittedActionId == view.pendingAction!.id
+                        ? '决定已送出 · 查看方案'
+                        : '有一项操作待确认 · 查看方案',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
               ),
-              child: SingleChildScrollView(
-                key: const ValueKey('agent-phone-composer-scroll'),
-                reverse: true,
-                child: controls,
-              ),
-            )
-          else
-            controls,
-        ],
-      ),
+            if (phone)
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight:
+                      (constraints.maxHeight -
+                              (view.pendingAction != null ? 58 : 10))
+                          .clamp(0.0, constraints.maxHeight * .62),
+                ),
+                child: SingleChildScrollView(
+                  key: const ValueKey('agent-phone-composer-scroll'),
+                  reverse: true,
+                  child: controls,
+                ),
+              )
+            else
+              controls,
+          ],
+        );
+      },
     );
   }
 
@@ -2027,7 +2206,22 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
     ),
   );
 
+  void _scheduleMessageFollow({int attempts = 2}) {
+    if (!_followingMessages || _followScheduled || !mounted) return;
+    _followScheduled = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _followScheduled = false;
+      if (!mounted || !_followingMessages || !_messageScroll.hasClients) return;
+      final position = _messageScroll.position;
+      if (position.maxScrollExtent > position.pixels + 1) {
+        _messageScroll.jumpTo(position.maxScrollExtent);
+        if (attempts > 1) _scheduleMessageFollow(attempts: attempts - 1);
+      }
+    });
+  }
+
   Widget _messages(AgentWorkspaceView view) {
+    _scheduleMessageFollow();
     final prefix = <Widget>[
       if (view.historyTruncated)
         Padding(
@@ -2059,57 +2253,64 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
             ],
           ),
         ),
-      if (view.pendingAction != null)
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          child: _actionCard(view.pendingAction!, view),
-        ),
     ];
     if (view.messages.isEmpty && prefix.isEmpty) {
       return const Center(
         child: Text('发送一条消息，开始对话。', style: TextStyle(color: _agentMuted)),
       );
     }
-    return ListView.builder(
-      key: const ValueKey('agent-message-list'),
-      padding: const EdgeInsets.all(16),
-      itemCount: view.messages.length + prefix.length,
-      itemBuilder: (context, index) {
-        if (index < prefix.length) return prefix[index];
-        index -= prefix.length;
-        final message = view.messages[index];
-        final detailsKey =
-            '${view.conversationId ?? 'no-conversation'}:${message.id}';
-        final actionCards = [
-          for (final storedAction in message.actions)
-            if (view.pendingAction?.id != storedAction.id)
-              _actionCard(storedAction, view),
-        ];
-        final isCurrentAnswerEvidence =
-            index == view.messages.length - 1 &&
-            view.phase == AgentPhase.idle &&
-            message.role == AgentMessageRole.assistant &&
-            message.status == AgentMessageStatus.complete;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _MessageBubble(
-            message: message,
-            isCurrentAnswerEvidence: isCurrentAnswerEvidence,
-            queryDetailsKey: detailsKey,
-            queryDetailsExpanded: _expandedQueryDetails.contains(detailsKey),
-            actionCount: actionCards.length,
-            actionCards: actionCards,
-            onOpenLocalEvidence: widget.onOpenLocalEvidence,
-            onToggleQueryDetails: () {
-              setState(() {
-                if (!_expandedQueryDetails.add(detailsKey)) {
-                  _expandedQueryDetails.remove(detailsKey);
-                }
-              });
-            },
-          ),
-        );
+    return NotificationListener<UserScrollNotification>(
+      onNotification: (notification) {
+        if (notification.depth == 0) {
+          _followingMessages =
+              notification.direction == ScrollDirection.idle &&
+              notification.metrics.extentAfter < 64;
+        }
+        return false;
       },
+      child: ListView.builder(
+        key: const ValueKey('agent-message-list'),
+        controller: _messageScroll,
+        padding: const EdgeInsets.all(16),
+        itemCount: view.messages.length + prefix.length,
+        itemBuilder: (context, index) {
+          if (index < prefix.length) return prefix[index];
+          index -= prefix.length;
+          final message = view.messages[index];
+          final detailsKey =
+              '${view.conversationId ?? 'no-conversation'}:${message.id}';
+          final actionCards = [
+            for (final storedAction in message.actions)
+              if (view.pendingAction?.id != storedAction.id)
+                _actionCard(storedAction, view),
+          ];
+          final isCurrentAnswerEvidence =
+              index == view.messages.length - 1 &&
+              view.phase == AgentPhase.idle &&
+              message.role == AgentMessageRole.assistant &&
+              message.status == AgentMessageStatus.complete;
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _MessageBubble(
+              message: message,
+              reasoning: view.reasoningByMessage[message.id],
+              isCurrentAnswerEvidence: isCurrentAnswerEvidence,
+              queryDetailsKey: detailsKey,
+              queryDetailsExpanded: _expandedQueryDetails.contains(detailsKey),
+              actionCount: actionCards.length,
+              actionCards: actionCards,
+              onOpenLocalEvidence: widget.onOpenLocalEvidence,
+              onToggleQueryDetails: () {
+                setState(() {
+                  if (!_expandedQueryDetails.add(detailsKey)) {
+                    _expandedQueryDetails.remove(detailsKey);
+                  }
+                });
+              },
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -2576,6 +2777,7 @@ final class _AgentActionCard extends StatelessWidget {
     this.statusOverride,
     this.onApprove,
     this.onReject,
+    this.maxHeight,
   });
 
   final AgentActionView action;
@@ -2587,10 +2789,20 @@ final class _AgentActionCard extends StatelessWidget {
   final String? statusOverride;
   final VoidCallback? onApprove;
   final VoidCallback? onReject;
+  final double? maxHeight;
 
   @override
   Widget build(BuildContext context) {
     final canRespond = onApprove != null || onReject != null;
+    final scrollWholeCard =
+        maxHeight != null &&
+        maxHeight! < 180 * MediaQuery.textScalerOf(context).scale(1);
+    Widget fit(Widget child) => scrollWholeCard
+        ? SingleChildScrollView(
+            key: ValueKey('agent-action-full-scroll-${action.id}'),
+            child: child,
+          )
+        : child;
     final authorizationLabel =
         isHistorical && action.status == AgentActionStatus.committed
         ? switch (action.authorization) {
@@ -2599,139 +2811,170 @@ final class _AgentActionCard extends StatelessWidget {
             AgentActionAuthorization.remembered => '已保存授权',
           }
         : null;
-    return Card(
-      key: ValueKey('agent-action-${action.id}'),
-      margin: EdgeInsets.zero,
-      color: Colors.white,
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+    return ConstrainedBox(
+      constraints: maxHeight == null
+          ? const BoxConstraints()
+          : BoxConstraints(maxHeight: maxHeight!),
+      child: Card(
+        key: ValueKey('agent-action-${action.id}'),
+        margin: EdgeInsets.zero,
+        color: Colors.white,
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: fit(
+            Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(
-                  Icons.fact_check_outlined,
-                  size: 19,
-                  color: _agentGreen,
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        action.title,
-                        key: ValueKey('agent-action-title-${action.id}'),
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(
+                      Icons.fact_check_outlined,
+                      size: 19,
+                      color: _agentGreen,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            action.title,
+                            key: ValueKey('agent-action-title-${action.id}'),
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${_actionKindLabel(action.kind)} · '
+                            '${statusOverride ?? _actionStatusLabel(action.status)}'
+                            '${isHistorical ? ' · 历史记录' : ''}'
+                            '${authorizationLabel == null ? '' : ' · $authorizationLabel'}',
+                            key: ValueKey('agent-action-status-${action.id}'),
+                            style: const TextStyle(
+                              color: _agentMuted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${_actionKindLabel(action.kind)} · '
-                        '${statusOverride ?? _actionStatusLabel(action.status)}'
-                        '${isHistorical ? ' · 历史记录' : ''}'
-                        '${authorizationLabel == null ? '' : ' · $authorizationLabel'}',
-                        key: ValueKey('agent-action-status-${action.id}'),
-                        style: const TextStyle(
-                          color: _agentMuted,
-                          fontSize: 12,
-                        ),
+                    ),
+                  ],
+                ),
+                if (maxHeight != null && !scrollWholeCard)
+                  Flexible(
+                    child: SingleChildScrollView(
+                      key: ValueKey('agent-action-details-scroll-${action.id}'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          ..._actionDetails(action),
+                          if (onRememberChanged != null) ...[
+                            const SizedBox(height: 8),
+                            _rememberApprovalTile(action),
+                          ],
+                        ],
+                      ),
+                    ),
+                  )
+                else ...[
+                  ..._actionDetails(action),
+                  if (onRememberChanged != null) ...[
+                    const SizedBox(height: 8),
+                    _rememberApprovalTile(action),
+                  ],
+                ],
+                if (requestPending || requestSubmitted) ...[
+                  const SizedBox(height: 6),
+                  Text(
+                    requestPending ? '正在提交你的决定…' : '操作已送出，等待本地状态更新。',
+                    key: ValueKey('agent-action-request-state-${action.id}'),
+                    style: const TextStyle(color: _agentMuted, fontSize: 12),
+                  ),
+                ],
+                if (canRespond) ...[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      FilledButton.icon(
+                        key: ValueKey('agent-action-approve-${action.id}'),
+                        onPressed: onApprove,
+                        icon: const Icon(Icons.check_rounded, size: 18),
+                        label: const Text('批准并提交'),
+                      ),
+                      OutlinedButton.icon(
+                        key: ValueKey('agent-action-reject-${action.id}'),
+                        onPressed: onReject,
+                        icon: const Icon(Icons.close_rounded, size: 18),
+                        label: const Text('拒绝'),
                       ),
                     ],
                   ),
-                ),
+                ],
               ],
             ),
-            if (action.details.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              for (final detail in action.details)
-                if (detail.trim().isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 3),
-                    child: Text('• $detail'),
-                  ),
-            ],
-            if (action.warning.trim().isNotEmpty) ...[
-              const SizedBox(height: 6),
-              Container(
-                key: ValueKey('agent-action-warning-${action.id}'),
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF5E8),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Text(
-                  action.warning,
-                  style: const TextStyle(color: Color(0xFF805500)),
-                ),
-              ),
-            ],
-            if (action.status == AgentActionStatus.committed ||
-                action.committedCount > 0) ...[
-              const SizedBox(height: 6),
-              Text(
-                '本地实际提交 ${action.committedCount} 项',
-                key: ValueKey('agent-action-committed-${action.id}'),
-                style: const TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ],
-            if (isHistorical) ...[
-              const SizedBox(height: 6),
-              const Text(
-                '这是历史记录，不提供再次批准操作。',
-                style: TextStyle(color: _agentMuted, fontSize: 12),
-              ),
-            ],
-            if (requestPending || requestSubmitted) ...[
-              const SizedBox(height: 6),
-              Text(
-                requestPending ? '正在提交你的决定…' : '操作已送出，等待本地状态更新。',
-                key: ValueKey('agent-action-request-state-${action.id}'),
-                style: const TextStyle(color: _agentMuted, fontSize: 12),
-              ),
-            ],
-            if (onRememberChanged != null) ...[
-              const SizedBox(height: 8),
-              CheckboxListTile(
-                key: ValueKey('agent-action-remember-${action.id}'),
-                value: rememberApproval,
-                contentPadding: EdgeInsets.zero,
-                controlAffinity: ListTileControlAffinity.leading,
-                title: const Text('以后不再确认此类操作'),
-                subtitle: const Text('只适用于本卡涉及的固定工具和操作类别；模型不能新增或扩大权限，可在设置中撤销。'),
-                onChanged: (value) {
-                  if (value != null) onRememberChanged?.call(value);
-                },
-              ),
-            ],
-            if (canRespond) ...[
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                runSpacing: 6,
-                children: [
-                  FilledButton.icon(
-                    key: ValueKey('agent-action-approve-${action.id}'),
-                    onPressed: onApprove,
-                    icon: const Icon(Icons.check_rounded, size: 18),
-                    label: const Text('批准并提交'),
-                  ),
-                  OutlinedButton.icon(
-                    key: ValueKey('agent-action-reject-${action.id}'),
-                    onPressed: onReject,
-                    icon: const Icon(Icons.close_rounded, size: 18),
-                    label: const Text('拒绝'),
-                  ),
-                ],
-              ),
-            ],
-          ],
+          ),
         ),
       ),
     );
   }
+
+  List<Widget> _actionDetails(AgentActionView action) => [
+    if (action.details.isNotEmpty) ...[
+      const SizedBox(height: 8),
+      for (final detail in action.details)
+        if (detail.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 3),
+            child: Text('• $detail'),
+          ),
+    ],
+    if (action.warning.trim().isNotEmpty) ...[
+      const SizedBox(height: 6),
+      Container(
+        key: ValueKey('agent-action-warning-${action.id}'),
+        width: double.infinity,
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF5E8),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          action.warning,
+          style: const TextStyle(color: Color(0xFF805500)),
+        ),
+      ),
+    ],
+    if (action.status == AgentActionStatus.committed ||
+        action.committedCount > 0) ...[
+      const SizedBox(height: 6),
+      Text(
+        '本地实际提交 ${action.committedCount} 项',
+        key: ValueKey('agent-action-committed-${action.id}'),
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+    ],
+    if (isHistorical) ...[
+      const SizedBox(height: 6),
+      const Text(
+        '这是历史记录，不提供再次批准操作。',
+        style: TextStyle(color: _agentMuted, fontSize: 12),
+      ),
+    ],
+  ];
+
+  Widget _rememberApprovalTile(AgentActionView action) => CheckboxListTile(
+    key: ValueKey('agent-action-remember-${action.id}'),
+    value: rememberApproval,
+    contentPadding: EdgeInsets.zero,
+    controlAffinity: ListTileControlAffinity.leading,
+    title: const Text('以后不再确认此类操作'),
+    subtitle: const Text('只适用于本卡涉及的固定工具和操作类别；模型不能新增或扩大权限，可在设置中撤销。'),
+    onChanged: (value) {
+      if (value != null) onRememberChanged?.call(value);
+    },
+  );
 }
 
 String _actionKindLabel(AgentActionKind kind) => switch (kind) {
@@ -3006,10 +3249,12 @@ final class _MessageBubble extends StatelessWidget {
     required this.onToggleQueryDetails,
     required this.actionCount,
     required this.actionCards,
+    this.reasoning,
     this.onOpenLocalEvidence,
   });
 
   final AgentMessage message;
+  final AgentReasoningView? reasoning;
   final bool isCurrentAnswerEvidence;
   final String queryDetailsKey;
   final bool queryDetailsExpanded;
@@ -3059,6 +3304,12 @@ final class _MessageBubble extends StatelessWidget {
                     ],
                   ],
                 ),
+              if (!user && reasoning != null && reasoning!.text.isNotEmpty)
+                AgentReasoningPanel(
+                  key: ValueKey('agent-reasoning-${message.id}'),
+                  messageId: message.id,
+                  reasoning: reasoning!,
+                ),
               if (text.isNotEmpty) ...[
                 if (!user) const SizedBox(height: 5),
                 AssistantMarkdown(data: text),
@@ -3067,6 +3318,8 @@ final class _MessageBubble extends StatelessWidget {
                 Text(
                   message.status == AgentMessageStatus.failed
                       ? '本次回复未完成。操作结果以方案卡为准，可导出最近日志排查。'
+                      : message.status == AgentMessageStatus.streaming
+                      ? (reasoning?.active == true ? '正在思考…' : '正在准备回复…')
                       : '回复已停止。',
                   style: const TextStyle(color: _agentMuted),
                 ),

@@ -367,13 +367,28 @@ final class A3ModelFixture {
   static Map<String, dynamic> _copyJsonMap(Map<String, dynamic> source) =>
       jsonDecode(jsonEncode(source)) as Map<String, dynamic>;
 
-  static Future<void> text(HttpRequest request, String text) async {
+  static Future<void> text(
+    HttpRequest request,
+    String text, {
+    String? reasoning,
+  }) async {
     final response = request.response;
     response.headers.contentType = ContentType(
       'text',
       'event-stream',
       charset: 'utf-8',
     );
+    if (reasoning != null) {
+      await _writeEvent(response, {
+        'choices': [
+          {
+            'index': 0,
+            'delta': {'reasoning_content': reasoning},
+            'finish_reason': null,
+          },
+        ],
+      });
+    }
     final runes = text.runes.toList(growable: false);
     final splitAt = (runes.length + 1) ~/ 2;
     final first = String.fromCharCodes(runes.take(splitAt));

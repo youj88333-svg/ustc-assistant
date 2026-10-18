@@ -32,6 +32,16 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(AndroidJUnit4::class)
 class A2YoungTransportTest {
     @Test
+    fun fixedNavigationDoesNotRequireTheDestinationsLazyReaderOnTheLandingPage() =
+        withHarness(Scenario.NO_HELPER) { harness ->
+            assertEquals(true, assertSuccess(harness.call(method = "navigationReady")).get("value"))
+            assertEquals(false, assertSuccess(harness.call(method = "prepare", pageName = "calendar")).get("value"))
+            // Navigating is not a read grant: a real read still needs its helper.
+            assertClosedError(harness.call(method = "start", operation = OPERATION), "sourceFailed")
+            assertEquals(0, harness.server.apiRequestCount.get())
+        }
+
+    @Test
     fun profileUsesCapturedNativeFetchAndXhrResponsesAndProjectsOnlyUsername() =
         withHarness(Scenario.SEQUENCE) { harness ->
             prepareAndStart(harness)
@@ -186,6 +196,7 @@ class A2YoungTransportTest {
     }
 
     private enum class Scenario {
+        NO_HELPER,
         SEQUENCE,
         FAKE,
         BACKGROUND,
@@ -386,7 +397,7 @@ class A2YoungTransportTest {
                 Scenario.SEQUENCE -> "sequence"
                 Scenario.FAKE -> "fake"
                 Scenario.BACKGROUND -> "background"
-                Scenario.REDIRECT, Scenario.DUPLICATE -> "fetch"
+                Scenario.REDIRECT, Scenario.DUPLICATE, Scenario.NO_HELPER -> "fetch"
             }
             val backgroundFetch = if (scenario == Scenario.BACKGROUND) {
                 "window.__backgroundFetch = fetch(${JSONObject.quote("http://127.0.0.1:$port$PROFILE_PATH")});"
@@ -419,7 +430,7 @@ class A2YoungTransportTest {
                   });
                 }};
                 function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
-                window.webpackJsonp = {push:function() { return {e:l}; }};
+                ${if (scenario == Scenario.NO_HELPER) "" else "window.webpackJsonp = {push:function() { return {e:l}; }};"}
                 $backgroundFetch
                 </script>
                 </body></html>

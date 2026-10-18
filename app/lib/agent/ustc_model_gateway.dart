@@ -42,6 +42,7 @@ final class UstcModelGateway implements ModelGatewayPort {
   static const int _sseLineLimit = 64 * 1024;
   static const int _sseEventLimit = 64 * 1024;
   static const int _textLimit = 24000;
+  static const int _reasoningLimit = 128 * 1024;
   static const int _toolArgumentsLimit = 16 * 1024;
 
   final Uri _baseUri;
@@ -621,6 +622,7 @@ final class UstcModelGateway implements ModelGatewayPort {
     var totalBytes = 0;
     var eventBytes = 0;
     var textCharacters = 0;
+    var reasoningCharacters = 0;
     var finishReason = <String>{};
     var sawDone = false;
     int? inputTokens;
@@ -719,6 +721,25 @@ final class UstcModelGateway implements ModelGatewayPort {
         throw const AgentFailure(AgentFailureCode.protocol);
       }
       if (deltaValue is Map<String, dynamic>) {
+        // Older vLLM/DeepSeek deployments use reasoning_content; newer vLLM
+        // uses reasoning. Accept either string, without double-emitting aliases
+        // and without inferring thinking from ordinary answer text.
+        final reasoning = deltaValue['reasoning'];
+        final legacyReasoning = deltaValue['reasoning_content'];
+        if ((reasoning != null && reasoning is! String) ||
+            (legacyReasoning != null && legacyReasoning is! String)) {
+          throw const AgentFailure(AgentFailureCode.protocol);
+        }
+        final reasoningText = reasoning is String && reasoning.isNotEmpty
+            ? reasoning
+            : legacyReasoning as String?;
+        if (reasoningText != null && reasoningText.isNotEmpty) {
+          reasoningCharacters += reasoningText.runes.length;
+          if (reasoningCharacters > _reasoningLimit) {
+            throw const AgentFailure(AgentFailureCode.resourceLimit);
+          }
+          output.add(ModelReasoningDelta(reasoningText));
+        }
         final contentValue = deltaValue['content'];
         if (contentValue != null) {
           if (contentValue is! String) {

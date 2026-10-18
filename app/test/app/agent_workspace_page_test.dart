@@ -14,6 +14,71 @@ import 'package:ustc_assistant_m0/core/morning_brief_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_permission_contract.dart';
 
 void main() {
+  testWidgets(
+    'live reasoning follows the latest reply without pulling a reader out of history',
+    (tester) async {
+      tester.view.physicalSize = const Size(360, 720);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      final defaults = _configuredView();
+      final messages = [
+        for (var id = 1; id < 35; id++)
+          AgentMessage(
+            id: id,
+            role: AgentMessageRole.assistant,
+            text: '这是一段较早的合成对话。' * 8,
+            status: AgentMessageStatus.complete,
+            createdAtUtc: DateTime.utc(2026, 10, 18),
+          ),
+        AgentMessage(
+          id: 35,
+          role: AgentMessageRole.assistant,
+          text: '',
+          status: AgentMessageStatus.streaming,
+          createdAtUtc: DateTime.utc(2026, 10, 18),
+        ),
+      ];
+      AgentWorkspaceView view(String reasoning) => AgentWorkspaceView(
+        settings: defaults.settings,
+        conversationId: defaults.conversationId,
+        phase: AgentPhase.generating,
+        messages: messages,
+        reasoningByMessage: {
+          35: AgentReasoningView(text: reasoning, active: true),
+        },
+      );
+      final port = _FakeAgentPort(view: view('先核对日期，再查找当天安排。'));
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+      );
+      for (var i = 0; i < 5; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+      expect(
+        find.byKey(const ValueKey('agent-reasoning-content-35')),
+        findsOneWidget,
+      );
+      final list = find.byKey(const ValueKey('agent-message-list'));
+      final scrollable = find
+          .descendant(of: list, matching: find.byType(Scrollable))
+          .first;
+      final position = tester.state<ScrollableState>(scrollable).position;
+      expect(position.extentAfter, lessThan(2));
+      await tester.drag(list, const Offset(0, 450));
+      await tester.pump(const Duration(milliseconds: 500));
+      final previousOffset = position.pixels;
+      expect(position.extentAfter, greaterThan(100));
+      port.replace(view('先核对日期，再查找当天安排。现在收到了新的片段。'));
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(position.pixels, closeTo(previousOffset, 1));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
   TestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
 

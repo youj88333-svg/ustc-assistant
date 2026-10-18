@@ -36,8 +36,12 @@ final class CalendarWeekView extends StatelessWidget {
 
   static const double _timeGutter = 62;
   static const double _minimumDayWidth = 124;
+  static const double _minimumMobileDayWidth = 30;
   static const double _headingHeight = 34;
   static const int _teachingStart = 420;
+
+  double _mobileTimeGutter(double availableWidth) =>
+      math.min(_timeGutter, math.max(28.0, availableWidth * .11)).toDouble();
 
   @override
   Widget build(BuildContext context) {
@@ -57,15 +61,19 @@ final class CalendarWeekView extends StatelessWidget {
             ? constraints.maxHeight
             : 680.0;
         final mobile = isPhoneWorkspace(context) || availableWidth < 620;
-        final boardWidth =
-            _timeGutter + (mobile ? 160 : _minimumDayWidth) * days.length;
-        final contentWidth = math.max(boardWidth, availableWidth).toDouble();
-        final dayWidth = (contentWidth - _timeGutter) / days.length;
         final textScale = MediaQuery.textScalerOf(context).scale(1);
+        final gutterWidth = mobile
+            ? _mobileTimeGutter(availableWidth)
+            : _timeGutter;
+        final mobileMinimumDayWidth =
+            _minimumMobileDayWidth + math.max(0.0, textScale - 1) * 18;
+        final boardWidth =
+            gutterWidth +
+            (mobile ? mobileMinimumDayWidth : _minimumDayWidth) * days.length;
+        final contentWidth = math.max(boardWidth, availableWidth).toDouble();
+        final dayWidth = (contentWidth - gutterWidth) / days.length;
         final headingHeight = mobile
-            ? math
-                  .max(48.0, _headingHeight * textScale.clamp(1.0, 2.0))
-                  .toDouble()
+            ? math.max(52.0, 30.0 * textScale.clamp(1.0, 2.0)).toDouble()
             : _headingHeight;
         final allDay = _segmentsByDay(days, allDay: true);
         final earlyMorning = _segmentsByDay(days, earlyMorning: true);
@@ -139,7 +147,13 @@ final class CalendarWeekView extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                _dayHeadings(days, dayWidth: dayWidth, height: headingHeight),
+                _dayHeadings(
+                  days,
+                  dayWidth: dayWidth,
+                  gutterWidth: gutterWidth,
+                  height: headingHeight,
+                  mobile: mobile,
+                ),
                 if (hasBands)
                   SizedBox(
                     height: bandViewportHeight,
@@ -153,6 +167,7 @@ final class CalendarWeekView extends StatelessWidget {
                               days,
                               allDay,
                               dayWidth: dayWidth,
+                              gutterWidth: gutterWidth,
                               height: allDayHeight,
                               label: '全天',
                               textScale: textScale,
@@ -163,7 +178,7 @@ final class CalendarWeekView extends StatelessWidget {
                               tasks: tasks,
                               nowUtc: nowUtc,
                               height: taskHeight,
-                              gutterWidth: _timeGutter,
+                              gutterWidth: gutterWidth,
                               dayWidth: dayWidth,
                               onSelectTask: onSelectTask,
                               onOpenUnscheduledTasks: onOpenUnscheduledTasks,
@@ -174,6 +189,7 @@ final class CalendarWeekView extends StatelessWidget {
                               days,
                               earlyMorning,
                               dayWidth: dayWidth,
+                              gutterWidth: gutterWidth,
                               height: earlyHeight,
                               label: '凌晨 00:00–07:00',
                               textScale: textScale,
@@ -192,7 +208,7 @@ final class CalendarWeekView extends StatelessWidget {
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
-                          _axisLabels(axis),
+                          _axisLabels(axis, gutterWidth),
                           for (final day in days)
                             _dayTimeline(day, dayWidth, axis),
                         ],
@@ -211,42 +227,118 @@ final class CalendarWeekView extends StatelessWidget {
   Widget _dayHeadings(
     List<DateTime> days, {
     required double dayWidth,
+    required double gutterWidth,
     required double height,
+    required bool mobile,
   }) => SizedBox(
     height: height,
     child: Row(
       children: [
-        const SizedBox(width: _timeGutter),
+        SizedBox(width: gutterWidth),
         for (final day in days)
           SizedBox(
+            key: ValueKey('calendar-week-heading-${_dayKey(day)}'),
             width: dayWidth,
-            child: Container(
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: _sameDay(day, today)
-                    ? const Color(0xFFE5F1E9)
-                    : Colors.white,
-                border: const Border(
-                  right: BorderSide(color: Color(0xFFE3E9E5)),
-                ),
-              ),
-              child: Text(
-                '${_weekday(day.weekday)}  ${_date(day)}',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w700,
-                  color: _sameDay(day, today)
-                      ? const Color(0xFF1F6B45)
-                      : const Color(0xFF1D2922),
-                ),
-              ),
-            ),
+            child: _dayHeading(day, height: height, mobile: mobile),
           ),
       ],
     ),
   );
+
+  Widget _dayHeading(
+    DateTime day, {
+    required double height,
+    required bool mobile,
+  }) {
+    final daySegments = window.segments
+        .where((segment) => _sameDay(segment.day, day))
+        .toList(growable: false);
+    final occurrences = _distinctOccurrences(daySegments);
+    final hasEntries = occurrences.isNotEmpty;
+    final isToday = _sameDay(day, today);
+    final fullDate = '${day.year}年${day.month}月${day.day}日';
+    final textColor = isToday
+        ? const Color(0xFF1F6B45)
+        : const Color(0xFF1D2922);
+    final label =
+        '${_weekday(day.weekday)}，$fullDate'
+        '${mobile && hasEntries ? '，打开当日日程列表' : ''}';
+
+    return Semantics(
+      button: mobile && hasEntries,
+      label: label,
+      child: Tooltip(
+        message: mobile && hasEntries
+            ? '查看 $fullDate 的 ${occurrences.length} 条日程'
+            : label,
+        child: InkWell(
+          key: ValueKey('calendar-week-day-${_dayKey(day)}'),
+          onTap: mobile && hasEntries
+              ? () => onOverflow(
+                  '${_weekday(day.weekday)} · ${_date(day)}',
+                  occurrences,
+                )
+              : null,
+          child: Container(
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: isToday ? const Color(0xFFE5F1E9) : Colors.white,
+              border: const Border(right: BorderSide(color: Color(0xFFE3E9E5))),
+            ),
+            child: mobile
+                ? Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _compactWeekday(day.weekday),
+                            maxLines: 1,
+                            overflow: TextOverflow.clip,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: textColor,
+                            ),
+                          ),
+                          if (hasEntries) ...[
+                            const SizedBox(width: 2),
+                            Icon(
+                              Icons.list_alt_outlined,
+                              size: 10,
+                              color: textColor.withValues(alpha: .8),
+                            ),
+                          ],
+                        ],
+                      ),
+                      Text(
+                        _compactDate(day),
+                        maxLines: 1,
+                        overflow: TextOverflow.clip,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: textColor,
+                        ),
+                      ),
+                    ],
+                  )
+                : Text(
+                    '${_weekday(day.weekday)}  ${_date(day)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: textColor,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
 
   double _bandHeight(double textScale, double maximum) =>
       math.min(28 * textScale.clamp(1, 2), maximum).toDouble();
@@ -258,6 +350,7 @@ final class CalendarWeekView extends StatelessWidget {
     List<DateTime> days,
     Map<DateTime, List<CalendarDaySegment>> byDay, {
     required double dayWidth,
+    required double gutterWidth,
     required double height,
     required String label,
     required double textScale,
@@ -268,7 +361,7 @@ final class CalendarWeekView extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SizedBox(
-          width: _timeGutter,
+          width: gutterWidth,
           child: Center(
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 3),
@@ -293,6 +386,7 @@ final class CalendarWeekView extends StatelessWidget {
               child: _bandItems(
                 label,
                 byDay[day] ?? const [],
+                dayWidth: dayWidth,
                 height: height,
                 textScale: textScale,
                 earlyMorning: earlyMorning,
@@ -306,6 +400,7 @@ final class CalendarWeekView extends StatelessWidget {
   Widget _bandItems(
     String heading,
     List<CalendarDaySegment> segments, {
+    required double dayWidth,
     required double height,
     required double textScale,
     required bool earlyMorning,
@@ -314,6 +409,20 @@ final class CalendarWeekView extends StatelessWidget {
     final segment = segments.first;
     final remaining = segments.length - 1;
     final paddedTarget = height >= 48;
+    void openOverflow() => onOverflow(
+      '$heading · ${_date(segment.day)}',
+      _distinctOccurrences(segments),
+    );
+    if (dayWidth < 58 && remaining > 0) {
+      return _eventTile(
+        segment,
+        strip: true,
+        stripEndMinute: earlyMorning
+            ? math.min(segment.endMinute, _teachingStart.toDouble()).toDouble()
+            : null,
+        onSelectOverride: (_) => openOverflow(),
+      );
+    }
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: 3,
@@ -347,10 +456,7 @@ final class CalendarWeekView extends StatelessWidget {
                       ? MaterialTapTargetSize.padded
                       : MaterialTapTargetSize.shrinkWrap,
                 ),
-                onPressed: () => onOverflow(
-                  '$heading · ${_date(segments.first.day)}',
-                  _distinctOccurrences(segments),
-                ),
+                onPressed: openOverflow,
                 child: Tooltip(
                   message: '查看全部 ${segments.length} 条日程',
                   child: Text(
@@ -377,8 +483,8 @@ final class CalendarWeekView extends StatelessWidget {
     return occurrences.values.toList(growable: false);
   }
 
-  Widget _axisLabels(CalendarTeachingAxis axis) => SizedBox(
-    width: _timeGutter,
+  Widget _axisLabels(CalendarTeachingAxis axis, double gutterWidth) => SizedBox(
+    width: gutterWidth,
     height: axis.height,
     child: Stack(
       clipBehavior: Clip.hardEdge,
@@ -506,6 +612,7 @@ final class CalendarWeekView extends StatelessWidget {
     bool strip = false,
     double? stripEndMinute,
     bool clippedAtTeachingStart = false,
+    ValueChanged<CalendarOccurrence>? onSelectOverride,
   }) {
     final occurrence = segment.occurrence;
     final colors = calendarColorsForTitle(occurrence.title);
@@ -532,7 +639,7 @@ final class CalendarWeekView extends StatelessWidget {
       child: InkWell(
         key: ValueKey<CalendarReference>(occurrence.reference),
         borderRadius: BorderRadius.circular(strip ? 5 : 7),
-        onTap: () => onSelect(occurrence),
+        onTap: () => (onSelectOverride ?? onSelect)(occurrence),
         child: Tooltip(
           message: _weekTileTooltip(occurrence, actualTime),
           child: Container(
@@ -540,15 +647,68 @@ final class CalendarWeekView extends StatelessWidget {
               border: Border.all(color: colors.edge.withValues(alpha: .55)),
               borderRadius: BorderRadius.circular(strip ? 5 : 7),
             ),
-            padding: EdgeInsets.symmetric(
-              horizontal: strip ? 4 : 5,
-              vertical: strip ? 2 : 3,
-            ),
             child: LayoutBuilder(
               builder: (context, constraints) {
                 final textScale = MediaQuery.textScalerOf(context).scale(1);
+                final compactStatus = constraints.maxWidth < 58 * textScale;
+                final horizontalPadding = compactStatus
+                    ? 0.0
+                    : strip
+                    ? 4.0
+                    : 5.0;
+                final verticalPadding = strip ? 2.0 : 3.0;
+                final contentWidth = math
+                    .max(0, constraints.maxWidth - horizontalPadding * 2)
+                    .toDouble();
+                final contentHeight = math
+                    .max(0, constraints.maxHeight - verticalPadding * 2)
+                    .toDouble();
+                if (contentWidth < 30 * textScale) {
+                  final hasConflict = statusItems.any(
+                    (status) => status.shortLabel.startsWith('冲'),
+                  );
+                  final markSize = math
+                      .min(12.0, math.max(0.0, contentWidth - 2))
+                      .toDouble();
+                  return Padding(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: horizontalPadding,
+                      vertical: verticalPadding,
+                    ),
+                    child: Center(
+                      child: hasConflict
+                          ? Tooltip(
+                              message: '存在时间冲突，点按查看日程详情',
+                              child: Icon(
+                                Icons.error_outline_rounded,
+                                size: markSize,
+                                color: const Color(0xFF9B2C2C),
+                              ),
+                            )
+                          : DecoratedBox(
+                              decoration: BoxDecoration(
+                                color: colors.edge,
+                                shape: BoxShape.circle,
+                              ),
+                              child: SizedBox(
+                                width: markSize,
+                                height: markSize,
+                              ),
+                            ),
+                    ),
+                  );
+                }
+                final visibleStatusItems = compactStatus
+                    ? statusItems
+                          .where((status) => status.shortLabel.startsWith('冲'))
+                          .take(1)
+                    : kind == CalendarKind.planBlock
+                    ? statusItems.take(
+                        constraints.maxWidth >= 160 * textScale ? 2 : 1,
+                      )
+                    : statusItems;
                 final detailLineHeight = 14.0 * textScale + 2;
-                var remainingHeight = constraints.maxHeight - 18 * textScale;
+                var remainingHeight = contentHeight - 18 * textScale;
                 final locationAvailable =
                     location.isNotEmpty ||
                     (_isJwAcademicKind(kind) && academic != null);
@@ -569,7 +729,7 @@ final class CalendarWeekView extends StatelessWidget {
                 final showTime = !strip && remainingHeight >= detailLineHeight;
                 final lineHeight = 16 * textScale;
                 final titleHeight =
-                    constraints.maxHeight -
+                    contentHeight -
                     (showLocation ? detailLineHeight : 0) -
                     (showTeachers ? detailLineHeight : 0) -
                     (showTime ? detailLineHeight : 0);
@@ -585,12 +745,7 @@ final class CalendarWeekView extends StatelessWidget {
                 final heading = Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    for (final status
-                        in kind == CalendarKind.planBlock
-                            ? statusItems.take(
-                                constraints.maxWidth >= 160 * textScale ? 2 : 1,
-                              )
-                            : statusItems)
+                    for (final status in visibleStatusItems)
                       Padding(
                         padding: const EdgeInsets.only(right: 2),
                         child: _statusMark(status),
@@ -609,8 +764,7 @@ final class CalendarWeekView extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (time != null &&
-                        constraints.maxWidth >= 100 * textScale) ...[
+                    if (time != null && contentWidth >= 100 * textScale) ...[
                       const SizedBox(width: 3),
                       Text(
                         time,
@@ -622,51 +776,59 @@ final class CalendarWeekView extends StatelessWidget {
                     ],
                   ],
                 );
-                if (!showTime && !showLocation && !showTeachers) return heading;
-                return Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    heading,
-                    if (showLocation) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        '地点：$displayedLocation',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: colors.ink.withValues(alpha: .82),
-                          fontSize: 10,
-                          height: 1.2,
-                        ),
-                      ),
-                    ],
-                    if (showTeachers) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        '教师：$displayedTeachers',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: colors.ink.withValues(alpha: .82),
-                          fontSize: 10,
-                          height: 1.2,
-                        ),
-                      ),
-                    ],
-                    if (showTime) ...[
-                      const SizedBox(height: 2),
-                      Text(
-                        actualTime,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          color: colors.ink.withValues(alpha: .82),
-                          fontSize: 10,
-                          height: 1.2,
-                        ),
-                      ),
-                    ],
-                  ],
+                final content = !showTime && !showLocation && !showTeachers
+                    ? heading
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          heading,
+                          if (showLocation) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              '地点：$displayedLocation',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: colors.ink.withValues(alpha: .82),
+                                fontSize: 10,
+                                height: 1.2,
+                              ),
+                            ),
+                          ],
+                          if (showTeachers) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              '教师：$displayedTeachers',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: colors.ink.withValues(alpha: .82),
+                                fontSize: 10,
+                                height: 1.2,
+                              ),
+                            ),
+                          ],
+                          if (showTime) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              actualTime,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: colors.ink.withValues(alpha: .82),
+                                fontSize: 10,
+                                height: 1.2,
+                              ),
+                            ),
+                          ],
+                        ],
+                      );
+                return Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: horizontalPadding,
+                    vertical: verticalPadding,
+                  ),
+                  child: content,
                 );
               },
             ),
@@ -1015,8 +1177,21 @@ String _weekday(int weekday) => switch (weekday) {
   _ => '周日',
 };
 
+String _compactWeekday(int weekday) => switch (weekday) {
+  DateTime.monday => '一',
+  DateTime.tuesday => '二',
+  DateTime.wednesday => '三',
+  DateTime.thursday => '四',
+  DateTime.friday => '五',
+  DateTime.saturday => '六',
+  _ => '日',
+};
+
 String _date(DateTime day) =>
     '${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';
+
+String _compactDate(DateTime day) =>
+    '${day.month.toString().padLeft(2, '0')}/${day.day.toString().padLeft(2, '0')}';
 
 String _dayKey(DateTime day) =>
     '${day.year}-${day.month.toString().padLeft(2, '0')}-${day.day.toString().padLeft(2, '0')}';

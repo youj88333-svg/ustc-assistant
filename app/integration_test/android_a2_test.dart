@@ -594,6 +594,7 @@ void main() {
           youngFixture = await YoungBusinessFixture.start(
             requireAuthentication: true,
             realisticLoginRedirects: true,
+            homeHasReader: false,
           );
           youngFixture.username = _account;
           final young = await harness.openYoung(youngFixture);

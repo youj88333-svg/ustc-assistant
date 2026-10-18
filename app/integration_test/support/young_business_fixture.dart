@@ -8,6 +8,7 @@ final class YoungBusinessFixture {
     this.server, {
     required this.requireAuthentication,
     required this.realisticLoginRedirects,
+    required this.homeHasReader,
     required this.delayBusinessReadiness,
     required this.businessReadinessDelay,
   });
@@ -22,6 +23,7 @@ final class YoungBusinessFixture {
   final HttpServer server;
   final bool requireAuthentication;
   final bool realisticLoginRedirects;
+  final bool homeHasReader;
   final bool delayBusinessReadiness;
   final Duration businessReadinessDelay;
   String mode = 'good';
@@ -49,6 +51,7 @@ final class YoungBusinessFixture {
   static Future<YoungBusinessFixture> start({
     bool requireAuthentication = false,
     bool realisticLoginRedirects = false,
+    bool homeHasReader = true,
     bool delayBusinessReadiness = false,
     Duration businessReadinessDelay = const Duration(milliseconds: 800),
   }) async {
@@ -57,6 +60,7 @@ final class YoungBusinessFixture {
       server,
       requireAuthentication: requireAuthentication,
       realisticLoginRedirects: realisticLoginRedirects,
+      homeHasReader: homeHasReader,
       delayBusinessReadiness: delayBusinessReadiness,
       businessReadinessDelay: businessReadinessDelay,
     );
@@ -245,7 +249,7 @@ function installHelper(){
 }
 setTimeout(async()=>{
   history.replaceState(null,'',namespace);
-  installHelper();
+  ${homeHasReader ? 'installHelper();' : '// Reader module is lazy-loaded only by the target business page.'}
   await fetch('/fixture/bootstrap-complete?queryCleared='+String(location.search.length===0),{cache:'no-store'});
   history.pushState(null,'',defaultChild);
 },900);

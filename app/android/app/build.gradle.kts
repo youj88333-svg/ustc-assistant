@@ -117,9 +117,9 @@ androidComponents {
         // A1's isolated emulator builds use that ABI; non-split integration
         // builds need the same final code to preserve their synthetic data.
         val splitQa = project.findProperty("split-per-abi") == "true"
-        // A7 adds a forward-compatible pending-click field. A higher QA code
-        // prevents accidentally reinstalling an older strict mirror reader.
-        variant.outputs.forEach { it.versionCode.set(if (splitQa) 4 else 4004) }
+        // Keep A7 feedback upgrades monotonic, including the pending-click
+        // mirror, so older QA readers cannot be reinstalled by the test runner.
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 5 else 4005) }
     }
 }
 

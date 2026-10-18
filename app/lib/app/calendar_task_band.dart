@@ -158,6 +158,7 @@ final class CalendarTaskBand extends StatelessWidget {
                   child: _dayCell(
                     day,
                     projection.byDay[calendarDay(day)] ?? const [],
+                    cellWidth: resolvedDayWidth,
                   ),
                 ),
             ],
@@ -218,7 +219,14 @@ final class CalendarTaskBand extends StatelessWidget {
         : cell;
   }
 
-  Widget _dayCell(DateTime day, List<TaskRecord> dayTasks) {
+  Widget _dayCell(
+    DateTime day,
+    List<TaskRecord> dayTasks, {
+    required double cellWidth,
+  }) {
+    if (cellWidth < 54 && dayTasks.isNotEmpty) {
+      return _compactDayCell(day, dayTasks);
+    }
     final remaining = dayTasks.length - 1;
     final paddedTarget = height >= 48;
     return Container(
@@ -265,6 +273,78 @@ final class CalendarTaskBand extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _compactDayCell(DateTime day, List<TaskRecord> dayTasks) {
+    final firstTask = dayTasks.first;
+    final colors = calendarColorsForTitle(firstTask.draft.title);
+    final warning = dayTasks
+        .map((task) => calendarTaskDeadlineWarning(task, nowUtc))
+        .firstWhere(
+          (value) => value != CalendarTaskDeadlineWarning.none,
+          orElse: () => CalendarTaskDeadlineWarning.none,
+        );
+    final opensList = dayTasks.length > 1;
+    final message = opensList
+        ? '查看 ${day.month}月${day.day}日的全部 ${dayTasks.length} 项任务'
+        : '${day.month}月${day.day}日：${firstTask.draft.title}';
+    return Tooltip(
+      message: message,
+      child: Semantics(
+        button: true,
+        label: opensList
+            ? '${day.month}月${day.day}日，${dayTasks.length}项任务，打开任务列表'
+            : '${day.month}月${day.day}日，任务：${firstTask.draft.title}',
+        child: Material(
+          color: colors.fill,
+          child: InkWell(
+            key: opensList
+                ? ValueKey('calendar-task-compact-${_dayKey(day)}')
+                : ValueKey(
+                    'calendar-task-${_dayKey(day)}-${firstTask.reference.localId}',
+                  ),
+            onTap: opensList
+                ? () => onOverflow(day, dayTasks)
+                : () => onSelectTask(firstTask),
+            child: Container(
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                border: Border.all(color: colors.edge.withValues(alpha: .45)),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (warning != CalendarTaskDeadlineWarning.none)
+                      Icon(
+                        Icons.error_outline_rounded,
+                        size: 12,
+                        color: warning == CalendarTaskDeadlineWarning.overdue
+                            ? const Color(0xFF9B2C2C)
+                            : const Color(0xFFB77900),
+                      ),
+                    Text(
+                      '${dayTasks.length}项',
+                      maxLines: 1,
+                      overflow: TextOverflow.clip,
+                      style: TextStyle(
+                        color: colors.ink,
+                        fontSize: 9,
+                        height: 1.05,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
       ),
     );
   }
