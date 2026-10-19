@@ -13,6 +13,17 @@ enum YoungBusinessRejection {
   helperUnavailable,
   preparationTimedOut,
   sourceFailure,
+  requestTarget,
+  requestMethod,
+  transportAmbiguous,
+  responseTarget,
+  responseStatus,
+  responseMime,
+  responseTooLarge,
+  responseFormat,
+  transportFailed,
+  helperRejected,
+  xhrConfiguration,
 }
 
 /// Closed diagnostics only; never carries the failed page or response.

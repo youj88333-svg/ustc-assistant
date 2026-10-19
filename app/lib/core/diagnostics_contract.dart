@@ -192,6 +192,18 @@ enum DiagnosticCode {
   accountMismatch,
   identityMismatch,
   invalidCredential,
+  sourceFailure,
+  requestTarget,
+  requestMethod,
+  transportAmbiguous,
+  responseTarget,
+  responseStatus,
+  responseMime,
+  responseTooLarge,
+  responseFormat,
+  transportFailed,
+  helperRejected,
+  xhrConfiguration,
   studentContextMissing,
   identityHttp,
   identityMime,
@@ -386,6 +398,17 @@ enum DiagnosticStage {
   morningFinanceNotices,
 }
 
+enum DiagnosticSourceAction { calendar, activities }
+
+enum DiagnosticSourceStep {
+  starting,
+  profileBefore,
+  activities,
+  calendar,
+  profileAfter,
+  stopping,
+}
+
 enum DiagnosticPhase {
   requestingPermission,
   idle,
@@ -414,6 +437,57 @@ enum DiagnosticPhase {
   cancelling,
 }
 
+/// Closed, value-free metadata for one fixed source operation.
+final class DiagnosticSourceMetadata {
+  const DiagnosticSourceMetadata({
+    this.action,
+    this.failedPhase,
+    this.step,
+    this.failure,
+  });
+
+  final DiagnosticSourceAction? action;
+  final DiagnosticPhase? failedPhase;
+  final DiagnosticSourceStep? step;
+  final DiagnosticCode? failure;
+
+  Map<String, Object?> toSafeMap() => {
+    if (action != null) 'action': action!.name,
+    if (failedPhase != null) 'failedPhase': failedPhase!.name,
+    if (step != null) 'step': step!.name,
+    if (failure != null) 'failure': failure!.name,
+  };
+
+  factory DiagnosticSourceMetadata.fromSafeMap(Map<String, dynamic> raw) {
+    if (raw.keys.any(
+      (key) =>
+          !const {'action', 'failedPhase', 'step', 'failure'}.contains(key),
+    )) {
+      throw const FormatException('diagnostic_source_shape');
+    }
+
+    T? optionalEnum<T extends Enum>(String key, List<T> values) {
+      if (!raw.containsKey(key)) return null;
+      final value = raw[key];
+      if (value is! String) {
+        throw const FormatException('diagnostic_source_type');
+      }
+      final match = values
+          .where((candidate) => candidate.name == value)
+          .firstOrNull;
+      if (match == null) throw const FormatException('diagnostic_source_enum');
+      return match;
+    }
+
+    return DiagnosticSourceMetadata(
+      action: optionalEnum('action', DiagnosticSourceAction.values),
+      failedPhase: optionalEnum('failedPhase', DiagnosticPhase.values),
+      step: optionalEnum('step', DiagnosticSourceStep.values),
+      failure: optionalEnum('failure', DiagnosticCode.values),
+    );
+  }
+}
+
 final class DiagnosticVersions {
   const DiagnosticVersions({
     this.application = 'unknown',
@@ -434,7 +508,10 @@ final class DiagnosticVersions {
     'tools': RegExp(r'^agent-tools-v\d{1,4}$').hasMatch(tools)
         ? tools
         : 'unknown',
-    'prompt': RegExp(r'^ustc-student-agent-v\d{1,4}$').hasMatch(prompt)
+    'prompt':
+        RegExp(
+          r'^(?:ustc-student-agent|ustc-personal-maid-agent)-v\d{1,4}(?![\s\S])',
+        ).hasMatch(prompt)
         ? prompt
         : 'unknown',
     'revision': RegExp(r'^[a-f0-9]{40}$').hasMatch(revision)
@@ -467,6 +544,7 @@ final class DiagnosticEvent {
     this.code,
     this.issue,
     this.context,
+    this.source,
     this.elapsedMilliseconds,
     this.modelCalls,
     this.toolCalls,
@@ -483,6 +561,7 @@ final class DiagnosticEvent {
   final DiagnosticCode? code;
   final AgentParameterIssue? issue;
   final DiagnosticContextMetadata? context;
+  final DiagnosticSourceMetadata? source;
   final int? elapsedMilliseconds, modelCalls, toolCalls, count, httpStatus;
 }
 
@@ -516,6 +595,7 @@ final class DiagnosticRecord {
       throw const FormatException('diagnostic_range');
     }
     event.context?.toSafeMap();
+    event.source?.toSafeMap();
   }
   final DateTime atUtc;
   final DiagnosticEvent event;
@@ -536,6 +616,7 @@ final class DiagnosticRecord {
     if (event.code != null) 'code': event.code!.name,
     if (event.issue != null) 'validation': event.issue!.toSafeMap(),
     if (event.context != null) 'context': event.context!.toSafeMap(),
+    if (event.source != null) 'source': event.source!.toSafeMap(),
     if (event.elapsedMilliseconds != null)
       'elapsedMs': event.elapsedMilliseconds,
     if (event.modelCalls != null) 'modelCalls': event.modelCalls,
@@ -576,6 +657,7 @@ final class DiagnosticRecord {
             'code',
             'validation',
             'context',
+            'source',
             'elapsedMs',
             'modelCalls',
             'toolCalls',
@@ -639,6 +721,14 @@ final class DiagnosticRecord {
       }
       context = DiagnosticContextMetadata.fromSafeMap(value);
     }
+    DiagnosticSourceMetadata? source;
+    if (raw.containsKey('source')) {
+      final value = raw['source'];
+      if (value is! Map<String, dynamic>) {
+        throw const FormatException('diagnostic_source_shape');
+      }
+      source = DiagnosticSourceMetadata.fromSafeMap(value);
+    }
     final name = optionalEnum('event', DiagnosticEventName.values);
     if (name == null || raw.containsKey('trace') && raw['trace'] is! String) {
       throw const FormatException('diagnostic_event');
@@ -695,6 +785,7 @@ final class DiagnosticRecord {
         code: optionalEnum('code', DiagnosticCode.values),
         issue: issue,
         context: context,
+        source: source,
         elapsedMilliseconds: number('elapsedMs'),
         modelCalls: number('modelCalls'),
         toolCalls: number('toolCalls'),

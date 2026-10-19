@@ -338,6 +338,76 @@ void main() {
     });
 
     test(
+      'Young source metadata preserves fixed operation and failure stages',
+      () async {
+        final diagnostics = _FakeDiagnostics();
+        final bindings = RuntimeDiagnosticBindings(diagnostics);
+        final changes = StreamController<YoungSyncView>(sync: true);
+        bindings.bindYoung(changes.stream);
+
+        changes
+          ..add(
+            YoungSyncView(
+              phase: YoungSyncPhase.collecting,
+              kind: YoungJobKind.activities,
+              failure: FailureCode.invalidSnapshot,
+              failureStage: YoungSyncPhase.collecting,
+              collectionStage: YoungBusinessStage.profileBefore,
+              collectionReason: YoungBusinessRejection.sourceFailure,
+            ),
+          )
+          ..add(
+            YoungSyncView(
+              phase: YoungSyncPhase.collecting,
+              kind: YoungJobKind.activities,
+              failure: FailureCode.invalidSnapshot,
+              failureStage: YoungSyncPhase.closing,
+              collectionStage: YoungBusinessStage.calendar,
+              collectionReason: YoungBusinessRejection.sourceFailure,
+            ),
+          );
+
+        expect(diagnostics.records, hasLength(2));
+        final first = diagnostics.records.first;
+        expect(first.phase, DiagnosticPhase.collecting);
+        expect(first.code, DiagnosticCode.sourceFailure);
+        expect(first.source?.action, DiagnosticSourceAction.activities);
+        expect(first.source?.failedPhase, DiagnosticPhase.collecting);
+        expect(first.source?.step, DiagnosticSourceStep.profileBefore);
+        expect(first.source?.failure, DiagnosticCode.invalidSnapshot);
+
+        final encoded = DiagnosticRecord(
+          atUtc: DateTime.utc(2026, 10, 14),
+          sequence: 1,
+          event: first,
+        ).encode();
+        final decoded = DiagnosticRecord.decode(encoded).event;
+        expect(decoded.code, DiagnosticCode.sourceFailure);
+        expect(decoded.source?.action, DiagnosticSourceAction.activities);
+        expect(decoded.source?.failedPhase, DiagnosticPhase.collecting);
+        expect(decoded.source?.step, DiagnosticSourceStep.profileBefore);
+        expect(decoded.source?.failure, DiagnosticCode.invalidSnapshot);
+
+        await bindings.close();
+        await changes.close();
+      },
+    );
+
+    test('every Young business rejection has a fixed diagnostic code', () {
+      for (final rejection in YoungBusinessRejection.values) {
+        expect(
+          diagnosticCode(rejection.name),
+          isNot(DiagnosticCode.unknown),
+          reason: rejection.name,
+        );
+      }
+      expect(
+        diagnosticCode('unregistered-private-reason'),
+        DiagnosticCode.unknown,
+      );
+    });
+
+    test(
       'closing to idle does not claim an uncommitted source is complete',
       () async {
         final diagnostics = _FakeDiagnostics();
@@ -473,6 +543,107 @@ void main() {
         }
       },
     );
+  });
+
+  group('DiagnosticSourceMetadata', () {
+    test(
+      'fixed source metadata roundtrips and legacy records remain valid',
+      () {
+        const source = DiagnosticSourceMetadata(
+          action: DiagnosticSourceAction.calendar,
+          failedPhase: DiagnosticPhase.collecting,
+          step: DiagnosticSourceStep.profileBefore,
+          failure: DiagnosticCode.invalidSnapshot,
+        );
+        final record = DiagnosticRecord(
+          atUtc: DateTime.utc(2026, 10, 14),
+          sequence: 1,
+          event: const DiagnosticEvent(
+            name: DiagnosticEventName.sourceStage,
+            stage: DiagnosticStage.young,
+            phase: DiagnosticPhase.collecting,
+            outcome: DiagnosticOutcome.failure,
+            code: DiagnosticCode.sourceFailure,
+            source: source,
+          ),
+        );
+        final encoded = record.encode();
+        final decoded = DiagnosticRecord.decode(encoded).event;
+
+        expect(decoded.source?.action, DiagnosticSourceAction.calendar);
+        expect(decoded.source?.failedPhase, DiagnosticPhase.collecting);
+        expect(decoded.source?.step, DiagnosticSourceStep.profileBefore);
+        expect(decoded.source?.failure, DiagnosticCode.invalidSnapshot);
+
+        final legacyMap = Map<String, dynamic>.from(
+          jsonDecode(encoded) as Map<String, dynamic>,
+        )..remove('source');
+        final legacy = DiagnosticRecord.decode(jsonEncode(legacyMap));
+        expect(legacy.event.source, isNull);
+      },
+    );
+
+    test('source metadata rejects unknown keys, values, and types', () {
+      final valid = DiagnosticRecord(
+        atUtc: DateTime.utc(2026, 10, 14),
+        sequence: 1,
+        event: const DiagnosticEvent(
+          name: DiagnosticEventName.sourceStage,
+          source: DiagnosticSourceMetadata(
+            action: DiagnosticSourceAction.activities,
+            step: DiagnosticSourceStep.profileBefore,
+          ),
+        ),
+      );
+      final encoded = valid.encode();
+      final recordMap = Map<String, dynamic>.from(
+        jsonDecode(encoded) as Map<String, dynamic>,
+      );
+      final invalidSources = <Map<String, dynamic>>[
+        {'action': 'unregisteredAction'},
+        {'step': 7},
+        {'failure': null},
+        {'account': 'private-account-value'},
+        {'url': 'https://private.example/path'},
+      ];
+      for (final invalidSource in invalidSources) {
+        final invalidMap = Map<String, dynamic>.from(recordMap)
+          ..['source'] = invalidSource;
+        Object? error;
+        try {
+          DiagnosticRecord.decode(jsonEncode(invalidMap));
+        } on Object catch (caught) {
+          error = caught;
+        }
+        expect(error, isA<FormatException>());
+        expect(error.toString(), isNot(contains('private-account-value')));
+        expect(error.toString(), isNot(contains('private.example')));
+      }
+      expect(encoded, isNot(contains('account')));
+      expect(encoded, isNot(contains('https://')));
+    });
+  });
+
+  test('prompt versions accept both fixed persona names only', () {
+    for (final prompt in [
+      'ustc-student-agent-v1',
+      'ustc-student-agent-v2026',
+      'ustc-personal-maid-agent-v3',
+      'ustc-personal-maid-agent-v1234',
+    ]) {
+      expect(DiagnosticVersions(prompt: prompt).toSafeMap()['prompt'], prompt);
+    }
+    for (final prompt in [
+      'private-prompt-value',
+      'ustc-personal-agent-v3',
+      'ustc-personal-maid-agent-v12345',
+      'ustc-student-agent-v1\n',
+    ]) {
+      expect(
+        DiagnosticVersions(prompt: prompt).toSafeMap()['prompt'],
+        'unknown',
+      );
+    }
   });
 
   group('DiagnosticErrorHooks', () {

@@ -932,6 +932,9 @@ internal class SchoolBrowserEngine(
         private val YOUNG_REASONS = setOf(
             "stampChanged", "nativeContext", "mainRoute", "contextLost", "compiledScript",
             "helperUnavailable", "preparationTimedOut", "sourceFailure",
+            "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
+            "responseStatus", "responseMime", "responseTooLarge", "responseFormat",
+            "transportFailed", "helperRejected", "xhrConfiguration",
         )
     }
 }

@@ -6,7 +6,7 @@ param(
     [ValidateRange(1, 65535)]
     [int]$AdbServerPort = 5038,
     [switch]$OrdinaryOnly,
-    [ValidateSet('android-webview2', 'android-feedback')]
+    [ValidateSet('android-webview2', 'android-feedback', 'qa4008')]
     [string]$ReportFamily = 'android-webview2'
 )
 
@@ -121,6 +121,7 @@ if ($OrdinaryOnly) {
         'cn.ustcassistant.mobile.qa.OrdinaryPartitionLedgerTest',
         'cn.ustcassistant.mobile.qa.OrdinaryHostIsolationTest',
         'cn.ustcassistant.mobile.qa.A2ProviderTest',
+        'cn.ustcassistant.mobile.qa.A2LoginReadinessTest',
         'cn.ustcassistant.mobile.qa.A2YoungTransportTest'
     )
     $instrumentArguments += @('-e', 'class', ($selectedTestClasses -join ','))

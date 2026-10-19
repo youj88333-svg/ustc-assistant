@@ -6,6 +6,7 @@ import '../core/young_work_contract.dart';
 import '../core/young_daily_sync_contract.dart';
 import '../jobs/jw_sync_port.dart';
 import '../jobs/young_sync_port.dart';
+import '../source/young_active_contract.dart';
 
 /// Composition-root observers receive only typed, value-free projections.
 /// They cannot read a source response, business database or credential.
@@ -117,7 +118,7 @@ final class RuntimeDiagnosticBindings {
     _subscriptions.add(
       changes.listen((view) {
         final key =
-            '${view.phase.name}/${view.automation.name}/${view.failure?.name}/${view.identityFailure?.name}/${view.credentialFailure?.name}/${view.loginPauseReason?.name}/${view.collectionReason?.name}/${view.committed}';
+            '${view.phase.name}/${view.automation.name}/${view.failure?.name}/${view.identityFailure?.name}/${view.credentialFailure?.name}/${view.loginPauseReason?.name}/${view.failureStage?.name}/${view.collectionStage?.name}/${view.collectionReason?.name}/${view.committed}';
         if (key == previous) return;
         previous = key;
         if (view.phase == YoungSyncPhase.opening &&
@@ -130,6 +131,39 @@ final class RuntimeDiagnosticBindings {
             view.identityFailure?.name ??
             view.credentialFailure?.name ??
             view.failure?.name;
+        final action = switch (view.kind) {
+          YoungJobKind.calendar => DiagnosticSourceAction.calendar,
+          YoungJobKind.activities => DiagnosticSourceAction.activities,
+          null => null,
+        };
+        final failedPhase = view.failureStage == null
+            ? null
+            : diagnosticPhase(view.failureStage!.name);
+        final step = switch (view.collectionStage) {
+          YoungBusinessStage.starting => DiagnosticSourceStep.starting,
+          YoungBusinessStage.profileBefore =>
+            DiagnosticSourceStep.profileBefore,
+          YoungBusinessStage.activities => DiagnosticSourceStep.activities,
+          YoungBusinessStage.calendar => DiagnosticSourceStep.calendar,
+          YoungBusinessStage.profileAfter => DiagnosticSourceStep.profileAfter,
+          YoungBusinessStage.stopping => DiagnosticSourceStep.stopping,
+          _ => null,
+        };
+        final failureCode = view.failure == null
+            ? null
+            : diagnosticCode(view.failure!.name);
+        final source =
+            action == null &&
+                failedPhase == null &&
+                step == null &&
+                failureCode == null
+            ? null
+            : DiagnosticSourceMetadata(
+                action: action,
+                failedPhase: failedPhase,
+                step: step,
+                failure: failureCode,
+              );
         recordDiagnostic(
           port,
           DiagnosticEvent(
@@ -151,6 +185,7 @@ final class RuntimeDiagnosticBindings {
                 : view.loginPauseReason == null
                 ? null
                 : diagnosticCode(view.loginPauseReason!.name),
+            source: source,
             count: view.committed
                 ? view.kind == YoungJobKind.activities
                       ? view.normalization?.activities

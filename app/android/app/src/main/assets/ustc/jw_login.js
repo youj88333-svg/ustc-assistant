@@ -14,9 +14,13 @@
   const setValue = Object.getOwnPropertyDescriptor(
       HTMLInputElement.prototype, 'value').set;
   const EventClass = root.Event;
+  const monotonicNow = root.performance.now.bind(root.performance);
+  // A partial form gets one fixed deadline for this document and login closure.
+  const PARTIAL_FORM_GRACE_MS = 1500;
   let captured = null;
   let consumed = false;
   let portalConsumed = false;
+  let partialFormSince = null;
 
   function current() {
     return typeof externalCurrent === 'function' && externalCurrent() &&
@@ -30,10 +34,9 @@
   function all(scope, selector) {
     return apply(scope === doc ? query : elementQuery, scope, [selector]);
   }
-  function visible(node) {
+  function visibleTree(node) {
     if (!node || node.ownerDocument !== doc || !node.isConnected ||
-        !apply(contains, doc, [node]) || !apply(rectangles, node, []).length)
-      return false;
+        !apply(contains, doc, [node])) return false;
     for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
       const css = style(ancestor);
       if (ancestor.hidden || ancestor.inert ||
@@ -43,6 +46,9 @@
         return false;
     }
     return true;
+  }
+  function visible(node) {
+    return visibleTree(node) && apply(rectangles, node, []).length > 0;
   }
   function actionable(node) {
     return visible(node) && !node.disabled &&
@@ -79,35 +85,46 @@
     // The public CAS template has a hidden autoLoginForm and a display:none
     // username mirror. Neither grants a credential capability. Uniqueness is
     // proved over visible controls, then over their one shared owning form.
-    const forms = Array.from(all(doc, 'form')).filter(form =>
-      Array.from(all(form, 'input, button, select, textarea')).some(control =>
-        control.form === form && visible(control)));
+    const forms = Array.from(all(doc, 'form')).filter(visibleTree);
     const usernames = Array.from(all(doc, 'input[name="username"], input#username'))
         .filter(visible);
     const passwords = Array.from(all(doc, 'input[type="password"]')).filter(visible);
     const buttons = Array.from(all(doc, '#submitBtn, button.login-button')).filter(visible);
+    const form = forms.length === 1 ? forms[0] : null;
+    const visibleFormControls = form ?
+        Array.from(all(form, 'input, button, select, textarea')).filter(control =>
+          control.form === form && visible(control)) : [];
+    const visibleActions = form ? Array.from(all(form,
+        'button, input[type="submit"], input[type="button"]')).filter(visible) : [];
     if (usernames.length === 0 && passwords.length === 0 && buttons.length === 0 &&
         forms.length === 0) return {state: 'waiting'};
-    if (usernames.length !== 1 || passwords.length !== 1 || buttons.length !== 1)
+    if (usernames.length > 1 || passwords.length > 1 || buttons.length > 1 ||
+        forms.length > 1) return {state: 'pageStructureChanged'};
+    if (buttons.length === 0 && visibleActions.some(action => !buttons.includes(action)))
       return {state: 'pageStructureChanged'};
-    const username = usernames[0];
-    const password = passwords[0];
-    const button = buttons[0];
-    const form = username.form;
-    if (!['text', 'email'].includes(username.type) || password.type !== 'password' ||
-        !['BUTTON', 'INPUT'].includes(button.tagName) ||
-        !['submit', 'button'].includes(button.type) ||
-        !form || forms.length !== 1 || forms[0] !== form ||
-        password.form !== form || button.form !== form ||
-        username.readOnly || password.readOnly ||
-        !actionable(form) || !actionable(username) || !actionable(password) ||
-        !actionable(button)) return {state: 'pageStructureChanged'};
+    const username = usernames[0] || null;
+    const password = passwords[0] || null;
+    const button = buttons[0] || null;
+    const present = [username, password, button].filter(Boolean);
+    if (!form) return {state: 'pageStructureChanged'};
+    if (present.length === 0) {
+      return visibleFormControls.length === 0 ?
+          {state: 'incompleteForm'} : {state: 'pageStructureChanged'};
+    }
+    if (present.some(node => node.form !== form) ||
+        (username && (!['text', 'email'].includes(username.type) || username.readOnly)) ||
+        (password && (password.type !== 'password' || password.readOnly)) ||
+        (button && (!['BUTTON', 'INPUT'].includes(button.tagName) ||
+            !['submit', 'button'].includes(button.type))) ||
+        !actionable(form) || present.some(node => !actionable(node)))
+      return {state: 'pageStructureChanged'};
     for (const input of all(doc, 'input, select, textarea')) {
       if (input === username || input === password || !visible(input)) continue;
       if (input.tagName !== 'INPUT' ||
           !['hidden', 'submit', 'button', 'reset', 'checkbox'].includes(input.type))
         return {state: 'pageStructureChanged'};
     }
+    if (!username || !password || !button) return {state: 'incompleteForm'};
     return {state: 'formReady', form, username, password, button};
   }
   function changed(nodes) {
@@ -137,7 +154,16 @@
       return 'portalActivated';
     }
     const selected = selectForm();
-    if (selected.state === 'formReady') captured = selected;
+    if (selected.state === 'formReady') {
+      captured = selected;
+      return selected.state;
+    }
+    if (selected.state === 'incompleteForm') {
+      if (partialFormSince === null) partialFormSince = monotonicNow();
+      // Keep the first observation time so DOM churn cannot extend the grace.
+      return monotonicNow() - partialFormSince < PARTIAL_FORM_GRACE_MS ?
+          'waiting' : 'pageStructureChanged';
+    }
     return selected.state;
   }
   function submit(username, password) {

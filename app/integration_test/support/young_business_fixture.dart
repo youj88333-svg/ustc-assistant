@@ -12,6 +12,8 @@ final class YoungBusinessFixture {
     required this.delayBusinessReadiness,
     required this.businessReadinessDelay,
     required this.keepTargetRouteWhilePreparing,
+    required this.cacheBustedRequests,
+    required this.useXhr,
   });
 
   static const syntheticPassword = 'young-fixture-only-\\"-42';
@@ -28,6 +30,8 @@ final class YoungBusinessFixture {
   final bool delayBusinessReadiness;
   final Duration businessReadinessDelay;
   final bool keepTargetRouteWhilePreparing;
+  final bool cacheBustedRequests;
+  final bool useXhr;
   String mode = 'good';
   String username = 'FIXTURE_ACCOUNT';
   int profiles = 0;
@@ -58,6 +62,8 @@ final class YoungBusinessFixture {
     bool delayBusinessReadiness = false,
     Duration businessReadinessDelay = const Duration(milliseconds: 800),
     bool keepTargetRouteWhilePreparing = false,
+    bool cacheBustedRequests = false,
+    bool useXhr = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fixture = YoungBusinessFixture._(
@@ -68,6 +74,8 @@ final class YoungBusinessFixture {
       delayBusinessReadiness: delayBusinessReadiness,
       businessReadinessDelay: businessReadinessDelay,
       keepTargetRouteWhilePreparing: keepTargetRouteWhilePreparing,
+      cacheBustedRequests: cacheBustedRequests,
+      useXhr: useXhr,
     );
     server.listen(fixture._serve);
     return fixture;
@@ -251,7 +259,7 @@ final class YoungBusinessFixture {
 const namespace='$_youngNamespacePath';
 const defaultChild=namespace+'portal/home';
 function installHomeReader(){
-  const r={b:function(options){return Promise.resolve().then(()=>fetch('/login/wisdom-group-learning-bg'+options.url+'?'+new URLSearchParams(options.params))).then(x=>x.json())}};
+  const r={b:${_businessGet()}};
   function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
   ${_webpackRuntime()}
   installHelper();
@@ -279,7 +287,7 @@ setTimeout(async()=>{
     final routeAfterBody = mode == 'routeAfterBody';
     final expectedPath = jsonEncode(path);
     return '''<!doctype html><html><body><iframe id="fixture-frame" src="/frame"></iframe><table><tr><td>Fixture</td></tr></table><div class="ant-fullcalendar"></div><script>
-      const r={b:function(options){return Promise.resolve().then(()=>fetch('/login/wisdom-group-learning-bg'+options.url+'?'+new URLSearchParams(options.params))).then(x=>x.json()).then(value=>{if(window.__youngRouteAfterBody&&options.url==='/personal/scCalendar/getPageUserList')history.pushState(null,'',location.href);return value})}};
+      const r={b:${_businessGet()}};
       function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
       window.__youngRouteAfterBody=$routeAfterBody;
       ${_webpackRuntime()}
@@ -292,6 +300,35 @@ setTimeout(async()=>{
       setInterval(()=>fetch('/login/wisdom-group-learning-bg/mobile/item/enrolmentList?pageNo=1&pageSize=10&background=1'),150);
       </script></body></html>''';
   }
+
+  // A framework-style async interceptor precedes the native request. XHR uses
+  // readyState completion like Axios' browser adapter; returned helper objects
+  // still cannot replace the reader's own native response projection.
+  String _businessGet() =>
+      '''function(options){
+      return Promise.resolve().then(function(){
+        const params=new URLSearchParams(options.params);
+        ${cacheBustedRequests ? "params.set('_t','1792396800000');" : ''}
+        const target='/login/wisdom-group-learning-bg'+options.url+(params.toString()?'?'+params.toString():'');
+        ${useXhr ? '''return new Promise(function(resolve,reject){
+          let request=new XMLHttpRequest();
+          request.open('GET',target,true);
+          request.onreadystatechange=function(){
+            if(!request||request.readyState!==4)return;
+            if(request.status===0)return;
+            const status=request.status, text=request.responseText;
+            request=null;
+            if(status<200||status>299){reject(new Error('synthetic-http'));return;}
+            try{resolve(JSON.parse(text));}catch(error){reject(error);}
+          };
+          request.onerror=function(){reject(new Error('synthetic-network'));request=null;};
+          request.send(null);
+        });''' : 'return fetch(target).then(function(response){return response.json();});'}
+      }).then(function(value){
+        if(window.__youngRouteAfterBody&&options.url==='/personal/scCalendar/getPageUserList')history.pushState(null,'',location.href);
+        return value;
+      });
+      }''';
 
   // Model Webpack 4's initial module table, JSONP registration and cache. The
   // cache deliberately retains a failed require so premature evaluation is a

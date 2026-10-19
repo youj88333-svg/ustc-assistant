@@ -144,7 +144,7 @@
     apply(weakAdd, errors, [result]);
     return freeze(result);
   }
-  function malformed() { throw rejection('invalidSnapshot', 'sourceFailure'); }
+  function malformed(reason) { throw rejection('invalidSnapshot', reason || 'sourceFailure'); }
 
   const responseURL = nativeGetter(Response.prototype, 'url');
   const responseStatus = nativeGetter(Response.prototype, 'status');
@@ -352,31 +352,42 @@
   }
 
   function targetURL(raw, step) {
-    if (typeof raw !== 'string' || raw.length > 4096) malformed();
+    if (typeof raw !== 'string' || raw.length > 4096) malformed('requestTarget');
     const parsed = new NativeURL(raw, step.owner.href);
     if (apply(urlOrigin, parsed, []) !== expectedOrigin ||
         apply(urlPath, parsed, []) !== PREFIX + fixedPath(step.endpoint) ||
         apply(urlHash, parsed, []) !== '' || apply(urlUsername, parsed, []) !== '' ||
-        apply(urlPassword, parsed, []) !== '') malformed();
+        apply(urlPassword, parsed, []) !== '') malformed('requestTarget');
     let count = 0;
     const keys = new NativeSet();
     apply(paramsEach, apply(urlParams, parsed, []), [function(value, key) {
-      if (apply(setHas, keys, [key])) malformed();
+      if (apply(setHas, keys, [key])) malformed('requestTarget');
       apply(setAdd, keys, [key]);
+      // The page's request interceptor may add its conventional cache buster.
+      // It has no identity, paging or date-selection authority. Keep every
+      // business key exact, and reject every other additional/duplicate key.
+      if (key === '_t') {
+        if (value.length !== 10 && value.length !== 13) malformed('requestTarget');
+        for (let index = 0; index < value.length; ++index) {
+          const digit = apply(stringCode, value, [index]);
+          if (digit < 48 || digit > 57 || (index === 0 && digit === 48)) malformed('requestTarget');
+        }
+        return;
+      }
       ++count;
-      if (step.endpoint === 'profile') malformed();
-      if (key === 'pageNo') { if (value !== '' + step.page) malformed(); }
-      else if (key === 'pageSize') { if (value !== '10') malformed(); }
+      if (step.endpoint === 'profile') malformed('requestTarget');
+      if (key === 'pageNo') { if (value !== '' + step.page) malformed('requestTarget'); }
+      else if (key === 'pageSize') { if (value !== '10') malformed('requestTarget'); }
       else if (key === 'field') {
         const field = step.endpoint === 'activities' ? 'id,,action' :
           'id,,number,title,place,startTime,endTime';
-        if (value !== field) malformed();
+        if (value !== field) malformed('requestTarget');
       } else if (key === 'now' && step.endpoint === 'schedule') {
-        if (value !== step.day) malformed();
-      } else malformed();
+        if (value !== step.day) malformed('requestTarget');
+      } else malformed('requestTarget');
     }]);
     const expected = step.endpoint === 'profile' ? 0 : (step.endpoint === 'schedule' ? 4 : 3);
-    if (count !== expected) malformed();
+    if (count !== expected) malformed('requestTarget');
     return apply(urlHref, parsed, []);
   }
 
@@ -386,17 +397,17 @@
       try { method = apply(requestMethod, input, []); } catch (_) {}
     }
     if (init !== undefined && init !== null) {
-      if (typeof init !== 'object') malformed();
+      if (typeof init !== 'object') malformed('requestMethod');
       const override = dataValue(init, 'method');
       if (override !== undefined) method = override;
     }
-    if (typeof method !== 'string' || apply(stringLower, method, []) !== 'get') malformed();
+    if (typeof method !== 'string' || apply(stringLower, method, []) !== 'get') malformed('requestMethod');
   }
 
   function claimTransport(step, kind, url) {
     demandStep(step);
     if (step.transport !== null) {
-      fail(step.owner, 'invalidSnapshot', 'sourceFailure');
+      fail(step.owner, 'invalidSnapshot', 'transportAmbiguous');
       throw step.owner.failure;
     }
     step.transport = kind;
@@ -404,39 +415,52 @@
   }
 
   function checkHeaders(mime, length) {
-    if (typeof mime !== 'string') malformed();
+    if (typeof mime !== 'string') malformed('responseMime');
     let end = mime.length;
     for (let index = 0; index < mime.length; ++index) {
       if (apply(stringCode, mime, [index]) === 59) { end = index; break; }
     }
     const type = apply(stringLower, apply(stringTrim, apply(stringSlice, mime, [0, end]), []), []);
-    if (type !== 'application/json') malformed();
+    if (type !== 'application/json') malformed('responseMime');
     if (length !== null) {
-      if (typeof length !== 'string' || length.length === 0 || length.length > 16) malformed();
+      if (typeof length !== 'string' || length.length === 0 || length.length > 16) malformed('responseTooLarge');
       let size = 0;
       for (let index = 0; index < length.length; ++index) {
         const digit = apply(stringCode, length, [index]) - 48;
-        if (digit < 0 || digit > 9) malformed();
+        if (digit < 0 || digit > 9) malformed('responseTooLarge');
         size = size * 10 + digit;
-        if (size > MAXIMUM) malformed();
+        if (size > MAXIMUM) malformed('responseTooLarge');
       }
     }
   }
 
   function transportFailed(step, code, reason) {
     if (operationState === step.owner && step.owner.step === step && !step.delivered && !step.cancelled) {
-      fail(step.owner, code || 'invalidSnapshot', reason || 'sourceFailure');
+      fail(step.owner, code || 'invalidSnapshot', reason || 'transportFailed');
     }
+  }
+
+  function transportError(step, error, fallback) {
+    // Only reader-created closed errors cross the bridge. Page/native error
+    // messages, response values, URLs and headers never become diagnostics.
+    if (error && (typeof error === 'object' || typeof error === 'function') &&
+        apply(weakHas, errors, [error])) {
+      transportFailed(step, error.code, error.reason);
+    } else transportFailed(step, 'invalidSnapshot', fallback || 'transportFailed');
   }
 
   function projected(step, raw) {
     demandStep(step);
-    if (step.projectedJson !== null || typeof raw !== 'string' || utf8Size(raw) > MAXIMUM) malformed();
-    const projection = strictProjection(raw, step.endpoint);
+    if (step.projectedJson !== null || typeof raw !== 'string') malformed('responseFormat');
+    if (utf8Size(raw) > MAXIMUM) malformed('responseTooLarge');
+    let projection;
+    try { projection = strictProjection(raw, step.endpoint); }
+    catch (_) { malformed('responseFormat'); }
     const encoded = jsonStringify(projection);
-    if (typeof encoded !== 'string' || utf8Size(encoded) > MAXIMUM) malformed();
+    if (typeof encoded !== 'string' || utf8Size(encoded) > MAXIMUM) malformed('responseTooLarge');
     demandStep(step);
     step.projectedJson = encoded;
+    if (step.helperRejected) fail(step.owner, 'sourceFailed', 'helperRejected');
   }
 
   function observeFetchResponse(step, response) {
@@ -445,10 +469,10 @@
       const status = apply(responseStatus, response, []);
       const type = apply(responseType, response, []);
       const finalURL = apply(responseURL, response, []);
-      if (!safeInteger(status) || status < 200 || status > 299 ||
-          (type !== 'basic' && type !== 'default') ||
+      if (!safeInteger(status) || status < 200 || status > 299) malformed('responseStatus');
+      if ((type !== 'basic' && type !== 'default') ||
           apply(responseRedirected, response, []) !== false ||
-          finalURL !== step.requestURL || targetURL(finalURL, step) !== step.requestURL) malformed();
+          finalURL !== step.requestURL || targetURL(finalURL, step) !== step.requestURL) malformed('responseTarget');
       const headers = apply(responseHeaders, response, []);
       checkHeaders(apply(headersGet, headers, ['content-type']),
         apply(headersGet, headers, ['content-length']));
@@ -456,7 +480,7 @@
       // result. No page Response.json/text/clone method or helper value is read.
       const clone = apply(responseClone, response, []);
       const body = apply(responseBody, clone, []);
-      if (!body) malformed();
+      if (!body) malformed('responseFormat');
       const reader = apply(streamReader, body, []);
       step.reader = reader;
       const decoderOptions = dto();
@@ -475,7 +499,7 @@
           try {
             demandStep(step);
             const done = ownValue(result, 'done');
-            if (typeof done !== 'boolean') malformed();
+            if (typeof done !== 'boolean') malformed('responseFormat');
             if (done) {
               text += apply(decodeText, decoder, []);
               step.reader = null;
@@ -486,15 +510,15 @@
             }
             const chunk = ownValue(result, 'value');
             bytes += apply(typedBytes, chunk, []);
-            if (bytes > MAXIMUM) malformed();
+            if (bytes > MAXIMUM) malformed('responseTooLarge');
             text += apply(decodeText, decoder, [chunk, streamOptions]);
-            if (text.length > MAXIMUM) malformed();
+            if (text.length > MAXIMUM) malformed('responseTooLarge');
             read();
-          } catch (_) { text = ''; transportFailed(step); }
+          } catch (error) { text = ''; transportError(step, error, 'responseFormat'); }
         }, function() { text = ''; transportFailed(step); }]);
       }
       read();
-    } catch (_) { transportFailed(step); }
+    } catch (error) { transportError(step, error, 'responseFormat'); }
   }
 
   function fetchWithScope(input, init) {
@@ -512,7 +536,7 @@
         function() { transportFailed(step); }]);
       return promise;
     } catch (error) {
-      transportFailed(step);
+      transportError(step, error);
       throw (step.owner.failure || rejection('invalidSnapshot', 'sourceFailure'));
     }
   }
@@ -522,14 +546,14 @@
     if (step) {
       try {
         demandStep(step);
-        if (typeof method !== 'string' || apply(stringLower, method, []) !== 'get' ||
-            (asynchronous !== undefined && asynchronous !== true) || arguments.length > 3) malformed();
+        if (typeof method !== 'string' || apply(stringLower, method, []) !== 'get') malformed('requestMethod');
+        if ((asynchronous !== undefined && asynchronous !== true) || arguments.length > 3) malformed('xhrConfiguration');
         const target = targetURL(inputURL(url), step);
         const result = apply(xhrOpen, this, arguments);
         apply(weakSet, xhrStates, [this, { step: step, url: target, sent: false }]);
         return result;
-      } catch (_) {
-        transportFailed(step);
+      } catch (error) {
+        transportError(step, error);
         throw (step.owner.failure || rejection('invalidSnapshot', 'sourceFailure'));
       }
     }
@@ -551,10 +575,10 @@
       demandStep(step);
       const opened = apply(weakGet, xhrStates, [xhr]);
       if (!opened || opened.step !== step || opened.sent ||
-          (body !== null && body !== undefined)) malformed();
+          (body !== null && body !== undefined)) malformed('xhrConfiguration');
       const type = apply(xhrResponseType, xhr, []);
       // responseType=json has already discarded duplicate JSON keys.
-      if (type !== '' && type !== 'text') malformed();
+      if (type !== '' && type !== 'text') malformed('xhrConfiguration');
       claimTransport(step, 'xhr', opened.url);
       opened.sent = true;
       step.xhr = xhr;
@@ -575,13 +599,14 @@
       function progress(event) {
         try {
           demandStep(step);
-          if (!trustedEvent(event) || apply(progressLoaded, event, []) > MAXIMUM) malformed();
-        } catch (_) { transportFailed(step); remove(); }
+          if (!trustedEvent(event)) malformed('responseTarget');
+          if (apply(progressLoaded, event, []) > MAXIMUM) malformed('responseTooLarge');
+        } catch (error) { transportError(step, error); remove(); }
       }
       function loaded(event) {
         try {
           demandStep(step);
-          if (completed || !trustedEvent(event) || apply(xhrReady, xhr, []) !== 4) malformed();
+          if (completed || !trustedEvent(event) || apply(xhrReady, xhr, []) !== 4) malformed('responseTarget');
           completed = true;
           const status = apply(xhrStatus, xhr, []);
           const finalURL = apply(xhrURL, xhr, []);
@@ -590,15 +615,16 @@
           // native instance ended at the exact fixed request URL; it cannot
           // prove an invisible intermediate redirect chain stayed same-origin
           // or contained no redirects. Fetch separately exposes redirected.
-          if (!safeInteger(status) || status < 200 || status > 299 ||
-              (type !== '' && type !== 'text') || finalURL !== step.requestURL ||
-              targetURL(finalURL, step) !== step.requestURL) malformed();
+          if (!safeInteger(status) || status < 200 || status > 299) malformed('responseStatus');
+          if (type !== '' && type !== 'text') malformed('xhrConfiguration');
+          if (finalURL !== step.requestURL ||
+              targetURL(finalURL, step) !== step.requestURL) malformed('responseTarget');
           checkHeaders(apply(xhrHeader, xhr, ['content-type']),
             apply(xhrHeader, xhr, ['content-length']));
           projected(step, apply(xhrText, xhr, []));
           step.xhr = null;
           remove();
-        } catch (_) { transportFailed(step); remove(); }
+        } catch (error) { transportError(step, error); remove(); }
       }
       apply(nativeAddEvent, xhr, ['load', loaded]);
       apply(nativeAddEvent, xhr, ['progress', progress]);
@@ -606,8 +632,8 @@
       apply(nativeAddEvent, xhr, ['timeout', failed]);
       apply(nativeAddEvent, xhr, ['abort', failed]);
       return apply(xhrSend, xhr, arguments);
-    } catch (_) {
-      transportFailed(step);
+    } catch (error) {
+      transportError(step, error);
       throw (step.owner.failure || rejection('invalidSnapshot', 'sourceFailure'));
     }
   }
@@ -894,7 +920,7 @@
     }
     freeze(parameters);
     const step = { owner: state, number: number, endpoint: endpoint, page: page, day: day,
-      cancelled: false, delivered: false, helperComplete: false, transport: null,
+      cancelled: false, delivered: false, helperComplete: false, helperRejected: false, transport: null,
       requestURL: null, projectedJson: null, reader: null, xhr: null };
     state.stepNumber = number;
     state.step = step;
@@ -906,7 +932,15 @@
         if (!stepCurrent(step)) return;
         step.helperComplete = true;
         if (step.transport === null) fail(state, 'sourceFailed', 'helperUnavailable');
-      }, function() { transportFailed(step); }]);
+      }, function() {
+        if (!stepCurrent(step)) return;
+        step.helperRejected = true;
+        // XHR helpers can reject at readyState=DONE, before the native load
+        // observer supplies status/body diagnostics. Wait for that one owned
+        // transport's terminal observation; a rejected helper never delivers.
+        if (step.transport === null || step.projectedJson !== null)
+          fail(state, 'sourceFailed', 'helperRejected');
+      }]);
     } catch (_) {
       fail(state, 'sourceFailed', 'helperUnavailable');
       throw state.failure;

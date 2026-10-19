@@ -32,6 +32,92 @@ import java.util.concurrent.atomic.AtomicInteger
 @RunWith(AndroidJUnit4::class)
 class A2YoungTransportTest {
     @Test
+    fun numericCacheBusterDoesNotChangeTheFixedProfileQuery() =
+        withHarness(Scenario.CACHE_BUSTER) { harness ->
+            prepareAndStart(harness)
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertEquals(1, harness.server.apiRequestCount.get())
+        }
+
+    @Test
+    fun millisecondsCacheBusterWorksWithFetchAndNativeXhr() {
+        for (scenario in listOf(Scenario.CACHE_MILLIS, Scenario.CACHE_XHR)) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+                assertProfileProjection(awaitPoll(harness, step = 1))
+                assertEquals(1, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun cacheBustersCannotAuthorizeUnknownDuplicateOrIdentityParameters() {
+        for (scenario in listOf(Scenario.CACHE_INVALID, Scenario.CACHE_DUPLICATE, Scenario.QUERY_SELECTOR)) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                val reply = harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = "")
+                assertClosedError(reply, "invalidSnapshot")
+                assertEquals("requestTarget", reply.getJSONObject("error").getString("reason"))
+                assertEquals(0, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun statusAndMimeFailuresHaveDifferentValueFreeReasons() {
+        for ((scenario, reason) in listOf(Scenario.HTTP_ERROR to "responseStatus", Scenario.WRONG_MIME to "responseMime")) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+                val reply = awaitPoll(harness, step = 1)
+                assertClosedError(reply, "invalidSnapshot")
+                assertEquals(reason, reply.getJSONObject("error").getString("reason"))
+                assertEquals(1, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun aCacheBusterCannotChangeTheRequestedPageOrCalendarDay() {
+        for (scenario in listOf(Scenario.QUERY_PAGE, Scenario.QUERY_DAY)) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                val reply = harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "schedule", pageNumber = 1, day = "2026-10-19")
+                assertClosedError(reply, "invalidSnapshot")
+                assertEquals("requestTarget", reply.getJSONObject("error").getString("reason"))
+                assertEquals(0, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun xhrReadyStateHelperRejectionPreservesNativeFailureAndNeverDeliversSuccess() {
+        val cases = listOf(
+            Triple(Scenario.HTTP_ERROR_XHR, "invalidSnapshot", "responseStatus"),
+            Triple(Scenario.INVALID_JSON_XHR, "invalidSnapshot", "responseFormat"),
+            Triple(Scenario.HELPER_REJECT_XHR, "sourceFailed", "helperRejected"),
+        )
+        for ((scenario, code, reason) in cases) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+                val reply = awaitPoll(harness, step = 1)
+                assertClosedError(reply, code)
+                assertEquals(reason, reply.getJSONObject("error").getString("reason"))
+                assertEquals(1, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
     fun anArrayBeforeRuntimeInstallationDoesNotAccumulateProbeEntries() =
         withHarness(Scenario.NATIVE_ARRAY) { harness ->
             repeat(3) {
@@ -231,11 +317,27 @@ class A2YoungTransportTest {
         val error = reply.getJSONObject("error")
         assertEquals(setOf("code", "reason"), error.keys().asSequence().toSet())
         assertEquals(expectedCode, error.getString("code"))
-        assertTrue(error.getString("reason") in setOf("helperUnavailable", "sourceFailure"))
+        assertTrue(error.getString("reason") in setOf("helperUnavailable", "sourceFailure",
+            "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
+            "responseStatus", "responseMime", "responseTooLarge", "responseFormat",
+            "transportFailed", "helperRejected", "xhrConfiguration"))
         assertNull(error.opt("raw"))
     }
 
     private enum class Scenario {
+        CACHE_BUSTER,
+        CACHE_MILLIS,
+        CACHE_XHR,
+        CACHE_INVALID,
+        CACHE_DUPLICATE,
+        QUERY_SELECTOR,
+        QUERY_PAGE,
+        QUERY_DAY,
+        HTTP_ERROR,
+        WRONG_MIME,
+        HTTP_ERROR_XHR,
+        INVALID_JSON_XHR,
+        HELPER_REJECT_XHR,
         NATIVE_ARRAY,
         GETTER,
         GETTER_FAKE,
@@ -429,9 +531,10 @@ class A2YoungTransportTest {
                 path == "/loopback-final" || path.startsWith(apiPath) -> {
                     writeResponse(
                         client,
-                        status = "200 OK",
-                        contentType = "application/json; charset=utf-8",
-                        body = if (scenario == Scenario.DUPLICATE)
+                        status = if (scenario == Scenario.HTTP_ERROR || scenario == Scenario.HTTP_ERROR_XHR) "503 Unavailable" else "200 OK",
+                        contentType = if (scenario == Scenario.WRONG_MIME) "text/plain" else "application/json; charset=utf-8",
+                        body = if (scenario == Scenario.INVALID_JSON_XHR) "synthetic-invalid-json"
+                            else if (scenario == Scenario.DUPLICATE)
                             """{"success":true,"code":200,"result":{"username":"other","username":"loopback-user"}}"""
                             else SYNTHETIC_PROFILE_JSON,
                     )
@@ -454,8 +557,20 @@ class A2YoungTransportTest {
                 Scenario.SEQUENCE -> "sequence"
                 Scenario.FAKE, Scenario.GETTER_FAKE -> "fake"
                 Scenario.BACKGROUND -> "background"
+                Scenario.CACHE_BUSTER -> "cacheBuster"
+                Scenario.CACHE_MILLIS -> "cacheMillis"
+                Scenario.CACHE_XHR -> "cacheXhr"
+                Scenario.CACHE_INVALID -> "cacheInvalid"
+                Scenario.CACHE_DUPLICATE -> "cacheDuplicate"
+                Scenario.QUERY_SELECTOR -> "querySelector"
+                Scenario.QUERY_PAGE -> "queryPage"
+                Scenario.QUERY_DAY -> "queryDay"
+                Scenario.HTTP_ERROR_XHR -> "httpErrorXhr"
+                Scenario.INVALID_JSON_XHR -> "invalidJsonXhr"
+                Scenario.HELPER_REJECT_XHR -> "helperRejectXhr"
                 Scenario.REDIRECT, Scenario.DUPLICATE, Scenario.NO_HELPER,
-                Scenario.GETTER, Scenario.THROWING_GETTER, Scenario.NATIVE_ARRAY -> "fetch"
+                Scenario.GETTER, Scenario.THROWING_GETTER, Scenario.NATIVE_ARRAY,
+                Scenario.HTTP_ERROR, Scenario.WRONG_MIME -> "fetch"
             }
             val backgroundFetch = if (scenario == Scenario.BACKGROUND) {
                 "window.__backgroundFetch = fetch(${JSONObject.quote("http://127.0.0.1:$port$PROFILE_PATH")});"
@@ -470,19 +585,37 @@ class A2YoungTransportTest {
                 var helperCalls = 0;
                 var r = {b:function(options) {
                   var target = new URL('/login/wisdom-group-learning-bg' + options.url, location.href).href;
+                  var parameters = new URLSearchParams(options.params);
+                  if (mode === 'cacheBuster') parameters.append('_t','1792396800');
+                  if (mode === 'cacheMillis' || mode === 'cacheXhr') parameters.append('_t','1792396800000');
+                  if (mode === 'cacheInvalid') parameters.append('_t','other-account');
+                  if (mode === 'cacheDuplicate') { parameters.append('_t','1792396800'); parameters.append('_t','1792396801'); }
+                  if (mode === 'querySelector') { parameters.append('_t','1792396800'); parameters.append('username','other-account'); }
+                  if (mode === 'queryPage' || mode === 'queryDay') {
+                    parameters.append('_t','1792396800');
+                    parameters.set(mode === 'queryPage' ? 'pageNo' : 'now', mode === 'queryPage' ? '2' : '2030-01-01');
+                  }
+                  if (parameters.toString()) target += '?' + parameters.toString();
                   if (mode === 'fake' || mode === 'background') {
                     return Promise.resolve({success:true,code:200,result:{username:'loopback-user',syntheticExtra:'discard'}});
                   }
-                  var transport = mode === 'sequence' ? (++helperCalls === 1 ? 'fetch' : 'xhr') : 'fetch';
+                  var readyStateMode = mode === 'httpErrorXhr' || mode === 'invalidJsonXhr' || mode === 'helperRejectXhr';
+                  var transport = readyStateMode || mode === 'cacheXhr' ? 'xhr' : mode === 'sequence' ? (++helperCalls === 1 ? 'fetch' : 'xhr') : 'fetch';
                   if (transport === 'fetch') {
                     return fetch(target, {method:options.method}).then(function(response) { return response.json(); });
                   }
                   return new Promise(function(resolve, reject) {
                     var request = new XMLHttpRequest();
                     request.open('GET', target, true);
-                    request.addEventListener('load', function() {
-                      try { resolve(JSON.parse(request.responseText)); } catch (error) { reject(error); }
-                    });
+                    if (readyStateMode) {
+                      request.onreadystatechange = function() {
+                        if (request.readyState !== 4) return;
+                        if (request.status >= 400 || mode === 'helperRejectXhr') { reject(new Error('synthetic-helper-rejection')); return; }
+                        try { resolve(JSON.parse(request.responseText)); } catch (error) { reject(error); }
+                      };
+                    } else request.addEventListener('load', function() {
+                        try { resolve(JSON.parse(request.responseText)); } catch (error) { reject(error); }
+                      });
                     request.addEventListener('error', reject);
                     request.send();
                   });

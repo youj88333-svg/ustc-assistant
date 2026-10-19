@@ -600,6 +600,8 @@ void main() {
             delayBusinessReadiness: true,
             businessReadinessDelay: const Duration(seconds: 13),
             keepTargetRouteWhilePreparing: true,
+            cacheBustedRequests: true,
+            useXhr: true,
           );
           youngFixture.username = _account;
           final young = await harness.openYoung(youngFixture);
