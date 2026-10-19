@@ -4,20 +4,20 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/qa4007/artifacts/USTC-Assistant-Android-QA4007-x86_64.apk`。这是沿用[跨端界面重构](../ui-refresh/plan.md)、修复二课准备并统一模型策略的x86_64私有QA包，不是A8正式版，也不是arm64手机包；本轮证据见[记录14](records/14-qa4006-young-and-model-policy.md)。
+文件位于工程内：`app/build/qa4008/artifacts/USTC-Assistant-Android-QA4008-x86_64.apk`。这是沿用[跨端界面重构](../ui-refresh/plan.md)、继续修复二课缓存参数/登录准备并补齐失败诊断的x86_64私有QA包，不是A8正式版，也不是arm64手机包；本轮证据见[记录15](records/15-qa4007-young-log-followup.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4007` |
-| ABI / 文件大小 | `x86_64` / `290976264` bytes |
-| SHA-256 | `db6b8c2bb2b8142bd370ab7a610ec0cc7feb62569333f12bdf50a6a455c7a498` |
-| 源码修订 | `29f3fe8d3e058e3c468fc6a7b1ade8297ecafc92` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4008` |
+| ABI / 文件大小 | `x86_64` / `290989516` bytes |
+| SHA-256 | `f81c855a7a7d65439706fbcfb692af79b27e4d74ccee0065dfda2d2f74ac103a` |
+| 源码修订 | `239ffb0e9fe4b38936f0ac669f99872ab314f2d0` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4006版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4007版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-另有同一源码的`app/build/qa4007/artifacts/USTC-Assistant-Android-QA2007-arm64-v8a.apk`，279209275 bytes，SHA-256为`ff16185974c297ce2f6ae6254a79967a7478ad54c665ee170b5bc447a756df5c`。它仅完成构建/签名/包内容检查，未在arm64实机运行。旧QA及ARM64包均保留；当前MuMu请选择上表x86_64/4007，不用ARM64包覆盖。
+另有同一源码的`app/build/qa4008/artifacts/USTC-Assistant-Android-QA2008-arm64-v8a.apk`，279216655 bytes，SHA-256为`673828edc59003b6e35d3342864d50124dc6d052368b60fb9fcedce33f03c029`。它仅完成构建/签名/包内容检查，未在arm64实机运行。旧QA及ARM64包均保留；当前MuMu请选择上表x86_64/4008，不用ARM64包覆盖。
 
 ## 安装
 
@@ -30,11 +30,11 @@
 
 ## 本轮集中复验
 
-1. 覆盖安装后重试二课同步。成功则核对活动关联日程；若仍失败，导出这次最近安全日志或复制二课同步摘要，无需反复登录或提供学校页面原文。
-2. 使用精确模型名 `deepseek-flash` 时，设置页应显示“高（high）”；对话、晨报、压缩及能力验证由统一网关发送同一参数。其他模型显示服务默认。此处显示的是客户端策略，不能替代学校实际接受及采用参数的验证；明确拒参会给出固定错误，不静默换强度。
-3. 新回复和重新生成的晨报使用专属女仆标签人格，以自然中文交流，偶尔称呼“主人”；旧聊天和已缓存晨报保留，不为体验更新清除会话或资料。
+覆盖安装后重试一次二课同步。成功则核对活动关联日程；若仍失败，从设置标题旁“导出日志”导出这次最近安全日志即可，无需反复登录或提供学校页面原文。正式界面隐藏了旧“同步摘要”按钮，本轮不要求寻找开发诊断入口。新日志能记录作业、失败阶段、读取步骤及封闭原因；未知异常和业务原文仍不导出。
 
-机械回归见记录14，真实MuMu同步、模型参数与语气效果待用户反馈；无需重做所有已通过的历史体验项。
+QA4007的模型策略继续保留：精确 `deepseek-flash` 发送high，其他模型服务默认；所有新请求共用专属女仆标签，旧聊天/晨报不改写。实际学校模型接受及采用参数、语气效果仍待反馈，不要求为本次二课修复重做模型验证或清会话。
+
+机械回归见记录15，真实MuMu同步需新版反馈；无需重做所有已通过的历史体验项。
 
 ## 沿用的界面体验
 
