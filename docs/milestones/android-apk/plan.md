@@ -363,6 +363,18 @@ F1–F4工程、根检查和x86_64 QA4005交付已完成，当前结果及保留
 
 根负责复核与实际analyze、全套Dart、Android原生/两来源loopback、相关Windows和独立升级构建，过程与先前失败分别记录在[记录16](records/16-qa4008-shared-auth-regression.md)。不读取正式数据库、秘密、原始学校响应或浏览器认证资产；不安装/操作用户MuMu，不以模拟器通过替代真实复验，不关闭A7/A8。
 
+### A7 QA4009 二课请求封装兼容
+
+2026-10-19用户确认QA4009教务自动认证恢复，Young登录后仍失败。最新安全导出显示Young两次均在collecting/profileBefore以requestTarget拒绝，JW已提交；本切依据07普通页面同源信任、09 K-03/K-04/K-05、10–12与13 V-02/V-03、14/15，继续修复现有只读来源，不改学校操作、权限或数据保留。
+
+| 归属和修改范围 | 接口与不变量 | 验收条件 |
+|---|---|---|
+| Sol：Android固定Young传输与必要原生/封闭诊断 | 对照当前Windows固定helper与M2已记录的不透明requestParams封装；应用主动路径、field/pageNo/pageSize/now由固定dispatch构造。保留明文逐项校验，兼容单个非空有界requestParams、至多伴随既有合法_t，不混入明文业务/账号键；不解码、解密、记录或把不透明值当身份/分页证明。精确origin/path/GET、同一步唯一原生传输、响应最小投影、前后身份和完整事务均不变 | 先在原脚本上复现合法框架封装被拒绝，再验证明文及封装两路，重复/空/未知/混合参数、错端点、HTTP/解析/身份/分页、取消排空仍拒绝。新诊断只含编译期原因，无URL/键值/响应 |
+| Luna/max：不重叠的原生传输测试与Young loopback夹具 | 只修改A2YoungTransportTest、young_business_fixture及对应Android A2测试；以合成封装模拟框架异步拦截器和原生XHR，服务端检查实际固定helper参数，不模拟或读取真实学校秘密；JW夹具和共用登录脚本保持 | 原生覆盖profile、活动、日历及负向封装；完整Young查询/同步/取消重试实际使用该封装，维持身份/完整性与提交计数，不仅测试简化明文请求 |
+| Astra按需只读、Sol裁决 | 核对不透明封装与普通同源信任、参数归属及出站最小化，不扩为任意query或另一来源通道 | 明确传输可证明范围与剩余信任假设，不把合成或审查声明替代真实MuMu复验 |
+
+根执行相关analyze/共享测试、Android原生与完整学校loopback、受影响Windows及同签名单调升级包核验；过程写[记录17](records/17-qa4009-young-wire-envelope.md)，保留旧失败与QA包。不读取正式业务、秘密、原始学校响应或浏览器认证资产，不操作用户MuMu，不关闭A7/A8。
+
 ## 6. 验证分工与完成条件
 
 ### 每切片的根检查
