@@ -223,10 +223,25 @@
     } catch (_) { return false; }
   }
 
+  function clearOpenedXhrs(step) {
+    const records = step.openedXhrs;
+    step.openedXhrs = null;
+    if (!records) return;
+    for (let index = 0; index < records.length; ++index) {
+      const record = records[index];
+      record.opened.url = null;
+      if (apply(weakGet, xhrStates, [record.xhr]) === record.opened)
+        apply(weakSet, xhrStates, [record.xhr, null]);
+      records[index] = null;
+    }
+  }
+
   function cancelStep(step) {
     if (!step) return;
     step.cancelled = true;
     step.projectedJson = null;
+    step.requestURL = null;
+    clearOpenedXhrs(step);
     if (step.reader) {
       const reader = step.reader;
       step.reader = null;
@@ -353,41 +368,54 @@
 
   function targetURL(raw, step) {
     if (typeof raw !== 'string' || raw.length > 4096) malformed('requestTarget');
-    const parsed = new NativeURL(raw, step.owner.href);
-    if (apply(urlOrigin, parsed, []) !== expectedOrigin ||
-        apply(urlPath, parsed, []) !== PREFIX + fixedPath(step.endpoint) ||
-        apply(urlHash, parsed, []) !== '' || apply(urlUsername, parsed, []) !== '' ||
+    let parsed;
+    try { parsed = new NativeURL(raw, step.owner.href); }
+    catch (_) { malformed('requestTarget'); }
+    if (apply(urlOrigin, parsed, []) !== expectedOrigin) malformed('requestOrigin');
+    if (apply(urlPath, parsed, []) !== PREFIX + fixedPath(step.endpoint)) malformed('requestPath');
+    if (apply(urlHash, parsed, []) !== '' || apply(urlUsername, parsed, []) !== '' ||
         apply(urlPassword, parsed, []) !== '') malformed('requestTarget');
     let count = 0;
+    let opaque = false;
     const keys = new NativeSet();
     apply(paramsEach, apply(urlParams, parsed, []), [function(value, key) {
-      if (apply(setHas, keys, [key])) malformed('requestTarget');
+      if (apply(setHas, keys, [key])) malformed('requestQueryDuplicate');
       apply(setAdd, keys, [key]);
       // The page's request interceptor may add its conventional cache buster.
       // It has no identity, paging or date-selection authority. Keep every
       // business key exact, and reject every other additional/duplicate key.
       if (key === '_t') {
-        if (value.length !== 10 && value.length !== 13) malformed('requestTarget');
+        if (value.length !== 10 && value.length !== 13) malformed('requestQueryShape');
         for (let index = 0; index < value.length; ++index) {
           const digit = apply(stringCode, value, [index]);
-          if (digit < 48 || digit > 57 || (index === 0 && digit === 48)) malformed('requestTarget');
+          if (digit < 48 || digit > 57 || (index === 0 && digit === 48)) malformed('requestQueryShape');
         }
         return;
       }
+      // The trusted school helper may wrap all fixed input parameters into
+      // this one opaque wire value. Do not inspect or decode its contents.
+      // The exact fixed arguments are constructed by dispatch, not supplied
+      // by a caller. This is the approved same-origin trust boundary, not an
+      // independent proof of which parameters the school chose to encode.
+      if (key === 'requestParams') {
+        if (value.length === 0) malformed('requestQueryShape');
+        opaque = true;
+        return;
+      }
+      if (key !== 'pageNo' && key !== 'pageSize' && key !== 'field' && key !== 'now')
+        malformed('requestQueryUnexpected');
       ++count;
-      if (step.endpoint === 'profile') malformed('requestTarget');
-      if (key === 'pageNo') { if (value !== '' + step.page) malformed('requestTarget'); }
-      else if (key === 'pageSize') { if (value !== '10') malformed('requestTarget'); }
+      if (step.endpoint === 'profile') malformed('requestQueryShape');
+      if (key === 'pageNo') { if (value !== '' + step.page) malformed('requestQueryShape'); }
+      else if (key === 'pageSize') { if (value !== '10') malformed('requestQueryShape'); }
       else if (key === 'field') {
         const field = step.endpoint === 'activities' ? 'id,,action' :
           'id,,number,title,place,startTime,endTime';
-        if (value !== field) malformed('requestTarget');
-      } else if (key === 'now' && step.endpoint === 'schedule') {
-        if (value !== step.day) malformed('requestTarget');
-      } else malformed('requestTarget');
+        if (value !== field) malformed('requestQueryShape');
+      } else if (step.endpoint !== 'schedule' || value !== step.day) malformed('requestQueryShape');
     }]);
     const expected = step.endpoint === 'profile' ? 0 : (step.endpoint === 'schedule' ? 4 : 3);
-    if (count !== expected) malformed('requestTarget');
+    if (count !== (opaque ? 0 : expected)) malformed('requestQueryShape');
     return apply(urlHref, parsed, []);
   }
 
@@ -549,8 +577,14 @@
         if (typeof method !== 'string' || apply(stringLower, method, []) !== 'get') malformed('requestMethod');
         if ((asynchronous !== undefined && asynchronous !== true) || arguments.length > 3) malformed('xhrConfiguration');
         const target = targetURL(inputURL(url), step);
+        // Track also unsent opens so rejection/cancel can release their URLs.
+        // Bound allocations without granting a second actual transport.
+        if (step.openedXhrs.length >= 32) malformed('xhrConfiguration');
         const result = apply(xhrOpen, this, arguments);
-        apply(weakSet, xhrStates, [this, { step: step, url: target, sent: false }]);
+        demandStep(step);
+        const opened = { step: step, url: target, sent: false };
+        apply(nativeArrayPush, step.openedXhrs, [{ xhr: this, opened: opened }]);
+        apply(weakSet, xhrStates, [this, opened]);
         return result;
       } catch (error) {
         transportError(step, error);
@@ -584,6 +618,9 @@
       step.xhr = xhr;
       let completed = false;
       function remove() {
+        opened.url = null;
+        if (apply(weakGet, xhrStates, [xhr]) === opened)
+          apply(weakSet, xhrStates, [xhr, null]);
         apply(nativeRemoveEvent, xhr, ['load', loaded]);
         apply(nativeRemoveEvent, xhr, ['progress', progress]);
         apply(nativeRemoveEvent, xhr, ['error', failed]);
@@ -921,7 +958,7 @@
     freeze(parameters);
     const step = { owner: state, number: number, endpoint: endpoint, page: page, day: day,
       cancelled: false, delivered: false, helperComplete: false, helperRejected: false, transport: null,
-      requestURL: null, projectedJson: null, reader: null, xhr: null };
+      requestURL: null, projectedJson: null, reader: null, xhr: null, openedXhrs: array() };
     state.stepNumber = number;
     state.step = step;
     let promise;
@@ -965,6 +1002,8 @@
     put(result, 'projectedJson', step.projectedJson);
     step.projectedJson = null;
     step.delivered = true;
+    step.requestURL = null;
+    clearOpenedXhrs(step);
     return freeze(result);
   }
 

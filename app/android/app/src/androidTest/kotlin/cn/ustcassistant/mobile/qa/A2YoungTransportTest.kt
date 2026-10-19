@@ -22,10 +22,12 @@ import java.io.InputStreamReader
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.Base64
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Exercises Young transport correlation using only synthetic loopback responses. */
@@ -42,6 +44,123 @@ class A2YoungTransportTest {
         }
 
     @Test
+    fun opaqueFrameworkEnvelopeWorksWithFixedProfileQuery() =
+        withHarness(Scenario.OPAQUE_PROFILE) { harness ->
+            prepareAndStart(harness)
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertEquals(1, harness.server.apiRequestCount.get())
+            assertEquals(1, harness.server.opaqueRequestCount.get())
+        }
+
+    @Test
+    fun opaqueProfileActivitiesAndCalendarKeepFixedInputsAcrossNativeFetchAndXhr() {
+        withHarness(Scenario.OPAQUE_ACTIVITIES_SEQUENCE) { harness ->
+            prepareAndStart(harness, pageName = "activities")
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 2, endpoint = "activities", pageNumber = 1, day = ""))
+            assertPageProjection(awaitPoll(harness, step = 2))
+            assertSuccess(harness.call(method = "finish", operation = OPERATION))
+            assertEquals(2, harness.server.apiRequestCount.get())
+            assertEquals(2, harness.server.opaqueRequestCount.get())
+        }
+
+        withHarness(Scenario.OPAQUE_CALENDAR_SEQUENCE) { harness ->
+            prepareAndStart(harness, pageName = "calendar")
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 2, endpoint = "schedule", pageNumber = 1, day = "2026-10-19"))
+            assertPageProjection(awaitPoll(harness, step = 2))
+            assertSuccess(harness.call(method = "finish", operation = OPERATION))
+            assertEquals(2, harness.server.apiRequestCount.get())
+            assertEquals(2, harness.server.opaqueRequestCount.get())
+        }
+    }
+
+    @Test
+    fun invalidOpaqueShapesAndTargetsFailBeforeAnyNetworkRequest() {
+        val cases = listOf(
+            Scenario.OPAQUE_EMPTY to "requestQueryShape",
+            Scenario.OPAQUE_MISSING to "requestQueryShape",
+            Scenario.OPAQUE_DUPLICATE to "requestQueryDuplicate",
+            Scenario.OPAQUE_UNKNOWN to "requestQueryUnexpected",
+            Scenario.OPAQUE_CASE_UNKNOWN to "requestQueryUnexpected",
+            Scenario.OPAQUE_MIXED to "requestQueryShape",
+            Scenario.OPAQUE_INVALID_CACHE to "requestQueryShape",
+            Scenario.OPAQUE_DUPLICATE_CACHE to "requestQueryDuplicate",
+            Scenario.OPAQUE_TOO_LONG to "requestTarget",
+            Scenario.OPAQUE_WRONG_ORIGIN to "requestOrigin",
+            Scenario.OPAQUE_WRONG_PATH to "requestPath",
+            Scenario.OPAQUE_NON_GET to "requestMethod",
+        )
+        for ((scenario, reason) in cases) {
+            withHarness(scenario) { harness ->
+                val missingOpaqueActivities = scenario == Scenario.OPAQUE_MISSING
+                prepareAndStart(harness, pageName = if (missingOpaqueActivities) "activities" else "calendar")
+                val reply = harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1,
+                    endpoint = if (missingOpaqueActivities) "activities" else "profile",
+                    pageNumber = if (missingOpaqueActivities) 1 else 0,
+                    day = "")
+                assertClosedError(reply, "invalidSnapshot")
+                assertEquals(reason, reply.getJSONObject("error").getString("reason"))
+                assertEquals("The rejected opaque request must not reach loopback.",
+                    0, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun openedXhrRejectCancelAndInvalidSendCannotDeliverAndNextOperationRecovers() {
+        val failures = listOf(
+            Triple(Scenario.OPAQUE_OPEN_REJECT, "sourceFailed", "helperRejected"),
+            Triple(Scenario.OPAQUE_OPEN_BODY, "invalidSnapshot", "xhrConfiguration"),
+        )
+        for ((scenario, code, reason) in failures) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                val dispatched = harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = "")
+                if (scenario == Scenario.OPAQUE_OPEN_BODY) {
+                    // Invalid send is rejected synchronously inside the helper.
+                    assertClosedError(dispatched, code)
+                    assertEquals(reason, dispatched.getJSONObject("error").getString("reason"))
+                } else {
+                    assertSuccess(dispatched)
+                }
+                harness.awaitSyntheticXhrOpenCount(1)
+                val rejected = awaitPoll(harness, step = 1)
+                assertClosedError(rejected, code)
+                assertEquals(reason, rejected.getJSONObject("error").getString("reason"))
+                assertEquals(0, harness.server.apiRequestCount.get())
+                assertSuccess(harness.call(method = "finish", operation = OPERATION))
+                assertProfileOperationRecovers(harness)
+            }
+        }
+
+        withHarness(Scenario.OPAQUE_OPEN_CANCEL) { harness ->
+            prepareAndStart(harness)
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            harness.awaitSyntheticXhrOpenCount(1)
+            assertSuccess(harness.call(method = "finish", operation = OPERATION))
+            // The page-call wrapper has already cleared its active operation,
+            // so it rejects this late call before invoking transport.poll.
+            val latePoll = harness.call(method = "poll", operation = OPERATION, step = 1)
+            assertClosedError(latePoll, "sourceFailed")
+            assertEquals("sourceFailure", latePoll.getJSONObject("error").getString("reason"))
+            assertEquals(0, harness.server.apiRequestCount.get())
+            assertProfileOperationRecovers(harness)
+        }
+    }
+
+    @Test
     fun millisecondsCacheBusterWorksWithFetchAndNativeXhr() {
         for (scenario in listOf(Scenario.CACHE_MILLIS, Scenario.CACHE_XHR)) {
             withHarness(scenario) { harness ->
@@ -56,13 +175,17 @@ class A2YoungTransportTest {
 
     @Test
     fun cacheBustersCannotAuthorizeUnknownDuplicateOrIdentityParameters() {
-        for (scenario in listOf(Scenario.CACHE_INVALID, Scenario.CACHE_DUPLICATE, Scenario.QUERY_SELECTOR)) {
+        for ((scenario, reason) in listOf(
+            Scenario.CACHE_INVALID to "requestQueryShape",
+            Scenario.CACHE_DUPLICATE to "requestQueryDuplicate",
+            Scenario.QUERY_SELECTOR to "requestQueryUnexpected",
+        )) {
             withHarness(scenario) { harness ->
                 prepareAndStart(harness)
                 val reply = harness.call(method = "dispatch", operation = OPERATION,
                     step = 1, endpoint = "profile", pageNumber = 0, day = "")
                 assertClosedError(reply, "invalidSnapshot")
-                assertEquals("requestTarget", reply.getJSONObject("error").getString("reason"))
+                assertEquals(reason, reply.getJSONObject("error").getString("reason"))
                 assertEquals(0, harness.server.apiRequestCount.get())
             }
         }
@@ -91,7 +214,7 @@ class A2YoungTransportTest {
                 val reply = harness.call(method = "dispatch", operation = OPERATION,
                     step = 1, endpoint = "schedule", pageNumber = 1, day = "2026-10-19")
                 assertClosedError(reply, "invalidSnapshot")
-                assertEquals("requestTarget", reply.getJSONObject("error").getString("reason"))
+                assertEquals("requestQueryShape", reply.getJSONObject("error").getString("reason"))
                 assertEquals(0, harness.server.apiRequestCount.get())
             }
         }
@@ -272,17 +395,17 @@ class A2YoungTransportTest {
         }
     }
 
-    private fun prepareAndStart(harness: Harness) {
-        val prepared = assertSuccess(harness.call(method = "prepare", pageName = "calendar"))
+    private fun prepareAndStart(harness: Harness, pageName: String = "calendar") {
+        val prepared = assertSuccess(harness.call(method = "prepare", pageName = pageName))
         assertEquals(true, prepared.get("value"))
         val started = assertSuccess(harness.call(method = "start", operation = OPERATION))
         assertEquals(JSONObject.NULL, started.get("value"))
     }
 
-    private fun awaitPoll(harness: Harness, step: Long): JSONObject {
+    private fun awaitPoll(harness: Harness, step: Long, operation: Long = OPERATION): JSONObject {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15)
         while (System.nanoTime() < deadline) {
-            val reply = harness.call(method = "poll", operation = OPERATION, step = step)
+            val reply = harness.call(method = "poll", operation = operation, step = step)
             if (reply.has("error")) return reply
             val value = assertSuccess(reply).getJSONObject("value")
             if (value.getBoolean("complete")) return reply
@@ -305,8 +428,34 @@ class A2YoungTransportTest {
         assertFalse(value.getString("projectedJson").contains("syntheticExtra"))
     }
 
+    private fun assertPageProjection(reply: JSONObject) {
+        val value = assertSuccess(reply).getJSONObject("value")
+        assertEquals(setOf("complete", "projectedJson"), value.keys().asSequence().toSet())
+        assertTrue(value.getBoolean("complete"))
+        val projection = JSONObject(value.getString("projectedJson"))
+        assertEquals(setOf("success", "code", "result"), projection.keys().asSequence().toSet())
+        assertTrue(projection.getBoolean("success"))
+        assertEquals(200, projection.getInt("code"))
+        assertEquals(1, projection.getJSONObject("result").getJSONArray("records").length())
+    }
+
+    private fun assertProfileOperationRecovers(harness: Harness) {
+        val nextOperation = OPERATION + 1
+        assertSuccess(harness.call(method = "start", operation = nextOperation))
+        assertSuccess(harness.call(method = "dispatch", operation = nextOperation,
+            step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+        assertProfileProjection(awaitPoll(harness, step = 1, operation = nextOperation))
+        assertSuccess(harness.call(method = "finish", operation = nextOperation))
+        assertEquals(1, harness.server.apiRequestCount.get())
+        assertEquals(1, harness.server.opaqueRequestCount.get())
+    }
+
     private fun assertSuccess(reply: JSONObject): JSONObject {
-        assertEquals(setOf("reply", "call", "value"), reply.keys().asSequence().toSet())
+        val error = reply.optJSONObject("error")
+        val safeFailure = if (error == null) "no error envelope" else
+            "${error.optString("code")}/${error.optString("reason")}"
+        assertEquals("Expected success; received closed result $safeFailure",
+            setOf("reply", "call", "value"), reply.keys().asSequence().toSet())
         assertFalse(reply.has("error"))
         return reply
     }
@@ -320,7 +469,9 @@ class A2YoungTransportTest {
         assertTrue(error.getString("reason") in setOf("helperUnavailable", "sourceFailure",
             "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
             "responseStatus", "responseMime", "responseTooLarge", "responseFormat",
-            "transportFailed", "helperRejected", "xhrConfiguration"))
+            "transportFailed", "helperRejected", "xhrConfiguration", "requestOrigin",
+            "requestPath", "requestQueryDuplicate", "requestQueryUnexpected",
+            "requestQueryShape", "stampChanged"))
         assertNull(error.opt("raw"))
     }
 
@@ -328,6 +479,24 @@ class A2YoungTransportTest {
         CACHE_BUSTER,
         CACHE_MILLIS,
         CACHE_XHR,
+        OPAQUE_PROFILE,
+        OPAQUE_ACTIVITIES_SEQUENCE,
+        OPAQUE_CALENDAR_SEQUENCE,
+        OPAQUE_EMPTY,
+        OPAQUE_MISSING,
+        OPAQUE_DUPLICATE,
+        OPAQUE_UNKNOWN,
+        OPAQUE_CASE_UNKNOWN,
+        OPAQUE_MIXED,
+        OPAQUE_INVALID_CACHE,
+        OPAQUE_DUPLICATE_CACHE,
+        OPAQUE_TOO_LONG,
+        OPAQUE_WRONG_ORIGIN,
+        OPAQUE_WRONG_PATH,
+        OPAQUE_NON_GET,
+        OPAQUE_OPEN_REJECT,
+        OPAQUE_OPEN_CANCEL,
+        OPAQUE_OPEN_BODY,
         CACHE_INVALID,
         CACHE_DUPLICATE,
         QUERY_SELECTOR,
@@ -357,8 +526,12 @@ class A2YoungTransportTest {
     ) : Closeable {
         val server = SyntheticServer(scenario)
         private val origin = "http://127.0.0.1:${server.port}"
-        private val initialUrl =
-            "$origin/login/sc-wisdom-group-learning/personalInformation/mySchedule"
+        private val initialUrl = "$origin" + if (scenario == Scenario.OPAQUE_ACTIVITIES_SEQUENCE ||
+            scenario == Scenario.OPAQUE_MISSING) {
+            "/login/sc-wisdom-group-learning/myproject/SignUp"
+        } else {
+            "/login/sc-wisdom-group-learning/personalInformation/mySchedule"
+        }
         private val policy = SchoolPolicy.fromArguments(
             mapOf(
                 "source" to "young",
@@ -459,6 +632,26 @@ class A2YoungTransportTest {
             return value
         }
 
+        fun awaitSyntheticXhrOpenCount(expected: Int) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (System.nanoTime() < deadline) {
+                val done = CountDownLatch(1)
+                var value = -1
+                instrumentation.runOnMainSync {
+                    checkNotNull(webView).evaluateJavascript(
+                        "window.__syntheticXhrOpenCount || 0",
+                    ) { raw ->
+                        value = raw.trim('"').toIntOrNull() ?: -1
+                        done.countDown()
+                    }
+                }
+                assertTrue("Synthetic XHR open marker timed out", done.await(5, TimeUnit.SECONDS))
+                if (value >= expected) return
+                Thread.sleep(25)
+            }
+            throw AssertionError("Synthetic helper did not open the expected XHR")
+        }
+
         override fun close() {
             try {
                 instrumentation.runOnMainSync {
@@ -484,6 +677,7 @@ class A2YoungTransportTest {
         private val apiResponse = CountDownLatch(1)
         val port: Int get() = server.localPort
         val apiRequestCount = AtomicInteger(0)
+        val opaqueRequestCount = AtomicInteger(0)
         @Volatile private var started = false
 
         fun start() {
@@ -507,6 +701,76 @@ class A2YoungTransportTest {
 
         fun awaitApiResponse(): Boolean = apiResponse.await(15, TimeUnit.SECONDS)
 
+        private fun usesOpaqueRequests(): Boolean = scenario in setOf(
+            Scenario.OPAQUE_PROFILE,
+            Scenario.OPAQUE_ACTIVITIES_SEQUENCE,
+            Scenario.OPAQUE_CALENDAR_SEQUENCE,
+            Scenario.OPAQUE_EMPTY,
+            Scenario.OPAQUE_MISSING,
+            Scenario.OPAQUE_DUPLICATE,
+            Scenario.OPAQUE_UNKNOWN,
+            Scenario.OPAQUE_CASE_UNKNOWN,
+            Scenario.OPAQUE_MIXED,
+            Scenario.OPAQUE_INVALID_CACHE,
+            Scenario.OPAQUE_DUPLICATE_CACHE,
+            Scenario.OPAQUE_TOO_LONG,
+            Scenario.OPAQUE_WRONG_ORIGIN,
+            Scenario.OPAQUE_WRONG_PATH,
+            Scenario.OPAQUE_NON_GET,
+            Scenario.OPAQUE_OPEN_REJECT,
+            Scenario.OPAQUE_OPEN_CANCEL,
+            Scenario.OPAQUE_OPEN_BODY,
+        )
+
+        private fun validateOpaqueRequest(path: String, target: String): Boolean {
+            val rawQuery = target.substringAfter('?', "")
+            if (rawQuery.isEmpty()) return false
+            val query = linkedMapOf<String, MutableList<String>>()
+            for (part in rawQuery.split('&')) {
+                if (part.isEmpty()) return false
+                val separator = part.indexOf('=')
+                val key = URLDecoder.decode(
+                    if (separator < 0) part else part.substring(0, separator),
+                    StandardCharsets.UTF_8.name(),
+                )
+                val value = URLDecoder.decode(
+                    if (separator < 0) "" else part.substring(separator + 1),
+                    StandardCharsets.UTF_8.name(),
+                )
+                query.getOrPut(key) { mutableListOf() }.add(value)
+            }
+            if (query.values.any { it.size != 1 } ||
+                query.keys.any { it != "requestParams" && it != "_t" }) return false
+            val cacheBuster = query["_t"]?.singleOrNull()
+            if (cacheBuster != null && !Regex("^[1-9][0-9]{9}(?:[0-9]{3})?$").matches(cacheBuster)) {
+                return false
+            }
+            val blob = query["requestParams"]?.singleOrNull() ?: return false
+            val decoded = if (scenario == Scenario.OPAQUE_PROFILE) {
+                if (blob != "syntheticOpaqueProfileEnvelope") return false
+                "{}"
+            } else {
+                try {
+                    String(Base64.getDecoder().decode(blob), StandardCharsets.UTF_8)
+                } catch (_: IllegalArgumentException) {
+                    return false
+                }
+            }
+            val expected = when (path) {
+                PROFILE_PATH -> setOf("{}")
+                ACTIVITIES_API_PATH -> setOf(
+                    "{\"field\":\"id,,action\",\"pageNo\":1,\"pageSize\":10}",
+                )
+                SCHEDULE_API_PATH -> setOf(
+                    "{\"field\":\"id,,number,title,place,startTime,endTime\",\"pageNo\":1,\"pageSize\":10,\"now\":\"2026-10-19\"}",
+                )
+                else -> return false
+            }
+            if (decoded !in expected) return false
+            opaqueRequestCount.incrementAndGet()
+            return true
+        }
+
         private fun serve(client: Socket) {
             val reader = BufferedReader(InputStreamReader(client.getInputStream(), StandardCharsets.US_ASCII))
             val requestLine = reader.readLine() ?: return
@@ -519,6 +783,10 @@ class A2YoungTransportTest {
             if (path.startsWith(apiPath)) apiRequestCount.incrementAndGet()
 
             when {
+                path.startsWith(apiPath) && usesOpaqueRequests() &&
+                    !validateOpaqueRequest(path, target) -> {
+                    writeResponse(client, "400 Bad Request", "application/json; charset=utf-8", "{}")
+                }
                 path.startsWith(apiPath) && scenario == Scenario.REDIRECT -> {
                     writeResponse(
                         client,
@@ -536,10 +804,18 @@ class A2YoungTransportTest {
                         body = if (scenario == Scenario.INVALID_JSON_XHR) "synthetic-invalid-json"
                             else if (scenario == Scenario.DUPLICATE)
                             """{"success":true,"code":200,"result":{"username":"other","username":"loopback-user"}}"""
-                            else SYNTHETIC_PROFILE_JSON,
+                            else apiBody(path),
                     )
                 }
                 path == PAGE_PATH -> {
+                    writeResponse(
+                        client,
+                        status = "200 OK",
+                        contentType = "text/html; charset=utf-8",
+                        body = pageHtml(),
+                    )
+                }
+                path == ACTIVITIES_PAGE_PATH -> {
                     writeResponse(
                         client,
                         status = "200 OK",
@@ -560,6 +836,24 @@ class A2YoungTransportTest {
                 Scenario.CACHE_BUSTER -> "cacheBuster"
                 Scenario.CACHE_MILLIS -> "cacheMillis"
                 Scenario.CACHE_XHR -> "cacheXhr"
+                Scenario.OPAQUE_PROFILE -> "opaqueProfile"
+                Scenario.OPAQUE_ACTIVITIES_SEQUENCE -> "opaqueActivitiesSequence"
+                Scenario.OPAQUE_CALENDAR_SEQUENCE -> "opaqueCalendarSequence"
+                Scenario.OPAQUE_EMPTY -> "opaqueEmpty"
+                Scenario.OPAQUE_MISSING -> "opaqueMissing"
+                Scenario.OPAQUE_DUPLICATE -> "opaqueDuplicate"
+                Scenario.OPAQUE_UNKNOWN -> "opaqueUnknown"
+                Scenario.OPAQUE_CASE_UNKNOWN -> "opaqueCaseUnknown"
+                Scenario.OPAQUE_MIXED -> "opaqueMixed"
+                Scenario.OPAQUE_INVALID_CACHE -> "opaqueInvalidCache"
+                Scenario.OPAQUE_DUPLICATE_CACHE -> "opaqueDuplicateCache"
+                Scenario.OPAQUE_TOO_LONG -> "opaqueTooLong"
+                Scenario.OPAQUE_WRONG_ORIGIN -> "opaqueWrongOrigin"
+                Scenario.OPAQUE_WRONG_PATH -> "opaqueWrongPath"
+                Scenario.OPAQUE_NON_GET -> "opaqueNonGet"
+                Scenario.OPAQUE_OPEN_REJECT -> "opaqueOpenReject"
+                Scenario.OPAQUE_OPEN_CANCEL -> "opaqueOpenCancel"
+                Scenario.OPAQUE_OPEN_BODY -> "opaqueOpenBody"
                 Scenario.CACHE_INVALID -> "cacheInvalid"
                 Scenario.CACHE_DUPLICATE -> "cacheDuplicate"
                 Scenario.QUERY_SELECTOR -> "querySelector"
@@ -583,9 +877,37 @@ class A2YoungTransportTest {
                 <script>
                 var mode = ${JSONObject.quote(mode)};
                 var helperCalls = 0;
+                window.__syntheticXhrOpenCount = 0;
                 var r = {b:function(options) {
+                  var invocation = ++helperCalls;
                   var target = new URL('/login/wisdom-group-learning-bg' + options.url, location.href).href;
                   var parameters = new URLSearchParams(options.params);
+                  if (mode.indexOf('opaque') === 0) {
+                    parameters = new URLSearchParams();
+                    var opaque = btoa(JSON.stringify(options.params));
+                    if (mode === 'opaqueProfile' || mode === 'opaqueUnknown' || mode === 'opaqueMixed' ||
+                        mode === 'opaqueWrongOrigin' || mode === 'opaqueWrongPath' || mode === 'opaqueNonGet') {
+                      opaque = 'syntheticOpaqueProfileEnvelope';
+                    }
+                    if (mode === 'opaqueEmpty') opaque = '';
+                    if (mode === 'opaqueTooLong') opaque = 'x'.repeat(4200);
+                    if (mode !== 'opaqueMissing') parameters.append('requestParams',opaque);
+                    if (mode === 'opaqueProfile' || mode === 'opaqueActivitiesSequence' ||
+                        mode === 'opaqueCalendarSequence' || mode.indexOf('opaqueOpen') === 0) {
+                      parameters.append('_t','1792396800000');
+                    }
+                    if (mode === 'opaqueDuplicate') parameters.append('requestParams','syntheticSecondEnvelope');
+                    if (mode === 'opaqueUnknown') parameters.append('username','syntheticSelector');
+                    if (mode === 'opaqueCaseUnknown') parameters.append('RequestParams','syntheticSelector');
+                    if (mode === 'opaqueMixed') parameters.append('field','id,,action');
+                    if (mode === 'opaqueInvalidCache') parameters.append('_t','synthetic');
+                    if (mode === 'opaqueDuplicateCache') {
+                      parameters.append('_t','1792396800000');
+                      parameters.append('_t','1792396800001');
+                    }
+                    if (mode === 'opaqueWrongOrigin') target = target.replace('127.0.0.1','localhost');
+                    if (mode === 'opaqueWrongPath') target = target.replace('/paramdesign/scMyInfo/info','/paramdesign/scMyInfo/other');
+                  }
                   if (mode === 'cacheBuster') parameters.append('_t','1792396800');
                   if (mode === 'cacheMillis' || mode === 'cacheXhr') parameters.append('_t','1792396800000');
                   if (mode === 'cacheInvalid') parameters.append('_t','other-account');
@@ -600,13 +922,25 @@ class A2YoungTransportTest {
                     return Promise.resolve({success:true,code:200,result:{username:'loopback-user',syntheticExtra:'discard'}});
                   }
                   var readyStateMode = mode === 'httpErrorXhr' || mode === 'invalidJsonXhr' || mode === 'helperRejectXhr';
-                  var transport = readyStateMode || mode === 'cacheXhr' ? 'xhr' : mode === 'sequence' ? (++helperCalls === 1 ? 'fetch' : 'xhr') : 'fetch';
+                  var transport = readyStateMode || mode === 'cacheXhr' || mode.indexOf('opaqueOpen') === 0 ? 'xhr' :
+                    mode === 'sequence' || mode === 'opaqueActivitiesSequence' ? (invocation === 1 ? 'fetch' : 'xhr') :
+                    mode === 'opaqueCalendarSequence' ? (invocation === 1 ? 'xhr' : 'fetch') : 'fetch';
                   if (transport === 'fetch') {
-                    return fetch(target, {method:options.method}).then(function(response) { return response.json(); });
+                    return fetch(target, {method:mode === 'opaqueNonGet' ? 'POST' : options.method}).then(function(response) { return response.json(); });
                   }
                   return new Promise(function(resolve, reject) {
                     var request = new XMLHttpRequest();
                     request.open('GET', target, true);
+                    window.__syntheticXhrOpenCount++;
+                    if (invocation === 1 && mode === 'opaqueOpenReject') {
+                      reject(new Error('synthetic-helper-rejection'));
+                      return;
+                    }
+                    if (invocation === 1 && mode === 'opaqueOpenCancel') return;
+                    if (invocation === 1 && mode === 'opaqueOpenBody') {
+                      request.send('synthetic-body');
+                      return;
+                    }
                     if (readyStateMode) {
                       request.onreadystatechange = function() {
                         if (request.readyState !== 4) return;
@@ -671,6 +1005,14 @@ class A2YoungTransportTest {
             }
         }
 
+        private fun apiBody(path: String): String = when (path) {
+            ACTIVITIES_API_PATH ->
+                """{"success":true,"code":200,"result":{"records":[{"id":"activity-0","itemName":"Synthetic activity","st":"2026-10-19 10:00:00","et":"2026-10-19 11:00:00","applySt":null,"applyEt":null,"placeInfo":"Synthetic room"}],"total":1,"current":1,"pages":1,"size":10}}"""
+            SCHEDULE_API_PATH ->
+                """{"success":true,"code":200,"result":{"records":[{"id":"calendar-0","title":"Synthetic calendar event","place":"Synthetic room","startTime":"2026-10-19 10:00:00","endTime":"2026-10-19 11:00:00","itemId":"activity-0"}],"total":1,"current":1}}"""
+            else -> SYNTHETIC_PROFILE_JSON
+        }
+
         override fun close() {
             try {
                 server.close()
@@ -683,8 +1025,14 @@ class A2YoungTransportTest {
         companion object {
             private const val PAGE_PATH =
                 "/login/sc-wisdom-group-learning/personalInformation/mySchedule"
+            private const val ACTIVITIES_PAGE_PATH =
+                "/login/sc-wisdom-group-learning/myproject/SignUp"
             private const val PROFILE_PATH =
                 "/login/wisdom-group-learning-bg/paramdesign/scMyInfo/info"
+            private const val ACTIVITIES_API_PATH =
+                "/login/wisdom-group-learning-bg/mobile/item/enrolmentList"
+            private const val SCHEDULE_API_PATH =
+                "/login/wisdom-group-learning-bg/personal/scCalendar/getPageUserList"
             private const val SYNTHETIC_PROFILE_JSON =
                 "{\"success\":true,\"code\":200,\"result\":{\"username\":\"loopback-user\",\"displayName\":\"synthetic\",\"syntheticExtra\":\"discard\"}}"
         }

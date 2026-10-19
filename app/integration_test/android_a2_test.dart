@@ -609,6 +609,7 @@ void main() {
             businessReadinessDelay: const Duration(seconds: 13),
             keepTargetRouteWhilePreparing: true,
             cacheBustedRequests: true,
+            opaqueRequests: true,
             useXhr: true,
           );
           youngFixture.username = _account;
@@ -713,6 +714,69 @@ void main() {
           expect(youngFixture.unexpectedAuthenticationSubmissions, 0);
           expect(youngFixture.bootstrapQueryCleared, isTrue);
           expect(youngFixture.prematureBusinessNavigations, 0);
+          expect(
+            youngFixture.opaqueRequestObservations,
+            equals(<Map<String, Object?>>[
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+              <String, Object?>{
+                'endpoint': 'activities',
+                'parameters': <String, Object?>{
+                  'field': 'id,,action',
+                  'pageNo': 1,
+                  'pageSize': 10,
+                },
+              },
+              <String, Object?>{
+                'endpoint': 'activities',
+                'parameters': <String, Object?>{
+                  'field': 'id,,action',
+                  'pageNo': 2,
+                  'pageSize': 10,
+                },
+              },
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+              <String, Object?>{
+                'endpoint': 'schedule',
+                'parameters': <String, Object?>{
+                  'field': 'id,,number,title,place,startTime,endTime',
+                  'pageNo': 1,
+                  'pageSize': 10,
+                  'now': '2026-10-10',
+                },
+              },
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+              <String, Object?>{
+                'endpoint': 'schedule',
+                'parameters': <String, Object?>{
+                  'field': 'id,,number,title,place,startTime,endTime',
+                  'pageNo': 1,
+                  'pageSize': 10,
+                  'now': '2026-10-10',
+                },
+              },
+              <String, Object?>{
+                'endpoint': 'profile',
+                'parameters': <String, Object?>{},
+              },
+            ]),
+          );
           _expectSafeSummary(repeatedCalendar.safeSummary, harness);
 
           _reportData.addAll({
@@ -722,6 +786,8 @@ void main() {
             'youngActivityPages': 2,
             'youngLinkedCalendarEvents': 1,
             'youngCalendarImports': 2,
+            'youngOpaqueRequestsValidated':
+                youngFixture.opaqueRequestObservations.length,
           });
         } finally {
           await _cleanup(
@@ -744,6 +810,7 @@ void main() {
         try {
           fixture = await YoungBusinessFixture.start(
             requireAuthentication: true,
+            opaqueRequests: true,
           );
           fixture.username = _account;
           final young = await harness.openYoung(fixture);
@@ -856,6 +923,7 @@ void main() {
         try {
           fixture = await YoungBusinessFixture.start(
             requireAuthentication: true,
+            opaqueRequests: true,
           );
           fixture.username = _account;
           final young = await harness.openYoung(fixture);

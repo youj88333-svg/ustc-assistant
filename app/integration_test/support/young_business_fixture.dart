@@ -13,6 +13,7 @@ final class YoungBusinessFixture {
     required this.businessReadinessDelay,
     required this.keepTargetRouteWhilePreparing,
     required this.cacheBustedRequests,
+    required this.opaqueRequests,
     required this.useXhr,
   });
 
@@ -31,6 +32,7 @@ final class YoungBusinessFixture {
   final Duration businessReadinessDelay;
   final bool keepTargetRouteWhilePreparing;
   final bool cacheBustedRequests;
+  final bool opaqueRequests;
   final bool useXhr;
   String mode = 'good';
   String username = 'FIXTURE_ACCOUNT';
@@ -48,6 +50,7 @@ final class YoungBusinessFixture {
   int bootstrapCompletions = 0;
   bool bootstrapQueryCleared = false;
   int frameRequests = 0;
+  final List<Map<String, Object?>> opaqueRequestObservations = [];
   bool credentialsMatched = false;
   Uri get initialUri {
     final path = realisticLoginRedirects ? '/login/' : _youngCalendarPath;
@@ -65,6 +68,7 @@ final class YoungBusinessFixture {
     Duration businessReadinessDelay = const Duration(milliseconds: 800),
     bool keepTargetRouteWhilePreparing = false,
     bool cacheBustedRequests = false,
+    bool opaqueRequests = false,
     bool useXhr = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
@@ -77,6 +81,7 @@ final class YoungBusinessFixture {
       businessReadinessDelay: businessReadinessDelay,
       keepTargetRouteWhilePreparing: keepTargetRouteWhilePreparing,
       cacheBustedRequests: cacheBustedRequests,
+      opaqueRequests: opaqueRequests,
       useXhr: useXhr,
     );
     server.listen(fixture._serve);
@@ -163,9 +168,32 @@ final class YoungBusinessFixture {
             : _businessPage(path),
       );
     } else if (path.startsWith('/login/wisdom-group-learning-bg/')) {
+      final endpoint = _endpointForPath(path);
+      final isBackgroundActivity =
+          endpoint == 'activities' &&
+          request.uri.queryParameters['background'] == '1';
+      var parameters = Map<String, Object?>.from(request.uri.queryParameters);
+      if (opaqueRequests && !isBackgroundActivity) {
+        try {
+          if (endpoint == null) throw const FormatException();
+          parameters = _decodeOpaqueParameters(request, endpoint);
+          opaqueRequestObservations.add(
+            Map<String, Object?>.unmodifiable({
+              'endpoint': endpoint,
+              'parameters': Map<String, Object?>.unmodifiable(parameters),
+            }),
+          );
+        } on FormatException {
+          request.response.statusCode = HttpStatus.badRequest;
+          request.response.headers.contentType = ContentType.json;
+          request.response.write('{"error":"synthetic-query-shape"}');
+          await request.response.close();
+          return;
+        }
+      }
       request.response.headers.contentType = ContentType.json;
       Object? result;
-      if (path.endsWith('/paramdesign/scMyInfo/info')) {
+      if (endpoint == 'profile') {
         ++profiles;
         result = {
           'username':
@@ -175,12 +203,11 @@ final class YoungBusinessFixture {
               : username,
           'unused': {'description': r'UNSELECTED_PRIVATE_\u0061'},
         };
-      } else if (path.endsWith('/mobile/item/enrolmentList')) {
-        if (!request.uri.queryParameters.containsKey('background')) {
+      } else if (endpoint == 'activities') {
+        if (!isBackgroundActivity) {
           ++activityRequests;
         }
-        final page =
-            int.tryParse(request.uri.queryParameters['pageNo'] ?? '') ?? 0;
+        final page = int.tryParse(parameters['pageNo']?.toString() ?? '') ?? 0;
         final records = <Map<String, Object?>>[];
         for (var i = (page - 1) * 10; i >= 0 && i < page * 10 && i < 11; ++i) {
           records.add({
@@ -200,12 +227,12 @@ final class YoungBusinessFixture {
           'pages': 2,
           'size': 10,
         };
-      } else if (path.endsWith('/personal/scCalendar/getPageUserList')) {
+      } else if (endpoint == 'schedule') {
         ++calendarRequests;
         if (mode == 'late') {
           await Future<void>.delayed(const Duration(seconds: 3));
         }
-        final day = request.uri.queryParameters['now'];
+        final day = parameters['now']?.toString();
         final nonempty =
             (day == '2026-10-10' && mode != 'emptyCalendar') ||
             mode == 'wrongDay';
@@ -261,6 +288,84 @@ final class YoungBusinessFixture {
 
   bool _isBusinessTarget(String path) =>
       path == _youngActivitiesPath || path == _youngCalendarPath;
+
+  String? _endpointForPath(String path) {
+    if (path == '/login/wisdom-group-learning-bg/paramdesign/scMyInfo/info') {
+      return 'profile';
+    }
+    if (path == '/login/wisdom-group-learning-bg/mobile/item/enrolmentList') {
+      return 'activities';
+    }
+    if (path ==
+        '/login/wisdom-group-learning-bg/personal/scCalendar/getPageUserList') {
+      return 'schedule';
+    }
+    return null;
+  }
+
+  Map<String, Object?> _decodeOpaqueParameters(
+    HttpRequest request,
+    String endpoint,
+  ) {
+    if (request.method != 'GET' || request.uri.toString().length > 4096) {
+      throw const FormatException();
+    }
+    final query = request.uri.queryParametersAll;
+    if (query.entries.any((entry) => entry.value.length != 1) ||
+        query.keys.any((key) => key != 'requestParams' && key != '_t') ||
+        !query.containsKey('requestParams')) {
+      throw const FormatException();
+    }
+    final cacheBuster = query['_t']?.single;
+    if (cacheBuster != null &&
+        !RegExp(r'^[1-9][0-9]{9}(?:[0-9]{3})?$').hasMatch(cacheBuster)) {
+      throw const FormatException();
+    }
+    final blob = query['requestParams']!.single;
+    if (blob.isEmpty || blob.length > 8192) throw const FormatException();
+    try {
+      // Base64 carries only this synthetic fixture's JSON params. It is not an
+      // encryption model and never represents a school cipher or credential.
+      final bytes = base64Decode(blob);
+      if (base64Encode(bytes) != blob) throw const FormatException();
+      final json = utf8.decode(bytes);
+      final decoded = jsonDecode(json);
+      if (decoded is! Map<String, dynamic> || jsonEncode(decoded) != json) {
+        throw const FormatException();
+      }
+      final parameters = Map<String, Object?>.from(decoded);
+      final keys = parameters.keys.toSet();
+      bool hasExactKeys(Set<String> expected) =>
+          keys.length == expected.length && keys.containsAll(expected);
+      if (endpoint == 'profile') {
+        if (parameters.isNotEmpty) throw const FormatException();
+      } else if (endpoint == 'activities') {
+        if (!hasExactKeys(const {'field', 'pageNo', 'pageSize'}) ||
+            parameters['field'] != 'id,,action' ||
+            parameters['pageNo'] is! int ||
+            (parameters['pageNo'] as int) < 1 ||
+            (parameters['pageNo'] as int) > 2 ||
+            parameters['pageSize'] != 10) {
+          throw const FormatException();
+        }
+      } else if (endpoint == 'schedule') {
+        if (!hasExactKeys(const {'field', 'pageNo', 'pageSize', 'now'}) ||
+            parameters['field'] != 'id,,number,title,place,startTime,endTime' ||
+            parameters['pageNo'] != 1 ||
+            parameters['pageSize'] != 10 ||
+            parameters['now'] != '2026-10-10') {
+          throw const FormatException();
+        }
+      } else {
+        throw const FormatException();
+      }
+      return parameters;
+    } on FormatException {
+      rethrow;
+    } on Object {
+      throw const FormatException();
+    }
+  }
 
   String _loginPortalPage() =>
       '''<!doctype html><html><head><meta charset="utf-8"><title>Synthetic portal</title></head>
@@ -344,7 +449,7 @@ loginForm.addEventListener('submit',function(event){
   String _businessGet() =>
       '''function(options){
       return Promise.resolve().then(function(){
-        const params=new URLSearchParams(options.params);
+        ${opaqueRequests ? "const params=new URLSearchParams();params.set('requestParams',btoa(JSON.stringify(options.params)));" : 'const params=new URLSearchParams(options.params);'}
         ${cacheBustedRequests ? "params.set('_t','1792396800000');" : ''}
         const target='/login/wisdom-group-learning-bg'+options.url+(params.toString()?'?'+params.toString():'');
         ${useXhr ? '''return new Promise(function(resolve,reject){

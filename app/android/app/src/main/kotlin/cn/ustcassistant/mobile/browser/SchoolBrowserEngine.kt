@@ -933,6 +933,7 @@ internal class SchoolBrowserEngine(
             "stampChanged", "nativeContext", "mainRoute", "contextLost", "compiledScript",
             "helperUnavailable", "preparationTimedOut", "sourceFailure",
             "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
+            "requestOrigin", "requestPath", "requestQueryDuplicate", "requestQueryUnexpected", "requestQueryShape",
             "responseStatus", "responseMime", "responseTooLarge", "responseFormat",
             "transportFailed", "helperRejected", "xhrConfiguration",
         )
