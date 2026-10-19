@@ -432,6 +432,10 @@ void main() {
           expect(first.data!.examCount, 1);
           expect(first.data!.events, hasLength(2));
           expect(fixture.authenticationSubmissions, 1);
+          expect(
+            fixture.authenticationSubmissionsWithAuxiliaryFieldsPreserved,
+            1,
+          );
           expect(fixture.acceptedIndexSemesters, [20261]);
 
           final firstCourse = first.data!.events.singleWhere(
@@ -532,6 +536,10 @@ void main() {
           );
           expect(crossSemester.data!.importCount, 3);
           expect(fixture.authenticationSubmissions, 3);
+          expect(
+            fixture.authenticationSubmissionsWithAuxiliaryFieldsPreserved,
+            3,
+          );
           expect(fixture.acceptedIndexSemesters, [20261, 20261, 20262]);
           _expectSafeSummary(crossSemester.safeSummary, harness);
 
@@ -627,6 +635,8 @@ void main() {
           expect(youngFixture.activityRequests, 2);
           expect(youngFixture.prematureModuleEvaluations, 0);
           expect(youngFixture.authenticationSubmissions, 1);
+          expect(youngFixture.auxiliaryFieldObservations, 1);
+          expect(youngFixture.auxiliaryFieldsPreservedObservations, 1);
           expect(youngFixture.successfulAuthenticationSubmissions, 1);
           expect(youngFixture.credentialsMatched, isTrue);
           expect(youngFixture.unexpectedAuthenticationSubmissions, 0);
@@ -663,6 +673,8 @@ void main() {
           expect(linked.place, 'Synthetic room');
           expect(youngFixture.calendarRequests, 1);
           expect(youngFixture.authenticationSubmissions, 2);
+          expect(youngFixture.auxiliaryFieldObservations, 2);
+          expect(youngFixture.auxiliaryFieldsPreservedObservations, 2);
           expect(youngFixture.successfulAuthenticationSubmissions, 2);
           expect(youngFixture.credentialsMatched, isTrue);
           expect(youngFixture.prematureBusinessNavigations, 0);
@@ -695,6 +707,8 @@ void main() {
           expect(youngFixture.calendarRequests, 2);
           expect(youngFixture.activityRequests, 2);
           expect(youngFixture.authenticationSubmissions, 3);
+          expect(youngFixture.auxiliaryFieldObservations, 3);
+          expect(youngFixture.auxiliaryFieldsPreservedObservations, 3);
           expect(youngFixture.successfulAuthenticationSubmissions, 3);
           expect(youngFixture.unexpectedAuthenticationSubmissions, 0);
           expect(youngFixture.bootstrapQueryCleared, isTrue);

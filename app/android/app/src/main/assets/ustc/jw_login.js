@@ -85,7 +85,13 @@
     // The public CAS template has a hidden autoLoginForm and a display:none
     // username mirror. Neither grants a credential capability. Uniqueness is
     // proved over visible controls, then over their one shared owning form.
-    const forms = Array.from(all(doc, 'form')).filter(visibleTree);
+    const formContainers = Array.from(all(doc, 'form')).filter(visibleTree);
+    // A hidden-only auxiliary form has no credential controls even when the
+    // form element itself has default CSS. Count rendered owning controls,
+    // as the public CAS template and the Windows reader do.
+    const forms = formContainers.filter(form =>
+      Array.from(all(form, 'input, button, select, textarea')).some(control =>
+        control.form === form && visible(control)));
     const usernames = Array.from(all(doc, 'input[name="username"], input#username'))
         .filter(visible);
     const passwords = Array.from(all(doc, 'input[type="password"]')).filter(visible);
@@ -97,7 +103,8 @@
     const visibleActions = form ? Array.from(all(form,
         'button, input[type="submit"], input[type="button"]')).filter(visible) : [];
     if (usernames.length === 0 && passwords.length === 0 && buttons.length === 0 &&
-        forms.length === 0) return {state: 'waiting'};
+        forms.length === 0) return {state: formContainers.length === 0 ?
+          'waiting' : 'incompleteForm'};
     if (usernames.length > 1 || passwords.length > 1 || buttons.length > 1 ||
         forms.length > 1) return {state: 'pageStructureChanged'};
     if (buttons.length === 0 && visibleActions.some(action => !buttons.includes(action)))

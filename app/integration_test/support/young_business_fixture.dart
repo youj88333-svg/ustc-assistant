@@ -39,6 +39,8 @@ final class YoungBusinessFixture {
   int calendarRequests = 0;
   int authenticationPages = 0;
   int authenticationSubmissions = 0;
+  int auxiliaryFieldObservations = 0;
+  int auxiliaryFieldsPreservedObservations = 0;
   int unexpectedAuthenticationSubmissions = 0;
   int successfulAuthenticationSubmissions = 0;
   int prematureBusinessNavigations = 0;
@@ -86,6 +88,17 @@ final class YoungBusinessFixture {
     request.response.headers.set(HttpHeaders.cacheControlHeader, 'no-store');
     final path = request.uri.path;
 
+    if (request.method == 'GET' && path == '/fixture-auth-fields') {
+      ++auxiliaryFieldObservations;
+      if (request.uri.queryParameters['auxiliaryUsernamePreserved'] == 'true' &&
+          request.uri.queryParameters['auxiliaryPasswordPreserved'] == 'true' &&
+          request.uri.queryParameters['mirrorUsernamePreserved'] == 'true') {
+        ++auxiliaryFieldsPreservedObservations;
+      }
+      request.response.statusCode = HttpStatus.noContent;
+      await request.response.close();
+      return;
+    }
     if (request.method == 'POST' && path == '/cas/login') {
       await _acceptAuthentication(request);
       return;
@@ -274,11 +287,35 @@ setTimeout(async()=>{
 
   String _authenticationPage() =>
       '''<!doctype html><html><head><meta charset="utf-8"><title>Synthetic CAS</title></head>
-<body><form id="normalLoginForm" method="POST" action="/cas/login" autocomplete="off">
+<body><form id="autoLoginForm" method="POST" action="/cas/login">
+<input name="username" type="hidden" value="young-aux-user-sentinel">
+<input name="password" type="hidden" value="young-aux-password-sentinel">
+</form>
+<button id="passkey-method" type="button" role="tab" aria-selected="false">Synthetic passkey method</button>
+<form id="normalLoginForm" method="POST" action="/cas/login" autocomplete="off">
 <input id="nameInput" name="username" type="text" autocomplete="username">
+<input id="hidden-name-mirror" name="username" type="text" style="display:none" value="young-mirror-user-sentinel">
 <input id="password" name="password" type="password" autocomplete="current-password">
 <button id="submitBtn" class="login-button" type="submit">Synthetic sign in</button>
-</form></body></html>''';
+</form>
+<script>
+const loginForm=document.querySelector('#normalLoginForm');
+let submittingAfterObservation=false;
+loginForm.addEventListener('submit',function(event){
+  if(submittingAfterObservation)return;
+  event.preventDefault();
+  submittingAfterObservation=true;
+  const auxiliary=document.querySelector('#autoLoginForm');
+  const mirror=document.querySelector('#hidden-name-mirror');
+  const query=new URLSearchParams({
+    auxiliaryUsernamePreserved:String(auxiliary.querySelector('[name="username"]').value==='young-aux-user-sentinel'),
+    auxiliaryPasswordPreserved:String(auxiliary.querySelector('[name="password"]').value==='young-aux-password-sentinel'),
+    mirrorUsernamePreserved:String(mirror.value==='young-mirror-user-sentinel')
+  });
+  fetch('/fixture-auth-fields?'+query.toString(),{cache:'no-store'})
+    .then(()=>loginForm.submit(),()=>loginForm.submit());
+});
+</script></body></html>''';
 
   String _businessPage(String path) {
     final delay = delayBusinessReadiness
@@ -356,10 +393,21 @@ setTimeout(async()=>{
   Future<void> _acceptAuthentication(HttpRequest request) async {
     ++authenticationSubmissions;
     final encoded = await utf8.decoder.bind(request).join();
-    final fields = Uri.splitQueryString(encoded);
+    // The hidden username mirror is still an HTML successful control. Keep
+    // both submitted values explicit instead of collapsing duplicate keys;
+    // only the visible field may contain the synthetic account.
+    final fields = Uri.parse('?$encoded').queryParametersAll;
+    final names = fields['username'];
+    final passwords = fields['password'];
     final matched =
-        fields['username'] == username &&
-        fields['password'] == syntheticPassword;
+        fields.length == 2 &&
+        names != null &&
+        names.length == 2 &&
+        names[0] == username &&
+        names[1] == 'young-mirror-user-sentinel' &&
+        passwords != null &&
+        passwords.length == 1 &&
+        passwords.single == syntheticPassword;
     credentialsMatched = credentialsMatched || matched;
     if (matched) {
       ++successfulAuthenticationSubmissions;

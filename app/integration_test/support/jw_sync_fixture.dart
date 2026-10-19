@@ -30,6 +30,7 @@ final class JwSyncFixture {
   final HttpServer _server;
   final bool requireLogin;
   int authenticationSubmissions = 0;
+  int authenticationSubmissionsWithAuxiliaryFieldsPreserved = 0;
   bool emptyCourse = false;
   bool emptyExams = false;
   bool omitAcademicDetails = false;
@@ -99,16 +100,19 @@ final class JwSyncFixture {
             return;
           }
           await _writeHtml(request, '''<!doctype html><html><body>
-<form id="autoLoginForm" style="display:none">
-<input name="username" type="hidden"><input name="password" type="hidden"></form>
+<form id="autoLoginForm">
+<input name="username" type="hidden" value="jw-aux-user-sentinel"><input name="password" type="hidden" value="jw-aux-password-sentinel"></form>
 <form id="normalLoginForm"><input name="username" type="text" id="nameInput">
-<input name="username" style="display:none" type="text">
+<input name="username" id="hidden-name-mirror" style="display:none" type="text" value="jw-mirror-user-sentinel">
 <input type="password"><button id="passkey-tab" type="button" role="tab" aria-selected="false">Synthetic passkey tab</button>
 <button id="submitBtn" class="login-button" type="submit">Synthetic login</button></form>
 <script>document.querySelector('#normalLoginForm').addEventListener('submit', async function(e) {
  e.preventDefault();
  const r = await fetch('/fixture-authenticate', {method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({username:this.querySelector('[name=username]').value,password:this.querySelector('[type=password]').value})});
+ body:JSON.stringify({username:this.querySelector('#nameInput').value,password:this.querySelector('[type=password]').value,
+ auxiliaryFieldsPreserved:document.querySelector('#autoLoginForm input[name=username]').value==='jw-aux-user-sentinel' &&
+ document.querySelector('#autoLoginForm input[name=password]').value==='jw-aux-password-sentinel' &&
+ document.querySelector('#hidden-name-mirror').value==='jw-mirror-user-sentinel'})});
  if(r.ok) location.href='/home';
 });</script></body></html>''');
           break;
@@ -124,9 +128,13 @@ final class JwSyncFixture {
           final bundle = jsonDecode(raw);
           final accepted =
               bundle is Map &&
-              bundle.length == 2 &&
+              bundle.length == 3 &&
               bundle['username'] == 'TEST0001' &&
-              bundle['password'] == 'synthetic-password';
+              bundle['password'] == 'synthetic-password' &&
+              bundle['auxiliaryFieldsPreserved'] == true;
+          if (bundle is Map && bundle['auxiliaryFieldsPreserved'] == true) {
+            authenticationSubmissionsWithAuxiliaryFieldsPreserved++;
+          }
           if (!accepted) {
             await _reject(request, HttpStatus.unauthorized);
             return;

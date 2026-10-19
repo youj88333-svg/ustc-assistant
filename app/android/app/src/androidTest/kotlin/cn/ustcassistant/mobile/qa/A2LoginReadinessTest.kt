@@ -1,5 +1,7 @@
 package cn.ustcassistant.mobile.qa
 
+import android.net.Uri
+import android.webkit.WebMessage
 import android.webkit.WebView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -16,6 +18,112 @@ import java.util.concurrent.TimeUnit
 /** Synthetic CAS DOM fixtures only; these tests never connect to a school. */
 @RunWith(AndroidJUnit4::class)
 class A2LoginReadinessTest {
+    @Test fun publicTemplateCredentialFormIgnoresHiddenAuxiliaryFormAndSubmitsOnce() {
+        val fixture = open("""<html><body>
+            <form id="autoLoginForm" method="POST" action="/cas/login">
+                <input name="username" type="hidden" value="aux-user-sentinel">
+                <input name="password" type="hidden" value="aux-password-sentinel">
+            </form>
+            <button id="passkey-method" type="button" role="tab" aria-selected="false">
+                Synthetic passkey method
+            </button>
+            <form id="normalLoginForm" method="POST" action="/cas/login">
+                <input id="nameInput" name="username" type="text" autocomplete="username">
+                <input id="jw-hidden-name-mirror" name="username" type="text"
+                    style="display:none" value="mirror-user-sentinel">
+                <rg-input-password><input name="password" type="password"
+                    autocomplete="current-password"></rg-input-password>
+                <input name="captcha_code" type="hidden" value="captcha-sentinel">
+                <button id="submitBtn" class="login-button" type="submit">Synthetic sign in</button>
+            </form>
+            <script>
+                window.syntheticSubmitCount = 0;
+                document.querySelector('#normalLoginForm').addEventListener('submit', function(event) {
+                    event.preventDefault();
+                    window.syntheticSubmitCount++;
+                });
+            </script>
+            </body></html>""")
+        try {
+            assertEquals("formReady", fixture.advance())
+            assertEquals(
+                "submitted",
+                fixture.deliverCredentials("TEST0001", "synthetic-password"),
+            )
+            assertTrue(fixture.evaluateBoolean("""window.syntheticSubmitCount === 1 &&
+                document.querySelector('#nameInput').value === 'TEST0001' &&
+                document.querySelector('#normalLoginForm input[type=password]').value === 'synthetic-password' &&
+                document.querySelector('#autoLoginForm input[name=username]').value === 'aux-user-sentinel' &&
+                document.querySelector('#autoLoginForm input[name=password]').value === 'aux-password-sentinel' &&
+                document.querySelector('#jw-hidden-name-mirror').value === 'mirror-user-sentinel' &&
+                document.querySelector('#normalLoginForm input[name=captcha_code]').value === 'captcha-sentinel'"""))
+            fixture.deliverDuplicateCredentials("TEST0001", "synthetic-password")
+            assertTrue(fixture.evaluateBoolean("window.syntheticSubmitCount === 1"))
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun hiddenOnlyAuxiliaryFormNeverBecomesCredentialReady() {
+        val fixture = open("""<html><body>
+            <form id="autoLoginForm">
+                <input name="username" type="hidden" value="aux-user-sentinel">
+                <input name="password" type="hidden" value="aux-password-sentinel">
+            </form>
+            </body></html>""")
+        try {
+            assertEquals("waiting", fixture.advance())
+            Thread.sleep(1_700)
+            assertEquals("pageStructureChanged", fixture.advance())
+        } finally {
+            fixture.close()
+        }
+    }
+
+    @Test fun credentialMutationThatRevealsAuxiliaryUsernameFailsBeforePasswordDelivery() {
+        val mutations = listOf(
+            "document.querySelector('#autoLoginForm input[name=username]').type = 'text';",
+            "document.querySelector('#jw-hidden-name-mirror').style.display = 'block';",
+        )
+        for (mutation in mutations) {
+            val fixture = open("""<html><body>
+                <form id="autoLoginForm">
+                    <input name="username" type="hidden" value="aux-user-sentinel">
+                    <input name="password" type="hidden" value="aux-password-sentinel">
+                </form>
+                <form id="normalLoginForm">
+                    <input id="nameInput" name="username" type="text">
+                    <input id="jw-hidden-name-mirror" name="username" type="text"
+                        style="display:none" value="mirror-user-sentinel">
+                    <input id="password" type="password">
+                    <button id="submitBtn" class="login-button" type="submit">Synthetic sign in</button>
+                </form>
+                <script>
+                    window.syntheticSubmitCount = 0;
+                    document.querySelector('#nameInput').addEventListener('input', function() {
+                        $mutation
+                    }, {once: true});
+                    document.querySelector('#normalLoginForm').addEventListener('submit', function(event) {
+                        event.preventDefault();
+                        window.syntheticSubmitCount++;
+                    });
+                </script>
+                </body></html>""")
+            try {
+                assertEquals("formReady", fixture.advance())
+                assertEquals(
+                    "pageStructureChanged",
+                    fixture.deliverCredentials("TEST0001", "synthetic-password"),
+                )
+                assertTrue(fixture.evaluateBoolean("""window.syntheticSubmitCount === 0 &&
+                    document.querySelector('#password').value === '' &&
+                    document.querySelector('#autoLoginForm input[name=password]').value === 'aux-password-sentinel'"""))
+            } finally {
+                fixture.close()
+            }
+        }
+    }
+
     @Test fun partialFormCanCompleteWithinReadinessGrace() {
         val fixture = open("""<html><body>
             <form id="normalLoginForm"><input name="username" type="text"></form>
@@ -141,8 +249,19 @@ class A2LoginReadinessTest {
         val fixtures = listOf(
             """<form><input name="username" type="text"><input name="username" type="text">
                 <input type="password"><button id="submitBtn" type="submit">Login</button></form>""",
+            """<form><input name="username" type="text"><input type="password">
+                <input type="password"><button id="submitBtn" type="submit">Login</button></form>""",
             """<form><input name="username" type="text"></form>
                 <form><input type="password"><button id="submitBtn" type="submit">Login</button></form>""",
+            """<form id="autoLoginForm"><input name="username" type="hidden">
+                <input name="password" type="hidden"></form>
+                <form><input name="username" type="text"><input type="password">
+                <button id="submitBtn" type="submit">Login</button></form>
+                <form><input name="username" type="text"><input type="password">
+                <button class="login-button" type="submit">Second visible login</button></form>""",
+            """<form><input name="username" type="text"><input type="password">
+                <input name="unclassified" type="text">
+                <button id="submitBtn" type="submit">Login</button></form>""",
             """<form><input name="username" type="text"><input type="password">
                 <button id="submitBtn" type="reset">Reset</button></form>""",
             """<form><input name="username" type="text"><input type="password">
@@ -155,6 +274,17 @@ class A2LoginReadinessTest {
             } finally {
                 fixture.close()
             }
+        }
+
+        val challenge = open("""<html><body>
+            <form><input name="username" type="text"><input type="password">
+                <input id="captcha" name="captcha" type="text">
+                <button id="submitBtn" type="submit">Login</button></form>
+            </body></html>""")
+        try {
+            assertEquals("challengeRequired", challenge.advance())
+        } finally {
+            challenge.close()
         }
     }
 
@@ -208,7 +338,37 @@ class A2LoginReadinessTest {
         private val browser: WebView,
         private val scripts: ScriptCatalog,
     ) {
-        fun advance(): String = call("advance")
+        fun advance(): String =
+            callValue("advance") ?: throw AssertionError("Synthetic login check returned no state")
+
+        fun deliverCredentials(username: String, password: String): String {
+            val message = scripts.credentialMessage(1L, 1L, username, password)
+            instrumentation.runOnMainSync {
+                browser.postWebMessage(WebMessage(message), Uri.parse("http://127.0.0.1:43128"))
+            }
+            return awaitSecretResult()
+        }
+
+        fun deliverDuplicateCredentials(username: String, password: String) {
+            val message = scripts.credentialMessage(1L, 1L, username, password)
+            instrumentation.runOnMainSync {
+                browser.postWebMessage(WebMessage(message), Uri.parse("http://127.0.0.1:43128"))
+            }
+        }
+
+        private fun awaitSecretResult(): String {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+            while (System.nanoTime() < deadline) {
+                val reply = callValue("secretResult")
+                if (reply != null) return reply
+                Thread.sleep(50)
+            }
+            throw AssertionError("Synthetic credential delivery returned no result")
+        }
+
+        private fun callValue(method: String): String? = callReply(method).let { reply ->
+            if (!reply.has("value") || reply.isNull("value")) null else reply.getString("value")
+        }
 
         fun evaluate(source: String) {
             val done = CountDownLatch(1)
@@ -218,23 +378,36 @@ class A2LoginReadinessTest {
             assertTrue("Synthetic DOM update did not finish", done.await(5, TimeUnit.SECONDS))
         }
 
-        private fun call(method: String): String {
+        fun evaluateBoolean(source: String): Boolean {
             val done = CountDownLatch(1)
-            var value: String? = null
+            var value: Boolean? = null
+            instrumentation.runOnMainSync {
+                browser.evaluateJavascript(source) { raw ->
+                    value = raw == "true"
+                    done.countDown()
+                }
+            }
+            assertTrue("Synthetic DOM inspection did not finish", done.await(5, TimeUnit.SECONDS))
+            return value == true
+        }
+
+        private fun callReply(method: String): JSONObject {
+            val done = CountDownLatch(1)
+            var result: JSONObject? = null
             val source = scripts.apiCall(
                 JSONObject().put("method", method).put("operation", 1L).put("document", 1L),
             )
             instrumentation.runOnMainSync {
                 browser.evaluateJavascript(source) { raw ->
                     try {
-                        value = scripts.unwrap(raw).getString("value")
+                        result = scripts.unwrap(raw)
                     } finally {
                         done.countDown()
                     }
                 }
             }
             assertTrue("Synthetic login check did not finish", done.await(5, TimeUnit.SECONDS))
-            return value ?: throw AssertionError("Synthetic login check returned no state")
+            return result ?: throw AssertionError("Synthetic login check returned no state")
         }
 
         fun close() {
