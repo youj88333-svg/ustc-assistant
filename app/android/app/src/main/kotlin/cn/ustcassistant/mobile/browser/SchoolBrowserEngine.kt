@@ -345,7 +345,10 @@ internal class SchoolBrowserEngine(
 
             override fun doUpdateVisitedHistory(view: WebView, url: String, reload: Boolean) {
                 if (active !== s || s.closing) return
-                if (!s.loading && url == s.view.url) historyChanged(s, url)
+                if (!s.loading && url == s.view.url) {
+                    if (isYoungStateOnlyHistory(s, url, reload)) return
+                    historyChanged(s, url)
+                }
             }
 
             override fun onPageFinished(view: WebView, url: String) {
@@ -522,7 +525,7 @@ internal class SchoolBrowserEngine(
     }
 
     private fun newDocument(s: Session, url: String) {
-        rejectPending(s, readinessRace = true)
+        rejectPending(s, readinessRace = true, reason = "contextLost")
         s.document++
         s.url = url
         s.ready = false
@@ -534,8 +537,14 @@ internal class SchoolBrowserEngine(
         event(s, "navigating")
     }
 
+    private fun isYoungStateOnlyHistory(s: Session, url: String, reload: Boolean): Boolean =
+        !reload && s.policy.source == "young" && ready(s) &&
+            s.bootstrapGeneration == s.document && s.url == url && s.committedUrl == url &&
+            s.policy.origin(url) == s.policy.businessOrigin &&
+            (youngRoute(url, "activities") || youngRoute(url, "calendar"))
+
     private fun historyChanged(s: Session, url: String) {
-        rejectPending(s, readinessRace = true)
+        rejectPending(s, readinessRace = true, reason = "historyNativeChanged")
         s.document++
         s.url = url
         s.loginOperation = 0
@@ -547,11 +556,12 @@ internal class SchoolBrowserEngine(
         installForCurrentDocument(s, url)
     }
 
-    private fun rejectPending(s: Session, readinessRace: Boolean = false) {
+    private fun rejectPending(s: Session, readinessRace: Boolean = false, reason: String? = null) {
         val pending = s.pending.values.toList()
         s.pending.clear()
         pending.forEach { call ->
-            call.result.error(if (readinessRace && call.preNavigation) "busy" else "staleResult")
+            call.result.error(if (readinessRace && call.preNavigation) "busy" else "staleResult",
+                reason.takeIf { call.page && !call.preNavigation })
         }
     }
 
@@ -931,6 +941,8 @@ internal class SchoolBrowserEngine(
         )
         private val YOUNG_REASONS = setOf(
             "stampChanged", "nativeContext", "mainRoute", "contextLost", "compiledScript",
+            "historyPushChanged", "historyReplaceChanged", "historyTraversal", "historyHashChanged",
+            "routeAddressChanged", "historyNativeChanged",
             "helperUnavailable", "preparationTimedOut", "sourceFailure",
             "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
             "requestOrigin", "requestPath", "requestQueryDuplicate", "requestQueryUnexpected", "requestQueryShape",

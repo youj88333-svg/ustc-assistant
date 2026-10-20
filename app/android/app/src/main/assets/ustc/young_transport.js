@@ -281,10 +281,11 @@
       if (apply(winDocument, win, []) !== doc || apply(winTop, win, []) !== win ||
           apply(locationOrigin, locationObject, []) !== expectedOrigin) {
         fail(state, 'staleResult', 'nativeContext');
-      } else if (routeSerial !== state.serial ||
-          apply(locationHref, locationObject, []) !== state.href ||
-          apply(locationPath, locationObject, []) !== state.route) {
+      } else if (routeSerial !== state.serial) {
         fail(state, 'staleResult', 'mainRoute');
+      } else if (apply(locationHref, locationObject, []) !== state.href ||
+          apply(locationPath, locationObject, []) !== state.route) {
+        fail(state, 'staleResult', 'routeAddressChanged');
       } else if (apply(documentRoot, doc, []) !== state.root ||
           apply(documentReady, doc, []) !== 'complete') {
         fail(state, 'staleResult', 'contextLost');
@@ -340,15 +341,26 @@
     return apply(nativeThen, this, [wrap(onFulfilled), wrap(onRejected)]);
   }
 
+  function updateHistory(method, receiver, args, reason) {
+    if (receiver !== historyObject) return apply(method, receiver, args);
+    const before = apply(locationHref, locationObject, []);
+    try { return apply(method, receiver, args); }
+    finally {
+      // Router metadata writes do not replace this Document or fixed target.
+      // Compare after the native call, also when argument conversion throws.
+      // Every observed address change is latched, including an away-and-back.
+      // Never inspect the page's history.state or interpret its business data.
+      if (apply(locationHref, locationObject, []) !== before) changed(reason);
+    }
+  }
   function pushWithStamp() {
-    if (this === historyObject) changed('mainRoute');
-    return apply(historyPush, this, arguments);
+    return updateHistory(historyPush, this, arguments, 'historyPushChanged');
   }
   function replaceWithStamp() {
-    if (this === historyObject) changed('mainRoute');
-    return apply(historyReplace, this, arguments);
+    return updateHistory(historyReplace, this, arguments, 'historyReplaceChanged');
   }
-  function onHistory() { changed('mainRoute'); }
+  function onHistoryTraversal() { changed('historyTraversal'); }
+  function onHistoryHashChange() { changed('historyHashChanged'); }
   function onPageGone() { changed('contextLost'); }
 
   function fixedPath(endpoint) {
@@ -1025,8 +1037,8 @@
     const options = dto();
     put(options, 'childList', true);
     apply(observe, mutationObserver, [doc, options]);
-    apply(nativeAddEvent, win, ['popstate', onHistory]);
-    apply(nativeAddEvent, win, ['hashchange', onHistory]);
+    apply(nativeAddEvent, win, ['popstate', onHistoryTraversal]);
+    apply(nativeAddEvent, win, ['hashchange', onHistoryHashChange]);
     apply(nativeAddEvent, win, ['pagehide', onPageGone]);
     apply(nativeAddEvent, win, ['beforeunload', onPageGone]);
   } catch (_) { integrityFailure = true; }

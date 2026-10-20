@@ -55,6 +55,60 @@ class A2YoungTransportTest {
         }
 
     @Test
+    fun stateOnlyHistoryKeepsProfileReadValid() =
+        withHarness(Scenario.STATE_ONLY_HISTORY) { harness ->
+            prepareAndStart(harness)
+            assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+            assertProfileProjection(awaitPoll(harness, step = 1))
+            assertEquals(1, harness.server.apiRequestCount.get())
+        }
+
+    @Test
+    fun sameUrlPushAndDataCloneFailureKeepProfileReadValid() {
+        for (scenario in listOf(Scenario.STATE_ONLY_PUSH, Scenario.STATE_ONLY_THROW)) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+                assertProfileProjection(awaitPoll(harness, step = 1))
+                assertEquals(1, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
+    fun addressChangesAndHistoryTraversalRejectTheInFlightProfileRead() {
+        val cases = listOf(
+            Scenario.HISTORY_QUERY_PUSH to "historyPushChanged",
+            Scenario.HISTORY_QUERY_REPLACE to "historyReplaceChanged",
+            Scenario.HISTORY_A_B_A to "historyReplaceChanged",
+            Scenario.HISTORY_HASH to "historyHashChanged",
+            Scenario.HISTORY_TRAVERSAL to "historyTraversal",
+            Scenario.HISTORY_NATIVE_QUERY to "routeAddressChanged",
+        )
+        for ((scenario, reason) in cases) {
+            withHarness(scenario) { harness ->
+                prepareAndStart(harness)
+                assertSuccess(harness.call(method = "dispatch", operation = OPERATION,
+                    step = 1, endpoint = "profile", pageNumber = 0, day = ""))
+                val rejected = awaitPoll(harness, step = 1)
+                if (scenario == Scenario.HISTORY_HASH) {
+                    // Fragment navigation also fires popstate. That listener
+                    // or the href getter can reject before hashchange runs.
+                    assertClosedError(rejected, "staleResult")
+                    val actualReason = rejected.getJSONObject("error").getString("reason")
+                    assertTrue("Synthetic fragment change returned $actualReason", actualReason in
+                        setOf("historyTraversal", "historyHashChanged", "routeAddressChanged"))
+                } else {
+                    assertClosedError(rejected, expectedCode = "staleResult", expectedReason = reason)
+                }
+                assertEquals(1, harness.server.apiRequestCount.get())
+            }
+        }
+    }
+
+    @Test
     fun opaqueProfileActivitiesAndCalendarKeepFixedInputsAcrossNativeFetchAndXhr() {
         withHarness(Scenario.OPAQUE_ACTIVITIES_SEQUENCE) { harness ->
             prepareAndStart(harness, pageName = "activities")
@@ -461,17 +515,28 @@ class A2YoungTransportTest {
     }
 
     private fun assertClosedError(reply: JSONObject, expectedCode: String) {
+        assertClosedError(reply, expectedCode, expectedReason = null)
+    }
+
+    private fun assertClosedError(
+        reply: JSONObject,
+        expectedCode: String,
+        expectedReason: String?,
+    ) {
         assertEquals(setOf("reply", "call", "error"), reply.keys().asSequence().toSet())
         assertFalse(reply.has("value"))
         val error = reply.getJSONObject("error")
         assertEquals(setOf("code", "reason"), error.keys().asSequence().toSet())
         assertEquals(expectedCode, error.getString("code"))
+        if (expectedReason != null) assertEquals(expectedReason, error.getString("reason"))
         assertTrue(error.getString("reason") in setOf("helperUnavailable", "sourceFailure",
             "requestTarget", "requestMethod", "transportAmbiguous", "responseTarget",
             "responseStatus", "responseMime", "responseTooLarge", "responseFormat",
             "transportFailed", "helperRejected", "xhrConfiguration", "requestOrigin",
             "requestPath", "requestQueryDuplicate", "requestQueryUnexpected",
-            "requestQueryShape", "stampChanged"))
+            "requestQueryShape", "stampChanged", "historyPushChanged",
+            "historyReplaceChanged", "historyTraversal", "historyHashChanged",
+            "routeAddressChanged", "historyNativeChanged", "contextLost"))
         assertNull(error.opt("raw"))
     }
 
@@ -479,6 +544,15 @@ class A2YoungTransportTest {
         CACHE_BUSTER,
         CACHE_MILLIS,
         CACHE_XHR,
+        STATE_ONLY_HISTORY,
+        STATE_ONLY_PUSH,
+        STATE_ONLY_THROW,
+        HISTORY_QUERY_PUSH,
+        HISTORY_QUERY_REPLACE,
+        HISTORY_A_B_A,
+        HISTORY_HASH,
+        HISTORY_TRAVERSAL,
+        HISTORY_NATIVE_QUERY,
         OPAQUE_PROFILE,
         OPAQUE_ACTIVITIES_SEQUENCE,
         OPAQUE_CALENDAR_SEQUENCE,
@@ -836,6 +910,15 @@ class A2YoungTransportTest {
                 Scenario.CACHE_BUSTER -> "cacheBuster"
                 Scenario.CACHE_MILLIS -> "cacheMillis"
                 Scenario.CACHE_XHR -> "cacheXhr"
+                Scenario.STATE_ONLY_HISTORY -> "stateOnlyHistory"
+                Scenario.STATE_ONLY_PUSH -> "stateOnlyPush"
+                Scenario.STATE_ONLY_THROW -> "stateOnlyThrow"
+                Scenario.HISTORY_QUERY_PUSH -> "historyQueryPush"
+                Scenario.HISTORY_QUERY_REPLACE -> "historyQueryReplace"
+                Scenario.HISTORY_A_B_A -> "historyAddressRoundTrip"
+                Scenario.HISTORY_HASH -> "historyHashChange"
+                Scenario.HISTORY_TRAVERSAL -> "historyTraversal"
+                Scenario.HISTORY_NATIVE_QUERY -> "historyNativeQuery"
                 Scenario.OPAQUE_PROFILE -> "opaqueProfile"
                 Scenario.OPAQUE_ACTIVITIES_SEQUENCE -> "opaqueActivitiesSequence"
                 Scenario.OPAQUE_CALENDAR_SEQUENCE -> "opaqueCalendarSequence"
@@ -878,8 +961,15 @@ class A2YoungTransportTest {
                 var mode = ${JSONObject.quote(mode)};
                 var helperCalls = 0;
                 window.__syntheticXhrOpenCount = 0;
+                window.__syntheticNativeReplaceState = history.replaceState;
                 var r = {b:function(options) {
                   var invocation = ++helperCalls;
+                  if (mode === 'stateOnlyHistory') history.replaceState({syntheticKey:1},'');
+                  if (mode === 'stateOnlyPush' || mode === 'historyTraversal') history.pushState({syntheticKey:1},'',location.href);
+                  if (mode === 'stateOnlyThrow') {
+                    try { history.replaceState({syntheticKey:function(){}},''); throw new Error('expected DataCloneError'); }
+                    catch (error) { if (error.name !== 'DataCloneError') throw error; }
+                  }
                   var target = new URL('/login/wisdom-group-learning-bg' + options.url, location.href).href;
                   var parameters = new URLSearchParams(options.params);
                   if (mode.indexOf('opaque') === 0) {
@@ -926,7 +1016,41 @@ class A2YoungTransportTest {
                     mode === 'sequence' || mode === 'opaqueActivitiesSequence' ? (invocation === 1 ? 'fetch' : 'xhr') :
                     mode === 'opaqueCalendarSequence' ? (invocation === 1 ? 'xhr' : 'fetch') : 'fetch';
                   if (transport === 'fetch') {
-                    return fetch(target, {method:mode === 'opaqueNonGet' ? 'POST' : options.method}).then(function(response) { return response.json(); });
+                    return fetch(target, {method:mode === 'opaqueNonGet' ? 'POST' : options.method}).then(function(response) { return response.json(); }).then(function(value) {
+                      if (mode === 'stateOnlyHistory') history.replaceState({syntheticKey:2},'',location.pathname+location.search+location.hash);
+                      if (mode === 'stateOnlyPush') history.replaceState({syntheticKey:2},'',location.pathname+location.search+location.hash);
+                      if (mode === 'historyQueryPush' || mode === 'historyQueryReplace' || mode === 'historyAddressRoundTrip') {
+                        var originalAddress=location.pathname+location.search+location.hash;
+                        var changedAddress=location.pathname+'?syntheticHistory=changed'+location.hash;
+                        if (mode === 'historyQueryPush') history.pushState({syntheticKey:1},'',changedAddress);
+                        if (mode === 'historyQueryReplace') history.replaceState({syntheticKey:1},'',changedAddress);
+                        if (mode === 'historyAddressRoundTrip') {
+                          history.replaceState({syntheticKey:1},'',changedAddress);
+                          history.replaceState({syntheticKey:2},'',originalAddress);
+                        }
+                      }
+                      if (mode === 'historyNativeQuery') {
+                        var nativeChangedAddress=new URL(location.href);
+                        nativeChangedAddress.searchParams.set('syntheticHistory','native');
+                        window.__syntheticNativeReplaceState.call(history,{syntheticKey:1},'',nativeChangedAddress.pathname+nativeChangedAddress.search+nativeChangedAddress.hash);
+                      }
+                      if (mode === 'historyHashChange') return new Promise(function(resolve,reject) {
+                        var timer=setTimeout(function(){reject(new Error('synthetic-hashchange-timeout'));},3000);
+                        window.addEventListener('hashchange',function(){clearTimeout(timer);resolve(value);},{once:true});
+                        location.hash='synthetic-history-change';
+                      });
+                      if (mode === 'historyTraversal') return new Promise(function(resolve,reject) {
+                        var originalAddress=location.href;
+                        var timer=setTimeout(function(){reject(new Error('synthetic-popstate-timeout'));},3000);
+                        window.addEventListener('popstate',function(){
+                          clearTimeout(timer);
+                          if (location.href!==originalAddress) { reject(new Error('synthetic-popstate-address-changed')); return; }
+                          resolve(value);
+                        },{once:true});
+                        setTimeout(function(){history.back();},0);
+                      });
+                      return value;
+                    });
                   }
                   return new Promise(function(resolve, reject) {
                     var request = new XMLHttpRequest();

@@ -611,6 +611,7 @@ void main() {
             cacheBustedRequests: true,
             opaqueRequests: true,
             useXhr: true,
+            stateOnlyHistory: true,
           );
           youngFixture.username = _account;
           final young = await harness.openYoung(youngFixture);
@@ -915,7 +916,7 @@ void main() {
   );
 
   testWidgets(
-    'Young rejects a same-URL route after the response and can safely retry and clear its partition',
+    'Young rejects A-to-B-to-A routes and same-URL reloads, then safely retries and clears its partition',
     (tester) async {
       await tester.runAsync(() async {
         final harness = await _AndroidA2Harness.create();
@@ -956,7 +957,7 @@ void main() {
           final beforeQueryCount = beforeRoute.queryCount;
           _expectSafeSummary(young.syncView.safeSummary, harness);
 
-          fixture.mode = 'routeAfterBody';
+          fixture.mode = 'addressAfterBody';
           await young
               .startCalendar(
                 expectedAccountCode: _account,
@@ -972,9 +973,8 @@ void main() {
           );
           expect(rejected.committed, isFalse, reason: rejected.safeSummary);
           expect(rejected.collectionStage, isNotNull);
-          // Either the native history callback or the page-side guard can
-          // observe this route change first. Both must reject the old result;
-          // only the latter carries an additional page-side reason.
+          // The URL changes away and back before the helper returns. Either
+          // the native history callback or the page-side guard can reject it.
           expect(
             rejected.failure,
             FailureCode.staleResult,
@@ -986,6 +986,10 @@ void main() {
               anyOf(
                 YoungBusinessRejection.stampChanged,
                 YoungBusinessRejection.mainRoute,
+                YoungBusinessRejection.historyPushChanged,
+                YoungBusinessRejection.historyReplaceChanged,
+                YoungBusinessRejection.routeAddressChanged,
+                YoungBusinessRejection.historyNativeChanged,
               ),
             );
             expect(rejected.safeSummary, contains('collectionReason'));
@@ -996,6 +1000,34 @@ void main() {
           expect(rejected.data!.events.single.localId, initial.localId);
           expect(rejected.data!.events.single.hidden, isTrue);
           _expectSafeSummary(rejected.safeSummary, harness);
+
+          fixture.mode = 'reloadAfterBody';
+          await young
+              .startCalendar(
+                expectedAccountCode: _account,
+                firstDay: _day,
+                lastDay: _day,
+              )
+              .timeout(_operationTimeout);
+          final reloaded = young.syncView;
+          expect(
+            reloaded.phase,
+            YoungSyncPhase.idle,
+            reason: reloaded.safeSummary,
+          );
+          expect(reloaded.committed, isFalse, reason: reloaded.safeSummary);
+          expect(reloaded.collectionStage, isNotNull);
+          expect(
+            reloaded.failure,
+            FailureCode.staleResult,
+            reason: reloaded.safeSummary,
+          );
+          expect(reloaded.data!.queryCount, beforeQueryCount);
+          expect(reloaded.data!.importCount, beforeImportCount);
+          expect(reloaded.data!.events, hasLength(1));
+          expect(reloaded.data!.events.single.localId, initial.localId);
+          expect(reloaded.data!.events.single.hidden, isTrue);
+          _expectSafeSummary(reloaded.safeSummary, harness);
 
           fixture.mode = 'good';
           await young
@@ -1025,7 +1057,8 @@ void main() {
           _expectSafeSummary(young.syncView.safeSummary, harness);
 
           _reportData.addAll({
-            'youngSameUrlRouteRejected': true,
+            'youngAddressRoundTripRejected': true,
+            'youngSameUrlReloadRejected': true,
             'youngRetryCommitted': true,
             'youngExistingEventsRetained': 1,
             'youngPartitionEntriesAfterClear': 0,

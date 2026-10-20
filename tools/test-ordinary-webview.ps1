@@ -6,7 +6,7 @@ param(
     [ValidateRange(1, 65535)]
     [int]$AdbServerPort = 5038,
     [switch]$OrdinaryOnly,
-    [ValidateSet('android-webview2', 'android-feedback', 'qa4008', 'qa4009', 'qa4010')]
+    [ValidateSet('android-webview2', 'android-feedback', 'qa4008', 'qa4009', 'qa4010', 'qa4011')]
     [string]$ReportFamily = 'android-webview2'
 )
 

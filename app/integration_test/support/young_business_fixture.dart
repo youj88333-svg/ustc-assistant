@@ -15,6 +15,7 @@ final class YoungBusinessFixture {
     required this.cacheBustedRequests,
     required this.opaqueRequests,
     required this.useXhr,
+    required this.stateOnlyHistory,
   });
 
   static const syntheticPassword = 'young-fixture-only-\\"-42';
@@ -34,6 +35,7 @@ final class YoungBusinessFixture {
   final bool cacheBustedRequests;
   final bool opaqueRequests;
   final bool useXhr;
+  final bool stateOnlyHistory;
   String mode = 'good';
   String username = 'FIXTURE_ACCOUNT';
   int profiles = 0;
@@ -70,6 +72,7 @@ final class YoungBusinessFixture {
     bool cacheBustedRequests = false,
     bool opaqueRequests = false,
     bool useXhr = false,
+    bool stateOnlyHistory = false,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fixture = YoungBusinessFixture._(
@@ -83,6 +86,7 @@ final class YoungBusinessFixture {
       cacheBustedRequests: cacheBustedRequests,
       opaqueRequests: opaqueRequests,
       useXhr: useXhr,
+      stateOnlyHistory: stateOnlyHistory,
     );
     server.listen(fixture._serve);
     return fixture;
@@ -427,11 +431,16 @@ loginForm.addEventListener('submit',function(event){
         ? businessReadinessDelay.inMilliseconds
         : 0;
     final routeAfterBody = mode == 'routeAfterBody';
+    final addressAfterBody = mode == 'addressAfterBody';
+    final reloadAfterBody = mode == 'reloadAfterBody';
     final expectedPath = jsonEncode(path);
     return '''<!doctype html><html><body><iframe id="fixture-frame" src="/frame"></iframe><table><tr><td>Fixture</td></tr></table><div class="ant-fullcalendar"></div><script>
       const r={b:${_businessGet()}};
       function l(e,t){return Object(r["b"])({url:e,method:"get",params:t,timeout:36e5})}
       window.__youngRouteAfterBody=$routeAfterBody;
+      window.__youngAddressAfterBody=$addressAfterBody;
+      window.__youngReloadAfterBody=$reloadAfterBody;
+      window.__youngHistoryMutationSequence=0;
       ${_webpackRuntime()}
       if($delay>0){if(!$keepTargetRouteWhilePreparing){history.replaceState(null,'','/login/sc-wisdom-group-learning/preparing');setTimeout(()=>history.replaceState(null,'',$expectedPath),Math.floor($delay/2));setTimeout(installHelper,$delay)}}else{installHelper()}
       // An unrelated frame also changes history near reader setup. The
@@ -449,6 +458,7 @@ loginForm.addEventListener('submit',function(event){
   String _businessGet() =>
       '''function(options){
       return Promise.resolve().then(function(){
+        ${stateOnlyHistory ? "history.replaceState({syntheticKey:++window.__youngHistoryMutationSequence},'');" : ''}
         ${opaqueRequests ? "const params=new URLSearchParams();params.set('requestParams',btoa(JSON.stringify(options.params)));" : 'const params=new URLSearchParams(options.params);'}
         ${cacheBustedRequests ? "params.set('_t','1792396800000');" : ''}
         const target='/login/wisdom-group-learning-bg'+options.url+(params.toString()?'?'+params.toString():'');
@@ -465,8 +475,21 @@ loginForm.addEventListener('submit',function(event){
           };
           request.onerror=function(){reject(new Error('synthetic-network'));request=null;};
           request.send(null);
+          ${stateOnlyHistory ? "history.replaceState({syntheticKey:++window.__youngHistoryMutationSequence},'',location.href);" : ''}
         });''' : 'return fetch(target).then(function(response){return response.json();});'}
       }).then(function(value){
+        ${stateOnlyHistory ? "history.pushState({syntheticKey:++window.__youngHistoryMutationSequence},'',location.pathname+location.search+location.hash);" : ''}
+        if(window.__youngAddressAfterBody&&options.url==='/personal/scCalendar/getPageUserList'){
+          const originalAddress=location.pathname+location.search+location.hash;
+          const changed=new URL(location.href);changed.searchParams.set('syntheticHistory','changed');
+          history.replaceState({syntheticKey:1},'',changed.pathname+changed.search+changed.hash);
+          history.replaceState({syntheticKey:2},'',originalAddress);
+        }
+        if(window.__youngReloadAfterBody&&options.url==='/personal/scCalendar/getPageUserList'){
+          return new Promise(function(){
+            location.reload();
+          });
+        }
         if(window.__youngRouteAfterBody&&options.url==='/personal/scCalendar/getPageUserList')history.pushState(null,'',location.href);
         return value;
       });
