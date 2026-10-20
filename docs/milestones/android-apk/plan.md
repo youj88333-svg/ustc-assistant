@@ -375,6 +375,20 @@ F1–F4工程、根检查和x86_64 QA4005交付已完成，当前结果及保留
 
 根执行相关analyze/共享测试、Android原生与完整学校loopback、受影响Windows及同签名单调升级包核验；过程写[记录17](records/17-qa4009-young-wire-envelope.md)，保留旧失败与QA包。不读取正式业务、秘密、原始学校响应或浏览器认证资产，不操作用户MuMu，不关闭A7/A8。
 
+### A7 QA4010 Young历史元数据与路由误判
+
+2026-10-21用户报告QA4010仍失败，并要求说明反复修复无效的原因。最新安全日志确认工程794185c，主动activities在collecting/profileBefore以staleResult/mainRoute拒绝，另一次每日calendar停在login/pageStructureChanged，JW成功提交；三者分开处理。本切依据07普通同源信任、09 K-03/K-04/K-05、10–12、13 V-02/V-03和14/15，纠正把history元数据等同主文档或业务地址变更的Android实现与测试假设；不改变认证、学校操作、数据保留或Windows1.00行为。
+
+| 单一归属及范围 | 接口、不变量与依赖 | 验收条件 |
+|---|---|---|
+| Sol：Android Young脚本、SchoolBrowserEngine、封闭诊断与装配 | 同一主Document/top/origin/root/完整href内，仅state更新的push/replace不撤销业务读取；不读取history.state。原生调用finally复核实际href，真实地址改变一次即永久撤销，恢复原地址不挽救。宿主仅在Young固定业务页ready/非loading/!reload、回调与当前/已提交地址相同且bootstrap世代一致时忽略同址通知；CAS/JW和完整同址重载保持严格代际 | 先用QA4010原脚本复现正常state写入误杀；新脚本与生产宿主均通过state-only正向。路径/query/hash变化、A→B→A、同址popstate、完整reload、文档/root/helper破坏、取消/旧作业、身份与分页失败均拒旧，失败不提交或改旧资料 |
+| Luna/max：仅A2YoungTransportTest、young_business_fixture、android_a2_test | 先固定原生红例，再在明确契约下更新Android正反例。默认关闭新增metadata选项；旧routeAfterBody及Windows夹具语义保留。正向包含真实fetch/XHR和不透明封装，完整集成必须经过生产engine双层 | helper发出请求前、等待/回包后同址push/replace；原生动作抛错而地址未变可继续。旧同URL必失败的Android用例改为真正地址/文档变化反例，并保留事务/隐藏/重试/清理行为 |
+| Astra/high只读复核，Sol裁决 | 独立区分规范与历史测试；核对JS/native代际、finally抛错副作用、真实同址reload与异步回调；只用新封闭原因，不输出URL/state/键值/原文 | 静态结论与合成、真实证据分开；不把本次mainRoute推断成已观察具体学校history动作，不把合成通过关闭A7/A8 |
+
+根执行analyze、共享全套、API32/34原生及完整学校loopback、受影响Windows、同签名升级包及文档检查，工程/文档分开本地提交。过程见[记录18](records/18-qa4010-history-state.md)。保留QA4010及Windows交付，环境/缓存/临时留E盘。
+
+本切后续用户专项授权：完成修复后用computer-use打开其既有MuMu、同签名覆盖APK、点击二课同步并用应用已保存凭据执行固定自动认证，导出安全日志，按结果循环修复。该真实UI验证与上述自动合成检查分开记录；只操作同步/状态/导出，不直接读取凭据、原始学校响应、认证资产或正式数据库，不更改模拟器/系统设置，不卸载清数据。若出现验证码或额外学校授权交用户。此授权替代此前本切“不得操作MuMu”的限制，不扩成其他来源或学校写操作。
+
 ## 6. 验证分工与完成条件
 
 ### 每切片的根检查

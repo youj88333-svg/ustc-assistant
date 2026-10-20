@@ -4,20 +4,20 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/qa4010/artifacts/USTC-Assistant-Android-QA4010-x86_64.apk`。这是沿用[跨端界面重构](../ui-refresh/plan.md)及QA4009共用认证修复、补齐Young框架不透明请求封装兼容的x86_64私有QA包，不是A8正式版，也不是arm64手机包；真实日志、修复依据及合成回归见[记录17](records/17-qa4009-young-wire-envelope.md)。
+文件位于工程内：`app/build/qa4011/artifacts/USTC-Assistant-Android-QA4011-x86_64.apk`。这是修复已复现的Young历史元数据误判、保留现有[界面](../ui-refresh/plan.md)和自动认证/采集的x86_64私有QA包，不是A8正式版，也不是arm64手机包；真实失败、修复依据及合成回归见[记录18](records/18-qa4010-history-state.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4010` |
-| ABI / 文件大小 | `x86_64` / `290990854` bytes |
-| SHA-256 | `357223f35ad2468b30c5d110b0b7f5883b0572c35c698ac959fad9def2afaf94` |
-| 源码修订 | `794185cd484d60d32876fdf1826abab19c710153` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4011` |
+| ABI / 文件大小 | `x86_64` / `290991189` bytes |
+| SHA-256 | `068b822d39bf09bc9871b6e7210b6a0653282b170027ce27070cea925625a692` |
+| 源码修订 | `885b41e52e641dd3a37b69e921987ed61d7652e8` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4009版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4010版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-同一源码的ARM64包、大小及摘要统一见[交付记录](records/17-qa4009-young-wire-envelope.md#私有升级交付)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu请选择上表x86_64/4010，不用ARM64包覆盖。
+同一源码的ARM64包、大小及摘要统一见[交付记录](records/18-qa4010-history-state.md#私有升级交付)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4011，不用ARM64包覆盖。
 
 ## 安装
 
@@ -30,11 +30,13 @@
 
 ## 本轮集中复验
 
-用户已确认QA4009教务自动登录恢复；本轮覆盖安装后只需重试二课同步。使用现有QA资料和已保存密码，无需卸载、清数据或清登录会话；如无保存密码，仅在应用内主动提供。成功则核对日程；若仍失败，从设置标题旁“导出日志”导出这次最近安全日志即可，无需反复登录或提供学校页面原文。正式界面隐藏了旧“同步摘要”按钮，本轮不要求寻找开发诊断入口。新日志细分请求origin/path、重复/未知/形状错误，仍不记录实际URL/参数、未知异常或业务原文。
+QA4010最新安全日志确认Young在collecting/profileBefore以staleResult/mainRoute失败；本轮修复已合成复现的正常history元数据误判，尚未证明真实学校唯一根因。用户已授权根使用computer-use覆盖安装、点击二课同步并导出日志；当前因MuMu运行其他任务暂停，待用户明确恢复后执行，不按等待时长自行继续。
+
+集中复验使用现有QA资料和已保存密码，无需卸载、清数据或清登录会话；学校挑战及额外授权仍由用户完成。成功后读取安全结果，若仍失败，从设置标题旁“导出日志”导出最近安全日志，继续按实际失败阶段排查。正式界面隐藏了旧“同步摘要”按钮，无需寻找开发入口。新日志增加封闭的history/地址变化原因，保留请求形状诊断，不记录实际URL、历史状态、参数、未知异常或业务原文。
 
 QA4007的模型策略继续保留：精确 `deepseek-flash` 发送high，其他模型服务默认；所有新请求共用专属女仆标签，旧聊天/晨报不改写。实际学校模型接受及采用参数、语气效果仍待反馈，不要求为本次二课修复重做模型验证或清会话。
 
-机械回归见记录17；QA4008的两来源登录暂停和QA4009的Young/profileBefore拒绝均保留。QA4010的框架封装缺口已由合成复现和回归覆盖，但尚不能据此认定真实MuMu故障已解决，无需重做所有历史体验项。
+机械回归及此前失败的区别见记录18；工程通过不等于真实MuMu故障已解决，无需重做所有历史体验项。QA4009教务恢复的用户确认继续保留；QA4010每日calendar登录暂停与主动activities读取失败分开追踪。
 
 ## 沿用的界面体验
 
