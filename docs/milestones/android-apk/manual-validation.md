@@ -4,20 +4,20 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/qa4014/artifacts/USTC-Assistant-Android-QA4014-x86_64.apk`。这是保留Young兼容修复、现有[界面](../ui-refresh/plan.md)和自动认证/采集，并修订Agent撤销参数与20工具诊断的x86_64私有QA包，不是A8正式版，也不是arm64手机包；根已在现有MuMu覆盖安装，实际结果及旧失败见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
+文件位于工程内：`app/build/qa4018/artifacts/USTC-Assistant-Android-QA4018-x86_64.apk`。这是保留Young兼容、现有[界面](../ui-refresh/plan.md)和自动认证/采集，并修订上下文、选图交接、晨报恢复及历史详情阅读的x86_64私有QA包，不是A8正式版或arm64手机包。根已在现有MuMu覆盖安装并完成本轮使用旅程，实际结果和旧失败见[记录20](records/20-mumu-full-journeys.md)，此前当前审批/撤销见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4014` |
-| ABI / 文件大小 | `x86_64` / `290997551` bytes |
-| SHA-256 | `77ba68439bf3d52383127d75f2a673078b3a4942bd5daf360463b38d7e51b541` |
-| 源码修订 | `cfec38f99344d3ade88cdc05dcb2a1cb94cfdfbf` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4018` |
+| ABI / 文件大小 | `x86_64` / `291011058` bytes |
+| SHA-256 | `8d8bf1725d4432bd86951836e412e63e458a3c395f48a329e0ee49cbe1ea0ce8` |
+| 源码修订 | `3c6ca59a6d9641cf898a2077391dbef901aaf1ac` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
 元数据在构建时记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`，后来的真实UI证据另记。签名沿用4003–4013版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-同一源码的ARM64/2014包、大小及摘要统一见[交付记录](records/19-mumu-a7-daily-approval-portrait.md#qa4014私有包)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4014，不用ARM64包覆盖。
+同一源码的ARM64/2018包、大小及摘要统一见[交付记录](records/20-mumu-full-journeys.md#最终私有包与留存边界)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4018，不用ARM64包覆盖。
 
 ## 安装
 
@@ -39,6 +39,8 @@ QA4007的模型策略继续保留：精确 `deepseek-flash` 发送high，其他�
 机械回归、真实成功及此前失败的区别见记录18–19，无需重做所有历史体验项。QA4009教务恢复、QA4011非空同步继续保留；日期编辑故障定位到computer-use输入路径，应用日期界面15项合成检查通过，未修改代码。
 
 后续根已在MuMu验证每日面板的固定31日“立即同步”成功、成功覆盖重启保留及同日不重复采集；第一次登录超时也留档。QA4014实际通过测试任务的当前审批、拒绝保留、重新申请及批准撤销；已完成详情可展开/收起，测试任务已恢复不存在。竖屏七列同时可见、日期详情与任务入口可达，手动9月范围保留。安全导出15完整、invalid/dropped均0；工具仍严格校验，未增加记住许可。实际次日06:00自动准入、窄屏审批弹层、业务明细对应、目标手机及鸿蒙继续待验，不能把手动恢复或内联审批当作这些分支通过。
+
+本轮[完整旅程](records/20-mumu-full-journeys.md)补验日程/任务/时间块、提醒与手工撤销、选图和真实模型识图、公开资料查询及7项知识材料载入/重复载入/重启保留。通知栏点击能定位任务块；晨报事实变化后可主动更新，旧摘要不冒充新版本。测试业务已清理，原学校资料、密码、聊天和设置保留。导出日志20/21均为最近1000条有界选择，显示“不完整”对应selectionTruncated，invalid/dropped仍0；旧导出未删除。A7/A8及目标机、麦克风、次日触发等保留项未关闭。
 
 ## 沿用的界面体验
 
