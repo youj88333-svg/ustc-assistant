@@ -5,6 +5,75 @@ import 'package:ustc_assistant_m0/app/agent_workspace_page.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 
 void main() {
+  testWidgets('opening an older receipt keeps its reading position', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(360, 720);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final port = _ApprovalVisibilityPort(
+      _view(
+        messages: [
+          for (var id = 1; id <= 40; id++)
+            AgentMessage(
+              id: id,
+              role: AgentMessageRole.assistant,
+              text: '较早的合成对话$id。' * 12,
+              status: AgentMessageStatus.complete,
+              createdAtUtc: DateTime.utc(2026, 10, 17),
+              actions: id == 1
+                  ? [
+                      _action(
+                        id: 'old-receipt',
+                        status: AgentActionStatus.committed,
+                        title: '旧回执',
+                        details: const ['较早回执的完整说明。'],
+                        committedCount: 1,
+                      ),
+                    ]
+                  : const [],
+            ),
+        ],
+      ),
+    );
+    addTearDown(port.dispose);
+    await tester.pumpWidget(
+      _host(AgentWorkspacePage(controller: port, onSettings: () {})),
+    );
+    await tester.pumpAndSettle();
+    final list = find.byKey(const ValueKey('agent-message-list'));
+    final scrollable = find
+        .descendant(of: list, matching: find.byType(Scrollable))
+        .first;
+    final position = tester.state<ScrollableState>(scrollable).position;
+    // History focus/ensureVisible and some input paths do not emit a user
+    // scroll notification. The detail toggle itself expresses reading intent.
+    position.jumpTo(0);
+    await tester.pumpAndSettle();
+    final toggle = find.byKey(
+      const ValueKey('agent-query-details-toggle-conversation-a:1'),
+    );
+    await tester.ensureVisible(toggle);
+    await tester.pumpAndSettle();
+    await tester.tap(toggle);
+    await tester.pumpAndSettle();
+    expect(position.extentAfter, greaterThan(500));
+    final detail = find.textContaining('较早回执的完整说明。');
+    await tester.ensureVisible(detail);
+    await tester.pumpAndSettle();
+    expect(detail.hitTestable(), findsOneWidget);
+    final readingOffset = position.pixels;
+    port.replace(port.view);
+    await tester.pumpAndSettle();
+    expect(position.pixels, closeTo(readingOffset, 1));
+    expect(
+      find.byKey(const ValueKey('agent-action-approve-old-receipt')),
+      findsNothing,
+    );
+    expect(tester.takeException(), isNull);
+  });
+
   TestWidgetsFlutterBinding.ensureInitialized();
   WidgetController.hitTestWarningShouldBeFatal = true;
 

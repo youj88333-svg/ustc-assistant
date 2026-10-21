@@ -2305,6 +2305,9 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
               onOpenLocalEvidence: widget.onOpenLocalEvidence,
               onToggleQueryDetails: () {
                 setState(() {
+                  // Reading details is explicit intent to stay on this answer,
+                  // including input paths without a UserScrollNotification.
+                  _followingMessages = false;
                   if (!_expandedQueryDetails.add(detailsKey)) {
                     _expandedQueryDetails.remove(detailsKey);
                   }
