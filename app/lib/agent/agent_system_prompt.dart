@@ -2,15 +2,15 @@ import '../core/agent_parameter_issue.dart';
 import 'model_gateway_contract.dart';
 import 'student_language_prompt.dart';
 
-const agentPromptVersion = 'ustc-personal-maid-agent-v13';
+const agentPromptVersion = 'ustc-personal-maid-agent-v14';
 
 /// Compiled protocol guidance only. Never elevate a tool/source payload,
 /// historical argument or provider error into a system instruction.
 String? agentToolParameterRepair(String toolName, AgentParameterIssue? issue) {
   if (toolName != 'propose_undo' || issue == null) return null;
   return '\n\n【应用本轮参数校验】\n'
-      '刚才的 propose_undo 参数无效，未执行。若继续撤销，重新调用 propose_undo(arguments={})，'
-      '不要带 changes 或其他字段，也不要照抄失败调用。应用自行读取当前撤销槽，并保留当前审批；'
+      '刚才的 propose_undo 参数无效，未执行。若继续撤销，重新调用 propose_undo(arguments={"scope":"latest_local_change"})，'
+      '只带此 scope，不带 changes 或其他字段，也不要照抄失败调用。应用自行读取当前撤销槽，并保留当前审批；'
       '这条参数纠正不授予任何许可，不代表已撤销。';
 }
 
@@ -32,7 +32,7 @@ String buildAgentSystemPrompt({
       : '本轮开放的固定工具名：${toolNames.join('、')}。只调用这些定义中存在的工具，不从名称或历史对话推断其他能力。同回合可查询多个只读工具；修改或需要学校交互的工具单独调用。'
             'invalidRequest 表示本次调用没有执行；按当前工具定义重新构造参数，不要照抄失败调用或历史摘要中的参数。';
   final undoGuidance = names.contains('propose_undo')
-      ? 'propose_undo 的 arguments 必须精确为 {}，没有 changes、引用或其他字段；应用读取最近可撤销项并准备当前审批，模型不重建要撤销的变化。'
+      ? 'propose_undo 的 arguments 必须精确为 {"scope":"latest_local_change"}，没有 changes、引用或其他字段；应用读取最近可撤销项并准备当前审批，模型不重建要撤销的变化。'
       : '';
   final contentPolicy = personalContentAllowed
       ? '应用已允许按需读取本地个人内容。围绕当前请求和具体目标使用备注、任务正文或描述等字段，无需用户每轮精确点名字段或使用固定动词；默认列表仍保持简洁，不预加载整库。'

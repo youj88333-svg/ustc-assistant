@@ -12,7 +12,12 @@ void main() {
       definitions: [_tool('propose_local_changes'), _tool('propose_undo')],
     );
     expect(prompt, contains('只有 propose_local_changes 使用 changes'));
-    expect(prompt, contains('propose_undo 的 arguments 必须精确为 {}'));
+    expect(
+      prompt,
+      contains(
+        'propose_undo 的 arguments 必须精确为 {"scope":"latest_local_change"}',
+      ),
+    );
     expect(prompt, contains('invalidRequest 表示本次调用没有执行'));
     expect(prompt, contains('不要照抄失败调用或历史摘要中的参数'));
     expect(prompt, contains('模型不得自行批准或重放'));
@@ -34,7 +39,7 @@ void main() {
       );
       final repair = agentToolParameterRepair('propose_undo', issue);
       expect(repair, contains('【应用本轮参数校验】'));
-      expect(repair, contains('arguments={}'));
+      expect(repair, contains('arguments={"scope":"latest_local_change"}'));
       expect(repair, contains('未执行'));
       expect(repair, contains('当前审批'));
       expect(agentToolParameterRepair('propose_undo', null), isNull);
@@ -64,7 +69,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-personal-maid-agent-v13');
+      expect(agentPromptVersion, 'ustc-personal-maid-agent-v14');
       expect(prompt, startsWith(assistantPersonaPrefix));
       expect(prompt, contains('ROLE: DEDICATED_PERSONAL_MAID'));
       expect(prompt, contains('CHARACTER: ADULT_WOMAN'));

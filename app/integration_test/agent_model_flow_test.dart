@@ -707,7 +707,9 @@ void main() {
         expect(undoProposal.kind, AgentActionKind.undo);
         expect(undoProposal.status, AgentActionStatus.proposed);
         expect(gateway.actionCalls.last.name, 'propose_undo');
-        expect(gateway.actionCalls.last.argumentsJson, '{}');
+        expect(jsonDecode(gateway.actionCalls.last.argumentsJson), {
+          'scope': 'latest_local_change',
+        });
         expect(
           find.byKey(ValueKey('agent-action-approve-$undoId')),
           findsOneWidget,
@@ -1480,7 +1482,7 @@ final class _SyntheticGateway implements ModelGatewayPort {
           id: 'synthetic-action-${++_actionCallSerial}',
           name: name,
           argumentsJson: undo
-              ? '{}'
+              ? '{"scope":"latest_local_change"}'
               : jsonEncode({
                   'changes': [
                     {

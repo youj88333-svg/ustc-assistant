@@ -370,7 +370,7 @@ void main() {
     );
 
     test(
-      'undo rejects extra arguments with an exact empty-object repair before preparing',
+      'undo rejects extra arguments with an exact constant-scope repair before preparing',
       () async {
         final fixture = _Fixture();
         fixture.tasks.undo = CalendarUndoView(
@@ -383,8 +383,11 @@ void main() {
         interactive.bindRun(_ticket(), '撤销上次测试修改');
 
         for (final args in const [
-          {'changes': <Object>[]},
-          {'unregistered-field': 'SYNTHETIC_EXTRA_ARGUMENT_MARKER'},
+          {'scope': 'latest_local_change', 'changes': <Object>[]},
+          {
+            'scope': 'latest_local_change',
+            'unregistered-field': 'SYNTHETIC_EXTRA_ARGUMENT_MARKER',
+          },
         ]) {
           final rejected = await toolSession.execute(
             _call('propose_undo', args),
@@ -394,9 +397,11 @@ void main() {
             rejected.validation?.reason,
             AgentParameterReason.unknownField,
           );
-          expect(rejected.data['expected_arguments'], isEmpty);
+          expect(rejected.data['expected_arguments'], {
+            'scope': 'latest_local_change',
+          });
           expect(rejected.data['repair'], contains('propose_undo'));
-          expect(rejected.data['repair'], contains('{}'));
+          expect(rejected.data['repair'], contains('latest_local_change'));
           final safe = jsonEncode(rejected.toMap());
           expect(safe, isNot(contains('unregistered-field')));
           expect(safe, isNot(contains('SYNTHETIC_EXTRA_ARGUMENT_MARKER')));
@@ -405,12 +410,58 @@ void main() {
           expect(interactive.pendingAction, isNull);
         }
 
-        final corrected = await toolSession.execute(_call('propose_undo', {}));
+        final corrected = await toolSession.execute(
+          _call('propose_undo', {'scope': 'latest_local_change'}),
+        );
         expect(corrected.status, 'waitingForApproval');
         expect(fixture.plans.prepareCalls, 1);
         expect(fixture.plans.commitCalls, 0);
         await interactive.decidePending(false);
         expect(fixture.plans.commitCalls, 0);
+      },
+    );
+
+    test(
+      'undo rejects missing, nonconstant and duplicate scope without preparing',
+      () async {
+        final fixture = _Fixture();
+        final tools = fixture.tools(_ReadTools(fixture.plans));
+        addTearDown(tools.close);
+        final session = tools.openSession();
+        final interactive = session as AgentInteractiveToolSession;
+        interactive.bindRun(_ticket(), '撤销本次合成修改');
+        for (final args in const <Map<String, Object?>>[
+          {},
+          {'changes': <Object>[]},
+          {'scope': null},
+          {'scope': <Object>[]},
+          {'scope': 'LATEST_LOCAL_CHANGE'},
+          {'scope': 'an-arbitrary-record'},
+        ]) {
+          final result = await session.execute(_call('propose_undo', args));
+          expect(result.status, 'invalidRequest');
+          expect(result.validation?.field, AgentParameterField.scope);
+          expect(result.data['expected_arguments'], {
+            'scope': 'latest_local_change',
+          });
+          expect(interactive.pendingAction, isNull);
+        }
+        final duplicate = await session.execute(
+          const ModelToolCall(
+            id: 'duplicate-scope',
+            name: 'propose_undo',
+            argumentsJson:
+                '{"scope":"latest_local_change","scope":"latest_local_change"}',
+          ),
+        );
+        expect(duplicate.status, 'invalidRequest');
+        expect(
+          duplicate.validation?.reason,
+          AgentParameterReason.malformedArguments,
+        );
+        expect(fixture.plans.prepareCalls, 0);
+        expect(fixture.plans.commitCalls, 0);
+        expect(interactive.pendingAction, isNull);
       },
     );
 
@@ -427,7 +478,9 @@ void main() {
         final interactive = toolSession as AgentInteractiveToolSession;
         interactive.bindRun(_ticket(), '撤销上次修改');
 
-        final undo = await toolSession.execute(_call('propose_undo', {}));
+        final undo = await toolSession.execute(
+          _call('propose_undo', {'scope': 'latest_local_change'}),
+        );
         expect(undo.status, 'waitingForApproval');
         expect(jsonEncode(undo.data), isNot(contains('local-undo-slot')));
         expect(

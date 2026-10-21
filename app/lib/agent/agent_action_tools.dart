@@ -43,7 +43,7 @@ const _maxSourceSemesterStart = 256;
 const _maxSourceSemesterReferences = 512;
 const _maxActivityOutputBytes = 7600;
 const _undoArgumentsRepair =
-    'propose_undo 不接受任何字段。重新调用时 arguments 只传空对象 {}；'
+    '重新调用 propose_undo 时只传 {"scope":"latest_local_change"}；'
     '不要添加 changes、引用或其它操作参数。应用读取当前撤销槽，仍按当前许可和审批执行。';
 
 /// Adds the four bounded local planning tools to the existing read-only tools.
@@ -103,9 +103,12 @@ final class AgentActionTools implements AgentReadToolsPort {
     ),
     _actionTool(
       'propose_undo',
-      '准备撤销本地最近一次可撤销修改。调用参数必须是空对象 {}，没有任何字段；'
+      '准备撤销本地最近一次可撤销修改。只传 {"scope":"latest_local_change"}；'
           '不传 changes、引用或要撤销的内容。应用读取当前撤销槽并准备当前审批方案。',
-      const {},
+      {
+        'scope': _stringSchema(enumValues: const ['latest_local_change']),
+      },
+      required: const ['scope'],
     ),
     _actionTool(
       'find_free_slots',
@@ -530,7 +533,7 @@ final class _AgentActionToolSession
               ? _undoArgumentsRepair
               : issue.repairHint,
           if (call.name == 'propose_undo')
-            'expected_arguments': const <String, Object?>{},
+            'expected_arguments': const {'scope': 'latest_local_change'},
           if (issue.action != null)
             'action_rules': agentChangeSpecs[issue.action]!.describe(
               issue.action!,
@@ -1671,7 +1674,13 @@ final class _AgentActionToolSession
   }
 
   Future<AgentToolResult> _proposeUndo(Map<String, Object?> args) async {
-    _requireKeys(args, const {}, const {});
+    _requireKeys(args, const {'scope'}, const {'scope'});
+    if (args['scope'] != 'latest_local_change') {
+      throw const AgentParameterIssue(
+        reason: AgentParameterReason.invalidValue,
+        field: AgentParameterField.scope,
+      );
+    }
     _ensureNoPending();
     final ticket = _requireTicket();
     final (context, revision) = await _owner.plans.readPlanContext();

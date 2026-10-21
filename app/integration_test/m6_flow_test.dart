@@ -171,7 +171,10 @@ void main() {
           jsonEncode(inspected.data),
           isNot(contains(os.pending.values.first.token)),
         );
-        expect((await call('propose_undo', {})).status, 'waitingForApproval');
+        expect(
+          (await call('propose_undo', {'scope': 'latest_local_change'})).status,
+          'waitingForApproval',
+        );
         expect(
           (await _runNative(
             tester,

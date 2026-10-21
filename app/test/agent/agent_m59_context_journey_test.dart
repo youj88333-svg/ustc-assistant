@@ -13,6 +13,7 @@ import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_context_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_discussion_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_source_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
@@ -27,26 +28,38 @@ import 'package:ustc_assistant_m0/source/jw_probe_contract.dart';
 
 final _now = DateTime.utc(2026, 10, 14, 4);
 final _modelKey = Uint8List.fromList('synthetic-m59-context-key'.codeUnits);
+const _legacyV6UndoResult =
+    '{"version":"agent-tools-v6","status":"empty","data":{"available":false},"evidence":[],"trust":"untrusted_source_data"}';
 
 void main() {
   for (final approve in [false, true]) {
     test(
-      'undo repairs an unsupported changes argument and ${approve ? "commits only after approval" : "keeps the task after rejection"}',
+      'undo repairs a missing required scope and ${approve ? "commits only after approval" : "keeps the task after rejection"}',
       () async {
         final rig = await _open();
         await _createTask(rig.store, '合成A7撤销测试任务');
         rig.gateway.enqueueEvents(
-          _call('a7-undo-invalid', 'propose_undo', const {
-            'changes': <Object>[],
-          }),
+          _call('a7-undo-invalid', 'propose_undo', const {}),
         );
         rig.gateway.enqueue((request) {
           final rejected = _latestResultFor(request, 'propose_undo');
           expect(rejected['status'], 'invalidRequest');
           final repair = rejected['data'] as Map;
-          expect(repair['expected_arguments'], isEmpty);
-          expect(repair['repair'], contains('{}'));
-          return _call('a7-undo-corrected', 'propose_undo', const {});
+          expect((rejected['validation'] as Map)['reason'], 'missingField');
+          expect((rejected['validation'] as Map)['field'], 'scope');
+          expect(repair['expected_arguments'], {
+            'scope': 'latest_local_change',
+          });
+          final repairText = repair['repair'] as String;
+          expect(repairText, contains('"scope":"latest_local_change"'));
+          expect(repairText, contains('changes'));
+          expect(
+            repairText.contains('不要添加') || repairText.contains('其它操作参数'),
+            isTrue,
+          );
+          return _call('a7-undo-corrected', 'propose_undo', const {
+            'scope': 'latest_local_change',
+          });
         });
         rig.gateway.enqueue((request) {
           expect(
@@ -110,7 +123,11 @@ void main() {
           requestTimeout: const Duration(seconds: 5),
           idleTimeout: const Duration(seconds: 2),
         );
-        final rig = await _open(gateway: gateway, includeReminders: true);
+        final rig = await _open(
+          gateway: gateway,
+          includeReminders: true,
+          seedLegacyV6UndoHistory: true,
+        );
         await _createTask(rig.store, '合成A7撤销测试任务');
 
         final run = rig.coordinator.send('undo');
@@ -906,6 +923,7 @@ void main() {
 Future<_Rig> _open({
   bool importCourse = false,
   bool includeReminders = false,
+  bool seedLegacyV6UndoHistory = false,
   ModelGatewayPort? gateway,
 }) async {
   final clock = FixedClock(_now);
@@ -934,6 +952,7 @@ Future<_Rig> _open({
     consent: true,
     key: _modelKey,
   );
+  if (seedLegacyV6UndoHistory) await _seedLegacyV6UndoHistory(store);
 
   final publicQueries = PublicQueryCoordinator(
     store: store.publicStore,
@@ -1299,6 +1318,42 @@ Future<TaskRecord> _createTask(
   );
 }
 
+Future<void> _seedLegacyV6UndoHistory(JwStore store) async {
+  final settings = await store.agent.inspectAgent();
+  final conversationId = await store.agent.ensurePrimaryConversation();
+  final policy = await store.agent.readAgentUsePolicy();
+  final ticket = await store.agent.beginRun(
+    settings.authority,
+    conversationId,
+    '旧版v6撤销协议历史',
+  );
+  await store.agent.bindAgentRunPolicy(ticket, policy);
+  await store.agent.saveAgentTurn(
+    ticket,
+    items: [
+      AgentContextItem(
+        role: 'assistant',
+        calls: const [
+          AgentContextCall(
+            id: 'legacy-v6-undo',
+            name: 'propose_undo',
+            argumentsJson: '{}',
+          ),
+        ],
+      ),
+      AgentContextItem(
+        role: 'tool',
+        toolCallId: 'legacy-v6-undo',
+        text: _legacyV6UndoResult,
+      ),
+    ],
+    includesPersonalContent: false,
+    policyRevision: policy.revision,
+  );
+  await store.agent.saveAssistant(ticket, '旧版v6撤销结果仅作为历史数据。');
+  await store.agent.finishRun(ticket, AgentMessageStatus.complete);
+}
+
 CalendarQuery _calendarQuery({CalendarFilter filter = CalendarFilter.all}) =>
     CalendarQuery(
       firstDay: DateTime.utc(2026, 10, 14),
@@ -1448,6 +1503,7 @@ final class _A7UndoLoopbackService {
               as Map<String, dynamic>;
       chatBodies.add(body);
       _expectUndoToolRegistry(body);
+      _expectLegacyV6UndoHistory(body);
 
       switch (chatBodies.length) {
         case 1:
@@ -1455,7 +1511,11 @@ final class _A7UndoLoopbackService {
           await _writeToolCall(
             request.response,
             id: 'a7-undo-invalid',
-            arguments: const ['{"changes":', '[]', '}'],
+            arguments: const [
+              '{"scope":"latest_local_change","changes":',
+              '[]',
+              '}',
+            ],
           );
           return;
         case 2:
@@ -1463,7 +1523,7 @@ final class _A7UndoLoopbackService {
           await _writeToolCall(
             request.response,
             id: 'a7-undo-corrected',
-            arguments: const ['{', '}'],
+            arguments: const ['{"scope":"latest_local_change"}'],
           );
           return;
         case 3:
@@ -1517,28 +1577,58 @@ final class _A7UndoLoopbackService {
       'query_reminders',
     });
 
-    final propertiesByName = <String, Map<String, dynamic>>{};
     for (final function in functions) {
       final parameters = function['parameters'] as Map<String, dynamic>;
       final properties = parameters['properties'] as Map<String, dynamic>;
-      propertiesByName[function['name'] as String] = properties;
       expect(
         properties.containsKey('changes'),
         function['name'] == 'propose_local_changes',
       );
     }
-    expect(propertiesByName['propose_undo'], isEmpty);
     final undo = functions.singleWhere(
       (function) => function['name'] == 'propose_undo',
     );
+    final undoParameters = undo['parameters'] as Map<String, dynamic>;
     expect(
-      undo['parameters'],
+      undoParameters,
       equals({
         'type': 'object',
-        'properties': <String, Object?>{},
-        'required': <Object?>[],
+        'properties': {
+          'scope': {
+            'type': 'string',
+            'enum': ['latest_local_change'],
+          },
+        },
+        'required': ['scope'],
         'additionalProperties': false,
       }),
+    );
+  }
+
+  void _expectLegacyV6UndoHistory(Map<String, dynamic> body) {
+    final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+    final legacyCall = messages
+        .where(
+          (message) =>
+              message['role'] == 'assistant' && message['tool_calls'] is List,
+        )
+        .expand((message) => message['tool_calls'] as List)
+        .cast<Map<String, dynamic>>()
+        .singleWhere((call) {
+          final function = call['function'] as Map<String, dynamic>;
+          return function['name'] == 'propose_undo' &&
+              function['arguments'] == '{}';
+        });
+    final callId = legacyCall['id'];
+    final legacyResult = messages.singleWhere(
+      (message) =>
+          message['role'] == 'tool' && message['tool_call_id'] == callId,
+    );
+    final resultBytes = legacyResult['content'] as String;
+    expect(resultBytes, _legacyV6UndoResult);
+    expect(
+      (jsonDecode(resultBytes) as Map<String, dynamic>)['version'],
+      'agent-tools-v6',
     );
   }
 
@@ -1555,8 +1645,15 @@ final class _A7UndoLoopbackService {
 
   void _expectInvalidUndoHistory(Map<String, dynamic> body) {
     final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
-    expect(_systemContent(body), contains('【应用本轮参数校验】'));
-    expect(_systemContent(body), contains('propose_undo(arguments={})'));
+    final system = _systemContent(body);
+    expect(system, contains('【应用本轮参数校验】'));
+    expect(
+      system,
+      contains('propose_undo(arguments={"scope":"latest_local_change"})'),
+    );
+    final repairSystem = system.substring(system.indexOf('【应用本轮参数校验】'));
+    expect(repairSystem, contains('不带 changes'));
+    expect(repairSystem, contains('其他字段'));
     final assistant = messages.singleWhere((message) {
       if (message['role'] != 'assistant' || message['tool_calls'] is! List) {
         return false;
@@ -1568,7 +1665,10 @@ final class _A7UndoLoopbackService {
     final invalidCall = (assistant['tool_calls'] as List)
         .cast<Map<String, dynamic>>()
         .singleWhere((call) => call['id'] == 'a7-undo-invalid');
-    expect(invalidCall['function']['arguments'], '{"changes":[]}');
+    expect(
+      invalidCall['function']['arguments'],
+      '{"scope":"latest_local_change","changes":[]}',
+    );
     final result = messages.singleWhere(
       (message) =>
           message['role'] == 'tool' &&
@@ -1577,14 +1677,17 @@ final class _A7UndoLoopbackService {
     final payload =
         jsonDecode(result['content'] as String) as Map<String, dynamic>;
     expect(payload['status'], 'invalidRequest');
-    final data = payload['data'] as Map<String, dynamic>;
-    expect(data['expected_arguments'], <String, Object?>{});
     expect(
-      data['repair'],
-      'propose_undo 不接受任何字段。重新调用时 arguments 只传空对象 {}；'
-      '不要添加 changes、引用或其它操作参数。应用读取当前撤销槽，'
-      '仍按当前许可和审批执行。',
+      (payload['validation'] as Map<String, dynamic>)['reason'],
+      'unknownField',
     );
+    expect((payload['validation'] as Map<String, dynamic>)['field'], 'changes');
+    final data = payload['data'] as Map<String, dynamic>;
+    expect(data['expected_arguments'], {'scope': 'latest_local_change'});
+    final repair = data['repair'] as String;
+    expect(repair, contains('"scope":"latest_local_change"'));
+    expect(repair, contains('changes'));
+    expect(repair.contains('不要添加') || repair.contains('其它操作参数'), isTrue);
   }
 
   void _expectUndoDecision(Map<String, dynamic> body) {
@@ -1598,7 +1701,10 @@ final class _A7UndoLoopbackService {
         .expand((message) => message['tool_calls'] as List)
         .cast<Map<String, dynamic>>()
         .singleWhere((call) => call['id'] == 'a7-undo-corrected');
-    expect(correctedCall['function']['arguments'], '{}');
+    expect(
+      correctedCall['function']['arguments'],
+      '{"scope":"latest_local_change"}',
+    );
     final result = messages.singleWhere(
       (message) =>
           message['role'] == 'tool' &&

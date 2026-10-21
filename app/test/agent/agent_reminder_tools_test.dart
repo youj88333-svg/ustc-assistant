@@ -372,7 +372,9 @@ void main() {
 
         final undo = await fixture.run(events: {'event-ref': event});
         expect(
-          (await undo.call('propose_undo', const {})).status,
+          (await undo.call('propose_undo', const {
+            'scope': 'latest_local_change',
+          })).status,
           'waitingForApproval',
         );
         expect(
@@ -404,7 +406,9 @@ void main() {
 
         final staleUndo = await fixture.run(events: {'event-ref': event});
         expect(
-          (await staleUndo.call('propose_undo', const {})).status,
+          (await staleUndo.call('propose_undo', const {
+            'scope': 'latest_local_change',
+          })).status,
           'waitingForApproval',
         );
         const manual = ReminderPair(
