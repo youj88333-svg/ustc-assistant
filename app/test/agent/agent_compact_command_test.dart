@@ -254,6 +254,97 @@ void main() {
   );
 
   test(
+    'a new send publishes cleared run counters on its first generating view',
+    () async {
+      final store = await _open();
+      await _configure(store);
+      final gateway = _SyntheticGateway()
+        ..enqueueEvents([
+          const ModelTextDelta('上一轮已完成。'),
+          ModelCompleted(finishReason: 'stop'),
+        ])
+        ..enqueueEvents([
+          const ModelTextDelta('上一轮的目标是继续处理合成历史。'),
+          ModelCompleted(finishReason: 'stop'),
+        ])
+        ..enqueueEvents([
+          const ModelTextDelta('新一轮正常开始。'),
+          ModelCompleted(finishReason: 'stop'),
+        ]);
+      final coordinator = await _coordinator(store, gateway);
+
+      await coordinator.send('上一轮问题');
+      expect(coordinator.view.modelCalls, 1);
+      await coordinator.send('/compact');
+      expect(coordinator.view.modelCalls, 1);
+
+      final firstGeneratingCounts = <({int modelCalls, int toolCalls})>[];
+      final subscription = coordinator.changes.listen((view) {
+        if (view.phase == AgentPhase.generating) {
+          firstGeneratingCounts.add((
+            modelCalls: view.modelCalls,
+            toolCalls: view.toolCalls,
+          ));
+        }
+      });
+      await coordinator.send('新一轮问题');
+      await subscription.cancel();
+
+      expect(firstGeneratingCounts, isNotEmpty);
+      expect(firstGeneratingCounts.first.modelCalls, 0);
+      expect(firstGeneratingCounts.first.toolCalls, 0);
+      expect(coordinator.view.modelCalls, 1);
+      expect(coordinator.view.failure, isNull);
+    },
+  );
+
+  test(
+    'a hanging compact publishes its request count and stop preserves durable summary',
+    () async {
+      final store = await _open();
+      final configured = await _configure(store);
+      final primary = await store.agent.ensurePrimaryConversation();
+      await _writeHistory(
+        store,
+        configured.authority,
+        primary,
+        'cancel-summary historical user marker',
+        'cancel-summary historical assistant marker',
+      );
+      final context = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      const durableSummary = 'cancel-summary durable prior summary marker';
+      await (store.agent as AgentConversationControlPort)
+          .saveConversationSummary(context, durableSummary);
+
+      final gateway = _SyntheticGateway();
+      final coordinator = await _coordinator(store, gateway);
+      final compact = coordinator.send('/compact');
+      final request = await gateway.nextRequest().timeout(
+        const Duration(seconds: 3),
+      );
+
+      expect(request.tools, isEmpty);
+      expect(coordinator.view.phase, AgentPhase.compacting);
+      expect(coordinator.view.modelCalls, 1);
+      expect(coordinator.view.toolCalls, 0);
+
+      await coordinator.stop().timeout(const Duration(seconds: 3));
+      await compact.timeout(const Duration(seconds: 3));
+
+      expect(coordinator.view.phase, AgentPhase.idle);
+      expect(coordinator.view.failure, AgentFailureCode.cancelled);
+      final afterStop = await (store.agent as AgentConversationControlPort)
+          .readConversationContext();
+      expect(afterStop.summary, durableSummary);
+      expect(afterStop.messages.map((message) => message.text), [
+        'cancel-summary historical user marker',
+        'cancel-summary historical assistant marker',
+      ]);
+    },
+  );
+
+  test(
     'automatic compact timeout keeps durable history and fits complete groups around the current question',
     () async {
       final store = await _open();

@@ -528,6 +528,18 @@ final class AgentCoordinator {
     } catch (_) {
       _diagnosticTrace = null;
     }
+    if (phase == AgentPhase.generating) {
+      // Admission has succeeded. Do not publish a new send with the previous
+      // run's counters while foreground work or history preparation is pending.
+      _modelCalls = 0;
+      _toolCalls = 0;
+      _inputTokens = 0;
+      _outputTokens = 0;
+      _usageComplete = true;
+      _steps = [];
+      _activeTool = null;
+      _runSelection = '';
+    }
     _phase = phase;
     final done = Completer<void>();
     _work = done.future;
@@ -1184,15 +1196,6 @@ final class AgentCoordinator {
     List<AgentImage> images = const [],
   }) => _action(AgentPhase.generating, (g) async {
     _wipeCandidate();
-    _budgetExpired = false;
-    _modelCalls = 0;
-    _toolCalls = 0;
-    _inputTokens = 0;
-    _outputTokens = 0;
-    _usageComplete = true;
-    _steps = [];
-    _activeTool = null;
-    _runSelection = '';
     final suppliedImages = List<AgentImage>.of(images);
     for (final image in suppliedImages) {
       image.validate();
@@ -1330,6 +1333,13 @@ final class AgentCoordinator {
         );
       }
     }
+    // A durable summary is historical context, not a fixed requirement for the
+    // current turn. Trim it as one oldest group before recent dialogue, without
+    // changing the saved summary, current question, or complete tool protocol.
+    historyGroups = [
+      if (summary != null) [summary],
+      ...historyGroups,
+    ];
     final ticket = await data.beginRun(
       settings.authority,
       _conversation!,
@@ -1454,7 +1464,7 @@ final class AgentCoordinator {
                 maximumToolCalls: limits.maximumToolCalls,
                 activeTimeout: limits.activeTimeout,
               );
-        var fixed = <ModelChatMessage>[currentSystem, ?summary, ...modelTurn];
+        var fixed = <ModelChatMessage>[currentSystem, ...modelTurn];
         var fit = activeLimits.trimCompleteGroups(
           historyGroups,
           fixedMessages: fixed,
@@ -1491,7 +1501,7 @@ final class AgentCoordinator {
               ),
             for (final group in keep) ...group,
           ];
-          fixed = [currentSystem, ?summary, ...modelTurn];
+          fixed = [currentSystem, ...modelTurn];
           fit = activeLimits.trimCompleteGroups(
             historyGroups,
             fixedMessages: fixed,
@@ -1532,7 +1542,6 @@ final class AgentCoordinator {
         }
         final messages = <ModelChatMessage>[
           currentSystem,
-          ?summary,
           for (final group in historyGroups) ...group,
           ...modelTurn,
         ];
@@ -2224,10 +2233,13 @@ final class AgentCoordinator {
     final secret = await _secret(settings.authority, g);
     var summary = '';
     ModelCompleted? completed;
+    final previousPhase = _phase;
     try {
       await ensureSummaryPolicy();
       _requests++;
       _modelCalls++;
+      _phase = AgentPhase.compacting;
+      _publish();
       final request = ModelRequest(
         modelId: settings.modelId!,
         maxTokens: min(2048, _limits.maximumOutputTokens),
@@ -2262,6 +2274,10 @@ final class AgentCoordinator {
       throw const AgentFailure(AgentFailureCode.timeout);
     } finally {
       secret.revoke();
+      if (g == _generation && !_stopping && _phase == AgentPhase.compacting) {
+        _phase = previousPhase;
+        _publish();
+      }
     }
   }
 

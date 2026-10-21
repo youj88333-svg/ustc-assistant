@@ -179,7 +179,7 @@ try {
             Assert-QaEmulator
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4014) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4015) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
             }
             $restoreNotificationDenial = $false

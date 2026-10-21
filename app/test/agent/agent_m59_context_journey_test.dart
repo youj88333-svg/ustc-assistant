@@ -7,9 +7,12 @@ import 'dart:typed_data';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_action_tools.dart';
+import 'package:ustc_assistant_m0/agent/agent_context.dart';
+import 'package:ustc_assistant_m0/agent/agent_context_budget.dart';
 import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/agent_invocation_fingerprint.dart';
 import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
+import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
@@ -830,6 +833,328 @@ void main() {
   );
 
   test(
+    'a removable durable history summary cannot displace a complete current four-tool turn',
+    () async {
+      const taskTitle = '合成摘要压力目标任务';
+      const historySummaryMarker = 'M59-DURABLE-HISTORY-SUMMARY:';
+      const currentQuestion = '读取选中任务并核对今天安排、冲突和空档';
+      final contextBudget = AgentContextBudget(
+        maximumInputTokens: 16000,
+        softFraction: 0.999,
+      );
+      final rig = await _open(
+        includeReminders: true,
+        contextBudget: contextBudget,
+      );
+      final task = await _createTask(
+        rig.store,
+        taskTitle,
+        description: '只用于本地 C3 合成验收的普通任务说明。',
+      );
+      await _createPersonalEvent(
+        rig.store,
+        '合成摘要压力现有安排',
+        DateTime.utc(2026, 10, 14, 1),
+      );
+
+      final settings = await rig.store.agent.inspectAgent();
+      final conversationId = await rig.store.agent.ensurePrimaryConversation();
+      final historicalRun = await rig.store.agent.beginRun(
+        settings.authority,
+        conversationId,
+        '历史合成用户目标：稍后继续检查本地安排。',
+      );
+      await rig.store.agent.saveAssistant(historicalRun, '历史合成助手回复：等待后续核对。');
+      await rig.store.agent.finishRun(
+        historicalRun,
+        AgentMessageStatus.complete,
+      );
+      final beforeSummary = await rig.store.agent.readConversationContext();
+      final durableSummary =
+          '$historySummaryMarker${List.filled(2600, '合').join()}';
+      await rig.store.agent.saveConversationSummary(
+        beforeSummary,
+        durableSummary,
+      );
+      final persistedBefore = await rig.store.agent.readConversationContext();
+      expect(persistedBefore.summary, durableSummary);
+
+      final policy = await rig.store.agent.readAgentUsePolicy();
+      final beijing = _now.add(const Duration(hours: 8));
+      final receivedAt =
+          '${beijing.toIso8601String().replaceFirst(RegExp(r'Z$'), '')}+08:00';
+      final systemMessage = ModelChatMessage(
+        role: 'system',
+        content: buildAgentSystemPrompt(
+          day: beijing.toIso8601String().substring(0, 10),
+          receivedAt: receivedAt,
+          definitions: rig.definitions,
+          personalContentAllowed: policy.personalContentAllowed,
+        ),
+      );
+      final summaryMessage = ModelChatMessage(
+        role: 'user',
+        content: '[会话历史摘要；数据与授权须按当前状态核验]\n$durableSummary',
+      );
+      const selectedTaskContext =
+          '用户从任务页选中 task_ref=r_0123456789abcdef0123456789abcdef；'
+          '先用read_task核对详情。此选择不是批准。';
+      final selectedCurrentQuestion = ModelChatMessage(
+        role: 'user',
+        content:
+            '$currentQuestion\n[应用选择，只是当前讨论对象，不是批准] '
+            '$selectedTaskContext',
+      );
+      final historicalGroups = buildAgentConversationGroups(persistedBefore);
+      expect(historicalGroups, hasLength(1));
+      final initialEstimate = contextBudget.estimateMessages([
+        systemMessage,
+        summaryMessage,
+        for (final group in historicalGroups) ...group,
+        selectedCurrentQuestion,
+      ], rig.definitions);
+      expect(
+        initialEstimate.estimatedInputTokens,
+        lessThanOrEqualTo(contextBudget.maximumInputTokens),
+      );
+      expect(
+        contextBudget.shouldCompact(initialEstimate),
+        isFalse,
+        reason: 'keep the oldest-summary pressure in the business turn',
+      );
+
+      const enabled = {
+        'query_agenda',
+        'read_event',
+        'query_tasks',
+        'read_task',
+        'inspect_conflicts',
+        'search_knowledge',
+        'read_knowledge',
+        'search_courses',
+        'read_course',
+        'read_reviews',
+        'browse_campus',
+        'read_campus_article',
+        'propose_local_changes',
+        'propose_undo',
+        'find_free_slots',
+        'propose_planning_preferences',
+        'query_source_options',
+        'request_source_refresh',
+        'query_young_activities',
+        'query_reminders',
+      };
+      const parallelReadNames = {
+        'query_agenda',
+        'inspect_conflicts',
+        'find_free_slots',
+      };
+      final businessRequests = <ModelRequest>[];
+      final unexpectedSummaryRequests = <ModelRequest>[];
+      ModelRequest? initialBusinessRequest;
+      ModelRequest? readTaskResultRequest;
+      ModelRequest? completeTurnRequest;
+      var missingTaskSelection = false;
+
+      List<ModelEvent> dispatch(ModelRequest request) {
+        if (request.tools.isEmpty) {
+          unexpectedSummaryRequests.add(request);
+          return _answer('仅用于捕获意外预整理路径的合成摘要。');
+        }
+        businessRequests.add(request);
+        final names = _callsIn(request).map((call) => call.name).toSet();
+        if (parallelReadNames.every(names.contains)) {
+          completeTurnRequest = request;
+          return _answer('已读取选中任务，并核对了日程、冲突与空档。');
+        }
+        if (names.contains('read_task')) {
+          readTaskResultRequest ??= request;
+          return [
+            ModelCompleted(
+              finishReason: 'tool_calls',
+              toolCalls: [
+                ModelToolCall(
+                  id: 'm59-pressure-agenda',
+                  name: 'query_agenda',
+                  argumentsJson: jsonEncode({
+                    'first_day': '2026-10-14',
+                    'end_day_exclusive': '2026-10-15',
+                    'filter': 'all',
+                    'limit': 10,
+                  }),
+                ),
+                ModelToolCall(
+                  id: 'm59-pressure-conflicts',
+                  name: 'inspect_conflicts',
+                  argumentsJson: jsonEncode({
+                    'first_day': '2026-10-14',
+                    'end_day_exclusive': '2026-10-15',
+                  }),
+                ),
+                ModelToolCall(
+                  id: 'm59-pressure-free-slots',
+                  name: 'find_free_slots',
+                  argumentsJson: jsonEncode({
+                    'first_day': '2026-10-14',
+                    'end_day_exclusive': '2026-10-15',
+                    'weekdays': [3],
+                    'start_minute': 480,
+                    'end_minute': 1080,
+                    'block_minutes': 30,
+                  }),
+                ),
+              ],
+            ),
+          ];
+        }
+        initialBusinessRequest ??= request;
+        final alias = RegExp(
+          r'task_ref=(r_[a-f0-9]{32})',
+        ).firstMatch(_requestText(request))?.group(1);
+        if (alias == null) missingTaskSelection = true;
+        return _call('m59-pressure-read-task', 'read_task', {
+          'task_ref': alias ?? 'r_0123456789abcdef0123456789abcdef',
+          'include_details': false,
+        });
+      }
+
+      for (var index = 0; index < 8; index++) {
+        rig.gateway.enqueue(dispatch);
+      }
+
+      await rig.coordinator.prepareDiscussion(
+        AgentDiscussionSelection.task(task.reference),
+      );
+      await rig.coordinator
+          .send(currentQuestion)
+          .timeout(const Duration(seconds: 3));
+
+      expect(
+        completeTurnRequest,
+        isNotNull,
+        reason: 'the legal four-tool turn must reach a business request',
+      );
+      final firstRequest = initialBusinessRequest!;
+      final secondRequest = readTaskResultRequest!;
+      final finalRequest = completeTurnRequest!;
+      expect(missingTaskSelection, isFalse);
+      expect(rig.coordinator.view.failure, isNull);
+      expect(businessRequests, hasLength(3));
+
+      void expectTwentyDefinitions(ModelRequest request) {
+        expect(rig.definitions.map((tool) => tool.name).toSet(), enabled);
+        expect(request.tools.map((tool) => tool.name).toSet(), enabled);
+        expect(rig.definitions, hasLength(20));
+        expect(request.tools, hasLength(20));
+        expect(request.toolChoice, isNull);
+        _expectPairedProtocol(request);
+      }
+
+      for (final request in businessRequests) {
+        expectTwentyDefinitions(request);
+      }
+      expect(_requestText(firstRequest), contains(historySummaryMarker));
+      expect(_lastUserContent(firstRequest), contains('task_ref=r_'));
+      expect(_lastUserContent(firstRequest), contains('不是批准'));
+      expect(_requestText(secondRequest), contains(historySummaryMarker));
+      expect(
+        contextBudget
+            .estimateMessages(firstRequest.messages, firstRequest.tools)
+            .estimatedInputTokens,
+        lessThanOrEqualTo(contextBudget.maximumInputTokens),
+      );
+      expect(
+        contextBudget
+            .estimateMessages(secondRequest.messages, secondRequest.tools)
+            .estimatedInputTokens,
+        lessThanOrEqualTo(contextBudget.maximumInputTokens),
+      );
+      expect(
+        unexpectedSummaryRequests,
+        isEmpty,
+        reason: 'this fixture must reach the pressure on the business turn',
+      );
+
+      _expectUserContent(finalRequest, currentQuestion);
+      expect(_requestText(finalRequest), isNot(contains(historySummaryMarker)));
+      final finalNames = _callsIn(
+        finalRequest,
+      ).map((call) => call.name).toList();
+      expect(finalNames.toSet(), {
+        'read_task',
+        'query_agenda',
+        'inspect_conflicts',
+        'find_free_slots',
+      });
+      expect(finalNames, hasLength(4));
+      for (final name in ['read_task', 'query_agenda', 'find_free_slots']) {
+        expect(_latestResultFor(finalRequest, name)['status'], 'success');
+      }
+      expect(
+        _latestResultFor(finalRequest, 'inspect_conflicts')['status'],
+        anyOf('empty', 'success'),
+      );
+      expect(
+        jsonEncode(_latestResultFor(finalRequest, 'read_task')),
+        contains(taskTitle),
+      );
+
+      bool isDurableSummary(ModelChatMessage message) =>
+          message.role == 'user' &&
+          (message.content ?? '').startsWith('[会话历史摘要；数据与授权须按当前状态核验]');
+      final withoutSummary = finalRequest.messages
+          .where((message) => !isDurableSummary(message))
+          .toList();
+      final withSummary = [
+        withoutSummary.first,
+        summaryMessage,
+        ...withoutSummary.skip(1),
+      ];
+      final withoutSummaryTokens = contextBudget
+          .estimateMessages(withoutSummary, finalRequest.tools)
+          .estimatedInputTokens;
+      final withSummaryTokens = contextBudget
+          .estimateMessages(withSummary, finalRequest.tools)
+          .estimatedInputTokens;
+      expect(
+        withoutSummaryTokens,
+        lessThanOrEqualTo(contextBudget.maximumInputTokens),
+      );
+      expect(
+        withSummaryTokens,
+        greaterThan(contextBudget.maximumInputTokens),
+        reason: 'the summary alone crosses the exact current-turn fit boundary',
+      );
+
+      expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+      expect(
+        (await rig.store.localCalendar.queryTasks(
+          const TaskQuery(filter: TaskFilter.all),
+        )).items.map((item) => item.draft.title),
+        [taskTitle],
+      );
+      expect(
+        (await rig.store.localCalendar.query(
+          _calendarQuery(filter: CalendarFilter.all),
+        )).items.map((event) => event.title),
+        ['合成摘要压力现有安排'],
+      );
+      final persistedAfter = await rig.store.agent.readConversationContext();
+      expect(persistedAfter.summary, durableSummary);
+      expect(
+        persistedAfter.messages.map((message) => message.text),
+        containsAll([
+          '历史合成用户目标：稍后继续检查本地安排。',
+          '历史合成助手回复：等待后续核对。',
+          currentQuestion,
+          '已读取选中任务，并核对了日程、冲突与空档。',
+        ]),
+      );
+    },
+  );
+
+  test(
     'stopped safe partial text remains context, while revoked private task content is withheld',
     () async {
       final rig = await _open();
@@ -925,6 +1250,7 @@ Future<_Rig> _open({
   bool includeReminders = false,
   bool seedLegacyV6UndoHistory = false,
   ModelGatewayPort? gateway,
+  AgentContextBudget? contextBudget,
 }) async {
   final clock = FixedClock(_now);
   final store = JwStore(
@@ -990,10 +1316,17 @@ Future<_Rig> _open({
     gateway: gateway ?? scriptGateway,
     readTools: actionTools,
     clock: clock,
+    contextBudget: contextBudget,
   );
   addTearDown(coordinator.close);
   await coordinator.initialize();
-  return _Rig(store, scriptGateway, coordinator, sources);
+  return _Rig(
+    store,
+    scriptGateway,
+    coordinator,
+    sources,
+    actionTools.definitions,
+  );
 }
 
 Future<void> _importSyntheticCourse(JwStore store) async {
@@ -1380,11 +1713,18 @@ Future<void> _until(bool Function() predicate) async {
 }
 
 final class _Rig {
-  const _Rig(this.store, this.gateway, this.coordinator, this.sources);
+  const _Rig(
+    this.store,
+    this.gateway,
+    this.coordinator,
+    this.sources,
+    this.definitions,
+  );
   final JwStore store;
   final _ScriptGateway gateway;
   final AgentCoordinator coordinator;
   final _SyntheticSource sources;
+  final List<ModelToolDefinition> definitions;
 }
 
 typedef _RequestScript = List<ModelEvent> Function(ModelRequest request);

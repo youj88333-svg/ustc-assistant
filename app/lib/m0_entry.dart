@@ -362,7 +362,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
           morningNowUtc: () => runtime.clock.nowUtc,
           onMorningRetry: () => runtime.morning.check(manual: true),
           openMorningSource: (uri) => _openRestrictedExternalLink(context, uri),
-          pickImages: pickAgentImages,
+          pickImages: () => pickAgentImages(diagnostics: runtime.diagnostics),
           onModelValidation: () async {
             try {
               final runner = await runtime.agent.openBehaviorValidation();

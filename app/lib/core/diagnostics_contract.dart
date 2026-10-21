@@ -62,6 +62,7 @@ enum DiagnosticEventName {
   morningBriefCompleted,
   morningBriefFailed,
   morningNoticeRead,
+  imageInputStage,
 }
 
 enum DiagnosticTool {
@@ -154,6 +155,7 @@ enum DiagnosticCode {
   closed,
   toolUnavailable,
   imageRejected,
+  imageReadFailed,
   reasoningRejected,
   invalidRequest,
   staleReference,
@@ -417,6 +419,8 @@ enum DiagnosticStage {
   morningBrief,
   morningTeachNotices,
   morningFinanceNotices,
+  imagePicker,
+  imageNormalization,
 }
 
 enum DiagnosticSourceAction { calendar, activities }

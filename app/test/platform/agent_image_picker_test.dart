@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
+import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 
 void main() {
@@ -78,6 +79,71 @@ void main() {
     );
     expect(() => validateAgentImageFrameCount(1), returnsNormally);
   });
+
+  test(
+    'Android normalization logs fixed stages and bounded image counts',
+    () async {
+      final diagnostics = _RecordingDiagnostics();
+      final original = _png(2, 2);
+      final normalized = await normalizeAndroidImages([
+        original,
+      ], diagnostics: diagnostics);
+
+      expect(normalized.single.width, 2);
+      expect(diagnostics.events.map((event) => event.outcome), [
+        DiagnosticOutcome.started,
+        DiagnosticOutcome.complete,
+      ]);
+      expect(
+        diagnostics.events.every(
+          (event) =>
+              event.name == DiagnosticEventName.imageInputStage &&
+              event.stage == DiagnosticStage.imageNormalization,
+        ),
+        isTrue,
+      );
+      expect(diagnostics.events.last.count, 1);
+      expect(original, everyElement(0));
+
+      diagnostics.events.clear();
+      final malformed = Uint8List.fromList([1, 2, 3]);
+      await expectLater(
+        normalizeAndroidImages([malformed], diagnostics: diagnostics),
+        _failsWith(AgentFailureCode.invalidInput),
+      );
+      expect(diagnostics.events.map((event) => event.outcome), [
+        DiagnosticOutcome.started,
+        DiagnosticOutcome.failure,
+      ]);
+      expect(diagnostics.events.last.code, DiagnosticCode.invalidInput);
+      expect(diagnostics.events.last.count, 1);
+      expect(malformed, everyElement(0));
+
+      diagnostics.events.clear();
+      final tooMany = List.generate(
+        AgentImage.maximumCount + 1,
+        (_) => _png(1, 1),
+      );
+      await expectLater(
+        normalizeAndroidImages(tooMany, diagnostics: diagnostics),
+        _failsWith(AgentFailureCode.resourceLimit),
+      );
+      expect(diagnostics.events.last.code, DiagnosticCode.resourceLimit);
+      expect(diagnostics.events.last.count, AgentImage.maximumCount);
+      expect(
+        tooMany.every((bytes) => bytes.every((byte) => byte == 0)),
+        isTrue,
+      );
+
+      final safeRecords = diagnostics.events.map((event) {
+        return DiagnosticRecord(
+          atUtc: DateTime.utc(2026, 10, 21),
+          event: event,
+        ).encode();
+      }).join();
+      expect(safeRecords, isNot(contains('image bytes')));
+    },
+  );
 }
 
 Matcher _failsWith(AgentFailureCode code) => throwsA(
@@ -178,4 +244,30 @@ List<String> _chunkTypes(Uint8List png) {
     offset += 12 + length;
   }
   return chunks;
+}
+
+final class _RecordingDiagnostics implements DiagnosticsPort {
+  final events = <DiagnosticEvent>[];
+
+  @override
+  DiagnosticsView get diagnosticsView => const DiagnosticsView(available: true);
+
+  @override
+  DiagnosticTrace newTrace() =>
+      DiagnosticTrace('00000000000000000000000000000000');
+
+  @override
+  void record(DiagnosticEvent event) => events.add(event);
+
+  @override
+  Future<void> flush() async {}
+
+  @override
+  Future<String> exportRecent() async => '';
+
+  @override
+  Future<void> clear() async => events.clear();
+
+  @override
+  Future<void> close() async {}
 }

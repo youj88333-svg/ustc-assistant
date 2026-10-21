@@ -3461,7 +3461,8 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.redirectRejected => '模型服务返回内容无法安全验证。',
   AgentFailureCode.resourceLimit => '回复超出当前处理上限。',
   AgentFailureCode.contextLimit => '当前请求超出模型服务的上下文容量，请缩短内容或减少上下文预算后重试。',
-  AgentFailureCode.reasoningRejected => '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
+  AgentFailureCode.reasoningRejected =>
+    '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
   AgentFailureCode.cancelled => '本次生成已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
   AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',
@@ -3470,7 +3471,7 @@ String _failureText(AgentFailureCode code) => switch (code) {
 String _imageFailureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.resourceLimit => '图片数量、尺寸或文件大小超过限制。',
   AgentFailureCode.invalidInput => '所选图片无法读取，请选择 PNG、JPEG 或 WebP 图片。',
-  AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
+  AgentFailureCode.imageRejected => '无法读取所选图片，请检查文件后重试。',
   _ => '无法读取所选图片，请检查文件后重试。',
 };
 

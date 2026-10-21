@@ -10,13 +10,16 @@ import '../core/diagnostics_contract.dart';
 final class AndroidFileAccess {
   const AndroidFileAccess({
     this.channel = const MethodChannel('ustc_assistant/files_v1'),
+    this.diagnostics,
   });
 
   final MethodChannel channel;
+  final DiagnosticsPort? diagnostics;
   static const maximumOriginalBytes = 10 * 1024 * 1024;
   static const maximumExportBytes = 2 * 1024 * 1024;
 
   Future<List<Uint8List>> pickImages() async {
+    _recordImagePickerStage(diagnostics, DiagnosticOutcome.started);
     Object? response;
     try {
       response = await channel.invokeMethod<Object?>('pickImages', {
@@ -34,6 +37,19 @@ final class AndroidFileAccess {
         }
         images.add(item);
       }
+      if (images.isEmpty) {
+        _recordImagePickerStage(
+          diagnostics,
+          DiagnosticOutcome.cancelled,
+          count: 0,
+        );
+        return images;
+      }
+      _recordImagePickerStage(
+        diagnostics,
+        DiagnosticOutcome.complete,
+        count: images.length,
+      );
       return images;
     } on Object catch (error) {
       if (response is List) {
@@ -41,17 +57,37 @@ final class AndroidFileAccess {
           if (item is Uint8List) item.fillRange(0, item.length, 0);
         }
       }
-      if (error is AgentFailure) rethrow;
-      if (error is PlatformException) {
-        throw AgentFailure(switch (error.code) {
-          'resource_limit' => AgentFailureCode.resourceLimit,
-          'busy' => AgentFailureCode.busy,
-          'timeout' => AgentFailureCode.timeout,
-          'cancelled' => AgentFailureCode.cancelled,
-          'unavailable' => AgentFailureCode.toolUnavailable,
-          _ => AgentFailureCode.imageRejected,
-        });
+      final count = response is List
+          ? response.length.clamp(0, AgentImage.maximumCount).toInt()
+          : null;
+      if (error is AgentFailure) {
+        _recordImagePickerStage(
+          diagnostics,
+          error.code == AgentFailureCode.cancelled
+              ? DiagnosticOutcome.cancelled
+              : DiagnosticOutcome.failure,
+          code: _diagnosticCodeForAgentFailure(error.code),
+          count: count,
+        );
+        rethrow;
       }
+      if (error is PlatformException) {
+        _recordImagePickerStage(
+          diagnostics,
+          error.code == 'cancelled'
+              ? DiagnosticOutcome.cancelled
+              : DiagnosticOutcome.failure,
+          code: _diagnosticCodeForPlatformCode(error.code),
+          count: count,
+        );
+        throw AgentFailure(_agentFailureForPlatformCode(error.code));
+      }
+      _recordImagePickerStage(
+        diagnostics,
+        DiagnosticOutcome.failure,
+        code: DiagnosticCode.unknown,
+        count: count,
+      );
       throw const AgentFailure(AgentFailureCode.imageRejected);
     }
   }
@@ -67,6 +103,62 @@ final class AndroidFileAccess {
     } on Object {
       throw const DiagnosticsFailure(DiagnosticsFailureCode.exportFailed);
     }
+  }
+}
+
+AgentFailureCode _agentFailureForPlatformCode(String code) => switch (code) {
+  'resource_limit' => AgentFailureCode.resourceLimit,
+  'busy' => AgentFailureCode.busy,
+  'timeout' => AgentFailureCode.timeout,
+  'cancelled' => AgentFailureCode.cancelled,
+  'unavailable' => AgentFailureCode.toolUnavailable,
+  'image_rejected' => AgentFailureCode.invalidInput,
+  'read_failed' || 'io_failed' => AgentFailureCode.imageRejected,
+  _ => AgentFailureCode.imageRejected,
+};
+
+DiagnosticCode _diagnosticCodeForPlatformCode(String code) => switch (code) {
+  'resource_limit' => DiagnosticCode.resourceLimit,
+  'busy' => DiagnosticCode.busy,
+  'timeout' => DiagnosticCode.timeout,
+  'cancelled' => DiagnosticCode.cancelled,
+  'unavailable' => DiagnosticCode.toolUnavailable,
+  'image_rejected' => DiagnosticCode.invalidInput,
+  'read_failed' || 'io_failed' => DiagnosticCode.imageReadFailed,
+  _ => DiagnosticCode.unknown,
+};
+
+DiagnosticCode _diagnosticCodeForAgentFailure(AgentFailureCode code) =>
+    switch (code) {
+      AgentFailureCode.invalidInput => DiagnosticCode.invalidInput,
+      AgentFailureCode.busy => DiagnosticCode.busy,
+      AgentFailureCode.timeout => DiagnosticCode.timeout,
+      AgentFailureCode.resourceLimit => DiagnosticCode.resourceLimit,
+      AgentFailureCode.cancelled => DiagnosticCode.cancelled,
+      AgentFailureCode.toolUnavailable => DiagnosticCode.toolUnavailable,
+      AgentFailureCode.imageRejected => DiagnosticCode.imageRejected,
+      _ => DiagnosticCode.unknown,
+    };
+
+void _recordImagePickerStage(
+  DiagnosticsPort? diagnostics,
+  DiagnosticOutcome outcome, {
+  DiagnosticCode? code,
+  int? count,
+}) {
+  if (diagnostics == null) return;
+  try {
+    diagnostics.record(
+      DiagnosticEvent(
+        name: DiagnosticEventName.imageInputStage,
+        stage: DiagnosticStage.imagePicker,
+        outcome: outcome,
+        code: code,
+        count: count?.clamp(0, AgentImage.maximumCount).toInt(),
+      ),
+    );
+  } catch (_) {
+    // Diagnostics are best-effort and carry only fixed enums and a bounded count.
   }
 }
 

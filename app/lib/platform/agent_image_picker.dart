@@ -6,6 +6,7 @@ import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
 
 import '../core/agent_contract.dart';
+import '../core/diagnostics_contract.dart';
 import 'android_file_access.dart';
 
 const _maximumOriginalBytes = 10 * 1024 * 1024;
@@ -20,9 +21,13 @@ const _agentImageTypes = XTypeGroup(
 
 /// Opens the native file selector and returns normalized, bounded PNG images.
 /// Paths and plugin exceptions stay inside this adapter.
-Future<List<AgentImage>> pickAgentImages() async {
+Future<List<AgentImage>> pickAgentImages({DiagnosticsPort? diagnostics}) async {
   if (Platform.isAndroid) {
-    return normalizeAndroidImages(await const AndroidFileAccess().pickImages());
+    final originals = await AndroidFileAccess(
+      diagnostics: diagnostics,
+    ).pickImages();
+    if (originals.isEmpty) return const [];
+    return normalizeAndroidImages(originals, diagnostics: diagnostics);
   }
   final List<XFile> files;
   try {
@@ -83,8 +88,10 @@ Future<List<AgentImage>> pickAgentImages() async {
 /// enforces single-frame input, strips metadata, and bounds the outgoing bytes.
 @visibleForTesting
 Future<List<AgentImage>> normalizeAndroidImages(
-  List<Uint8List> originals,
-) async {
+  List<Uint8List> originals, {
+  DiagnosticsPort? diagnostics,
+}) async {
+  _recordImageNormalizationStage(diagnostics, DiagnosticOutcome.started);
   final normalized = <AgentImage>[];
   try {
     if (originals.length > AgentImage.maximumCount) {
@@ -99,17 +106,66 @@ Future<List<AgentImage>> normalizeAndroidImages(
         throw const AgentFailure(AgentFailureCode.resourceLimit);
       }
     }
+    _recordImageNormalizationStage(
+      diagnostics,
+      DiagnosticOutcome.complete,
+      count: normalized.length,
+    );
     return List.unmodifiable(normalized);
-  } on AgentFailure {
+  } on AgentFailure catch (failure) {
+    _recordImageNormalizationStage(
+      diagnostics,
+      failure.code == AgentFailureCode.cancelled
+          ? DiagnosticOutcome.cancelled
+          : DiagnosticOutcome.failure,
+      code: _normalizationDiagnosticCode(failure.code),
+      count: originals.length,
+    );
     _wipe(normalized);
     rethrow;
   } on Object {
+    _recordImageNormalizationStage(
+      diagnostics,
+      DiagnosticOutcome.failure,
+      code: DiagnosticCode.unknown,
+      count: originals.length,
+    );
     _wipe(normalized);
     throw const AgentFailure(AgentFailureCode.invalidInput);
   } finally {
     for (final original in originals) {
       original.fillRange(0, original.length, 0);
     }
+  }
+}
+
+DiagnosticCode _normalizationDiagnosticCode(AgentFailureCode code) =>
+    switch (code) {
+      AgentFailureCode.invalidInput => DiagnosticCode.invalidInput,
+      AgentFailureCode.resourceLimit => DiagnosticCode.resourceLimit,
+      AgentFailureCode.cancelled => DiagnosticCode.cancelled,
+      _ => DiagnosticCode.unknown,
+    };
+
+void _recordImageNormalizationStage(
+  DiagnosticsPort? diagnostics,
+  DiagnosticOutcome outcome, {
+  DiagnosticCode? code,
+  int? count,
+}) {
+  if (diagnostics == null) return;
+  try {
+    diagnostics.record(
+      DiagnosticEvent(
+        name: DiagnosticEventName.imageInputStage,
+        stage: DiagnosticStage.imageNormalization,
+        outcome: outcome,
+        code: code,
+        count: count?.clamp(0, AgentImage.maximumCount).toInt(),
+      ),
+    );
+  } catch (_) {
+    // Diagnostics are best-effort and contain no image content or file details.
   }
 }
 
