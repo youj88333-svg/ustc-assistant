@@ -21,6 +21,7 @@ final class AndroidFileAccess {
   Future<List<Uint8List>> pickImages() async {
     _recordImagePickerStage(diagnostics, DiagnosticOutcome.started);
     Object? response;
+    final images = <Uint8List>[];
     try {
       response = await channel.invokeMethod<Object?>('pickImages', {
         'maximumCount': AgentImage.maximumCount,
@@ -28,14 +29,15 @@ final class AndroidFileAccess {
       if (response is! List || response.length > AgentImage.maximumCount) {
         throw const AgentFailure(AgentFailureCode.imageRejected);
       }
-      final images = <Uint8List>[];
       for (final item in response) {
         if (item is! Uint8List ||
             item.isEmpty ||
             item.length > maximumOriginalBytes) {
           throw const AgentFailure(AgentFailureCode.imageRejected);
         }
-        images.add(item);
+        // Platform codecs can lend read-only buffers. The adapter must own
+        // writable copies before handing their lifetime to the image pipeline.
+        images.add(Uint8List.fromList(item));
       }
       if (images.isEmpty) {
         _recordImagePickerStage(
@@ -52,10 +54,8 @@ final class AndroidFileAccess {
       );
       return images;
     } on Object catch (error) {
-      if (response is List) {
-        for (final item in response) {
-          if (item is Uint8List) item.fillRange(0, item.length, 0);
-        }
+      for (final image in images) {
+        image.fillRange(0, image.length, 0);
       }
       final count = response is List
           ? response.length.clamp(0, AgentImage.maximumCount).toInt()

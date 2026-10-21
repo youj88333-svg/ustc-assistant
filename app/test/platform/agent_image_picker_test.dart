@@ -7,6 +7,32 @@ import 'package:ustc_assistant_m0/core/diagnostics_contract.dart';
 import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 
 void main() {
+  test(
+    'Android read-only channel buffers do not fail a valid selection',
+    () async {
+      final original = _png(2, 2).asUnmodifiableView();
+      final normalized = await normalizeAndroidImages([original]);
+      expect(normalized.single.width, 2);
+      expect(normalized.single.height, 2);
+      expect(normalized.single.bytes.take(8), [
+        137,
+        80,
+        78,
+        71,
+        13,
+        10,
+        26,
+        10,
+      ]);
+      await expectLater(
+        normalizeAndroidImages([
+          Uint8List.fromList([1, 2, 3]).asUnmodifiableView(),
+        ]),
+        _failsWith(AgentFailureCode.invalidInput),
+      );
+    },
+  );
+
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(

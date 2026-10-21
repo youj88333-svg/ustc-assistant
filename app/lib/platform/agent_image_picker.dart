@@ -134,7 +134,12 @@ Future<List<AgentImage>> normalizeAndroidImages(
     throw const AgentFailure(AgentFailureCode.invalidInput);
   } finally {
     for (final original in originals) {
-      original.fillRange(0, original.length, 0);
+      try {
+        original.fillRange(0, original.length, 0);
+      } on UnsupportedError {
+        // A borrowed engine buffer may be read-only. Writable owned inputs are
+        // still wiped; cleanup must not reject an already normalized image.
+      }
     }
   }
 }

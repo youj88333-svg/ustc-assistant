@@ -16,6 +16,32 @@ void main() {
   );
 
   test(
+    'picker owns writable copies and does not retain borrowed buffers',
+    () async {
+      for (final readOnly in [false, true]) {
+        final source = Uint8List.fromList([1, 2, 3]);
+        final borrowed = readOnly ? source.asUnmodifiableView() : source;
+        final selected = await AndroidFileAccess(
+          channel: _ReplyChannel([borrowed]),
+        ).pickImages();
+        expect(selected.single, [1, 2, 3]);
+        selected.single.fillRange(0, selected.single.length, 0);
+        expect(selected.single, [0, 0, 0]);
+      // The channel owns borrowed memory. Only the returned copies are ours.
+      expect(source, [1, 2, 3]);
+      }
+
+      final accepted = Uint8List.fromList([1, 2, 3]);
+      await expectLater(
+        AndroidFileAccess(
+          channel: _ReplyChannel([accepted.asUnmodifiableView(), 'invalid']),
+        ).pickImages(),
+        throwsA(isA<AgentFailure>()),
+      );
+    },
+  );
+
+  test(
     'picker uses only the fixed method and bounded bytes, including cancel',
     () async {
       var cancelled = false;
@@ -330,6 +356,15 @@ Map<String, Object?> _bundle() => {
     ).toMap(),
   ],
 };
+
+final class _ReplyChannel extends MethodChannel {
+  _ReplyChannel(this.response) : super('synthetic-image-reply');
+  final Object? response;
+
+  @override
+  Future<T?> invokeMethod<T>(String method, [dynamic arguments]) async =>
+      response as T?;
+}
 
 final class _RecordingDiagnostics implements DiagnosticsPort {
   final events = <DiagnosticEvent>[];

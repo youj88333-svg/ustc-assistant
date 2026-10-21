@@ -119,7 +119,7 @@ androidComponents {
         val splitQa = project.findProperty("split-per-abi") == "true"
         // Keep compatibility and UI QA upgrades monotonic so the test runner
         // cannot reinstall an older reader over the retained synthetic owner.
-        variant.outputs.forEach { it.versionCode.set(if (splitQa) 15 else 4015) }
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 16 else 4016) }
     }
 }
 
