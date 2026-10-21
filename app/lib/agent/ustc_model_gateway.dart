@@ -12,7 +12,7 @@ import 'model_reasoning_policy.dart';
 final class UstcModelGateway implements ModelGatewayPort {
   UstcModelGateway({
     Duration connectTimeout = const Duration(seconds: 15),
-    Duration requestTimeout = const Duration(seconds: 60),
+    Duration requestTimeout = const Duration(seconds: 180),
     Duration idleTimeout = const Duration(seconds: 20),
   }) : _baseUri = Uri.https(_productionHost, '/'),
        _loopback = false,
@@ -25,7 +25,7 @@ final class UstcModelGateway implements ModelGatewayPort {
   UstcModelGateway.loopbackForTesting(
     Uri baseUri, {
     Duration connectTimeout = const Duration(seconds: 15),
-    Duration requestTimeout = const Duration(seconds: 60),
+    Duration requestTimeout = const Duration(seconds: 180),
     Duration idleTimeout = const Duration(seconds: 20),
   }) : _baseUri = _validateLoopbackUri(baseUri),
        _loopback = true,

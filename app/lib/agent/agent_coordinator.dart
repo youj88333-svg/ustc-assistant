@@ -2252,7 +2252,7 @@ final class AgentCoordinator {
         request,
         secret,
         g,
-      ).timeout(const Duration(seconds: 45))) {
+      ).timeout(const Duration(seconds: 180))) {
         await ensureSummaryPolicy();
         if (event is ModelTextDelta) {
           summary += event.text;
