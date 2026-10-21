@@ -312,7 +312,13 @@ final class DiagnosticContextMetadata {
       1000000,
     );
     _addBoundedInteger(result, 'outputReserve', outputReserve, 1, 8192);
-    _addBoundedInteger(result, 'availableTools', availableTools, 0, 19);
+    _addBoundedInteger(
+      result,
+      'availableTools',
+      availableTools,
+      0,
+      DiagnosticTool.values.length,
+    );
     _addBoundedInteger(
       result,
       'wholeGroupsRemoved',
@@ -367,7 +373,11 @@ final class DiagnosticContextMetadata {
       decision: optionalEnum('decision', DiagnosticContextDecision.values),
       estimatedInputTokens: boundedInteger('estimatedInputTokens', 0, 1000000),
       outputReserve: boundedInteger('outputReserve', 1, 8192),
-      availableTools: boundedInteger('availableTools', 0, 19),
+      availableTools: boundedInteger(
+        'availableTools',
+        0,
+        DiagnosticTool.values.length,
+      ),
       wholeGroupsRemoved: boundedInteger('wholeGroupsRemoved', 0, 1000000),
     );
   }

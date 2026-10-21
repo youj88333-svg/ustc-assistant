@@ -42,6 +42,9 @@ const _maxSlotReferences = 256;
 const _maxSourceSemesterStart = 256;
 const _maxSourceSemesterReferences = 512;
 const _maxActivityOutputBytes = 7600;
+const _undoArgumentsRepair =
+    'propose_undo 不接受任何字段。重新调用时 arguments 只传空对象 {}；'
+    '不要添加 changes、引用或其它操作参数。应用读取当前撤销槽，仍按当前许可和审批执行。';
 
 /// Adds the four bounded local planning tools to the existing read-only tools.
 ///
@@ -98,7 +101,12 @@ final class AgentActionTools implements AgentReadToolsPort {
       },
       required: const ['changes'],
     ),
-    _actionTool('propose_undo', '准备撤销本地最近一次可撤销修改。无需传入引用；应用读取当前撤销槽。', const {}),
+    _actionTool(
+      'propose_undo',
+      '准备撤销本地最近一次可撤销修改。调用参数必须是空对象 {}，没有任何字段；'
+          '不传 changes、引用或要撤销的内容。应用读取当前撤销槽并准备当前审批方案。',
+      const {},
+    ),
     _actionTool(
       'find_free_slots',
       '在最多 31 天的本地日程投影中确定性查找空闲时段；未覆盖范围不会被表述为空闲。',
@@ -518,7 +526,11 @@ final class _AgentActionToolSession
         failure: 'invalidRequest',
         validation: issue,
         data: {
-          'repair': issue.repairHint,
+          'repair': call.name == 'propose_undo'
+              ? _undoArgumentsRepair
+              : issue.repairHint,
+          if (call.name == 'propose_undo')
+            'expected_arguments': const <String, Object?>{},
           if (issue.action != null)
             'action_rules': agentChangeSpecs[issue.action]!.describe(
               issue.action!,

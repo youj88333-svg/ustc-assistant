@@ -13,7 +13,7 @@ void main() {
         decision: DiagnosticContextDecision.softCompaction,
         estimatedInputTokens: 1000000,
         outputReserve: 8192,
-        availableTools: 19,
+        availableTools: 20,
         wholeGroupsRemoved: 1000000,
       );
       final record = _record(
@@ -38,6 +38,7 @@ void main() {
       expect(contextWire['readScope'], 'personal');
       expect(contextWire['executionMode'], 'daily');
       expect(contextWire['decision'], 'softCompaction');
+      expect(contextWire['availableTools'], 20);
       expect(decoded.event.context!.toSafeMap(), metadata.toSafeMap());
       expect(decoded.event.code, DiagnosticCode.contextLimit);
       expect(
@@ -133,7 +134,7 @@ void main() {
         {'outputReserve': 0},
         {'outputReserve': 8193},
         {'availableTools': -1},
-        {'availableTools': 20},
+        {'availableTools': 21},
         {'wholeGroupsRemoved': -1},
         {'wholeGroupsRemoved': 1000001},
       ];
@@ -156,7 +157,7 @@ void main() {
         throwsA(isA<FormatException>()),
       );
       expect(
-        () => const DiagnosticContextMetadata(availableTools: 20).toSafeMap(),
+        () => const DiagnosticContextMetadata(availableTools: 21).toSafeMap(),
         throwsA(isA<FormatException>()),
       );
       expect(

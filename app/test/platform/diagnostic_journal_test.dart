@@ -9,6 +9,40 @@ import 'package:ustc_assistant_m0/platform/diagnostic_journal.dart';
 
 void main() {
   test(
+    'twenty-tool context events remain valid and export as complete',
+    () async {
+      final harness = await _Harness.create();
+      addTearDown(harness.dispose);
+      final journal = await harness.open();
+      addTearDown(journal.close);
+
+      journal.record(
+        const DiagnosticEvent(
+          name: DiagnosticEventName.agentContextAssembled,
+          context: DiagnosticContextMetadata(
+            decision: DiagnosticContextDecision.assembled,
+            availableTools: 20,
+          ),
+        ),
+      );
+      await journal.flush();
+
+      final bundle =
+          jsonDecode(await journal.exportRecent()) as Map<String, dynamic>;
+      expect(bundle['complete'], isTrue);
+      expect(bundle['invalid'], 0);
+      expect(bundle['dropped'], 0);
+      final records = bundle['records'] as List;
+      expect(records, hasLength(1));
+      expect(records.single['event'], 'agentContextAssembled');
+      final context = records.single['context'] as Map<String, dynamic>;
+      expect(context.keys.toSet(), {'decision', 'availableTools'});
+      expect(context['decision'], 'assembled');
+      expect(context['availableTools'], 20);
+    },
+  );
+
+  test(
     'validated records survive restart and export in the fixed envelope',
     () async {
       final harness = await _Harness.create();

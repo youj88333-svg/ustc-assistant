@@ -370,6 +370,51 @@ void main() {
     );
 
     test(
+      'undo rejects extra arguments with an exact empty-object repair before preparing',
+      () async {
+        final fixture = _Fixture();
+        fixture.tasks.undo = CalendarUndoView(
+          reference: const CalendarUndoReference(_context, 'local-undo-slot'),
+        );
+        final tools = fixture.tools(_ReadTools(fixture.plans));
+        addTearDown(tools.close);
+        final toolSession = tools.openSession();
+        final interactive = toolSession as AgentInteractiveToolSession;
+        interactive.bindRun(_ticket(), '撤销上次测试修改');
+
+        for (final args in const [
+          {'changes': <Object>[]},
+          {'unregistered-field': 'SYNTHETIC_EXTRA_ARGUMENT_MARKER'},
+        ]) {
+          final rejected = await toolSession.execute(
+            _call('propose_undo', args),
+          );
+          expect(rejected.status, 'invalidRequest');
+          expect(
+            rejected.validation?.reason,
+            AgentParameterReason.unknownField,
+          );
+          expect(rejected.data['expected_arguments'], isEmpty);
+          expect(rejected.data['repair'], contains('propose_undo'));
+          expect(rejected.data['repair'], contains('{}'));
+          final safe = jsonEncode(rejected.toMap());
+          expect(safe, isNot(contains('unregistered-field')));
+          expect(safe, isNot(contains('SYNTHETIC_EXTRA_ARGUMENT_MARKER')));
+          expect(fixture.plans.prepareCalls, 0);
+          expect(fixture.plans.commitCalls, 0);
+          expect(interactive.pendingAction, isNull);
+        }
+
+        final corrected = await toolSession.execute(_call('propose_undo', {}));
+        expect(corrected.status, 'waitingForApproval');
+        expect(fixture.plans.prepareCalls, 1);
+        expect(fixture.plans.commitCalls, 0);
+        await interactive.decidePending(false);
+        expect(fixture.plans.commitCalls, 0);
+      },
+    );
+
+    test(
       'undo uses the current local slot and planning preferences remain pending',
       () async {
         final fixture = _Fixture();

@@ -27,6 +27,74 @@ final _now = DateTime.utc(2026, 10, 14, 4);
 final _modelKey = Uint8List.fromList('synthetic-m59-context-key'.codeUnits);
 
 void main() {
+  for (final approve in [false, true]) {
+    test(
+      'undo repairs an unsupported changes argument and ${approve ? "commits only after approval" : "keeps the task after rejection"}',
+      () async {
+        final rig = await _open();
+        await _createTask(rig.store, '合成A7撤销测试任务');
+        rig.gateway.enqueueEvents(
+          _call('a7-undo-invalid', 'propose_undo', const {
+            'changes': <Object>[],
+          }),
+        );
+        rig.gateway.enqueue((request) {
+          final rejected = _latestResultFor(request, 'propose_undo');
+          expect(rejected['status'], 'invalidRequest');
+          final repair = rejected['data'] as Map;
+          expect(repair['expected_arguments'], isEmpty);
+          expect(repair['repair'], contains('{}'));
+          return _call('a7-undo-corrected', 'propose_undo', const {});
+        });
+        rig.gateway.enqueue((request) {
+          expect(
+            _latestResultFor(request, 'propose_undo')['status'],
+            approve ? 'committed' : 'rejected',
+          );
+          return _answer(approve ? '已撤销测试任务。' : '没有撤销测试任务。');
+        });
+
+        final run = rig.coordinator.send('undo');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final current = rig.coordinator.view.pendingAction!;
+        expect(current.status, AgentActionStatus.proposed);
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+        expect(
+          (await rig.store.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          )).items,
+          hasLength(1),
+        );
+
+        if (approve) {
+          await rig.coordinator.approveAction(current.id);
+        } else {
+          await rig.coordinator.rejectAction(current.id);
+        }
+        await run.timeout(const Duration(seconds: 3));
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.pendingAction, isNull);
+        expect(
+          await _count(rig.store, 'agenda_plan_receipts'),
+          approve ? 1 : 0,
+        );
+        expect(
+          (await rig.store.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          )).items,
+          hasLength(approve ? 0 : 1),
+        );
+        expect(rig.sources.refreshCalls, 0);
+        expect(await rig.coordinator.readActionPermissions(), isEmpty);
+        for (final request in rig.gateway.requests.skip(1)) {
+          _expectPairedProtocol(request);
+        }
+      },
+    );
+  }
+
   test(
     'course follow-up resolves the historical alias, commits the current card once, and continues from its receipt',
     () async {
