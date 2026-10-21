@@ -1439,6 +1439,7 @@ final class AgentCoordinator {
       var serviceCapacityRetried = false;
       var serviceInputLimit = limits.maximumInputTokens;
       var finalStatus = AgentMessageStatus.interrupted;
+      var currentSystem = system;
       while (true) {
         if (_modelCalls >= limits.maximumModelCalls || budget.expired) {
           throw const AgentFailure(AgentFailureCode.resourceLimit);
@@ -1453,7 +1454,7 @@ final class AgentCoordinator {
                 maximumToolCalls: limits.maximumToolCalls,
                 activeTimeout: limits.activeTimeout,
               );
-        var fixed = <ModelChatMessage>[system, ?summary, ...modelTurn];
+        var fixed = <ModelChatMessage>[currentSystem, ?summary, ...modelTurn];
         var fit = activeLimits.trimCompleteGroups(
           historyGroups,
           fixedMessages: fixed,
@@ -1490,7 +1491,7 @@ final class AgentCoordinator {
               ),
             for (final group in keep) ...group,
           ];
-          fixed = [system, ?summary, ...modelTurn];
+          fixed = [currentSystem, ?summary, ...modelTurn];
           fit = activeLimits.trimCompleteGroups(
             historyGroups,
             fixedMessages: fixed,
@@ -1530,7 +1531,7 @@ final class AgentCoordinator {
           );
         }
         final messages = <ModelChatMessage>[
-          system,
+          currentSystem,
           ?summary,
           for (final group in historyGroups) ...group,
           ...modelTurn,
@@ -1793,6 +1794,16 @@ final class AgentCoordinator {
             committedResults[signature] = result;
           }
           _parameterIssue = result.validation;
+          final parameterRepair = agentToolParameterRepair(
+            call.name,
+            result.validation,
+          );
+          currentSystem = parameterRepair == null
+              ? system
+              : ModelChatMessage(
+                  role: 'system',
+                  content: '${system.content}$parameterRepair',
+                );
           _log(
             result.status == 'invalidRequest'
                 ? DiagnosticEventName.toolRejected

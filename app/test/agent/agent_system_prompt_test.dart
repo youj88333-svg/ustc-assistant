@@ -2,8 +2,47 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/agent/agent_system_prompt.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/agent/student_language_prompt.dart';
+import 'package:ustc_assistant_m0/core/agent_parameter_issue.dart';
 
 void main() {
+  test('local batch arguments do not become undo arguments', () {
+    final prompt = buildAgentSystemPrompt(
+      day: '2026-10-21',
+      receivedAt: '2026-10-21 09:00:00+08:00',
+      definitions: [_tool('propose_local_changes'), _tool('propose_undo')],
+    );
+    expect(prompt, contains('只有 propose_local_changes 使用 changes'));
+    expect(prompt, contains('propose_undo 的 arguments 必须精确为 {}'));
+    expect(prompt, contains('invalidRequest 表示本次调用没有执行'));
+    expect(prompt, contains('不要照抄失败调用或历史摘要中的参数'));
+    expect(prompt, contains('模型不得自行批准或重放'));
+    final noUndo = buildAgentSystemPrompt(
+      day: '2026-10-21',
+      receivedAt: '2026-10-21 09:00:00+08:00',
+      definitions: [_tool('query_tasks')],
+    );
+    expect(noUndo, isNot(contains('propose_undo')));
+    expect(noUndo, isNot(contains('propose_local_changes')));
+  });
+
+  test(
+    'undo repair instruction is app owned and never quotes invalid input',
+    () {
+      const issue = AgentParameterIssue(
+        reason: AgentParameterReason.unknownField,
+        field: AgentParameterField.changes,
+      );
+      final repair = agentToolParameterRepair('propose_undo', issue);
+      expect(repair, contains('【应用本轮参数校验】'));
+      expect(repair, contains('arguments={}'));
+      expect(repair, contains('未执行'));
+      expect(repair, contains('当前审批'));
+      expect(agentToolParameterRepair('propose_undo', null), isNull);
+      expect(agentToolParameterRepair('UNTRUSTED_SOURCE_TEXT', issue), isNull);
+      expect(agentToolParameterRepair('propose_local_changes', issue), isNull);
+    },
+  );
+
   test('reminder guidance distinguishes Android registration and delivery', () {
     final prompt = buildAgentSystemPrompt(
       day: '2026-10-17',
@@ -25,7 +64,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-personal-maid-agent-v12');
+      expect(agentPromptVersion, 'ustc-personal-maid-agent-v13');
       expect(prompt, startsWith(assistantPersonaPrefix));
       expect(prompt, contains('ROLE: DEDICATED_PERSONAL_MAID'));
       expect(prompt, contains('CHARACTER: ADULT_WOMAN'));

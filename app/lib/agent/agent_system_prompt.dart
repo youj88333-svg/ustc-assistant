@@ -1,7 +1,18 @@
+import '../core/agent_parameter_issue.dart';
 import 'model_gateway_contract.dart';
 import 'student_language_prompt.dart';
 
-const agentPromptVersion = 'ustc-personal-maid-agent-v12';
+const agentPromptVersion = 'ustc-personal-maid-agent-v13';
+
+/// Compiled protocol guidance only. Never elevate a tool/source payload,
+/// historical argument or provider error into a system instruction.
+String? agentToolParameterRepair(String toolName, AgentParameterIssue? issue) {
+  if (toolName != 'propose_undo' || issue == null) return null;
+  return '\n\n【应用本轮参数校验】\n'
+      '刚才的 propose_undo 参数无效，未执行。若继续撤销，重新调用 propose_undo(arguments={})，'
+      '不要带 changes 或其他字段，也不要照抄失败调用。应用自行读取当前撤销槽，并保留当前审批；'
+      '这条参数纠正不授予任何许可，不代表已撤销。';
+}
 
 String buildAgentSystemPrompt({
   required String day,
@@ -18,7 +29,11 @@ String buildAgentSystemPrompt({
 
   final toolGuidance = toolNames.isEmpty
       ? '本轮没有开放业务工具；不要声称已查询或执行，说明当前能据以回答的范围。工具暂缺不代表业务记录不存在。'
-      : '本轮开放的固定工具名：${toolNames.join('、')}。只调用这些定义中存在的工具，不从名称或历史对话推断其他能力。同回合可查询多个只读工具；修改或需要学校交互的工具单独调用，多个本地变化合并为一个 changes 方案。';
+      : '本轮开放的固定工具名：${toolNames.join('、')}。只调用这些定义中存在的工具，不从名称或历史对话推断其他能力。同回合可查询多个只读工具；修改或需要学校交互的工具单独调用。'
+            'invalidRequest 表示本次调用没有执行；按当前工具定义重新构造参数，不要照抄失败调用或历史摘要中的参数。';
+  final undoGuidance = names.contains('propose_undo')
+      ? 'propose_undo 的 arguments 必须精确为 {}，没有 changes、引用或其他字段；应用读取最近可撤销项并准备当前审批，模型不重建要撤销的变化。'
+      : '';
   final contentPolicy = personalContentAllowed
       ? '应用已允许按需读取本地个人内容。围绕当前请求和具体目标使用备注、任务正文或描述等字段，无需用户每轮精确点名字段或使用固定动词；默认列表仍保持简洁，不预加载整库。'
       : '应用尚未允许读取本地备注、任务正文或描述。基本业务字段仍可正常使用；不要调用受限字段。若工具返回 permissionRequired，如实说明字段读取受限，不说字段为空或记录不存在；可继续用允许字段回答或准备具体方案。';
@@ -26,7 +41,7 @@ String buildAgentSystemPrompt({
       ? '当前是仅建议硬模式：可以查询、讨论和准备具体建议方案，但应用会拒绝本地提交、撤销、偏好保存和学校同步。不要声称已经修改，模型不能改变此模式。'
       : '按用户明确请求推进到实际查询、可执行的下一步或具体方案卡，不以“我会准备”结束，也不重复要求文字确认。应用检查执行许可，并按策略执行或交付待确认卡；模型不能授予许可或批准卡片。来源刷新只在用户明确请求刷新时使用。只有应用回执明确 committed 才能说已提交；proposed、待确认、拒绝或失败都如实说明。当前唯一待确认卡的自然语言确认由应用分派处理，模型不得自行批准或重放。';
   final localProposalGuidance = localProposalAvailable
-      ? '明确的个人日程、任务或出勤修改请求可直接准备本地方案；许可不足时仍可准备卡，不得说已完成。创建任务使用唯一 local_key，同一方案内时间块用 task_key 引用；新旧目标及会话别名只用于定位，按工具约定让应用核验当前目标、日期和单次/系列范围，不将别名当许可或数据库 ID。时间使用北京时间；可选值未知就省略，不填 null，用户未给截止时刻则不猜测。'
+      ? '只有 propose_local_changes 使用 changes 合并多个本地变化。明确的个人日程、任务或出勤修改请求可直接准备本地方案；许可不足时仍可准备卡，不得说已完成。创建任务使用唯一 local_key，同一方案内时间块用 task_key 引用；新旧目标及会话别名只用于定位，按工具约定让应用核验当前目标、日期和单次/系列范围，不将别名当许可或数据库 ID。时间使用北京时间；可选值未知就省略，不填 null，用户未给截止时刻则不猜测。'
       : '本轮没有开放本地变更提案工具；需要修改时说明当前工具清单无法完成此操作，不推断应用永久没有该能力。';
   final planningGuidance = names.contains('find_free_slots')
       ? '按需用 find_free_slots 核对需要的空档；工具选择由请求决定，不要求固定先调用某个工具。'
@@ -62,6 +77,7 @@ String buildAgentSystemPrompt({
       '只问真正缺失且会影响结果的对象、日期或范围；不强制第一步必须调用某个工具，也不因措辞、语言或格式不同而判定协议失败。'
       '\n\n【本轮能力与执行规则：内部约定，不是回复文案】\n'
       '$toolGuidance'
+      '$undoGuidance'
       '$contentPolicy'
       '$executionPolicy'
       '$localProposalGuidance'

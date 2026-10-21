@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -10,6 +11,7 @@ import 'package:ustc_assistant_m0/agent/agent_coordinator.dart';
 import 'package:ustc_assistant_m0/agent/agent_invocation_fingerprint.dart';
 import 'package:ustc_assistant_m0/agent/agent_read_tools.dart';
 import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
+import 'package:ustc_assistant_m0/agent/ustc_model_gateway.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_discussion_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_source_contract.dart';
@@ -91,6 +93,69 @@ void main() {
         for (final request in rig.gateway.requests.skip(1)) {
           _expectPairedProtocol(request);
         }
+      },
+    );
+  }
+
+  for (final approve in [false, true]) {
+    test(
+      'loopback HTTP undo repair ${approve ? "is approved" : "is rejected"} through the full C3 flow',
+      () async {
+        final service = _A7UndoLoopbackService(approve: approve);
+        await service.start();
+        addTearDown(service.close);
+        final gateway = UstcModelGateway.loopbackForTesting(
+          service.baseUri,
+          connectTimeout: const Duration(seconds: 2),
+          requestTimeout: const Duration(seconds: 5),
+          idleTimeout: const Duration(seconds: 2),
+        );
+        final rig = await _open(gateway: gateway, includeReminders: true);
+        await _createTask(rig.store, '合成A7撤销测试任务');
+
+        final run = rig.coordinator.send('undo');
+        await _until(
+          () =>
+              rig.coordinator.view.phase == AgentPhase.waitingForApproval ||
+              rig.coordinator.view.failure != null ||
+              service.failures.isNotEmpty,
+        );
+        expect(service.failures, isEmpty);
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.phase, AgentPhase.waitingForApproval);
+        final current = rig.coordinator.view.pendingAction!;
+        expect(current.status, AgentActionStatus.proposed);
+        expect(await _count(rig.store, 'agenda_plan_receipts'), 0);
+        expect(
+          (await rig.store.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          )).items,
+          hasLength(1),
+        );
+
+        if (approve) {
+          await rig.coordinator.approveAction(current.id);
+        } else {
+          await rig.coordinator.rejectAction(current.id);
+        }
+        await run.timeout(const Duration(seconds: 8));
+
+        expect(service.failures, isEmpty);
+        expect(service.chatBodies, hasLength(3));
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.pendingAction, isNull);
+        expect(
+          await _count(rig.store, 'agenda_plan_receipts'),
+          approve ? 1 : 0,
+        );
+        expect(
+          (await rig.store.localCalendar.queryTasks(
+            const TaskQuery(filter: TaskFilter.all),
+          )).items,
+          hasLength(approve ? 0 : 1),
+        );
+        expect(rig.sources.refreshCalls, 0);
+        expect(await rig.coordinator.readActionPermissions(), isEmpty);
       },
     );
   }
@@ -838,7 +903,11 @@ void main() {
   );
 }
 
-Future<_Rig> _open({bool importCourse = false}) async {
+Future<_Rig> _open({
+  bool importCourse = false,
+  bool includeReminders = false,
+  ModelGatewayPort? gateway,
+}) async {
   final clock = FixedClock(_now);
   final store = JwStore(
     NativeDatabase.memory(),
@@ -849,6 +918,7 @@ Future<_Rig> _open({bool importCourse = false}) async {
   addTearDown(store.close);
   await store.initialize();
   await store.agent.initializeAgent();
+  if (includeReminders) await store.features.initialize();
   if (importCourse) await _importSyntheticCourse(store);
   final settings = await store.agent.inspectAgent();
   await store.agent.saveModelConfiguration(
@@ -892,18 +962,19 @@ Future<_Rig> _open({bool importCourse = false}) async {
     preferenceProposals: store.agent,
     sources: sources,
     actionRecords: store.agent,
+    reminders: includeReminders ? store.features : null,
     clock: clock,
   );
-  final gateway = _ScriptGateway();
+  final scriptGateway = _ScriptGateway();
   final coordinator = AgentCoordinator(
     data: store.agent,
-    gateway: gateway,
+    gateway: gateway ?? scriptGateway,
     readTools: actionTools,
     clock: clock,
   );
   addTearDown(coordinator.close);
   await coordinator.initialize();
-  return _Rig(store, gateway, coordinator, sources);
+  return _Rig(store, scriptGateway, coordinator, sources);
 }
 
 Future<void> _importSyntheticCourse(JwStore store) async {
@@ -1340,6 +1411,304 @@ final class _ScriptGateway implements ModelGatewayPort {
   Future<void> close() async {
     _closed = true;
     await cancelAndDrain();
+  }
+}
+
+final class _A7UndoLoopbackService {
+  _A7UndoLoopbackService({required this.approve});
+
+  final bool approve;
+  HttpServer? _server;
+  StreamSubscription<HttpRequest>? _subscription;
+  final List<Map<String, dynamic>> chatBodies = [];
+  final List<String> failures = [];
+
+  Uri get baseUri {
+    final server = _server;
+    if (server == null) throw StateError('A7 loopback server is not started.');
+    return Uri(scheme: 'http', host: '127.0.0.1', port: server.port);
+  }
+
+  Future<void> start() async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    _server = server;
+    _subscription = server.listen((request) {
+      unawaited(_handle(request));
+    });
+  }
+
+  Future<void> _handle(HttpRequest request) async {
+    try {
+      if (request.method != 'POST' ||
+          request.uri.path != '/v1/chat/completions') {
+        throw StateError('Unexpected A7 loopback request target.');
+      }
+      final body =
+          jsonDecode(await utf8.decoder.bind(request).join())
+              as Map<String, dynamic>;
+      chatBodies.add(body);
+      _expectUndoToolRegistry(body);
+
+      switch (chatBodies.length) {
+        case 1:
+          _expectUserTurn(body, 'undo');
+          await _writeToolCall(
+            request.response,
+            id: 'a7-undo-invalid',
+            arguments: const ['{"changes":', '[]', '}'],
+          );
+          return;
+        case 2:
+          _expectInvalidUndoHistory(body);
+          await _writeToolCall(
+            request.response,
+            id: 'a7-undo-corrected',
+            arguments: const ['{', '}'],
+          );
+          return;
+        case 3:
+          _expectUndoDecision(body);
+          await _writeText(
+            request.response,
+            approve ? '已撤销合成测试任务。' : '已保留合成测试任务。',
+          );
+          return;
+        default:
+          throw StateError('Unexpected extra A7 model request.');
+      }
+    } on Object catch (error) {
+      failures.add(error.toString());
+      try {
+        request.response.statusCode = HttpStatus.internalServerError;
+        await request.response.close();
+      } on Object {
+        // The gateway may already have closed a failed response.
+      }
+    }
+  }
+
+  void _expectUndoToolRegistry(Map<String, dynamic> body) {
+    final tools = (body['tools'] as List).cast<Map<String, dynamic>>();
+    expect(tools, hasLength(20));
+    final functions = [
+      for (final tool in tools) tool['function'] as Map<String, dynamic>,
+    ];
+    final names = functions.map((function) => function['name']).toSet();
+    expect(names, {
+      'query_agenda',
+      'read_event',
+      'query_tasks',
+      'read_task',
+      'inspect_conflicts',
+      'search_knowledge',
+      'read_knowledge',
+      'search_courses',
+      'read_course',
+      'read_reviews',
+      'browse_campus',
+      'read_campus_article',
+      'propose_local_changes',
+      'propose_undo',
+      'find_free_slots',
+      'propose_planning_preferences',
+      'query_source_options',
+      'request_source_refresh',
+      'query_young_activities',
+      'query_reminders',
+    });
+
+    final propertiesByName = <String, Map<String, dynamic>>{};
+    for (final function in functions) {
+      final parameters = function['parameters'] as Map<String, dynamic>;
+      final properties = parameters['properties'] as Map<String, dynamic>;
+      propertiesByName[function['name'] as String] = properties;
+      expect(
+        properties.containsKey('changes'),
+        function['name'] == 'propose_local_changes',
+      );
+    }
+    expect(propertiesByName['propose_undo'], isEmpty);
+    final undo = functions.singleWhere(
+      (function) => function['name'] == 'propose_undo',
+    );
+    expect(
+      undo['parameters'],
+      equals({
+        'type': 'object',
+        'properties': <String, Object?>{},
+        'required': <Object?>[],
+        'additionalProperties': false,
+      }),
+    );
+  }
+
+  void _expectUserTurn(Map<String, dynamic> body, String content) {
+    final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+    expect(_systemContent(body), isNot(contains('【应用本轮参数校验】')));
+    expect(
+      messages.any(
+        (message) => message['role'] == 'user' && message['content'] == content,
+      ),
+      isTrue,
+    );
+  }
+
+  void _expectInvalidUndoHistory(Map<String, dynamic> body) {
+    final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+    expect(_systemContent(body), contains('【应用本轮参数校验】'));
+    expect(_systemContent(body), contains('propose_undo(arguments={})'));
+    final assistant = messages.singleWhere((message) {
+      if (message['role'] != 'assistant' || message['tool_calls'] is! List) {
+        return false;
+      }
+      return (message['tool_calls'] as List).any(
+        (call) => (call as Map<String, dynamic>)['id'] == 'a7-undo-invalid',
+      );
+    });
+    final invalidCall = (assistant['tool_calls'] as List)
+        .cast<Map<String, dynamic>>()
+        .singleWhere((call) => call['id'] == 'a7-undo-invalid');
+    expect(invalidCall['function']['arguments'], '{"changes":[]}');
+    final result = messages.singleWhere(
+      (message) =>
+          message['role'] == 'tool' &&
+          message['tool_call_id'] == 'a7-undo-invalid',
+    );
+    final payload =
+        jsonDecode(result['content'] as String) as Map<String, dynamic>;
+    expect(payload['status'], 'invalidRequest');
+    final data = payload['data'] as Map<String, dynamic>;
+    expect(data['expected_arguments'], <String, Object?>{});
+    expect(
+      data['repair'],
+      'propose_undo 不接受任何字段。重新调用时 arguments 只传空对象 {}；'
+      '不要添加 changes、引用或其它操作参数。应用读取当前撤销槽，'
+      '仍按当前许可和审批执行。',
+    );
+  }
+
+  void _expectUndoDecision(Map<String, dynamic> body) {
+    final messages = (body['messages'] as List).cast<Map<String, dynamic>>();
+    expect(_systemContent(body), isNot(contains('【应用本轮参数校验】')));
+    final correctedCall = messages
+        .where(
+          (message) =>
+              message['role'] == 'assistant' && message['tool_calls'] is List,
+        )
+        .expand((message) => message['tool_calls'] as List)
+        .cast<Map<String, dynamic>>()
+        .singleWhere((call) => call['id'] == 'a7-undo-corrected');
+    expect(correctedCall['function']['arguments'], '{}');
+    final result = messages.singleWhere(
+      (message) =>
+          message['role'] == 'tool' &&
+          message['tool_call_id'] == 'a7-undo-corrected',
+    );
+    final payload =
+        jsonDecode(result['content'] as String) as Map<String, dynamic>;
+    expect(payload['status'], approve ? 'committed' : 'rejected');
+  }
+
+  String _systemContent(Map<String, dynamic> body) =>
+      (body['messages'] as List).cast<Map<String, dynamic>>().singleWhere(
+            (message) => message['role'] == 'system',
+          )['content']
+          as String;
+
+  Future<void> _writeToolCall(
+    HttpResponse response, {
+    required String id,
+    required List<String> arguments,
+  }) => _writeSse(response, [
+    {
+      'choices': [
+        {
+          'index': 0,
+          'delta': {
+            'tool_calls': [
+              {
+                'index': 0,
+                'id': id,
+                'type': 'function',
+                'function': {
+                  'name': 'propose_undo',
+                  'arguments': arguments.first,
+                },
+              },
+            ],
+          },
+          'finish_reason': null,
+        },
+      ],
+    },
+    for (final part in arguments.skip(1))
+      {
+        'choices': [
+          {
+            'index': 0,
+            'delta': {
+              'tool_calls': [
+                {
+                  'index': 0,
+                  'function': {'arguments': part},
+                },
+              ],
+            },
+            'finish_reason': null,
+          },
+        ],
+      },
+    {
+      'choices': [
+        {
+          'index': 0,
+          'delta': <String, Object?>{},
+          'finish_reason': 'tool_calls',
+        },
+      ],
+    },
+  ]);
+
+  Future<void> _writeText(HttpResponse response, String text) =>
+      _writeSse(response, [
+        {
+          'choices': [
+            {
+              'index': 0,
+              'delta': {'content': text},
+              'finish_reason': null,
+            },
+          ],
+        },
+        {
+          'choices': [
+            {'index': 0, 'delta': <String, Object?>{}, 'finish_reason': 'stop'},
+          ],
+        },
+      ]);
+
+  Future<void> _writeSse(
+    HttpResponse response,
+    List<Map<String, Object?>> events,
+  ) async {
+    response.headers.contentType = ContentType(
+      'text',
+      'event-stream',
+      charset: 'utf-8',
+    );
+    for (final event in events) {
+      response.write('data: ${jsonEncode(event)}\n\n');
+      await response.flush();
+    }
+    response.write('data: [DONE]\n\n');
+    await response.close();
+  }
+
+  Future<void> close() async {
+    await _subscription?.cancel();
+    await _server?.close(force: true);
+    _subscription = null;
+    _server = null;
   }
 }
 
