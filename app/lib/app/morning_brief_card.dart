@@ -41,11 +41,7 @@ final class MorningBriefCard extends StatelessWidget {
         ? candidateBatch
         : null;
     final phase = view.phase;
-    final canRetry =
-        phase == MorningBriefPhase.failed ||
-        phase == MorningBriefPhase.interrupted ||
-        view.failure != null ||
-        (noticeBatch != null && !noticeBatch.complete);
+    final canRetry = view.canRegenerate;
 
     return DecoratedBox(
       key: const ValueKey('morning-brief-card'),
@@ -189,19 +185,19 @@ final class _MorningBriefDetailsDialog extends StatelessWidget {
         ? candidateBatch
         : null;
     final phase = view.phase;
-    final summary = _summaryForToday(brief, view.text, today, noticeBatch);
+    final summary = view.summaryOutdated
+        ? const _SummaryPresentation(today: '', notices: '', structured: false)
+        : _summaryForToday(brief, view.text, today, noticeBatch);
     final attention = _attentionFor(view, facts, noticeBatch, phase);
-    final canRetry =
-        phase == MorningBriefPhase.failed ||
-        phase == MorningBriefPhase.interrupted ||
-        view.failure != null ||
-        (noticeBatch != null && !noticeBatch.complete);
+    final canRetry = view.canRegenerate;
     final phaseLabel = view.failure != null
         ? '失败，可重试'
         : phase == MorningBriefPhase.ready &&
               noticeBatch != null &&
               !noticeBatch.complete
         ? '部分完成'
+        : view.summaryOutdated
+        ? '安排已变化，可重新生成'
         : _phaseLabel(phase);
 
     return Dialog(
@@ -291,7 +287,13 @@ final class _MorningBriefDetailsDialog extends StatelessWidget {
                     key: const ValueKey('morning-brief-details-retry'),
                     onPressed: view.busy ? null : onRetry,
                     icon: const Icon(Icons.refresh_rounded),
-                    label: const Text('重试晨报'),
+                    label: Text(
+                      view.summaryOutdated ||
+                              phase == MorningBriefPhase.facts ||
+                              phase == MorningBriefPhase.cleared
+                          ? '重新生成晨报'
+                          : '重试晨报',
+                    ),
                   ),
                 ),
               ],
@@ -416,6 +418,11 @@ final class _MorningBriefDetailsDialog extends StatelessWidget {
       }
     }
 
+    if (currentView.summaryOutdated) {
+      items.add(
+        const _Attention('今天的安排有变化，摘要尚未更新。可重新生成晨报。', Icons.update_rounded),
+      );
+    }
     if (currentView.failure != null) {
       items.add(
         const _Attention(
@@ -775,6 +782,7 @@ String _compactStatus(
     return '失败，可重试';
   }
   if (phase == MorningBriefPhase.interrupted) return '已暂停，可重试';
+  if (view.summaryOutdated) return '安排已变化，可重新生成';
   if (noticeBatch != null && !noticeBatch.complete) {
     return '部分完成 · 可重试';
   }
@@ -888,7 +896,7 @@ String _noticeStatus(MorningNoticeBatch? batch, MorningBriefPhase phase) {
 
 String _phaseLabel(MorningBriefPhase phase) => switch (phase) {
   MorningBriefPhase.idle => '待开始',
-  MorningBriefPhase.facts => '整理本地事实',
+  MorningBriefPhase.facts => '等待生成',
   MorningBriefPhase.notices => '更新公开通知',
   MorningBriefPhase.waiting => '等待模型空闲',
   MorningBriefPhase.generating => '生成摘要',

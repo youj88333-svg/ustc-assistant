@@ -357,17 +357,28 @@ void main() {
       final busyPort = _FakeYoungSyncPort(
         initial: YoungSyncView(
           accountBound: true,
+          profileRetained: true,
           data: _data(accountBound: true),
         ),
       )..nextJobGate = Completer<void>();
       addTearDown(busyPort.dispose);
-      await _pump(tester, busyPort);
+      await _pump(tester, busyPort, productMode: true);
       await _tapVisible(
         tester,
         find.byKey(const ValueKey('young-sync-start-activities')),
       );
       await tester.pump();
-      expect(find.text('取消本次二课作业'), findsOneWidget);
+      expect(find.text('取消本次操作'), findsOneWidget);
+      final cancelFinder = find.byKey(const ValueKey('young-sync-cancel'));
+      final primaryActionsFinder = find.byKey(
+        const ValueKey('young-sync-primary-actions'),
+      );
+      await tester.ensureVisible(cancelFinder);
+      await tester.pumpAndSettle();
+      final busyCancelRect = tester.getRect(cancelFinder);
+      final busyPrimaryRect = tester.getRect(primaryActionsFinder);
+      final cancelOffsetInPrimary =
+          busyCancelRect.topLeft - busyPrimaryRect.topLeft;
       expect(
         tester
             .widget<FilledButton>(
@@ -376,14 +387,47 @@ void main() {
             .onPressed,
         isNull,
       );
-      await _tapVisible(
-        tester,
-        find.byKey(const ValueKey('young-sync-cancel')),
-      );
+      expect(cancelFinder.hitTestable(), findsOneWidget);
+      await tester.tapAt(busyCancelRect.center);
       await tester.pumpAndSettle();
       expect(busyPort.cancelCalls, 1);
       expect(busyPort.syncView.phase, YoungSyncPhase.idle);
+      expect(busyPort.syncView.profileRetained, isTrue);
 
+      final idleCancelRect = tester.getRect(cancelFinder);
+      final idlePrimaryRect = tester.getRect(primaryActionsFinder);
+      expect(idleCancelRect.size, busyCancelRect.size);
+      expect(
+        idleCancelRect.topLeft - idlePrimaryRect.topLeft,
+        cancelOffsetInPrimary,
+      );
+      expect(tester.widget<OutlinedButton>(cancelFinder).onPressed, isNull);
+      await tester.tapAt(busyCancelRect.center);
+      await tester.pumpAndSettle();
+      expect(busyPort.cancelCalls, 1);
+      expect(busyPort.activityCalls, 1);
+      expect(busyPort.clearCalls, 0);
+      expect(busyPort.deleteCredentialCalls, 0);
+      await tester.tapAt(idleCancelRect.center);
+      await tester.pumpAndSettle();
+      expect(busyPort.clearCalls, 0);
+      expect(find.byType(AlertDialog), findsNothing);
+      final clearSessionFinder = find.byKey(
+        const ValueKey('young-sync-clear-session'),
+      );
+      expect(
+        tester.widget<OutlinedButton>(clearSessionFinder).onPressed,
+        isNotNull,
+      );
+      await _tapVisible(tester, clearSessionFinder);
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsOneWidget);
+      await tester.tap(find.widgetWithText(TextButton, '取消'));
+      await tester.pumpAndSettle();
+      expect(busyPort.clearCalls, 0);
+
+      // Recovery labels below exercise the pre-existing diagnostic-mode UI.
+      await _pump(tester, busyPort);
       busyPort.emit(
         YoungSyncView(
           phase: YoungSyncPhase.recovery,
@@ -782,36 +826,67 @@ void main() {
     },
   );
 
-  testWidgets('fits a narrow panel without layout overflow', (tester) async {
-    final port = _FakeYoungSyncPort();
-    addTearDown(port.dispose);
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: Center(
-            child: SizedBox(
-              width: 320,
-              height: 720,
-              child: YoungSyncPanel(controller: port),
+  testWidgets(
+    'fits a narrow panel and keeps primary and secondary actions reachable',
+    (tester) async {
+      final port = _FakeYoungSyncPort(
+        initial: YoungSyncView(
+          accountBound: true,
+          profileRetained: true,
+          data: _data(
+            accountBound: true,
+            credentialSaved: true,
+            importCount: 3,
+          ),
+        ),
+      );
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: SizedBox(
+                width: 320,
+                height: 720,
+                child: YoungSyncPanel(controller: port),
+              ),
             ),
           ),
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    expect(tester.takeException(), isNull);
-  });
+      );
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      for (final key in <String>[
+        'young-sync-start-calendar',
+        'young-sync-start-activities',
+        'young-sync-clear-session',
+        'young-sync-delete-saved-credential',
+      ]) {
+        final finder = find.byKey(ValueKey(key));
+        await tester.ensureVisible(finder);
+        await tester.pumpAndSettle();
+        expect(finder.hitTestable(), findsOneWidget, reason: key);
+        expect(tester.takeException(), isNull);
+      }
+    },
+  );
 }
 
 Future<void> _pump(
   WidgetTester tester,
   _FakeYoungSyncPort port, {
   DateTime Function()? clock,
+  bool productMode = false,
 }) async {
   await tester.pumpWidget(
     MaterialApp(
       home: Scaffold(
-        body: YoungSyncPanel(controller: port, clock: clock),
+        body: YoungSyncPanel(
+          controller: port,
+          clock: clock,
+          productMode: productMode,
+        ),
       ),
     ),
   );

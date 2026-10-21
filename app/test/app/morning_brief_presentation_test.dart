@@ -19,6 +19,68 @@ final _day = DateTime.utc(2026, 10, 15);
 final _yesterday = DateTime.utc(2026, 10, 14);
 
 void main() {
+  testWidgets('outdated summary shows new facts and manual recovery', (
+    tester,
+  ) async {
+    final base = _view(agenda: [_agenda(title: '更新后的课程')]);
+    await tester.pumpWidget(
+      _host(
+        MorningRuntimeView(
+          enabled: true,
+          facts: base.facts,
+          // Even an inconsistent caller cannot accidentally render old prose.
+          brief: base.brief,
+          text: base.text,
+          phase: MorningBriefPhase.facts,
+          summaryOutdated: true,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('安排已变化，可重新生成'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+    await tester.pumpAndSettle();
+    expect(find.text('今天的安排有变化，摘要尚未更新。可重新生成晨报。'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('morning-brief-full-summary')),
+      findsNothing,
+    );
+    expect(find.text('重新生成晨报'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('morning-brief-agenda-expand')));
+    await tester.pumpAndSettle();
+    expect(find.text('更新后的课程'), findsOneWidget);
+  });
+
+  for (final phase in [MorningBriefPhase.facts, MorningBriefPhase.cleared]) {
+    testWidgets('idle ${phase.name} offers a manual generation entry', (
+      tester,
+    ) async {
+      final base = _view();
+      await tester.pumpWidget(
+        _host(
+          MorningRuntimeView(enabled: true, facts: base.facts, phase: phase),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('整理本地事实'), findsNothing);
+      expect(find.byKey(const ValueKey('morning-brief-retry')), findsOneWidget);
+      await tester.tap(find.byKey(const ValueKey('morning-brief-open')));
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const ValueKey('morning-brief-details-retry')),
+        findsOneWidget,
+      );
+      expect(
+        tester
+            .widget<OutlinedButton>(
+              find.byKey(const ValueKey('morning-brief-details-retry')),
+            )
+            .onPressed,
+        isNotNull,
+      );
+    });
+  }
+
   testWidgets('summary and attention lead while details remain folded', (
     tester,
   ) async {

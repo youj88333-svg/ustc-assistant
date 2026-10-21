@@ -453,11 +453,11 @@ extension _AgentPlanStorage on LocalCalendarStore {
         id: id,
         kind: undoOnly ? AgentActionKind.undo : AgentActionKind.localPlan,
         status: AgentActionStatus.proposed,
-        title: undoOnly ? '撤销最近一次本地修改' : '待批准的本地变化',
+        title: undoOnly ? '撤销最近一次本地修改' : '本地修改方案',
         details: lines,
         warning:
             '批准后将一次提交上述全部变化。学校资料未自动刷新。$previewWarning${taskWarnings.join()}'
-            '${reminderRevision == null ? "" : "提醒规则保存后由系统异步登记；保存成功不代表Windows已接收或保证投递。"}',
+            '${reminderRevision == null ? "" : "提醒规则保存后由系统异步登记；保存成功不代表系统已接收或保证投递。"}',
       );
       final proposed = AgentLocalPlan(
         id: id,

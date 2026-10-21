@@ -229,8 +229,9 @@ void main() {
       final committed = _action(
         id: 'current',
         status: AgentActionStatus.committed,
-        title: '已完成的修改',
+        title: '待批准的本地变化',
         details: const ['C3 回执记录的结果。'],
+        warning: '保存成功不代表Windows已接收或保证投递。',
         committedCount: 1,
       );
       port.replace(
@@ -258,6 +259,10 @@ void main() {
       await tester.tap(detailsToggle);
       await tester.pumpAndSettle();
       expect(find.text('本地实际提交 1 项'), findsOneWidget);
+      expect(find.text('待批准的本地变化'), findsNothing);
+      expect(find.text('本地修改方案'), findsOneWidget);
+      expect(find.textContaining('Windows已接收'), findsNothing);
+      expect(find.textContaining('系统已接收'), findsOneWidget);
       expect(find.text('这是历史记录，不提供再次批准操作。'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('agent-action-approve-current')),

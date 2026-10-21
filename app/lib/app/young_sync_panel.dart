@@ -493,6 +493,7 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                   ],
                   const SizedBox(height: 12),
                   _actions(context),
+                  _secondaryActions(context),
                   if (_actionMessage != null) ...[
                     const SizedBox(height: 10),
                     _message(context, _actionMessage!, error: true),
@@ -721,6 +722,7 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
   Widget _actions(BuildContext context) {
     final datesValid = _dateRange != null;
     return Wrap(
+      key: const ValueKey('young-sync-primary-actions'),
       spacing: 10,
       runSpacing: 10,
       children: [
@@ -745,10 +747,10 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
             icon: const Icon(Icons.login),
             label: const Text('登录完成，继续'),
           ),
-        if (_canCancel)
+        if (_canCancel || _isIdle || _pendingAction == 'cancel')
           OutlinedButton.icon(
             key: const ValueKey('young-sync-cancel'),
-            onPressed: _cancel,
+            onPressed: _canCancel ? _cancel : null,
             icon: const Icon(Icons.stop_circle_outlined),
             label: Text(
               _pendingAction == 'cancel'
@@ -771,21 +773,50 @@ final class _YoungSyncPanelState extends State<YoungSyncPanel> {
                   : '重试二课收口',
             ),
           ),
-        if (_isIdle)
-          OutlinedButton.icon(
-            key: const ValueKey('young-sync-clear-session'),
-            onPressed: _canClearSession ? _clearSession : null,
-            icon: const Icon(Icons.key_off_outlined),
-            label: const Text('清除二课登录资料'),
-          ),
-        if (_credentialSaved)
-          OutlinedButton.icon(
-            key: const ValueKey('young-sync-delete-saved-credential'),
-            onPressed: _canStart ? _deleteSavedCredential : null,
-            icon: const Icon(Icons.key_off),
-            label: const Text('删除保存的学校密码'),
-          ),
       ],
+    );
+  }
+
+  Widget _secondaryActions(BuildContext context) {
+    if (!_isIdle && !_credentialSaved) return const SizedBox.shrink();
+
+    final actions = <Widget>[];
+    if (_isIdle) {
+      actions.add(
+        OutlinedButton.icon(
+          key: const ValueKey('young-sync-clear-session'),
+          onPressed: _canClearSession ? _clearSession : null,
+          icon: const Icon(Icons.key_off_outlined),
+          label: const Text('清除二课登录资料'),
+        ),
+      );
+    }
+    if (_credentialSaved) {
+      actions.add(
+        OutlinedButton.icon(
+          key: const ValueKey('young-sync-delete-saved-credential'),
+          onPressed: _canStart ? _deleteSavedCredential : null,
+          icon: const Icon(Icons.key_off),
+          label: const Text('删除保存的学校密码'),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text('登录资料管理', style: Theme.of(context).textTheme.labelLarge),
+          const SizedBox(height: 4),
+          Wrap(
+            key: const ValueKey('young-sync-secondary-actions'),
+            spacing: 10,
+            runSpacing: 10,
+            children: actions,
+          ),
+        ],
+      ),
     );
   }
 

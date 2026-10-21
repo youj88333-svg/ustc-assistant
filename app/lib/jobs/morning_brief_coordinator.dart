@@ -141,9 +141,9 @@ final class MorningBriefCoordinator {
     }
     final done = Completer<void>();
     _checking = done.future;
+    var enabled = _view.enabled;
     try {
-      final enabled =
-          (await settings.inspectReminders()).preferences.morningEnabled;
+      enabled = (await settings.inspectReminders()).preferences.morningEnabled;
       if (!enabled) {
         await _interrupt('disabled');
         _publish(const MorningRuntimeView());
@@ -152,9 +152,10 @@ final class MorningBriefCoordinator {
       final day = beijingDay(clock.nowUtc);
       final facts = await data.morningFacts(day);
       final cached = await data.readMorningBrief(day);
-      final current = cached != null && cached.factDigest == facts.digest
-          ? cached
-          : null;
+      final cleared = cached?.phase == MorningBriefPhase.cleared;
+      final summaryOutdated =
+          cached != null && !cleared && cached.factDigest != facts.digest;
+      final current = cached != null && !summaryOutdated ? cached : null;
       if (_ticket != null &&
           (_ticket!.day != day ||
               _ticket!.factDigest != facts.digest ||
@@ -174,6 +175,7 @@ final class MorningBriefCoordinator {
               ? _view.text
               : (current?.summary ?? ''),
           failure: _drainFailed ? 'drainFailed' : current?.failure,
+          summaryOutdated: _work == null && summaryOutdated,
         ),
       );
       if (_work != null ||
@@ -210,7 +212,7 @@ final class MorningBriefCoordinator {
     } catch (error) {
       _publish(
         MorningRuntimeView(
-          enabled: _view.enabled,
+          enabled: enabled,
           facts: _view.facts,
           brief: _view.brief,
           phase: MorningBriefPhase.failed,

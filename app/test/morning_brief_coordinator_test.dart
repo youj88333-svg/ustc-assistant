@@ -26,6 +26,134 @@ const _noticeUrl =
     'https://www.teach.ustc.edu.cn/2026/10/14/private-id-sentinel.html';
 
 void main() {
+  for (final read in ['facts', 'brief']) {
+    test(
+      'initial $read read failure remains visible and can recover',
+      () async {
+        final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 21, 59));
+        fixture.data.failFactRead = read == 'facts';
+        fixture.data.failBriefRead = read == 'brief';
+        fixture.coordinator.onForeground(true);
+        await _waitFor(
+          () => fixture.coordinator.view.phase == MorningBriefPhase.failed,
+        );
+        expect(fixture.coordinator.view.enabled, isTrue);
+        expect(fixture.coordinator.view.canRegenerate, isTrue);
+        expect(fixture.coordinator.view.busy, isFalse);
+        expect(fixture.gateway.generateCalls, 0);
+        fixture.data.failFactRead = fixture.data.failBriefRead = false;
+        await fixture.coordinator.check(manual: true);
+        await fixture.gateway.started.future.timeout(
+          const Duration(seconds: 2),
+        );
+        fixture.gateway.finishSuccessfully();
+        await fixture.data.readySaved.future.timeout(
+          const Duration(seconds: 2),
+        );
+        await fixture.close();
+      },
+    );
+  }
+
+  for (final oldPhase in [MorningBriefPhase.ready, MorningBriefPhase.failed]) {
+    test(
+      'changed facts hide ${oldPhase.name} summary until manual retry',
+      () async {
+        final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 22));
+        fixture.data.modelAttempts = 2;
+        final oldBrief = MorningBrief(
+          day: fixture.data.facts.day,
+          phase: oldPhase,
+          factDigest: _briefDigest,
+          autoAttempts: 2,
+          notices: _coverageBatch(complete: true),
+          summary: 'synthetic obsolete summary',
+          failure: oldPhase == MorningBriefPhase.failed ? 'timeout' : null,
+        );
+        fixture.data.cached = oldBrief;
+        fixture.data.changeFacts(
+          digest: 'synthetic-new-digest',
+          eventTitle: 'synthetic updated arrangement',
+        );
+        fixture.coordinator.onForeground(true);
+        await _waitFor(() => fixture.coordinator.view.facts != null);
+        for (var i = 0; i < 3; i++) {
+          await fixture.coordinator.check();
+          final view = fixture.coordinator.view;
+          expect(view.facts!.digest, 'synthetic-new-digest');
+          expect(view.busy, isFalse);
+          expect(view.summaryOutdated, isTrue);
+          expect(view.canRegenerate, isTrue);
+          expect(view.brief, isNull);
+          expect(view.text, isEmpty);
+          expect(fixture.data.cached, same(oldBrief));
+        }
+        expect(fixture.data.beginCalls, 0);
+        expect(fixture.data.modelAttempts, 2);
+        expect(fixture.source.browseCalls, 0);
+        expect(fixture.gateway.generateCalls, 0);
+
+        // A new runtime over the same persisted snapshot has the same idle,
+        // recoverable projection; it does not interpret facts changes as work.
+        await fixture.close();
+        final restarted = _BriefFixture(fixture.clock.value);
+        restarted.data.cached = oldBrief;
+        restarted.data.modelAttempts = 2;
+        restarted.data.facts = fixture.data.facts;
+        restarted.coordinator.onForeground(true);
+        await _waitFor(() => restarted.coordinator.view.facts != null);
+        expect(restarted.coordinator.view.summaryOutdated, isTrue);
+        expect(restarted.coordinator.view.canRegenerate, isTrue);
+        expect(restarted.data.beginCalls, 0);
+
+        await restarted.coordinator.check(manual: true);
+        await restarted.gateway.started.future.timeout(
+          const Duration(seconds: 2),
+        );
+        expect(restarted.source.browseCalls, 2);
+        expect(restarted.data._ticket!.manual, isTrue);
+        expect(restarted.data._ticket!.factDigest, 'synthetic-new-digest');
+        expect(
+          restarted.gateway.lastRequest!.messages.last.content,
+          contains('synthetic updated arrangement'),
+        );
+        restarted.gateway.finishSuccessfully();
+        await restarted.data.readySaved.future.timeout(
+          const Duration(seconds: 2),
+        );
+        await _waitFor(
+          () => restarted.coordinator.view.phase == MorningBriefPhase.ready,
+        );
+        expect(restarted.coordinator.view.summaryOutdated, isFalse);
+        expect(restarted.data.cached!.factDigest, 'synthetic-new-digest');
+        await restarted.close();
+      },
+    );
+  }
+
+  test(
+    'cleared brief remains cleared even with the store empty digest',
+    () async {
+      final fixture = _BriefFixture(DateTime.utc(2026, 10, 14, 22))
+        ..data.cached = MorningBrief(
+          day: DateTime.utc(2026, 10, 15),
+          phase: MorningBriefPhase.cleared,
+          factDigest: '',
+          autoAttempts: 2,
+        );
+      fixture.coordinator.onForeground(true);
+      await _waitFor(() => fixture.coordinator.view.facts != null);
+      await fixture.coordinator.check();
+      expect(fixture.coordinator.view.phase, MorningBriefPhase.cleared);
+      expect(fixture.coordinator.view.busy, isFalse);
+      expect(fixture.coordinator.view.text, isEmpty);
+      expect(fixture.data.beginCalls, 0);
+      expect(fixture.source.browseCalls, 0);
+      expect(fixture.gateway.generateCalls, 0);
+      await fixture.close();
+    },
+  );
+
   test(
     'manual retry refreshes even a previously complete notice cache',
     () async {
@@ -558,6 +686,7 @@ final class _FakeBriefData implements MorningBriefDataPort {
   final Completer<void> readySaved = Completer<void>();
   MorningFacts facts;
   MorningBrief? cached;
+  bool failFactRead = false, failBriefRead = false;
   int epoch = 2, beginCalls = 0, modelAttempts = 0, readyWrites = 0;
   int _nextTicket = 0;
   MorningBriefTicket? _ticket;
@@ -567,11 +696,16 @@ final class _FakeBriefData implements MorningBriefDataPort {
   Stream<int> get changes => _changes.stream;
 
   @override
-  Future<MorningFacts> morningFacts(DateTime day) async => facts;
+  Future<MorningFacts> morningFacts(DateTime day) async {
+    if (failFactRead) throw StateError('synthetic fact read failure');
+    return facts;
+  }
 
   @override
-  Future<MorningBrief?> readMorningBrief(DateTime day) async =>
-      cached?.day == day ? cached : null;
+  Future<MorningBrief?> readMorningBrief(DateTime day) async {
+    if (failBriefRead) throw StateError('synthetic brief read failure');
+    return cached?.day == day ? cached : null;
+  }
 
   @override
   Future<MorningBriefTicket?> beginMorningBrief(

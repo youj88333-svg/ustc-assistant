@@ -290,6 +290,7 @@ final class MorningRuntimeView {
     this.phase = MorningBriefPhase.idle,
     this.text = '',
     this.failure,
+    this.summaryOutdated = false,
   });
   final bool enabled, busy;
   final MorningFacts? facts;
@@ -297,4 +298,17 @@ final class MorningRuntimeView {
   final MorningBriefPhase phase;
   final String text;
   final String? failure;
+
+  /// Runtime projection only. The persisted summary remains bound to its old
+  /// facts and cannot be reused until an explicit generation succeeds.
+  final bool summaryOutdated;
+
+  bool get canRegenerate =>
+      summaryOutdated ||
+      phase == MorningBriefPhase.facts ||
+      phase == MorningBriefPhase.cleared ||
+      phase == MorningBriefPhase.failed ||
+      phase == MorningBriefPhase.interrupted ||
+      failure != null ||
+      (brief?.notices != null && !brief!.notices!.complete);
 }

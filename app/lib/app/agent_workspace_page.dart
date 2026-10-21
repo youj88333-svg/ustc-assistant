@@ -2853,7 +2853,12 @@ final class _AgentActionCard extends StatelessWidget {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            action.title,
+                            action.kind == AgentActionKind.localPlan &&
+                                    action.status !=
+                                        AgentActionStatus.proposed &&
+                                    action.title == '待批准的本地变化'
+                                ? _actionKindLabel(action.kind)
+                                : action.title,
                             key: ValueKey('agent-action-title-${action.id}'),
                             style: const TextStyle(fontWeight: FontWeight.w700),
                           ),
@@ -2955,7 +2960,7 @@ final class _AgentActionCard extends StatelessWidget {
           borderRadius: BorderRadius.circular(8),
         ),
         child: Text(
-          action.warning,
+          action.warning.replaceAll('Windows已接收', '系统已接收'),
           style: const TextStyle(color: Color(0xFF805500)),
         ),
       ),
