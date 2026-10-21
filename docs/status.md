@@ -12,9 +12,9 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | QA4011已通过MuMu真实空/非空自动同步与活动查询；A7/A8继续开放 | [A0–A8计划](milestones/android-apk/plan.md)、[最新记录18](milestones/android-apk/records/18-qa4010-history-state.md)及[设备矩阵](milestones/android-apk/device-matrix.md)区分旧失败、工程回归及后续真实证据。根computer-use覆盖QA4011，密码留空自动完成原范围同步（0条）、活动查询（102条）及9月非空同步（2条），三次安全日志已导出核对。日期问题定位到CU传入MuMu的输入路径，单键编辑正常，日期界面15项合成检查通过，未修改应用。此前全套工程检查及QA4011/2011包核验保留；业务明细对应、每日当前窗口、手机/鸿蒙及原未观察项不补记通过 |
+| Android APK迁移 | QA4014已在MuMu通过当前审批/拒绝/撤销与竖屏整周；A7/A8继续开放 | [A0–A8计划](milestones/android-apk/plan.md)、[最新记录19](milestones/android-apk/records/19-mumu-a7-daily-approval-portrait.md)及[设备矩阵](milestones/android-apk/device-matrix.md)区分旧失败、自动检查和真实UI。本轮每日固定31日显式恢复成功、同日重启去重；修复撤销参数歧义和20工具诊断，测试任务创建/拒绝/撤销闭环，竖屏七列及日期/任务可达。根analyze、1575项/1跳过、Windows相关10组和QA4014/2014构建核验通过，安全导出完整。此前非空同步与活动查询保留；次日06:00真实触发、窄屏审批弹层、业务明细对应和手机/鸿蒙待验 |
 | 跨端界面重构 | 工程、自动检查和私有体验构建完成；用户体验待确认 | [任务单](milestones/ui-refresh/plan.md)明确风格、布局、接口不变量与验收；两项Skill已安装，详见[记录](milestones/ui-refresh/records.md)。白色画布、细分隔线、平面分区，保留Agent、日程任务、设置与审批功能。最终analyze、1558项/1平台跳过、Windows相关21项、API34合成4项与实际图像复核通过；Android构建/lint/签名和独立Windows暂存Release已核验，未提前关闭本轮体验或A7/A8 |
-| 后续 | A7剩余体验/业务内容对应/目标机补验；A8发行待办 | 本轮二课空/非空自动链路与导出已取得真实证据，详见[说明](milestones/android-apk/manual-validation.md)。审批/竖屏、模型思考及其它原体验项保留；整体UI重构单独跟踪。当前无目标实机，不用模拟器替代目标设备，不提前关闭完整风险项；原生鸿蒙及Windows公开发布另行定界 |
+| 后续 | A7剩余体验/业务内容对应/目标机补验；A8发行待办 | MuMu已有二课空/非空链路、当前内联审批、竖屏整周及安全导出实证，详见[说明](milestones/android-apk/manual-validation.md)。实际次日每日触发、窄屏弹层/键盘、真实麦克风/通知及其他原体验项保留；整体UI重构单独跟踪。当前无目标实机，不用模拟器替代目标设备，不提前关闭完整风险项；原生鸿蒙及Windows公开发布另行定界 |
 
 ## 已批准范围与待验证
 

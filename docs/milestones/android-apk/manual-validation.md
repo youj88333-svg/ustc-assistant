@@ -4,20 +4,20 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/qa4011/artifacts/USTC-Assistant-Android-QA4011-x86_64.apk`。这是修复已复现的Young历史元数据误判、保留现有[界面](../ui-refresh/plan.md)和自动认证/采集的x86_64私有QA包，不是A8正式版，也不是arm64手机包；真实失败、修复依据及合成回归见[记录18](records/18-qa4010-history-state.md)。
+文件位于工程内：`app/build/qa4014/artifacts/USTC-Assistant-Android-QA4014-x86_64.apk`。这是保留Young兼容修复、现有[界面](../ui-refresh/plan.md)和自动认证/采集，并修订Agent撤销参数与20工具诊断的x86_64私有QA包，不是A8正式版，也不是arm64手机包；根已在现有MuMu覆盖安装，实际结果及旧失败见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4011` |
-| ABI / 文件大小 | `x86_64` / `290991189` bytes |
-| SHA-256 | `068b822d39bf09bc9871b6e7210b6a0653282b170027ce27070cea925625a692` |
-| 源码修订 | `885b41e52e641dd3a37b69e921987ed61d7652e8` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4014` |
+| ABI / 文件大小 | `x86_64` / `290997551` bytes |
+| SHA-256 | `77ba68439bf3d52383127d75f2a673078b3a4942bd5daf360463b38d7e51b541` |
+| 源码修订 | `cfec38f99344d3ade88cdc05dcb2a1cb94cfdfbf` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`。签名沿用4003–4010版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据在构建时记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`，后来的真实UI证据另记。签名沿用4003–4013版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
 
-同一源码的ARM64包、大小及摘要统一见[交付记录](records/18-qa4010-history-state.md#私有升级交付)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4011，不用ARM64包覆盖。
+同一源码的ARM64/2014包、大小及摘要统一见[交付记录](records/19-mumu-a7-daily-approval-portrait.md#qa4014私有包)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4014，不用ARM64包覆盖。
 
 ## 安装
 
@@ -36,7 +36,9 @@ QA4010安全日志确认Young在collecting/profileBefore以staleResult/mainRoute
 
 QA4007的模型策略继续保留：精确 `deepseek-flash` 发送high，其他模型服务默认；所有新请求共用专属女仆标签，旧聊天/晨报不改写。实际学校模型接受及采用参数、语气效果仍待反馈，不要求为本次二课修复重做模型验证或清会话。
 
-机械回归、真实成功及此前失败的区别见记录18，无需重做所有历史体验项。QA4009教务恢复的用户确认继续保留；QA4011非空同步已有真实证据，当前选择为9月1–30日。此次computer-use整段文字和快捷键传入MuMu异常，使用Android全选和数字/减号单键可正常编辑；应用日期界面15项合成检查通过，未修改应用代码。每日协调状态与手动来源作业分开追踪，当前滚动窗口的独立每日触发、业务明细对应、目标手机及鸿蒙仍待验证。
+机械回归、真实成功及此前失败的区别见记录18–19，无需重做所有历史体验项。QA4009教务恢复、QA4011非空同步继续保留；日期编辑故障定位到computer-use输入路径，应用日期界面15项合成检查通过，未修改代码。
+
+后续根已在MuMu验证每日面板的固定31日“立即同步”成功、成功覆盖重启保留及同日不重复采集；第一次登录超时也留档。QA4014实际通过测试任务的当前审批、拒绝保留、重新申请及批准撤销；已完成详情可展开/收起，测试任务已恢复不存在。竖屏七列同时可见、日期详情与任务入口可达，手动9月范围保留。安全导出15完整、invalid/dropped均0；工具仍严格校验，未增加记住许可。实际次日06:00自动准入、窄屏审批弹层、业务明细对应、目标手机及鸿蒙继续待验，不能把手动恢复或内联审批当作这些分支通过。
 
 ## 沿用的界面体验
 
