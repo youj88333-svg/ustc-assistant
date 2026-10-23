@@ -4,20 +4,22 @@
 
 ## 当前QA包
 
-文件位于工程内：`app/build/qa4018/artifacts/USTC-Assistant-Android-QA4018-x86_64.apk`。这是保留Young兼容、现有[界面](../ui-refresh/plan.md)和自动认证/采集，并修订上下文、选图交接、晨报恢复及历史详情阅读的x86_64私有QA包，不是A8正式版或arm64手机包。根已在现有MuMu覆盖安装并完成本轮使用旅程，实际结果和旧失败见[记录20](records/20-mumu-full-journeys.md)，此前当前审批/撤销见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
+最新文件位于工程内：`app/build/model-providers/artifacts/USTC-Assistant-Android-QA4019-x86_64.apk`。本版保留既有来源、日程任务与[界面](../ui-refresh/plan.md)，新增可选 DeepSeek 官方 Key 配置，并包含此前上下文整理 180 秒等待修订；不是 A8 正式版或 ARM64 手机包。本版构建/合成证据及未验证项见[模型服务记录](../model-providers/records.md)。现有 MuMu 的最后一次完整使用旅程仍为 QA4018，见[记录20](records/20-mumu-full-journeys.md)，不把新构建当作新的真实学校或官方 API 通过；此前审批/撤销见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4018` |
-| ABI / 文件大小 | `x86_64` / `291011058` bytes |
-| SHA-256 | `8d8bf1725d4432bd86951836e412e63e458a3c395f48a329e0ee49cbe1ea0ce8` |
-| 源码修订 | `3c6ca59a6d9641cf898a2077391dbef901aaf1ac` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4019` |
+| ABI / 文件大小 | `x86_64` / `291042347` bytes |
+| SHA-256 | `02c27d90d4fdb709c96d92ead6a247747301a384e37944b4e2f55cc5e7c9bec4` |
+| 源码修订 | `37ce18804754cc8d395df4b44658e5447769cd2a` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据在构建时记录入口为`lib/main.dart`、`publicRelease: false`、`realSchoolValidated: false`，后来的真实UI证据另记。签名沿用4003–4013版QA包；覆盖升级保留本QA资料。旧包和Windows资产继续保留；不要把QA资料复制到Windows，也不从Windows导入数据库或密文。
+元数据在构建时记录入口为 `lib/main.dart`、`publicRelease: false`、`realDeepSeekValidated: false`；后来的真实 UI 证据另记。签名沿用既有 QA 包，覆盖升级保留资料。schema19 增量迁移保留旧学校配置及数据，但旧程序不能直接读取升级后的新 schema；不要降级、卸载或清数据来绕过问题。旧包和 Windows1.00 历史交付继续保留；不要把 QA 资料复制到 Windows，也不从 Windows 导入数据库或密文。
 
-同一源码的ARM64/2018包、大小及摘要统一见[交付记录](records/20-mumu-full-journeys.md#最终私有包与留存边界)，不代表arm64实机已验证。旧QA及ARM64包均保留；当前MuMu使用上表x86_64/4018，不用ARM64包覆盖。
+本轮 ARM64 构建与哈希统一见[模型服务交付记录](../model-providers/records.md#私有交付)，不代表 ARM64 实机已验证。旧 QA4018/2018 仍保留；MuMu 使用 x86_64 包，不能用 ARM64 包覆盖。
+
+选择官方服务时，在“设置 → Agent”选择“DeepSeek 官方”，仅在应用输入其 Key，阅读独立计费/发送说明后勾选同意，获取目录、选择模型、验证并保存。学校 Key、同意和模型配置会保留；切回可复用。官方本期直答，业务工具可用；真实速度、余额及所选模型的工具/图片表现需自行确认，安全摘要会包含 `provider`。请勿把 Key 发到开发聊天。
 
 ## 安装
 

@@ -4,6 +4,7 @@
 
 | 阶段 | 范围 | 任务单 | 实施记录 | 用户验收 |
 |---|---|---|---|---|
+| 可选模型服务 | 保留学校，增加固定 DeepSeek 官方 Key 接入 | [任务单](model-providers/plan.md) | [记录](model-providers/records.md) | 实际官方 Key/速度由用户在应用主动配置后核验；不关闭 A7/A8 |
 | M0 | 本地合成基础链路 | [计划](m0/plan.md) | [记录](m0/records.md) | [2026-10-09 关闭](m0/acceptance.md) |
 | M1 | JW 自动采集与本地日程 | [计划](m1/plan.md) | [记录索引](m1/records.md) | [2026-10-10 关闭](m1/acceptance.md) |
 | M2 | Young 活动关联日程/独立只读查询 | [计划](m2/plan.md) | [记录索引](m2/records.md) | [2026-10-11 关闭](m2/acceptance.md) |

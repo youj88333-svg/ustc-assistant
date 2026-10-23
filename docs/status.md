@@ -1,9 +1,10 @@
 # 项目当前状态
 
-更新时间：2026-10-21。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
+更新时间：2026-10-23。分支 `codex/design-reset`，工作区 `E:\107\.worktrees\rewrite\design-reset`。本页只汇总当前结论；具体批准和验收以相应记录为准。
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
+| 可选模型服务 | 工程及私有 QA4019/2019、Windows Release 就绪；真实官方 Key 待用户在应用核验 | [任务单](milestones/model-providers/plan.md)、[决定](decisions/model-providers.md)和[记录](milestones/model-providers/records.md)。学校/DeepSeek 官方两套受保护 Key、同意、目录与能力隔离；Agent/compact/晨报使用当前选择，官方直答保留工具。schema19 无解密保留旧学校配置；analyze、1609项/1跳过、Windows10组、API34 Keystore6组与构建/签名检查通过；未覆盖现有MuMu，不推断速度提升，不关闭A7/A8 |
 | M0 | 已关闭，2026-10-09 | 本地合成链路、目录/事务/取消恢复；[用户验收](milestones/m0/acceptance.md) |
 | M1 | 已关闭，2026-10-10 | JW 身份/只读契约、自动认证/选期、事务与本地日程；[用户验收](milestones/m1/acceptance.md) |
 | M2 | 已关闭，2026-10-11 | Young 活动关联日程和独立报名活动只读查询、全自动及生命周期/连续性；[用户验收](milestones/m2/acceptance.md) |

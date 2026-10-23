@@ -6,6 +6,7 @@
 
 | 要了解什么 | 入口 |
 |---|---|
+| 学校/DeepSeek 官方 API 的选择、保护与验证 | [提供方决定](decisions/model-providers.md) · [接口契约](reference/sources/model-gateway.md) · [实施任务单](milestones/model-providers/plan.md) |
 | 当前阶段、已完成范围与待验证 | [项目状态](status.md) |
 | 产品和安全边界 | [07 产品约束](architecture/07-constitution.md) · [批准决定](decisions/README.md) |
 | 模块职责与依赖 | [08 目标架构](architecture/08-target-architecture.md) |

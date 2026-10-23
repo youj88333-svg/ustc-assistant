@@ -17,6 +17,8 @@ DR-ADR-01–10 延续现有编号；下表保留原决定与承接关系，被�
 
 ## 重点决定
 
+- [可选 DeepSeek 官方模型服务](model-providers.md)：学校与官方两套固定配置/同意/受保护 Key 隔离，手工切换且不自动回退，官方直答与现有工具兼容。
+
 - [DR-ADR-09：首版浏览器边界](dr-adr-09-browser-boundary.md)。
 - [DR-ADR-10：本地 M0 分段准入](dr-adr-10-local-m0.md)。
 - [学校账号与凭据共享](school-credentials.md)：2026-10-10/11 的明确授权，延续既有保护用途。
