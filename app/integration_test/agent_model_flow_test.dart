@@ -33,12 +33,14 @@ void main() {
       final bootstraps = <RuntimeBootstrap>[];
       try {
         final firstGateway = _SyntheticGateway();
+        debugPrint('Synthetic Agent flow: opening owned runtime');
         final first = await _openBootstrap(
           tester,
           workspace,
           gateway: firstGateway,
         );
         bootstraps.add(first);
+        debugPrint('Synthetic Agent flow: runtime ready');
         expect(first.runtime, isNotNull);
         expect(first.directory.isHeld, isTrue);
         expect(first.jwDirectory.isHeld, isTrue);
@@ -114,7 +116,9 @@ void main() {
           reason: 'Choose a returned model before verification is enabled.',
         );
 
-        await tester.tap(find.byKey(const ValueKey('agent-settings-model')));
+        await tester.tap(
+          find.byKey(const ValueKey('agent-settings-model-school')),
+        );
         await tester.pumpAndSettle();
         await tester.tap(find.text('synthetic-chat-model').last);
         await tester.pumpAndSettle();
@@ -948,8 +952,14 @@ Future<void> _waitSettled(
 }
 
 Future<void> _tapKey(WidgetTester tester, String key) async {
+  debugPrint('Synthetic Agent flow: tap $key');
   final finder = find.byKey(ValueKey<String>(key));
   expect(finder, findsOneWidget, reason: 'Missing UI key: $key');
+  // A native focused text field can repeatedly reveal its caret while the
+  // test scrolls to an action below it. Model the focus change of a desktop
+  // action click before scrolling; keep the typed draft intact.
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pump();
   await tester.ensureVisible(finder);
   if (key == 'agent-stop') {
     await tester.pump(const Duration(milliseconds: 100));
@@ -957,8 +967,10 @@ Future<void> _tapKey(WidgetTester tester, String key) async {
     await tester.pumpAndSettle();
   }
   await tester.tap(finder);
+  debugPrint('Synthetic Agent flow: dispatched $key');
   await tester.pump();
   await tester.pumpAndSettle();
+  debugPrint('Synthetic Agent flow: settled $key');
 }
 
 Future<void> _tapText(WidgetTester tester, String label) async {

@@ -60,15 +60,18 @@ class AndroidCredentialVaultTest {
         val otherSchoolPurpose = schoolPurpose(owner = "1" + "0".repeat(31))
         val modelPurpose = modelPurpose()
         val otherModelPurpose = modelPurpose(owner = "1" + "0".repeat(31))
+        val deepseekPurpose = modelPurpose(provider = "deepseek")
 
         val schoolEnvelope = vault().protect(data, schoolPurpose)
         val modelEnvelope = vault().protect(data, modelPurpose)
+        val deepseekEnvelope = vault().protect(data, deepseekPurpose)
         val originalSchoolEnvelope = schoolEnvelope.copyOf()
         val originalModelEnvelope = modelEnvelope.copyOf()
 
         assertArrayEquals(originalData, data)
         assertArrayEquals(data, vault().unprotect(schoolEnvelope, schoolPurpose))
         assertArrayEquals(data, vault().unprotect(modelEnvelope, modelPurpose))
+        assertArrayEquals(data, vault().unprotect(deepseekEnvelope, deepseekPurpose))
         assertArrayEquals(originalSchoolEnvelope, schoolEnvelope)
         assertArrayEquals(originalModelEnvelope, modelEnvelope)
         assertEquals(ENVELOPE_VERSION, schoolEnvelope[0].toInt())
@@ -78,6 +81,12 @@ class AndroidCredentialVaultTest {
         }
         assertVaultCode(INVALID_CREDENTIAL) {
             vault().unprotect(modelEnvelope, otherModelPurpose)
+        }
+        assertVaultCode(INVALID_CREDENTIAL) {
+            vault().unprotect(modelEnvelope, deepseekPurpose)
+        }
+        assertVaultCode(INVALID_CREDENTIAL) {
+            vault().unprotect(deepseekEnvelope, modelPurpose)
         }
     }
 
@@ -139,6 +148,15 @@ class AndroidCredentialVaultTest {
             vault().protect(syntheticBytes(1), "not-a-credential-purpose")
         }
         assertVaultCode(INVALID_REQUEST) {
+            vault().protect(
+                syntheticBytes(1),
+                "other-model-key/v1/jw-owner-${"c".repeat(32)}",
+            )
+        }
+        assertVaultCode(INVALID_REQUEST) {
+            vault().protect(syntheticBytes(1), modelPurpose(provider = "deepseek") + "\n")
+        }
+        assertVaultCode(INVALID_REQUEST) {
             vault().protect(syntheticBytes(1), schoolPurpose() + "\n")
         }
         assertVaultCode(INVALID_REQUEST) {
@@ -157,22 +175,29 @@ class AndroidCredentialVaultTest {
         val data = syntheticBytes(64)
 
         listOf(
-            "$namespace.school" to schoolPurpose(),
-            "$namespace.model" to modelPurpose(),
-        ).forEach { (alias, purpose) ->
-            val oldEnvelope = vault().protect(data, purpose)
+            "$namespace.school" to listOf(schoolPurpose()),
+            "$namespace.model" to listOf(
+                modelPurpose(),
+                modelPurpose(provider = "deepseek"),
+            ),
+        ).forEach { (alias, purposes) ->
+            val oldEnvelope = vault().protect(data, purposes.first())
             assertTrue(keyStore.containsAlias(alias))
             assertNull(keyStore.getKey(alias, null)?.encoded)
             keyStore.deleteEntry(alias)
 
-            assertVaultCode(INVALID_CREDENTIAL) { vault().unprotect(oldEnvelope, purpose) }
+            assertVaultCode(INVALID_CREDENTIAL) {
+                vault().unprotect(oldEnvelope, purposes.first())
+            }
             assertFalse(keyStore.containsAlias(alias))
             assertNull(keyStore.getKey(alias, null))
 
-            val newEnvelope = vault().protect(data, purpose)
+            val newEnvelope = vault().protect(data, purposes.last())
             assertTrue(keyStore.containsAlias(alias))
-            assertArrayEquals(data, vault().unprotect(newEnvelope, purpose))
-            assertVaultCode(INVALID_CREDENTIAL) { vault().unprotect(oldEnvelope, purpose) }
+            assertArrayEquals(data, vault().unprotect(newEnvelope, purposes.last()))
+            assertVaultCode(INVALID_CREDENTIAL) {
+                vault().unprotect(oldEnvelope, purposes.first())
+            }
         }
     }
 
@@ -181,8 +206,10 @@ class AndroidCredentialVaultTest {
     private fun schoolPurpose(owner: String = "a".repeat(32)): String =
         "ustc-assistant/jw/login/v1:jw-owner-$owner:${"b".repeat(64)}"
 
-    private fun modelPurpose(owner: String = "c".repeat(32)): String =
-        "ustc-model-key/v1/jw-owner-$owner"
+    private fun modelPurpose(
+        owner: String = "c".repeat(32),
+        provider: String = "ustc",
+    ): String = "$provider-model-key/v1/jw-owner-$owner"
 
     private fun syntheticBytes(size: Int): ByteArray = ByteArray(size).also(SecureRandom()::nextBytes)
 

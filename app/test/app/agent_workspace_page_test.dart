@@ -844,6 +844,10 @@ void main() {
         _host(AgentSettingsPanel(controller: preferencesPort)),
       );
       await tester.pumpAndSettle();
+      await _scrollSettingsTo(
+        tester,
+        find.byKey(const ValueKey('agent-planning-preferences-panel')),
+      );
       expect(
         find.byKey(const ValueKey('agent-planning-preferences-panel')),
         findsOneWidget,
@@ -1521,7 +1525,7 @@ void main() {
       expect(port.loadCalls.single.key, 'one-time-model-key');
       expect(_keyField(tester).controller!.text, isEmpty);
 
-      await _tap(tester, 'agent-settings-model');
+      await _tap(tester, 'agent-settings-model-school');
       await tester.tap(find.text('model-a').last);
       await tester.pumpAndSettle();
       expect(
@@ -1588,6 +1592,7 @@ void main() {
 
       await tester.pumpWidget(_host(AgentSettingsPanel(controller: port)));
       await tester.pumpAndSettle();
+      await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
       expect(find.text('创建任务'), findsOneWidget);
       expect(port.permissionReadCalls, 1);
 
@@ -1595,8 +1600,13 @@ void main() {
       await _tap(tester, 'agent-settings-delete-key-confirm');
       expect(port.deleteKeyCalls, 1);
       expect(port.actionPermissions, [remembered]);
+      await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
       expect(find.text('创建任务'), findsOneWidget);
 
+      await _scrollSettingsTo(
+        tester,
+        find.byKey(const ValueKey('agent-permission-revoke-createTask:7')),
+      );
       await _tap(tester, 'agent-permission-revoke-createTask:7');
       expect(port.revokedPermissions, [remembered]);
       expect(port.actionPermissions, isEmpty);
@@ -1617,6 +1627,7 @@ void main() {
     await tester.pumpWidget(_host(AgentSettingsPanel(controller: port)));
     await tester.pumpAndSettle();
 
+    await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
     expect(find.text('无法读取已记住的操作授权，请重试。'), findsOneWidget);
     expect(find.textContaining('private detail'), findsNothing);
     await _tap(tester, 'agent-permissions-reload');
@@ -2165,6 +2176,15 @@ Future<void> _tap(WidgetTester tester, String key) async {
   await tester.ensureVisible(target);
   await tester.pumpAndSettle();
   await tester.tap(target);
+  await tester.pumpAndSettle();
+}
+
+Future<void> _scrollSettingsTo(WidgetTester tester, Finder target) async {
+  final settings = find.byKey(const ValueKey('agent-settings-panel'));
+  final scrollable = find
+      .descendant(of: settings, matching: find.byType(Scrollable))
+      .first;
+  await tester.scrollUntilVisible(target, 240, scrollable: scrollable);
   await tester.pumpAndSettle();
 }
 

@@ -20,7 +20,8 @@ final class AgentWorkspaceController extends ChangeNotifier
         AgentConversationCommandsWorkspacePort,
         AgentPermissionWorkspacePort,
         AgentWorkspaceUsePolicyPort,
-        AgentContextOptionsWorkspacePort {
+        AgentContextOptionsWorkspacePort,
+        AgentModelProviderWorkspacePort {
   AgentWorkspaceController(this.coordinator) {
     _subscription = coordinator.changes.listen((_) {
       if (!_disposed) notifyListeners();
@@ -142,6 +143,12 @@ final class AgentWorkspaceController extends ChangeNotifier
   Future<void> setModelConsent(bool consent) async {
     await drainBehaviorValidation();
     await coordinator.setModelConsent(consent);
+  }
+
+  @override
+  Future<void> selectModelProvider(ModelProvider provider) async {
+    await drainBehaviorValidation();
+    await coordinator.selectModelProvider(provider);
   }
 
   @override

@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import '../support/calendar_legacy_schema.dart';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -25,7 +26,10 @@ void main() {
       final before = _legacyFacts(file);
 
       final store = await _open(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 18);
+      expect(
+        await _scalar(store, 'PRAGMA user_version'),
+        JwStore.currentSchemaVersion,
+      );
       final settings = await store.agent.inspectAgent();
       expect(settings.modelId, 'synthetic-migration-model');
       expect(settings.keySaved, isTrue);
@@ -254,6 +258,7 @@ void _rewindToSchema13(File file) {
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    removeModelProviderSchemaForLegacyFixture(raw);
     _dropM6TablesForLegacyFixture(raw);
     for (final table in [
       'agent_context_turns',
@@ -347,6 +352,7 @@ List<Map<String, Object?>> _legacyFactsFromRaw(sqlite3.Database raw) => [
         ..remove('context_private')
         ..remove('invocation_fingerprint')
         ..remove('source_retired')
+        ..remove('provider')
         ..removeWhere((key, _) => table == 'agenda_state' && key == 'revision')
         ..updateAll(
           (key, value) =>

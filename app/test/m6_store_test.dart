@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'support/calendar_legacy_schema.dart';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -190,7 +191,10 @@ void main() {
     expect(_schemaVersion(file), 15);
     store = await _open(file: file);
 
-    expect(await _scalar(store, 'PRAGMA user_version'), 18);
+    expect(
+      await _scalar(store, 'PRAGMA user_version'),
+      JwStore.currentSchemaVersion,
+    );
     expect(await _scalar(store, 'SELECT owner_id FROM jw_state'), ownerBefore);
     final settings = await store.features.inspectReminders();
     expect(settings.preferences.enabled, isFalse);
@@ -668,6 +672,7 @@ void _rewindToSchema15(File file) {
   final database = sqlite3.sqlite3.open(file.path);
   try {
     database.execute('BEGIN IMMEDIATE');
+    removeModelProviderSchemaForLegacyFixture(database);
     database.execute('DROP TABLE IF EXISTS young_daily_sync');
     database.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
     database.execute('ALTER TABLE young_events DROP COLUMN source_retired');

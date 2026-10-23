@@ -274,7 +274,8 @@ internal class AndroidCredentialVault(
         private val SCHOOL_PURPOSE = Regex(
             "^ustc-assistant/jw/login/v1:jw-owner-[0-9a-f]{32}:[0-9a-f]{64}$",
         )
-        private val MODEL_PURPOSE = Regex("^ustc-model-key/v1/jw-owner-[0-9a-f]{32}$")
+        private val MODEL_PURPOSE =
+            Regex("^(?:ustc|deepseek)-model-key/v1/jw-owner-[0-9a-f]{32}$")
         private val KEY_CREATION_LOCK = Any()
     }
 }

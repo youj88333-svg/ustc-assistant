@@ -72,3 +72,9 @@ abstract interface class AgentWorkspacePort implements Listenable {
   Future<void> clearHistory({String? conversationId, required bool confirmed});
   String safeValidationSummary();
 }
+
+/// Optional switch for selecting one of the app's fixed model providers.
+/// Kept separate so existing workspace fakes and adapters remain compatible.
+abstract interface class AgentModelProviderWorkspacePort {
+  Future<void> selectModelProvider(ModelProvider provider);
+}

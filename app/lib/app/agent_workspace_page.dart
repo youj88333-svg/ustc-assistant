@@ -1186,7 +1186,7 @@ final class _AgentWorkspacePageState extends State<AgentWorkspacePage>
                           const Align(
                             alignment: Alignment.centerLeft,
                             child: Text(
-                              '建议输入估算 16,000；默认输出 2,048、模型调用 16 次、工具调用 48 次、主动运行 300 秒。配置值，学校模型容量未核验。',
+                              '建议输入估算 16,000；默认输出 2,048、模型调用 16 次、工具调用 48 次、主动运行 300 秒。配置值，模型容量未核验。',
                               style: TextStyle(color: _agentMuted, height: 1.4),
                             ),
                           ),
@@ -2651,7 +2651,7 @@ final class _SetupPrompt extends StatelessWidget {
       children: [
         const Icon(Icons.info_outline_rounded, color: Color(0xFF8A5A14)),
         const SizedBox(width: 10),
-        const Expanded(child: Text('配置学校模型并完成发送说明确认后，才能发送消息。')),
+        const Expanded(child: Text('配置模型服务并完成发送说明确认后，才能发送消息。')),
         TextButton(onPressed: onSettings, child: const Text('去设置')),
       ],
     ),
@@ -3460,6 +3460,7 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.ownershipLost => '本机数据状态已变化，请重新打开 Agent。',
   AgentFailureCode.storageFailed => '本机对话暂时无法保存，请稍后重试。',
   AgentFailureCode.protectionFailed => '本机密钥保护未完成，操作没有保存。',
+  AgentFailureCode.insufficientBalance => '模型账户余额不足，请在对应服务账户检查余额。',
   AgentFailureCode.unauthorized ||
   AgentFailureCode.forbidden => '模型服务未授权此请求，请检查设置。',
   AgentFailureCode.rateLimited => '模型服务暂时繁忙，请稍后重试。',

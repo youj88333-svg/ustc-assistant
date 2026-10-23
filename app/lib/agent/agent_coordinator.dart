@@ -125,6 +125,7 @@ final class AgentCoordinator {
   AgentHistoryIntent? _pendingHistory;
   _OperationDiagnostics? _pendingHistoryDiagnostics;
   Uint8List? _candidateKey;
+  AgentAuthority? _candidateAuthority;
   Timer? _candidateExpiry;
   String _liveText = '';
   final _reasoning = <int, AgentReasoningView>{};
@@ -206,6 +207,9 @@ final class AgentCoordinator {
           name: name,
           trace: _diagnosticTrace,
           stage: stage,
+          modelService: _settings == null
+              ? null
+              : DiagnosticModelService.values.byName(_settings!.provider.name),
           phase: diagnosticPhase(_phase.name),
           tool: tool,
           outcome: outcome,
@@ -253,6 +257,7 @@ final class AgentCoordinator {
     _candidateExpiry = null;
     _candidateKey?.fillRange(0, _candidateKey!.length, 0);
     _candidateKey = null;
+    _candidateAuthority = null;
   }
 
   void _candidate(String key) {
@@ -266,6 +271,7 @@ final class AgentCoordinator {
       throw const AgentFailure(AgentFailureCode.invalidInput);
     }
     _candidateKey = bytes;
+    _candidateAuthority = _settings!.authority;
     _candidateExpiry = Timer(const Duration(minutes: 3), () {
       _wipeCandidate();
       if (_work != null) {
@@ -305,7 +311,14 @@ final class AgentCoordinator {
     _current(generation);
     final candidate = _candidateKey;
     if (candidate != null) {
-      return ModelSecretLease(Uint8List.fromList(candidate));
+      if (_candidateAuthority != authority) {
+        _wipeCandidate();
+        throw const AgentFailure(AgentFailureCode.staleContext);
+      }
+      return ModelSecretLease(
+        Uint8List.fromList(candidate),
+        provider: _settings!.provider,
+      );
     }
     final secret = await data.leaseModelKey(authority);
     try {
@@ -419,6 +432,14 @@ final class AgentCoordinator {
     final oldPolicy = _usePolicy;
     _settings = await data.inspectAgent();
     _report = _settings!.report;
+    if (oldAuthority != null &&
+        (oldAuthority.owner != _settings!.authority.owner ||
+            oldAuthority.resetEpoch != _settings!.authority.resetEpoch ||
+            oldAuthority.configRevision !=
+                _settings!.authority.configRevision)) {
+      _wipeCandidate();
+      _models = [];
+    }
     final policyPort = data;
     if (policyPort is AgentUsePolicyPort) {
       _usePolicy = await (policyPort as AgentUsePolicyPort)
@@ -810,6 +831,7 @@ final class AgentCoordinator {
           _current(g);
           final code = _code(e);
           if (code == AgentFailureCode.unauthorized ||
+              code == AgentFailureCode.insufficientBalance ||
               code == AgentFailureCode.forbidden ||
               code == AgentFailureCode.cancelled ||
               code == AgentFailureCode.closed) {
@@ -2522,6 +2544,29 @@ final class AgentCoordinator {
     },
   );
 
+  Future<void> selectModelProvider(ModelProvider provider) =>
+      _diagnoseConfiguration(DiagnosticOperation.changeModelProvider, (
+        diagnostic,
+      ) async {
+        await stop();
+        await _action(AgentPhase.settling, (g) async {
+          await _refresh();
+          _current(g);
+          final port = data;
+          if (port is! AgentModelProviderDataPort) {
+            throw const AgentFailure(AgentFailureCode.toolUnavailable);
+          }
+          await (port as AgentModelProviderDataPort).selectModelProvider(
+            _settings!.authority,
+            provider,
+          );
+          diagnostic.markCommitted();
+          _models = [];
+          _wipeCandidate();
+          _current(g);
+        });
+      });
+
   Future<void> clearHistory({
     String? conversationId,
     required bool confirmed,
@@ -2669,6 +2714,7 @@ final class AgentCoordinator {
     'kind': 'agent-model-validation-v1',
     'phase': _phase.name,
     'keySaved': _settings?.keySaved ?? false,
+    'provider': (_settings?.provider ?? ModelProvider.school).name,
     'modelSelected': _settings?.modelId != null,
     'modelCount': _models.length,
     'capability': _report.capability.name,
@@ -2690,8 +2736,9 @@ final class AgentCoordinator {
     'vision': 'unverified',
     'registry': agentToolRegistryVersion,
     'promptVersion': agentPromptVersion,
-    'reasoningEffort':
-        modelReasoningEffort(_settings?.modelId) ?? 'serverDefault',
+    'reasoningEffort': _settings?.provider == ModelProvider.deepseek
+        ? 'disabled'
+        : modelReasoningEffort(_settings?.modelId) ?? 'serverDefault',
     if (_diagnosticTrace != null) 'diagnosticTrace': _diagnosticTrace!.value,
     if (_parameterIssue != null)
       'parameterValidation': _parameterIssue!.toSafeMap(),

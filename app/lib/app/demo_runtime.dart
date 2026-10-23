@@ -17,7 +17,7 @@ import '../agent/agent_read_tools.dart';
 import '../agent/agent_action_tools.dart';
 import '../jobs/agent_source_coordinator.dart';
 import '../agent/model_gateway_contract.dart';
-import '../agent/ustc_model_gateway.dart';
+import '../agent/configured_model_gateway.dart';
 import '../data/demo_store.dart';
 import '../data/jw_store.dart';
 import '../data/knowledge_service.dart';
@@ -436,7 +436,7 @@ final class RuntimeBootstrap extends ChangeNotifier {
       );
       agentCoordinator = AgentCoordinator(
         data: database.agent,
-        gateway: modelGateway ?? UstcModelGateway(),
+        gateway: modelGateway ?? ConfiguredModelGateway(),
         clock: clock,
         diagnostics: diagnostics,
         readTools: AgentActionTools(
@@ -489,7 +489,9 @@ final class RuntimeBootstrap extends ChangeNotifier {
         agentData: database.agent,
         gateway:
             morningGateway ??
-            UstcModelGateway(requestTimeout: const Duration(seconds: 240)),
+            ConfiguredModelGateway(
+              requestTimeout: const Duration(seconds: 240),
+            ),
         notices: MorningNoticeQuery(source: morningQueries, clock: clock),
         clock: clock,
         diagnostics: diagnostics,

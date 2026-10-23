@@ -5,6 +5,7 @@ part of 'jw_store.dart';
 final class AgentStore
     implements
         AgentDataPort,
+        AgentModelProviderDataPort,
         AgentRunJournalPort,
         AgentHistoryPagePort,
         AgentConversationControlPort,
@@ -441,6 +442,25 @@ final class AgentStore
   bool _closed = false;
   int _sequence = 0;
 
+  /// Transactional metadata-only migration. The legacy school ciphertext and
+  /// purpose remain byte-for-byte intact; no protector or network is used.
+  static const upgradeFrom18 = <String>[
+    'ALTER TABLE agent_config RENAME TO agent_config_legacy18',
+    '''CREATE TABLE agent_config (
+      provider TEXT PRIMARY KEY CHECK(provider IN ('school','deepseek')),
+      singleton INTEGER NOT NULL CHECK(singleton=1),
+      model_id TEXT NOT NULL CHECK(length(model_id)<=128), model_ids TEXT NOT NULL,
+      consent INTEGER NOT NULL CHECK(consent IN (0,1)), key_ciphertext BLOB,
+      mechanism TEXT, purpose TEXT, capability TEXT NOT NULL,
+      report TEXT NOT NULL, verified_at INTEGER NOT NULL)''',
+    "INSERT INTO agent_config SELECT 'school',* FROM agent_config_legacy18",
+    'DROP TABLE agent_config_legacy18',
+    '''CREATE TABLE agent_model_selection (
+      singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+      provider TEXT NOT NULL CHECK(provider IN ('school','deepseek')))''',
+    "INSERT INTO agent_model_selection VALUES (1,'school')",
+  ];
+
   static const schema = <String>[
     '''CREATE TABLE agent_state (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
       history_epoch INTEGER NOT NULL CHECK(history_epoch>=0),
@@ -658,8 +678,23 @@ final class AgentStore
   Future<QueryRow> _state() => _db
       .customSelect('SELECT * FROM agent_state WHERE singleton=1')
       .getSingle();
-  Future<QueryRow?> _config() => _db
-      .customSelect('SELECT * FROM agent_config WHERE singleton=1')
+  Future<ModelProvider> _provider() async {
+    final row = await _db
+        .customSelect(
+          'SELECT provider FROM agent_model_selection WHERE singleton=1',
+        )
+        .getSingle();
+    return ModelProvider.values.firstWhere(
+      (provider) => provider.name == row.read<String>('provider'),
+      orElse: () => throw const AgentFailure(AgentFailureCode.storageFailed),
+    );
+  }
+
+  Future<QueryRow?> _config() async => _db
+      .customSelect(
+        'SELECT * FROM agent_config WHERE provider=?',
+        variables: [Variable.withString((await _provider()).name)],
+      )
       .getSingleOrNull();
   Future<QueryRow?> _historyIntent() => _db
       .customSelect('SELECT * FROM agent_history_intent WHERE singleton=1')
@@ -777,12 +812,40 @@ final class AgentStore
         : (jsonDecode(row.read<String>('model_ids')) as List).cast<String>();
     return AgentSettingsSnapshot(
       authority: await _authority(),
+      provider: await _provider(),
       keySaved: row?.read<Uint8List?>('key_ciphertext') != null,
       consent: row?.read<int>('consent') == 1,
       modelId: row?.read<String>('model_id'),
       modelIds: ids,
       report: _report(row),
     );
+  });
+
+  @override
+  Future<void> selectModelProvider(
+    AgentAuthority expected,
+    ModelProvider provider,
+  ) => _serial(() async {
+    final changed = await _db.transaction(() async {
+      await _require(expected);
+      if (await _provider() == provider) return false;
+      await _invalidateRuns(cancelled: true);
+      await _db.customStatement(
+        'UPDATE agent_model_selection SET provider=? WHERE singleton=1',
+        [provider.name],
+      );
+      await _db.customStatement(
+        'UPDATE agent_state SET config_revision=config_revision+1,request_epoch=request_epoch+1 WHERE singleton=1',
+      );
+      await _audit('config', 1);
+      await _db.onAgentCheckpoint?.call();
+      _db._ownership.ensureHeld();
+      return true;
+    });
+    if (changed) {
+      _revoke();
+      _signal();
+    }
   });
 
   static void validateKey(Uint8List bytes) {
@@ -813,7 +876,11 @@ final class AgentStore
     }
     Uint8List? cipher;
     final protector = _db.modelCredentialProtector;
-    final purpose = 'ustc-model-key/v1/${expected.owner}';
+    final provider = await _serial(() async {
+      await _require(expected);
+      return _provider();
+    });
+    final purpose = provider.keyPurpose(expected.owner);
     try {
       if (key != null) {
         validateKey(key);
@@ -839,8 +906,11 @@ final class AgentStore
           }
           await _invalidateRuns();
           await _db.customStatement(
-            'INSERT OR REPLACE INTO agent_config VALUES (1,?,?,?,?,?,?,?,?,?)',
+            'INSERT OR REPLACE INTO agent_config '
+            '(provider,singleton,model_id,model_ids,consent,key_ciphertext,mechanism,purpose,capability,report,verified_at) '
+            'VALUES (?,1,?,?,?,?,?,?,?,?,?)',
             [
+              provider.name,
               modelId,
               jsonEncode(modelIds.toSet().toList()),
               1,
@@ -876,50 +946,51 @@ final class AgentStore
   }
 
   @override
-  Future<ModelSecretLease> leaseModelKey(AgentAuthority expected) =>
-      _serial(() async {
+  Future<ModelSecretLease> leaseModelKey(AgentAuthority expected) => _serial(
+    () async {
+      await _require(expected);
+      final row = await _config();
+      if (row == null) throw const AgentFailure(AgentFailureCode.keyRequired);
+      final cipher = row.read<Uint8List?>('key_ciphertext');
+      if (cipher == null) {
+        throw const AgentFailure(AgentFailureCode.keyRequired);
+      }
+      if (row.read<int>('consent') != 1) {
+        throw const AgentFailure(AgentFailureCode.consentRequired);
+      }
+      final protector = _db.modelCredentialProtector;
+      final provider = await _provider();
+      if (protector == null ||
+          row.read<String?>('mechanism') != protector.mechanism ||
+          row.read<String?>('purpose') != provider.keyPurpose(expected.owner)) {
+        throw const AgentFailure(AgentFailureCode.protectionFailed);
+      }
+      Uint8List bytes;
+      try {
+        bytes = await protector.unprotect(
+          cipher,
+          purpose: row.read<String>('purpose'),
+        );
+      } on Object {
+        throw const AgentFailure(AgentFailureCode.protectionFailed);
+      }
+      try {
+        try {
+          validateKey(bytes);
+        } on AgentFailure {
+          throw const AgentFailure(AgentFailureCode.protectionFailed);
+        }
         await _require(expected);
-        final row = await _config();
-        if (row == null) throw const AgentFailure(AgentFailureCode.keyRequired);
-        final cipher = row.read<Uint8List?>('key_ciphertext');
-        if (cipher == null) {
-          throw const AgentFailure(AgentFailureCode.keyRequired);
-        }
-        if (row.read<int>('consent') != 1) {
-          throw const AgentFailure(AgentFailureCode.consentRequired);
-        }
-        final protector = _db.modelCredentialProtector;
-        if (protector == null ||
-            row.read<String?>('mechanism') != protector.mechanism ||
-            row.read<String?>('purpose') !=
-                'ustc-model-key/v1/${expected.owner}') {
-          throw const AgentFailure(AgentFailureCode.protectionFailed);
-        }
-        Uint8List bytes;
-        try {
-          bytes = await protector.unprotect(
-            cipher,
-            purpose: row.read<String>('purpose'),
-          );
-        } on Object {
-          throw const AgentFailure(AgentFailureCode.protectionFailed);
-        }
-        try {
-          try {
-            validateKey(bytes);
-          } on AgentFailure {
-            throw const AgentFailure(AgentFailureCode.protectionFailed);
-          }
-          await _require(expected);
-          _secrets.removeWhere((secret) => !secret.isAvailable);
-          final secret = ModelSecretLease(bytes);
-          _secrets.add(secret);
-          return secret;
-        } catch (_) {
-          bytes.fillRange(0, bytes.length, 0);
-          rethrow;
-        }
-      });
+        _secrets.removeWhere((secret) => !secret.isAvailable);
+        final secret = ModelSecretLease(bytes, provider: provider);
+        _secrets.add(secret);
+        return secret;
+      } catch (_) {
+        bytes.fillRange(0, bytes.length, 0);
+        rethrow;
+      }
+    },
+  );
   @override
   Future<void> invalidateModelWork(
     AgentAuthority expected,
@@ -947,8 +1018,8 @@ final class AgentStore
       }
       await _invalidateRuns();
       await _db.customStatement(
-        'UPDATE agent_config SET consent=? WHERE singleton=1',
-        [consent ? 1 : 0],
+        'UPDATE agent_config SET consent=? WHERE provider=?',
+        [consent ? 1 : 0, (await _provider()).name],
       );
       await _db.customStatement(
         'UPDATE agent_state SET config_revision=config_revision+1,request_epoch=request_epoch+1 WHERE singleton=1',
@@ -966,7 +1037,8 @@ final class AgentStore
       await _require(expected);
       await _invalidateRuns();
       await _db.customStatement(
-        'UPDATE agent_config SET key_ciphertext=NULL,mechanism=NULL,purpose=NULL WHERE singleton=1',
+        'UPDATE agent_config SET key_ciphertext=NULL,mechanism=NULL,purpose=NULL WHERE provider=?',
+        [(await _provider()).name],
       );
       await _db.customStatement(
         'UPDATE agent_state SET config_revision=config_revision+1 WHERE singleton=1',
@@ -1424,6 +1496,9 @@ final class AgentStore
     ]) {
       await _db.customStatement('DELETE FROM $table');
     }
+    await _db.customStatement(
+      "UPDATE agent_model_selection SET provider='school' WHERE singleton=1",
+    );
     await _db.customStatement(
       "UPDATE agent_preferences SET revision=revision+1,value_json='[[1,2,3,4,5,6,7],420,1439,60,10,[]]' WHERE singleton=1",
     );

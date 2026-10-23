@@ -59,7 +59,7 @@ void main() {
           .initialValue,
       '300',
     );
-    expect(find.textContaining('配置值，学校模型容量未核验。'), findsOneWidget);
+    expect(find.textContaining('配置值，模型容量未核验。'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('agent-context-input-tokens')));
     await tester.pumpAndSettle();

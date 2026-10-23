@@ -11,9 +11,10 @@ void main() {
   const model = AndroidModelCredentialProtector();
   final messenger =
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
-  final schoolPurpose =
-      'ustc-assistant/jw/login/v1:jw-owner-${'a' * 32}:${'b' * 64}';
-  final modelPurpose = 'ustc-model-key/v1/jw-owner-${'a' * 32}';
+  final owner = 'jw-owner-${'a' * 32}';
+  final schoolPurpose = 'ustc-assistant/jw/login/v1:$owner:${'b' * 64}';
+  final modelPurpose = ModelProvider.school.keyPurpose(owner);
+  final deepseekPurpose = ModelProvider.deepseek.keyPurpose(owner);
   Matcher jwFailure(JwCredentialFailure code) => throwsA(
     isA<JwCredentialException>().having((error) => error.code, 'code', code),
   );
@@ -37,7 +38,10 @@ void main() {
       messenger.setMockMethodCallHandler(channel, (call) async {
         final arguments = call.arguments as Map;
         expect(arguments.keys.toSet(), {'purpose', 'data'});
-        expect(arguments['purpose'], anyOf(schoolPurpose, modelPurpose));
+        expect(
+          arguments['purpose'],
+          anyOf(schoolPurpose, modelPurpose, deepseekPurpose),
+        );
         final data = arguments['data'] as Uint8List;
         calls.add(call.method);
         return call.method == 'protect'
@@ -47,6 +51,7 @@ void main() {
       for (final (protector, purpose) in [
         (school, schoolPurpose),
         (model, modelPurpose),
+        (model, deepseekPurpose),
       ]) {
         final input = Uint8List.fromList([7, 8]);
         // The two interfaces are deliberately distinct; use their shared behavior here only.
@@ -67,7 +72,14 @@ void main() {
         expect(cipher.length, 31);
         expect(cipher.first, 1);
       }
-      expect(calls, ['protect', 'unprotect', 'protect', 'unprotect']);
+      expect(calls, [
+        'protect',
+        'unprotect',
+        'protect',
+        'unprotect',
+        'protect',
+        'unprotect',
+      ]);
       expect(school.mechanism, 'android-keystore-aes-gcm-v1');
       expect(model.mechanism, school.mechanism);
     },
@@ -84,6 +96,7 @@ void main() {
       final bytes = Uint8List.fromList([7]);
       for (final purpose in [
         modelPurpose,
+        deepseekPurpose,
         '$schoolPurpose\n',
         '$schoolPurpose/extra',
         'x' * 257,
@@ -101,6 +114,13 @@ void main() {
         model.unprotect(envelope(1), purpose: schoolPurpose),
         modelFailure,
       );
+      for (final purpose in [
+        'other-model-key/v1/$owner',
+        '$deepseekPurpose\n',
+        '${deepseekPurpose}suffix',
+      ]) {
+        await expectLater(model.protect(bytes, purpose: purpose), modelFailure);
+      }
       expect(calls, 0);
       expect(bytes, [7]);
     },

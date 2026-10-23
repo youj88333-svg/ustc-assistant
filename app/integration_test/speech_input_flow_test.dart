@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -122,7 +123,7 @@ void main() {
         expect(identical(first.speechInput, firstSpeech), isTrue);
         expect(identical(runtime.speechInput, firstSpeech), isTrue);
         expect(runtime.agent.view.settings!.keySaved, isFalse);
-        expect(runtime.jwStore.schemaVersion, 18);
+        expect(runtime.jwStore.schemaVersion, JwStore.currentSchemaVersion);
 
         await tester.pumpWidget(OwnedApplication(bootstrap: first));
         await tester.pumpAndSettle();
@@ -200,7 +201,10 @@ void main() {
         );
         bootstraps.add(reopened);
         final reopenedRuntime = reopened.runtime!;
-        expect(reopenedRuntime.jwStore.schemaVersion, 18);
+        expect(
+          reopenedRuntime.jwStore.schemaVersion,
+          JwStore.currentSchemaVersion,
+        );
         expect(reopenedRuntime.agent.view.messages, isEmpty);
         expect(
           reopenedRuntime.calendar.view.window!.items.any(

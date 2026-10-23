@@ -926,7 +926,7 @@ final class _ApplicationSettingsPageState
       const SizedBox(height: 12),
       const _SettingsCard(
         title: 'Agent 状态',
-        child: Text('连接学校模型服务后，可用对话查询、规划日程和管理个人安排。修改按你的许可执行，学校来源保持只读。'),
+        child: Text('连接模型服务后，可用对话查询、规划日程和管理个人安排。修改按你的许可执行，学校来源保持只读。'),
       ),
       const SizedBox(height: 12),
       const _SettingsCard(

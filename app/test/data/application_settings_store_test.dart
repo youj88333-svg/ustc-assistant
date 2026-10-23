@@ -51,7 +51,7 @@ void main() {
             .calendarView,
         DefaultCalendarView.week,
       );
-      expect(second.schemaVersion, 18);
+      expect(second.schemaVersion, JwStore.currentSchemaVersion);
     },
   );
   test(
@@ -1156,7 +1156,10 @@ void main() {
       store = await _open(file: file);
       raw = sqlite3.sqlite3.open(file.path);
       try {
-        expect(raw.select('PRAGMA user_version').single['user_version'], 18);
+        expect(
+          raw.select('PRAGMA user_version').single['user_version'],
+          JwStore.currentSchemaVersion,
+        );
         expect(_legacyFacts(raw), before);
         expect(
           raw

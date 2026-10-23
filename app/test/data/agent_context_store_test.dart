@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import '../support/calendar_legacy_schema.dart';
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show QueryExecutor, Variable;
@@ -1067,6 +1068,7 @@ void main() {
       final raw = sqlite3.sqlite3.open(file.path);
       try {
         raw.execute('BEGIN');
+        removeModelProviderSchemaForLegacyFixture(raw);
         _removeSchema15ObjectsForLegacyFixture(raw);
         raw.execute('DROP TABLE IF EXISTS young_daily_sync');
         raw.execute('PRAGMA user_version=14');
@@ -1080,7 +1082,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        18,
+        JwStore.currentSchemaVersion,
       );
       expect(await _count(store, 'agent_context_turns'), 0);
       expect(await _count(store, 'agent_target_aliases'), 0);

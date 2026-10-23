@@ -11,7 +11,9 @@ const _envelopeOverhead = 1 + 12 + 16;
 final _schoolPurpose = RegExp(
   r'^ustc-assistant/jw/login/v1:jw-owner-[0-9a-f]{32}:[0-9a-f]{64}$',
 );
-final _modelPurpose = RegExp(r'^ustc-model-key/v1/jw-owner-[0-9a-f]{32}$');
+final _modelPurpose = RegExp(
+  r'^(?:ustc|deepseek)-model-key/v1/jw-owner-[0-9a-f]{32}$',
+);
 
 /// Keystore holds the non-exportable key; C3 remains the ciphertext owner.
 final class AndroidJwCredentialProtector implements JwCredentialProtector {

@@ -9,10 +9,13 @@ final class WindowsModelCredentialProtector
     implements ModelCredentialProtector {
   const WindowsModelCredentialProtector();
   static const _primitive = WindowsJwCredentialProtector();
+  static final _modelPurpose = RegExp(
+    r'^(?:ustc|deepseek)-model-key/v1/jw-owner-[0-9a-f]{32}$',
+  );
   @override
   String get mechanism => _primitive.mechanism;
   void _purpose(String value) {
-    if (!RegExp(r'^ustc-model-key/v1/jw-owner-[0-9a-f]{32}$').hasMatch(value)) {
+    if (_modelPurpose.matchAsPrefix(value)?.end != value.length) {
       throw const AgentFailure(AgentFailureCode.protectionFailed);
     }
   }

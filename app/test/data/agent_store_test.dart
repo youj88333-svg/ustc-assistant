@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import '../support/calendar_legacy_schema.dart';
 
 import 'package:drift/drift.dart' show QueryExecutor;
 import 'package:drift/native.dart';
@@ -17,6 +18,235 @@ final _initialKey = Uint8List.fromList('synthetic-model-key-01'.codeUnits);
 final _replacementKey = Uint8List.fromList('synthetic-model-key-02'.codeUnits);
 
 void main() {
+  test(
+    'provider profiles survive restart and revoke only the selected Key/consent',
+    () async {
+      final file = await _temporaryDatabase();
+      final protector = _SyntheticProtector();
+      var store = await _openAt(file, protector: protector);
+      final school = await _configure(store);
+      await _seedPersonalEvent(store, '提供方切换应保留的日程');
+      final conversation = await store.agent.createConversation();
+      await _completeRun(store, school.authority, conversation, '保留问题', '保留回复');
+      final oldLease = await store.agent.leaseModelKey(school.authority);
+      final active = await store.agent.beginRun(
+        school.authority,
+        conversation,
+        '被切换撤销的问题',
+      );
+      await store.agent.selectModelProvider(
+        school.authority,
+        ModelProvider.deepseek,
+      );
+      expect(oldLease.isAvailable, isFalse);
+      await _agentFailure(
+        store.agent.saveAssistant(active, '旧服务的迟到回复'),
+        AgentFailureCode.staleContext,
+      );
+      var official = await store.agent.inspectAgent();
+      expect(official.provider, ModelProvider.deepseek);
+      expect(official.keySaved, isFalse);
+      expect(official.consent, isFalse);
+      expect(official.modelIds, isEmpty);
+      expect(official.report.capability, ModelCapability.unverified);
+      await _agentFailure(
+        store.agent.saveModelConfiguration(
+          school.authority,
+          modelId: 'old-school-result',
+          modelIds: const ['old-school-result'],
+          report: const AgentCapabilityReport(text: true, streaming: true),
+          consent: true,
+          key: _initialKey,
+        ),
+        AgentFailureCode.staleContext,
+      );
+      await _agentFailure(
+        store.agent.leaseModelKey(official.authority),
+        AgentFailureCode.keyRequired,
+      );
+      await store.agent.saveModelConfiguration(
+        official.authority,
+        modelId: 'same-model-id',
+        modelIds: const ['same-model-id'],
+        report: const AgentCapabilityReport(
+          text: true,
+          streaming: true,
+          toolCall: true,
+          toolResult: true,
+        ),
+        consent: true,
+        key: _replacementKey,
+      );
+      official = await store.agent.inspectAgent();
+      expect(protector.protectPurposes, [
+        ModelProvider.school.keyPurpose(school.authority.owner),
+        ModelProvider.deepseek.keyPurpose(school.authority.owner),
+      ]);
+      await store.close();
+      store = await _openAt(file, protector: protector);
+      official = await store.agent.inspectAgent();
+      expect(official.provider, ModelProvider.deepseek);
+      expect(official.modelId, 'same-model-id');
+      final officialLease = await store.agent.leaseModelKey(official.authority);
+      expect(officialLease.provider, ModelProvider.deepseek);
+      final officialBytes = officialLease.take();
+      expect(officialBytes, _replacementKey);
+      officialBytes.fillRange(0, officialBytes.length, 0);
+      await store.agent.setModelConsent(official.authority, false);
+      official = await store.agent.inspectAgent();
+      await _agentFailure(
+        store.agent.leaseModelKey(official.authority),
+        AgentFailureCode.consentRequired,
+      );
+      await store.agent.deleteModelKey(official.authority);
+      official = await store.agent.inspectAgent();
+      expect(official.keySaved, isFalse);
+      await store.agent.selectModelProvider(
+        official.authority,
+        ModelProvider.school,
+      );
+      final restored = await store.agent.inspectAgent();
+      expect(restored.keySaved, isTrue);
+      expect(restored.consent, isTrue);
+      expect(restored.modelId, school.modelId);
+      expect(restored.report.capability, school.report.capability);
+      final schoolLease = await store.agent.leaseModelKey(restored.authority);
+      expect(schoolLease.provider, ModelProvider.school);
+      final schoolBytes = schoolLease.take();
+      expect(schoolBytes, _initialKey);
+      schoolBytes.fillRange(0, schoolBytes.length, 0);
+      expect(await _count(store, 'personal_events'), 1);
+      expect(
+        (await store.agent.messages(conversation)).map((m) => m.text),
+        containsAll(['保留问题', '保留回复']),
+      );
+
+      final beforeReset = await store.applicationSettings.inspectSettings();
+      final reset = await store.applicationSettings.prepareMaintenance(
+        beforeReset.context,
+        MaintenanceKind.reset,
+        confirmed: true,
+      );
+      await store.applicationSettings.completeMaintenance(
+        await store.applicationSettings.beginMaintenance(reset),
+      );
+      expect(await _count(store, 'agent_config'), 0);
+      final cleared = await store.agent.inspectAgent();
+      expect(cleared.provider, ModelProvider.school);
+      expect(cleared.keySaved, isFalse);
+    },
+  );
+
+  test(
+    'schema 18 migration preserves legacy ciphertext and school consent without decryption',
+    () async {
+      final file = await _temporaryDatabase();
+      var store = await _openAt(file);
+      final saved = await _configure(store);
+      await _seedPersonalEvent(store, 'schema18保留日程');
+      final conversation = await store.agent.createConversation();
+      await _completeRun(
+        store,
+        saved.authority,
+        conversation,
+        'schema18问题',
+        'schema18回复',
+      );
+      final cipher =
+          (await store
+                  .customSelect('SELECT key_ciphertext FROM agent_config')
+                  .getSingle())
+              .read<Uint8List>('key_ciphertext');
+      await store.close();
+      final raw = sqlite3.sqlite3.open(file.path);
+      try {
+        removeModelProviderSchemaForLegacyFixture(raw);
+        raw.execute('PRAGMA user_version=18');
+      } finally {
+        raw.close();
+      }
+      final protector = _SyntheticProtector();
+      store = await _openAt(file, protector: protector);
+      final migrated = await store.agent.inspectAgent();
+      expect(protector.unprotectCalls, 0);
+      expect(protector.protectPurposes, isEmpty);
+      expect(migrated.provider, ModelProvider.school);
+      expect(migrated.keySaved, isTrue);
+      expect(migrated.consent, isTrue);
+      expect(migrated.modelId, saved.modelId);
+      expect(migrated.report.capability, saved.report.capability);
+      expect(
+        (await store
+                .customSelect('SELECT key_ciphertext FROM agent_config')
+                .getSingle())
+            .read<Uint8List>('key_ciphertext'),
+        cipher,
+      );
+      expect(await _count(store, 'personal_events'), 1);
+      expect(
+        (await store.agent.messages(conversation)).last.text,
+        'schema18回复',
+      );
+      final lease = await store.agent.leaseModelKey(migrated.authority);
+      final bytes = lease.take();
+      expect(bytes, _initialKey);
+      bytes.fillRange(0, bytes.length, 0);
+    },
+  );
+
+  test(
+    'schema 19 late failure restores schema 18 config and can be retried',
+    () async {
+      final file = await _temporaryDatabase();
+      var store = await _openAt(file);
+      final saved = await _configure(store);
+      await store.close();
+      var raw = sqlite3.sqlite3.open(file.path);
+      late Uint8List oldCipher;
+      try {
+        removeModelProviderSchemaForLegacyFixture(raw);
+        raw.execute('PRAGMA user_version=18');
+        oldCipher =
+            raw
+                    .select('SELECT key_ciphertext FROM agent_config')
+                    .single['key_ciphertext']
+                as Uint8List;
+        raw.execute('CREATE TABLE agent_model_selection(sentinel TEXT)');
+        raw.execute(
+          "INSERT INTO agent_model_selection VALUES('rollback-sentinel')",
+        );
+      } finally {
+        raw.close();
+      }
+      await expectLater(_openAt(file), throwsA(isA<AppFailure>()));
+      raw = sqlite3.sqlite3.open(file.path);
+      try {
+        expect(raw.select('PRAGMA user_version').single['user_version'], 18);
+        expect(
+          raw.select('PRAGMA table_info(agent_config)').map((r) => r['name']),
+          isNot(contains('provider')),
+        );
+        expect(
+          raw
+              .select('SELECT key_ciphertext FROM agent_config')
+              .single['key_ciphertext'],
+          oldCipher,
+        );
+        expect(
+          raw
+              .select('SELECT sentinel FROM agent_model_selection')
+              .single['sentinel'],
+          'rollback-sentinel',
+        );
+        raw.execute('DROP TABLE agent_model_selection');
+      } finally {
+        raw.close();
+      }
+      store = await _openAt(file);
+      expect((await store.agent.inspectAgent()).modelId, saved.modelId);
+    },
+  );
+
   test(
     'revoking model consent preserves key and history while invalidating leases and runs',
     () async {
@@ -644,6 +874,7 @@ void main() {
       try {
         raw.execute('BEGIN');
         for (final table in [
+          'agent_model_selection',
           'agent_actions',
           'agenda_plan_receipts',
           'agenda_plan_audit',
@@ -667,7 +898,10 @@ void main() {
       }
 
       store = await _openAt(file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 18);
+      expect(
+        await _scalar(store, 'PRAGMA user_version'),
+        JwStore.currentSchemaVersion,
+      );
       expect(await _count(store, 'agent_state'), 1);
       expect(await _count(store, 'agent_config'), 0);
       expect(

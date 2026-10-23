@@ -116,8 +116,11 @@ enum DiagnosticOperation {
   verifyModel,
   deleteModelKey,
   changeModelConsent,
+  changeModelProvider,
   clearHistory,
 }
+
+enum DiagnosticModelService { school, deepseek }
 
 /// Fixed codes, shared vocabulary only; no exception strings or raw statuses.
 enum DiagnosticCode {
@@ -144,6 +147,7 @@ enum DiagnosticCode {
   storageFailed,
   protectionFailed,
   unauthorized,
+  insufficientBalance,
   forbidden,
   rateLimited,
   networkFailed,
@@ -565,6 +569,7 @@ final class DiagnosticEvent {
     this.phase,
     this.tool,
     this.operation,
+    this.modelService,
     this.outcome,
     this.code,
     this.issue,
@@ -582,6 +587,7 @@ final class DiagnosticEvent {
   final DiagnosticPhase? phase;
   final DiagnosticTool? tool;
   final DiagnosticOperation? operation;
+  final DiagnosticModelService? modelService;
   final DiagnosticOutcome? outcome;
   final DiagnosticCode? code;
   final AgentParameterIssue? issue;
@@ -637,6 +643,7 @@ final class DiagnosticRecord {
     if (event.phase != null) 'phase': event.phase!.name,
     if (event.tool != null) 'tool': event.tool!.name,
     if (event.operation != null) 'operation': event.operation!.name,
+    if (event.modelService != null) 'modelService': event.modelService!.name,
     if (event.outcome != null) 'outcome': event.outcome!.name,
     if (event.code != null) 'code': event.code!.name,
     if (event.issue != null) 'validation': event.issue!.toSafeMap(),
@@ -678,6 +685,7 @@ final class DiagnosticRecord {
             'stage',
             'tool',
             'operation',
+            'modelService',
             'outcome',
             'code',
             'validation',
@@ -806,6 +814,10 @@ final class DiagnosticRecord {
         phase: optionalEnum('phase', DiagnosticPhase.values),
         tool: optionalEnum('tool', DiagnosticTool.values),
         operation: optionalEnum('operation', DiagnosticOperation.values),
+        modelService: optionalEnum(
+          'modelService',
+          DiagnosticModelService.values,
+        ),
         outcome: optionalEnum('outcome', DiagnosticOutcome.values),
         code: optionalEnum('code', DiagnosticCode.values),
         issue: issue,

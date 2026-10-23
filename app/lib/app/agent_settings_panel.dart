@@ -13,7 +13,14 @@ import 'app_design.dart';
 const _settingsMuted = Color(0xFF66736C);
 const _settingsGreen = Color(0xFF1F6B45);
 
-/// Settings for the fixed school model service. The controller is externally
+typedef _ModelDraftScope = ({
+  ModelProvider? provider,
+  String? owner,
+  int? resetEpoch,
+  int? configRevision,
+});
+
+/// Settings for the selected fixed model service. The controller is externally
 /// owned; this widget only holds an unsaved key in its text field.
 final class AgentSettingsPanel extends StatefulWidget {
   const AgentSettingsPanel({super.key, required this.controller});
@@ -28,9 +35,12 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
   final TextEditingController _key = TextEditingController();
   int _generation = 0;
   bool _pending = false;
+  bool _pendingMayChangeConfig = false;
   bool _showKey = false;
   bool _messageIsError = false;
   bool? _consentDraft;
+  ModelProvider? _providerDraft;
+  bool _suppressViewFailure = false;
   String? _message;
   int _permissionGeneration = 0;
   int _permissionOperation = 0;
@@ -38,10 +48,13 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
   List<AgentPermissionReference> _actionPermissions = const [];
   String? _permissionsError;
   String? _revokingPermissionKey;
+  late _ModelDraftScope _observedModelDraftScope;
 
   @override
   void initState() {
     super.initState();
+    _observedModelDraftScope = _modelDraftScope(widget.controller.view);
+    widget.controller.addListener(_onControllerChanged);
     _scheduleRefresh();
     _schedulePermissionRead();
   }
@@ -50,13 +63,19 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
   void didUpdateWidget(covariant AgentSettingsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.controller, widget.controller)) {
+      oldWidget.controller.removeListener(_onControllerChanged);
       _generation++;
       _pending = false;
+      _pendingMayChangeConfig = false;
       _consentDraft = null;
+      _providerDraft = null;
+      _suppressViewFailure = false;
       _selectedModel = null;
       _messageIsError = false;
       _message = null;
       _key.clear();
+      _observedModelDraftScope = _modelDraftScope(widget.controller.view);
+      widget.controller.addListener(_onControllerChanged);
       _permissionGeneration++;
       _permissionOperation++;
       _permissionsLoading = false;
@@ -70,12 +89,54 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
 
   @override
   void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
     _generation++;
     _permissionGeneration++;
     _permissionOperation++;
     _key.clear();
     _key.dispose();
     super.dispose();
+  }
+
+  void _onControllerChanged() {
+    final nextScope = _modelDraftScope(widget.controller.view);
+    final previousScope = _observedModelDraftScope;
+    if (nextScope == previousScope) return;
+    _observedModelDraftScope = nextScope;
+
+    final sameProviderOwnerAndReset =
+        nextScope.provider == previousScope.provider &&
+        nextScope.owner == previousScope.owner &&
+        nextScope.resetEpoch == previousScope.resetEpoch;
+    final expectedConfigAdvance =
+        _pending && _pendingMayChangeConfig && sameProviderOwnerAndReset;
+    if (!mounted) return;
+    setState(() {
+      if (!expectedConfigAdvance) {
+        _generation++;
+        _pending = false;
+        _pendingMayChangeConfig = false;
+        _providerDraft = null;
+      }
+      _key.clear();
+      _showKey = false;
+      _selectedModel = null;
+      _consentDraft = null;
+      _suppressViewFailure = true;
+      _message = null;
+      _messageIsError = false;
+    });
+  }
+
+  _ModelDraftScope _modelDraftScope(AgentWorkspaceView view) {
+    final settings = view.settings;
+    final authority = settings?.authority;
+    return (
+      provider: settings?.provider,
+      owner: authority?.owner,
+      resetEpoch: authority?.resetEpoch,
+      configRevision: authority?.configRevision,
+    );
   }
 
   void _scheduleRefresh() {
@@ -256,9 +317,66 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       port,
       generation,
       () => port.setModelConsent(consent),
+      mayChangeConfig: true,
       success: consent ? '已开启模型联网授权。' : '已关闭模型联网授权，Key 和对话仍保留。',
     );
     if (_isCurrent(port, generation)) setState(() => _consentDraft = null);
+  }
+
+  Future<void> _selectModelProvider(ModelProvider provider) async {
+    final port = widget.controller;
+    if (port is! AgentModelProviderWorkspacePort ||
+        _pending ||
+        port.view.busy ||
+        port.view.phase == AgentPhase.closed) {
+      return;
+    }
+    final providerPort = port as AgentModelProviderWorkspacePort;
+    final previousFailure = port.view.failure;
+    final generation = ++_generation;
+    setState(() {
+      _providerDraft = provider;
+      _suppressViewFailure = true;
+      _pending = true;
+      _pendingMayChangeConfig = false;
+      _key.clear();
+      _showKey = false;
+      _selectedModel = null;
+      _consentDraft = null;
+      _message = null;
+      _messageIsError = false;
+    });
+    try {
+      await providerPort.selectModelProvider(provider);
+      if (!_isCurrent(port, generation)) return;
+      final failure = port.view.failure;
+      final selectedProvider =
+          port.view.settings?.provider ?? ModelProvider.school;
+      setState(() {
+        _providerDraft = null;
+        if (selectedProvider != provider) {
+          _message = failure == null || failure == previousFailure
+              ? '无法切换模型服务，请稍后重试。'
+              : _failureText(failure);
+          _messageIsError = true;
+        }
+      });
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _providerDraft = null;
+          _message = '无法切换模型服务，请稍后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _pending = false;
+          _pendingMayChangeConfig = false;
+        });
+      }
+    }
   }
 
   Future<void> _perform(
@@ -266,12 +384,15 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
     int generation,
     Future<void> Function() action, {
     required String success,
+    bool mayChangeConfig = false,
   }) async {
     if (!_isCurrent(port, generation) || _pending) return;
     setState(() {
       _pending = true;
+      _pendingMayChangeConfig = mayChangeConfig;
       _message = null;
       _messageIsError = false;
+      _suppressViewFailure = false;
     });
     try {
       await action();
@@ -290,7 +411,12 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
         });
       }
     } finally {
-      if (_isCurrent(port, generation)) setState(() => _pending = false);
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _pending = false;
+          _pendingMayChangeConfig = false;
+        });
+      }
     }
   }
 
@@ -317,17 +443,19 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       port,
       generation,
       () => port.verifyAndSave(key: key, modelId: modelId, consent: consent),
+      mayChangeConfig: true,
       success: '模型验证与设置已完成。',
     );
   }
 
   Future<void> _deleteKey() async {
     final port = widget.controller;
+    final provider = port.view.settings?.provider ?? ModelProvider.school;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('删除已保存的模型 Key？'),
-        content: const Text('这只会删除本机保存的模型 Key。学校账号密码、业务数据和对话历史会保留。'),
+        content: Text('这只会删除本机保存的${provider.label} Key。学校账号密码、业务数据和对话历史会保留。'),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -346,7 +474,8 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       port,
       _generation,
       () => port.deleteKey(confirmed: true),
-      success: '已删除本机保存的模型 Key。',
+      mayChangeConfig: true,
+      success: '已删除本机保存的${provider.label} Key。',
     );
   }
 
@@ -379,26 +508,37 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
     builder: (context, _) {
       final view = widget.controller.view;
       final settings = view.settings;
-      final report = settings?.report ?? view.report;
-      final consent = _consentDraft ?? settings?.consent ?? false;
+      final storedProvider = settings?.provider ?? ModelProvider.school;
+      final provider = _providerDraft ?? storedProvider;
+      final switchingProvider = _providerDraft != null;
+      final report = switchingProvider
+          ? const AgentCapabilityReport()
+          : settings?.report ?? view.report;
+      final consent = switchingProvider
+          ? false
+          : _consentDraft ?? settings?.consent ?? false;
       final models = <String>{
-        ...view.availableModels,
-        ...?settings?.modelIds,
-        if (settings?.modelId != null) settings!.modelId!,
+        if (!switchingProvider) ...view.availableModels,
+        if (!switchingProvider) ...?settings?.modelIds,
+        if (!switchingProvider && settings?.modelId != null) settings!.modelId!,
       }.where((model) => model.trim().isNotEmpty).toList()..sort();
       final selectedModel = models.contains(_selectedModel)
           ? _selectedModel
           : models.contains(settings?.modelId)
           ? settings?.modelId
           : null;
-      final keySaved = settings?.keySaved ?? false;
+      final keySaved = !switchingProvider && (settings?.keySaved ?? false);
       final portBusy = view.busy || view.phase == AgentPhase.closed || _pending;
+      final providerPort = widget.controller is AgentModelProviderWorkspacePort
+          ? widget.controller as AgentModelProviderWorkspacePort
+          : null;
       final preferencesPort = widget.controller is AgentPreferencesWorkspacePort
           ? widget.controller as AgentPreferencesWorkspacePort
           : null;
       final permissionPort = widget.controller is AgentPermissionWorkspacePort
           ? widget.controller as AgentPermissionWorkspacePort
           : null;
+      final visibleFailure = _suppressViewFailure ? null : view.failure;
       final canLoad =
           !portBusy && consent && (keySaved || _key.text.isNotEmpty);
       final canVerify =
@@ -415,16 +555,49 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
             children: [
               _SettingsCard(
-                title: '学校模型服务',
+                title: provider.label,
                 subtitle: '服务地址由应用固定管理；只读查询按本次问题需要调用。',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const _FixedServiceRow(),
+                    if (providerPort != null) ...[
+                      DropdownButtonFormField<ModelProvider>(
+                        isExpanded: true,
+                        key: ValueKey(
+                          'agent-settings-provider-${provider.name}',
+                        ),
+                        initialValue: provider,
+                        decoration: const InputDecoration(
+                          labelText: '模型服务',
+                          helperText: '只可选择应用固定的服务地址。',
+                        ),
+                        items: [
+                          for (final candidate in ModelProvider.values)
+                            DropdownMenuItem(
+                              value: candidate,
+                              child: Text(
+                                candidate.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: portBusy || switchingProvider
+                            ? null
+                            : (value) {
+                                if (value != null && value != storedProvider) {
+                                  unawaited(_selectModelProvider(value));
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    _FixedServiceRow(provider: provider),
                     const SizedBox(height: 14),
                     TextField(
                       key: const ValueKey('agent-settings-key'),
                       controller: _key,
+                      enabled: !portBusy,
                       obscureText: !_showKey,
                       enableSuggestions: false,
                       autocorrect: false,
@@ -436,7 +609,9 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                             : '输入内容只在本次页面操作中暂存。',
                         suffixIcon: IconButton(
                           tooltip: _showKey ? '隐藏 Key' : '显示 Key',
-                          onPressed: () => setState(() => _showKey = !_showKey),
+                          onPressed: portBusy
+                              ? null
+                              : () => setState(() => _showKey = !_showKey),
                           icon: Icon(
                             _showKey ? Icons.visibility_off : Icons.visibility,
                           ),
@@ -453,9 +628,13 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                           style: TextStyle(fontWeight: FontWeight.w700),
                         ),
                         const SizedBox(height: 4),
-                        const Text(
-                          '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到学校模型服务。图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。',
-                          style: TextStyle(color: _settingsMuted, height: 1.45),
+                        Text(
+                          _consentDescription(provider),
+                          key: const ValueKey('agent-settings-consent-copy'),
+                          style: const TextStyle(
+                            color: _settingsMuted,
+                            height: 1.45,
+                          ),
                         ),
                         Material(
                           color: Colors.transparent,
@@ -505,7 +684,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
-                      key: const ValueKey('agent-settings-model'),
+                      key: ValueKey('agent-settings-model-${provider.name}'),
                       isExpanded: true,
                       initialValue: selectedModel,
                       decoration: const InputDecoration(
@@ -529,7 +708,9 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      modelReasoningEffort(selectedModel) == 'high'
+                      provider == ModelProvider.deepseek
+                          ? '思考模式：关闭，使用直答模式；工具调用照常使用。'
+                          : modelReasoningEffort(selectedModel) == 'high'
                           ? '思考强度：高（high）。对话、晨报和能力验证统一使用。'
                           : '思考强度：服务默认。当前模型未设置额外思考参数。',
                       key: const ValueKey('agent-settings-reasoning-policy'),
@@ -540,20 +721,28 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                       const SizedBox(height: 10),
                       _PhaseNotice(phase: view.phase),
                     ],
-                    if (view.pendingKeyProvided) ...[
+                    if (_providerDraft != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '正在切换到${provider.label}…',
+                        style: const TextStyle(color: _settingsMuted),
+                      ),
+                    ],
+                    if (!switchingProvider && view.pendingKeyProvided) ...[
                       const SizedBox(height: 8),
                       const Text(
                         '模型目录已获取，可以继续选择模型并验证设置。',
                         style: TextStyle(color: _settingsMuted),
                       ),
                     ],
-                    if (_message != null || view.failure != null) ...[
+                    if (!switchingProvider &&
+                        (_message != null || visibleFailure != null)) ...[
                       const SizedBox(height: 10),
                       _SettingsNotice(
-                        message: _message ?? _failureText(view.failure!),
+                        message: _message ?? _failureText(visibleFailure!),
                         isError:
                             _messageIsError ||
-                            (_message == null && view.failure != null),
+                            (_message == null && visibleFailure != null),
                       ),
                     ],
                   ],
@@ -732,29 +921,63 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
 }
 
 final class _FixedServiceRow extends StatelessWidget {
-  const _FixedServiceRow();
+  const _FixedServiceRow({required this.provider});
+
+  final ModelProvider provider;
 
   @override
-  Widget build(BuildContext context) => const Row(
+  Widget build(BuildContext context) => Row(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
-      Icon(Icons.school_outlined, size: 20, color: _settingsGreen),
-      SizedBox(width: 10),
+      Icon(
+        provider == ModelProvider.school
+            ? Icons.school_outlined
+            : Icons.cloud_outlined,
+        size: 20,
+        color: _settingsGreen,
+      ),
+      const SizedBox(width: 10),
       Expanded(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('学校模型服务', style: TextStyle(fontWeight: FontWeight.w600)),
-            SizedBox(height: 3),
             Text(
-              '连接信息由应用管理，不在此页面编辑。',
-              style: TextStyle(color: _settingsMuted, height: 1.4),
+              provider.label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
             ),
+            const SizedBox(height: 3),
+            Text(
+              '固定目的地：${provider.endpoint}',
+              style: const TextStyle(color: _settingsMuted, height: 1.4),
+            ),
+            if (provider == ModelProvider.deepseek) ...[
+              const SizedBox(height: 3),
+              const Text(
+                '直答模式：减少等待，工具调用照常使用。',
+                style: TextStyle(color: _settingsMuted, height: 1.4),
+              ),
+              const Text(
+                'DeepSeek 官方账号独立计费。',
+                style: TextStyle(color: _settingsMuted, height: 1.4),
+              ),
+            ],
           ],
         ),
       ),
     ],
   );
+}
+
+String _consentDescription(ModelProvider provider) {
+  final destination = provider.endpoint.toString();
+  final service = provider.label;
+  final billing = provider == ModelProvider.deepseek
+      ? 'DeepSeek 官方账号独立计费。'
+      : '';
+  final directMode = provider == ModelProvider.deepseek
+      ? '直答模式：减少等待，工具调用照常使用。'
+      : '';
+  return '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到$service（$destination）。$billing$directMode 图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。';
 }
 
 final class _SettingsCard extends StatelessWidget {
@@ -1315,5 +1538,6 @@ String _failureText(AgentFailureCode code) => switch (code) {
   AgentFailureCode.resourceLimit => '模型列表或回复超出当前处理上限。',
   AgentFailureCode.cancelled => '操作已取消。',
   AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
+  AgentFailureCode.insufficientBalance => 'DeepSeek 官方账户余额不足，请检查账户余额或选择其他模型服务。',
   AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',
 };

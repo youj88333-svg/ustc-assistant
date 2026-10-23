@@ -7,14 +7,28 @@ import '../core/agent_contract.dart';
 import 'model_gateway_contract.dart';
 import 'model_reasoning_policy.dart';
 
-/// Fixed USTC model gateway. The only non-production destination is the
-/// explicit 127.0.0.1 test constructor.
+/// One allowlisted model service. A provider-bound lease cannot be used at a
+/// different destination. Only the test constructor accepts a loopback URI.
 final class UstcModelGateway implements ModelGatewayPort {
   UstcModelGateway({
     Duration connectTimeout = const Duration(seconds: 15),
     Duration requestTimeout = const Duration(seconds: 180),
     Duration idleTimeout = const Duration(seconds: 20),
-  }) : _baseUri = Uri.https(_productionHost, '/'),
+  }) : provider = ModelProvider.school,
+       _baseUri = ModelProvider.school.endpoint,
+       _loopback = false,
+       _connectTimeout = connectTimeout,
+       _requestTimeout = requestTimeout,
+       _idleTimeout = idleTimeout {
+    _validateTimeouts(connectTimeout, requestTimeout, idleTimeout);
+  }
+
+  UstcModelGateway.deepseekOfficial({
+    Duration connectTimeout = const Duration(seconds: 15),
+    Duration requestTimeout = const Duration(seconds: 180),
+    Duration idleTimeout = const Duration(seconds: 20),
+  }) : provider = ModelProvider.deepseek,
+       _baseUri = ModelProvider.deepseek.endpoint,
        _loopback = false,
        _connectTimeout = connectTimeout,
        _requestTimeout = requestTimeout,
@@ -24,6 +38,7 @@ final class UstcModelGateway implements ModelGatewayPort {
 
   UstcModelGateway.loopbackForTesting(
     Uri baseUri, {
+    this.provider = ModelProvider.school,
     Duration connectTimeout = const Duration(seconds: 15),
     Duration requestTimeout = const Duration(seconds: 180),
     Duration idleTimeout = const Duration(seconds: 20),
@@ -35,7 +50,6 @@ final class UstcModelGateway implements ModelGatewayPort {
     _validateTimeouts(connectTimeout, requestTimeout, idleTimeout);
   }
 
-  static const String _productionHost = 'api.llm.ustc.edu.cn';
   static final RegExp _modelIdPattern = RegExp(r'^[A-Za-z0-9._:/-]{1,128}$');
   static final RegExp _toolNamePattern = RegExp(r'^[A-Za-z0-9_.-]{1,64}$');
   static const int _modelsBodyLimit = 1024 * 1024;
@@ -47,6 +61,7 @@ final class UstcModelGateway implements ModelGatewayPort {
   static const int _toolArgumentsLimit = 16 * 1024;
 
   final Uri _baseUri;
+  final ModelProvider provider;
   final bool _loopback;
   final Duration _connectTimeout;
   final Duration _requestTimeout;
@@ -59,6 +74,10 @@ final class UstcModelGateway implements ModelGatewayPort {
 
   @override
   Future<List<String>> listModels(ModelSecretLease secret) {
+    if (secret.provider != provider) {
+      secret.revoke();
+      return Future.error(const AgentFailure(AgentFailureCode.invalidInput));
+    }
     final operation = _register();
     if (operation == null) {
       secret.revoke();
@@ -110,6 +129,14 @@ final class UstcModelGateway implements ModelGatewayPort {
     _OwnedRequest? operation;
     controller = StreamController<ModelEvent>(
       onListen: () {
+        if (secret.provider != provider) {
+          secret.revoke();
+          controller.addError(
+            const AgentFailure(AgentFailureCode.invalidInput),
+          );
+          unawaited(controller.close());
+          return;
+        }
         operation = _register();
         if (operation == null) {
           secret.revoke();
@@ -246,7 +273,8 @@ final class UstcModelGateway implements ModelGatewayPort {
         if (_isContextLimit(error)) {
           throw const AgentFailure(AgentFailureCode.contextLimit);
         }
-        if (modelReasoningEffort(modelRequest.modelId) != null &&
+        if (provider == ModelProvider.school &&
+            modelReasoningEffort(modelRequest.modelId) != null &&
             _isReasoningRejection(error)) {
           throw const AgentFailure(AgentFailureCode.reasoningRejected);
         }
@@ -332,6 +360,9 @@ final class UstcModelGateway implements ModelGatewayPort {
   }
 
   void _checkStatus(int status) {
+    if (status == HttpStatus.paymentRequired) {
+      throw const AgentFailure(AgentFailureCode.insufficientBalance);
+    }
     if (status == HttpStatus.unauthorized) {
       throw const AgentFailure(AgentFailureCode.unauthorized);
     }
@@ -530,7 +561,12 @@ final class UstcModelGateway implements ModelGatewayPort {
       'messages': messages,
       'stream': true,
       'max_tokens': request.maxTokens,
-      'reasoning_effort': ?modelReasoningEffort(request.modelId),
+      if (provider == ModelProvider.school)
+        'reasoning_effort': ?modelReasoningEffort(request.modelId),
+      // Official thinking defaults to enabled and requires reasoning replay in
+      // tool history. Explicit direct mode preserves our no-replay contract and
+      // prioritizes response latency; business tools remain fully available.
+      if (provider == ModelProvider.deepseek) 'thinking': {'type': 'disabled'},
     };
     if (request.tools.isNotEmpty) {
       body['tools'] = request.tools
@@ -1049,8 +1085,11 @@ final class UstcModelGateway implements ModelGatewayPort {
     return const AgentFailure(AgentFailureCode.networkFailed);
   }
 
-  Uri _endpoint(String path) =>
-      _baseUri.replace(path: '/v1/$path', query: null, fragment: null);
+  Uri _endpoint(String path) => _baseUri.replace(
+    path: provider == ModelProvider.deepseek ? '/$path' : '/v1/$path',
+    query: null,
+    fragment: null,
+  );
 
   static Uri _validateLoopbackUri(Uri uri) {
     if (uri.scheme != 'http' ||

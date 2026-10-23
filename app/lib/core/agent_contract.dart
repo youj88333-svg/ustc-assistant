@@ -15,6 +15,7 @@ enum AgentFailureCode {
   storageFailed,
   protectionFailed,
   unauthorized,
+  insufficientBalance,
   forbidden,
   rateLimited,
   networkFailed,
@@ -38,6 +39,27 @@ final class AgentFailure implements Exception {
 }
 
 enum ModelCapability { unverified, chatOnly, toolReady }
+
+/// App-owned allowlist. Neither tools nor remote content choose a destination.
+enum ModelProvider { school, deepseek }
+
+extension ModelProviderConfiguration on ModelProvider {
+  String get label => switch (this) {
+    ModelProvider.school => '学校模型服务',
+    ModelProvider.deepseek => 'DeepSeek 官方',
+  };
+
+  Uri get endpoint => switch (this) {
+    ModelProvider.school => Uri.https('api.llm.ustc.edu.cn', '/'),
+    ModelProvider.deepseek => Uri.https('api.deepseek.com', '/'),
+  };
+
+  String keyPurpose(String owner) => switch (this) {
+    // Preserve the exact legacy purpose without decrypting during migration.
+    ModelProvider.school => 'ustc-model-key/v1/$owner',
+    ModelProvider.deepseek => 'deepseek-model-key/v1/$owner',
+  };
+}
 
 enum AgentPhase {
   idle,
@@ -110,6 +132,7 @@ final class AgentCapabilityReport {
 final class AgentSettingsSnapshot {
   AgentSettingsSnapshot({
     required this.authority,
+    this.provider = ModelProvider.school,
     this.keySaved = false,
     this.consent = false,
     this.modelId,
@@ -117,6 +140,7 @@ final class AgentSettingsSnapshot {
     this.report = const AgentCapabilityReport(),
   }) : modelIds = List.unmodifiable(modelIds);
   final AgentAuthority authority;
+  final ModelProvider provider;
   final bool keySaved, consent;
   final String? modelId;
   final List<String> modelIds;
@@ -133,7 +157,9 @@ abstract interface class ModelCredentialProtector {
 
 /// Single-consumption, non-serializable model request outlet; consumer wipes.
 final class ModelSecretLease {
-  ModelSecretLease(Uint8List bytes) : _bytes = bytes;
+  ModelSecretLease(Uint8List bytes, {this.provider = ModelProvider.school})
+    : _bytes = bytes;
+  final ModelProvider provider;
   Uint8List? _bytes;
   bool get isAvailable => _bytes != null;
   Uint8List take() {
@@ -367,6 +393,15 @@ abstract interface class AgentDataPort {
     String? conversationId,
   });
   Future<void> completeClearHistory(AgentHistoryIntent intent);
+}
+
+/// Human configuration only. Switching does not grant consent or reuse a Key
+/// belonging to another service. The authority revision fences stale work.
+abstract interface class AgentModelProviderDataPort {
+  Future<void> selectModelProvider(
+    AgentAuthority expected,
+    ModelProvider provider,
+  );
 }
 
 /// Safe UI projection, shared without Flutter dependencies in C4.

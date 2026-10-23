@@ -95,6 +95,7 @@ void removeSettingsTablesForLegacyFixture(Database database) {
 /// Remove v11 Agent tables from an explicitly constructed synthetic legacy
 /// copy before setting its older user_version.
 void removeAgentTablesForLegacyFixture(Database database) {
+  removeModelProviderSchemaForLegacyFixture(database);
   database.execute('DROP TABLE IF EXISTS young_daily_sync');
   for (final table in const [
     'agent_context_turns',
@@ -116,4 +117,30 @@ void removeAgentTablesForLegacyFixture(Database database) {
   ]) {
     database.execute('DROP TABLE IF EXISTS $table');
   }
+}
+
+/// Reconstruct the publicly shipped schema-18 singleton config in an owned
+/// synthetic DB. Older fixtures must not carry newer provider objects.
+void removeModelProviderSchemaForLegacyFixture(Database database) {
+  database.execute('DROP TABLE IF EXISTS agent_model_selection');
+  final columns = database
+      .select('PRAGMA table_info(agent_config)')
+      .map((row) => row['name'])
+      .toSet();
+  if (!columns.contains('provider')) return;
+  database.execute('''CREATE TABLE synthetic_agent_config18 (
+    singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+    model_id TEXT NOT NULL CHECK(length(model_id)<=128), model_ids TEXT NOT NULL,
+    consent INTEGER NOT NULL CHECK(consent IN (0,1)), key_ciphertext BLOB,
+    mechanism TEXT, purpose TEXT, capability TEXT NOT NULL,
+    report TEXT NOT NULL, verified_at INTEGER NOT NULL)''');
+  database.execute(
+    '''INSERT INTO synthetic_agent_config18
+    SELECT singleton,model_id,model_ids,consent,key_ciphertext,mechanism,purpose,
+      capability,report,verified_at FROM agent_config WHERE provider='school' ''',
+  );
+  database.execute('DROP TABLE agent_config');
+  database.execute(
+    'ALTER TABLE synthetic_agent_config18 RENAME TO agent_config',
+  );
 }

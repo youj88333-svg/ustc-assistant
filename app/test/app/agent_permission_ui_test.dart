@@ -27,6 +27,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(port.permissionReadCalls, 1);
+      await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
       expect(find.text('创建任务'), findsOneWidget);
       expect(find.text('修改任务'), findsOneWidget);
       expect(port.clearHistoryCalls, 0);
@@ -38,9 +39,14 @@ void main() {
       expect(port.deleteKeyCalls, 1);
       expect(port.view.settings?.keySaved, isFalse);
       expect(port.actionPermissions, [createTask, updateTask]);
+      await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
       expect(find.text('创建任务'), findsOneWidget);
       expect(find.text('修改任务'), findsOneWidget);
 
+      await _scrollSettingsTo(
+        tester,
+        find.byKey(const ValueKey('agent-permission-revoke-updateTask:4')),
+      );
       await _tap(tester, 'agent-permission-revoke-updateTask:4');
       await tester.pumpAndSettle();
 
@@ -69,12 +75,14 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(port.permissionReadCalls, 1);
+    await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
     expect(find.text('无法读取已记住的操作授权，请重试。'), findsOneWidget);
     expect(find.textContaining('private fixture detail'), findsNothing);
     await _tap(tester, 'agent-permissions-reload');
     await tester.pumpAndSettle();
 
     expect(port.permissionReadCalls, 2);
+    await _scrollSettingsTo(tester, find.text('已记住的操作授权'));
     expect(find.text('创建任务'), findsOneWidget);
     expect(find.byKey(const ValueKey('agent-permissions-error')), findsNothing);
     expect(tester.takeException(), isNull);
@@ -88,6 +96,15 @@ Widget _host(Widget child) => MaterialApp(
     ),
   ),
 );
+
+Future<void> _scrollSettingsTo(WidgetTester tester, Finder target) async {
+  final settings = find.byKey(const ValueKey('agent-settings-panel'));
+  final scrollable = find
+      .descendant(of: settings, matching: find.byType(Scrollable))
+      .first;
+  await tester.scrollUntilVisible(target, 240, scrollable: scrollable);
+  await tester.pumpAndSettle();
+}
 
 Future<void> _tap(WidgetTester tester, String key) async {
   final target = find.byKey(ValueKey(key));

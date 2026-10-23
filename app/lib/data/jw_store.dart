@@ -154,7 +154,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   bool _closing = false;
   Future<void>? _closeFuture;
 
-  static const currentSchemaVersion = 18;
+  static const currentSchemaVersion = 19;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -184,6 +184,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...M6Store.schema,
         ...MorningBriefStore.schema,
         ...YoungDailySyncStore.schema,
+        ...AgentStore.upgradeFrom18,
       ]) {
         await customStatement(statement);
       }
@@ -201,7 +202,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 17 || to != 18) {
+      if (from < 1 || from > 18 || to != 19) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -240,7 +241,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
             "UPDATE young_events SET source_retired=1,version=version+1 WHERE presence='missingWithinScope'",
           if (from <= 16)
             'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
-          ...YoungDailySyncStore.schema,
+          if (from <= 17) ...YoungDailySyncStore.schema,
+          ...AgentStore.upgradeFrom18,
         ]) {
           await customStatement(statement);
         }

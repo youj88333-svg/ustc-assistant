@@ -16,6 +16,63 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 
 void main() {
   test(
+    'switching provider drops candidate Key/models and restores the saved school profile',
+    () async {
+      final rig = await _rig(configured: true);
+      rig.gateway.models = ['school-candidate-model'];
+      await rig.coordinator.loadModels(
+        key: 'synthetic-unsaved-school-key',
+        consent: true,
+      );
+      expect(rig.coordinator.view.pendingKeyProvided, isTrue);
+      await rig.coordinator.selectModelProvider(ModelProvider.deepseek);
+      expect(rig.coordinator.view.settings!.provider, ModelProvider.deepseek);
+      expect(rig.coordinator.view.pendingKeyProvided, isFalse);
+      expect(rig.coordinator.view.availableModels, isEmpty);
+      expect(rig.coordinator.view.canSend, isFalse);
+      final calls = rig.gateway.requestCount;
+      await rig.coordinator.loadModels(consent: true);
+      expect(rig.coordinator.view.failure, AgentFailureCode.keyRequired);
+      expect(
+        rig.gateway.requestCount,
+        calls,
+        reason: 'official cannot borrow school candidate or saved Key',
+      );
+      await rig.coordinator.selectModelProvider(ModelProvider.school);
+      expect(rig.coordinator.view.settings!.keySaved, isTrue);
+      expect(rig.coordinator.view.settings!.modelId, 'synthetic-chat-model');
+      expect(rig.coordinator.view.availableModels, ['synthetic-chat-model']);
+      expect(rig.coordinator.view.failure, isNull);
+    },
+  );
+
+  test(
+    'provider switch during streaming cancels old result and preserves prior messages',
+    () async {
+      final rig = await _rig(configured: true);
+      final sending = rig.coordinator.send('合成切换中问题');
+      final generation = await rig.gateway.nextGeneration();
+      await generation.started.future;
+      generation.emit(const ModelTextDelta('学校服务的部分回答'));
+      await _until(() => rig.coordinator.view.messages.last.text.isNotEmpty);
+      await rig.coordinator.selectModelProvider(ModelProvider.deepseek);
+      await sending;
+      expect(generation.emit(const ModelTextDelta('切换后的迟到内容')), isFalse);
+      expect(rig.coordinator.view.settings!.provider, ModelProvider.deepseek);
+      expect(
+        rig.coordinator.view.messages.last.text,
+        isNot(contains('切换后的迟到内容')),
+      );
+      expect(
+        rig.coordinator.view.messages.last.status,
+        AgentMessageStatus.cancelled,
+      );
+      expect(rig.coordinator.view.settings!.consent, isFalse);
+      expect(rig.coordinator.view.phase, AgentPhase.idle);
+    },
+  );
+
+  test(
     'provider reasoning is live display only, never durable or next-turn input',
     () async {
       final rig = await _rig(configured: true);

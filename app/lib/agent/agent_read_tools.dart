@@ -2499,6 +2499,7 @@ AgentToolResult _agentFailureResult(AgentFailure failure) {
     AgentFailureCode.reasoningRejected ||
     AgentFailureCode.redirectRejected => ('failure', 'sourceSchema'),
     AgentFailureCode.unauthorized ||
+    AgentFailureCode.insufficientBalance ||
     AgentFailureCode.forbidden => ('accessRestricted', 'accessRestricted'),
     AgentFailureCode.keyRequired ||
     AgentFailureCode.modelRequired => ('unavailable', 'unavailable'),

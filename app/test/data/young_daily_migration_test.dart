@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import '../support/calendar_legacy_schema.dart';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -21,7 +22,7 @@ void main() {
       await HttpOverrides.runZoned(
         () async {
           final store = await _openMigration(file, protector: protector);
-          expect(store.schemaVersion, 18);
+          expect(store.schemaVersion, JwStore.currentSchemaVersion);
           expect(
             (await store
                     .customSelect('SELECT enabled FROM young_daily_sync')
@@ -42,7 +43,10 @@ void main() {
       expect(_snapshot(file), before);
       final raw = sqlite.sqlite3.open(file.path);
       try {
-        expect(raw.select('PRAGMA user_version').single['user_version'], 18);
+        expect(
+          raw.select('PRAGMA user_version').single['user_version'],
+          JwStore.currentSchemaVersion,
+        );
         expect(
           raw
               .select(
@@ -183,6 +187,7 @@ Future<File> _legacyFile() async {
   final raw = sqlite.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN IMMEDIATE');
+    removeModelProviderSchemaForLegacyFixture(raw);
     raw.execute('DROP TABLE IF EXISTS young_daily_sync');
     raw.execute("INSERT INTO jw_account VALUES(1,'SYNTHETIC18')");
     raw.execute(
@@ -254,21 +259,28 @@ Map<String, Object?> _snapshot(File file) {
   final raw = sqlite.sqlite3.open(file.path);
   try {
     final tables = raw.select(
-      "SELECT name,sql FROM sqlite_master WHERE type='table' AND name!='young_daily_sync' ORDER BY name",
+      "SELECT name,sql FROM sqlite_master WHERE type='table' "
+      "AND name NOT IN ('young_daily_sync','agent_model_selection') ORDER BY name",
     );
     return {
       for (final table in tables)
         table['name'] as String: {
-          'schema': table['sql'],
+          // Provider schema extension is covered by its dedicated migration
+          // tests. Here every pre-existing config field remains comparable.
+          'schema': table['name'] == 'agent_config'
+              ? 'model-profile'
+              : table['sql'],
           'rows': [
             for (final row in raw.select(
               'SELECT * FROM "${table['name']}" ORDER BY rowid',
             ))
               {
                 for (final entry in row.entries)
-                  entry.key: entry.value is List<int>
-                      ? List<int>.from(entry.value as List<int>)
-                      : entry.value,
+                  if (entry.key != 'provider' ||
+                      table['name'] != 'agent_config')
+                    entry.key: entry.value is List<int>
+                        ? List<int>.from(entry.value as List<int>)
+                        : entry.value,
               },
           ],
         },

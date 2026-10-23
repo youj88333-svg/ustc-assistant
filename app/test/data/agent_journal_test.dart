@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
+import '../support/calendar_legacy_schema.dart';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -480,7 +481,10 @@ void main() {
       _rewindMessagesToSchema11(file);
 
       store = await _open(file: file);
-      expect(await _scalar(store, 'PRAGMA user_version'), 18);
+      expect(
+        await _scalar(store, 'PRAGMA user_version'),
+        JwStore.currentSchemaVersion,
+      );
       expect(
         await _scalar(store, 'SELECT owner_id FROM jw_state'),
         beforeOwner,
@@ -505,7 +509,7 @@ void main() {
     final conversation = await store.agent.createConversation();
     await _completeJournal(store, conversation, 'future schema sentinel');
     await store.close();
-    _setSchemaVersion(file, 19);
+    _setSchemaVersion(file, JwStore.currentSchemaVersion + 1);
 
     await expectLater(
       _open(file: file),
@@ -519,7 +523,10 @@ void main() {
     );
     final raw = sqlite3.sqlite3.open(file.path);
     try {
-      expect(raw.select('PRAGMA user_version').single['user_version'], 19);
+      expect(
+        raw.select('PRAGMA user_version').single['user_version'],
+        JwStore.currentSchemaVersion + 1,
+      );
       expect(
         raw
             .select('SELECT text FROM agent_messages WHERE role=\'assistant\'')
@@ -681,6 +688,7 @@ Future<void> _rewindMessagesToSchema11(
   final raw = sqlite3.sqlite3.open(file.path);
   try {
     raw.execute('BEGIN');
+    removeModelProviderSchemaForLegacyFixture(raw);
     _dropM6TablesForLegacyFixture(raw);
     raw.execute('DROP INDEX IF EXISTS agent_messages_conversation');
     raw.execute('ALTER TABLE agent_messages RENAME TO agent_messages_v12');

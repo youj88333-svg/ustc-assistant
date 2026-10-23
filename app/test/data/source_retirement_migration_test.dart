@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import '../support/calendar_legacy_schema.dart';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,6 +58,7 @@ void main() {
       late List<Map<String, Object?>> retainedFacts;
       try {
         raw.execute('BEGIN IMMEDIATE');
+        removeModelProviderSchemaForLegacyFixture(raw);
         raw.execute('DROP TABLE IF EXISTS young_daily_sync');
         raw.execute('ALTER TABLE jw_events DROP COLUMN source_retired');
         raw.execute('ALTER TABLE young_events DROP COLUMN source_retired');
@@ -86,14 +88,14 @@ void main() {
       }
 
       store = await _open(file);
-      expect(store.schemaVersion, 18);
+      expect(store.schemaVersion, JwStore.currentSchemaVersion);
       expect((await _window(store)).context, originalContext);
       expect((await _window(store)).revision, originalRevision + 1);
       final upgraded = sqlite.sqlite3.open(file.path);
       try {
         expect(
           upgraded.select('PRAGMA user_version').single['user_version'],
-          18,
+          JwStore.currentSchemaVersion,
         );
         expect(_retainedFacts(upgraded), retainedFacts);
         expect(

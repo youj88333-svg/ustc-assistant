@@ -8,7 +8,7 @@ import '../agent/agent_action_tools.dart';
 import '../agent/agent_coordinator.dart';
 import '../agent/agent_read_tools.dart';
 import '../agent/model_gateway_contract.dart';
-import '../agent/ustc_model_gateway.dart';
+import '../agent/configured_model_gateway.dart';
 import '../core/agent_contract.dart';
 import '../core/agent_source_contract.dart';
 import '../core/calendar_contract.dart';
@@ -77,7 +77,7 @@ final class AgentBehaviorValidationRunner {
     required AgentDataPort modelConfiguration,
     ModelGatewayPort Function()? gatewayFactory,
   }) : _configuration = modelConfiguration,
-       _gatewayFactory = gatewayFactory ?? UstcModelGateway.new;
+       _gatewayFactory = gatewayFactory ?? ConfiguredModelGateway.new;
   static const requestLimit = 96;
   static const caseCount = 14;
   final AgentDataPort _configuration;

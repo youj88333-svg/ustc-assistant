@@ -222,7 +222,7 @@ void main() {
         (await store.customSelect('PRAGMA user_version').getSingle()).read<int>(
           'user_version',
         ),
-        18,
+        JwStore.currentSchemaVersion,
       );
       final afterJw = await store.readView();
       final afterYoung = await store.readYoungView();
