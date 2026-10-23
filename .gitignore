@@ -9,6 +9,7 @@ temp.md
 **/.dart_tool/
 **/build/
 **/.flutter-plugins-dependencies
+app/android/.kotlin/
 **/__pycache__/
 *.py[cod]
 
