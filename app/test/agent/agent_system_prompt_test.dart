@@ -69,7 +69,7 @@ void main() {
         definitions: [_tool('query_agenda'), _tool('propose_local_changes')],
       );
       // This verifies what the request supplies, not how a live model will speak.
-      expect(agentPromptVersion, 'ustc-personal-maid-agent-v14');
+      expect(agentPromptVersion, 'ustc-personal-maid-agent-v15');
       expect(prompt, startsWith(assistantPersonaPrefix));
       expect(prompt, contains('ROLE: DEDICATED_PERSONAL_MAID'));
       expect(prompt, contains('CHARACTER: ADULT_WOMAN'));

@@ -302,6 +302,9 @@ void main() {
         clock: FixedClock(DateTime.utc(2026, 10, 14, 2)),
         runTimeout: const Duration(seconds: 15),
         diagnostics: diagnostics,
+        // This scenario injects a provider capacity rejection, independently
+        // of automatic soft compaction (covered by separate journeys).
+        contextBudget: AgentContextBudget(maximumInputTokens: 32768),
       );
 
       addTearDown(() async {
@@ -321,10 +324,8 @@ void main() {
           .timeout(const Duration(seconds: 8));
       expect(coordinator.view.report.capability, ModelCapability.toolReady);
 
-      // Keep this fixture below automatic soft compaction so the injected
-      // capacity failures exercise the normal request and its single retry.
-      // Soft compaction has its own coordinator coverage; its threshold also
-      // includes the evolving system prompt and fixed tool definitions.
+      // The explicit test budget leaves room for both retained turns, so a
+      // growing fixed prompt cannot turn this into a soft-compaction test.
       final longHistory = List.filled(7000, 'h').join();
       service.nextToolResultText = longHistory;
       await coordinator

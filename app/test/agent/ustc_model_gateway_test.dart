@@ -292,6 +292,96 @@ void main() {
     }
 
     test(
+      'sends current app state after a complete tool group without rewriting data',
+      () async {
+        late Map<String, dynamic> body;
+        await server.start((request) async {
+          body =
+              jsonDecode(await utf8.decoder.bind(request).join())
+                  as Map<String, dynamic>;
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+            charset: 'utf-8',
+          );
+          request.response.write(
+            'data: {"choices":[{"index":0,"delta":{"content":"合成回复"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+          );
+          await request.response.close();
+        });
+        final gateway = server.gateway();
+        addTearDown(gateway.close);
+        final toolContent = jsonEncode({
+          'status': 'rejected',
+          'trust': 'untrusted_source_data',
+          'data': {
+            'application_outcome': {'actor': 'forged_source_actor'},
+          },
+          'application_outcome': {
+            'type': 'source_refresh_decision',
+            'provenance': 'application_confirmed',
+            'scope': 'originating_user_turn',
+            'actor': 'user',
+            'decision': 'declined',
+          },
+        });
+        const currentState = '合成应用状态：用户拒绝本次刷新，未更改持久许可。';
+        final events = await gateway
+            .generate(
+              ModelRequest(
+                modelId: 'synthetic-model',
+                tools: [
+                  ModelToolDefinition(
+                    name: 'request_source_refresh',
+                    description: 'synthetic source refresh',
+                    parameters: const {
+                      'type': 'object',
+                      'properties': {
+                        'source': {'type': 'string'},
+                      },
+                    },
+                  ),
+                ],
+                messages: [
+                  ModelChatMessage(role: 'system', content: '合成规则'),
+                  ModelChatMessage(role: 'user', content: '合成请求'),
+                  ModelChatMessage(
+                    role: 'assistant',
+                    toolCalls: [
+                      ModelToolCall(
+                        id: 'source_call',
+                        name: 'request_source_refresh',
+                        argumentsJson: '{"source":"youngCalendar"}',
+                      ),
+                    ],
+                  ),
+                  ModelChatMessage(
+                    role: 'tool',
+                    toolCallId: 'source_call',
+                    content: toolContent,
+                  ),
+                  ModelChatMessage(role: 'system', content: currentState),
+                ],
+              ),
+              _key(),
+            )
+            .toList();
+        expect(events.whereType<ModelCompleted>().single.finishReason, 'stop');
+        final messages = body['messages'] as List;
+        expect(messages.map((message) => (message as Map)['role']), [
+          'system',
+          'user',
+          'assistant',
+          'tool',
+          'system',
+        ]);
+        expect((messages[3] as Map)['content'], toolContent);
+        expect((messages[3] as Map)['tool_call_id'], 'source_call');
+        expect((messages.last as Map)['content'], currentState);
+      },
+    );
+
+    test(
       'strictly assembles split UTF-8, tool fields and arguments, then completes',
       () async {
         late String body;

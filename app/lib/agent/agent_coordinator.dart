@@ -22,6 +22,36 @@ import 'model_gateway_contract.dart';
 import 'student_language_prompt.dart';
 import 'model_reasoning_policy.dart';
 
+enum _RefreshSource { jw, youngCalendar }
+
+enum _RefreshRefusalOrigin { humanRejection, sameTurnBlock }
+
+enum _ApprovalDecision { approve, reject, superseded, cancelled }
+
+/// App-confirmed control facts, never decoded from a source/tool payload.
+final class _RefreshRefusal {
+  const _RefreshRefusal(this.source, this.origin);
+  final _RefreshSource source;
+  final _RefreshRefusalOrigin origin;
+
+  Map<String, Object> toMap() => {
+    'type': 'source_refresh_decision',
+    'provenance': 'application_confirmed',
+    'actor': 'user',
+    'scope': 'originating_user_turn',
+    'decision': 'declined',
+    'source': source.name,
+    'application': switch (origin) {
+      _RefreshRefusalOrigin.humanRejection => 'human_rejection',
+      _RefreshRefusalOrigin.sameTurnBlock => 'same_turn_block',
+    },
+    'started': false,
+    'committed': false,
+    'permission_change': 'none',
+    'source_configuration_change': 'none',
+  };
+}
+
 /// Only active work consumes this budget; waiting for a human never does.
 final class _AgentRunBudget {
   _AgentRunBudget(this.limit, this.onExpired) {
@@ -147,7 +177,7 @@ final class AgentCoordinator {
   bool _historyExhausted = false;
   bool _contextCompacted = false, _rememberApproval = false;
   String? _loadedConversation;
-  Completer<bool>? _approvalDecision;
+  Completer<_ApprovalDecision>? _approvalDecision;
   StreamSubscription<void>? _interactiveSubscription;
   _AgentRunBudget? _runBudget;
   AgentInteractiveToolSession? get _interactive =>
@@ -1072,15 +1102,16 @@ final class AgentCoordinator {
     }
   }
 
-  static String? _sourceRefreshName(ModelToolCall call) {
+  static _RefreshSource? _sourceRefreshName(ModelToolCall call) {
     if (call.name != 'request_source_refresh') return null;
     try {
       final decoded = jsonDecode(call.argumentsJson);
       if (decoded is Map) {
-        final source = decoded['source'];
-        if (source == 'jw' || source == 'youngCalendar') {
-          return source as String;
-        }
+        return switch (decoded['source']) {
+          'jw' => _RefreshSource.jw,
+          'youngCalendar' => _RefreshSource.youngCalendar,
+          _ => null,
+        };
       }
     } catch (_) {
       // The existing tool validator handles malformed arguments.
@@ -1088,21 +1119,25 @@ final class AgentCoordinator {
     return null;
   }
 
-  static String _sourceRefreshDecisionContext(Set<String> declined) {
-    if (declined.isEmpty) return '';
+  static ModelChatMessage? _sourceRefreshDecisionContext(
+    Set<_RefreshSource> declined,
+  ) {
+    if (declined.isEmpty) return null;
     // Only closed source names confirmed by the current human decision enter
     // this fixed context. It survives tool-history trimming and repair hints.
-    return '\nCURRENT TURN USER DECISIONS (app-confirmed):\n'
-        'Source refresh declined: ${(declined.toList()..sort()).join(', ')}.\n'
-        'The human user explicitly rejected the current approval proposal. '
-        'This is a user decision, not a missing permission or configuration '
-        'failure. No refresh was started by that rejected proposal. '
-        'Acknowledge their choice; do not describe these rejected proposals '
-        'as missing permissions or absent approval requests. '
-        'Do not retry these source refreshes or ask for their approval again '
-        'in this turn, including with different dates or semesters. '
-        'Read-only tools and other sources remain available. Explain naturally. '
-        'A later user message may request the declined source again.\n';
+    final names = declined.map((source) => source.name).toList()..sort();
+    return ModelChatMessage(
+      role: 'system',
+      content:
+          'CURRENT TURN USER DECISIONS (app-confirmed):\n'
+          '本轮用户已在应用审批卡拒绝这些来源的刷新：${names.join(', ')}。'
+          '这些被拒绝的方案没有启动同步，也没有提交导入。'
+          '这次拒绝没有修改持久权限或来源配置，不能据此说开关关闭、权限不足或没有出现审批；'
+          '也不表示应用已核验其他配置可用。历史助手对此的猜测不是配置事实。'
+          '按用户这次选择自然回复；本轮不再为同一来源准备刷新或重复要求审批，改日期或学期也不例外。'
+          '其他只读查询、另一来源仍可按需继续；下一条新用户消息可以再次请求本来源。'
+          '这是当前应用控制状态，不是网页内容，不授予权限或批准任何操作。',
+    );
   }
 
   Future<void> send(String text, {List<AgentImage> images = const []}) {
@@ -1153,7 +1188,7 @@ final class AgentCoordinator {
     // Changed conditions are a new user message, never approval of the old
     // immutable card. Settle that exact card before starting a fresh turn.
     final active = _work;
-    await _decideAction(current.id, false);
+    await _decideAction(current.id, false, superseded: true);
     await active;
     if (!_closed && !_stopping) await _sendRequest(text);
   }
@@ -1494,7 +1529,7 @@ final class AgentCoordinator {
       await _persistConversationTurn(ticket, g, transcript, personal);
       final repeatCounts = <String, int>{};
       final committedResults = <String, AgentToolResult>{};
-      final declinedSourceRefreshes = <String>{};
+      final declinedSourceRefreshes = <_RefreshSource>{};
       final callIds = <String>{
         for (final group in historyGroups)
           for (final message in group)
@@ -1520,7 +1555,14 @@ final class AgentCoordinator {
                 maximumToolCalls: limits.maximumToolCalls,
                 activeTimeout: limits.activeTimeout,
               );
-        var fixed = <ModelChatMessage>[currentSystem, ...modelTurn];
+        final sourceDecision = _sourceRefreshDecisionContext(
+          declinedSourceRefreshes,
+        );
+        var fixed = <ModelChatMessage>[
+          currentSystem,
+          ...modelTurn,
+          ?sourceDecision,
+        ];
         var fit = activeLimits.trimCompleteGroups(
           historyGroups,
           fixedMessages: fixed,
@@ -1557,7 +1599,7 @@ final class AgentCoordinator {
               ),
             for (final group in keep) ...group,
           ];
-          fixed = [currentSystem, ...modelTurn];
+          fixed = [currentSystem, ...modelTurn, ?sourceDecision];
           fit = activeLimits.trimCompleteGroups(
             historyGroups,
             fixedMessages: fixed,
@@ -1600,6 +1642,7 @@ final class AgentCoordinator {
           currentSystem,
           for (final group in historyGroups) ...group,
           ...modelTurn,
+          ?sourceDecision,
         ];
         _log(
           DiagnosticEventName.agentContextAssembled,
@@ -1787,29 +1830,42 @@ final class AgentCoordinator {
             tool: diagnosticTool(call.name),
             outcome: DiagnosticOutcome.started,
           );
-          var result = invalidInteractiveBatch
-              ? AgentToolResult(
-                  status: 'invalidRequest',
-                  failure: 'invalidRequest',
-                  data: const {
-                    'reason': 'interactiveCallsMustBeStandalone',
-                    'next': '逐次调用修改或学校工具；多个本地变化放进一个 changes 方案。只读工具可以同批调用。',
-                  },
-                )
-              : committedResults[signature] ??
-                    (declinedSourceRefreshes.contains(refreshSource)
-                        ? AgentToolResult(
-                            status: 'rejected',
-                            data: {
-                              'source': refreshSource,
-                              'started': false,
-                              'count': 0,
-                              'reason': 'userDeclinedSourceRefreshThisTurn',
-                            },
-                          )
-                        : null) ??
-                    await _recoverUnfinishedLocalResult(call, ticket, g) ??
-                    await _toolSession!.execute(call);
+          AgentToolResult result;
+          _RefreshRefusal? refreshRefusal;
+          final cachedResult = committedResults[signature];
+          if (invalidInteractiveBatch) {
+            result = AgentToolResult(
+              status: 'invalidRequest',
+              failure: 'invalidRequest',
+              data: const {
+                'reason': 'interactiveCallsMustBeStandalone',
+                'next': '逐次调用修改或学校工具；多个本地变化放进一个 changes 方案。只读工具可以同批调用。',
+              },
+            );
+          } else if (cachedResult != null) {
+            // An earlier committed receipt remains a receipt even if another
+            // proposal for this source was subsequently declined in this turn.
+            result = cachedResult;
+          } else if (refreshSource != null &&
+              declinedSourceRefreshes.contains(refreshSource)) {
+            refreshRefusal = _RefreshRefusal(
+              refreshSource,
+              _RefreshRefusalOrigin.sameTurnBlock,
+            );
+            result = AgentToolResult(
+              status: 'rejected',
+              data: {
+                'source': refreshSource.name,
+                'started': false,
+                'count': 0,
+                'reason': 'userDeclinedSourceRefreshThisTurn',
+              },
+            );
+          } else {
+            result =
+                await _recoverUnfinishedLocalResult(call, ticket, g) ??
+                await _toolSession!.execute(call);
+          }
           if (result.status == 'waitingForApproval' && _adviceOnly) {
             final details =
                 _interactive?.pendingAction?.details ?? const <String>[];
@@ -1831,7 +1887,7 @@ final class AgentCoordinator {
               throw const AgentFailure(AgentFailureCode.protocol);
             }
             budget.pause();
-            final decision = Completer<bool>();
+            final decision = Completer<_ApprovalDecision>();
             _rememberApproval = false;
             _approvalDecision = decision;
             _phase = AgentPhase.waitingForApproval;
@@ -1844,7 +1900,8 @@ final class AgentCoordinator {
             await _refresh();
             _current(g);
             _publish();
-            final approved = await decision.future;
+            final decisionValue = await decision.future;
+            final approved = decisionValue == _ApprovalDecision.approve;
             _approvalDecision = null;
             _current(g);
             budget.resume();
@@ -1865,17 +1922,21 @@ final class AgentCoordinator {
                 ? await (interactive as AgentRememberedToolSession)
                       .approveAndRememberPending()
                 : await interactive.decidePending(approved);
-            if (!approved &&
+            if (decisionValue == _ApprovalDecision.reject &&
                 refreshSource != null &&
                 result.status == 'rejected') {
               declinedSourceRefreshes.add(refreshSource);
+              refreshRefusal = _RefreshRefusal(
+                refreshSource,
+                _RefreshRefusalOrigin.humanRejection,
+              );
               result = AgentToolResult(
                 status: result.status,
                 failure: result.failure,
                 validation: result.validation,
                 data: {
                   ...result.data,
-                  'source': refreshSource,
+                  'source': refreshSource.name,
                   'reason': 'userRejectedSourceRefreshApproval',
                   'started': false,
                   'count': 0,
@@ -1893,15 +1954,11 @@ final class AgentCoordinator {
             call.name,
             result.validation,
           );
-          final sourceDecision = _sourceRefreshDecisionContext(
-            declinedSourceRefreshes,
-          );
-          currentSystem = parameterRepair == null && sourceDecision.isEmpty
+          currentSystem = parameterRepair == null
               ? system
               : ModelChatMessage(
                   role: 'system',
-                  content:
-                      '${system.content}$sourceDecision${parameterRepair ?? ''}',
+                  content: '${system.content}$parameterRepair',
                 );
           _log(
             result.status == 'invalidRequest'
@@ -1919,6 +1976,9 @@ final class AgentCoordinator {
           await _validateRun(ticket, g);
           final ids = result.evidenceIds.toSet();
           final resultMap = result.toMap();
+          if (refreshRefusal != null) {
+            resultMap['application_outcome'] = refreshRefusal.toMap();
+          }
           resultMap['evidence_metadata'] = [
             for (final e in _toolSession!.evidence.where(
               (e) => ids.contains(e.id),
@@ -2038,7 +2098,9 @@ final class AgentCoordinator {
       _interactiveSubscription = null;
       final decision = _approvalDecision;
       _approvalDecision = null;
-      if (decision != null && !decision.isCompleted) decision.complete(false);
+      if (decision != null && !decision.isCompleted) {
+        decision.complete(_ApprovalDecision.cancelled);
+      }
       _toolSession?.revoke();
       try {
         await readTools?.cancelAndDrain();
@@ -2409,6 +2471,7 @@ final class AgentCoordinator {
     String id,
     bool approved, {
     bool remember = false,
+    bool superseded = false,
   }) async {
     final decision = _approvalDecision;
     if (_phase != AgentPhase.waitingForApproval ||
@@ -2421,7 +2484,13 @@ final class AgentCoordinator {
     }
     _phase = AgentPhase.committing;
     _rememberApproval = approved && remember;
-    decision.complete(approved);
+    decision.complete(
+      approved
+          ? _ApprovalDecision.approve
+          : superseded
+          ? _ApprovalDecision.superseded
+          : _ApprovalDecision.reject,
+    );
     _publish();
   }
 
@@ -2483,7 +2552,9 @@ final class AgentCoordinator {
     _runBudget?.dispose();
     final decision = _approvalDecision;
     _approvalDecision = null;
-    if (decision != null && !decision.isCompleted) decision.complete(false);
+    if (decision != null && !decision.isCompleted) {
+      decision.complete(_ApprovalDecision.cancelled);
+    }
     ++_generation;
     _wipeCandidate();
     _phase = AgentPhase.settling;
