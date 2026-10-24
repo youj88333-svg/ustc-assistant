@@ -366,6 +366,21 @@ void main() {
         expect(rig.tools.executeCount, 4);
         expect(rig.tools.readCount, 2);
         expect(rig.tools.sourceRefreshCount, 0);
+        final declinedResult = rig.gateway.generations[1].request.messages
+            .singleWhere(
+              (message) =>
+                  message.role == 'tool' &&
+                  message.toolCallId == 'young-refresh-first',
+            );
+        final declined = jsonDecode(declinedResult.content!) as Map;
+        expect(declined['status'], 'rejected');
+        expect(
+          (declined['data'] as Map)['reason'],
+          'userRejectedSourceRefreshApproval',
+        );
+        expect((declined['data'] as Map)['source'], 'youngCalendar');
+        expect((declined['data'] as Map)['started'], isFalse);
+        expect((declined['data'] as Map)['count'], 0);
         final retryResult = rig.gateway.generations[2].request.messages
             .singleWhere(
               (message) =>
@@ -409,6 +424,10 @@ void main() {
           contains('Source refresh declined: youngCalendar.'),
         );
         expect(repairedSystem, contains('【应用本轮参数校验】'));
+        expect(
+          repairedSystem,
+          contains('The human user explicitly rejected the current approval'),
+        );
         final afterReadSystem = systemText(5);
         expect(
           afterReadSystem,

@@ -1094,6 +1094,11 @@ final class AgentCoordinator {
     // this fixed context. It survives tool-history trimming and repair hints.
     return '\nCURRENT TURN USER DECISIONS (app-confirmed):\n'
         'Source refresh declined: ${(declined.toList()..sort()).join(', ')}.\n'
+        'The human user explicitly rejected the current approval proposal. '
+        'This is a user decision, not a missing permission or configuration '
+        'failure. No refresh was started by that rejected proposal. '
+        'Acknowledge their choice; do not describe these rejected proposals '
+        'as missing permissions or absent approval requests. '
         'Do not retry these source refreshes or ask for their approval again '
         'in this turn, including with different dates or semesters. '
         'Read-only tools and other sources remain available. Explain naturally. '
@@ -1864,6 +1869,19 @@ final class AgentCoordinator {
                 refreshSource != null &&
                 result.status == 'rejected') {
               declinedSourceRefreshes.add(refreshSource);
+              result = AgentToolResult(
+                status: result.status,
+                failure: result.failure,
+                validation: result.validation,
+                data: {
+                  ...result.data,
+                  'source': refreshSource,
+                  'reason': 'userRejectedSourceRefreshApproval',
+                  'started': false,
+                  'count': 0,
+                },
+                evidenceIds: result.evidenceIds,
+              );
             }
             _rememberApproval = false;
           }
