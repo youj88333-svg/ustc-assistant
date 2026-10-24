@@ -1072,6 +1072,34 @@ final class AgentCoordinator {
     }
   }
 
+  static String? _sourceRefreshName(ModelToolCall call) {
+    if (call.name != 'request_source_refresh') return null;
+    try {
+      final decoded = jsonDecode(call.argumentsJson);
+      if (decoded is Map) {
+        final source = decoded['source'];
+        if (source == 'jw' || source == 'youngCalendar') {
+          return source as String;
+        }
+      }
+    } catch (_) {
+      // The existing tool validator handles malformed arguments.
+    }
+    return null;
+  }
+
+  static String _sourceRefreshDecisionContext(Set<String> declined) {
+    if (declined.isEmpty) return '';
+    // Only closed source names confirmed by the current human decision enter
+    // this fixed context. It survives tool-history trimming and repair hints.
+    return '\nCURRENT TURN USER DECISIONS (app-confirmed):\n'
+        'Source refresh declined: ${(declined.toList()..sort()).join(', ')}.\n'
+        'Do not retry these source refreshes or ask for their approval again '
+        'in this turn, including with different dates or semesters. '
+        'Read-only tools and other sources remain available. Explain naturally. '
+        'A later user message may request the declined source again.\n';
+  }
+
   Future<void> send(String text, {List<AgentImage> images = const []}) {
     if (_phase == AgentPhase.waitingForApproval && images.isEmpty) {
       return _sendPendingInput(text);
@@ -1461,6 +1489,7 @@ final class AgentCoordinator {
       await _persistConversationTurn(ticket, g, transcript, personal);
       final repeatCounts = <String, int>{};
       final committedResults = <String, AgentToolResult>{};
+      final declinedSourceRefreshes = <String>{};
       final callIds = <String>{
         for (final group in historyGroups)
           for (final message in group)
@@ -1732,6 +1761,7 @@ final class AgentCoordinator {
             throw const AgentFailure(AgentFailureCode.protocol);
           }
           final signature = _canonicalCall(call);
+          final refreshSource = _sourceRefreshName(call);
           final repetitions = (repeatCounts[signature] ?? 0) + 1;
           repeatCounts[signature] = repetitions;
           if (repetitions > 3 && !committedResults.containsKey(signature)) {
@@ -1762,6 +1792,17 @@ final class AgentCoordinator {
                   },
                 )
               : committedResults[signature] ??
+                    (declinedSourceRefreshes.contains(refreshSource)
+                        ? AgentToolResult(
+                            status: 'rejected',
+                            data: {
+                              'source': refreshSource,
+                              'started': false,
+                              'count': 0,
+                              'reason': 'userDeclinedSourceRefreshThisTurn',
+                            },
+                          )
+                        : null) ??
                     await _recoverUnfinishedLocalResult(call, ticket, g) ??
                     await _toolSession!.execute(call);
           if (result.status == 'waitingForApproval' && _adviceOnly) {
@@ -1819,6 +1860,11 @@ final class AgentCoordinator {
                 ? await (interactive as AgentRememberedToolSession)
                       .approveAndRememberPending()
                 : await interactive.decidePending(approved);
+            if (!approved &&
+                refreshSource != null &&
+                result.status == 'rejected') {
+              declinedSourceRefreshes.add(refreshSource);
+            }
             _rememberApproval = false;
           }
           if (result.status == 'committed') {
@@ -1829,11 +1875,15 @@ final class AgentCoordinator {
             call.name,
             result.validation,
           );
-          currentSystem = parameterRepair == null
+          final sourceDecision = _sourceRefreshDecisionContext(
+            declinedSourceRefreshes,
+          );
+          currentSystem = parameterRepair == null && sourceDecision.isEmpty
               ? system
               : ModelChatMessage(
                   role: 'system',
-                  content: '${system.content}$parameterRepair',
+                  content:
+                      '${system.content}$sourceDecision${parameterRepair ?? ''}',
                 );
           _log(
             result.status == 'invalidRequest'

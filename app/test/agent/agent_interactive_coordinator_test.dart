@@ -11,6 +11,7 @@ import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_action_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_discussion_contract.dart';
+import 'package:ustc_assistant_m0/core/agent_parameter_issue.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
 import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/data/jw_store.dart';
@@ -278,6 +279,283 @@ void main() {
         await send.timeout(const Duration(seconds: 3));
         expect(rig.coordinator.view.failure, isNull);
         expect(rig.tools.ownedSourceJobCancelled, isFalse);
+      },
+    );
+
+    test(
+      'a rejected source refresh cannot be resubmitted during the same turn',
+      () async {
+        final rig = await _open(
+          tools: _FakeInteractiveTools(includeUndoTool: true),
+        );
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-refresh-first',
+              '2026-09-01',
+              '2026-09-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-refresh-new-dates',
+              '2026-10-01',
+              '2026-10-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            const ModelToolCall(
+              id: 'invalid-undo-for-repair',
+              name: 'propose_undo',
+              argumentsJson: '{}',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            ModelToolCall(
+              id: 'read-after-parameter-repair',
+              name: 'query_agenda',
+              argumentsJson: '{}',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_toolCall(_readCall('read-after-reject')));
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-refresh-after-read',
+              '2026-11-01',
+              '2026-11-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_answer('本轮合成查询已完成。'));
+
+        final send = rig.coordinator.send('合成测试：同步二课活动并核对本轮状态');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final firstActionId = rig.coordinator.view.pendingAction!.id;
+        await rig.coordinator.rejectAction(firstActionId);
+
+        // A second card proves that a changed date bypassed the same-turn
+        // rejection. A third generation proves the tool result was returned
+        // and the model continued without another approval.
+        await _until(
+          () =>
+              (rig.coordinator.view.phase == AgentPhase.waitingForApproval &&
+                  rig.coordinator.view.pendingAction?.id != firstActionId) ||
+              rig.gateway.generations.length >= 3,
+          label: 'same-turn source retry or post-rejection continuation',
+        );
+        expect(
+          rig.coordinator.view.phase,
+          isNot(AgentPhase.waitingForApproval),
+          reason: 'the same source must not create a second approval card',
+        );
+
+        await send.timeout(const Duration(seconds: 3));
+
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.gateway.generations, hasLength(7));
+        expect(rig.tools.executeCount, 4);
+        expect(rig.tools.readCount, 2);
+        expect(rig.tools.sourceRefreshCount, 0);
+        final retryResult = rig.gateway.generations[2].request.messages
+            .singleWhere(
+              (message) =>
+                  message.role == 'tool' &&
+                  message.toolCallId == 'young-refresh-new-dates',
+            );
+        final retry = jsonDecode(retryResult.content!) as Map;
+        expect(retry['status'], 'rejected');
+        expect(
+          (retry['data'] as Map)['reason'],
+          'userDeclinedSourceRefreshThisTurn',
+        );
+        expect((retry['data'] as Map)['started'], isFalse);
+        expect((retry['data'] as Map)['count'], 0);
+        final afterReadRetryResult = rig.gateway.generations[6].request.messages
+            .singleWhere(
+              (message) =>
+                  message.role == 'tool' &&
+                  message.toolCallId == 'young-refresh-after-read',
+            );
+        final afterReadRetry = jsonDecode(afterReadRetryResult.content!) as Map;
+        expect(afterReadRetry['status'], 'rejected');
+        expect(
+          (afterReadRetry['data'] as Map)['reason'],
+          'userDeclinedSourceRefreshThisTurn',
+        );
+        expect((afterReadRetry['data'] as Map)['started'], isFalse);
+        expect((afterReadRetry['data'] as Map)['count'], 0);
+
+        String systemText(int generation) => rig
+            .gateway
+            .generations[generation]
+            .request
+            .messages
+            .where((message) => message.role == 'system')
+            .map((message) => message.content ?? '')
+            .join('\n');
+        final repairedSystem = systemText(3);
+        expect(
+          repairedSystem,
+          contains('Source refresh declined: youngCalendar.'),
+        );
+        expect(repairedSystem, contains('【应用本轮参数校验】'));
+        final afterReadSystem = systemText(5);
+        expect(
+          afterReadSystem,
+          contains('Source refresh declined: youngCalendar.'),
+        );
+        expect(afterReadSystem, isNot(contains('【应用本轮参数校验】')));
+      },
+    );
+
+    test(
+      'a declined source does not block a different source approval',
+      () async {
+        final rig = await _open();
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-source-first',
+              '2026-09-01',
+              '2026-09-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_toolCall(_jwSourceRefreshCall('jw-source')));
+        rig.gateway.enqueueEvents(_answer('不同来源的审批已由用户拒绝。'));
+
+        final send = rig.coordinator.send('合成测试：先准备二课来源，再准备教务来源');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final youngActionId = rig.coordinator.view.pendingAction!.id;
+        await rig.coordinator.rejectAction(youngActionId);
+
+        await _until(
+          () =>
+              rig.coordinator.view.phase == AgentPhase.waitingForApproval &&
+              rig.coordinator.view.pendingAction?.id != youngActionId,
+          label: 'different-source approval after a source-specific rejection',
+        );
+        expect(rig.gateway.generations, hasLength(2));
+        final jwActionId = rig.coordinator.view.pendingAction!.id;
+        await rig.coordinator.rejectAction(jwActionId);
+        await send.timeout(const Duration(seconds: 3));
+
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.tools.executeCount, 2);
+        expect(rig.tools.sourceRefreshCount, 0);
+      },
+    );
+
+    test(
+      'a new user turn can request a source declined in the previous turn',
+      () async {
+        final rig = await _open();
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-source-old-turn',
+              '2026-09-01',
+              '2026-09-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_answer('上一轮已按拒绝结束。'));
+        final firstSend = rig.coordinator.send('合成测试：请求二课刷新');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+        );
+        final firstActionId = rig.coordinator.view.pendingAction!.id;
+        await rig.coordinator.rejectAction(firstActionId);
+        await firstSend.timeout(const Duration(seconds: 3));
+
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'young-source-new-turn',
+              '2026-10-01',
+              '2026-10-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_answer('新一轮的待批方案已拒绝。'));
+        final secondSend = rig.coordinator.send('合成测试：新一轮再次请求二课刷新');
+        await _until(
+          () => rig.coordinator.view.phase == AgentPhase.waitingForApproval,
+          label: 'same source becomes approvable in the next user turn',
+        );
+        final secondActionId = rig.coordinator.view.pendingAction!.id;
+        expect(secondActionId, isNot(firstActionId));
+        expect(rig.gateway.generations, hasLength(3));
+        final nextTurnSystem = rig.gateway.generations[2].request.messages
+            .where((message) => message.role == 'system')
+            .map((message) => message.content ?? '')
+            .join('\n');
+        expect(
+          nextTurnSystem,
+          isNot(contains('CURRENT TURN USER DECISIONS (app-confirmed)')),
+        );
+        await rig.coordinator.rejectAction(secondActionId);
+        await secondSend.timeout(const Duration(seconds: 3));
+
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.tools.executeCount, 2);
+        expect(rig.tools.sourceRefreshCount, 0);
+      },
+    );
+
+    test(
+      'advice-only automatic rejection does not close a source for the turn',
+      () async {
+        final rig = await _open();
+        await rig.coordinator.setAdviceOnly(true);
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'advice-source-first',
+              '2026-09-01',
+              '2026-09-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(
+          _toolCall(
+            _youngSourceRefreshCall(
+              'advice-source-retry',
+              '2026-10-01',
+              '2026-10-02',
+            ),
+          ),
+        );
+        rig.gateway.enqueueEvents(_answer('仅建议模式没有启动刷新。'));
+
+        await rig.coordinator.send('合成测试：仅建议模式下准备二课刷新建议');
+
+        expect(rig.gateway.generations, hasLength(3));
+        expect(rig.coordinator.view.failure, isNull);
+        expect(rig.coordinator.view.pendingAction, isNull);
+        expect(rig.tools.executeCount, 2);
+        expect(rig.tools.sourceRefreshCount, 0);
+        final automaticResult = rig.gateway.generations[2].request.messages
+            .singleWhere(
+              (message) =>
+                  message.role == 'tool' &&
+                  message.toolCallId == 'advice-source-retry',
+            );
+        final result = jsonDecode(automaticResult.content!) as Map;
+        expect(result['status'], 'adviceOnly');
+        expect((result['data'] as Map)['submitted'], isFalse);
       },
     );
 
@@ -724,6 +1002,29 @@ ModelToolCall _sourceRefreshCall() => const ModelToolCall(
   argumentsJson: '{}',
 );
 
+ModelToolCall _youngSourceRefreshCall(
+  String id,
+  String firstDay,
+  String endDayExclusive,
+) => ModelToolCall(
+  id: id,
+  name: 'request_source_refresh',
+  argumentsJson: jsonEncode({
+    'source': 'youngCalendar',
+    'first_day': firstDay,
+    'end_day_exclusive': endDayExclusive,
+  }),
+);
+
+ModelToolCall _jwSourceRefreshCall(String id) => ModelToolCall(
+  id: id,
+  name: 'request_source_refresh',
+  argumentsJson: jsonEncode({
+    'source': 'jw',
+    'semester_ref': 'synthetic-semester-ref',
+  }),
+);
+
 ModelToolCall _readCall(String id) =>
     ModelToolCall(id: id, name: 'query_agenda', argumentsJson: '{}');
 
@@ -877,9 +1178,13 @@ final class _SyntheticGeneration {
 }
 
 final class _FakeInteractiveTools implements AgentReadToolsPort {
-  _FakeInteractiveTools({this.useSyntheticProposal = false});
+  _FakeInteractiveTools({
+    this.useSyntheticProposal = false,
+    this.includeUndoTool = false,
+  });
 
   final bool useSyntheticProposal;
+  final bool includeUndoTool;
   late final JwStore _store;
   _FakeInteractiveSession? _session;
   int _nextPlan = 0;
@@ -901,11 +1206,12 @@ final class _FakeInteractiveTools implements AgentReadToolsPort {
 
   @override
   List<ModelToolDefinition> get definitions => [
-    for (final name in const [
+    for (final name in [
       'query_agenda',
       'query_tasks',
       'propose_local_changes',
       'request_source_refresh',
+      if (includeUndoTool) 'propose_undo',
     ])
       ModelToolDefinition(
         name: name,
@@ -984,6 +1290,15 @@ final class _FakeInteractiveSession
         _owner.readCount++;
         _owner.readArguments.add(call.argumentsJson);
         return AgentToolResult(status: 'success', data: const {'count': 0});
+      case 'propose_undo':
+        return AgentToolResult(
+          status: 'invalidRequest',
+          failure: 'invalidRequest',
+          validation: const AgentParameterIssue(
+            reason: AgentParameterReason.unknownField,
+            field: AgentParameterField.arguments,
+          ),
+        );
       case 'propose_local_changes':
         if (_owner.useSyntheticProposal) {
           _pending = AgentActionView(
