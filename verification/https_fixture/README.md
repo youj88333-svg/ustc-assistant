@@ -8,8 +8,8 @@
 
 ```powershell
 & 'E:\conda\envs\basic310\python.exe' verification/https_fixture/fixture.py `
-  --runtime-root 'E:\107\.worktrees\rewrite\design-reset\verification\.runtime\https_fixture\run-<随机ID>' `
-  --deps-root 'E:\107\.worktrees\rewrite\design-reset\verification\.runtime\transport-deps'
+  --runtime-root 'E:\107\main\verification\.runtime\https_fixture\run-<随机ID>' `
+  --deps-root 'E:\107\main\verification\.runtime\transport-deps'
 ```
 
 两个路径必须是 `verification/.runtime` 下已存在、逐级无符号链接或 reparse point 的目录。`runtime-root` 的末级目录名须以 `run-` 开头；fixture 不创建该目录。它会生成临时 ECDSA P-256 自签名证书，SAN 为 `127.0.0.1`、有效期六天；HTTPS SSL context 和 aioquic 配置读入证书后，立即删除运行根中的临时证书与私钥文件。

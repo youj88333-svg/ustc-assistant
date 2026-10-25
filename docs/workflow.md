@@ -2,7 +2,9 @@
 
 ## 本分支当前规则
 
-本标准于 2026-10-09 经用户要求建立。用户要求“总结一下刚才关于工作流的讨论并记录作为整个项目工作流标准”。本节据此成为设计、前置验证、M0 及后续实现、调试和验收的统一工作方式，替代此前默认单 agent 独立施工的约定；根目录 [AGENTS.md](../AGENTS.md)保存执行摘要。新工程只在 `E:\107\.worktrees\rewrite\design-reset` 修改。当前阶段查看 [状态页](status.md)，具体批准查看 [决策登记](decisions/README.md)。
+本标准于2026-10-09经用户要求建立，统一设计、实现、调试和验收；根目录[AGENTS.md](../AGENTS.md)保存执行摘要。主工程为`E:\107\main`，维护主线`main`，短期修复工作树在`E:\107\worktrees`登记；旧工作区在迁移记录中追溯。当前阶段查看[状态页](status.md)，具体批准查看[决策登记](decisions/README.md)及[维护交接授权](milestones/maintenance-handoff/acceptance.md)。
+
+维护时从main建立短期`codex/fix-*`，按影响修复、测试和本地提交，集成核验后合回main。用户已授权GitHub与校内仓库同步已验收主线；每次同步核对最新远端并正常推送，不强推或删除远端历史，不把私有交付、备份和未提交归档推入仓库。实际命令与保留边界见[维护说明](maintenance.md)。
 
 ### 项目工作流标准
 

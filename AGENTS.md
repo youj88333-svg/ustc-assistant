@@ -2,8 +2,8 @@
 
 ## 工作区与文档
 
-- 仅在 `E:\107\.worktrees\rewrite\design-reset`、`codex/design-reset` 修改新工程，未经用户要求不推送。`E:\107` 的 minimal 未提交内容和 `rewrite/flutter-native` 参考分支保留，不接管其资产。
-- 唯一导航为 [docs/README.md](docs/README.md)。[状态页](docs/status.md)维护当前阶段；M0–M6 已关闭，Windows已获1.00私有基线认可，[收尾](docs/milestones/windows-polish/plan.md)只完成本地交付和核验，暂不公开发布；Android APK优先、兼顾可安装APK鸿蒙，[迁移计划](docs/milestones/android-apk/plan.md)已批准，按A0–A8推进。当前无实机，先用独立模拟器，不以模拟器结论替代目标机验收。未观察项与已知语音问题继续登记。默认Agent，Agent/日程两主页，任务在日程内，设置为辅助入口。M3公开内部能力无独立产品检索入口；M5按批准范围接入固定工具，main只读界面参考不转移代码或资产。
+- 主工程为`E:\107\main`、维护主线`main`；修复可在`E:\107\worktrees`登记的短期`codex/fix-*`工作树中进行。总目录只管理工程、归档、备份及私有交付；旧工程/未提交成果在`E:\107\archive`保留，不接管其业务或认证资产。用户已授权同步核验后的维护主线到GitHub `origin`及校内`ustc`，不强推、不镜像删除远端分支，APK/ZIP及备份不推送。本次迁移交接前的原工作树可用于受控收口，见[维护说明](docs/maintenance.md)。
+- 唯一导航为[docs/README.md](docs/README.md)，[状态页](docs/status.md)维护当前结论。M0–M6已关闭，两平台当前私有交付保留，项目进入维护/修复；Android完整逐项验收、正式独立签名及已知语音等保留项继续登记，不以模拟器或总体反馈替代目标机专项证据。默认Agent，Agent/日程两主页，任务在日程内，设置为辅助入口。M3公开内部能力无独立检索主页，M5使用固定工具；旧main参赛版与放弃版仅作归档参考，图标复用等既有批准继续有效。
 - 现行依据为 `docs/architecture/07–12`、`docs/quality/13`、`docs/reviews/14`、[15 工作流](docs/workflow.md)和对应来源参考/已批准决定。旧 `docs/refactor-docs/00–15` 仅是迁移导航，原文在冻结档案，不能采用旧里程碑或旧通过结论。
 - 较大阶段只维护 `docs/milestones/<阶段>/plan.md` 一份任务单；实施/失败/检查写 `records*`，用户验收和关闭写 `acceptance.md`。遵循 [文档维护规则](docs/maintaining.md)，不向设计、AGENTS 或入口追加进展流水。
 - 每份任务规格与子代理提示词显式列出设计依据、已批准修订、接口/不变量、修改范围、依赖及验收条件；冲突交主代理，不照搬历史实现、测试、fixtures、CI 或施工插件。

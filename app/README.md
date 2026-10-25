@@ -31,6 +31,8 @@ Windows x64的1.00私有交付已按2026-10-25授权刷新为源码441a68b、sch
 
 私有交付前用`tools/package-windows-private.ps1`传入本工作树`app/build`内的正式Release目录和40位源码提交。脚本核验1.00版本、固定运行资产、获准品牌PNG、模型/许可及ZIP逐文件摘要，生成全新的`app/build/private-releases/1.0.0+1-<短提交>/`；拒绝覆盖旧包，忽略静态构建库，不读取正式资料。当前包位于`1.0.0+1-441a68b9`，包含36个运行文件、2份说明和manifest；schema20升级后不能直接使用旧schema18程序打开资料。版本号同时维护于`pubspec.yaml`和`lib/core/application_version.dart`，脚本会检查一致；PE产品名改善但EXE、包名、资料根与通知身份保留。脚本不构建、不安装、不公开上传。
 
+已核验的长期交付统一移到`E:\107\releases\windows`或`android`，源码主工程为`E:\107\main`；具体文件和原构建修订见上述交付说明。构建输出可重建，已交付包保持哈希冻结，移目录不代表重新验收或变更版本。
+
 ## Android本地开发验证
 
 在仓库根使用`tools/android-a0.ps1`。该脚本只为自身进程和子进程设置E盘SDK、Gradle/Pub缓存、AVD与临时目录，不修改用户/系统环境。API36本地底座AVD使用`emulator-5582`；A2支持隔离世界的官方独立镜像使用`emulator-5586`及`-ApiLevel 37 -CurrentProvider`。均只用ADB端口5038，不连接真实手机或默认ADB服务；一次只运行一台，避免编译与模拟器争用内存。

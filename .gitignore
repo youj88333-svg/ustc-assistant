@@ -16,3 +16,10 @@ app/android/.kotlin/
 # 编辑器本地设置
 .idea/
 .vscode/
+
+# Worktree metadata, local credentials and private handoff assets
+.worktrees/
+.env
+.env.*
+!.env.example
+private/

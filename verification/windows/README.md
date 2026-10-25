@@ -35,7 +35,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1
 独立复跑 DNR 并保留已有证据：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant dnr -EvidencePath "E:\107\.worktrees\rewrite\design-reset\verification\windows\evidence-dnr-independent.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant dnr -EvidencePath "E:\107\main\verification\windows\evidence-dnr-independent.json"
 ```
 
 `EvidencePath` 只能位于 `verification/windows` 或 `verification/.runtime/windows`。DNR 变体只运行安装/重复请求/跨进程重启/排空/清理，不重复 SDK 和 CDP 候选；默认输出 `evidence-dnr.json`，独立验收应显式指定新文件名。全套自定义输出时，其 DNR 子证据也采用对应文件名前缀，避免覆盖原证据。
@@ -43,7 +43,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1
 静态 CSP worker guard 和本机 UDP 反例可独立运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant worker-guard -EvidencePath "E:\107\.worktrees\rewrite\design-reset\verification\windows\evidence-worker-guard-independent.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant worker-guard -EvidencePath "E:\107\main\verification\windows\evidence-worker-guard-independent.json"
 ```
 
 该变体先运行新 UDF 的未加 worker guard 对照，再运行另一个全新 UDF 的 guard 与跨进程重启。当前预期退出码仍为 **1**，由实际 WebRTC UDP 漏拦产生；CSP worker 检查通过不等于整个浏览器出站覆盖通过。
@@ -109,7 +109,7 @@ DPAPI 跨 Windows 用户/设备未测，不宣称可移植；业务 SQLite 的�
 2026-10-09 新增独立 `connection-allowlist` 变体。它使用全新 DNR+CSP 对照和另一个全新 CAL 分区，再由独立进程重开 CAL 分区；不改变 `all`、`dnr`、`worker-guard` 的规则含义，不覆盖既有 JSON。CAL 输出默认采用时间戳，指定已存在的输出路径会拒绝执行。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant connection-allowlist -EvidencePath "E:\107\.worktrees\rewrite\design-reset\verification\windows\evidence-connection-allowlist-independent-new.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/run.ps1 -Variant connection-allowlist -EvidencePath "E:\107\main\verification\windows\evidence-connection-allowlist-independent-new.json"
 ```
 
 可分别运行 `-Variant connection-allowlist-minimal` 的单主文档 RTC/服务端直接 CAL 对照、`-Variant connection-allowlist-minimal-navigation` 的第二个普通主文档 RTC 对照，以及 `-Variant connection-allowlist-https` 的相同 HTTPS URL 上 GET 和 WebTransport CONNECT 对照。完整 CAL 套件因每个上下文采用独立 browser child/profile，suite 上限为 300 秒；每个 child 仍为 45 秒。helpers Hidden，宿主离屏；不设置启用 CAL 的 feature flag、不改变 7897、系统代理或系统证书信任。
@@ -161,7 +161,7 @@ CAL 静态 `set` 尝试覆盖服务端宽 CAL 是合成实验设定，**不是�
 本次已修复工具侧处理：收到原生故障后，导航和脚本等待立即结束，记录 `NativeBrowserProcessFailureException`；不再用脚本超时掩盖已知进程故障。Dispose 后仍独立等待 `BrowserProcessExited`，排空失败不能报清理成功。增加[运行时资格脚本](qualify-runtime.ps1)，按后续导航最小反例 → 首文档最小实验 → 完整 CAL 套件依次验收；完整套件包含五类上下文的 RTC/Worker 和真实 HTTPS/WebTransport 收据。任一失败、缺必要阳性、混合运行时版本或未完成删除都阻止资格通过，并将后续阶段标记为未执行。它只是合成回归门禁，不自动开启学校入口或关闭 V-02。
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/qualify-runtime.ps1 -EvidencePath "E:\107\.worktrees\rewrite\design-reset\verification\windows\evidence-runtime-next.json"
+powershell -NoProfile -ExecutionPolicy Bypass -File verification/windows/qualify-runtime.ps1 -EvidencePath "E:\107\main\verification\windows\evidence-runtime-next.json"
 ```
 
 未来隔离候选可向 `run.ps1` 或 `qualify-runtime.ps1` 同时传 `-BrowserExecutableFolder` 与 `-ExpectedRuntimeVersion`。只接受 `verification/.runtime/engine-candidates` 下无 reparse 祖先、版本匹配且具有有效 Microsoft Authenticode 签名的运行时；启动后再次核对实际 exe 的精确路径和浏览器版本。选择只写入自有 helper 的子进程环境，不改变系统安装、用户代理或持久 WebView2 设置。当前没有该候选，所以签名候选的实际启动及整个资格通过分支尚未执行，版本号不能代替回归。

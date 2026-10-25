@@ -4,12 +4,12 @@
 
 ## 下载本机安装包
 
-交付目录为本工作树下`app/build/private-releases/android-1.00-qa2024-441a68b/`，在E盘，不包含用户资料或签名私钥。
+长期交付目录为`E:\107\releases\android\android-1.00-qa2024-441a68b\`，在源码仓库之外，不包含用户资料或签名私钥。原构建输出为`app/build/private-releases/android-1.00-qa2024-441a68b/`；仓库迁移只搬移和核验已有文件，不重写APK或其随包清单。
 
 | 使用环境 | 文件 | 版本码 | 大小 |
 |---|---|---:|---:|
-| ARM64 Android手机、可直接安装APK的鸿蒙（含当前MatePad） | [ARM64安装包](../../app/build/private-releases/android-1.00-qa2024-441a68b/USTC-Assistant-Android-QA2024-arm64-v8a.apk) | 2024 | 281727148 bytes |
-| MuMu x86_64模拟器 | [MuMu安装包](../../app/build/private-releases/android-1.00-qa2024-441a68b/USTC-Assistant-Android-QA4024-x86_64.apk) | 4024 | 293625010 bytes |
+| ARM64 Android手机、可直接安装APK的鸿蒙（含当前MatePad） | `USTC-Assistant-Android-QA2024-arm64-v8a.apk` | 2024 | 281727148 bytes |
+| MuMu x86_64模拟器 | `USTC-Assistant-Android-QA4024-x86_64.apk` | 4024 | 293625010 bytes |
 
 这两个文件沿用[记录23](../milestones/android-apk/records/23-onboarding-and-brand.md)的已验证构建，没有另造一个未经测试的“最终版”。各设备只安装对应的一个APK；手机不能安装x86_64包。体积主要来自随包本地语音模型，不是用户数据。Windows1.00及独立Windows暂存目录保留，未被本次移动交付覆盖。
 

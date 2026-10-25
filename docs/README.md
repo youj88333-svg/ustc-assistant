@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户关闭，[Windows 1.00私有交付](releases/windows-1.00.md)已于2026-10-25按当前441a68b/schema20刷新，原包保留。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，Android独立正式签名Release延后。两平台暂不公开发布；当前完成范围、已知问题与未观察项统一见[状态页](status.md)，详细移动证据见[设备矩阵](milestones/android-apk/device-matrix.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。主工程为`E:\107\main`、维护主线`main`；两远端同步当前维护版本，布局/操作见[维护说明](maintenance.md)。M0–M6已由用户关闭，[Windows 1.00私有交付](releases/windows-1.00.md)已按441a68b/schema20刷新，原包保留。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，Android独立正式签名Release延后。两平台暂不公开发布；完成范围、已知问题与未观察项统一见[状态页](status.md)，详细移动证据见[设备矩阵](milestones/android-apk/device-matrix.md)。
 
 ## 按阅读目的选择
 
@@ -8,6 +8,7 @@
 |---|---|
 | 学校/DeepSeek 官方 API 的选择、保护与验证 | [提供方决定](decisions/model-providers.md) · [接口契约](reference/sources/model-gateway.md) · [实施任务单](milestones/model-providers/plan.md) |
 | 当前阶段、已完成范围与待验证 | [项目状态](status.md) |
+| main主线、总目录、归档、修复与双远端同步 | [维护说明](maintenance.md) · [迁移任务单](milestones/maintenance-handoff/plan.md) · [实际记录](milestones/maintenance-handoff/records.md) |
 | 产品和安全边界 | [07 产品约束](architecture/07-constitution.md) · [批准决定](decisions/README.md) |
 | 模块职责与依赖 | [08 目标架构](architecture/08-target-architecture.md) |
 | 身份、分区、文档、凭据、导入与连续性 | [09 关键契约](architecture/09-contracts.md) |
@@ -40,8 +41,9 @@
 
 | 目录 | 用途 |
 |---|---|
-| `E:\107\.worktrees\rewrite\design-reset` | 本分支唯一施工工作区 |
-| `E:\107` | 本地 `main`，原 minimal 项目及其未提交内容保留 |
-| `E:\107\.worktrees\rewrite\flutter-native` | 暂停并保留的参考分支 |
+| `E:\107\main` | main维护主工程，唯一共用.git |
+| `E:\107\worktrees` | 短期修复与迁移交接工作树 |
+| `E:\107\archive` | 旧版本及其本地成果保留 |
+| `E:\107\releases`、`backups` | 私有交付、迁移恢复，均在源码仓库之外 |
 
-新工程不读旧工程业务或浏览器资产，未经用户要求不推送。文档整理不改变当前应用、数据库、凭据或里程碑范围。
+不读取旧工程业务或浏览器资产。用户已授权同步核验后的维护主线到两个远端；私有安装包不公开分发，未观察项不由仓库迁移关闭。
