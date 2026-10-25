@@ -28,11 +28,11 @@ Luna/max只写`tools/test-maintenance-layout.ps1`及自建GUID临时仓库。根
 | `E:\107\archive\competition-minimal` | archive/competition-minimal，旧main e1b7ed3及48条本地状态 |
 | `E:\107\archive\flutter-native` | archive/flutter-native，原5ac2db0及3条本地状态 |
 | `archive/design-reset`引用 | 准备完成的重写2d2f3b0，历史本地保留 |
-| `E:\107\.worktrees\rewrite\design-reset` | 当前会话的临时交接工作区，保留原构建/运行证据；因目录共享冲突暂留原位，记录提交后detach到维护主线 |
+| `E:\107\worktrees\maintenance-handoff` | detached临时交接快照，保留原构建/运行证据；原位置为E:\107\.worktrees\rewrite\design-reset，最后由用户完成Git移位 |
 
-最后一项为当前会话的临时交接目录，不作为第二个长期主线；后续打开`E:\107\main`继续维护。原总目录不再有.git，不重新init/clone第三个工程，不改归档文件内容或冻结历史中的原路径。
+最后一项为临时交接快照，不作为第二个长期主线；当前会话已使用`E:\107\main`继续维护。原总目录不再有.git，不重新init/clone第三个工程，不改归档文件内容或冻结历史中的原路径。
 
-### 唯一保留的目录归位项
+### 曾被共享冲突阻塞的目录归位项
 
 目标仍为`E:\107\worktrees\maintenance-handoff`。工具和用户普通PowerShell均执行Git worktree move失败，源仍存在、目标未创建，注册关系未改变。源目录/祖先和目标父目录无显式拒绝规则或重解析属性；只读Win32句柄查询中读取属性成功（0），改名所需DELETE访问返回32（共享冲突）。合成空目录的自建进程当前目录探针同样阻止改名，结束自己的探针后才成功；首轮尚未定位真实占用进程，未直接归因于某个Codex进程，后续查询见下。
 
@@ -82,3 +82,9 @@ GitHub实时main为6e8fd35，校内实际main为068b1b7，均为迁移后main的
 显式指定已有身份文件后，校内Git实际接受该密钥并允许目标仓库读写；未生成/上传新密钥，不能从日志确定原授权的添加时间。仅本仓库core.sshCommand固定已验证客户端、已有身份文件路径和忽略的`.local/git/known_hosts`；私钥仍留原位置，不复制/输出，不启用本机SSH入站服务，不改全局SSH或系统信任。
 
 已实际用普通推送将两个远端main推进到`21226c6252a3671d69dedc27963da7648bb8e044`，随后ls-remote读回均相同；这是真实服务结果，不是仅看remote-tracking缓存。最后的交接文档提交后再同步并核对，最终HEAD和所选版本标记在本地恢复清单与最终交付说明中登记；不用force/mirror/all，不删远端分支、不推本地archive成果或安装包。
+
+## 目录归位完成与会话接续
+
+2026-10-25，用户反馈“似乎已经成功运行，并将你迁移到此main”。根在`E:\107\main`实际核对：当前分支main、工作区干净，原`E:\107\.worktrees\rewrite\design-reset`不存在，目标`E:\107\worktrees\maintenance-handoff`存在且Git登记为干净的detached工作树，HEAD为7cb007e。主工程及交接工作树均使用`E:\107\main\.git`，总目录不存在独立.git；两旧工程的48/3条状态逐项仍与原恢复清单一致。
+
+目录尾项据此关闭，当前会话与未来维护使用main。前述失败、句柄快照及当时保留原目录的处理过程仍为历史事实，不再作为当前待办；本次没有重试移位、结束用户进程、删除交接资产、打开业务库或读取认证资产，也不反推用户为解除占用采取了哪一步。收口只更新文档并运行文档/差异检查，不因工作树移位重跑产品全量或重建冻结安装包。
