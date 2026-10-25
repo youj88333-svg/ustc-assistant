@@ -533,6 +533,7 @@ void main() {
 
         harness.clock.nowUtc = retryAt;
         await harness.coordinator.check();
+        await _eventually(() => harness.source.startCalls == 2);
         expect(harness.source.startCalls, 2);
         expect(harness.data.attempts, 2);
         harness.source.emitTerminal(failure: FailureCode.storageFailed);
@@ -541,6 +542,9 @@ void main() {
 
         harness.clock.nowUtc = retryAt.add(const Duration(days: 1));
         await harness.coordinator.check();
+        // An already queued automatic check may own admission. Observe its
+        // completion rather than assuming this call acquired that check.
+        await _eventually(() => harness.source.startCalls == 3);
         expect(harness.source.startCalls, 3);
         expect(harness.data.attemptDay, DateTime.utc(2026, 10, 16));
         expect(harness.data.attempts, 1);
