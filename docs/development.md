@@ -84,7 +84,7 @@ pwsh -NoProfile -File tools/build-public-release.ps1 `
   -SigningConfiguration (Join-Path $signingDirectory 'signing.json')
 ```
 
-`-Platform` 可选 `Windows`、`Android` 或 `All`。候选位于 `app/build/public-releases`，带修订号并含校验清单；Android 正式包与 QA 包使用不同身份且不迁移数据，Windows 包未代码签名。准备 GitLab Release 本地清单（需同时有同一修订的 Windows 和 Android 候选）：
+`-Platform` 可选 `Windows`、`Android` 或 `All`。脚本先离线核对锁定依赖，随后保留Flutter标准构建的`--pub`阶段，以重新生成对应Release的插件注册；不要手工删除或修改测试插件注册代码。构建若改变受控源码或锁文件会拒绝继续打包。候选位于 `app/build/public-releases`，带修订号并含校验清单；Android 正式包与 QA 包使用不同身份且不迁移数据，Windows 包未代码签名。准备 GitLab Release 本地清单（需同时有同一修订的 Windows 和 Android 候选）：
 
 ```powershell
 $shortRevision = $revision.Substring(0, 8)

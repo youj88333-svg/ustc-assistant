@@ -41,3 +41,9 @@ GitLab CI YAML由既有Dart yaml依赖解析通过；本机Conda basic310未安�
 已创建一个自有无窗口API34官方模拟器，WHP可用、冷启动80.5秒、独立ADB5038/端口5588，AVD/临时资产在E盘；不操作MuMu、真实设备或原私有资料。正式APK安装与启动结果待实际构建后核验。
 
 Windows稳定Debug产品入口构建及纯音频方法消息编解码目标也实际通过，未打开麦克风或启动正式资料。Android真实工具链预检发现Kotlin DSL的java访问器遮蔽`java.util.Base64`，改用显式导入后编译通过；无签名的`assembleRelease`确实因本项目签名门禁退出失败，非其它编译错误冒充通过。正式runtime依赖图解析成功，补齐传递原生组件归属；初次直接调用尚未生成的wrapper、以及不存在的无签名validateSigning任务均未计为成功证据。使用的Flutter 3.44.5 / Dart 3.12.2、engine 83675ed、AGP9.0.1 / Kotlin2.3.20已实际核对，未修改全局JAVA_HOME或代理。
+
+## 首轮候选实际构建
+
+干净ae64abac构建中，Windows Release和公开打包已通过，41项载荷及manifest/ZIP重读一致，ZIP183725084字节，SHA-256 `fe2bc0fe431a5b83b963bbea7efa9623979c166f92801a9f1b5c2a3ca3db15a2`；根另验VersionInfo为1.0.0+1、Authenticode为NotSigned。这是本地候选，不是已发布或最终选定版本。
+
+同轮Android Java编译失败：先前测试/普通pub准备生成的Java插件注册仍含integration_test，而Release Gradle已正确排除该开发依赖。查实际SDK `flutter_command.dart`/`flutter_plugins.dart`确认`--no-pub`还会跳过Release插件重新生成。构建入口改为先离线校验锁文件、正式构建保留标准`--pub`再生成；没有手工删生成Java或把测试插件纳入正式依赖。源码/锁文件变动仍拒绝继续打包。首轮Android未产出成功候选，不将Windows部分成功当作双平台完成；修订后从新干净修订重建。
