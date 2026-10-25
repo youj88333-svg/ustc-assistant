@@ -10,12 +10,69 @@ import 'package:ustc_assistant_m0/app/product_app.dart';
 import 'package:ustc_assistant_m0/app/settings_contract.dart';
 import 'package:ustc_assistant_m0/core/agent_contract.dart';
 import 'package:ustc_assistant_m0/core/calendar_contract.dart';
+import 'package:ustc_assistant_m0/core/contracts.dart';
 import 'package:ustc_assistant_m0/core/onboarding_contract.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/jobs/jw_sync_port.dart';
 import 'package:ustc_assistant_m0/jobs/young_sync_port.dart';
 
 void main() {
+  testWidgets(
+    'landscape keyboard and large text keep model cancellation reachable',
+    (tester) async {
+      tester.view.devicePixelRatio = 1;
+      tester.view.physicalSize = const Size(800, 360);
+      tester.view.viewInsets = const FakeViewPadding(bottom: 180);
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetViewInsets);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final fixture = _Fixture();
+      addTearDown(fixture.close);
+      await tester.pumpWidget(fixture.widget());
+      await tester.pumpAndSettle();
+      await fixture.progress.navigate(OnboardingStep.model);
+      await tester.pumpAndSettle();
+      fixture.agent.phase = AgentPhase.loadingModels;
+      fixture.agent.notifyListeners();
+      await tester.pumpAndSettle();
+      final stop = find.byKey(const ValueKey('setup-stop-model'));
+      expect(stop.hitTestable(), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.tap(stop);
+      await tester.pumpAndSettle();
+      expect(fixture.agent.stops, 1);
+      expect(tester.takeException(), isNull);
+    },
+  );
+  testWidgets(
+    'source recovery keeps diagnostic export reachable while navigation waits',
+    (tester) async {
+      final fixture = _Fixture();
+      addTearDown(fixture.close);
+      await tester.pumpWidget(fixture.widget());
+      await tester.pumpAndSettle();
+      await fixture.progress.navigate(OnboardingStep.sync);
+      await tester.pumpAndSettle();
+      fixture.jw.phase = JwSyncPhase.recovery;
+      fixture.jw.failure = FailureCode.cleanupPending;
+      fixture.shell.busy = true;
+      fixture.shell.notifyListeners();
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextButton>(find.byKey(const ValueKey('setup-defer')))
+            .onPressed,
+        isNull,
+      );
+      final export = find.text('导出合成诊断');
+      await tester.ensureVisible(export);
+      await tester.tap(export);
+      await tester.pumpAndSettle();
+      expect(fixture.exports, 1);
+    },
+  );
   testWidgets('model operation has a reachable stop while navigation waits', (
     tester,
   ) async {
@@ -242,6 +299,7 @@ class _Fixture {
   final settings = _Settings();
   final agent = _Agent();
   final reminders = _Reminders();
+  int exports = 0;
   Widget widget() => MaterialApp(
     theme: productTheme,
     home: OnboardingPage(
@@ -252,6 +310,8 @@ class _Fixture {
       reminders: reminders,
       reminderChanges: const Stream.empty(),
       initialReminderView: const ReminderRuntimeView(),
+      logsBuilder: (_) =>
+          TextButton(onPressed: () => exports++, child: const Text('导出合成诊断')),
     ),
   );
   Future<void> close() async {
@@ -325,8 +385,11 @@ class _Shell extends ChangeNotifier implements AppShellPort {
 class _Jw extends Fake implements JwSyncPort {
   int calls = 0;
   bool bound = false;
+  JwSyncPhase phase = JwSyncPhase.idle;
+  FailureCode? failure;
   @override
-  JwSyncView get syncView => JwSyncView(accountBound: bound);
+  JwSyncView get syncView =>
+      JwSyncView(accountBound: bound, phase: phase, failure: failure);
   @override
   Stream<JwSyncView> get syncChanges => const Stream.empty();
   @override

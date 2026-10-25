@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../core/onboarding_contract.dart';
 import '../core/reminder_contract.dart';
+import '../jobs/jw_sync_port.dart';
+import '../jobs/young_sync_port.dart';
 import 'agent_settings_panel.dart';
 import 'agent_workspace_contract.dart';
 import 'app_design.dart';
@@ -115,6 +117,15 @@ class _OnboardingPageState extends State<OnboardingPage> {
     if (mounted && value != _childBusy) setState(() => _childBusy = value);
   }
 
+  bool get _hasDomainIssue =>
+      widget.shell.view.progressUnavailable ||
+      widget.shell.view.jw.failure != null ||
+      widget.shell.view.young.failure != null ||
+      widget.shell.view.jw.phase == JwSyncPhase.recovery ||
+      widget.shell.view.young.phase == YoungSyncPhase.recovery ||
+      widget.agent.view.failure != null ||
+      widget.settings.settingsView.failure != null;
+
   Future<void> _go(OnboardingStep step) async {
     if (_busy) return;
     final old = widget.progress.snapshot?.step;
@@ -128,6 +139,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
       }
       _childBusy = false;
       if (_scroll.hasClients) _scroll.jumpTo(0);
+      _modelStopFailed = false;
     }
   }
 
@@ -159,7 +171,12 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: Listenable.merge([widget.progress, widget.shell, widget.agent]),
+    animation: Listenable.merge([
+      widget.progress,
+      widget.shell,
+      widget.agent,
+      widget.settings,
+    ]),
     builder: (context, _) {
       final progress = widget.progress;
       final snapshot = progress.snapshot;
@@ -188,41 +205,45 @@ class _OnboardingPageState extends State<OnboardingPage> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final padding = constraints.maxWidth < 500 ? 20.0 : 40.0;
+                    final compactHeight = constraints.maxHeight < 420;
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            padding,
-                            16,
-                            padding,
-                            12,
-                          ),
-                          child: Row(
-                            children: [
-                              Image.asset(
-                                'assets/branding/ustc_assistant_icon_concept_v1.png',
-                                width: 36,
-                                height: 36,
-                                excludeFromSemantics: true,
-                              ),
-                              const SizedBox(width: 10),
-                              const Expanded(
-                                child: Text(
-                                  'USTC Assistant',
-                                  style: TextStyle(fontWeight: FontWeight.w700),
+                        if (!compactHeight)
+                          Padding(
+                            padding: EdgeInsets.fromLTRB(
+                              padding,
+                              16,
+                              padding,
+                              12,
+                            ),
+                            child: Row(
+                              children: [
+                                Image.asset(
+                                  'assets/branding/ustc_assistant_icon_concept_v1.png',
+                                  width: 36,
+                                  height: 36,
+                                  excludeFromSemantics: true,
                                 ),
-                              ),
-                              if (!progress.loading && !progress.failure)
-                                TextButton(
-                                  key: const ValueKey('setup-defer'),
-                                  onPressed: _busy ? null : _defer,
-                                  child: const Text('稍后设置'),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Text(
+                                    'USTC Assistant',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
                                 ),
-                            ],
+                                if (!progress.loading && !progress.failure)
+                                  TextButton(
+                                    key: const ValueKey('setup-defer'),
+                                    onPressed: _busy ? null : _defer,
+                                    child: const Text('稍后设置'),
+                                  ),
+                              ],
+                            ),
                           ),
-                        ),
-                        const Divider(height: 1),
+                        if (!compactHeight) const Divider(height: 1),
                         Expanded(
                           child: SingleChildScrollView(
                             controller: _scroll,
@@ -276,11 +297,21 @@ class _OnboardingPageState extends State<OnboardingPage> {
                                         key: ValueKey(step),
                                         child: _body(step),
                                       ),
+                                      if (widget.logsBuilder != null &&
+                                          _hasDomainIssue) ...[
+                                        const SizedBox(height: 12),
+                                        widget.logsBuilder!(context),
+                                      ],
                                     ],
                                   ),
                           ),
                         ),
-                        if (!progress.loading && !progress.failure) ...[
+                        if (!progress.loading &&
+                            !progress.failure &&
+                            (!compactHeight ||
+                                !_busy ||
+                                (step == OnboardingStep.model &&
+                                    widget.agent.view.busy))) ...[
                           const Divider(height: 1),
                           Padding(
                             padding: EdgeInsets.fromLTRB(
@@ -292,7 +323,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                if (_busy) ...[
+                                if (_busy && !compactHeight) ...[
                                   const Text(
                                     '请先完成或取消当前操作，再继续设置。',
                                     style: TextStyle(color: AppUi.muted),
@@ -321,46 +352,47 @@ class _OnboardingPageState extends State<OnboardingPage> {
                                     '暂未能取消，请稍后再试。',
                                     style: TextStyle(color: AppUi.error),
                                   ),
-                                Wrap(
-                                  spacing: 12,
-                                  runSpacing: 8,
-                                  alignment: WrapAlignment.end,
-                                  children: [
-                                    if (step.index > 0)
+                                if (!compactHeight || !_busy)
+                                  Wrap(
+                                    spacing: 12,
+                                    runSpacing: 8,
+                                    alignment: WrapAlignment.end,
+                                    children: [
+                                      if (step.index > 0)
+                                        TextButton(
+                                          key: const ValueKey('setup-back'),
+                                          onPressed: _busy
+                                              ? null
+                                              : () => _go(
+                                                  OnboardingStep
+                                                      .values[step.index - 1],
+                                                ),
+                                          child: const Text('上一步'),
+                                        ),
                                       TextButton(
-                                        key: const ValueKey('setup-back'),
+                                        key: const ValueKey('setup-skip'),
                                         onPressed: _busy
                                             ? null
-                                            : () => _go(
-                                                OnboardingStep
-                                                    .values[step.index - 1],
-                                              ),
-                                        child: const Text('上一步'),
+                                            : () => _next(step, skip: true),
+                                        child: Text(
+                                          step == OnboardingStep.permissions
+                                              ? '保持当前选择'
+                                              : '跳过这步',
+                                        ),
                                       ),
-                                    TextButton(
-                                      key: const ValueKey('setup-skip'),
-                                      onPressed: _busy
-                                          ? null
-                                          : () => _next(step, skip: true),
-                                      child: Text(
-                                        step == OnboardingStep.permissions
-                                            ? '保持当前选择'
-                                            : '跳过这步',
+                                      FilledButton(
+                                        key: const ValueKey('setup-next'),
+                                        onPressed: _busy
+                                            ? null
+                                            : () => _next(step),
+                                        child: Text(
+                                          step == OnboardingStep.permissions
+                                              ? '开始使用'
+                                              : '下一步',
+                                        ),
                                       ),
-                                    ),
-                                    FilledButton(
-                                      key: const ValueKey('setup-next'),
-                                      onPressed: _busy
-                                          ? null
-                                          : () => _next(step),
-                                      child: Text(
-                                        step == OnboardingStep.permissions
-                                            ? '开始使用'
-                                            : '下一步',
-                                      ),
-                                    ),
-                                  ],
-                                ),
+                                    ],
+                                  ),
                               ],
                             ),
                           ),
