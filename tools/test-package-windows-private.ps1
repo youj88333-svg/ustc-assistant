@@ -50,8 +50,8 @@ try {
   Throws { Resolve-ReleaseDirectory $PSScriptRoot } 'inside this worktree app/build' 'reject source outside app/build'
 
   $notice = [IO.File]::ReadAllText((Join-Path $workspace 'app\resources\speech\NOTICE.txt'), [Text.Encoding]::UTF8)
-  $model = [regex]::Match($notice, '(?m)^Model SHA-256:[ \t]*([0-9a-fA-F]{64})[ \t]*$').Groups[1].Value
-  $tokens = [regex]::Match($notice, '(?m)^Tokens SHA-256:[ \t]*([0-9a-fA-F]{64})[ \t]*$').Groups[1].Value
+  $model = [regex]::Match($notice, '(?m)^Model SHA-256:[ \t]*([0-9a-fA-F]{64})[ \t]*\r?$').Groups[1].Value
+  $tokens = [regex]::Match($notice, '(?m)^Tokens SHA-256:[ \t]*([0-9a-fA-F]{64})[ \t]*\r?$').Groups[1].Value
   Check ($model -ceq 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51') 'read reviewed model hash'
   Check ($tokens -ceq 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc') 'read reviewed tokens hash'
 
