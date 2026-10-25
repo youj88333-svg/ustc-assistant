@@ -224,9 +224,9 @@ try {
         Assert-Check ([long]$actual.Length -eq [long]$file.bytes -and (Get-Sha256FromFile $actual.FullName) -ceq [string]$file.sha256) 'public file size and checksum match'
     }
     $notesText = [IO.File]::ReadAllText((Join-Path $target 'release-notes.md'))
-    Assert-Check ($notesText.Contains('not code-signed') -and $notesText.Contains('does not migrate or upgrade the QA app')) 'release notes state Windows and Android identity limits'
+    Assert-Check ($notesText.Contains('尚未取得 Windows 代码签名') -and $notesText.Contains('不会覆盖测试版') -and $notesText.Contains('不会自动搬迁')) 'release notes state Windows and Android identity limits'
     Assert-Check ($notesText.Contains($success.Revision) -and $notesText.Contains('known-issues.md')) 'release notes identify source and known issues'
-    Assert-Check ($notesText.Contains('AI-adapted icon') -and $notesText.Contains('does not grant rights')) 'release notes preserve icon-source and license distinction'
+    Assert-Check ($notesText.Contains('原创代码采用 Apache-2.0') -and $notesText.Contains('第三方依赖、模型和来源材料分别保留原许可')) 'release notes preserve original-code and third-party license distinction'
 
     $planPath = Join-Path $target 'release-plan.json'
     $plan = [IO.File]::ReadAllText($planPath) | ConvertFrom-Json

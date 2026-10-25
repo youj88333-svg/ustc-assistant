@@ -1,4 +1,5 @@
 import java.nio.file.Files
+import java.util.Base64
 import java.security.MessageDigest
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.DirectoryProperty
@@ -87,7 +88,7 @@ gradle.taskGraph.whenReady {
         }
         val definitions = (project.findProperty("dart-defines") as? String).orEmpty()
             .split(',').filter { it.isNotBlank() }.map {
-                String(java.util.Base64.getDecoder().decode(it), Charsets.UTF_8)
+                String(Base64.getDecoder().decode(it), Charsets.UTF_8)
             }
         check(definitions.none {
             it == "USTC_DIAGNOSTICS=true" || it == "USTC_M3_VALIDATION=true"

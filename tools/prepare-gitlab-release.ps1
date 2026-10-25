@@ -442,29 +442,27 @@ function New-PublicReleaseNotes([string]$Revision, [string]$Repository, [object]
     $lines = @(
         '# USTC Assistant 1.0.0'
         ''
-        'This release bundle is bound to the source revision shown below. The embedded package metadata marks these binaries as public candidates; GitLab publication status is separate and must be checked on the Releases page.'
+        '本次提供 Windows 便携版和 Android 正式 APK，全部安装包对应下方同一源码修订。包内候选标记用于追溯，实际发布状态以本页为准。'
         ''
-        '## Downloads'
+        '## 下载安装'
         ''
-        "- Windows x64 portable ZIP: ``$($Windows.File)``. Windows binaries are not code-signed. The SHA-256 is for integrity checking, not publisher identity. Microsoft Edge WebView2 Runtime and, depending on the machine, the Microsoft Visual C++ runtime are required."
-        "- Android ARM64 APK: ``app-arm64-v8a-release.apk``. Package ID: ``$($Android.ApplicationId)``."
-        "- Android x86_64 APK: ``app-x86_64-release.apk``. Package ID: ``$($Android.ApplicationId)``."
-        "- Android signing certificate SHA-256: ``$($Android.CertificateSha256)``."
-        '- Verify downloaded files with `SHA256SUMS.txt`.'
+        "- Windows x64：下载 ``$($Windows.File)``，完整解压后运行 ``ustc_assistant_m0.exe``。需要 WebView2 Runtime，部分新系统还需微软 Visual C++ 运行库；本版尚未取得 Windows 代码签名。"
+        "- Android 手机及可直接安装 APK 的鸿蒙：通常选择 ``app-arm64-v8a-release.apk``，正式包名 ``$($Android.ApplicationId)``。本项目不提供原生鸿蒙 HAP。"
+        '- x86_64 模拟器：选择 `app-x86_64-release.apk`。'
+        "- Android 签名证书 SHA-256：``$($Android.CertificateSha256)``。"
+        '- 文件完整性可用 `SHA256SUMS.txt` 核对；文件摘要不等于 Windows 发布者数字签名。'
         ''
-        'The Android package ID is independent of `cn.ustcassistant.mobile.qa`; it does not migrate or upgrade the QA app or its stored data. Keep the QA app and its data separately.'
+        'Android 正式版与原 `cn.ustcassistant.mobile.qa` 测试版并存，不会覆盖测试版，也不会自动搬迁账号配置、聊天和个人安排。请保留原应用及资料，在正式版重新设置并同步。'
         ''
-        '## Setup and limits'
+        '## 首次使用与已知问题'
         ''
-        'Users supply their own school account authorization and any model service API keys. No personal credentials or API keys are included. School challenges and additional authorization remain user-operated; the app reads school data and does not perform enrollment or other school-record changes.'
+        '首次启动可按引导配置学校来源、模型 Key 和各项授权，也可跳过联网接入，先使用本地日程与任务。学校账号及模型 Key 由你在应用中提供，安装包不包含任何私人凭据。学校验证码或额外授权仍需本人完成；应用只读采集，不报名、退选或修改学校记录。'
         ''
-        "Known issues and unverified scenarios are listed in [the release issue notes]($knownIssues). Device installation, real-device acceptance, and school access were not performed by this packaging step."
+        "语音、机型/后台通知和学校接口等保留项见[已知问题]($knownIssues)。打包校验不代替目标机、真实学校和实际业务对应关系验收；已有测试版反馈也不自动成为新正式包的验收结果。"
         ''
-        "Source revision: ``$Revision`` ([source tree]($sourceUrl)). Package hashes are in ``SHA256SUMS.txt``. See ``LICENSE``, ``NOTICE`` and ``THIRD_PARTY_NOTICES.md`` for the distinction between the project's Apache-2.0 code and third-party materials."
+        "源码修订：``$Revision``（[查看源码]($sourceUrl)）。原创代码采用 Apache-2.0，第三方依赖、模型和来源材料分别保留原许可，详见随包 ``LICENSE``、``NOTICE`` 和 ``THIRD_PARTY_NOTICES.md``。"
         ''
-        'The existing user-approved AI-adapted icon is retained. It references university marks and a circulating fan-made image; Apache-2.0 does not grant rights to those external marks or reference artwork. The third-party notice records this distinction.'
-        ''
-        'This project is independent and does not claim university or model-provider endorsement.'
+        '这是独立校园助手项目，不代表学校或模型服务提供方。反馈问题时请提供版本、设备、操作步骤和应用导出的安全日志，不要公开账号、密码、Key 或数据库。'
     )
     return [string]::Join("`n", $lines) + "`n"
 }

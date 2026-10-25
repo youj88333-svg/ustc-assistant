@@ -9,6 +9,25 @@ The Android Open Source Project and its contributors retain their copyrights.
 The unmodified Apache-2.0 text is included as APACHE-2.0.txt in this directory.
 Resolved component versions are also recorded by the release build report.
 
+Other AndroidX runtime components retain the Android Open Source Project's
+copyrights and Apache-2.0 terms. The resolved graph also includes:
+
+- Kotlin standard library 2.3.20, kotlinx.coroutines 1.7.1 and JetBrains
+  annotations: Apache-2.0, JetBrains and contributors.
+  https://github.com/JetBrains/kotlin
+  https://github.com/Kotlin/kotlinx.coroutines
+  https://github.com/JetBrains/java-annotations
+- Guava ListenableFuture 1.0: Apache-2.0, Google and the Guava authors.
+  https://github.com/google/guava
+- JSpecify 1.0.0: Apache-2.0, the JSpecify authors.
+  https://github.com/jspecify/jspecify
+- ReLinker 1.4.5: Apache-2.0, KeepSafe and contributors.
+  https://github.com/KeepSafe/ReLinker
+
+Upstream declarations remain authoritative; this is an attribution summary,
+not a replacement license. The shared Apache-2.0 text above accompanies these
+components as well. Flutter/engine components have their own notices below.
+
 Flutter/Dart packages retain the notices in flutter_assets/NOTICES.Z.
 Speech SDK, ONNX Runtime and SenseVoice model terms are provided separately
 under speech/licenses and speech/sensevoice. This notice does not replace or
