@@ -94,7 +94,7 @@ V-02 的崩溃反例还包括：C3 已撤销认领许可、P 尚未标记删除�
 
 ### 当前放行判断
 
-M0–M6已按各自证据及用户决定关闭，详见[阶段索引](../milestones/README.md)和[M6关闭依据](../milestones/m6/acceptance.md#阶段关闭2026-10-15)。整体关闭限于批准的阶段交付，不推断逐项真人结果；未观察项与已知语音问题仍登记，M6平台实证及根工程结果见[记录](../milestones/m6/records.md)。Windows已获[1.00私有基线认可](../milestones/windows-polish/acceptance.md)，[本地收尾](../milestones/windows-polish/records/05-windows-v1-private-release.md)已完成；公开发布、其他平台及完整V项没有据此通过。
+M0–M6已按各自证据及用户决定关闭，详见[阶段索引](../milestones/README.md)和[M6关闭依据](../milestones/m6/acceptance.md#阶段关闭2026-10-15)。整体关闭限于批准的阶段交付，不推断逐项真人结果；未观察项与已知语音问题仍登记，M6平台实证及根工程结果见[记录](../milestones/m6/records.md)。Windows已获[1.00私有基线认可](../milestones/windows-polish/acceptance.md)，原[本地收尾](../milestones/windows-polish/records/05-windows-v1-private-release.md)已完成；2026-10-25又获准按已验证441a68b工程刷新便携目录/ZIP，见[记录06](../milestones/windows-polish/records/06-windows-private-refresh.md)。刷新只补打包资产检查与交付，不重跑或改写既有工程结果，也不代替当前Windows正式资料启动、新机器或逐项真人验收；公开发布及完整V项没有据此通过。
 
 Android的[A1本地底座](../milestones/android-apk/records/03-a1-platform-bootstrap.md)、[原A2学校桥](../milestones/android-apk/records/04-a2-school-bridges.md)及[普通WebView修订](../milestones/android-apk/records/12-ordinary-system-webview.md)已有各自范围的根证据。新路线保留固定认证/读取、身份与事务、隔离/排空及清理投影，改为普通页面世界同源信任和原生可观察导航边界；不是旧隔离世界保证的等价替代，旧失败保留。目标实机、鸿蒙、真实来源/模型、语音和提醒整合仍按迁移计划分别验收；不关闭完整V-02/V-04/V-07或手机版。Windows既有文档绑定不因Android取舍而弱化。
 

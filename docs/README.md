@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户关闭，Windows保留[1.00私有基线](releases/windows-1.00.md)。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，正式独立签名Release延后，暂不公开发布。当前完成范围、已知问题与未观察项统一见[状态页](status.md)，详细证据见[设备矩阵](milestones/android-apk/device-matrix.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户关闭，[Windows 1.00私有交付](releases/windows-1.00.md)已于2026-10-25按当前441a68b/schema20刷新，原包保留。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，Android独立正式签名Release延后。两平台暂不公开发布；当前完成范围、已知问题与未观察项统一见[状态页](status.md)，详细移动证据见[设备矩阵](milestones/android-apk/device-matrix.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 

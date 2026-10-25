@@ -1,6 +1,6 @@
 # USTC Assistant
 
-Windows x64保留1.00私有基线（工程版本`1.0.0+1`），说明见[Windows交付](../docs/releases/windows-1.00.md)与[已知问题](../docs/releases/windows-1.00-known-issues.md)。Android / APK鸿蒙沿用现有QA身份完成本轮[私有交付](../docs/releases/android-private-1.00.md)，手机ARM64 QA2024、MuMu x86_64 QA4024；普通WebView路线保留自动认证/采集。用户MatePad日常使用总体认可，原后台返回目录占用已复验未再出现，见[验收](../docs/milestones/android-apk/acceptance.md)。均未公开发布；当前范围见[状态页](../docs/status.md)，完整迁移及原未观察项见[计划](../docs/milestones/android-apk/plan.md)和[限制](../docs/releases/android-private-1.00-known-issues.md)。正式独立签名Release延后，不通过卸载或清数据更换身份。
+Windows x64的1.00私有交付已按2026-10-25授权刷新为源码441a68b、schema20（工程版本仍`1.0.0+1`），说明见[Windows交付](../docs/releases/windows-1.00.md)与[已知问题](../docs/releases/windows-1.00-known-issues.md)；旧包保留。Android / APK鸿蒙沿用现有QA身份完成本轮[私有交付](../docs/releases/android-private-1.00.md)，手机ARM64 QA2024、MuMu x86_64 QA4024；普通WebView路线保留自动认证/采集。用户MatePad日常使用总体认可，原后台返回目录占用已复验未再出现，见[验收](../docs/milestones/android-apk/acceptance.md)。均未公开发布；当前范围见[状态页](../docs/status.md)，完整迁移及原未观察项见[计划](../docs/milestones/android-apk/plan.md)和[限制](../docs/releases/android-private-1.00-known-issues.md)。Android独立正式签名Release延后，不通过卸载或清数据更换身份。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
@@ -29,7 +29,7 @@ Windows x64保留1.00私有基线（工程版本`1.0.0+1`），说明见[Windows
 
 启动 `build/windows/x64/runner/Release/ustc_assistant_m0.exe`；分发保留整个 Release 目录的 DLL、`data/` 和资源。集成测试可能替换该目录中的测试助手，测试后再构建正式入口。
 
-私有交付前用`tools/package-windows-private.ps1`传入本工作树`app/build`内的正式Release目录和40位源码提交。脚本核验1.00版本、固定运行资产、模型/许可及ZIP逐文件摘要，生成全新的`app/build/private-releases/1.0.0+1-<短提交>/`；拒绝覆盖旧包，忽略静态构建库，不读取正式资料。版本号同时维护于`pubspec.yaml`和`lib/core/application_version.dart`，脚本会检查一致；PE产品名改善但EXE、包名、资料根与通知身份保留。脚本不构建、不安装、不公开上传。
+私有交付前用`tools/package-windows-private.ps1`传入本工作树`app/build`内的正式Release目录和40位源码提交。脚本核验1.00版本、固定运行资产、获准品牌PNG、模型/许可及ZIP逐文件摘要，生成全新的`app/build/private-releases/1.0.0+1-<短提交>/`；拒绝覆盖旧包，忽略静态构建库，不读取正式资料。当前包位于`1.0.0+1-441a68b9`，包含36个运行文件、2份说明和manifest；schema20升级后不能直接使用旧schema18程序打开资料。版本号同时维护于`pubspec.yaml`和`lib/core/application_version.dart`，脚本会检查一致；PE产品名改善但EXE、包名、资料根与通知身份保留。脚本不构建、不安装、不公开上传。
 
 ## Android本地开发验证
 
@@ -102,7 +102,7 @@ Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业�
 
 识别结果只插入录音开始时捕获的草稿光标位置，保留已有文字和已选图片；你可以继续修改，再自行点击发送。听写不会自动发送或批准操作，只有主动发送后才按现有对话历史规则处理。取消会先撤销本轮转写的交付并等待后台工作排空；编辑草稿、切换对话/历史、离开页面、应用进入后台或维护模式都会使迟到结果失效。录音结束、取消或退出时尽力清除短暂缓冲，但不承诺运行时副本绝对抹除。应用不保存录音文件、不上传音频或自动下载模型；诊断仅保留固定阶段/失败码、计数和耗时，不含声音、转写文字或设备名。
 
-录音依赖固定为`record 7.1.2`，本地推理依赖固定为`sherpa_onnx 1.13.8`；SenseVoice模型约228MiB，不进Git，开发时按仓库流程准备并校验，构建时随应用分发。缺少模型时键盘输入仍可用。SDK与模型权重许可分别处理，见[`resources/speech/NOTICE.txt`](resources/speech/NOTICE.txt)。Windows的`record.hasPermission=true`只表示插件报告的权限状态，并不证明真实麦克风可用；录音失败时检查Windows系统麦克风权限。语音不新增录音表，保留当前schema18和既有业务/历史。
+录音依赖固定为`record 7.1.2`，本地推理依赖固定为`sherpa_onnx 1.13.8`；SenseVoice模型约228MiB，不进Git，开发时按仓库流程准备并校验，构建时随应用分发。缺少模型时键盘输入仍可用。SDK与模型权重许可分别处理，见[`resources/speech/NOTICE.txt`](resources/speech/NOTICE.txt)。Windows的`record.hasPermission=true`只表示插件报告的权限状态，并不证明真实麦克风可用；录音失败时检查Windows系统麦克风权限。语音不新增录音表，保留既有业务/历史；当前完整应用为schema20。
 
 Android首次点麦克风才申请系统录音权限，并将包内模型提取至私有no-backup缓存；首次准备需要解包和完整性检查，状态会显示在输入框旁。只有申请权限、尚无录音时可以等待系统弹窗造成的暂时失焦；实际退后台、录音失焦或插件报告中断都会作废本次输入，返回后需主动再点麦克风。权限拒绝或准备失败可继续键盘输入。A6仅完成模拟器真实本地ASR加合成音频验证，实际手机麦克风、来电和中文效果仍待A7；不声明iOS支持。
 

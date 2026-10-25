@@ -2,6 +2,8 @@
 
 日期：2026-10-15。当前范围与验收只在[任务单](plan.md)维护；用户已确认[M6关闭](../m6/acceptance.md#阶段关闭2026-10-15)。本页记录研究依据、实施和实际验核，不替代真人判断。
 
+当前私有交付已于2026-10-25按现行共享工程刷新，见[记录06](records/06-windows-private-refresh.md)；原1.00交付及其当时结果保留在[记录05](records/05-windows-v1-private-release.md)。下文为原收尾过程，不作为当前包的新增真人验收。
+
 接续主题：[Agent管理提醒：实现、审查与检查](records/01-agent-reminders.md)。
 
 整体核查：[Windows联动终审、修复与根验核](records/02-windows-integration-review.md)。接续修复：[来源场次退出有效日程](records/03-source-retirement.md)；最新功能补齐：[每日二课自动同步](records/04-young-daily-sync.md)。
