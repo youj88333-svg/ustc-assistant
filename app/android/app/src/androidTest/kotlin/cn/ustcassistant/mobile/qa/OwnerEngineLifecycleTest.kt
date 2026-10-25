@@ -16,6 +16,8 @@ import io.flutter.plugin.common.MethodChannel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
@@ -28,6 +30,17 @@ import java.util.concurrent.atomic.AtomicReference
 /** Uses real FlutterEngine instances and only a QA-private synthetic SQLite database. */
 @RunWith(AndroidJUnit4::class)
 class OwnerEngineLifecycleTest {
+    @Before
+    fun requireDedicatedDartProbeBuild() {
+        // Ordinary APKs deliberately exclude the Dart test entrypoint. Keep
+        // the regular all-native suite usable, while explicit probe runs fail
+        // strictly if their compiled entrypoint is missing or broken.
+        assumeTrue(
+            "Build tool/android_owner_lifecycle_probe.dart and opt in to this dedicated suite.",
+            InstrumentationRegistry.getArguments().getString("ustc_owner_lifecycle_probe") == "true",
+        )
+    }
+
     @Test
     fun destroyingAnUnclosedOwnerReleasesItAndPreservesTheSyntheticDatabase() {
         val context = requireApi34QaContext()
