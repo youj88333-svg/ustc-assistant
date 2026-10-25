@@ -1,13 +1,13 @@
 # 文档入口
 
-这是项目唯一文档导航入口。主工程为`E:\107\main`、维护主线`main`；两远端同步当前维护版本，布局/操作见[维护说明](maintenance.md)。M0–M6已由用户关闭，[Windows 1.00私有交付](releases/windows-1.00.md)已按441a68b/schema20刷新，原包保留。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，Android独立正式签名Release延后。两平台暂不公开发布；完成范围、已知问题与未观察项统一见[状态页](status.md)，详细移动证据见[设备矩阵](milestones/android-apk/device-matrix.md)。
+这是项目唯一文档导航入口。主工程为`E:\107\main`、维护主线`main`；两远端同步当前维护版本，布局/操作见[维护说明](maintenance.md)。M0–M6已由用户关闭，Windows与Android的[1.0.0公开版](releases/public-1.0.0.md)已发布；此前[Windows私有交付](releases/windows-1.00.md)和[Android QA交付](releases/android-private-1.00.md)继续保留。MatePad日常使用与后台返回修复的已有反馈见[用户验收](milestones/android-apk/acceptance.md)，不替代本次正式包的完整目标机验证。完成范围、已知问题与未观察项统一见[状态页](status.md)，详细移动证据见[设备矩阵](milestones/android-apk/device-matrix.md)。
 
 ## 按阅读目的选择
 
 | 要了解什么 | 入口 |
 |---|---|
-| 首次使用、支持平台与配置 | [使用入门](getting-started.md) · [公开候选说明](releases/public-1.0.0.md) |
-| 开源、正式签名、安装包与GitLab Release准备 | [任务单](milestones/open-source-release/plan.md) · [实际记录](milestones/open-source-release/records.md) · [用户选择](milestones/open-source-release/acceptance.md) |
+| 首次使用、支持平台与配置 | [使用入门](getting-started.md) · [公开版下载与说明](releases/public-1.0.0.md) |
+| 开源、正式签名、安装包与GitLab Release | [任务单](milestones/open-source-release/plan.md) · [实际记录](milestones/open-source-release/records.md) · [用户选择与发布授权](milestones/open-source-release/acceptance.md) |
 | 从源码构建、贡献与安全报告 | [开发说明](development.md) · [贡献指南](../CONTRIBUTING.md) · [安全报告](../SECURITY.md) · [代码许可](../LICENSE) · [第三方通知](../THIRD_PARTY_NOTICES.md) |
 | 学校/DeepSeek 官方 API 的选择、保护与验证 | [提供方决定](decisions/model-providers.md) · [接口契约](reference/sources/model-gateway.md) · [实施任务单](milestones/model-providers/plan.md) |
 | 当前阶段、已完成范围与待验证 | [项目状态](status.md) |

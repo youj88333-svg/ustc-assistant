@@ -1,6 +1,6 @@
 # USTC Assistant
 
-Windows x64的1.00私有交付已按2026-10-25授权刷新为源码441a68b、schema20（工程版本仍`1.0.0+1`），说明见[Windows交付](../docs/releases/windows-1.00.md)与[已知问题](../docs/releases/windows-1.00-known-issues.md)；旧包保留。Android / APK鸿蒙沿用现有QA身份完成本轮[私有交付](../docs/releases/android-private-1.00.md)，手机ARM64 QA2024、MuMu x86_64 QA4024；普通WebView路线保留自动认证/采集。用户MatePad日常使用总体认可，原后台返回目录占用已复验未再出现，见[验收](../docs/milestones/android-apk/acceptance.md)。均未公开发布；当前范围见[状态页](../docs/status.md)，完整迁移及原未观察项见[计划](../docs/milestones/android-apk/plan.md)和[限制](../docs/releases/android-private-1.00-known-issues.md)。Android独立正式签名Release延后，不通过卸载或清数据更换身份。
+Windows x64和Android ARM64/x86_64的1.0.0已在[校内GitLab Release](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)公开，安装与签名见[发布说明](../docs/releases/public-1.0.0.md)。Android正式身份`cn.ustcassistant.mobile`与原QA应用并存，不自动搬迁资料；此前[Windows私有交付](../docs/releases/windows-1.00.md)和[Android QA交付](../docs/releases/android-private-1.00.md)继续保留。普通WebView保持自动认证/只读采集。MatePad既有反馈见[验收](../docs/milestones/android-apk/acceptance.md)，完整范围与未观察项见[状态页](../docs/status.md)、[迁移计划](../docs/milestones/android-apk/plan.md)及[已知问题](../docs/releases/known-issues.md)，不以公开发布替代实机逐项验证。
 
 应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 

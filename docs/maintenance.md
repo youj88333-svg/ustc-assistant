@@ -33,7 +33,7 @@ git ls-remote --heads origin main
 git ls-remote --heads ustc main
 ```
 
-应核对两个远端main均等于本地main。推送被拒绝时先核对新提交与权限，不使用force、mirror或all覆盖；不要把archive分支、恢复备份或所有本地标签一并推送。仅明确选定的交付源码标签单独同步；安装包继续私有，不上传源代码托管的Release附件。
+应核对两个远端main均等于本地main。推送被拒绝时先核对新提交与权限，不使用force、mirror或all覆盖；不要把archive分支、恢复备份或所有本地标签一并推送。仅明确选定的交付源码标签单独同步。安装包不提交源码Git；用户已批准的公开版本按[发布任务单](milestones/open-source-release/plan.md)独立上传至校内包仓库并链接Release，完成匿名下载读回校验。旧私有交付、备份及认证资料继续保留原边界，不随项目公开批量上传。
 
 认证由本机Git的既有凭据或用户主动配置完成，不把密码/Token/私钥交给Agent。SSH主机指纹须与官方HTTPS公布值核对；可使用任务/仓库专用known_hosts，保留严格校验，不改系统信任或全局代理。校内认证缺失与同步成功分开记录，不能只凭本地remote-tracking引用宣称远端已更新。
 

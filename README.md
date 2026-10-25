@@ -13,11 +13,21 @@ USTC Assistant 是一款面向校内学习生活的本地优先助手。它把 A
 
 | 平台 | 当前情况 |
 |---|---|
-| Windows x64 | 已有私有 1.00 交付基线；1.0.0 公开候选构建和打包入口已装配，Windows 包未代码签名。目标机型和全新系统覆盖仍有限。 |
-| Android APK | 有 ARM64 与 x86_64 的私有 QA 构建。正式版构建、签名初始化和候选打包入口已装配；正式身份为 `cn.ustcassistant.mobile`，与 QA 包 `cn.ustcassistant.mobile.qa` 并存且不自动迁移数据。多厂商设备和完整逐项验收仍有保留项。 |
+| Windows x64 | 1.0.0 便携 ZIP 已公开发布，完整解压后运行。Windows 包未代码签名，目标机型和全新系统覆盖仍有限。 |
+| Android APK | 1.0.0 ARM64 与 x86_64 正式 APK 已公开发布，采用长期发布签名。正式身份为 `cn.ustcassistant.mobile`，与 QA 包 `cn.ustcassistant.mobile.qa` 并存且不自动迁移数据。多厂商设备和完整逐项验收仍有保留项。 |
 | 鸿蒙设备 | 仅指可直接安装 Android APK 的场景。MatePad 11.5 S / HarmonyOS 4.2.0 有用户实际使用反馈；这不代表原生鸿蒙 HAP 支持，也不代表所有设备已验收。 |
 
-开源与公开安装包仍在准备中，计划在校内 GitLab 发布。当前没有公开 Release 或可用的下载附件；现有私有包不是公开版本。公开候选只能从干净的已提交修订生成，候选整理脚本也只在本机准备文件，不会发布。源码构建入口见[开始使用](docs/getting-started.md)，正式候选命令见[开发说明](docs/development.md#正式候选构建)，详细文档导航见[docs/README.md](docs/README.md)。
+## 下载 1.0.0
+
+[校内 GitLab 发布页面](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)提供以下安装包，可直接下载：
+
+| 使用设备 | 下载 |
+|---|---|
+| Windows x64 | [便携 ZIP](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/USTC-Assistant-1.0.0-windows-x64.zip) |
+| Android 手机、可直接安装 APK 的鸿蒙 | [ARM64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-arm64-v8a-release.apk) |
+| x86_64 模拟器 | [x86_64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-x86_64-release.apk) |
+
+安装步骤、签名及资料保留边界见[发布说明](docs/releases/public-1.0.0.md)，限制见[已知问题](docs/releases/known-issues.md)，文件摘要见[SHA256SUMS.txt](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/SHA256SUMS.txt)。源码构建入口见[开始使用](docs/getting-started.md)，构建命令见[开发说明](docs/development.md#正式候选构建)，完整导航见[docs/README.md](docs/README.md)。
 
 ## 隐私与模型配置
 

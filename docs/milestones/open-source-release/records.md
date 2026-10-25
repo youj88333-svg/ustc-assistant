@@ -81,3 +81,21 @@ Windows版本为1.0.0+1，未取得Authenticode签名。Android正式身份`cn.u
 通过精确仓库路径确认项目ID6522、`demo233/107_ustc_assistant`，实例GitLab19.5.1；当前Private、默认main、未归档，项目访问级别50（Owner）。Release、源码及Package Registry均为enabled。该项目现有Release为0、通用`release-assets`包为0，只有既有三个私有交付/维护标签，没有`v1.0.0`；重验六份冻结候选及SHA256SUMS全部匹配。功能开关与权限不等于已完成上传限额或匿名下载验证，实际传输及下载读回仍留到发布动作之后。
 
 发布准备源码与证据`75a0b6a`已从78835c9快进整合main，并按既有授权正常推至GitHub和校内main，远端读回一致；未强推、推送新tag、上传二进制或改变可见性。该修订及既定可达历史再次经固定审计退出0、0项未豁免命中，脱敏报告`source-audit-0e35fcf676554cf89339974230a3039d.json`，原审计范围限制保留。安装包仍绑定9515e50a，不随之后纯记录提交改写。用户登录仅完成认证前置条件，具体Public/tag/Release和六附件上传的最后确认仍待取得。
+
+## v1.0.0实际公开发布与匿名回读
+
+2026-10-25用户对最后公开请求回复“确认”，授权记录先提交为05889dd并同步两远端main。该提交与既定refs的固定源码审计退出0、0项未豁免命中，报告`source-audit-feeaa780f95c4c10932fd1d6a6831353.json`；原审计范围限制保留。
+
+精确核对项目6522、源修订9515e50a、无同名tag/Release及六个批准文件哈希后，glab在现有Private状态创建[USTC Assistant 1.0.0](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)，13.01秒完成六份通用包资产上传，退出0。实际包ID1255、名称release-assets、版本v1.0.0；Release链接集与六个文件名完全一致，服务器逐项大小及file_sha256与冻结文件匹配。v1.0.0的commit为`9515e50a95d6988f0d1a438566b5957e0e88d78a`，不是之后的记录提交。
+
+首轮URL门禁只接受数字项目ID前缀，因此拒绝了客户端生成的编码项目路径。只读核对实际链接后，按解码后的精确`demo233/107_ustc_assistant`、release-assets/v1.0.0和每个批准文件名校验；HTTPS/主机/无用户信息/无查询参数要求保留，未重传或放宽到其他项目。永久下载链接另逐项校验。Release正文前加入Windows、ARM64手机及x86_64模拟器三个直接下载入口，原六个附件字节保持不变。
+
+随后仅将该项目visibility改为public并读回确认；原main保护保持开启，未改GitHub可见性、旧分支/标签或用户安装资料。实际公开时间记录为2026-10-25T13:32:41Z，公开状态元数据为`app/build/release-preparation/publication/public-state.json`。
+
+匿名核验使用全新HttpClient，关闭Cookie、默认凭据和预认证，Authorization为空；项目API和Release API返回正确项目/修订，项目页及Release页均HTTP200且未转至登录页面。六个永久下载地址均实际跟随跳转、完整读取响应流并增量计算SHA-256：共619783706字节，各文件字节数及哈希与上表/冻结清单完全一致。没有把仅HEAD或服务端摘要当作实际下载，也没有在磁盘额外保留整套下载副本。结果为`app/build/release-preparation/publication/anonymous-verification.json`，2026-10-25T13:34:01Z，allMatched=true。
+
+外部网页取页工具对校内域名返回不可访问，未据此推断所有校外网络已验证；本轮成功证据为本机无登录凭据的HTTP实际回读。校内标签CI为[pipeline 8105](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/pipelines/8105)，查询时pending，不能登记为CI通过。本机已完成的analyze、1654共享/1既有跳过、六套20组Windows原生及正式构建/打包证据仍按前文保留，本轮仅变更公开入口与记录，不重复Flutter业务测试。
+
+README、使用入口、当前状态和维护说明随实际发布更新；不可变安装包/manifest仍保留候选追溯标记，公开状态以实际Release为准，不重打包或移动标签。私钥、签名密码、正式业务和浏览器资料、旧QA应用及所有旧私有交付均未上传。公开版进入维护/修复，原实机、语音、06:00及学校业务未观察项继续披露。
+
+发布后入口/记录的根文档检查通过：180份Markdown、1400个本地链接，`git diff --check`通过。六份小型发布操作/回读证据逐份校验复制至既有`E:\107\releases\evidence\public-1.0.0-9515e50a`，该目录现17份证据，六份冻结公开文件保持不变；证据目录不作为公开附件。
