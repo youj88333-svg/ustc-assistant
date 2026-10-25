@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "date": "2026-10-11",
+  "purpose": "User-authorized document reorganization; immutable pre-change originals",
+  "entries": [
+    {
+      "source": "README.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/README.md",
+      "sha256": "9eebfefdef8ba6234939018a6e4cade0edf5da15251105a43d4c1547a0ca5ded"
+    },
+    {
+      "source": "AGENTS.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/AGENTS.md",
+      "sha256": "f926d050a63146bf5d1c2df6a9693e6bf6a81f0ed6a73f117b1b5d5497797a71"
+    },
+    {
+      "source": "docs/README.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/README.md",
+      "sha256": "ec507d9094bc3d5f0beb5b323d41a6f12912f0b946c9a67ce62b78fee3eb14b9"
+    },
+    {
+      "source": "docs/design-review.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/design-review.md",
+      "sha256": "8889e5057622442020704792b0cd1828b36d73b28b1b7479d6c996a6deac5f8d"
+    },
+    {
+      "source": "app/README.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/app/README.md",
+      "sha256": "2c1361936f05cc0c7ff40dba0ea0e1036609dff295fb7cba6ad4e9a3efa117b1"
+    },
+    {
+      "source": "verification/README.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/verification/README.md",
+      "sha256": "278f1929b099893331394a62441b617319c23d5fb6fd501955294cb0aa42aab3"
+    },
+    {
+      "source": "verification/sources.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/verification/sources.md",
+      "sha256": "c0f79eef1ad9f012d45ced1ed39b50a22dc8b3f1d7cac65faceb9aae35febd56"
+    },
+    {
+      "source": "verification/windows/README.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/verification/windows/README.md",
+      "sha256": "db715c194718bb20f72d3b83695019e677e5816dafa7c4165f80cb26f8a0b641"
+    },
+    {
+      "source": "docs/refactor-docs/00-index.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/00-index.md",
+      "sha256": "3f84979e161eeaa91f88b97ceadb488389494b7a165939aaf280d21f4c28d427"
+    },
+    {
+      "source": "docs/refactor-docs/01-authentication.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/01-authentication.md",
+      "sha256": "fd5252a01373f47bc408ac16d37083993e302eb5fd01dbe62458428451f3ce42"
+    },
+    {
+      "source": "docs/refactor-docs/02-data-acquisition.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/02-data-acquisition.md",
+      "sha256": "e447d88caae725b19b9926fef7d40f0622d4ff1e0d70ff642a3a8b61d6245afa"
+    },
+    {
+      "source": "docs/refactor-docs/03-data-storage.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/03-data-storage.md",
+      "sha256": "1dc727ea1b6ce2bde42e704dfb863231c61af6118d86f5b308013d0cc4dedca8"
+    },
+    {
+      "source": "docs/refactor-docs/04-app-shell.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/04-app-shell.md",
+      "sha256": "6cbf0046c44f7334c3ae98e8f15ba3ab03c8b83c9d6b707d4c095b5f5e8ac58f"
+    },
+    {
+      "source": "docs/refactor-docs/05-schedule-frontend.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/05-schedule-frontend.md",
+      "sha256": "cd554b763e0823663c6c432be1509b115559c059f35150799620ce60aa83cf76"
+    },
+    {
+      "source": "docs/refactor-docs/06-agent-harness.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/06-agent-harness.md",
+      "sha256": "5015c9233cebd3b14abd801efaa9ecd3d2991955a1579c7ee71e4761800eccee"
+    },
+    {
+      "source": "docs/refactor-docs/07-constitution.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/07-constitution.md",
+      "sha256": "7c1d58448d2f7e2572b4246952c44820880e6dac0b077277fa1b5e64e923547c"
+    },
+    {
+      "source": "docs/refactor-docs/08-target-architecture.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/08-target-architecture.md",
+      "sha256": "8b84b2fe16c72b1b1324d65a6f4a1c019d84f8923f39a73f87343d4bfd3132b7"
+    },
+    {
+      "source": "docs/refactor-docs/09-contracts.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/09-contracts.md",
+      "sha256": "0d800b2d2a24a2aa78eba860faf648e7b3c2a1cff0e748e0de00450b9bedceaf"
+    },
+    {
+      "source": "docs/refactor-docs/10-runtime.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/10-runtime.md",
+      "sha256": "ceadd551f23085b5150cc6fa4443dcdacf26ff20e92e9f258c9c43c295309a16"
+    },
+    {
+      "source": "docs/refactor-docs/11-component-designs.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/11-component-designs.md",
+      "sha256": "82fe662d12207c55bc1d0ae012836c0f55d2716f4405d519778d1248d4732632"
+    },
+    {
+      "source": "docs/refactor-docs/12-cross-cutting.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/12-cross-cutting.md",
+      "sha256": "562ee45f39fc6b112ff3b2dc7c464d1ea76b8396cb52243e4b1679a2e628fecb"
+    },
+    {
+      "source": "docs/refactor-docs/13-risks-and-acceptance.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/13-risks-and-acceptance.md",
+      "sha256": "004b42cee6b9760c8a29d2a61f6b4ca55de08cbaf970a0dca630a7d3693ab020"
+    },
+    {
+      "source": "docs/refactor-docs/14-overall-review.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/14-overall-review.md",
+      "sha256": "201c76530954c48f39c57e47bae822f829e7e649db2172e55bbecef421420c1e"
+    },
+    {
+      "source": "docs/refactor-docs/15-construction-methodology.md",
+      "archive": "docs/archive/2026-10-11-before-reorganization/docs/refactor-docs/15-construction-methodology.md",
+      "sha256": "5654d78b30b5ddf4d52f9c465a1c3e8538d78e79f30c9702b170c603f309a50d"
+    }
+  ]
+}

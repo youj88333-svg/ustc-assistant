@@ -1,0 +1,39 @@
+{
+  "utc": "2026-10-09T07:39:55.6929047Z",
+  "sdk": "1.0.3967.48",
+  "runtime": "154.0.4258.62",
+  "command": "Isolated native PowerShell wrapper clears process proxy variables, launches run.ps1 -Variant worker-guard -EvidencePath evidence-worker-guard-direct.json with --no-proxy-server, and samples only owned browser-root proxy-flag booleans.",
+  "checks": [
+    {
+      "id": "proxy_environment_observed",
+      "status": "info",
+      "detail": "Process HTTP_PROXY/HTTPS_PROXY=http loopback:7897; ALL_PROXY=socks5 loopback:7897; NO_PROXY includes localhost and 127.0.0.1. WinINET manual loopback:7897 enabled with explicit loopback bypass. No credentials or PAC value logged."
+    },
+    {
+      "id": "proxy_listener_native_tcp",
+      "status": "pass",
+      "detail": "Native TcpClient connected to 127.0.0.1:7897; sent no application bytes. Sandboxed inventory reported no listener and is not used as absence evidence."
+    },
+    {
+      "id": "direct_control_process_configuration",
+      "status": "info",
+      "detail": "Fresh wrapper process clears HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY and supplies WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--no-proxy-server only for descendants. No User/Machine environment or Windows proxy setting is modified."
+    },
+    {
+      "id": "direct_control_browser_argument",
+      "status": "pass",
+      "detail": "Observed 3 new experiment browser-root processes; all carry --no-proxy-server=True. Only process-ID/flag booleans retained; no command lines logged."
+    },
+    {
+      "id": "direct_control_egress_result",
+      "status": "info",
+      "detail": "See evidence-worker-guard-direct.json for actual native execution/receiver checks, original CSP behavior and cleanup. This control is diagnostic and is not a production proxy policy or security gate."
+    },
+    {
+      "id": "historical_synthetic_partition_recovery",
+      "status": "pass",
+      "detail": "Closing check found one retained synthetic UDF and one empty partition directory from an early failed suite. Prior setA close_and_drain passed; native browser-process absence, canonical root, exclusive ownership and every reparse-free deletion target verified before deleting the two named in-runtime partitions. Prior failure JSON remains unchanged. No profile contents read."
+    }
+  ],
+  "deletePending": false
+}

@@ -7,12 +7,18 @@
 #include <memory>
 
 #include "win32_window.h"
+#include "default_audio_input.h"
+#include "observation_bridge.h"
+#include "notification_activation.h"
+#include "notification_bridge.h"
 
 // A window that does nothing but host a Flutter view.
 class FlutterWindow : public Win32Window {
  public:
   // Creates a new FlutterWindow hosting a Flutter view running |project|.
-  explicit FlutterWindow(const flutter::DartProject& project);
+  FlutterWindow(const flutter::DartProject& project,
+                NotificationActivationHub& activations,
+                NotificationInstance& instance, bool test_host);
   virtual ~FlutterWindow();
 
  protected:
@@ -25,9 +31,15 @@ class FlutterWindow : public Win32Window {
  private:
   // The project to run.
   flutter::DartProject project_;
+  NotificationActivationHub& activations_;
+  NotificationInstance& instance_;
+  bool notification_test_host_;
 
   // The Flutter instance hosted by this window.
   std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+  std::unique_ptr<DefaultAudioInputBridge> default_audio_input_bridge_;
+  std::unique_ptr<ObservationBridge> observation_bridge_;
+  std::unique_ptr<NotificationBridge> notification_bridge_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

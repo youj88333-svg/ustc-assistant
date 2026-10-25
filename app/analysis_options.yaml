@@ -9,6 +9,13 @@
 # packages, and plugins designed to encourage good coding practices.
 include: package:flutter_lints/flutter.yaml
 
+# E-drive tool/test temporary files live beneath build as well. Analyze the
+# application sources, not Flutter's generated listener and staging programs.
+analyzer:
+  exclude:
+    - build/**
+    - .dart_tool/**
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`

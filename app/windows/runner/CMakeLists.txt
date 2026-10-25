@@ -1,6 +1,18 @@
 cmake_minimum_required(VERSION 3.14)
 project(runner LANGUAGES CXX)
 
+# Keep C++/WinRT and its exception-enabled STL separate from the Flutter runner.
+# apply_standard_settings intentionally does not apply to this target.
+add_library(notification_native STATIC
+  "notification_platform.cpp"
+  "notification_activation.cpp"
+)
+target_compile_features(notification_native PRIVATE cxx_std_20)
+target_compile_options(notification_native PRIVATE /W4 /WX /EHsc /utf-8)
+target_compile_definitions(notification_native PRIVATE UNICODE _UNICODE NOMINMAX
+  "$<$<CONFIG:Debug>:_DEBUG>")
+target_link_libraries(notification_native PUBLIC windowsapp ole32 shell32 propsys advapi32 uuid)
+
 # Define the application target. To change its name, change BINARY_NAME in the
 # top-level CMakeLists.txt, not the value here, or `flutter run` will no longer
 # work.
@@ -8,6 +20,13 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
+  "default_audio_input.cpp"
+  "observation_bridge.cpp"
+  "notification_bridge.cpp"
+  "young_json_projection.cpp"
+  "young_read_only_observer.cpp"
+  "young_business_reader.cpp"
+  "$<$<CONFIG:Debug>:${CMAKE_CURRENT_SOURCE_DIR}/young_json_projection_test.cpp>"
   "main.cpp"
   "utils.cpp"
   "win32_window.cpp"
@@ -32,9 +51,27 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 
 # Add dependency libraries and include directories. Add any application-specific
 # dependencies here.
-target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
+target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app notification_native)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib")
+include("webview2_sdk.cmake")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.
 add_dependencies(${BINARY_NAME} flutter_assemble)
+
+# Opt-in pure codec regression. It serializes synthetic method calls and never
+# instantiates the audio bridge or accesses Windows audio devices.
+add_executable(default_audio_input_codec_test EXCLUDE_FROM_ALL
+  "default_audio_input_codec_test.cpp"
+)
+apply_standard_settings(default_audio_input_codec_test)
+target_compile_definitions(default_audio_input_codec_test PRIVATE "NOMINMAX")
+target_include_directories(default_audio_input_codec_test PRIVATE "${CMAKE_SOURCE_DIR}")
+target_link_libraries(default_audio_input_codec_test PRIVATE flutter_wrapper_plugin)
+
+add_custom_target(run_default_audio_input_codec_test
+  COMMAND "$<TARGET_FILE:default_audio_input_codec_test>"
+  DEPENDS default_audio_input_codec_test
+  WORKING_DIRECTORY "$<TARGET_FILE_DIR:default_audio_input_codec_test>"
+  VERBATIM
+)

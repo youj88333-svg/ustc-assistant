@@ -1,0 +1,1618 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'agent_workspace_contract.dart';
+import '../core/agent_action_contract.dart';
+import '../core/agent_contract.dart';
+import '../core/agent_permission_contract.dart';
+import '../agent/model_reasoning_policy.dart';
+import 'app_design.dart';
+
+const _settingsMuted = Color(0xFF66736C);
+const _settingsGreen = Color(0xFF1F6B45);
+
+typedef _ModelDraftScope = ({
+  ModelProvider? provider,
+  String? owner,
+  int? resetEpoch,
+  int? configRevision,
+});
+
+/// Settings for the selected fixed model service. The controller is externally
+/// owned; this widget only holds an unsaved key in its text field.
+final class AgentSettingsPanel extends StatefulWidget {
+  const AgentSettingsPanel({
+    super.key,
+    required this.controller,
+    this.setupMode = false,
+    this.onBusyChanged,
+  });
+
+  final AgentWorkspacePort controller;
+  final bool setupMode;
+  final ValueChanged<bool>? onBusyChanged;
+
+  @override
+  State<AgentSettingsPanel> createState() => _AgentSettingsPanelState();
+}
+
+final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
+  final TextEditingController _key = TextEditingController();
+  int _generation = 0;
+  bool _pending = false;
+  bool _pendingMayChangeConfig = false;
+  bool _showKey = false;
+  bool _messageIsError = false;
+  bool? _consentDraft;
+  ModelProvider? _providerDraft;
+  bool _suppressViewFailure = false;
+  String? _message;
+  int _permissionGeneration = 0;
+  int _permissionOperation = 0;
+  bool _permissionsLoading = false;
+  int _activeOperations = 0;
+  int _busyCallbackGeneration = 0;
+  bool _initialBusyReportReady = false;
+  bool? _lastReportedBusy;
+  List<AgentPermissionReference> _actionPermissions = const [];
+  String? _permissionsError;
+  String? _revokingPermissionKey;
+  late _ModelDraftScope _observedModelDraftScope;
+
+  @override
+  void initState() {
+    super.initState();
+    _observedModelDraftScope = _modelDraftScope(widget.controller.view);
+    widget.controller.addListener(_onControllerChanged);
+    _scheduleBusyStateAfterFrame();
+    _scheduleRefresh();
+    if (!widget.setupMode) _schedulePermissionRead();
+  }
+
+  @override
+  void didUpdateWidget(covariant AgentSettingsPanel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    final setupModeChanged = oldWidget.setupMode != widget.setupMode;
+    final busyCallbackChanged = oldWidget.onBusyChanged != widget.onBusyChanged;
+    if (controllerChanged) {
+      oldWidget.controller.removeListener(_onControllerChanged);
+      _generation++;
+      _pending = false;
+      _pendingMayChangeConfig = false;
+      _consentDraft = null;
+      _providerDraft = null;
+      _suppressViewFailure = false;
+      _selectedModel = null;
+      _messageIsError = false;
+      _message = null;
+      _key.clear();
+      _observedModelDraftScope = _modelDraftScope(widget.controller.view);
+      widget.controller.addListener(_onControllerChanged);
+      _scheduleRefresh();
+    }
+    if (controllerChanged || setupModeChanged) {
+      _permissionGeneration++;
+      _permissionOperation++;
+      _permissionsLoading = false;
+      _actionPermissions = const [];
+      _permissionsError = null;
+      _revokingPermissionKey = null;
+      if (!widget.setupMode) _schedulePermissionRead();
+    }
+    if (controllerChanged || setupModeChanged || busyCallbackChanged) {
+      _scheduleBusyStateAfterFrame();
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChanged);
+    _generation++;
+    _permissionGeneration++;
+    _permissionOperation++;
+    _key.clear();
+    _key.dispose();
+    super.dispose();
+  }
+
+  void _onControllerChanged() {
+    final nextScope = _modelDraftScope(widget.controller.view);
+    final previousScope = _observedModelDraftScope;
+    if (nextScope == previousScope) return;
+    _observedModelDraftScope = nextScope;
+
+    final sameProviderOwnerAndReset =
+        nextScope.provider == previousScope.provider &&
+        nextScope.owner == previousScope.owner &&
+        nextScope.resetEpoch == previousScope.resetEpoch;
+    final expectedConfigAdvance =
+        _pending && _pendingMayChangeConfig && sameProviderOwnerAndReset;
+    if (!mounted) return;
+    setState(() {
+      if (!expectedConfigAdvance) {
+        _generation++;
+        _pending = false;
+        _pendingMayChangeConfig = false;
+        _providerDraft = null;
+      }
+      _key.clear();
+      _showKey = false;
+      _selectedModel = null;
+      _consentDraft = null;
+      _suppressViewFailure = true;
+      _message = null;
+      _messageIsError = false;
+    });
+  }
+
+  _ModelDraftScope _modelDraftScope(AgentWorkspaceView view) {
+    final settings = view.settings;
+    final authority = settings?.authority;
+    return (
+      provider: settings?.provider,
+      owner: authority?.owner,
+      resetEpoch: authority?.resetEpoch,
+      configRevision: authority?.configRevision,
+    );
+  }
+
+  void _scheduleRefresh() {
+    final port = widget.controller;
+    final generation = _generation;
+    scheduleMicrotask(() {
+      if (_isCurrent(port, generation)) unawaited(_refresh(port, generation));
+    });
+  }
+
+  void _scheduleBusyStateAfterFrame() {
+    final generation = ++_busyCallbackGeneration;
+    if (widget.onBusyChanged == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _busyCallbackGeneration) return;
+      _initialBusyReportReady = true;
+      _reportBusyState();
+    });
+  }
+
+  void _reportBusyState() {
+    final onBusyChanged = widget.onBusyChanged;
+    if (!mounted || onBusyChanged == null) return;
+    if (!_initialBusyReportReady) {
+      _scheduleBusyStateAfterFrame();
+      return;
+    }
+    final busy = _activeOperations > 0;
+    if (_lastReportedBusy == busy) return;
+    _lastReportedBusy = busy;
+    onBusyChanged(busy);
+  }
+
+  void _beginBusyOperation() {
+    _activeOperations++;
+    _reportBusyState();
+  }
+
+  void _endBusyOperation() {
+    if (_activeOperations > 0) _activeOperations--;
+    _reportBusyState();
+  }
+
+  bool _isCurrent(AgentWorkspacePort port, int generation) =>
+      mounted &&
+      identical(widget.controller, port) &&
+      _generation == generation;
+
+  void _schedulePermissionRead() {
+    final port = widget.controller;
+    if (port is! AgentPermissionWorkspacePort) return;
+    final permissionPort = port as AgentPermissionWorkspacePort;
+    final generation = _permissionGeneration;
+    scheduleMicrotask(() {
+      if (_isCurrentPermissionPort(port, generation)) {
+        unawaited(_readActionPermissions(permissionPort, generation));
+      }
+    });
+  }
+
+  bool _isCurrentPermissionPort(AgentWorkspacePort port, int generation) =>
+      mounted &&
+      identical(widget.controller, port) &&
+      _permissionGeneration == generation &&
+      port is AgentPermissionWorkspacePort;
+
+  bool _isCurrentPermissionOperation(
+    AgentPermissionWorkspacePort port,
+    AgentWorkspacePort owner,
+    int generation,
+    int operation,
+  ) =>
+      _isCurrentPermissionPort(owner, generation) &&
+      identical(widget.controller, port) &&
+      _permissionOperation == operation;
+
+  Future<void> _readActionPermissions(
+    AgentPermissionWorkspacePort permissionPort,
+    int generation,
+  ) async {
+    final owner = widget.controller;
+    if (!_isCurrentPermissionPort(owner, generation) ||
+        owner is! AgentPermissionWorkspacePort ||
+        !identical(owner, permissionPort) ||
+        _revokingPermissionKey != null) {
+      return;
+    }
+    final operation = ++_permissionOperation;
+    setState(() {
+      _permissionsLoading = true;
+      _permissionsError = null;
+    });
+    try {
+      final permissions = await permissionPort.readActionPermissions();
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _actionPermissions = List.unmodifiable(permissions));
+      }
+    } on Object {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() {
+          _actionPermissions = const [];
+          _permissionsError = '无法读取已记住的操作授权，请重试。';
+        });
+      }
+    } finally {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _permissionsLoading = false);
+      }
+    }
+  }
+
+  Future<void> _revokeActionPermission(
+    AgentPermissionReference reference,
+  ) async {
+    final owner = widget.controller;
+    if (owner is! AgentPermissionWorkspacePort ||
+        _permissionsLoading ||
+        _revokingPermissionKey != null) {
+      return;
+    }
+    final permissionPort = owner as AgentPermissionWorkspacePort;
+    final generation = _permissionGeneration;
+    final operation = ++_permissionOperation;
+    final key = _permissionKey(reference);
+    setState(() {
+      _revokingPermissionKey = key;
+      _permissionsError = null;
+    });
+    try {
+      await permissionPort.revokeActionPermission(reference);
+      if (!_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        return;
+      }
+      final permissions = await permissionPort.readActionPermissions();
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _actionPermissions = List.unmodifiable(permissions));
+      }
+    } on Object {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() {
+          _actionPermissions = const [];
+          _permissionsError = '无法确认授权状态，请重新读取后继续。';
+        });
+      }
+    } finally {
+      if (_isCurrentPermissionOperation(
+        permissionPort,
+        owner,
+        generation,
+        operation,
+      )) {
+        setState(() => _revokingPermissionKey = null);
+      }
+    }
+  }
+
+  String _permissionKey(AgentPermissionReference reference) =>
+      '${reference.category.name}:${reference.revision}';
+
+  Future<void> _refresh(AgentWorkspacePort port, int generation) async {
+    _beginBusyOperation();
+    try {
+      await port.refresh();
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '暂时无法读取 Agent 设置，请稍后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      _endBusyOperation();
+    }
+  }
+
+  Future<void> _setConsent(bool consent) async {
+    final port = widget.controller;
+    final generation = _generation;
+    if (port.view.settings?.keySaved != true) {
+      setState(() => _consentDraft = consent);
+      return;
+    }
+    await _perform(
+      port,
+      generation,
+      () => port.setModelConsent(consent),
+      mayChangeConfig: true,
+      success: consent ? '已开启模型联网授权。' : '已关闭模型联网授权，Key 和对话仍保留。',
+    );
+    if (_isCurrent(port, generation)) setState(() => _consentDraft = null);
+  }
+
+  Future<void> _selectModelProvider(ModelProvider provider) async {
+    final port = widget.controller;
+    if (port is! AgentModelProviderWorkspacePort ||
+        _pending ||
+        port.view.busy ||
+        port.view.phase == AgentPhase.closed) {
+      return;
+    }
+    final providerPort = port as AgentModelProviderWorkspacePort;
+    final previousFailure = port.view.failure;
+    final generation = ++_generation;
+    setState(() {
+      _providerDraft = provider;
+      _suppressViewFailure = true;
+      _pending = true;
+      _pendingMayChangeConfig = false;
+      _key.clear();
+      _showKey = false;
+      _selectedModel = null;
+      _consentDraft = null;
+      _message = null;
+      _messageIsError = false;
+    });
+    _beginBusyOperation();
+    try {
+      await providerPort.selectModelProvider(provider);
+      if (!_isCurrent(port, generation)) return;
+      final failure = port.view.failure;
+      final selectedProvider =
+          port.view.settings?.provider ?? ModelProvider.school;
+      setState(() {
+        _providerDraft = null;
+        if (selectedProvider != provider) {
+          _message = failure == null || failure == previousFailure
+              ? '无法切换模型服务，请稍后重试。'
+              : _failureText(failure);
+          _messageIsError = true;
+        }
+      });
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _providerDraft = null;
+          _message = '无法切换模型服务，请稍后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _pending = false;
+          _pendingMayChangeConfig = false;
+        });
+      }
+      _endBusyOperation();
+    }
+  }
+
+  Future<void> _perform(
+    AgentWorkspacePort port,
+    int generation,
+    Future<void> Function() action, {
+    required String success,
+    bool mayChangeConfig = false,
+  }) async {
+    if (!_isCurrent(port, generation) || _pending) return;
+    setState(() {
+      _pending = true;
+      _pendingMayChangeConfig = mayChangeConfig;
+      _message = null;
+      _messageIsError = false;
+      _suppressViewFailure = false;
+    });
+    _beginBusyOperation();
+    try {
+      await action();
+      if (_isCurrent(port, generation)) {
+        final failure = port.view.failure;
+        setState(() {
+          _message = failure == null ? success : _failureText(failure);
+          _messageIsError = failure != null;
+        });
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '操作暂未完成，请检查网络或稍后重试。';
+          _messageIsError = true;
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _pending = false;
+          _pendingMayChangeConfig = false;
+        });
+      }
+      _endBusyOperation();
+    }
+  }
+
+  Future<void> _loadModels(bool consent) async {
+    final port = widget.controller;
+    final generation = _generation;
+    final key = _key.text;
+    _key.clear();
+    await _perform(
+      port,
+      generation,
+      () => port.loadModels(key: key, consent: consent),
+      success: '模型列表已更新。',
+    );
+  }
+
+  Future<void> _verifyAndSave(bool consent, String? modelId) async {
+    if (modelId == null) return;
+    final port = widget.controller;
+    final generation = _generation;
+    final key = _key.text;
+    _key.clear();
+    await _perform(
+      port,
+      generation,
+      () => port.verifyAndSave(key: key, modelId: modelId, consent: consent),
+      mayChangeConfig: true,
+      success: '模型验证与设置已完成。',
+    );
+  }
+
+  Future<void> _deleteKey() async {
+    final port = widget.controller;
+    final provider = port.view.settings?.provider ?? ModelProvider.school;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('删除已保存的模型 Key？'),
+        content: Text('这只会删除本机保存的${provider.label} Key。学校账号密码、业务数据和对话历史会保留。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            key: const ValueKey('agent-settings-delete-key-confirm'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('删除 Key'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _perform(
+      port,
+      _generation,
+      () => port.deleteKey(confirmed: true),
+      mayChangeConfig: true,
+      success: '已删除本机保存的${provider.label} Key。',
+    );
+  }
+
+  Future<void> _copySummary() async {
+    final port = widget.controller;
+    final generation = _generation;
+    try {
+      await Clipboard.setData(
+        ClipboardData(text: port.safeValidationSummary()),
+      );
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '已复制安全能力摘要。';
+          _messageIsError = false;
+        });
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _message = '暂时无法复制安全能力摘要。';
+          _messageIsError = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller,
+    builder: (context, _) {
+      final view = widget.controller.view;
+      final settings = view.settings;
+      final storedProvider = settings?.provider ?? ModelProvider.school;
+      final provider = _providerDraft ?? storedProvider;
+      final switchingProvider = _providerDraft != null;
+      final report = switchingProvider
+          ? const AgentCapabilityReport()
+          : settings?.report ?? view.report;
+      final consent = switchingProvider
+          ? false
+          : _consentDraft ?? settings?.consent ?? false;
+      final models = <String>{
+        if (!switchingProvider) ...view.availableModels,
+        if (!switchingProvider) ...?settings?.modelIds,
+        if (!switchingProvider && settings?.modelId != null) settings!.modelId!,
+      }.where((model) => model.trim().isNotEmpty).toList()..sort();
+      final selectedModel = models.contains(_selectedModel)
+          ? _selectedModel
+          : models.contains(settings?.modelId)
+          ? settings?.modelId
+          : null;
+      final keySaved = !switchingProvider && (settings?.keySaved ?? false);
+      final portBusy = view.busy || view.phase == AgentPhase.closed || _pending;
+      final providerPort = widget.controller is AgentModelProviderWorkspacePort
+          ? widget.controller as AgentModelProviderWorkspacePort
+          : null;
+      final preferencesPort = widget.controller is AgentPreferencesWorkspacePort
+          ? widget.controller as AgentPreferencesWorkspacePort
+          : null;
+      final permissionPort = widget.controller is AgentPermissionWorkspacePort
+          ? widget.controller as AgentPermissionWorkspacePort
+          : null;
+      final visibleFailure = _suppressViewFailure ? null : view.failure;
+      final canLoad =
+          !portBusy && consent && (keySaved || _key.text.isNotEmpty);
+      final canVerify =
+          !portBusy &&
+          consent &&
+          selectedModel != null &&
+          (keySaved || view.pendingKeyProvided || _key.text.isNotEmpty);
+
+      return Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppUi.formWidth),
+          child: ListView(
+            key: const ValueKey('agent-settings-panel'),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            shrinkWrap: widget.setupMode,
+            physics: widget.setupMode
+                ? const NeverScrollableScrollPhysics()
+                : null,
+            children: [
+              _SettingsCard(
+                title: provider.label,
+                subtitle: widget.setupMode
+                    ? '填写该服务的 Key，再获取模型并验证。'
+                    : '服务地址由应用固定管理；只读查询按本次问题需要调用。',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (providerPort != null) ...[
+                      DropdownButtonFormField<ModelProvider>(
+                        isExpanded: true,
+                        key: ValueKey(
+                          'agent-settings-provider-${provider.name}',
+                        ),
+                        initialValue: provider,
+                        decoration: const InputDecoration(
+                          labelText: '模型服务',
+                          helperText: '只可选择应用固定的服务地址。',
+                        ),
+                        items: [
+                          for (final candidate in ModelProvider.values)
+                            DropdownMenuItem(
+                              value: candidate,
+                              child: Text(
+                                candidate.label,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                        ],
+                        onChanged: portBusy || switchingProvider
+                            ? null
+                            : (value) {
+                                if (value != null && value != storedProvider) {
+                                  unawaited(_selectModelProvider(value));
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                    ],
+                    _FixedServiceRow(provider: provider),
+                    const SizedBox(height: 14),
+                    TextField(
+                      key: const ValueKey('agent-settings-key'),
+                      controller: _key,
+                      enabled: !portBusy,
+                      obscureText: !_showKey,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: '模型 Key',
+                        hintText: keySaved ? '留空以使用已保存的 Key' : '输入模型 Key',
+                        helperText: keySaved
+                            ? '已保存的 Key 不会回填到此处。'
+                            : '输入内容只在本次页面操作中暂存。',
+                        suffixIcon: IconButton(
+                          tooltip: _showKey ? '隐藏 Key' : '显示 Key',
+                          onPressed: portBusy
+                              ? null
+                              : () => setState(() => _showKey = !_showKey),
+                          icon: Icon(
+                            _showKey ? Icons.visibility_off : Icons.visibility,
+                          ),
+                        ),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                    const SizedBox(height: 12),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          '发送前说明',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _consentDescription(provider),
+                          key: const ValueKey('agent-settings-consent-copy'),
+                          style: const TextStyle(
+                            color: _settingsMuted,
+                            height: 1.45,
+                          ),
+                        ),
+                        Material(
+                          color: Colors.transparent,
+                          child: CheckboxListTile(
+                            key: const ValueKey('agent-settings-consent'),
+                            contentPadding: EdgeInsets.zero,
+                            value: consent,
+                            controlAffinity: ListTileControlAffinity.leading,
+                            title: const Text('我已了解并同意按上述说明发送必要内容'),
+                            onChanged: portBusy
+                                ? null
+                                : (value) =>
+                                      unawaited(_setConsent(value ?? false)),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const ValueKey('agent-settings-load-models'),
+                          onPressed: canLoad
+                              ? () => _loadModels(consent)
+                              : null,
+                          icon: const Icon(Icons.refresh_rounded),
+                          label: const Text('获取模型'),
+                        ),
+                        FilledButton.icon(
+                          key: const ValueKey('agent-settings-verify-save'),
+                          onPressed: canVerify
+                              ? () => _verifyAndSave(consent, selectedModel)
+                              : null,
+                          icon: const Icon(Icons.verified_outlined),
+                          label: const Text('验证并保存'),
+                        ),
+                        if (keySaved && !widget.setupMode)
+                          TextButton.icon(
+                            key: const ValueKey('agent-settings-delete-key'),
+                            onPressed: portBusy ? null : _deleteKey,
+                            icon: const Icon(Icons.delete_outline_rounded),
+                            label: const Text('删除 Key'),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    DropdownButtonFormField<String>(
+                      key: ValueKey('agent-settings-model-${provider.name}'),
+                      isExpanded: true,
+                      initialValue: selectedModel,
+                      decoration: const InputDecoration(
+                        labelText: '模型',
+                        helperText: '从服务返回或本机已保存的模型中选择。',
+                      ),
+                      items: [
+                        for (final model in models)
+                          DropdownMenuItem(
+                            value: model,
+                            child: Text(
+                              model,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                      ],
+                      onChanged: portBusy || models.isEmpty
+                          ? null
+                          : (value) => setState(() => _selectedModel = value),
+                    ),
+                    const SizedBox(height: 8),
+                    if (!widget.setupMode)
+                      Text(
+                        provider == ModelProvider.deepseek
+                            ? '思考模式：关闭，使用直答模式；工具调用照常使用。'
+                            : modelReasoningEffort(selectedModel) == 'high'
+                            ? '思考强度：高（high）。对话、晨报和能力验证统一使用。'
+                            : '思考强度：服务默认。当前模型未设置额外思考参数。',
+                        key: const ValueKey('agent-settings-reasoning-policy'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    if (view.phase != AgentPhase.idle &&
+                        view.phase != AgentPhase.closed) ...[
+                      const SizedBox(height: 10),
+                      _PhaseNotice(phase: view.phase),
+                    ],
+                    if (_providerDraft != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '正在切换到${provider.label}…',
+                        style: const TextStyle(color: _settingsMuted),
+                      ),
+                    ],
+                    if (!switchingProvider && view.pendingKeyProvided) ...[
+                      const SizedBox(height: 8),
+                      const Text(
+                        '模型目录已获取，可以继续选择模型并验证设置。',
+                        style: TextStyle(color: _settingsMuted),
+                      ),
+                    ],
+                    if (!switchingProvider &&
+                        (_message != null || visibleFailure != null)) ...[
+                      const SizedBox(height: 10),
+                      _SettingsNotice(
+                        message: _message ?? _failureText(visibleFailure!),
+                        isError:
+                            _messageIsError ||
+                            (_message == null && visibleFailure != null),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              if (!widget.setupMode) ...[
+                const SizedBox(height: 14),
+                if (preferencesPort != null) ...[
+                  _SettingsCard(
+                    title: '时间规划偏好',
+                    subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
+                    child: _PlanningPreferencesEditor(port: preferencesPort),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                if (permissionPort != null) ...[
+                  _SettingsCard(
+                    title: '已记住的操作授权',
+                    subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (_permissionsLoading) ...[
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '正在读取授权…',
+                            style: TextStyle(color: _settingsMuted),
+                          ),
+                        ],
+                        if (_permissionsError != null) ...[
+                          Text(
+                            _permissionsError!,
+                            key: const ValueKey('agent-permissions-error'),
+                            style: const TextStyle(color: Color(0xFF9B2C2C)),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const ValueKey('agent-permissions-reload'),
+                              onPressed:
+                                  _permissionsLoading ||
+                                      _revokingPermissionKey != null
+                                  ? null
+                                  : () => unawaited(
+                                      _readActionPermissions(
+                                        permissionPort,
+                                        _permissionGeneration,
+                                      ),
+                                    ),
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('重新读取'),
+                            ),
+                          ),
+                        ] else if (!_permissionsLoading &&
+                            _actionPermissions.isEmpty) ...[
+                          const Text(
+                            '尚未记住任何操作授权。',
+                            key: ValueKey('agent-permissions-empty'),
+                            style: TextStyle(color: _settingsMuted),
+                          ),
+                        ],
+                        for (final reference in _actionPermissions)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.verified_user_outlined,
+                                  color: _settingsGreen,
+                                  size: 19,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    reference.category.label,
+                                    key: ValueKey(
+                                      'agent-permission-${_permissionKey(reference)}',
+                                    ),
+                                  ),
+                                ),
+                                TextButton(
+                                  key: ValueKey(
+                                    'agent-permission-revoke-${_permissionKey(reference)}',
+                                  ),
+                                  onPressed:
+                                      _permissionsLoading ||
+                                          _revokingPermissionKey != null
+                                      ? null
+                                      : () => unawaited(
+                                          _revokeActionPermission(reference),
+                                        ),
+                                  child: Text(
+                                    _revokingPermissionKey ==
+                                            _permissionKey(reference)
+                                        ? '正在撤销…'
+                                        : '撤销',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        if (_permissionsError == null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const ValueKey('agent-permissions-refresh'),
+                              onPressed:
+                                  _permissionsLoading ||
+                                      _revokingPermissionKey != null
+                                  ? null
+                                  : () => unawaited(
+                                      _readActionPermissions(
+                                        permissionPort,
+                                        _permissionGeneration,
+                                      ),
+                                    ),
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('刷新授权列表'),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                _SettingsCard(
+                  title: '能力状态',
+                  subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
+                  child: ExpansionTile(
+                    key: const ValueKey('agent-settings-capability-details'),
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text('查看能力状态'),
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _CapabilityChip(
+                                label: '文本',
+                                enabled: report.text,
+                              ),
+                              _CapabilityChip(
+                                label: '流式',
+                                enabled: report.streaming,
+                              ),
+                              _CapabilityChip(
+                                label: '工具调用',
+                                enabled: report.toolCall,
+                              ),
+                              _CapabilityChip(
+                                label: '工具结果',
+                                enabled: report.toolResult,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            key: const ValueKey('agent-settings-copy-summary'),
+                            onPressed: _pending ? null : _copySummary,
+                            icon: const Icon(Icons.copy_rounded),
+                            label: const Text('复制安全能力摘要'),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    },
+  );
+
+  String? _selectedModel;
+}
+
+final class _FixedServiceRow extends StatelessWidget {
+  const _FixedServiceRow({required this.provider});
+
+  final ModelProvider provider;
+
+  @override
+  Widget build(BuildContext context) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Icon(
+        provider == ModelProvider.school
+            ? Icons.school_outlined
+            : Icons.cloud_outlined,
+        size: 20,
+        color: _settingsGreen,
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              provider.label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 3),
+            Text(
+              '固定目的地：${provider.endpoint}',
+              style: const TextStyle(color: _settingsMuted, height: 1.4),
+            ),
+            if (provider == ModelProvider.deepseek) ...[
+              const SizedBox(height: 3),
+              const Text(
+                '直答模式：减少等待，工具调用照常使用。',
+                style: TextStyle(color: _settingsMuted, height: 1.4),
+              ),
+              const Text(
+                'DeepSeek 官方账号独立计费。',
+                style: TextStyle(color: _settingsMuted, height: 1.4),
+              ),
+            ],
+          ],
+        ),
+      ),
+    ],
+  );
+}
+
+String _consentDescription(ModelProvider provider) {
+  final destination = provider.endpoint.toString();
+  final service = provider.label;
+  final billing = provider == ModelProvider.deepseek
+      ? 'DeepSeek 官方账号独立计费。'
+      : '';
+  final directMode = provider == ModelProvider.deepseek
+      ? '直答模式：减少等待，工具调用照常使用。'
+      : '';
+  return '发起模型请求时，本次问题、你主动选择并附加的图片、相关对话历史，以及回答所需的业务字段和已核验资料片段会按需发送到$service（$destination）。$billing$directMode 图片输入能力尚未核验；若模型拒绝图片，应用不会移除图片后自动重发。只有明确勾选同意后，才会获取模型列表或验证并保存设置。';
+}
+
+final class _SettingsCard extends StatelessWidget {
+  const _SettingsCard({
+    required this.title,
+    required this.subtitle,
+    required this.child,
+  });
+
+  final String title;
+  final String subtitle;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) =>
+      WorkspaceSection(title: title, description: subtitle, child: child);
+}
+
+final class _PlanningPreferencesEditor extends StatefulWidget {
+  const _PlanningPreferencesEditor({required this.port});
+
+  final AgentPreferencesWorkspacePort port;
+
+  @override
+  State<_PlanningPreferencesEditor> createState() =>
+      _PlanningPreferencesEditorState();
+}
+
+final class _PlanningPreferencesEditorState
+    extends State<_PlanningPreferencesEditor> {
+  AgentPlanningPreferences? _preferences;
+  int _generation = 0;
+  bool _loading = false;
+  bool _saving = false;
+  bool _dirty = false;
+  bool _needsReload = false;
+  String? _error;
+  String? _notice;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_reload());
+  }
+
+  @override
+  void didUpdateWidget(covariant _PlanningPreferencesEditor oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.port, widget.port)) {
+      _generation++;
+      _preferences = null;
+      _loading = false;
+      _saving = false;
+      _dirty = false;
+      _needsReload = false;
+      _error = null;
+      _notice = null;
+      unawaited(_reload());
+    }
+  }
+
+  bool _isCurrent(AgentPreferencesWorkspacePort port, int generation) =>
+      mounted && identical(widget.port, port) && _generation == generation;
+
+  Future<void> _reload() async {
+    if (_loading || _saving) return;
+    final port = widget.port;
+    final generation = ++_generation;
+    setState(() {
+      _loading = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      final preferences = await port.readPlanningPreferences();
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _preferences = preferences;
+          _dirty = false;
+          _needsReload = false;
+        });
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() {
+          _error = '暂时无法读取时间规划偏好，请重试。';
+        });
+      }
+    } finally {
+      if (_isCurrent(port, generation)) setState(() => _loading = false);
+    }
+  }
+
+  void _change({
+    List<int>? weekdays,
+    int? startMinute,
+    int? endMinute,
+    int? blockMinutes,
+    int? breakMinutes,
+    List<(int, int)>? avoid,
+  }) {
+    final current = _preferences;
+    if (current == null || !_canEdit) return;
+    setState(() {
+      _preferences = AgentPlanningPreferences(
+        revision: current.revision,
+        weekdays: weekdays ?? current.weekdays,
+        startMinute: startMinute ?? current.startMinute,
+        endMinute: endMinute ?? current.endMinute,
+        blockMinutes: blockMinutes ?? current.blockMinutes,
+        breakMinutes: breakMinutes ?? current.breakMinutes,
+        avoid: avoid ?? current.avoid,
+      );
+      _dirty = true;
+      _error = null;
+      _notice = null;
+    });
+  }
+
+  bool get _canEdit =>
+      !_loading && !_saving && !_needsReload && _preferences != null;
+
+  String? _validationError(AgentPlanningPreferences preferences) {
+    if (preferences.weekdays.any((day) => day < 1 || day > 7) ||
+        preferences.weekdays.toSet().length != preferences.weekdays.length) {
+      return '请选择有效的星期。';
+    }
+    if (preferences.startMinute < 0 ||
+        preferences.startMinute >= 1440 ||
+        preferences.endMinute < 0 ||
+        preferences.endMinute >= 1440 ||
+        preferences.startMinute >= preferences.endMinute) {
+      return '可安排时间须在同一天内，且结束时间晚于开始时间。';
+    }
+    if (preferences.blockMinutes <= 0 ||
+        preferences.blockMinutes > 1440 ||
+        preferences.breakMinutes < 0 ||
+        preferences.breakMinutes > 1440) {
+      return '学习块和休息间隔请使用有效时长。';
+    }
+    if (preferences.avoid.any(
+      (range) =>
+          range.$1 < 0 ||
+          range.$1 >= 1440 ||
+          range.$2 < 0 ||
+          range.$2 >= 1440 ||
+          range.$1 >= range.$2,
+    )) {
+      return '每日避开时段须有效，且结束时间晚于开始时间。';
+    }
+    return null;
+  }
+
+  String _clock(int minute) {
+    if (minute < 0 || minute >= 1440) return '时间无效';
+    final hour = (minute ~/ 60).toString().padLeft(2, '0');
+    final rest = (minute % 60).toString().padLeft(2, '0');
+    return '$hour:$rest';
+  }
+
+  Future<TimeOfDay?> _pickTime(int minute, String helpText) => showTimePicker(
+    context: context,
+    initialTime: TimeOfDay(
+      hour: minute >= 0 && minute < 1440 ? minute ~/ 60 : 8,
+      minute: minute >= 0 && minute < 1440 ? minute % 60 : 0,
+    ),
+    helpText: helpText,
+    builder: (context, child) => MediaQuery(
+      data: MediaQuery.of(context).copyWith(alwaysUse24HourFormat: true),
+      child: child ?? const SizedBox.shrink(),
+    ),
+  );
+
+  Future<void> _editTime({required bool start}) async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit) return;
+    final picked = await _pickTime(
+      start ? preferences.startMinute : preferences.endMinute,
+      start ? '选择可安排开始时间' : '选择可安排结束时间',
+    );
+    if (!mounted || picked == null) return;
+    final minute = picked.hour * 60 + picked.minute;
+    if (start) {
+      _change(startMinute: minute);
+    } else {
+      _change(endMinute: minute);
+    }
+  }
+
+  Future<void> _addAvoidRange() async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit) return;
+    final start = await _pickTime(12 * 60, '选择避开时段的开始时间');
+    if (!mounted || start == null) return;
+    final end = await _pickTime(
+      start.hour * 60 + start.minute + 60,
+      '选择避开时段的结束时间',
+    );
+    if (!mounted || end == null) return;
+    final startMinute = start.hour * 60 + start.minute;
+    final endMinute = end.hour * 60 + end.minute;
+    if (endMinute <= startMinute) {
+      setState(() => _error = '避开时段的结束时间须晚于开始时间。');
+      return;
+    }
+    _change(avoid: [...preferences.avoid, (startMinute, endMinute)]);
+  }
+
+  Future<void> _save() async {
+    final preferences = _preferences;
+    if (preferences == null || !_canEdit || !_dirty) return;
+    final validationError = _validationError(preferences);
+    if (validationError != null) {
+      setState(() => _error = validationError);
+      return;
+    }
+    final port = widget.port;
+    final generation = ++_generation;
+    setState(() {
+      _saving = true;
+      _error = null;
+      _notice = null;
+    });
+    try {
+      await port.savePlanningPreferences(preferences);
+      if (!_isCurrent(port, generation)) return;
+      try {
+        final saved = await port.readPlanningPreferences();
+        if (_isCurrent(port, generation)) {
+          setState(() {
+            _preferences = saved;
+            _dirty = false;
+            _needsReload = false;
+            _notice = '时间规划偏好已保存。';
+          });
+        }
+      } on Object {
+        if (_isCurrent(port, generation)) {
+          setState(() {
+            _dirty = false;
+            _needsReload = true;
+            _error = '保存请求已完成，但无法读取新版本；请重新读取后继续编辑。';
+          });
+        }
+      }
+    } on Object {
+      if (_isCurrent(port, generation)) {
+        setState(() => _error = '无法确认偏好已保存，请检查当前设置后重试。');
+      }
+    } finally {
+      if (_isCurrent(port, generation)) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final preferences = _preferences;
+    final validationError = preferences == null
+        ? null
+        : _validationError(preferences);
+    final canEdit = _canEdit;
+    return Column(
+      key: const ValueKey('agent-planning-preferences-panel'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const Text(
+          '这些条件只在你主动保存后用于规划。',
+          style: TextStyle(color: _settingsMuted),
+        ),
+        if (_loading) ...[
+          const SizedBox(height: 8),
+          const LinearProgressIndicator(),
+          const SizedBox(height: 4),
+          const Text('正在读取当前偏好…', style: TextStyle(color: _settingsMuted)),
+        ],
+        if (preferences != null) ...[
+          const SizedBox(height: 12),
+          const Text('可安排星期', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 4),
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            children: [
+              for (var day = 1; day <= 7; day++)
+                FilterChip(
+                  key: ValueKey('agent-planning-weekday-$day'),
+                  label: Text(_weekdayLabel(day)),
+                  selected: preferences.weekdays.contains(day),
+                  onSelected: canEdit
+                      ? (selected) {
+                          final weekdays = {...preferences.weekdays};
+                          if (selected) {
+                            weekdays.add(day);
+                          } else {
+                            weekdays.remove(day);
+                          }
+                          _change(weekdays: weekdays.toList()..sort());
+                        }
+                      : null,
+                ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          const Text('每日可安排时间', style: TextStyle(fontWeight: FontWeight.w600)),
+          Wrap(
+            spacing: 8,
+            children: [
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-start-time'),
+                onPressed: canEdit ? () => _editTime(start: true) : null,
+                icon: const Icon(Icons.schedule_rounded, size: 17),
+                label: Text('开始 ${_clock(preferences.startMinute)}'),
+              ),
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-end-time'),
+                onPressed: canEdit ? () => _editTime(start: false) : null,
+                icon: const Icon(Icons.schedule_rounded, size: 17),
+                label: Text('结束 ${_clock(preferences.endMinute)}'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            key: const ValueKey('agent-planning-block-minutes'),
+            initialValue: preferences.blockMinutes,
+            decoration: const InputDecoration(labelText: '每个学习块'),
+            items: _durationOptions(preferences.blockMinutes)
+                .map(
+                  (minutes) => DropdownMenuItem(
+                    value: minutes,
+                    child: Text('$minutes 分钟'),
+                  ),
+                )
+                .toList(),
+            onChanged: canEdit
+                ? (value) {
+                    if (value != null) _change(blockMinutes: value);
+                  }
+                : null,
+          ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<int>(
+            key: const ValueKey('agent-planning-break-minutes'),
+            initialValue: preferences.breakMinutes,
+            decoration: const InputDecoration(labelText: '学习块之间休息'),
+            items:
+                _durationOptions(
+                      preferences.breakMinutes,
+                      options: const [0, 5, 10, 15, 20, 30],
+                    )
+                    .map(
+                      (minutes) => DropdownMenuItem(
+                        value: minutes,
+                        child: Text('$minutes 分钟'),
+                      ),
+                    )
+                    .toList(),
+            onChanged: canEdit
+                ? (value) {
+                    if (value != null) _change(breakMinutes: value);
+                  }
+                : null,
+          ),
+          const SizedBox(height: 10),
+          const Text('每日避开时段', style: TextStyle(fontWeight: FontWeight.w600)),
+          for (var index = 0; index < preferences.avoid.length; index++)
+            Row(
+              key: ValueKey('agent-planning-avoid-$index'),
+              children: [
+                Expanded(
+                  child: Text(
+                    '${_clock(preferences.avoid[index].$1)}–'
+                    '${_clock(preferences.avoid[index].$2)}',
+                  ),
+                ),
+                IconButton(
+                  key: ValueKey('agent-planning-avoid-remove-$index'),
+                  tooltip: '移除此时段',
+                  onPressed: canEdit
+                      ? () {
+                          final avoid = [...preferences.avoid]..removeAt(index);
+                          _change(avoid: avoid);
+                        }
+                      : null,
+                  icon: const Icon(Icons.remove_circle_outline_rounded),
+                ),
+              ],
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('agent-planning-add-avoid'),
+              onPressed: canEdit ? _addAvoidRange : null,
+              icon: const Icon(Icons.add_rounded, size: 18),
+              label: const Text('添加避开时段'),
+            ),
+          ),
+        ],
+        if (_error != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _error!,
+            key: const ValueKey('agent-planning-error'),
+            style: const TextStyle(color: Color(0xFF9B2C2C)),
+          ),
+        ],
+        if (_notice != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            _notice!,
+            key: const ValueKey('agent-planning-notice'),
+            style: const TextStyle(color: _settingsGreen),
+          ),
+        ],
+        if (validationError != null && _error == null) ...[
+          const SizedBox(height: 8),
+          Text(
+            validationError,
+            key: const ValueKey('agent-planning-validation'),
+            style: const TextStyle(color: Color(0xFF805500)),
+          ),
+        ],
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          runSpacing: 6,
+          children: [
+            if (_error != null || preferences == null)
+              OutlinedButton.icon(
+                key: const ValueKey('agent-planning-reload'),
+                onPressed: _loading || _saving ? null : _reload,
+                icon: const Icon(Icons.refresh_rounded),
+                label: const Text('重新读取'),
+              ),
+            FilledButton.icon(
+              key: const ValueKey('agent-planning-save'),
+              onPressed: canEdit && _dirty && validationError == null
+                  ? _save
+                  : null,
+              icon: _saving
+                  ? const SizedBox.square(
+                      dimension: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.save_outlined),
+              label: const Text('保存偏好'),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+String _weekdayLabel(int day) => switch (day) {
+  1 => '周一',
+  2 => '周二',
+  3 => '周三',
+  4 => '周四',
+  5 => '周五',
+  6 => '周六',
+  7 => '周日',
+  _ => '未知',
+};
+
+List<int> _durationOptions(
+  int current, {
+  List<int> options = const [15, 25, 30, 45, 60, 90, 120, 180],
+}) => ({...options, current}.toList()..sort());
+
+final class _CapabilityChip extends StatelessWidget {
+  const _CapabilityChip({required this.label, required this.enabled});
+
+  final String label;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) => Chip(
+    avatar: Icon(
+      enabled ? Icons.check_circle_outline : Icons.remove_circle_outline,
+      size: 17,
+      color: enabled ? _settingsGreen : _settingsMuted,
+    ),
+    label: Text('$label ${enabled ? '已验证' : '未验证'}'),
+  );
+}
+
+final class _PhaseNotice extends StatelessWidget {
+  const _PhaseNotice({required this.phase});
+
+  final AgentPhase phase;
+
+  @override
+  Widget build(BuildContext context) => Text(
+    _phaseText(phase),
+    key: const ValueKey('agent-settings-phase'),
+    style: const TextStyle(color: _settingsMuted),
+  );
+}
+
+final class _SettingsNotice extends StatelessWidget {
+  const _SettingsNotice({required this.message, required this.isError});
+
+  final String message;
+  final bool isError;
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const ValueKey('agent-settings-notice'),
+    padding: const EdgeInsets.all(12),
+    decoration: BoxDecoration(
+      color: isError ? const Color(0xFFFFF0F0) : const Color(0xFFEAF3ED),
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Text(message, style: const TextStyle(height: 1.4)),
+  );
+}
+
+String _phaseText(AgentPhase phase) => switch (phase) {
+  AgentPhase.idle => '空闲',
+  AgentPhase.loadingModels => '正在获取模型列表…',
+  AgentPhase.verifying => '正在验证模型并保存设置…',
+  AgentPhase.generating => '正在生成回复…',
+  AgentPhase.compacting => '正在整理对话上下文…',
+  AgentPhase.executingRead => '正在查询资料…',
+  AgentPhase.waitingForApproval => '等待你批准方案…',
+  AgentPhase.waitingForSchool => '等待你在学校页面继续…',
+  AgentPhase.committing => '正在提交本地修改…',
+  AgentPhase.settling => '正在保存回复…',
+  AgentPhase.recovery => '正在恢复本地状态…',
+  AgentPhase.maintenance => '本地维护中…',
+  AgentPhase.closed => 'Agent 服务已关闭。',
+};
+
+String _failureText(AgentFailureCode code) => switch (code) {
+  AgentFailureCode.invalidInput => '输入不符合要求，请检查后重试。',
+  AgentFailureCode.imageRejected => '模型拒绝了附图；请换用支持图片输入的模型后重试。',
+  AgentFailureCode.contextLimit => '模型服务的上下文容量不足，请降低上下文预算或换用更大容量的模型。',
+  AgentFailureCode.reasoningRejected =>
+    '模型服务拒绝了 high 思考参数，未自动改用其他强度。请换用其他模型或导出最近日志。',
+  AgentFailureCode.secretDetected => '输入包含受保护内容，请移除后重试。',
+  AgentFailureCode.consentRequired => '请先阅读发送说明并明确勾选同意。',
+  AgentFailureCode.keyRequired => '请提供模型 Key，或使用本机已保存的 Key。',
+  AgentFailureCode.modelRequired => '请先获取并选择有效模型。',
+  AgentFailureCode.busy => 'Agent 正在处理其他操作，请稍后重试。',
+  AgentFailureCode.staleContext => '设置状态已变化，请刷新后重试。',
+  AgentFailureCode.maintenance => '本地维护正在进行，请稍后重试。',
+  AgentFailureCode.ownershipLost => '本机数据状态已变化，请重新打开设置。',
+  AgentFailureCode.storageFailed => '本机设置保存失败，请稍后重试。',
+  AgentFailureCode.protectionFailed => '本机密钥保护未完成，设置没有保存。',
+  AgentFailureCode.unauthorized ||
+  AgentFailureCode.forbidden => '模型服务未授权此请求，请检查 Key 或服务权限。',
+  AgentFailureCode.rateLimited => '模型服务暂时繁忙，请稍后重试。',
+  AgentFailureCode.networkFailed ||
+  AgentFailureCode.timeout => '暂时无法连接模型服务，请检查网络后重试。',
+  AgentFailureCode.protocol ||
+  AgentFailureCode.redirectRejected => '模型服务返回内容无法安全验证。',
+  AgentFailureCode.resourceLimit => '模型列表或回复超出当前处理上限。',
+  AgentFailureCode.cancelled => '操作已取消。',
+  AgentFailureCode.closed => 'Agent 服务已关闭，请重新打开页面。',
+  AgentFailureCode.insufficientBalance => 'DeepSeek 官方账户余额不足，请检查账户余额或选择其他模型服务。',
+  AgentFailureCode.toolUnavailable => '请求的工具不在本次可用范围内，已停止本次处理。',
+};

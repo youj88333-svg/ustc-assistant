@@ -1,10 +1,10 @@
 # Project-level configuration.
 cmake_minimum_required(VERSION 3.14)
-project(ustc_assistant_app LANGUAGES CXX)
+project(ustc_assistant_m0 LANGUAGES CXX)
 
 # The name of the executable created for the application. Change this to change
 # the on-disk name of your application.
-set(BINARY_NAME "ustc_assistant_app")
+set(BINARY_NAME "ustc_assistant_m0")
 
 # Explicitly opt in to modern CMake behaviors to avoid warnings with recent
 # versions of CMake.
@@ -106,3 +106,22 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Fixed public speech assets prepared by tools/prepare-speech-assets.ps1.
+# Missing assets keep text input usable; the microphone reports unavailable.
+set(USTC_SPEECH_MODEL_DIR "${CMAKE_SOURCE_DIR}/../build/speech_models/sensevoice")
+if(EXISTS "${USTC_SPEECH_MODEL_DIR}/model.int8.onnx" AND
+   EXISTS "${USTC_SPEECH_MODEL_DIR}/tokens.txt")
+  install(FILES "${USTC_SPEECH_MODEL_DIR}/model.int8.onnx"
+    "${USTC_SPEECH_MODEL_DIR}/tokens.txt"
+    "${USTC_SPEECH_MODEL_DIR}/LICENSE"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/speech/sensevoice" COMPONENT Runtime)
+endif()
+# The SDK DLLs are distributed even in a text-only build without model weights.
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/../resources/speech/"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/speech/sensevoice" COMPONENT Runtime)
+
+# The WebView2 loader is linked statically; retain its binary-distribution notices.
+install(FILES "${CMAKE_SOURCE_DIR}/../resources/webview2/LICENSE.txt"
+  "${CMAKE_SOURCE_DIR}/../resources/webview2/NOTICE.txt"
+  DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/licenses/webview2" COMPONENT Runtime)

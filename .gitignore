@@ -1,37 +1,25 @@
-# Sensitive capture data and generated output
-temp.md
+# 本机私有研究与验收资产
 tmp/
-private/
-*.raw.json
-*.raw.html
+temp.md
+*.db
+*.db-shm
+*.db-wal
 
-# Python
-__pycache__/
+# 开始构建后产生的本地产物
+**/.dart_tool/
+**/build/
+**/.flutter-plugins-dependencies
+app/android/.kotlin/
+**/__pycache__/
 *.py[cod]
-*.egg-info/
-.pytest_cache/
-.coverage
-htmlcov/
-build/
-dist/
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.venv/
-venv/
 
-# Local configuration
+# 编辑器本地设置
+.idea/
+.vscode/
+
+# Worktree metadata, local credentials and private handoff assets
+.worktrees/
 .env
 .env.*
 !.env.example
-
-# IDE and operating system files
-.superpowers/
-.worktrees/
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-# Flutter golden test failure artifacts
-app/test/goldens/failures/
+private/

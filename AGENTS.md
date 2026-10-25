@@ -1,163 +1,34 @@
-# USTC Assistant Agent Guide（minimal 分支版）
+# 施工约定
 
-> 适用范围：`refactor/webview-minimal` 分支。本分支最小实现：只保留教务（JW）+
-> 日程表 + Agent（本地只读 / 受控写 / 生命周期）。二课（young）、评课（icourse）、
-> 校园公开目录（campus）的用户功能与外部 Agent 来源工具已随 M1 删除。
-> 本文件不再描述旧"六层阶梯 M0–M8 / rewrite-flutter-native"路线；本分支执行口径见
-> `docs/plan-webview-minimal.md` 与各 `plan-webview-minimal-m{N}.md`。
+## 工作区与文档
 
-## 目标
+- 主工程为`E:\107\main`、维护主线`main`；修复可在`E:\107\worktrees`登记的短期`codex/fix-*`工作树中进行。总目录只管理工程、归档、备份及私有交付；旧工程/未提交成果在`E:\107\archive`保留，不接管其业务或认证资产。用户已授权同步核验后的维护主线到GitHub `origin`及校内`ustc`，不强推、不镜像删除远端分支，APK/ZIP及备份不推送。本次迁移交接前的原工作树可用于受控收口，见[维护说明](docs/maintenance.md)。
+- 唯一导航为[docs/README.md](docs/README.md)，[状态页](docs/status.md)维护当前结论。M0–M6已关闭，两平台当前私有交付保留，项目进入维护/修复；Android完整逐项验收、正式独立签名及已知语音等保留项继续登记，不以模拟器或总体反馈替代目标机专项证据。默认Agent，Agent/日程两主页，任务在日程内，设置为辅助入口。M3公开内部能力无独立检索主页，M5使用固定工具；旧main参赛版与放弃版仅作归档参考，图标复用等既有批准继续有效。
+- 现行依据为 `docs/architecture/07–12`、`docs/quality/13`、`docs/reviews/14`、[15 工作流](docs/workflow.md)和对应来源参考/已批准决定。旧 `docs/refactor-docs/00–15` 仅是迁移导航，原文在冻结档案，不能采用旧里程碑或旧通过结论。
+- 较大阶段只维护 `docs/milestones/<阶段>/plan.md` 一份任务单；实施/失败/检查写 `records*`，用户验收和关闭写 `acceptance.md`。遵循 [文档维护规则](docs/maintaining.md)，不向设计、AGENTS 或入口追加进展流水。
+- 每份任务规格与子代理提示词显式列出设计依据、已批准修订、接口/不变量、修改范围、依赖及验收条件；冲突交主代理，不照搬历史实现、测试、fixtures、CI 或施工插件。
 
-开发一个面向中国科学技术大学的本地优先校园学习生活助手。当前分支为整体重构的
-**最小实现**：删掉二课/评课/校园公开目录，仅保留教务采集 + 本地日程/Task/PlanBlock
-+ 本地 Agent 读写能力。教务采集的目标运行通道是 Flutter 原生 WebView2
-（`docs/plan-webview-minimal-m7-webview2.md`），Python Bridge 保留为兜底通道，不提前删除。
+## 工作流
 
-## 当前能力
+- 采用“Sol 总负责、Luna 承接明确任务、Sol 集成验收、Astra 按需参与”。主代理 GPT-6.1 Sol / `max` 负责设计、关键实现、调试、集成和最终验收，短任务可直接完成。
+- 用户已授权在已批准范围内选择模型及委派，无需逐次确认。所有 Luna 子代理显式指定模型和 `reasoning_effort=max`，其他子代理强度由主代理判断；只有契约已定、文件互不重叠的任务才并行。
+- 跨层状态/事务/安全和规格歧义由 Sol 处理，Astra 按具体需要分析或独立复核；子代理通过声明不替代根实际验收。
+- 产品范围、安全红线、保留承诺及可能丢失已有数据的取舍交用户决定；常规技术选择和授权内修复直接执行。使用普通文档和 Git，不加载旧派发模板/审查流水线。
+- 在相关检查通过、结果可回退和审查的节点建立本地 commit；区分文档与工程提交，排除临时资产和生成的构建目录，未完成的真人验收在记录中明确保留。
 
-1. 教务系统：指定学期（当前为 `461 / 2026fall / 2026 秋季学期`）课程、考试安排和
-   统一日程导入包（SourceBundle 1.0）。
-2. Windows App：账号与同步、七日周课表、个人日程、Task/PlanBlock、冲突与用户覆盖、
-   提醒、操作历史、设置和一步撤回。
-3. Agent（本地读写 + 生命周期）：15 个本地只读工具 + 20 个受控写/生命周期工具（11 写 +
-   9 生命周期/清除/撤回 + 管理态只读），全部经审批门按风险分级确认；无任何外部按需来源
-   工具。API Key 由 `CredentialProtector`（Windows DPAPI / fallback）保护；Agent 不能发起
-   同步或执行任何外部写操作。系统提示词版本 9，grounding policy 只含本地规则。
-4. 原生 WebView2 采集（已接入，M7）：`app/lib/features/sync/native/` 已有 Dart
-   规范化 + `JwCollector` + `JwWebViewAdapter`（真实实现）+ `NativeJwGateway`
-   （BridgeGateway 兼容壳），产物与 Python oracle 对齐（digest `f858a385…`）；
-   真实校网人工验收仍外置。
+## 保留边界与验收
 
-## 项目结构与当前阶段
+- 五条来源、本地日程、任务和 Agent 的批准范围保留；单账号、北京时间、一源一通道、事务导入、审计与用户主权继续有效。
+- 首版普通 WebView 边界遵循 07/DR-ADR-09：保留导航/权限、隔离/凭据/清理控制，接受页面正常后台网络；不恢复 CAL/全协议隔离、补丁资格或全局 Worker 禁用门槛。
+- 自动检查只用合成/loopback/临时资产，不访问真实学校。真实登录、验证码和额外学校授权由用户完成；用户在应用主动提供的凭据可按已批准固定认证契约自动使用。浏览器手填秘密不读取或保存。
+- 不读取或记录实际秘密、原始学校响应、浏览器认证资产；不直接检查正式业务记录。现行来源契约、会话隔离、出站最小化及只读学校操作遵循 07/09。
+- M1 真实非空考试获批准后补；Young 仅同步个人日历活动关联记录，排除未关联记录，不宣称独立验证本人报名状态。未观察项与阶段关闭分开，不覆盖失败或推断新计数。
+- 每次修改运行相关检查；关闭里程碑前根执行 analyze/test/相关 Windows/build 全套，自动结果与用户真人确认分开记录。测试验证用户行为、外部契约和故障边界，不以数量为目标。
 
-### 实现状态
+## 工具与编辑
 
-- Python 数据层已收敛为 JW 单链路：`src/ustc_assistant/sources/` 仅 `jw/`；
-  `bridge/` 仅保留 `/health`、`/capabilities`、`/collect/jw`、`/login/resume`、
-  `/jobs/{id}/events`、`/shutdown`；CLI 仅 `collect jw` + `config generate-flutter-defaults`。
-- `app/` 已实现 Flutter Windows 首版（Drift/SQLite、账号分区、同步、周课表、个人日程、
-  Task/PlanBlock、提醒、历史、设置及测试）。Android/iOS 只有平台脚手架，采集适配器未实现。
-- `app/lib/features/sync/native/`：M2（`jw_course_normalizer.dart` / `jw_exam_parser.dart` /
-  `jw_source_bundle_builder.dart`）、M3（`source_collection_gateway.dart` /
-  `jw_collector.dart` / `jw_web_page.dart`）、M5（`jw_webview_adapter.dart` stub）。
-- 真实人工验收（真实校园网/账号/API Key）尚未执行；清单见
-  `docs/acceptance/read-only-agent.md`（minimal 适用边界已注记）。
-
-### 目录职责
-
-```text
-config/
-  source-defaults.json         教务学期默认三元组（461/2026fall/2026 秋季学期）
-schemas/
-  source-bundle-1.0.schema.json  SourceBundle 1.0 正式契约
-src/ustc_assistant/
-  sources/jw/                  教务采集（collector/course/exam/service/source_bundle）
-  bridge/                      Windows Flutter 使用的认证回环采集 Bridge（fallback）
-  contracts/                   契约校验与 schema 导出（app assets 生成源）
-  config.py                    JW 学期配置读取
-  cli.py / __main__.py         统一 CLI（仅 collect jw + config）
-tests/                         Python 单测（JW + bridge + contracts + config，140 项）
-app/
-  lib/core/                    Drift 数据库、安全（CredentialProtector）与北京时间工具
-  lib/features/                账号、同步、导入、日程、Task、提醒、历史、设置与 Agent
-  lib/features/sync/native/    原生 WebView2 采集器（M2/M3/M5/M7）
-  lib/features/agent/          本地只读 + 受控写/生命周期 Agent
-  test/                        Flutter 单元、数据库、Widget、Golden 和流程测试
-  windows|android|ios/         Flutter 平台工程；当前真实运行目标是 Windows
-  packages/webview_flutter_windows_secure/  WebView2 插件（M7 引入，可自足提取）
-docs/
-  plan-webview-minimal.md      总路线（M0–M6）
-  plan-webview-minimal-m{N}.md 各里程碑计划（m1–m7，m7=原生 WebView2）
-  m5-three-platform-build-analysis.md  三端构建错误静态分析
-  m6-external-machine-handoff.md  M6 外部机器交接手册
-  m6-refactor-final-verification.md  M0–M5 静态验证快照
-  acceptance/read-only-agent.md  Agent 真实验收清单（minimal 注记版）
-  data-sources/{jw,source-bundle-v1}.md  JW 与 SourceBundle 契约
-  schedule-data-model.md       本地日程领域模型（契约类，保留）
-  plan-webview-minimal-doc-slimming.md 文档精简计划
-```
-
-### 数据流（当前）
-
-```text
-学校/教务网站
-  -> [原生 WebView2 采集器 | Python Bridge fallback]
-  -> SourceBundle 1.0
-  -> Flutter ImportService
-  -> Drift/SQLite + UserOverlay
-```
-
-同一来源同一时刻只允许一个通道在跑、在写库（原生 WebView2 与 Python Bridge fallback
-二选一）。
-
-### 新 Agent 阅读和修改路径
-
-- 接手项目：先读 `docs/plan-webview-minimal.md`，再读 `docs/m6-external-machine-handoff.md`
-  与 `docs/m6-refactor-final-verification.md`，然后看 `app/lib/features/` 与 `tests`。
-- 教务采集/WebView：先读 `docs/plan-webview-minimal-m7-webview2.md`，再读
-  `app/lib/features/sync/native/` 与 `src/ustc_assistant/sources/jw/`。
-- SourceBundle 迁移：先读 `docs/data-sources/source-bundle-v1.md`、`schemas/` 与
-  `tests/fixtures/source-bundle/`、`app/test/fixtures/`，再同步修改 Python 生产者与
-  Flutter 消费者；不要让 Flutter 兼容 legacy。
-- Agent 工具修改：先读 `app/lib/features/agent/application/agent_tools.dart` /
-  `agent_write_tools.dart` / `agent_lifecycle_tools.dart` 与对应测试。
-- `tmp/`、浏览器 Profile、原始响应只用于本机研究，不能作为稳定输入或提交内容。
-
-## 安全红线（本分支内化；原 `refactor-docs/07-constitution.md` 已按方案 A 删除）
-
-1. 隐私与账号隔离：凭据不经源码/日志/截图；账号按本地分区隔离；不记录/不打日志完整
-   URL 的 query、CAS ticket、Cookie、DOM、账号原文或私人课表。
-2. 契约：SourceBundle 1.0 与 schema 不随功能删除而关闭（功能可关，契约不关）；
-   young 的 SourceBundle fixture 仅作 schema 兼容性测试输入保留。
-3. 一源一通道：同源同时只跑一个通道（原生 WebView2 或 Python Bridge fallback），
-   不并行、不双写。
-4. 时间统一 `Asia/Shanghai`；教务学期 ID（461）不得按年份或名称推算，必须来自
-   `config/source-defaults.json`。
-5. 网站契约变化时明确失败，不返回部分数据冒充完整结果；修改来源行为先加回归测试。
-6. 过程纪律：自动测试不代替人工验收；不把自动测试/静态验证通过写成"真实验收通过"。
-
-## 开发规则
-
-- Python 仅用于 Bridge fallback 与 oracle，使用 Conda 环境 `ustc_assistant`（≥3.10）。
-- 手动改 `config/source-defaults.json` 后必须重新生成提交文件：
-  `python -m ustc_assistant config generate-flutter-defaults`，勿手改生成文件。
-- DB 退役列（`icourseConsent` 等）不删、不做非正式 migration；清理需走正式迁移。
-- 平台差异收敛到 `lib/core/security/credential_protector_factory.dart` 等隔离点，
-  不在 lib 顶层散落平台专属直构；WebView 平台细节隔离在 `native/`。
-- 目标态（M7 原生 WebView2）不破坏 minimal 现有 analyze/test 基线优先顺序。
-
-## 验证
-
-```powershell
-conda run -n ustc_assistant python -m unittest discover -s tests -v
-conda run -n ustc_assistant python -m compileall -q src tests
-Push-Location app
-E:\flutter\flutter\bin\flutter.bat analyze     # 期望 0 error
-E:\flutter\flutter\bin\flutter.bat test        # 期望 1360 pass / 7 fail(基线)
-E:\flutter\flutter\bin\flutter.bat build windows --release
-Pop-Location
-```
-
-7 项基线失败（1 DB migration 健壮性缺口 + 6 golden 字体环境差异）为 M0 起已知项，
-处置见 `docs/m6-external-machine-handoff.md` §6。
-
-## 里程碑总览（本分支）
-
-| 里程碑 | 内容 | 状态 |
-|---|---|---|
-| M0 | 基线环境 + 计划采纳 | ✅ |
-| M1 | 删外部功能/工具，保留 JW Bridge，递归 sync 到 jw | ✅ |
-| M2 | Dart JW 规范化 + SourceBundle，Python oracle 对齐 | ✅ |
-| M3 | SourceCollectionGateway + 平台无关采集器 | ✅ |
-| M4 | Agent 删除/生命周期工具回归固化 | ✅ |
-| M5 | 跨平台凭据/通知/WebView 适配（静态接口） + 三端 build 错误清单 | ✅ |
-| M6 | 外部机器三端构建 + 真实验收（本分支只交手册+快照） | 📋 交接 |
-| M7 | 原生 WebView2 接入（文档 `plan-webview-minimal-m7-webview2.md`） | ✅ 已完成（真实验收外置） |
-
-## 当前边界
-
-- 原生 WebView2 采集已接入（M7）：`JwWebViewAdapter` 真实实现 + `NativeJwGateway`
-  为默认通道；真实校网人工验收仍外置（见 `m6-external-machine-handoff.md` §8.4）。
-- 不做 C++ 会话持久化：重启后需重新登录（已知边界，不阻塞日常使用）。
-- Android/iOS 真实 WebView 与构建仍留外部机器（M5 静态接口 + stub）。
-- Python Bridge 未删除，保留为 fallback 开关（`kUsePythonBridgeFallback`）。
+- 手工编辑使用 `apply_patch`，保留用户未提交修改。整理只读原文可复制归档并核验哈希，归档不再追加。
+- 若需 Python，优先 Conda `basic310`；既有手动登录跳转工具按用户专项偏好使用 `E:/conda/envs/ustc_assistant/python.exe`。
+- Android SDK、Gradle/Pub缓存、AVD和本轮临时目录优先留在E盘；A0使用 `tools/android-a0.ps1` 的进程级环境，不改用户/系统全局设置、不迁移或删除原有C盘资产。Windows系统功能本身仍由系统管理。
+- 本机代理端口为 7897，尊重已有环境变量；用户确认本机在校园网，遇明确校园 IP 限制时对已注册校园请求用本机直连复验。不改全局代理、降低 TLS、修改系统信任或浏览器宿主；实际登录限制仍按来源授权处理。
+- Windows 原生自动检查在本次进程使用 `USTC_NOTIFICATION_TEST_HOST=1`，结束还原；仅 Debug 生效，实际 OS 验核用独立身份，不登记生产通知。纯文档变更运行 `powershell -NoProfile -ExecutionPolicy Bypass -File tools/check-docs.ps1` 与 `git diff --check`，执行策略只作用于本次进程；不为此重复运行 Flutter 或真实采集。

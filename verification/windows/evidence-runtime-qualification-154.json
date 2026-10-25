@@ -1,0 +1,34 @@
+﻿{
+    "utc":  "2026-10-09T09:52:34.9382253Z",
+    "qualified":  false,
+    "scope":  "Synthetic loopback runtime regression gate only; not V-02 closure, school login or M0 approval.",
+    "runtime":  "154.0.4258.62",
+    "sourceSha256":  {
+                         "WindowsProbe.cs":  "0554bc7f735d39c693f2716218076b73deadb13af042db7b2793b74d07750f5d",
+                         "run.ps1":  "b7eee3a5a36d48b127273f5883573e7abd1cd319efc88fb82ed4bed85b7b42a5",
+                         "qualify-runtime.ps1":  "a04a9248c79ad83f5a06bcb9f49586f7991fa3a4f391f2411f697a776ce69df9"
+                     },
+    "stages":  [
+                   {
+                       "variant":  "connection-allowlist-minimal-navigation",
+                       "status":  "fail",
+                       "exitCode":  1,
+                       "evidence":  "evidence-runtime-qualification-154-connection-allowlist-minimal-navigation.json",
+                       "sha256":  "9e51e9d44c0dc3d1916c2feca6be38571ca69e6d90b3605d3d48c7ba9acbb081",
+                       "failureCount":  12,
+                       "requiredEvidenceComplete":  false,
+                       "runtimeConsistent":  true,
+                       "deletePending":  false
+                   },
+                   {
+                       "variant":  "connection-allowlist-minimal",
+                       "status":  "not_run",
+                       "reason":  "Earlier native regression or evidence validation failed."
+                   },
+                   {
+                       "variant":  "connection-allowlist",
+                       "status":  "not_run",
+                       "reason":  "Earlier native regression or evidence validation failed."
+                   }
+               ]
+}

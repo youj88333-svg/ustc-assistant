@@ -4,4 +4,29 @@
          to allow setting breakpoints, to provide hot reload, etc.
     -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <application android:networkSecurityConfig="@xml/qa_network_security">
+        <activity android:name=".notifications.ReminderOsProbeActivity" android:exported="true" />
+        <activity
+            android:name=".files.FilesBridgeHostActivity"
+            android:exported="false" />
+        <provider
+            android:name=".files.SyntheticFilesProvider"
+            android:authorities="cn.ustcassistant.mobile.qa.synthetic-files"
+            android:exported="false" />
+        <!-- Flutter is the A1 launcher; fixed A0 probes remain explicitly addressable. -->
+        <activity
+            android:name=".qa.QaProbeActivity"
+            android:label="USTC Assistant · Android QA"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        </activity>
+        <service
+            android:name=".qa.QaBrowserParentService"
+            android:exported="false"
+            android:process=":qa_browser_parent" />
+        <receiver android:name=".qa.QaAlarmReceiver" android:exported="false" />
+    </application>
 </manifest>

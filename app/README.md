@@ -1,71 +1,256 @@
-# USTC Assistant Flutter App
+# USTC Assistant
 
-`app/` 是 USTC Assistant 的共享 Flutter 应用。当前真实运行和验收目标是 Windows；
-Android/iOS 仅有平台脚手架，后续将复用这里的数据库、导入、业务模型和共享 Agent
-核心，并替换来源采集适配器。
+Windows x64的1.00私有交付已按2026-10-25授权刷新为源码441a68b、schema20（工程版本仍`1.0.0+1`），说明见[Windows交付](../docs/releases/windows-1.00.md)与[已知问题](../docs/releases/windows-1.00-known-issues.md)；旧包保留。Android / APK鸿蒙沿用现有QA身份完成本轮[私有交付](../docs/releases/android-private-1.00.md)，手机ARM64 QA2024、MuMu x86_64 QA4024；普通WebView路线保留自动认证/采集。用户MatePad日常使用总体认可，原后台返回目录占用已复验未再出现，见[验收](../docs/milestones/android-apk/acceptance.md)。均未公开发布；当前范围见[状态页](../docs/status.md)，完整迁移及原未观察项见[计划](../docs/milestones/android-apk/plan.md)和[限制](../docs/releases/android-private-1.00-known-issues.md)。Android独立正式签名Release延后，不通过卸载或清数据更换身份。
 
-## 已实现
+应用默认进入 Agent，两主页面为 Agent/日程，任务在日程页内；Windows 设置为侧边栏底部辅助入口，手机使用底部双主页导航和右上角设置入口。除原有日程、任务、来源和维护能力外，M5 接入模型、只读工具/出处、主动图片、经方案批准的本地修改/撤销、有界时间规划、固定学校来源同步、安全历史与显式偏好。M0–M6 已由用户确认关闭；当前体验修订和未观察项见状态页。
 
-- Drift/SQLite 本地账号分区与 SourceBundle 1.0 原子导入；
-- `CredentialProtector`（Windows DPAPI）保护的学校账号和可选密码；
-- 教务同步：目标通道为原生 WebView2 采集器（`lib/features/sync/native/`，接入中），
-  Python localhost Bridge 保留为 fallback；
-- 七日周课表、重叠展开、人工冲突关系和来源事件用户覆盖；
-- 单次、全天、跨日和基础重复个人日程；
-- Task、PlanBlock、截止风险、结束后确认和单步撤回；
-- Reminder 持久化、App 内状态和 App 运行期间的 Windows 通知；
-- 账号、操作历史、设置、官方网页和完全重置；
-- 本地 Agent（见下文）。
+助手以自然中文交流，沿用当前批准的人格标签，默认先给当前问题需要的结论，必要名称、时间和教室适度突出；更多档案信息按需提供。工具/出处/审批仍在折叠详情内。提示词更新作用于之后的请求，不改写旧聊天或自动重发旧问题。
 
-## Agent
+## 启动与构建
 
-聊天页已接入学校 Anthropic 兼容模型服务
-（`https://api.llm.ustc.edu.cn`，默认模型 `deepseek-v4-flash`，SSE 流式，
-`tool_use`/`tool_result` 循环）。共享 Agent 核心位于 `lib/features/agent/`：
+新安装先显示四步首次设置：学校账号、同步教务与二课、模型Key、逐项授权。可跳过、稍后继续，在“设置 → 首次设置”重开。已有安装升级后保留原入口和资料，不强制重复；完整重置后重新引导。账号页只暂存候选，真正登录及同步由下一页主动开始；验证码与额外学校授权仍由用户完成。提醒/晨报/评课/私人读取/日常操作独立选择，系统通知许可另行主动申请。schema20只新增非敏感进度，不改变原保护凭据或导入事务。
 
-- `domain/` 与 `application/`：平台无关的会话运行时、工具注册表、上下文构建、
-  确定性隐私过滤、15 个本地只读工具（含 4 个管理态只读）与 20 个受控写/生命周期
-  工具（11 写 + 9 生命周期/清除/撤回）。无外部按需来源工具。
-- `data/`：`DriftChatRepository`、`AnthropicLlmProvider`（`package:http`）、
-  `ProtectedAgentSecretStore`（DPAPI）。
-- `presentation/`：聊天页、工具运行条、安全 Markdown、设置页和首次配置面板。
-
-API Key 由 DPAPI 保护，每调用临时传入，不持久化为字段、不写入日志或异常。工具向
-模型只返回临时引用，不返回数据库主键。单次请求最多 8 轮模型调用、12 次工具调用。
-Agent 不能修改本地业务数据（未经审批门）、发起同步或执行任何外部写操作。本地
-日程/任务工具返回数据时会话生成去重的本地导航动作，聊天页渲染为可点击 `ActionChip`
-经 GoRouter 跳转。写工具与删除/生命周期工具全部经审批门按风险分级确认（聊天内联
-确认卡）；权限变更永远需用户亲手确认。组合级集成测试见
-`test/integration/agent_composition_flow_test.dart` 与
-`test/features/agent/agent_delete_tools_test.dart`（真实路由 + 注入式组合）。
-
-学校 API Host 固定为 `https://api.llm.ustc.edu.cn`，不在 App 内提供 Host 配置项；探针
-仅返回脱敏的成功/失败与错误码，不存储或显示"最近连接测试时间"。
-
-## 运行
+在本目录执行（当前机器 SDK 未加入 PATH）：
 
 ```powershell
-E:\flutter\flutter\bin\flutter.bat pub get
-E:\flutter\flutter\bin\flutter.bat run -d windows
+& 'E:\flutter\flutter\bin\flutter.bat' pub get --offline
+& 'E:\flutter\flutter\bin\flutter.bat' run -d windows
 ```
 
-使用 Python fallback 同步时依赖仓库根目录的 Python 包和 Conda 环境
-`ustc_assistant`。解释器无法自动定位时，可在 App 设置中填写该环境的 `python.exe`。
+依赖锁定在 `pubspec.lock`；sqlite3 原生 hook 首次需下载并缓存库，尊重既有 7897 代理环境。WebView2 SDK 固定为 NuGet `Microsoft.Web.WebView2 1.0.3967.48`，从用户 NuGet 缓存读取；自定义位置可用 CMake `USTC_WEBVIEW2_SDK_ROOT`。新机器安装通常的 Windows Flutter 工具链与 WebView2 Runtime，不需要旧 CAL 补丁资格。
 
-## 验证
+构建正式入口：
 
 ```powershell
-E:\flutter\flutter\bin\flutter.bat analyze
-E:\flutter\flutter\bin\flutter.bat test
-E:\flutter\flutter\bin\flutter.bat build windows --release
+& 'E:\flutter\flutter\bin\flutter.bat' build windows --release --no-pub --target=lib/main.dart
 ```
 
-Release 位于 `build/windows/x64/runner/Release/`。运行和复制时必须保留整个
-Release 目录，不能只保留 `ustc_assistant_app.exe`。
+交付构建可附加 `--dart-define=USTC_BUILD_REVISION=<本地代码提交的40位SHA>`，诊断事件会保留该构建来源；未提供时明确记为 unknown，不推断当前 Git 状态。
 
-产品边界和当前交接状态分别见：
+启动 `build/windows/x64/runner/Release/ustc_assistant_m0.exe`；分发保留整个 Release 目录的 DLL、`data/` 和资源。集成测试可能替换该目录中的测试助手，测试后再构建正式入口。
 
-- `../docs/plan-webview-minimal.md`（本分支总路线）
-- `../docs/plan-webview-minimal-m7-webview2.md`（原生 WebView2 接入计划）
-- `../docs/m6-external-machine-handoff.md`（M6 交接手册）
-- `../docs/acceptance/read-only-agent.md`（Agent 人工验收清单，minimal 注记版）
+私有交付前用`tools/package-windows-private.ps1`传入本工作树`app/build`内的正式Release目录和40位源码提交。脚本核验1.00版本、固定运行资产、获准品牌PNG、模型/许可及ZIP逐文件摘要，生成全新的`app/build/private-releases/1.0.0+1-<短提交>/`；拒绝覆盖旧包，忽略静态构建库，不读取正式资料。当前包位于`1.0.0+1-441a68b9`，包含36个运行文件、2份说明和manifest；schema20升级后不能直接使用旧schema18程序打开资料。版本号同时维护于`pubspec.yaml`和`lib/core/application_version.dart`，脚本会检查一致；PE产品名改善但EXE、包名、资料根与通知身份保留。脚本不构建、不安装、不公开上传。
+
+已核验的长期交付统一移到`E:\107\releases\windows`或`android`，源码主工程为`E:\107\main`；具体文件和原构建修订见上述交付说明。构建输出可重建，已交付包保持哈希冻结，移目录不代表重新验收或变更版本。
+
+## Android本地开发验证
+
+在仓库根使用`tools/android-a0.ps1`。该脚本只为自身进程和子进程设置E盘SDK、Gradle/Pub缓存、AVD与临时目录，不修改用户/系统环境。API36本地底座AVD使用`emulator-5582`；A2支持隔离世界的官方独立镜像使用`emulator-5586`及`-ApiLevel 37 -CurrentProvider`。均只用ADB端口5038，不连接真实手机或默认ADB服务；一次只运行一台，避免编译与模拟器争用内存。
+
+```powershell
+# 首次开发准备固定公开模型；不是应用自动下载功能：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-speech-assets.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Build
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 36
+# 待独立模拟器完成开机后执行：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36
+# 已有合成样本时，严格要求日程和任务保留，不允许重新生成样本：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -VerifyRetained
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
+# A3模型、公开查询及随包知识仅使用合成/loopback/私有临时根：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 36
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A3_Public
+# A4手机壳/日程/任务/偏好/诊断的私有合成集成：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A4
+# 跨端UI合成场景与原生字体截图；仍只操作独立QA AVD：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 34 -IntegrationSuite UIRefresh
+# A5临时C3与真实Android提醒桥，禁止真实网络：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 36 -IntegrationSuite A5
+# 普通QA包已覆盖安装后，固定QA通知的退出/取消/权限/模拟器重启检查：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-android-a5.ps1
+# 已安装独立QA包时，包内真实ASR与固定TTS合成WAV/草稿检查，不打开麦克风：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/test-android-a6.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 36
+# A2学校桥仅运行loopback，不登录学校：
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Start -ApiLevel 37 -CurrentProvider
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action IntegrationTest -ApiLevel 37 -CurrentProvider -IntegrationSuite A2
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action Stop -ApiLevel 37 -CurrentProvider
+```
+
+集成测试仅使用`.qa`沙箱，显式关闭Flutter测试结束后的自动卸载，并检查包仍安装。普通启动包用`Build`重新生成，输出为`build/app/outputs/flutter-apk/app-x86_64-debug.apk`；可附加`-BuildRevision <40位源码SHA>`，Flutter与后续Gradle均保留该诊断定义。集成测试编译的入口不能作为普通启动包。测试包与普通QA包使用相同的最终版本码，拒绝降级后卸载重装来伪装保留成功。
+
+Android资料保存在应用内部`no_backup/ustc_assistant_v1`，演示与业务分别位于`demo_v1`和`local_v1`，受同一父根排他锁管理；凭据由Android Keystore保护。学校桥按已批准的[普通系统WebView路线](../docs/decisions/android-system-webview-compatibility.md)使用API28+的基础能力，保留导航/权限、来源分区、凭据与清理控制，不再以多Profile、独立删除、DOCUMENT_START或私有执行世界为门槛；具体提供方是否可用仍由运行结果裁决。Agent进入后台会停止作业并撤销未提交批准，回前台不自动重发或重复提交；暂时inactive不取消。语音有独立的前台/权限规则，见下文。当前QA包、ABI、版本及哈希只查[人工体验说明](../docs/milestones/android-apk/manual-validation.md)，不把旧构建目录当成最新交付；七份知识仍经设置主动载入，公开能力通过Agent使用。
+
+系统提醒默认关闭，在“设置→晨报与提醒”主动启用，并点击系统权限入口。未允许精确提醒时可能延后；“本地已登记”不代表系统队列独立核验或已送达。普通退出保留未来提醒；强制停止、系统节电及厂商限制另行处理。晨报与每日二课均独立默认关闭，晨报异步生成；二课只在前台空闲采集，Android退后台撤销当次尝试。A5系统投递仅在独立模拟器验证，真实通知栏点击、权限界面和厂商策略仍待A7。
+
+手机新资料默认日视图，可改为周视图并记住；正常字号尽量显示整周，大字号保留必要的滚动和日期详情，短横屏不会挤掉顶部操作。已有视图偏好保留。切页保留Agent未发送草稿；返回先关闭键盘/弹层，设置回到原主页、日程回到Agent。图片通过系统照片/文档选择器主动选择，最多三张，原图单张10MiB/1600万像素；去元数据、单帧规范化后单张3MiB、合计6MiB，不缓存原图或取得整个媒体库权限。“设置 → 数据与隐私 → 导出日志”使用系统创建JSON文档，先经现有脱敏白名单，取消不表示保存成功。真实相册、保存目录、系统键盘与触摸体验留待A7。
+
+## 模型配置与对话
+
+进入“设置 → Agent”或 Agent 页的“去设置”，选择“学校模型服务”或“DeepSeek 官方”。Key 只在应用里主动输入，不在聊天正文中提供。分别勾选发送同意，点击“获取模型”，从所选服务返回的目录选择模型，再点击“验证并保存”；获取目录后 Key 输入清空，但本次候选 Key 最多在内存保留三分钟供验证，超时或停止后清除。验证使用合成问题和固定 echo_probe，不读取业务数据；只通过文本与流式时标记 chatOnly，完成工具调用和工具结果续答才标记 toolReady。
+
+学校网关固定为 `https://api.llm.ustc.edu.cn/v1`，官方固定为 `https://api.deepseek.com`，无自定义地址，不自动回退其他服务。两套 Key、联网同意和模型配置分别保存；切回学校可继续使用原配置。官方独立计费，先采用直答模式减少等待，日程/任务等工具照常使用；学校原思考策略保留。Agent、上下文整理和晨报共用当前提供方选择。模型 Key 在Windows采用DPAPI CurrentUser、在Android采用Keystore封套保护，用途与学校密码及另一提供方分开，密文不跨设备复制。已保存后可留空；取消发送同意会立即停止相关运行，当前 Key/历史继续保留，重新勾选可恢复授权。删除 Key 需确认，只影响当前模型服务，保留另一方配置及其他数据。
+
+回到 Agent 页直接在唯一持续对话中发送问题，回复逐步显示；“停止”保留已经安全保存的片段并标注终态。toolReady模型稳定获得20个固定工具，按需要查询日程、任务、提醒、知识库、评课与校园公开资料或准备本地操作，例如“明天有哪些课”“哪些任务快截止”“缓考怎么办”。问题真正缺少对象或范围时才澄清，短答和“第二个”等指代结合安全历史理解。个人备注、任务正文不会默认发送；在“Agent 使用权限”单独允许后，才按需读取所选范围。学校身份/密码不发送给模型。评课须先在设置允许第三方查询，知识未载入时由用户在设置主动载入，不自动获取资料。
+
+查询步骤、覆盖/失败及出处默认放在“处理详情”折叠区，展开查看；正文的本轮证据标记对应出处卡，未知标记显示“引用未验证”。卡片可展开有界片段、复制核验出处；本地日程/任务出处可返回当前详情，目标已改变时需重新查询。模型普通链接不自动打开或获得抓取权限。财务在线关键词和 FAQ 仍不可用，材料适用性未知明确说明。
+
+请求新增/移动个人安排、创建任务并安排时间块、修改本地状态或撤销时，Agent 准备具体方案，应用检查当前许可：已有许可可执行，缺少许可则显示当前确认卡。核对后点击“批准并提交”或“拒绝”；有唯一当前卡时也可输入“确认”“approve”等明确确认，继续同一个操作。修改条件会拒绝旧卡并重新准备；没有卡的短答只延续讨论，不批准旧方案。一个方案整体提交，失败零改；已提交后停止回答不会倒写业务。学校课程/考试本体只能通过学校同步更新。
+
+可以问“找本周两个一小时空闲段，安排这个任务”；空闲范围最多 31 天，具体提交遵循当前许可。Agent 页权限按钮可分别允许私人内容读取和日常本地操作；日常包包含17类已有操作，个人记录删除、学校刷新及新增提醒/默认设置/晨报各用单独许可，旧单项许可保留。打开“仅建议”时可查询、讨论和展示方案，但不会写入或同步；该开关只约束当前使用，退出后恢复通常模式。进入“设置 → Agent”可保存规划偏好、撤销单项许可及调整预算。日程/任务详情中的“交给 Agent 讨论”仍需自行发送，不自动出站。
+
+可直接说“这节课提前10分钟提醒我”“把这组个人安排恢复默认提醒”“把默认提醒改为提前20分钟，再提前5分钟提醒一次”“关闭自动晨报”或“通知里别显示名称和地点”。Agent查看当前规则后可准备方案，按需要确认或使用你此前明确记住的对应权限，也可撤销最近修改。调整单条规则不会暗中打开系统提醒；任务没有具体截止时刻时不会猜提醒时间。规则保存与Windows登记分开，系统关闭通知或登记失败会如实说明，已登记也不保证通知一定可见。
+
+明确要求刷新教务或二课日程时，Agent 展示具体来源与学期/日期卡，批准后复用原自动认证及采集；已有加密密码无需再发给模型。学校挑战按可见窗口完成后在 Agent 中继续，停止只取消 Agent 自己的作业。查询二课活动是只读目录，无报名或退选功能，不等于本人报名状态核验。
+
+“设置 → 来源 → 二课”另有默认关闭的“每日二课自动同步”。启用后，每天北京时间06:00后，运行中的应用可见且空闲时，在隐藏学校窗口同步昨天起31天的活动关联日程；不消耗模型额度，也不启动退出后的后台进程。它使用已保存的学校密码，遇学校额外验证会停下提示，可点“立即同步”打开可见窗口处理。失败有退避，每天最多3次自动尝试；Agent对话优先。同步沿用原日程身份和个人设置，不更改普通手动选择的日期；完整范围内学校不再返回的场次退出有效日程并更新提醒。清空业务后当天不自动补建，完全重置会关闭此开关。
+
+点击输入区“附图”主动选择 PNG/JPEG/WebP，预览后可移除、随问题发送，或只发图片。最多 3 张；原文件单张 10 MiB、1600 万像素，规范处理后长边 1536、单张 3 MiB/合计 6 MiB。去元数据后的 PNG 只发到同一固定模型网关，历史只保存图片数量，原图不保留；应用不自动截图、抓远端图片或上传任意文件。模型拒绝图片时明确失败，实际看图效果取决于所选模型，不能从 toolReady 推断视觉能力。
+
+### 本地中文听写（Windows与Android）
+
+输入框可编辑时，点击麦克风才按需申请权限、准备随包的SenseVoiceSmall INT8模型和录音；再次点击停止后在本机CPU上按中文识别。建议录入几秒短句，最短0.5秒，30秒硬截止后自动停止。两平台均使用系统默认输入；Windows不存在可用默认设备时报告失败，不静默切换，Android不主动切换蓝牙路由。输入为16kHz单声道PCM16，录音缓冲仅驻留内存且不超过960000字节；模型按需加载，推理在独立isolate中运行。它不需要Agent Key，不经过学校或模型网关，也没有持续监听、语音回复或Agent麦克风工具。
+
+识别结果只插入录音开始时捕获的草稿光标位置，保留已有文字和已选图片；你可以继续修改，再自行点击发送。听写不会自动发送或批准操作，只有主动发送后才按现有对话历史规则处理。取消会先撤销本轮转写的交付并等待后台工作排空；编辑草稿、切换对话/历史、离开页面、应用进入后台或维护模式都会使迟到结果失效。录音结束、取消或退出时尽力清除短暂缓冲，但不承诺运行时副本绝对抹除。应用不保存录音文件、不上传音频或自动下载模型；诊断仅保留固定阶段/失败码、计数和耗时，不含声音、转写文字或设备名。
+
+录音依赖固定为`record 7.1.2`，本地推理依赖固定为`sherpa_onnx 1.13.8`；SenseVoice模型约228MiB，不进Git，开发时按仓库流程准备并校验，构建时随应用分发。缺少模型时键盘输入仍可用。SDK与模型权重许可分别处理，见[`resources/speech/NOTICE.txt`](resources/speech/NOTICE.txt)。Windows的`record.hasPermission=true`只表示插件报告的权限状态，并不证明真实麦克风可用；录音失败时检查Windows系统麦克风权限。语音不新增录音表，保留既有业务/历史；当前完整应用为schema20。
+
+Android首次点麦克风才申请系统录音权限，并将包内模型提取至私有no-backup缓存；首次准备需要解包和完整性检查，状态会显示在输入框旁。只有申请权限、尚无录音时可以等待系统弹窗造成的暂时失焦；实际退后台、录音失焦或插件报告中断都会作废本次输入，返回后需主动再点麦克风。权限拒绝或准备失败可继续键盘输入。A6仅完成模拟器真实本地ASR加合成音频验证，实际手机麦克风、来电和中文效果仍待A7；不声明iOS支持。
+
+开发者可从仓库根目录核对模型资产：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-speech-assets.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/prepare-speech-assets.ps1 -Check
+```
+
+默认准备命令首次获取固定公开模型，之后复用校验通过的缓存；`-Check` 只核验。开发者可用 `tools/prepare-synthetic-speech.ps1` 在 ignored build 内生成固定中文测试 WAV，使用本机中文 TTS，不打开麦克风。发行时保留整个 Release 目录及 `data/speech/sensevoice`，不能只拷贝 exe。
+
+Windows 合成 WAV 原生链路验核先按 [M5.8 记录](../docs/milestones/m5/records/08-local-speech-input.md)准备固定合成素材，再从 `app` 目录运行。测试不会打开真实麦克风；`USTC_SPEECH_TEST_WAV` 必须是绝对 WAV 路径：
+
+```powershell
+$speechTestWav = [System.IO.Path]::GetFullPath('build\m58-probe\synthetic.wav')
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/speech_input_flow_test.dart -d windows --no-pub "--dart-define=USTC_SPEECH_TEST_WAV=$speechTestWav"
+```
+
+持续对话保留在本机，可“载入更早消息”；重启不自动续跑，未完成方案显示中断，已提交操作保留历史事实。安全历史保留完整助手/工具交互、候选选择和原收到时间；跨日继续不改写原请求日期。历史结果可回答“刚才查到了什么”，当前状态和变更按需取得当前记录，不把旧批准当新权限。单独发送 `/compact` 可压缩后续模型上下文，保留聊天；单独发送 `/clear` 清当前聊天、摘要及定位别名，建立新空对话，不清业务、Key、设置、知识或记住的许可。命令不带附图，压缩需要已配置模型且可停止；失败保留原上下文。其它旧会话保留为档案，不自动合并。默认输入预算为估算 16000 token，输出 2048，最多 16 次模型请求、48 次工具调用、300 秒主动时间；审批和学校等待不计主动时间。这是应用配置，不能证明学校模型的实际容量。
+
+已写入但最终回复失败时，继续相同操作会核验实际回执并说明历史完成，不重复提交；用户明确要求另建一个相同记录时按新操作处理。Agent 使用权限内还有可选“合成模型核验”：只有点击开始才用当前模型运行 14 个合成场景，最多 96 个请求，显示实际 token usage 或未知，可停止。它使用独立合成业务库，不读取或修改你的日程/历史，不访问学校；会消耗模型额度，不能代替真实体验验收。
+
+批准卡可勾选“以后不再确认”，只保存当前实际工具及操作类别，后续同类方案仍重新检查目标版本、账号和事务；混合方案要所有类别获许可才免确认。“设置 → Agent”可查看和撤销；当前点击批准与随后使用已有许可分别显示。已完成/拒绝操作和出处一起放在默认折叠的“处理详情”，待批准卡保持可见。
+
+清业务保留 Agent 历史/模型配置/偏好，清 Key 或历史保留记住的权限；完全重置包含这些资产。输入、回复、结果、轮数/时间和历史均有界，识别到可见秘密时拒绝本次操作；此检测不承诺发现所有秘密，也不做图片 OCR 秘密检测。历史不作为有效业务批准。
+
+“复制安全能力摘要”只包含阶段、能力布尔值、固定失败码、模型/工具/图片请求、会话计数、提示词/工具版本、实际主动/人工等待时间和可用 usage，不含 Key、模型名称、问题或回复。缺少 token/费用字段保持未知。用户已核验所选模型toolReady并确认M5整体关闭，未单独观察的模型/视觉/语音效果继续登记，不据此补造逐项通过。清日程/资料库保留模型Key、配置、偏好与明确的历史内容，活业务引用失效；整应用重置一并删除。当前schema18增量保留旧来源、目录、秘密、个人安排/任务、知识和界面设置。
+
+## 教务日常采集
+
+1. 进入“设置 → 教务”，首次填写预期学号与学校密码，按需勾选本机加密保存；已有绑定和保存密码时留空，点击“同步课表与考试”。输入启动后清空，不回填保存密码。
+2. 固定自动认证后读取新学期目录。首次按北京时间从目录选择当前学期，成功后保存目录和学期；以后可在同步开始前改选，默认上次成功项，每次重新核验。指定项消失或当前标签不唯一时暂停选择。
+3. 学校验证码、通行密钥或额外授权由你在学校窗口完成，再点击“登录完成，继续同步”。一次作业已提交的密码不会再次自动发送。
+4. 导入完成后进入“日程”，选择北京时间日期及课程/考试/二课筛选，点击条目查看详情并隐藏或恢复。“显示隐藏/跳过记录”只影响本地展示；日期/来源筛选不改变采集参数。隐藏/恢复在再次同步与重启后保留。
+
+完整同步所选学期后，学校已不再返回的旧课程退出有效日程，不再占用空档、参与冲突或提醒；历史和个人备注仍保留，可用日历“显示隐藏/跳过及来源失效历史”查看。同步其它学期不会清掉原学期的正常课表。同一记录再次返回时恢复有效性并保留个人设置。逐行检查后合并完全一致重复项；仅教师姓名不同的课程行取姓名并集，其余同键冲突拒绝。摘要分别报告来源行、唯一日程和合并数。真实非空考试已批准后续补验，当前零行不撤销旧考试。
+
+教务采集保存校区、楼宇、教室、补充地点、教师、课程号/类别、学期名称及周次/节数等已提供事实；考试保存考场、类型与说明。旧版只存过名称和时间的日程会提示“尚未采集”，在设置中重新同步对应学期即可补充，无需删除日程。更新沿用原身份，保留备注、隐藏和参加计划；其它已导入学期需分别同步。新采集没有该字段时才提示“本次来源未提供”。
+
+教务地点优先显示教室名称或代码，楼宇与校区放在后面，详情继续保留独立字段；不会根据教室代号推算建筑或楼层。仅显示顺序调整无需重新同步已采集详情。
+
+## 二课查询与同步
+
+进入“设置 → 二课”。两来源共享同一份本机加密学校密码，二课业务身份、浏览器分区和许可独立；密码留空可使用已保存密码。
+
+- “查询报名活动”自动认证并读取完整列表。展开条目看地点、活动时间与独立报名时段；结果仅在本次内存中，不导入日程，重启不恢复列表，也不会执行学校报名操作。
+- 同步前输入北京时间日期范围，最多 62 天，首次默认当月、以后默认上次成功范围。“同步二课日程”逐日读取全部页，只导入学校个人日历中与活动关联的记录；未关联记录排除。活动关联不代表已独立证明本人报名成功或取消。
+- 本地日程可隐藏或恢复；重复同步保留本地身份和个人设置。完整所选日期内不再返回的旧活动关联日程退出有效日程，历史仍可查看；其它日期范围的正常记录保留。这不独立证明本人取消报名。门户及回调期间自动等待，无需自行输入网址或登录后逐页选择。
+- 没有可用密码、学校挑战/授权或页面结构无法安全确认时，在学校窗口处理后点击“登录完成，继续”。切换主页面不会取消来源作业；另一项来源占用时，新同步、清登录资料及删除密码暂不可用。
+
+## 日程与个人安排
+
+“日程”默认显示本周，周一开始；可切换日列表、选择日期和来源。周网格按 USTC 13 节作息分格，凌晨单独压缩，空档按可用画布适配；实际活动时间不吸附到节次。同名日程使用同色。空间允许时周块直接显示地点、教师，小块可悬停查看；全天/凌晨栏的 +N 可打开完整列表。窄窗口可横向浏览周列，也可使用日列表。日程详情显示完整名称、北京时间、地点、教师等教务详情及来源状态；没有来源记录的日期与读取失败分别提示。
+
+- 点击“新建个人安排”，填写名称、开始和结束；无需学校账号。全天安排的结束日期包含当日，定时安排可跨午夜。结束时间到达后不会自动完成。
+- 重复可选“每周一次”，星期由开始日期决定，可留空截止日期。详情可修改本次或整组、完成、跳过和恢复本次；整组修改保留已修改的单次内容和决定。改成单次后若保留了单次修改，“编辑安排”修改当前内容，“设置重复”调整原始重复方式。缩短截止或改为单次只使超范围项暂不显示，扩大后恢复；删除整项/整组需确认，可在有效期内受控撤销最近一次本地修改。
+- 学校日程可添加本地备注和隐藏；课程、二课可记录参加计划，课程另有听讲方式。这些是自己的计划，不是学校出勤记录。来源同步不会修改这些决定。
+- 定时重叠默认以红色圆圈感叹号显示冲突，可在详情或冲突列表标记“不冲突”、确认“冲突”及记原因；默认展示不会自动写入用户判断。全天、隐藏或跳过项不参与当前冲突，来源筛选不缩小全局冲突范围。改时后已保存的说明仍保留；旧“相关”仅保留原说明，当前重叠也按默认冲突显示。
+
+写入期间以及学校作业进行中，新的本地修改暂不可用，仍可浏览。旧表单或目标已被修改时会拒绝保存，请刷新后重新打开；失败不会提示已保存。个人安排、例外、备注和关系均在正常重启后保留。
+
+## 任务与手工时间规划
+
+进入“日程 → 任务”，无需学校登录。任务可填写标题、描述、备注、优先级、预计分钟及可选截止；点击截止日期或时间字段可打开日历或 24 小时表盘，无需手工输入格式。截止时间默认北京时间 23:59，也可恢复为默认；取消选择保留原值。列表可按状态和标题筛选，默认显示前 100 项，截断时明确提示并可扩大查询或检索。任务状态由自己设为进行中、受阻、完成或取消，逾期不会自动改变状态。
+
+任务详情可安排多个时间块，通过日历和 24 小时表盘选择开始/结束，填写地点和备注；时间选择器也可切换为独立的小时、分钟输入。移动或编辑保留原块 ID。时间块进入同一日/周和冲突投影，名称取任务当前标题，同名同色；详情可打开关联任务。时间块状态为待执行、已执行或已跳过，结束只提示待复核。允许跨日和截止后的安排并提示截止关系；本期不做拖拽、自动排程、全天/重复块或提醒。
+
+任务完成或取消保留各块的状态；删除任务需确认，移除任务及其块的有效显示，但保留块记录。撤销父任务删除只恢复父标记，之前已经删除的块不会复活。编辑任一块会更新所属任务的版本，打开的旧任务或兄弟块表单需重新读取。
+
+任务本体同时显示在日/周日历的独立任务栏，不占用时间、不参与冲突；任务时间块继续显示在对应时段。北京时间今天截止的未完成任务用黄色圈感叹号，已截止用红色，完成/取消不警示。以前已逾期的未完成任务延续到今天并保留真实截止日期；没有截止的任务通过“待安排”入口查看，不伪造日期。
+
+日程和任务工具栏均有“撤销最近修改”。只撤销最近一次成功的本地操作，跨重启最多保留 24 小时；后续成功本地修改替换，失败不替换，撤销本身不产生重做或多步历史。个人安排、来源备注/显示/计划、冲突判定及任务/块修改使用同一受控撤销。执行前复验当前版本与必要关联，来源同步若改变目标则报告不可安全撤销；不恢复旧学校标题、时间或学术详情。学校采集导入不由此撤销。
+
+## M3 内部验收入口
+
+普通构建不显示 M3 入口。临时验收版在“设置 → 开发诊断”中使用同一正式内部端口，只需在构建命令增加：
+
+```powershell
+& 'E:\flutter\flutter\bin\flutter.bat' build windows --release --no-pub --target=lib/main.dart --dart-define=USTC_M3_VALIDATION=true
+```
+
+该面板用于课程/教师查询、课程与点评筛选、固定校园栏目及正文读取、本地精选材料检索和受控载入/清库。首次评课联网需单独授权；每次在线作业与 JW/Young 共用全局租约，本地检索不占网络租约。财务在线关键词与常见问题回复暂不可用，固定栏目和本地检索分别使用。结果显示来源、版本/人群、时间与实际覆盖；金额及流程的现行适用性保留未知。
+
+点击“载入首批清单”接受随包的 7 项校核长期材料，之后可离线检索/读 Markdown；重复载入报告重放，不重复写。查询和启动不会隐式入库；“清除知识库”需两次确认，只清公开文本、索引与回执，保留 JW/Young 日程、密码和目录，重启不会自动重建。清库后如需恢复，主动重新载入。新版逐项事务回执与取消后的已提交事实分别显示。
+
+“复制安全验收摘要”输出 public-query-validation-v1，只含状态/固定失败/安全计数，不含关键词、原文、引用值或账号。原文及附件 HTTPS 链接可以复制后由用户打开，应用不下载文件，Markdown 不自动联网加载图片。该入口不是正式产品路由，M3 不接 Agent、模型或工具注册；材料转换工具也不装入应用。
+
+制作资料后，从仓库根运行 `tools/prepare-knowledge-assets.ps1 -Check`，确认校核摘要和固定编译资产一致；需要更新时由维护版本流程重新编译，不允许应用选择任意 URL 或本机路径。
+
+临时面板是可选调试辅助，不要求用户重复点击才能验收内部能力。维护者可明确启动实际随包资料开发核验：
+
+```powershell
+& 'E:\flutter\flutter\bin\flutter.bat' run -d windows --debug --no-pub --target=tool/m3_reviewed_bundle_probe.dart --dart-define=USTC_M3_REVIEWED_BUNDLE_PROBE=true
+```
+
+该程序不显示界面，不访问网络或正式数据库；使用默认资源 Loader、正式服务和独立临时原生库核验全部 7 项的载入、中文检索、全文读取、重放、数据库重开、清库不重建及重载，关闭后删除自建临时根，仅输出安全计数与固定失败阶段。必须显式 opt-in，普通入口与 CI 不运行它；它核验已批准的实际公开文本，不冒充合成测试、政策现行证明或用户体验验收。
+
+## 取消、清理与恢复
+
+- 作业进行中可取消；取消不撤销已提交业务，未提交迟到结果不交付。窗口关闭或认领未完成时使用该来源的“重试关闭窗口”，旧事实保留；开发诊断保留原收口按钮文案。
+- “清除浏览器登录资料”清本应用教务分区；“清除二课登录资料”仅清二课分区。两个入口均保留相关日程及共享加密密码，清二课资料还保留 JW 目录/分区。
+- “删除保存的学校密码”在全局空闲时删除共享密码，影响两来源；账号、浏览器资料、目录和日程保留。以后重新提供密码或手动登录。
+- 普通退出保留本地数据。分区保留/复用不表示学校永久免登录；只管理本应用资料，不操作系统 Edge/Chrome 资料。
+
+## 目录与诊断
+
+“设置 → 晨报与提醒”可分别开启每日晨报与 Windows 提醒，升级默认不启用。06:00 后首次前台使用时先展示当天安排，后台补昨日教务/财务公告和简短摘要；可以照常聊天，主动聊天优先。晨报默认仅一行，点击后优先看今日重点及冲突、截止/逾期提醒，今日明细和来源覆盖可展开；状态显示为中文，完整空公告仅一句说明。可隐藏当天入口，标题区小图标恢复，本次应用会话内切页和后台更新不会强制恢复。没有重复的“和 Agent 讨论”按钮。无 Key/模型同意时仍保留基础信息，公告覆盖不完整时直接使用本地事实版，不额外请求模型；同日复用，手动重试会重新获取公告，也可清缓存。更新不会自动重新生成已有晨报。
+
+每个日程、任务截止和时间块详情都有两个提醒槽。默认提前30分钟/关闭；全天默认当天09:00/关闭，无截止任务暂不发布。个人重复项支持系列和本次。隐藏、不参加、跳过或完成会撤销相应提醒，改期会更新。系统计划最多覆盖未来180天/512项，设置显示实际登记和覆盖，可主动发送测试通知。正常退出仍投递已登记计划，打开或更改日程后延展；关机、勿扰及系统通知开关可能抑制投递，不会唤醒机器。移动端尚未实现。
+
+正式根为 `%USERPROFILE%/.ustc-assistant/local_v1`，业务库文件名为 `jw.sqlite`，当前schema18，增量保留JW/Young和公开知识表、个人安排/例外、来源覆盖及本地操作回执；7→8增添教务学术详情，8→9添加任务、时间块和最近一次受控撤销，9→10添加显示设置与维护恢复，10→11添加独立模型配置、受保护Key、会话/运行与历史清理账本，11→12添加有界出处、查询步骤和图片数量，12→13添加Agent方案/批准与整组撤销事实，13→14添加唯一主对话、上下文摘要及可撤销操作许可，14→15添加安全完整交互、会话定位别名、读取/预算设置及实际调用恢复关联；15→16添加晨报与提醒，16→17添加来源失效事实，17→18添加默认关闭的每日二课同步状态。升级保留旧记录和许可，不补造旧工具原始输出或模型批准。旧教务行保持未知，后续同步补充。关系类型升级保留原ID/说明，旧共存转不冲突，旧相关不推断为用户确认。学期目录、成功范围及受保护凭据与对应成功事务保存；保护机制为Windows DPAPI CurrentUser，不承诺跨用户/设备解密，不宣称整个数据库加密。
+
+独立离线演示根为 `%TEMP%/ustc_assistant_m0_demo_v1`。普通构建不显示旧演示与观测面板；需要时以 `--dart-define=USTC_DIAGNOSTICS=true` 构建后在设置内展开“开发诊断”。演示的正常/重放、取消、失败和恢复只操作合成数据。目录排他保护第二实例，勿手动修改或清理使用中的数据库/分区。
+
+开发诊断的“复制导入脱敏摘要”生成 `jw-import-v1`，“复制二课同步摘要”生成 `young-import-v1`，用于反馈固定状态/失败阶段、安全计数、密码存在及分区保留/复用标志；不发送账号、密码、原文或日程明细。候选摘要不授予生产许可；正常日程和来源设置不展示内部摘要或阶段编号。
+
+正式版运行日志在“设置 → 数据与隐私 → 运行诊断”中导出；Agent 错误提示也提供“导出最近日志”。选择保存位置后生成 JSON，再由你主动发送给维护者；取消不写文件，应用不自动上传。启动失败页可导出本次内存错误，明确不包含既有日志，不能安全访问目录时不会读取旧文件。
+
+日志仅保存版本、随机运行关联、阶段、工具名称、失败码、参数拒绝字段、耗时和计数，不保存提问/回复、工具参数值/原始响应、账号、Key/密码、图片、浏览器资料、URL 或用户路径。固定日志文件总上限 1 MiB，打开、记录或导出时淘汰超过 7 天的事件；一次导出最近最多 1000 条，覆盖不足、丢弃和坏行会明确标记。清除日志需两次确认，仅清诊断，日程、任务、历史和凭据保留；完全重置包含日志。
+
+维护者收到安全 JSON 后可离线汇总失败轨迹，无需访问用户业务库：
+
+```powershell
+& 'E:\flutter\flutter\bin\cache\dart-sdk\bin\dart.exe' run tool/diagnostics_summary.dart 'C:\path\USTC-Assistant-diagnostics.json'
+```
+
+该工具只读取所指定的有界安全诊断包，输出版本、失败字段和实际提交阶段；未知异常只保留类别。日志用于构造同版本合成复现，不能恢复用户私人原文或保证重播原业务。
+
+## 开发检查
+
+```powershell
+& 'E:\flutter\flutter\bin\flutter.bat' analyze --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/m0_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/jw_sync_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/young_sync_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/young_automation_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/public_knowledge_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/app_shell_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/calendar_workspace_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/settings_maintenance_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/agent_model_flow_test.dart -d windows --no-pub
+& 'E:\flutter\flutter\bin\flutter.bat' test integration_test/diagnostics_flow_test.dart -d windows --no-pub
+```
+
+按变更选择相关原生套件，里程碑关闭前完成全套相关检查和正式构建。所有自动检查只使用合成/loopback/随机临时资产，不访问学校或正式库。原生 HTTPS fixture 可用 Conda basic310 的 OpenSSL 或 `USTC_TEST_OPENSSL`，不写系统信任；既有测试助手只终止其自建进程并清理自身已排空目录。实际命令与结果记阶段记录，不在本帮助中积累轮次。
+
+Windows integration 使用 Debug 宿主时，在本次进程设置 `USTC_NOTIFICATION_TEST_HOST=1` 并在结束还原，以隔离生产互斥/通知身份；Release不识别该旗标。M6新增 `integration_test/m6_flow_test.dart`，它只用fake通知队列/标记TEMP，不创建生产OS通知。真实OS投递使用仓库根 `verification/notifications` 独立身份探针，勿把Debug能力全false当产品能力。语音原生套件需先运行 `../tools/prepare-synthetic-speech.ps1`，通过 `--dart-define=USTC_SPEECH_TEST_WAV=<固定合成WAV绝对路径>` 传入，不使用真人音频。
