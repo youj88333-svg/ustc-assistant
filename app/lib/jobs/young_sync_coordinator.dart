@@ -29,7 +29,9 @@ final class YoungSyncCoordinator implements YoungSyncPort {
     this.clock = const SystemClock(),
     this.navigationTimeout = const Duration(seconds: 30),
     this.pollInterval = const Duration(milliseconds: 100),
-    this.drainTimeout = const Duration(seconds: 12),
+    // A recovery-only WebView2 group can exit normally after 12 seconds.
+    // Retain the lease until the same native exit proof arrives or times out.
+    this.drainTimeout = const Duration(seconds: 30),
     this.loginWaitTimeout = const Duration(seconds: 90),
     this.businessStability = const Duration(milliseconds: 500),
     this.automaticAuthentication = true,

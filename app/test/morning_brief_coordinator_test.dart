@@ -290,6 +290,7 @@ void main() {
         () => fixture.data.cached?.phase == MorningBriefPhase.failed,
       );
       expect(fixture.data.cached?.failure, 'timeout');
+      await _waitFor(() => fixture.gateway.cancelAndDrainCalls == 1);
       expect(fixture.gateway.cancelAndDrainCalls, 1);
       expect(fixture.data.readyWrites, 0);
       await fixture.close();

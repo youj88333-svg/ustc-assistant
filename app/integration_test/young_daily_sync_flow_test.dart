@@ -6,6 +6,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
@@ -81,6 +82,12 @@ void main() {
           // afresh rather than succeeding only through a warm cookie.
           final priorLogins = fixture.successfulAuthenticationSubmissions;
           await harness.sync.clearSession();
+          expect(
+            harness.sync.syncView.phase,
+            YoungSyncPhase.idle,
+            reason: harness.sync.syncView.safeSummary,
+          );
+          expect(harness.leases.isBusy, isFalse);
           expect(harness.sync.syncView.data!.credentialSaved, isTrue);
           expect(
             harness.sync.syncView.data!.events.single.localId,
@@ -388,8 +395,13 @@ Future<void> _cleanup(
   for (final harness in harnesses.reversed) {
     try {
       await harness.dispose();
-    } on Object {
+    } on Object catch (error) {
       // Preserve the temporary root if native work did not fully drain.
+      final failure = error is AppFailure ? error.code.name : 'unexpected';
+      debugPrint(
+        'Young daily synthetic cleanup failed: '
+        'failure=$failure ${harness.sync.syncView.safeSummary}',
+      );
     }
   }
   await fixture.close();
