@@ -16,6 +16,7 @@ import 'package:ustc_assistant_m0/core/settings_contract.dart';
 import 'package:ustc_assistant_m0/m0_entry.dart';
 import 'package:ustc_assistant_m0/platform/demo_directory.dart';
 import 'package:ustc_assistant_m0/platform/diagnostic_journal.dart';
+import 'support/onboarding_fixture.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -151,6 +152,7 @@ void main() {
           ),
         );
         await tester.runAsync(first.agentCoordinator.refresh);
+        await tester.runAsync(() => finishSyntheticSetup(first));
         await tester.pumpWidget(OwnedApplication(bootstrap: first));
         await tester.pumpAndSettle();
         await tester.runAsync(

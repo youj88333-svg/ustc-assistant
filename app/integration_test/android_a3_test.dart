@@ -22,6 +22,7 @@ import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 
 import 'support/a3_model_fixture.dart';
+import 'support/onboarding_fixture.dart';
 
 const _platform = MethodChannel('ustc_assistant/platform_v1');
 final _clock = FixedClock(DateTime.utc(2026, 10, 16, 1));
@@ -344,6 +345,7 @@ void main() {
         addTearDown(tester.view.resetPhysicalSize);
         addTearDown(tester.view.resetDevicePixelRatio);
         _foreground(tester.binding);
+        await tester.runAsync(() => finishSyntheticSetup(bootstrap!));
         await tester.pumpWidget(OwnedApplication(bootstrap: bootstrap));
         await tester.pumpAndSettle();
         model!.replies.add((request, body) async {

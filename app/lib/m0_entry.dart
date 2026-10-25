@@ -42,6 +42,8 @@ import 'app/calendar_workspace_contract.dart';
 import 'core/agenda_contract.dart';
 import 'core/reminder_contract.dart';
 import 'app/m6_settings_panel.dart';
+import 'app/onboarding_controller.dart';
+import 'app/onboarding_page.dart';
 
 // This temporary panel is absent from normal product navigation.
 const m3ValidationEnabled = bool.fromEnvironment('USTC_M3_VALIDATION');
@@ -93,6 +95,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
   CalendarReference? _evidenceSelection;
   bool _evidenceTasks = false;
   DemoRuntime? _boundRuntime;
+  OnboardingController? _onboarding;
   StreamSubscription<ReminderTarget>? _reminderNavigation;
   int _runtimeGeneration = 0;
   final _messengerKey = GlobalKey<ScaffoldMessengerState>();
@@ -117,6 +120,8 @@ final class _OwnedAppState extends State<OwnedApplication> {
   void dispose() {
     _runtimeGeneration++;
     _reminderNavigation?.cancel();
+    _onboarding?.removeListener(_onboardingChanged);
+    _onboarding?.dispose();
     _diagnosticErrors.dispose();
     _lifecycle.dispose();
     _destination.dispose();
@@ -144,8 +149,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
     switch (state) {
       case AppLifecycleState.resumed:
         _setAgentHostAvailable(runtime, true);
-        runtime.morning.onForeground(true);
-        runtime.youngDaily.onForeground(true);
+        _syncAutomaticForeground();
         runtime.reminders.onForeground();
         break;
       case AppLifecycleState.hidden:
@@ -158,6 +162,23 @@ final class _OwnedAppState extends State<OwnedApplication> {
       case AppLifecycleState.inactive:
         break;
     }
+  }
+
+  void _onboardingChanged() {
+    if (!mounted) return;
+    _syncAutomaticForeground();
+    setState(() {});
+  }
+
+  void _syncAutomaticForeground() {
+    final runtime = _boundRuntime;
+    if (runtime == null) return;
+    final state = WidgetsBinding.instance.lifecycleState;
+    final allowed =
+        _onboarding?.blocksAutomatic == false &&
+        (state == null || state == AppLifecycleState.resumed);
+    runtime.morning.onForeground(allowed);
+    runtime.youngDaily.onForeground(allowed);
   }
 
   void _setAgentHostAvailable(DemoRuntime runtime, bool available) {
@@ -183,11 +204,18 @@ final class _OwnedAppState extends State<OwnedApplication> {
 
   void _bindRuntime(DemoRuntime? runtime) {
     if (identical(_boundRuntime, runtime)) return;
+    _boundRuntime?.morning.onForeground(false);
+    _boundRuntime?.youngDaily.onForeground(false);
+    _onboarding?.removeListener(_onboardingChanged);
+    _onboarding?.dispose();
+    _onboarding = null;
     _runtimeGeneration++;
     _reminderNavigation?.cancel();
     _reminderNavigation = null;
     _boundRuntime = runtime;
     if (runtime == null) return;
+    _onboarding = OnboardingController(runtime.jwStore.onboarding)
+      ..addListener(_onboardingChanged);
 
     final generation = _runtimeGeneration;
     _reminderNavigation = runtime.reminders.navigation.listen(
@@ -214,8 +242,7 @@ final class _OwnedAppState extends State<OwnedApplication> {
             state == AppLifecycleState.inactive,
       );
       if (state == null || state == AppLifecycleState.resumed) {
-        runtime.morning.onForeground(true);
-        runtime.youngDaily.onForeground(true);
+        _syncAutomaticForeground();
       }
     });
   }
@@ -347,7 +374,26 @@ final class _OwnedAppState extends State<OwnedApplication> {
       _navigationResetEpoch = resetEpoch;
       return ProductApp(
         scaffoldMessengerKey: _messengerKey,
-        key: ValueKey(view.snapshot?.context.resetEpoch),
+        key: ValueKey(
+          'product-${view.snapshot?.context.resetEpoch}-${_onboarding!.showSetup}',
+        ),
+        home: _onboarding!.showSetup
+            ? OnboardingPage(
+                key: ValueKey(view.snapshot?.context.resetEpoch),
+                progress: _onboarding!,
+                shell: runtime.shell,
+                settings: runtime.settings,
+                agent: runtime.agent,
+                reminders: runtime.jwStore.features,
+                reminderChanges: runtime.reminders.changes,
+                initialReminderView: runtime.reminders.view,
+                configureSystemAccess: runtime.reminders.supportsSystemAccess
+                    ? runtime.reminders.configureSystemAccess
+                    : null,
+                logsBuilder: (context) =>
+                    DiagnosticsExportButton(diagnostics: runtime.diagnostics),
+              )
+            : null,
         controller: runtime.shell,
         destination: _destination,
         onDestinationChanged: (next) {
@@ -463,6 +509,19 @@ final class _OwnedAppState extends State<OwnedApplication> {
           },
         ),
         settingsBuilder: (context) => ApplicationSettingsPage(
+          onOpenSetup: () async {
+            final progress = _onboarding;
+            if (progress == null ||
+                runtime.shell.view.globallyBusy ||
+                runtime.shell.view.actionPending ||
+                runtime.shell.view.progressUnavailable ||
+                runtime.agent.view.busy ||
+                progress.pending) {
+              return;
+            }
+            _destination.value = ShellDestination.agent;
+            await progress.reopen();
+          },
           dailySync: runtime.youngDaily,
           settings: runtime.settings,
           controller: runtime.shell,

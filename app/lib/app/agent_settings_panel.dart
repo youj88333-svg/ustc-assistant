@@ -23,9 +23,16 @@ typedef _ModelDraftScope = ({
 /// Settings for the selected fixed model service. The controller is externally
 /// owned; this widget only holds an unsaved key in its text field.
 final class AgentSettingsPanel extends StatefulWidget {
-  const AgentSettingsPanel({super.key, required this.controller});
+  const AgentSettingsPanel({
+    super.key,
+    required this.controller,
+    this.setupMode = false,
+    this.onBusyChanged,
+  });
 
   final AgentWorkspacePort controller;
+  final bool setupMode;
+  final ValueChanged<bool>? onBusyChanged;
 
   @override
   State<AgentSettingsPanel> createState() => _AgentSettingsPanelState();
@@ -45,6 +52,10 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
   int _permissionGeneration = 0;
   int _permissionOperation = 0;
   bool _permissionsLoading = false;
+  int _activeOperations = 0;
+  int _busyCallbackGeneration = 0;
+  bool _initialBusyReportReady = false;
+  bool? _lastReportedBusy;
   List<AgentPermissionReference> _actionPermissions = const [];
   String? _permissionsError;
   String? _revokingPermissionKey;
@@ -55,14 +66,21 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
     super.initState();
     _observedModelDraftScope = _modelDraftScope(widget.controller.view);
     widget.controller.addListener(_onControllerChanged);
+    _scheduleBusyStateAfterFrame();
     _scheduleRefresh();
-    _schedulePermissionRead();
+    if (!widget.setupMode) _schedulePermissionRead();
   }
 
   @override
   void didUpdateWidget(covariant AgentSettingsPanel oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!identical(oldWidget.controller, widget.controller)) {
+    final controllerChanged = !identical(
+      oldWidget.controller,
+      widget.controller,
+    );
+    final setupModeChanged = oldWidget.setupMode != widget.setupMode;
+    final busyCallbackChanged = oldWidget.onBusyChanged != widget.onBusyChanged;
+    if (controllerChanged) {
       oldWidget.controller.removeListener(_onControllerChanged);
       _generation++;
       _pending = false;
@@ -76,14 +94,19 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       _key.clear();
       _observedModelDraftScope = _modelDraftScope(widget.controller.view);
       widget.controller.addListener(_onControllerChanged);
+      _scheduleRefresh();
+    }
+    if (controllerChanged || setupModeChanged) {
       _permissionGeneration++;
       _permissionOperation++;
       _permissionsLoading = false;
       _actionPermissions = const [];
       _permissionsError = null;
       _revokingPermissionKey = null;
-      _scheduleRefresh();
-      _schedulePermissionRead();
+      if (!widget.setupMode) _schedulePermissionRead();
+    }
+    if (controllerChanged || setupModeChanged || busyCallbackChanged) {
+      _scheduleBusyStateAfterFrame();
     }
   }
 
@@ -145,6 +168,39 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
     scheduleMicrotask(() {
       if (_isCurrent(port, generation)) unawaited(_refresh(port, generation));
     });
+  }
+
+  void _scheduleBusyStateAfterFrame() {
+    final generation = ++_busyCallbackGeneration;
+    if (widget.onBusyChanged == null) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _busyCallbackGeneration) return;
+      _initialBusyReportReady = true;
+      _reportBusyState();
+    });
+  }
+
+  void _reportBusyState() {
+    final onBusyChanged = widget.onBusyChanged;
+    if (!mounted || onBusyChanged == null) return;
+    if (!_initialBusyReportReady) {
+      _scheduleBusyStateAfterFrame();
+      return;
+    }
+    final busy = _activeOperations > 0;
+    if (_lastReportedBusy == busy) return;
+    _lastReportedBusy = busy;
+    onBusyChanged(busy);
+  }
+
+  void _beginBusyOperation() {
+    _activeOperations++;
+    _reportBusyState();
+  }
+
+  void _endBusyOperation() {
+    if (_activeOperations > 0) _activeOperations--;
+    _reportBusyState();
   }
 
   bool _isCurrent(AgentWorkspacePort port, int generation) =>
@@ -294,6 +350,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       '${reference.category.name}:${reference.revision}';
 
   Future<void> _refresh(AgentWorkspacePort port, int generation) async {
+    _beginBusyOperation();
     try {
       await port.refresh();
     } on Object {
@@ -303,6 +360,8 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           _messageIsError = true;
         });
       }
+    } finally {
+      _endBusyOperation();
     }
   }
 
@@ -346,6 +405,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       _message = null;
       _messageIsError = false;
     });
+    _beginBusyOperation();
     try {
       await providerPort.selectModelProvider(provider);
       if (!_isCurrent(port, generation)) return;
@@ -376,6 +436,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           _pendingMayChangeConfig = false;
         });
       }
+      _endBusyOperation();
     }
   }
 
@@ -394,6 +455,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
       _messageIsError = false;
       _suppressViewFailure = false;
     });
+    _beginBusyOperation();
     try {
       await action();
       if (_isCurrent(port, generation)) {
@@ -417,6 +479,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           _pendingMayChangeConfig = false;
         });
       }
+      _endBusyOperation();
     }
   }
 
@@ -553,10 +616,16 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
           child: ListView(
             key: const ValueKey('agent-settings-panel'),
             padding: const EdgeInsets.fromLTRB(16, 4, 16, 20),
+            shrinkWrap: widget.setupMode,
+            physics: widget.setupMode
+                ? const NeverScrollableScrollPhysics()
+                : null,
             children: [
               _SettingsCard(
                 title: provider.label,
-                subtitle: '服务地址由应用固定管理；只读查询按本次问题需要调用。',
+                subtitle: widget.setupMode
+                    ? '填写该服务的 Key，再获取模型并验证。'
+                    : '服务地址由应用固定管理；只读查询按本次问题需要调用。',
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -673,7 +742,7 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                           icon: const Icon(Icons.verified_outlined),
                           label: const Text('验证并保存'),
                         ),
-                        if (keySaved)
+                        if (keySaved && !widget.setupMode)
                           TextButton.icon(
                             key: const ValueKey('agent-settings-delete-key'),
                             onPressed: portBusy ? null : _deleteKey,
@@ -707,15 +776,16 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                           : (value) => setState(() => _selectedModel = value),
                     ),
                     const SizedBox(height: 8),
-                    Text(
-                      provider == ModelProvider.deepseek
-                          ? '思考模式：关闭，使用直答模式；工具调用照常使用。'
-                          : modelReasoningEffort(selectedModel) == 'high'
-                          ? '思考强度：高（high）。对话、晨报和能力验证统一使用。'
-                          : '思考强度：服务默认。当前模型未设置额外思考参数。',
-                      key: const ValueKey('agent-settings-reasoning-policy'),
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                    if (!widget.setupMode)
+                      Text(
+                        provider == ModelProvider.deepseek
+                            ? '思考模式：关闭，使用直答模式；工具调用照常使用。'
+                            : modelReasoningEffort(selectedModel) == 'high'
+                            ? '思考强度：高（high）。对话、晨报和能力验证统一使用。'
+                            : '思考强度：服务默认。当前模型未设置额外思考参数。',
+                        key: const ValueKey('agent-settings-reasoning-policy'),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     if (view.phase != AgentPhase.idle &&
                         view.phase != AgentPhase.closed) ...[
                       const SizedBox(height: 10),
@@ -748,168 +818,173 @@ final class _AgentSettingsPanelState extends State<AgentSettingsPanel> {
                   ],
                 ),
               ),
-              const SizedBox(height: 14),
-              if (preferencesPort != null) ...[
-                _SettingsCard(
-                  title: '时间规划偏好',
-                  subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
-                  child: _PlanningPreferencesEditor(port: preferencesPort),
-                ),
+              if (!widget.setupMode) ...[
                 const SizedBox(height: 14),
-              ],
-              if (permissionPort != null) ...[
-                _SettingsCard(
-                  title: '已记住的操作授权',
-                  subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (_permissionsLoading) ...[
-                        const LinearProgressIndicator(),
-                        const SizedBox(height: 8),
-                        const Text(
-                          '正在读取授权…',
-                          style: TextStyle(color: _settingsMuted),
-                        ),
-                      ],
-                      if (_permissionsError != null) ...[
-                        Text(
-                          _permissionsError!,
-                          key: const ValueKey('agent-permissions-error'),
-                          style: const TextStyle(color: Color(0xFF9B2C2C)),
-                        ),
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const ValueKey('agent-permissions-reload'),
-                            onPressed:
-                                _permissionsLoading ||
-                                    _revokingPermissionKey != null
-                                ? null
-                                : () => unawaited(
-                                    _readActionPermissions(
-                                      permissionPort,
-                                      _permissionGeneration,
+                if (preferencesPort != null) ...[
+                  _SettingsCard(
+                    title: '时间规划偏好',
+                    subtitle: '只按你明确保存的条件辅助后续规划，不会根据聊天内容自动调整。',
+                    child: _PlanningPreferencesEditor(port: preferencesPort),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                if (permissionPort != null) ...[
+                  _SettingsCard(
+                    title: '已记住的操作授权',
+                    subtitle: '授权按固定工具和操作类别分别保存。模型不能新增授权；修改 Key 或清理聊天不会删除授权。',
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        if (_permissionsLoading) ...[
+                          const LinearProgressIndicator(),
+                          const SizedBox(height: 8),
+                          const Text(
+                            '正在读取授权…',
+                            style: TextStyle(color: _settingsMuted),
+                          ),
+                        ],
+                        if (_permissionsError != null) ...[
+                          Text(
+                            _permissionsError!,
+                            key: const ValueKey('agent-permissions-error'),
+                            style: const TextStyle(color: Color(0xFF9B2C2C)),
+                          ),
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const ValueKey('agent-permissions-reload'),
+                              onPressed:
+                                  _permissionsLoading ||
+                                      _revokingPermissionKey != null
+                                  ? null
+                                  : () => unawaited(
+                                      _readActionPermissions(
+                                        permissionPort,
+                                        _permissionGeneration,
+                                      ),
+                                    ),
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('重新读取'),
+                            ),
+                          ),
+                        ] else if (!_permissionsLoading &&
+                            _actionPermissions.isEmpty) ...[
+                          const Text(
+                            '尚未记住任何操作授权。',
+                            key: ValueKey('agent-permissions-empty'),
+                            style: TextStyle(color: _settingsMuted),
+                          ),
+                        ],
+                        for (final reference in _actionPermissions)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  Icons.verified_user_outlined,
+                                  color: _settingsGreen,
+                                  size: 19,
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    reference.category.label,
+                                    key: ValueKey(
+                                      'agent-permission-${_permissionKey(reference)}',
                                     ),
                                   ),
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: const Text('重新读取'),
-                          ),
-                        ),
-                      ] else if (!_permissionsLoading &&
-                          _actionPermissions.isEmpty) ...[
-                        const Text(
-                          '尚未记住任何操作授权。',
-                          key: ValueKey('agent-permissions-empty'),
-                          style: TextStyle(color: _settingsMuted),
-                        ),
-                      ],
-                      for (final reference in _actionPermissions)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 8),
-                          child: Row(
-                            children: [
-                              const Icon(
-                                Icons.verified_user_outlined,
-                                color: _settingsGreen,
-                                size: 19,
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  reference.category.label,
+                                ),
+                                TextButton(
                                   key: ValueKey(
-                                    'agent-permission-${_permissionKey(reference)}',
+                                    'agent-permission-revoke-${_permissionKey(reference)}',
+                                  ),
+                                  onPressed:
+                                      _permissionsLoading ||
+                                          _revokingPermissionKey != null
+                                      ? null
+                                      : () => unawaited(
+                                          _revokeActionPermission(reference),
+                                        ),
+                                  child: Text(
+                                    _revokingPermissionKey ==
+                                            _permissionKey(reference)
+                                        ? '正在撤销…'
+                                        : '撤销',
                                   ),
                                 ),
-                              ),
-                              TextButton(
-                                key: ValueKey(
-                                  'agent-permission-revoke-${_permissionKey(reference)}',
-                                ),
-                                onPressed:
-                                    _permissionsLoading ||
-                                        _revokingPermissionKey != null
-                                    ? null
-                                    : () => unawaited(
-                                        _revokeActionPermission(reference),
+                              ],
+                            ),
+                          ),
+                        if (_permissionsError == null)
+                          Align(
+                            alignment: Alignment.centerLeft,
+                            child: TextButton.icon(
+                              key: const ValueKey('agent-permissions-refresh'),
+                              onPressed:
+                                  _permissionsLoading ||
+                                      _revokingPermissionKey != null
+                                  ? null
+                                  : () => unawaited(
+                                      _readActionPermissions(
+                                        permissionPort,
+                                        _permissionGeneration,
                                       ),
-                                child: Text(
-                                  _revokingPermissionKey ==
-                                          _permissionKey(reference)
-                                      ? '正在撤销…'
-                                      : '撤销',
-                                ),
+                                    ),
+                              icon: const Icon(Icons.refresh_rounded),
+                              label: const Text('刷新授权列表'),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+                _SettingsCard(
+                  title: '能力状态',
+                  subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
+                  child: ExpansionTile(
+                    key: const ValueKey('agent-settings-capability-details'),
+                    tilePadding: EdgeInsets.zero,
+                    title: const Text('查看能力状态'),
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              _CapabilityChip(
+                                label: '文本',
+                                enabled: report.text,
+                              ),
+                              _CapabilityChip(
+                                label: '流式',
+                                enabled: report.streaming,
+                              ),
+                              _CapabilityChip(
+                                label: '工具调用',
+                                enabled: report.toolCall,
+                              ),
+                              _CapabilityChip(
+                                label: '工具结果',
+                                enabled: report.toolResult,
                               ),
                             ],
                           ),
-                        ),
-                      if (_permissionsError == null)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            key: const ValueKey('agent-permissions-refresh'),
-                            onPressed:
-                                _permissionsLoading ||
-                                    _revokingPermissionKey != null
-                                ? null
-                                : () => unawaited(
-                                    _readActionPermissions(
-                                      permissionPort,
-                                      _permissionGeneration,
-                                    ),
-                                  ),
-                            icon: const Icon(Icons.refresh_rounded),
-                            label: const Text('刷新授权列表'),
+                          const SizedBox(height: 12),
+                          OutlinedButton.icon(
+                            key: const ValueKey('agent-settings-copy-summary'),
+                            onPressed: _pending ? null : _copySummary,
+                            icon: const Icon(Icons.copy_rounded),
+                            label: const Text('复制安全能力摘要'),
                           ),
-                        ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
-                const SizedBox(height: 14),
               ],
-              _SettingsCard(
-                title: '能力状态',
-                subtitle: '能力验核只发送合成测试文本；实际只读查询会按需发送必要字段与已核验资料片段。',
-                child: ExpansionTile(
-                  key: const ValueKey('agent-settings-capability-details'),
-                  tilePadding: EdgeInsets.zero,
-                  title: const Text('查看能力状态'),
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: [
-                            _CapabilityChip(label: '文本', enabled: report.text),
-                            _CapabilityChip(
-                              label: '流式',
-                              enabled: report.streaming,
-                            ),
-                            _CapabilityChip(
-                              label: '工具调用',
-                              enabled: report.toolCall,
-                            ),
-                            _CapabilityChip(
-                              label: '工具结果',
-                              enabled: report.toolResult,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        OutlinedButton.icon(
-                          key: const ValueKey('agent-settings-copy-summary'),
-                          onPressed: _pending ? null : _copySummary,
-                          icon: const Icon(Icons.copy_rounded),
-                          label: const Text('复制安全能力摘要'),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
             ],
           ),
         ),

@@ -37,7 +37,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
-            versionNameSuffix = "-qa-a7-webview2"
+            versionNameSuffix = "-qa-a8-setup"
         }
         release {
             // A8 supplies the privately managed production signature.
@@ -119,7 +119,7 @@ androidComponents {
         val splitQa = project.findProperty("split-per-abi") == "true"
         // Keep compatibility and UI QA upgrades monotonic so the test runner
         // cannot reinstall an older reader over the retained synthetic owner.
-        variant.outputs.forEach { it.versionCode.set(if (splitQa) 23 else 4023) }
+        variant.outputs.forEach { it.versionCode.set(if (splitQa) 24 else 4024) }
     }
 }
 

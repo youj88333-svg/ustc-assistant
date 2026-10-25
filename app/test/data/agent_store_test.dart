@@ -874,6 +874,7 @@ void main() {
       try {
         raw.execute('BEGIN');
         for (final table in [
+          'onboarding_state',
           'agent_model_selection',
           'agent_actions',
           'agenda_plan_receipts',

@@ -260,7 +260,7 @@ Map<String, Object?> _snapshot(File file) {
   try {
     final tables = raw.select(
       "SELECT name,sql FROM sqlite_master WHERE type='table' "
-      "AND name NOT IN ('young_daily_sync','agent_model_selection') ORDER BY name",
+      "AND name NOT IN ('young_daily_sync','agent_model_selection','onboarding_state') ORDER BY name",
     );
     return {
       for (final table in tables)

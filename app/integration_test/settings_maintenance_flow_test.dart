@@ -20,6 +20,7 @@ import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/platform/observation_assets.dart';
 
 import 'support/diagnostic_cleanup.dart';
+import 'support/onboarding_fixture.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -417,11 +418,13 @@ Future<RuntimeBootstrap> _openBootstrap(
   Future<void> Function()? onActivationCheckpoint,
 }) => _runNative(
   tester,
-  () => RuntimeBootstrap.open(
-    directoryPath: workspace.demoPath,
-    jwDirectoryPath: workspace.formalPath,
-    clock: FixedClock(DateTime.utc(2026, 10, 12, 4)),
-    onActivationCheckpoint: onActivationCheckpoint,
+  () => configuredSyntheticInstallation(
+    RuntimeBootstrap.open(
+      directoryPath: workspace.demoPath,
+      jwDirectoryPath: workspace.formalPath,
+      clock: FixedClock(DateTime.utc(2026, 10, 12, 4)),
+      onActivationCheckpoint: onActivationCheckpoint,
+    ),
   ),
 );
 

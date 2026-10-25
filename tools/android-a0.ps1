@@ -11,7 +11,7 @@ param(
     [ValidateSet(28, 29, 32, 34, 35, 36, 37)]
     [int]$ApiLevel = 36,
     [switch]$CurrentProvider,
-    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source', 'UIRefresh')]
+    [ValidateSet('A1', 'A2', 'A3', 'A3_Public', 'A4', 'A5', 'A6', 'A7', 'A7_Source', 'UIRefresh', 'Onboarding')]
     [string]$IntegrationSuite = 'A1',
     [switch]$UnsupportedSourceOnly,
     [switch]$VerifyRetained,
@@ -179,7 +179,7 @@ try {
             Assert-QaEmulator
             $installedMetadata = & $adb -P 5038 -s $serial shell dumpsys package cn.ustcassistant.mobile.qa
             $codeMatch = [regex]::Match(($installedMetadata -join "`n"), 'versionCode=(\d+)')
-            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4023) {
+            if ($codeMatch.Success -and [long]$codeMatch.Groups[1].Value -gt 4024) {
                 throw 'QA version is newer; refusing Flutter downgrade/uninstall fallback.'
             }
             $restoreNotificationDenial = $false
@@ -197,6 +197,8 @@ try {
                 # which would invalidate the cross-process retention checks.
                 $integrationFile = if ($IntegrationSuite -eq 'UIRefresh') {
                     'integration_test/ui_refresh_gallery_test.dart'
+                } elseif ($IntegrationSuite -eq 'Onboarding') {
+                    'integration_test/onboarding_flow_test.dart'
                 } else {
                     "integration_test/android_$($IntegrationSuite.ToLowerInvariant())_test.dart"
                 }

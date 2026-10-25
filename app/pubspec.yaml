@@ -76,6 +76,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/knowledge/
+    - assets/branding/ustc_assistant_icon_concept_v1.png
 
   # To add assets to your application, add an assets section, like this:
   # assets:

@@ -156,7 +156,7 @@ void main() {
             targets: targets,
             parser: parser,
           );
-          expect(JwStore.currentSchemaVersion, 19);
+          expect(JwStore.currentSchemaVersion, 20);
 
           final listing = await harness.queries.browseCampus(
             CampusColumn.teachNotice,

@@ -29,6 +29,7 @@ final class ProductApp extends StatelessWidget {
     this.destination,
     this.onDestinationChanged,
     this.scaffoldMessengerKey,
+    this.home,
   });
 
   final AppShellPort controller;
@@ -38,6 +39,7 @@ final class ProductApp extends StatelessWidget {
   final ValueListenable<ShellDestination>? destination;
   final ValueChanged<ShellDestination>? onDestinationChanged;
   final GlobalKey<ScaffoldMessengerState>? scaffoldMessengerKey;
+  final Widget? home;
 
   @override
   Widget build(BuildContext context) => MaterialApp(
@@ -80,14 +82,16 @@ final class ProductApp extends StatelessWidget {
             ),
             child: child!,
           ),
-    home: _ProductShell(
-      controller: controller,
-      settingsBuilder: settingsBuilder,
-      agendaBuilder: agendaBuilder,
-      agentBuilder: agentBuilder,
-      destination: destination,
-      onDestinationChanged: onDestinationChanged,
-    ),
+    home:
+        home ??
+        _ProductShell(
+          controller: controller,
+          settingsBuilder: settingsBuilder,
+          agendaBuilder: agendaBuilder,
+          agentBuilder: agentBuilder,
+          destination: destination,
+          onDestinationChanged: onDestinationChanged,
+        ),
   );
 }
 

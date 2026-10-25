@@ -13,6 +13,7 @@ import '../core/jw_academic_details.dart';
 import '../core/public_query_contract.dart';
 import '../core/knowledge_contract.dart';
 import '../core/settings_contract.dart';
+import '../core/onboarding_contract.dart';
 import '../core/jw_work_contract.dart';
 import '../core/jw_credentials.dart';
 import '../core/young_work_contract.dart';
@@ -48,6 +49,7 @@ part 'local_calendar_store.dart';
 part 'local_task_store.dart';
 part 'calendar_undo_store.dart';
 part 'application_settings_store.dart';
+part 'onboarding_store.dart';
 part 'agent_store.dart';
 part 'agent_chat_store.dart';
 part 'agent_permission_store.dart';
@@ -138,6 +140,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   late final M6Store features = M6Store._(this);
   late final MorningBriefStore briefs = MorningBriefStore._(this);
   late final YoungDailySyncStore youngDaily = YoungDailySyncStore._(this);
+  late final OnboardingStore onboarding = OnboardingStore._(this);
   int? _m6Changed;
   late final ApplicationSettingsStore applicationSettings =
       ApplicationSettingsStore._(this);
@@ -154,7 +157,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
   bool _closing = false;
   Future<void>? _closeFuture;
 
-  static const currentSchemaVersion = 19;
+  static const currentSchemaVersion = 20;
 
   @override
   int get schemaVersion => currentSchemaVersion;
@@ -185,6 +188,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
         ...MorningBriefStore.schema,
         ...YoungDailySyncStore.schema,
         ...AgentStore.upgradeFrom18,
+        ...OnboardingStore.create,
       ]) {
         await customStatement(statement);
       }
@@ -202,7 +206,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
       _ownership.ensureHeld();
     }),
     onUpgrade: (_, from, to) async {
-      if (from < 1 || from > 18 || to != 19) {
+      if (from < 1 || from > 19 || to != 20) {
         throw const AppFailure(FailureCode.storageFailed);
       }
       await transaction(() async {
@@ -242,7 +246,8 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
           if (from <= 16)
             'UPDATE agenda_state SET revision=revision+1 WHERE singleton=1',
           if (from <= 17) ...YoungDailySyncStore.schema,
-          ...AgentStore.upgradeFrom18,
+          if (from <= 18) ...AgentStore.upgradeFrom18,
+          ...OnboardingStore.upgrade,
         ]) {
           await customStatement(statement);
         }
@@ -1552,6 +1557,7 @@ final class JwStore extends GeneratedDatabase implements JwReadPort {
     await features._changes.close();
     await youngDaily._close();
     await applicationSettings._close();
+    await onboarding._changes.close();
     await agent.close();
     await super.close();
   }

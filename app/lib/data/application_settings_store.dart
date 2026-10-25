@@ -528,6 +528,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
       }
       if (request.kind == MaintenanceKind.reset) {
         await _db.agent._resetApplication();
+        await _db.onboarding._reset();
         for (final table in _resetTables) {
           await _db.customStatement('DELETE FROM $table');
         }
@@ -572,6 +573,7 @@ final class ApplicationSettingsStore implements ApplicationSettingsDataPort {
     _db.localCalendar._signal(agendaRevision);
     _signal(receipt.context.revision);
     _db.youngDaily._signal();
+    if (request.kind == MaintenanceKind.reset) await _db.onboarding._signal();
     return receipt;
   });
 

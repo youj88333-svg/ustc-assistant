@@ -22,6 +22,7 @@ import 'package:ustc_assistant_m0/platform/android_directory.dart';
 import 'package:ustc_assistant_m0/platform/android_file_access.dart';
 import 'package:ustc_assistant_m0/platform/native_observation_browser.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
+import 'support/onboarding_fixture.dart';
 
 const _platform = MethodChannel('ustc_assistant/platform_v1');
 final _clock = FixedClock(DateTime.utc(2026, 10, 16, 1));
@@ -68,6 +69,7 @@ void main() {
           ),
         );
         final runtime = bootstrap!.runtime!;
+        await tester.runAsync(() => finishSyntheticSetup(bootstrap!));
         expect(runtime.calendar.view.mode, CalendarViewMode.day);
         await tester.runAsync(() async {
           final calendar = runtime.jwStore.localCalendar;

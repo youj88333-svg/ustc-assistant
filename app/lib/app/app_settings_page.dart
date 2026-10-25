@@ -30,6 +30,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
     this.logsBuilder,
     this.logsActionBuilder,
     this.dailySync,
+    this.onOpenSetup,
   });
 
   final ApplicationSettingsPort settings;
@@ -40,6 +41,7 @@ final class ApplicationSettingsPage extends StatefulWidget {
   final WidgetBuilder? logsBuilder;
   final WidgetBuilder? logsActionBuilder;
   final YoungDailySyncControlPort? dailySync;
+  final Future<void> Function()? onOpenSetup;
 
   @override
   State<ApplicationSettingsPage> createState() =>
@@ -167,8 +169,21 @@ final class _ApplicationSettingsPageState
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                if (widget.logsActionBuilder != null)
-                  widget.logsActionBuilder!.call(context),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    if (widget.onOpenSetup != null)
+                      TextButton.icon(
+                        key: const ValueKey('settings-open-setup'),
+                        onPressed: writable ? widget.onOpenSetup : null,
+                        icon: const Icon(Icons.tune),
+                        label: const Text('首次设置'),
+                      ),
+                    if (widget.logsActionBuilder != null)
+                      widget.logsActionBuilder!.call(context),
+                  ],
+                ),
               ],
             ),
             const SizedBox(height: 8),

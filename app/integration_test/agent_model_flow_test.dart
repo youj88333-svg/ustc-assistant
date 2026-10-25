@@ -21,6 +21,7 @@ import 'package:ustc_assistant_m0/agent/model_gateway_contract.dart';
 import 'package:ustc_assistant_m0/platform/agent_image_picker.dart';
 
 import 'support/diagnostic_cleanup.dart';
+import 'support/onboarding_fixture.dart';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -304,6 +305,25 @@ void main() {
         );
         expect(first.runtime!.agent.view.messages, isEmpty);
         expect(first.runtime!.agent.view.canSend, isFalse);
+        expect(find.text('先连上你的学校账号'), findsOneWidget);
+        // The reset now restarts setup. This older Agent journey continues
+        // after that explicit boundary; the complete guide is tested alone.
+        await _runNative(tester, () => finishSyntheticSetup(first));
+        final setupExit = Stopwatch()..start();
+        while (find
+            .byKey(const ValueKey('agent-model-setup-prompt'))
+            .evaluate()
+            .isEmpty) {
+          if (setupExit.elapsed > const Duration(seconds: 20)) {
+            throw StateError('Synthetic setup exit did not reach Agent');
+          }
+          await _runNative(
+            tester,
+            () => Future<void>.delayed(const Duration(milliseconds: 50)),
+          );
+          await tester.pump();
+        }
+        await _waitSettled(tester, first);
         expect(
           find.byKey(const ValueKey('agent-model-setup-prompt')),
           findsOneWidget,
@@ -821,12 +841,14 @@ Future<RuntimeBootstrap> _openBootstrap(
   Future<void> Function()? onActivationCheckpoint,
 }) => _runNative(
   tester,
-  () => RuntimeBootstrap.open(
-    directoryPath: workspace.demoPath,
-    jwDirectoryPath: workspace.formalPath,
-    clock: FixedClock(DateTime.utc(2026, 10, 13, 4)),
-    modelGateway: gateway,
-    onActivationCheckpoint: onActivationCheckpoint,
+  () => configuredSyntheticInstallation(
+    RuntimeBootstrap.open(
+      directoryPath: workspace.demoPath,
+      jwDirectoryPath: workspace.formalPath,
+      clock: FixedClock(DateTime.utc(2026, 10, 13, 4)),
+      modelGateway: gateway,
+      onActivationCheckpoint: onActivationCheckpoint,
+    ),
   ),
 );
 

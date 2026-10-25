@@ -23,6 +23,7 @@ import 'package:ustc_assistant_m0/platform/speech_model_bundle.dart';
 import 'package:ustc_assistant_m0/platform/speech_audio_recorder.dart';
 
 import 'support/diagnostic_cleanup.dart';
+import 'support/onboarding_fixture.dart';
 
 const _speechTestWavPath = String.fromEnvironment('USTC_SPEECH_TEST_WAV');
 const _eventTitle = 'M58 合成普通日程';
@@ -459,12 +460,14 @@ Future<RuntimeBootstrap> _openBootstrap(
   required SpeechInputPort speech,
 }) => _runNative(
   tester,
-  () => RuntimeBootstrap.open(
-    directoryPath: workspace.demoPath,
-    jwDirectoryPath: workspace.formalPath,
-    clock: FixedClock(DateTime.utc(2026, 10, 13, 4)),
-    modelGateway: gateway,
-    speechInput: speech,
+  () => configuredSyntheticInstallation(
+    RuntimeBootstrap.open(
+      directoryPath: workspace.demoPath,
+      jwDirectoryPath: workspace.formalPath,
+      clock: FixedClock(DateTime.utc(2026, 10, 13, 4)),
+      modelGateway: gateway,
+      speechInput: speech,
+    ),
   ),
 );
 

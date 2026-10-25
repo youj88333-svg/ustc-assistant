@@ -1,0 +1,9 @@
+# 应用图标来源
+
+用户于2026-10-25明确要求复用main的现有图标。原件取自main工作区的`app/assets/branding/ustc_assistant_icon_concept_v1.png`与`app/windows/runner/resources/app_icon.ico`；当时main提交为e1b7ed32238e4fa2dba3d4a99855b2cf2268bb13，但这两项自定义图标尚未提交，因此来源是工作区而非该提交中的默认图标。未修改main或转移其他资产。
+
+PNG（1024×1024，RGBA）SHA256：`a89623e9364cd95fe916ff0764407bf45ac11932a7eafc14bda47cb5175bbd7c`。
+
+Windows ICO SHA256：`40cf4b0e5d9fd6354b8fe747d2724bd984172ec75e8cfa0f56a7ae4d0a908c6d`。
+
+Android旧版密度图仅机械缩放原图；自适应前景将完整图像置于108dp画布的66dp安全区域，白色背景，不新增绘画或外部网络素材。Flutter只打包本目录中明确声明的PNG。

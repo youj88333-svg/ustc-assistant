@@ -122,6 +122,8 @@ void removeAgentTablesForLegacyFixture(Database database) {
 /// Reconstruct the publicly shipped schema-18 singleton config in an owned
 /// synthetic DB. Older fixtures must not carry newer provider objects.
 void removeModelProviderSchemaForLegacyFixture(Database database) {
+  // All callers reconstruct a version before the first-run navigation table.
+  database.execute('DROP TABLE IF EXISTS onboarding_state');
   database.execute('DROP TABLE IF EXISTS agent_model_selection');
   final columns = database
       .select('PRAGMA table_info(agent_config)')
