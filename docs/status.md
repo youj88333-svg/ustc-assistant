@@ -1,10 +1,10 @@
 # 项目当前状态
 
-更新时间：2026-10-25。维护主线`main`、主工程`E:\107\main`；[仓库交接](milestones/maintenance-handoff/plan.md)按用户批准推进。本页只汇总当前结论；具体批准和验收以相应记录为准。
+更新时间：2026-10-25。项目进入维护/修复阶段，主线`main`、主工程`E:\107\main`；[仓库交接](milestones/maintenance-handoff/records.md)保存实际结果。本页只汇总当前结论；具体批准和验收以相应记录为准。
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
-| 维护与Git交接 | 已批准主线/目录迁移及双远端同步，正在核验 | [任务单](milestones/maintenance-handoff/plan.md)、[记录](milestones/maintenance-handoff/records.md)、[授权](milestones/maintenance-handoff/acceptance.md)。当前重写成为main，旧main与放弃版及本地成果归档；GitHub和校内均跟随维护主线，实际远端成功与本地引用分开登记 |
+| 维护与Git交接 | 主工程/归档/双远端已收口；旧会话目录待释放后归位 | [任务单](milestones/maintenance-handoff/plan.md)、[实际记录](milestones/maintenance-handoff/records.md)、[授权与结果](milestones/maintenance-handoff/acceptance.md)。当前重写接续为main，旧main/放弃版48/3条状态保留，96个私有交付文件未变；GitHub和校内实际main已正常向前同步。新根离线依赖/analyze、文档、打包及合成迁移通过。旧交接目录共享冲突32、具体进程未定位，暂留原位，不影响在main及短期codex/fix-*维护 |
 | 首次设置与main图标 | 工程与构建完成，纳入双平台当前私有交付 | [记录23](milestones/android-apk/records/23-onboarding-and-brand.md)：四页可跳过/续行、独立授权与恢复日志；新安装引导、升级用户从设置进入，schema20保留资料。最终analyze、1654项共享/1跳过、相关Windows/Android原生检查及双ABIQA4024/2024、独立Windows暂存核验通过。用户总体反馈不补造逐页引导验收；旧Windows包保留，当前Windows刷新见下行 |
 | 可选模型服务 | 官方最小真实能力检查通过；当前私有包见QA说明 | [任务单](milestones/model-providers/plan.md)、[决定](decisions/model-providers.md)和[记录](milestones/model-providers/records.md)。两方受保护配置隔离；QA4019中根仅触发一次4请求能力检查，文本/流式/合成工具往返通过，后续业务使用学校。[受控补验21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)与[当前QA](milestones/android-apk/manual-validation.md)分开记录，不推断完整官方业务、图片、速度或账单，不关闭A7/A8 |
 | M0 | 已关闭，2026-10-09 | 本地合成链路、目录/事务/取消恢复；[用户验收](milestones/m0/acceptance.md) |
