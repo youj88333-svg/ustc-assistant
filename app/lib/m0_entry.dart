@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show defaultTargetPlatform;
+import 'package:flutter/foundation.dart' show defaultTargetPlatform, kDebugMode;
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -46,8 +46,10 @@ import 'app/onboarding_controller.dart';
 import 'app/onboarding_page.dart';
 
 // This temporary panel is absent from normal product navigation.
-const m3ValidationEnabled = bool.fromEnvironment('USTC_M3_VALIDATION');
-const developmentDiagnosticsEnabled = bool.fromEnvironment('USTC_DIAGNOSTICS');
+const m3ValidationEnabled =
+    kDebugMode && bool.fromEnvironment('USTC_M3_VALIDATION');
+const developmentDiagnosticsEnabled =
+    kDebugMode && bool.fromEnvironment('USTC_DIAGNOSTICS');
 
 Future<void> launchM0() async {
   WidgetsFlutterBinding.ensureInitialized();

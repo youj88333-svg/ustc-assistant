@@ -24,3 +24,11 @@ app/android/.kotlin/
 .env.*
 !.env.example
 private/
+
+# Native signing setup owns these outside the repository; never commit them.
+*.keystore
+*.jks
+*.p12
+*.pfx
+**/key.properties
+**/signing.json

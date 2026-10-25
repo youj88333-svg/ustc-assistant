@@ -1,0 +1,31 @@
+stages:
+  - validate
+
+variables:
+  GIT_DEPTH: "0"
+
+secret_scan:
+  stage: validate
+  image:
+    name: ghcr.io/gitleaks/gitleaks:v8.30.1
+    entrypoint: [""]
+  script:
+    - printf '[extend]\nuseDefault = true\n' > /tmp/gitleaks-default.toml
+    - >-
+      gitleaks git .
+      --log-opts="--no-textconv --no-ext-diff --full-history --all"
+      --config=/tmp/gitleaks-default.toml
+      --gitleaks-ignore-path=.gitleaksignore
+      --redact=100 --no-banner --log-level=error
+      --report-format=template
+      --report-template=tools/gitleaks-safe-report.tmpl
+      --report-path=public-source-audit.json
+      > /tmp/gitleaks.stdout 2> /tmp/gitleaks.stderr
+    - test ! -s /tmp/gitleaks.stdout
+    - test ! -s /tmp/gitleaks.stderr
+    - test -s public-source-audit.json
+  artifacts:
+    when: always
+    paths:
+      - public-source-audit.json
+    expire_in: 7 days

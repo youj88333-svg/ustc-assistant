@@ -9,12 +9,20 @@ $script:Version = '1.0.0+1'
 $script:DisplayVersion = '1.00'
 $script:ProductName = 'USTC Assistant'
 $script:ExecutableName = 'ustc_assistant_m0.exe'
+$script:PublicDisplayVersion = '1.0.0'
 $script:IgnoredBuildFile = 'notification_native.lib'
 $script:BrandAsset = 'data/flutter_assets/assets/branding/ustc_assistant_icon_concept_v1.png'
 $script:BrandSha256 = 'a89623e9364cd95fe916ff0764407bf45ac11932a7eafc14bda47cb5175bbd7c'
 $script:Documents = [ordered]@{
   'windows-1.00.md' = 'docs/releases/windows-1.00.md'
   'windows-1.00-known-issues.md' = 'docs/releases/windows-1.00-known-issues.md'
+}
+$script:PublicDocuments = [ordered]@{
+  'LICENSE' = 'LICENSE'
+  'NOTICE' = 'NOTICE'
+  'THIRD_PARTY_NOTICES.md' = 'THIRD_PARTY_NOTICES.md'
+  'docs/releases/public-1.0.0.md' = 'docs/releases/public-1.0.0.md'
+  'docs/releases/known-issues.md' = 'docs/releases/known-issues.md'
 }
 
 function Get-ExpectedReleasePaths {
@@ -67,6 +75,114 @@ function Assert-SafeRelativePath {
   foreach ($part in $Path.Split('/')) {
     if ([string]::IsNullOrWhiteSpace($part) -or $part -ceq '.' -or $part -ceq '..') { throw "Unsafe package path: $Path" }
   }
+}
+
+function Get-ExpectedPackagePaths {
+  param([switch]$PublicCandidate)
+  $paths = [System.Collections.Generic.List[string]]::new()
+  foreach ($path in (Get-ExpectedReleasePaths)) { $paths.Add($path) }
+  $documents = if ($PublicCandidate) { $script:PublicDocuments } else { $script:Documents }
+  foreach ($path in $documents.Keys) { $paths.Add([string]$path) }
+  return $paths.ToArray()
+}
+
+function Resolve-PublicDocument {
+  param([string]$Root, [string]$RelativePath)
+  Assert-SafeRelativePath $RelativePath
+  $rootPath = [IO.Path]::GetFullPath($Root).TrimEnd('\', '/')
+  if (-not (Test-Path -LiteralPath $rootPath -PathType Container)) { throw "Expected a public source directory: $rootPath" }
+  $rootItem = Get-Item -LiteralPath $rootPath
+  if (-not $rootItem.PSIsContainer) { throw "Expected a public source directory: $rootPath" }
+  Assert-NoReparseAttributes $rootItem.Attributes 'Public source tree'
+  $fullPath = [IO.Path]::GetFullPath((Join-Path $rootPath $RelativePath.Replace('/', '\')))
+  $prefix = $rootPath + [IO.Path]::DirectorySeparatorChar
+  if (-not $fullPath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Public source path escapes workspace: $RelativePath"
+  }
+  $current = $rootPath
+  $parts = $RelativePath.Split('/')
+  for ($index = 0; $index -lt $parts.Count; $index++) {
+    $current = Join-Path $current $parts[$index]
+    if (-not (Test-Path -LiteralPath $current)) { throw "Required public source path is missing: $RelativePath" }
+    $item = Get-Item -LiteralPath $current -ErrorAction Stop
+    Assert-NoReparseAttributes $item.Attributes 'Public source tree'
+    if ($index -lt ($parts.Count - 1) -and -not $item.PSIsContainer) {
+      throw "Public source parent is not a directory: $RelativePath"
+    }
+  }
+  if ($item.PSIsContainer) { throw "Expected a public source file: $RelativePath" }
+  if ($item.Length -le 0) { throw "Public source file is empty: $RelativePath" }
+  return $item
+}
+
+function Get-PublicPackageDocuments {
+  param([string]$Root = $script:WorkspaceRoot)
+  $documents = [System.Collections.Generic.List[object]]::new()
+  foreach ($destination in $script:PublicDocuments.Keys) {
+    $source = [string]$script:PublicDocuments[$destination]
+    $item = Resolve-PublicDocument -Root $Root -RelativePath $source
+    $documents.Add([pscustomobject]@{ Name = $destination; PackagePath = $destination; Item = $item })
+  }
+  return $documents.ToArray()
+}
+
+function Assert-CleanSourceRevision {
+  param([string]$Revision, [string]$HeadRevision, [string[]]$StatusLines)
+  if ($Revision -notmatch '^[0-9a-fA-F]{40}$') { throw 'Revision must be exactly 40 hexadecimal characters.' }
+  if ($HeadRevision -notmatch '^[0-9a-fA-F]{40}$' -or
+      $HeadRevision.ToLowerInvariant() -cne $Revision.ToLowerInvariant()) {
+    throw 'Public candidate Revision must identify the current HEAD.'
+  }
+  if ($null -ne $StatusLines -and $StatusLines.Count -gt 0) {
+    throw 'Public candidate packaging requires a clean source worktree.'
+  }
+}
+
+function Assert-AotRevision {
+  param([string]$Path, [string]$Revision)
+  if ($Revision -notmatch '^[0-9a-fA-F]{40}$') { throw 'Revision must be exactly 40 hexadecimal characters.' }
+  $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+  if ($item.PSIsContainer) { throw 'AOT snapshot must be a file.' }
+  Assert-NoReparseAttributes $item.Attributes 'AOT snapshot'
+  $needle = [Text.Encoding]::ASCII.GetBytes($Revision.ToLowerInvariant())
+  $stream = [IO.File]::OpenRead($item.FullName)
+  $buffer = [byte[]]::new(65536)
+  $carry = [byte[]]::new(0)
+  $found = $false
+  try {
+    while (($read = $stream.Read($buffer, 0, $buffer.Length)) -gt 0) {
+      $window = [byte[]]::new($carry.Length + $read)
+      if ($carry.Length -gt 0) { [Buffer]::BlockCopy($carry, 0, $window, 0, $carry.Length) }
+      [Buffer]::BlockCopy($buffer, 0, $window, $carry.Length, $read)
+      for ($start = 0; $start -le ($window.Length - $needle.Length); $start++) {
+        $matches = $true
+        for ($offset = 0; $offset -lt $needle.Length; $offset++) {
+          $actualByte = [int]$window[$start + $offset]
+          if ($actualByte -ge 65 -and $actualByte -le 90) { $actualByte += 32 }
+          if ($actualByte -ne [int]$needle[$offset]) { $matches = $false; break }
+        }
+        if ($matches) { $found = $true; break }
+      }
+      if ($found) { break }
+      $carryLength = [Math]::Min($needle.Length - 1, $window.Length)
+      $carry = [byte[]]::new($carryLength)
+      if ($carryLength -gt 0) { [Buffer]::BlockCopy($window, $window.Length - $carryLength, $carry, 0, $carryLength) }
+    }
+  } finally { $stream.Dispose() }
+  if (-not $found) { throw 'AOT snapshot does not contain the requested USTC_BUILD_REVISION.' }
+}
+
+function Assert-PublicSourceRevision {
+  param([string]$Revision)
+  $git = Get-Command git -ErrorAction SilentlyContinue
+  if ($null -eq $git) { throw 'Git is required to bind a public candidate to a clean source revision.' }
+  $head = & $git.Source -C $script:WorkspaceRoot rev-parse --verify HEAD 2>$null
+  $headExitCode = $LASTEXITCODE
+  if ($headExitCode -ne 0) { throw 'Could not resolve the public candidate source HEAD.' }
+  $status = @(& $git.Source -C $script:WorkspaceRoot status --porcelain=v1 --untracked-files=all 2>$null)
+  $statusExitCode = $LASTEXITCODE
+  if ($statusExitCode -ne 0) { throw 'Could not verify the public candidate source worktree.' }
+  Assert-CleanSourceRevision -Revision $Revision -HeadRevision ([string]$head).Trim() -StatusLines $status
 }
 
 function Get-ValidatedReleaseFiles {
@@ -152,15 +268,23 @@ function Get-PackageFileRecords {
 }
 
 function Write-PackageManifest {
-  param([string]$Root, [object[]]$Files, [string]$Revision, [object]$ExeInfo)
+  param([string]$Root, [object[]]$Files, [string]$Revision, [object]$ExeInfo, [switch]$PublicCandidate)
+  $displayVersion = if ($PublicCandidate) { $script:PublicDisplayVersion } else { $script:DisplayVersion }
   $manifest = [ordered]@{
-    schemaVersion = 1; productName = $script:ProductName; displayVersion = $script:DisplayVersion
+    schemaVersion = 1; productName = $script:ProductName; displayVersion = $displayVersion
     version = $script:Version; sourceRevision = $Revision.ToLowerInvariant()
-    buildType = 'release'; entry = 'lib/main.dart'; dataSchema = 20; publicRelease = $false
+    buildType = 'release'; entry = 'lib/main.dart'; dataSchema = 20; publicRelease = [bool]$PublicCandidate
     agentToolRegistry = 'agent-tools-v7'; persona = 'ustc-personal-maid-agent-v15'
     pubspecLockSha256 = Get-Sha256 (Join-Path $script:WorkspaceRoot 'app\pubspec.lock')
     executable = [ordered]@{ file = $script:ExecutableName; fileVersion = $ExeInfo.FileVersion; productVersion = $ExeInfo.ProductVersion; productName = $ExeInfo.ProductName }
     files = @($Files)
+  }
+  if ($PublicCandidate) {
+    $manifest['artifactStatus'] = 'public-candidate'
+    $manifest['published'] = $false
+    $manifest['windowsCodeSigned'] = $false
+    $manifest['containsUserData'] = $false
+    $manifest['sha256Purpose'] = 'integrity-only-not-a-digital-signature'
   }
   $path = Join-Path $Root 'manifest.json'
   [IO.File]::WriteAllText($path, ((ConvertTo-Json -InputObject $manifest -Depth 5) + "`n"), [Text.UTF8Encoding]::new($false))
@@ -169,7 +293,7 @@ function Write-PackageManifest {
 
 function Assert-ZipMatchesManifest {
   param([string]$ZipPath, [string]$Folder, [string]$Revision, [string[]]$Expected,
-        [long]$ManifestBytes, [string]$ManifestHash)
+        [long]$ManifestBytes, [string]$ManifestHash, [switch]$PublicCandidate)
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   $zip = [IO.Compression.ZipFile]::OpenRead($ZipPath)
   try {
@@ -194,10 +318,17 @@ function Assert-ZipMatchesManifest {
     $stream = $manifestEntry.Open(); try { $hash = Get-Sha256 -Stream $stream } finally { $stream.Dispose() }
     if ($hash -cne $ManifestHash) { throw 'ZIP manifest hash differs from copied manifest.' }
     $manifest = ConvertFrom-Json -InputObject $json
-    if ($manifest.version -cne $script:Version -or $manifest.displayVersion -cne $script:DisplayVersion -or $manifest.sourceRevision -cne $Revision -or
+    $expectedDisplayVersion = if ($PublicCandidate) { $script:PublicDisplayVersion } else { $script:DisplayVersion }
+    if ($manifest.version -cne $script:Version -or $manifest.displayVersion -cne $expectedDisplayVersion -or $manifest.sourceRevision -cne $Revision -or
         $manifest.productName -cne $script:ProductName -or $manifest.executable.file -cne $script:ExecutableName -or
         $manifest.executable.fileVersion -cne $script:Version -or
         $manifest.executable.productVersion -cne $script:Version -or $manifest.executable.productName -cne $script:ProductName) { throw 'ZIP manifest identity/version is inconsistent.' }
+    if ($PublicCandidate -and ($manifest.publicRelease -ne $true -or
+        $manifest.artifactStatus -cne 'public-candidate' -or $manifest.published -ne $false -or
+        $manifest.windowsCodeSigned -ne $false -or $manifest.containsUserData -ne $false -or
+        $manifest.sha256Purpose -cne 'integrity-only-not-a-digital-signature')) {
+      throw 'ZIP manifest does not identify an unpublished unsigned public candidate.'
+    }
     $wanted = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     foreach ($path in $Expected) { [void]$wanted.Add($path) }
     $listed = [System.Collections.Generic.Dictionary[string, object]]::new([StringComparer]::Ordinal)
@@ -233,46 +364,58 @@ function Resolve-ReleaseDirectory {
 }
 
 function Invoke-WindowsPrivatePackage {
-  param([string]$Source, [string]$SourceRevision)
+  param([string]$Source, [string]$SourceRevision, [switch]$PublicCandidate)
   if ($SourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'Revision must be exactly 40 hexadecimal characters.' }
+  if ($PublicCandidate) { Assert-PublicSourceRevision $SourceRevision }
   $revision = $SourceRevision.ToLowerInvariant(); $version = Get-ReleaseVersion; $release = Resolve-ReleaseDirectory $Source
   $files = @(Get-ValidatedReleaseFiles $release); Assert-SpeechAssets $release; Assert-BrandAsset $release
   Assert-ExecutableMetadata (Join-Path $release $script:ExecutableName) $version
+  if ($PublicCandidate) { Assert-AotRevision -Path (Join-Path $release 'data\app.so') -Revision $revision }
   $docs = [System.Collections.Generic.List[object]]::new()
-  foreach ($name in $script:Documents.Keys) {
-    $path = Join-Path $script:WorkspaceRoot $script:Documents[$name]
-    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required release document missing: $($script:Documents[$name])" }
-    $item = Get-Item $path; Assert-NoReparseAttributes $item.Attributes 'Release document'
-    if ($item.Length -le 0) { throw "Release document is empty: $name" }
-    $docs.Add([pscustomobject]@{ Name = $name; Item = $item })
+  if ($PublicCandidate) {
+    foreach ($doc in (Get-PublicPackageDocuments)) { $docs.Add($doc) }
+  } else {
+    foreach ($name in $script:Documents.Keys) {
+      $path = Join-Path $script:WorkspaceRoot $script:Documents[$name]
+      if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required release document missing: $($script:Documents[$name])" }
+      $item = Get-Item $path; Assert-NoReparseAttributes $item.Attributes 'Release document'
+      if ($item.Length -le 0) { throw "Release document is empty: $name" }
+      $docs.Add([pscustomobject]@{ Name = $name; PackagePath = $name; Item = $item })
+    }
   }
 
-  $parent = Join-Path $script:BuildRoot 'private-releases'
-  if (Test-Path $parent) { $item = Get-Item $parent; if (-not $item.PSIsContainer) { throw 'private-releases is not a directory.' }; Assert-NoReparseAttributes $item.Attributes 'Output parent' }
+  $parentName = if ($PublicCandidate) { 'public-releases' } else { 'private-releases' }
+  $parent = Join-Path $script:BuildRoot $parentName
+  if (Test-Path $parent) { $item = Get-Item $parent; if (-not $item.PSIsContainer) { throw "$parentName is not a directory." }; Assert-NoReparseAttributes $item.Attributes 'Output parent' }
   else { [void][IO.Directory]::CreateDirectory($parent) }
   $parent = (Resolve-Path $parent).Path; Assert-NoReparseAttributes (Get-Item $parent).Attributes 'Output parent'
   $output = Join-Path $parent ($version + '-' + $revision.Substring(0, 8))
   if (Test-Path $output) { throw "Refusing to overwrite existing output: $output" }
   [void][IO.Directory]::CreateDirectory($output)
-  $folder = 'USTC-Assistant-1.00-windows-x64'; $package = Join-Path $output $folder
+  $folder = if ($PublicCandidate) { 'USTC-Assistant-1.0.0-windows-x64' } else { 'USTC-Assistant-1.00-windows-x64' }
+  $package = Join-Path $output $folder
   [void][IO.Directory]::CreateDirectory($package)
   foreach ($entry in $files) {
     $destination = Join-Path $package $entry.RelativePath.Replace('/', '\')
     [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
     Copy-Item -LiteralPath $entry.Item.FullName -Destination $destination
   }
-  foreach ($doc in $docs) { Copy-Item -LiteralPath $doc.Item.FullName -Destination (Join-Path $package $doc.Name) }
+  foreach ($doc in $docs) {
+    $destination = Join-Path $package $doc.PackagePath.Replace('/', '\')
+    [void][IO.Directory]::CreateDirectory((Split-Path -Parent $destination))
+    Copy-Item -LiteralPath $doc.Item.FullName -Destination $destination
+  }
   Assert-SpeechAssets $package; Assert-BrandAsset $package; Assert-ExecutableMetadata (Join-Path $package $script:ExecutableName) $version
-  $expected = @(Get-ExpectedReleasePaths) + @($script:Documents.Keys); $records = @(Get-PackageFileRecords $package)
+  $expected = @(Get-ExpectedPackagePaths -PublicCandidate:$PublicCandidate); $records = @(Get-PackageFileRecords $package)
   if ($records.Count -ne $expected.Count) { throw 'Copied package file count differs from fixed payload.' }
   foreach ($record in $records) { if ($expected -cnotcontains $record.path) { throw "Unexpected copied package file: $($record.path)" } }
   $exeInfo = (Get-Item (Join-Path $package $script:ExecutableName)).VersionInfo
-  $manifest = Write-PackageManifest $package $records $revision $exeInfo
+  $manifest = Write-PackageManifest $package $records $revision $exeInfo -PublicCandidate:$PublicCandidate
   $zip = Join-Path $output ($folder + '.zip')
   if (Test-Path $zip) { throw "Refusing to overwrite ZIP: $zip" }
   Add-Type -AssemblyName System.IO.Compression.FileSystem
   [IO.Compression.ZipFile]::CreateFromDirectory($package, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
-  Assert-ZipMatchesManifest $zip $folder $revision $expected $manifest.Bytes $manifest.Sha256
+  Assert-ZipMatchesManifest $zip $folder $revision $expected $manifest.Bytes $manifest.Sha256 -PublicCandidate:$PublicCandidate
   $zipHash = Get-Sha256 $zip
   [IO.File]::WriteAllText(($zip + '.sha256'), ($zipHash + '  ' + [IO.Path]::GetFileName($zip) + "`n"), [Text.UTF8Encoding]::new($false))
   Write-Output "Package directory: $package"; Write-Output "ZIP: $zip"; Write-Output "ZIP SHA-256: $zipHash"

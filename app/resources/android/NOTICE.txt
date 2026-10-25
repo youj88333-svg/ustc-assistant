@@ -1,0 +1,15 @@
+Android native components used by USTC Assistant
+
+AndroidX Core 1.13.1 and AndroidX WebKit 1.17.1
+Source: https://android.googlesource.com/platform/frameworks/support/
+License: Apache License, Version 2.0
+https://www.apache.org/licenses/LICENSE-2.0
+
+The Android Open Source Project and its contributors retain their copyrights.
+The unmodified Apache-2.0 text is included as APACHE-2.0.txt in this directory.
+Resolved component versions are also recorded by the release build report.
+
+Flutter/Dart packages retain the notices in flutter_assets/NOTICES.Z.
+Speech SDK, ONNX Runtime and SenseVoice model terms are provided separately
+under speech/licenses and speech/sensevoice. This notice does not replace or
+relicense any of those components or model weights.

@@ -1,0 +1,46 @@
+# Reviewed historical false positives only (Gitleaks 8.30.1, 2026-10-25).
+# These entries identify exact commits/lines, not entire test folders or rules.
+# New commits are scanned normally, including replacements at the same path.
+# Rationale and scan boundaries: docs/milestones/open-source-release/records.md.
+
+# JavaScript API object property, not a credential
+e5c8bf15ca8662429d85c2014d43e1d7379b5ab7:app/android/app/src/main/kotlin/cn/ustcassistant/mobile/browser/ScriptCatalog.kt:generic-api-key:53
+
+# Explicit synthetic privacy fixture / test-only sentinel
+02144991b5e92c03d2ab55e55f1815aeee82f6cf:app/test/agent/agent_context_test.dart:generic-api-key:204
+
+# Explicit synthetic privacy fixture / test-only sentinel
+02144991b5e92c03d2ab55e55f1815aeee82f6cf:app/test/app/agent_behavior_validation_test.dart:generic-api-key:16
+
+# Public tokens.txt SHA-256 checksum
+6e2922015e3788b1b10f557b20cea01f28c6bf9c:app/resources/speech/NOTICE.txt:generic-api-key:11
+
+# Explicit synthetic privacy fixture / test-only sentinel
+56b3f9ff20b15214f78e07b0841d1b7953ee7c6c:app/test/agent/agent_diagnostics_behavior_test.dart:generic-api-key:642
+
+# Explicit synthetic privacy fixture / test-only sentinel
+bec5a35e4313f95a461617260ed3abb0be889c89:app/test/agent/agent_context_test.dart:generic-api-key:233
+
+# Explicit synthetic privacy fixture / test-only sentinel
+3c5c757742b759c23a9f530e8d9b244bc910ac68:app/test/data/agent_journal_test.dart:generic-api-key:184
+
+# Explicit synthetic privacy fixture / test-only sentinel
+15dc270abb494b78c9cb9b3397f554e83022b9c5:app/integration_test/agent_model_flow_test.dart:generic-api-key:248
+
+# Explicit synthetic privacy fixture / test-only sentinel
+15dc270abb494b78c9cb9b3397f554e83022b9c5:app/integration_test/agent_model_flow_test.dart:generic-api-key:361
+
+# Short sequential digit/alphabet fixture used by pure text rejection test
+15dc270abb494b78c9cb9b3397f554e83022b9c5:app/test/core/agent_text_test.dart:generic-api-key:21
+
+# Explicit synthetic privacy fixture / test-only sentinel
+5f2f993cebd7ea0a6142dcc236ab7e95c0452734:app/test/data/application_settings_store_test.dart:generic-api-key:1252
+
+# Explicit synthetic privacy fixture / test-only sentinel
+e2b9ce6fb4e8930afdb12ca9abd96c24d4b89815:app/integration_test/public_knowledge_flow_test.dart:generic-api-key:22
+
+# Explicit synthetic privacy fixture / test-only sentinel
+e2b9ce6fb4e8930afdb12ca9abd96c24d4b89815:app/integration_test/public_knowledge_flow_test.dart:generic-api-key:212
+
+# Explicit synthetic privacy fixture / test-only sentinel
+536f72938dd3e186b0d2a6202cffbb04802c1717:app/test/features/agent/agent_tool_registry_test.dart:generic-api-key:116

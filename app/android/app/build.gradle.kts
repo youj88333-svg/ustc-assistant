@@ -15,6 +15,16 @@ abstract class PrepareSpeechAssetsTask : DefaultTask() {
     abstract val outputDirectory: DirectoryProperty
 }
 
+// Signing material is supplied only by the local release helper/secure CI job.
+// Nothing falls back to the QA certificate or a checked-in password.
+val releaseSigningEnvironment = mapOf(
+    "store" to System.getenv("USTC_ANDROID_KEYSTORE"),
+    "alias" to System.getenv("USTC_ANDROID_KEY_ALIAS"),
+    "storePassword" to System.getenv("USTC_ANDROID_STORE_PASSWORD"),
+    "keyPassword" to System.getenv("USTC_ANDROID_KEY_PASSWORD"),
+)
+val hasReleaseSigning = releaseSigningEnvironment.values.all { !it.isNullOrBlank() }
+
 android {
     namespace = "cn.ustcassistant.mobile"
     compileSdk = flutter.compileSdkVersion
@@ -34,16 +44,54 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("publicRelease") {
+                storeFile = file(releaseSigningEnvironment.getValue("store")!!)
+                storeType = "PKCS12"
+                keyAlias = releaseSigningEnvironment.getValue("alias")
+                storePassword = releaseSigningEnvironment.getValue("storePassword")
+                keyPassword = releaseSigningEnvironment.getValue("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".qa"
             versionNameSuffix = "-qa-a8-setup"
         }
         release {
-            // A8 supplies the privately managed production signature.
-            // Never silently sign production with the QA/debug identity.
-            signingConfig = null
+            signingConfig = if (hasReleaseSigning) signingConfigs.getByName("publicRelease") else null
         }
+    }
+}
+
+// Manifest/lint/debug verification may run without a production key. Producing
+// a release APK/AAB may not: AGP otherwise permits an unsigned output.
+gradle.taskGraph.whenReady {
+    val producingRelease = allTasks.any {
+        it.project == project &&
+            Regex("^(assemble|bundle|package|sign|validateSigning)Release(?:$|Bundle|UniversalApk)").containsMatchIn(it.name)
+    }
+    if (producingRelease) {
+        check(hasReleaseSigning) {
+            "Release signing is required. Use tools/build-public-release.ps1 with a local signing configuration."
+        }
+        check(!releaseSigningEnvironment.getValue("alias").equals("androiddebugkey", ignoreCase = true)) {
+            "The QA/debug signing alias is not allowed for a public release."
+        }
+        val keyStore = file(releaseSigningEnvironment.getValue("store")!!)
+        check(keyStore.isFile && !Files.isSymbolicLink(keyStore.toPath())) {
+            "The release keystore must be a regular local file."
+        }
+        val definitions = (project.findProperty("dart-defines") as? String).orEmpty()
+            .split(',').filter { it.isNotBlank() }.map {
+                String(java.util.Base64.getDecoder().decode(it), Charsets.UTF_8)
+            }
+        check(definitions.none {
+            it == "USTC_DIAGNOSTICS=true" || it == "USTC_M3_VALIDATION=true"
+        }) { "Development panels cannot be enabled in a public release." }
     }
 }
 
@@ -62,6 +110,15 @@ flutter {
 val speechAssetsDirectory = layout.buildDirectory.dir("generated/speechAssets")
 val speechModelSource = rootProject.projectDir.resolve("../build/speech_models/sensevoice")
 val speechNotices = rootProject.projectDir.resolve("../resources/speech")
+val projectSourceRoot = rootProject.projectDir.resolve("../..")
+val projectNoticeFiles = mapOf(
+    "LICENSE" to projectSourceRoot.resolve("LICENSE"),
+    "NOTICE" to projectSourceRoot.resolve("NOTICE"),
+    "THIRD_PARTY_NOTICES.md" to projectSourceRoot.resolve("THIRD_PARTY_NOTICES.md"),
+    "public-1.0.0.md" to projectSourceRoot.resolve("docs/releases/public-1.0.0.md"),
+    "known-issues.md" to projectSourceRoot.resolve("docs/releases/known-issues.md"),
+)
+val androidNativeNotice = rootProject.projectDir.resolve("../resources/android/NOTICE.txt")
 val speechFiles = mapOf(
     "model.int8.onnx" to (239233841L to "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"),
     "tokens.txt" to (315894L to "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"),
@@ -71,6 +128,8 @@ val prepareSpeechAssets = tasks.register<PrepareSpeechAssetsTask>("prepareSpeech
     outputDirectory.set(speechAssetsDirectory)
     inputs.files(speechFiles.keys.map { speechModelSource.resolve(it) })
     inputs.dir(speechNotices)
+    inputs.files(projectNoticeFiles.values)
+    inputs.file(androidNativeNotice)
     outputs.dir(speechAssetsDirectory)
     doLast {
         val destination = speechAssetsDirectory.get().asFile
@@ -102,6 +161,22 @@ val prepareSpeechAssets = tasks.register<PrepareSpeechAssetsTask>("prepareSpeech
             target.parentFile.mkdirs()
             speechNotices.resolve(name).copyTo(target, overwrite = true)
         }
+        projectNoticeFiles.forEach { (name, source) ->
+            check(source.isFile && source.length() > 0 && !Files.isSymbolicLink(source.toPath())) {
+                "Required project release notice is missing or unsafe."
+            }
+            val target = destination.resolve("licenses/project/$name")
+            target.parentFile.mkdirs()
+            source.copyTo(target, overwrite = true)
+        }
+        check(androidNativeNotice.isFile && androidNativeNotice.length() > 0) {
+            "Required Android native component notice is missing."
+        }
+        val androidNoticeTarget = destination.resolve("licenses/android/NOTICE.txt")
+        androidNoticeTarget.parentFile.mkdirs()
+        androidNativeNotice.copyTo(androidNoticeTarget, overwrite = true)
+        projectNoticeFiles.getValue("LICENSE")
+            .copyTo(destination.resolve("licenses/android/APACHE-2.0.txt"), overwrite = true)
     }
 }
 androidComponents.onVariants { variant ->

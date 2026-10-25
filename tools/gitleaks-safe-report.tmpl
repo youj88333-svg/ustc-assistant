@@ -1,0 +1,3 @@
+[
+{{range $i, $f := .}}{{if $i}},{{end}}{"rule":{{printf "%q" $f.RuleID}},"file":{{printf "%q" $f.File}},"line":{{$f.StartLine}},"endLine":{{$f.EndLine}},"commit":{{printf "%q" $f.Commit}}}{{end}}
+]
