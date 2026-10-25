@@ -13,8 +13,8 @@ USTC Assistant 是一款面向校内学习生活的本地优先助手。它把 A
 
 | 平台 | 当前情况 |
 |---|---|
-| Windows x64 | 已有私有 1.00 交付基线；1.0.0 公开候选构建和打包入口已装配，Windows 包未代码签名。候选尚未生成，目标机型和全新系统覆盖仍有限。 |
-| Android APK | 有 ARM64 与 x86_64 的私有 QA 构建。正式版构建、签名初始化和候选打包入口已装配；正式身份为 `cn.ustcassistant.mobile`，与 QA 包 `cn.ustcassistant.mobile.qa` 并存且不自动迁移数据。公开候选尚未生成，多厂商设备和完整逐项验收仍有保留项。 |
+| Windows x64 | 已有私有 1.00 交付基线；1.0.0 公开候选构建和打包入口已装配，Windows 包未代码签名。目标机型和全新系统覆盖仍有限。 |
+| Android APK | 有 ARM64 与 x86_64 的私有 QA 构建。正式版构建、签名初始化和候选打包入口已装配；正式身份为 `cn.ustcassistant.mobile`，与 QA 包 `cn.ustcassistant.mobile.qa` 并存且不自动迁移数据。多厂商设备和完整逐项验收仍有保留项。 |
 | 鸿蒙设备 | 仅指可直接安装 Android APK 的场景。MatePad 11.5 S / HarmonyOS 4.2.0 有用户实际使用反馈；这不代表原生鸿蒙 HAP 支持，也不代表所有设备已验收。 |
 
 开源与公开安装包仍在准备中，计划在校内 GitLab 发布。当前没有公开 Release 或可用的下载附件；现有私有包不是公开版本。公开候选只能从干净的已提交修订生成，候选整理脚本也只在本机准备文件，不会发布。源码构建入口见[开始使用](docs/getting-started.md)，正式候选命令见[开发说明](docs/development.md#正式候选构建)，详细文档导航见[docs/README.md](docs/README.md)。

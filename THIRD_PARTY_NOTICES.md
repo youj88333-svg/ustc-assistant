@@ -10,7 +10,7 @@
 | sherpa-onnx本地推理SDK | Apache-2.0，保留[原许可](app/resources/speech/SHERPA-ONNX-LICENSE.txt)；SDK许可不等于模型权重许可 |
 | ONNX Runtime | MIT，保留[原许可](app/resources/speech/ONNXRUNTIME-LICENSE.txt)及对应来源声明 |
 | SenseVoiceSmall INT8权重 | 使用[FunASR模型协议1.1](app/resources/speech/FUNASR-MODEL-LICENSE.txt)，独立于本项目Apache-2.0；固定来源、模型名、作者、转换包和摘要见[NOTICE](app/resources/speech/NOTICE.txt)。保留原`LICENSE`及完整协议；其中用途、责任、社区和终止条款以原文为准，不宣称这是Apache/MIT权重 |
-| AndroidX及Android原生依赖 | AndroidX Core/WebKit等以Gradle锁定声明及上游原许可为准，发布核验需检查APK随包通知和最终依赖清单 |
+| Android原生依赖 | AndroidX、Kotlin/协程/annotations、Guava ListenableFuture、JSpecify、ReLinker等分别保留Apache-2.0及上游归属，[Android原生通知](app/resources/android/NOTICE.txt)随APK携带；实际解析版本由正式构建依赖报告记录 |
 | 学校公开资料 | [知识材料目录](knowledge/README.md)记录来源和整理范围。本项目对办事事实的整理、索引和校核说明不改变学校原文/图示的权利，也不证明政策现行；不把原资料标成Apache-2.0或授予其商标/原图再利用权 |
 | 应用图标 | 用户确认是AI改编，参考学校标识及网络流传的二创形象，并决定公开版沿用现有图标；[来源记录](app/assets/branding/README.md)保留取用与摘要。项目代码许可证不额外授予学校标识、参考形象或原素材的相关权利 |
 
