@@ -45,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/android-a0.ps1 -Action
 
 ## 正式候选构建
 
-这些命令使用 Windows PowerShell 7（`pwsh`）。先把待发布源码提交，再确认工作区干净；构建脚本会再次核对修订必须等于当前 `HEAD`。将下面的工具目录替换为本机已安装位置；本机构建环境默认在E盘，可传入其他本地固定盘路径。候选构建的临时目录位于仓库`app/build`，因此该入口要求仓库放在非C盘。脚本离线解析依赖，须预先准备锁定依赖及[固定语音资源](../app/resources/speech/README.md)。
+这些命令使用 Windows PowerShell 7（`pwsh`）。先把待发布源码提交，再确认工作区干净；构建脚本会再次核对修订必须等于当前 `HEAD`。将下面的工具目录替换为本机已安装位置；本机构建环境默认在E盘，可传入其他本地固定盘路径。候选构建的临时目录位于仓库`app/build`，因此该入口要求仓库放在非C盘。脚本离线解析依赖，须预先准备锁定依赖，并运行[固定语音资源准备脚本](../tools/prepare-speech-assets.ps1)取得模型及随包许可。
 
 ```powershell
 # 在仓库根目录执行；没有改动时可直接取得提交号。

@@ -20,7 +20,7 @@
 
 Release生产任务无签名时失败；禁止QA alias及开发面板defines。Dart临时诊断/M3面板另受kDebugMode约束，普通日志导出和生产采集脚本保留。签名仅经构建进程环境传递，恢复原环境、禁用Gradle daemon/configuration cache，日志先脱敏再落盘。候选要求干净HEAD、AOT内嵌修订、APK真实签名/包名/版本/ABI/Manifest与固定资产、Windows固定运行载荷和逐文件SHA-256。公开组合计划只列3安装包及manifest/sums/notes六个公开附件，不包含本地执行plan或签名资料；工具本身不创建tag、改可见性或上传。
 
-根已独立运行：签名初始化61项、Windows私有17项及公开25项、Android打包44项、GitLab组合计划48项合成检查通过；构建客户端初版102项及依赖报告增量122项通过，最后Windows不依赖Android工具/非C盘可移植性增量另复验。Android打包已根据实际Flutter源码兼容准确的`.apk.sha1`旁文件并检查匹配，发布完整性仍采用SHA-256，不用SHA-1代替签名。
+根已独立运行：签名初始化61项、Windows私有17项及公开25项、Android打包44项、GitLab组合计划48项合成检查通过；构建客户端初版102项、依赖报告增量122项及最终143项均通过。最终增量验证Windows不依赖Android工具或签名配置、不向子进程泄露既有签名环境；非C盘路径仍经过普通本地路径校验，D盘实际构建未执行。Android打包已根据实际Flutter源码兼容准确的`.apk.sha1`旁文件并检查匹配，发布完整性仍采用SHA-256，不用SHA-1代替签名。
 
 ## 整体检查中的失败与处理
 
