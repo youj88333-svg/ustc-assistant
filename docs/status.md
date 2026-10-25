@@ -4,7 +4,7 @@
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
-| 首次设置与main图标 | 工程与私有构建核验完成，用户体验待确认 | [记录23](milestones/android-apk/records/23-onboarding-and-brand.md)：四页可跳过/续行、独立授权与恢复日志；新安装引导、升级用户从设置进入，schema20保留资料。最终analyze、1654项共享/1跳过、相关Windows/Android原生检查及双ABIQA4024/2024、独立Windows暂存核验通过。未覆盖Windows1.00、操作MuMu或连接目标机，不据此关闭A7/A8 |
+| 首次设置与main图标 | 工程与构建完成，纳入当前QA私有交付 | [记录23](milestones/android-apk/records/23-onboarding-and-brand.md)：四页可跳过/续行、独立授权与恢复日志；新安装引导、升级用户从设置进入，schema20保留资料。最终analyze、1654项共享/1跳过、相关Windows/Android原生检查及双ABIQA4024/2024、独立Windows暂存核验通过。用户总体反馈不补造逐页引导验收；未覆盖Windows1.00 |
 | 可选模型服务 | 官方最小真实能力检查通过；当前私有包见QA说明 | [任务单](milestones/model-providers/plan.md)、[决定](decisions/model-providers.md)和[记录](milestones/model-providers/records.md)。两方受保护配置隔离；QA4019中根仅触发一次4请求能力检查，文本/流式/合成工具往返通过，后续业务使用学校。[受控补验21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)与[当前QA](milestones/android-apk/manual-validation.md)分开记录，不推断完整官方业务、图片、速度或账单，不关闭A7/A8 |
 | M0 | 已关闭，2026-10-09 | 本地合成链路、目录/事务/取消恢复；[用户验收](milestones/m0/acceptance.md) |
 | M1 | 已关闭，2026-10-10 | JW 身份/只读契约、自动认证/选期、事务与本地日程；[用户验收](milestones/m1/acceptance.md) |
@@ -14,9 +14,9 @@
 | M5 | 已关闭，2026-10-15 | 用户明确确认关闭；[关闭依据及保留项](milestones/m5/acceptance.md#阶段关闭2026-10-15)。[最新工程证据](milestones/m5/records/12-context-and-permission-implementation.md)为 analyze、1214 项/1 平台跳过、九套 Windows 29 组和 Release；不补造逐项真人结果，已知语音问题继续登记 |
 | M6 | 已关闭，2026-10-15 | [用户关闭](milestones/m6/acceptance.md#阶段关闭2026-10-15)：06:00后晨报、两槽/Windows退出提醒；日期窗口与展示修订、1314项/1跳过及相关Windows/Release见[记录03](milestones/m6/records/03-morning-window-and-presentation.md)，未观察项保留 |
 | Windows 1.00 | 用户已认可，私有收尾完成；未公开发布 | [版本决定](milestones/windows-polish/acceptance.md)、[1.00记录](milestones/windows-polish/records/05-windows-v1-private-release.md)、[交付说明](releases/windows-1.00.md)。analyze、1435项/1平台跳过、十套Windows37组及正式Release通过；本地ZIP/逐文件manifest/hash与许可完整，原路径已更新但本轮未启动。保留schema18、20工具、现有资料与通知身份；全新机器和原未观察项不补记通过 |
-| Android APK迁移 | 鸿蒙目录锁残留工程修复完成，MatePad复验待确认；A7/A8继续开放 | [计划](milestones/android-apk/plan.md)、[目录生命周期22](milestones/android-apk/records/22-android-owner-lifecycle.md)及[设备矩阵](milestones/android-apk/device-matrix.md)。用户MatePad 11.5″S/HarmonyOS4.2.0报告后台返回ownerConflict；根真实FlutterEngine旧反例失败、修复后两项通过，A1六组、analyze、1617项共享/1跳过及Windows Agent五组通过，保留资料和活跃实例排他。覆盖包见[QA说明](milestones/android-apk/manual-validation.md)，目标机尚未复验。先前MuMu二课取消/重试、评课与450dp审批见[记录21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)；QA4022覆盖后用户Esc中断，来源拒绝解释复测仍保留。原完整旅程20、每日首次前台证据和旧失败保留，真实麦克风、06:00整点/厂商策略等不据本切关闭 |
+| Android APK迁移 | MatePad日常使用获认可，目录故障实机复验通过；按现有QA身份私有交付 | [用户验收](milestones/android-apk/acceptance.md)确认HarmonyOS4.2.0后台返回问题未再出现，保留历史失败及[工程反例22](milestones/android-apk/records/22-android-owner-lifecycle.md)。用户选择沿用QA身份保留资料，双ABI包、说明、许可和校验见[交付](releases/android-private-1.00.md)与[收尾24](milestones/android-apk/records/24-private-handoff.md)。MuMu真实旅程及官方合成结果按[设备矩阵](milestones/android-apk/device-matrix.md)分别登记；当前QA收尾不等于A7全部逐项验收或A8正式Release。真实麦克风、06:00、厂商通知策略及来源拒绝解释复测等继续披露 |
 | 跨端界面重构 | 工程、自动检查和私有体验构建完成；用户体验待确认 | [任务单](milestones/ui-refresh/plan.md)明确风格、布局、接口不变量与验收；两项Skill已安装，详见[记录](milestones/ui-refresh/records.md)。白色画布、细分隔线、平面分区，保留Agent、日程任务、设置与审批功能。最终analyze、1558项/1平台跳过、Windows相关21项、API34合成4项与实际图像复核通过；Android构建/lint/签名和独立Windows暂存Release已核验，未提前关闭本轮体验或A7/A8 |
-| 后续 | A7目标机及保留项补验；A8发行待办 | 当前QA和受控证据见[说明](milestones/android-apk/manual-validation.md)。MatePad目录修复效果、06:00整点/长期挑战退避、业务内容对应、真实麦克风、真机通知/厂商策略、来源撤回/调休与非空考试等保留；开发环境未连接目标机，不以模拟器替代或关闭完整风险项。整体UI体验单独跟踪，原生鸿蒙及公开发布另行定界 |
+| 后续 | 当前QA继续私有使用；按反馈修复，正式签名Release延后 | [已知问题](releases/android-private-1.00-known-issues.md)保留06:00整点/长期挑战退避、业务内容对应、真实麦克风、真机通知/厂商策略、来源撤回/调休、非空考试及模型解释复测等。MatePad目录故障已获用户补验，不再列为待确认。其他机型、整体UI逐项体验、原生鸿蒙及公开发布仍单独定界，不据总体反馈关闭完整风险项 |
 
 ## 已批准范围与待验证
 

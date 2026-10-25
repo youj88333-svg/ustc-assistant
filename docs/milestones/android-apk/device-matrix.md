@@ -2,6 +2,12 @@
 
 本表区分可重复的合成/模拟器结果与真人、实机结果；阶段任务见[计划](plan.md)，操作说明见[人工测试说明](manual-validation.md)，普通系统WebView与反馈回归见[记录12](records/12-ordinary-system-webview.md)、[记录13](records/13-mumu-navigation-approval-and-reasoning.md)。现行路线不要求四项高级WebView API；历史高级后端的拒绝结果不能当作新版普通路线的能力结论。没有记录的能力保持待验，不能用安装成功推定学校登录或后台通知可靠。
 
+## 当前用户实机反馈（2026-10-25）
+
+用户确认MatePad 11.5″S / HarmonyOS 4.2.0直接安装APK后，实际使用总体无大问题；原切后台再返回的目录占用故障已复验、未再出现，并选择沿用现有QA身份完成私有交付。原话及适用范围见[验收](acceptance.md)，交付见[说明](../../releases/android-private-1.00.md)。这是用户的远程实机结果，开发环境未连接该机；没有另报本次包版本、WebView、次数或业务计数，不把总体反馈扩展为全部功能、其他型号/ROM或正式Release通过。
+
+下列历史小节保留各次记录时点的“待复验”和失败；当前目录故障已按上述用户反馈补验，不再作为该设备的待确认故障。真实麦克风、次日06:00及实机通知/厂商策略等仍按[保留项](../../releases/android-private-1.00-known-issues.md)登记。
+
 ## 普通系统WebView修订
 
 工程修订`e36ccb58933650e514aad79ab1f60e8038047219`，x86_64 QA4004；学校后端API28起，安装下限仍API24。2026-10-17–18根已执行下表检查，只使用独立官方AVD、合成凭据、loopback和临时资料，没有访问真实学校或改动用户MuMu。

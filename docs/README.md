@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准；MuMu完整旅程见[记录20](milestones/android-apk/records/20-mumu-full-journeys.md)，官方小测试、取消、评课与手机审批补验见[记录21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)，鸿蒙后台返回故障与目录生命周期修复见[记录22](milestones/android-apk/records/22-android-owner-lifecycle.md)。当前环境与交付见[设备矩阵](milestones/android-apk/device-matrix.md)及[QA说明](milestones/android-apk/manual-validation.md)。旧失败保留，目标机/鸿蒙复验、真实麦克风、06:00整点及厂商策略等仍待验；A7未真人关闭、A8尚未正式交付，暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户关闭，Windows保留[1.00私有基线](releases/windows-1.00.md)。[Android APK迁移](milestones/android-apk/plan.md)已有模拟器、MuMu旅程和用户MatePad实际反馈：鸿蒙日常使用总体获认可，原后台返回目录占用已复验未再出现，见[用户验收](milestones/android-apk/acceptance.md)。用户选择沿用现有QA身份完成[私有交付](releases/android-private-1.00.md)，正式独立签名Release延后，暂不公开发布。当前完成范围、已知问题与未观察项统一见[状态页](status.md)，详细证据见[设备矩阵](milestones/android-apk/device-matrix.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
@@ -22,6 +22,7 @@
 | 长期知识资料的 Markdown 制作与样稿 | [知识材料目录](../knowledge/README.md) |
 | 如何启动和使用应用 | [应用说明](../app/README.md) |
 | Windows 1.00 私有包与移动方向 | [交付说明](releases/windows-1.00.md) · [已知问题](releases/windows-1.00-known-issues.md) · [APK迁移评估](research/android-apk-migration.md) · [完整迁移计划](milestones/android-apk/plan.md) |
+| Android / APK鸿蒙当前QA私有包 | [安装与校验](releases/android-private-1.00.md) · [已知问题](releases/android-private-1.00-known-issues.md) · [用户验收](milestones/android-apk/acceptance.md) · [交付核验](milestones/android-apk/records/24-private-handoff.md) |
 | Android / APK鸿蒙的WebView覆盖、限制与兼容候选 | [兼容性调研](research/android-webview-compatibility.md) · [2024年后国内机型核对](research/android-webview-domestic-models.md) |
 | 普通系统WebView兼容修复的已批准路线 | [A7修订计划](milestones/android-apk/plan.md#a7普通系统webview兼容修订已批准) · [安全与恢复取舍](decisions/android-system-webview-compatibility.md) |
 | 跨端前端Skill与整体界面重构 | [选型依据](research/frontend-skill-selection.md) · [已批准任务单](milestones/ui-refresh/plan.md) · [安装、核验与交付记录](milestones/ui-refresh/records.md)，工程与独立体验包完成，用户体验待确认 |
