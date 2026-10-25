@@ -47,3 +47,7 @@ Windows稳定Debug产品入口构建及纯音频方法消息编解码目标也�
 干净ae64abac构建中，Windows Release和公开打包已通过，41项载荷及manifest/ZIP重读一致，ZIP183725084字节，SHA-256 `fe2bc0fe431a5b83b963bbea7efa9623979c166f92801a9f1b5c2a3ca3db15a2`；根另验VersionInfo为1.0.0+1、Authenticode为NotSigned。这是本地候选，不是已发布或最终选定版本。
 
 同轮Android Java编译失败：先前测试/普通pub准备生成的Java插件注册仍含integration_test，而Release Gradle已正确排除该开发依赖。查实际SDK `flutter_command.dart`/`flutter_plugins.dart`确认`--no-pub`还会跳过Release插件重新生成。构建入口改为先离线校验锁文件、正式构建保留标准`--pub`再生成；没有手工删生成Java或把测试插件纳入正式依赖。源码/锁文件变动仍拒绝继续打包。首轮Android未产出成功候选，不将Windows部分成功当作双平台完成；修订后从新干净修订重建。
+
+干净3e2ec443重建已成功生成ARM64/x86_64 Release APK（215323454/220730537字节）。正式打包校验暴露SDK37 `apksigner`的新`V2 Signer:`标签；根直接原生验签确认v2有效、单签名且证书为已登记8f5022…，并非签名失败。解析器补已知scheme标签、跨scheme摘要一致性、CRLF及伪多签/公钥/SourceStamp反例，根54项合成通过。根组件级预检还纠正打包器把Android原生语音路径错当成Flutter路径：实际Gradle及SpeechModelStore契约是`assets/speech`，按生产路径校验，不修改运行时或放宽固定哈希。两ABI的实际签名、身份/版本码2001/4001、合并Manifest、AOT3e2ec443、完整语音模型/词表/通知/许可全部独立通过；组件预检没有绕过干净源码门禁生成候选。
+
+根在自有API34模拟器安装3e2ec443正式x86_64 APK成功，冷启动6.362秒，实际检查竖屏首次引导截图；不填账号/Key且不开权限，选择“稍后设置”进入默认Agent。停止该自有新装应用后冷启动3.035秒，稍后设置状态保留、无目录占用/启动错误。没有访问学校或用户MuMu；ARM64及本次正式包实机/鸿蒙验收仍未执行。最终选定包及覆盖本次自有安装的保留检查待最后干净构建。
