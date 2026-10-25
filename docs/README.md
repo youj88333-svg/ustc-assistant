@@ -6,6 +6,9 @@
 
 | 要了解什么 | 入口 |
 |---|---|
+| 首次使用、支持平台与配置 | [使用入门](getting-started.md) · [公开候选说明](releases/public-1.0.0.md) |
+| 开源、正式签名、安装包与GitLab Release准备 | [任务单](milestones/open-source-release/plan.md) · [实际记录](milestones/open-source-release/records.md) · [用户选择](milestones/open-source-release/acceptance.md) |
+| 从源码构建、贡献与安全报告 | [开发说明](development.md) · [贡献指南](../CONTRIBUTING.md) · [安全报告](../SECURITY.md) · [代码许可](../LICENSE) · [第三方通知](../THIRD_PARTY_NOTICES.md) |
 | 学校/DeepSeek 官方 API 的选择、保护与验证 | [提供方决定](decisions/model-providers.md) · [接口契约](reference/sources/model-gateway.md) · [实施任务单](milestones/model-providers/plan.md) |
 | 当前阶段、已完成范围与待验证 | [项目状态](status.md) |
 | main主线、总目录、归档、修复与双远端同步 | [维护说明](maintenance.md) · [迁移任务单](milestones/maintenance-handoff/plan.md) · [实际记录](milestones/maintenance-handoff/records.md) |

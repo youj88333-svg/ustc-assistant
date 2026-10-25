@@ -10,6 +10,7 @@
 | `E:\107\releases\windows` | 当前和历史Windows完整便携目录、ZIP及哈希 |
 | `E:\107\releases\android` | 当前私有QA双ABI APK、manifest、许可与哈希 |
 | `E:\107\backups` | 迁移元数据备份、bundle及移动/恢复记录；不能当业务备份公开分享 |
+| `E:\107\private` | 用户本机发布签名等受保护资料；不入Git/安装包，不作为缓存清理或扫描内容 |
 
 归档引用保留旧历史，主线文件采用已验收的重写版本。归档工作区里的本地改动不自动提交或推送；移动路径不等于允许读取业务数据库或认证资产。实际应用资料、Windows DPAPI和Android Keystore与源码目录迁移分开，迁移不启动应用。
 
