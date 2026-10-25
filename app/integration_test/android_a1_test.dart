@@ -15,6 +15,7 @@ import 'package:ustc_assistant_m0/core/jw_credentials.dart';
 import 'package:ustc_assistant_m0/core/reminder_contract.dart';
 import 'package:ustc_assistant_m0/core/speech_input_contract.dart';
 import 'package:ustc_assistant_m0/data/demo_store.dart';
+import 'package:ustc_assistant_m0/data/jw_store.dart';
 import 'package:ustc_assistant_m0/platform/android_credential_protector.dart';
 import 'package:ustc_assistant_m0/platform/android_directory.dart';
 import 'package:ustc_assistant_m0/platform/native_database.dart';
@@ -271,12 +272,36 @@ void main() {
   );
 
   testWidgets(
-    'Android default bootstrap and native credential RPC preserve local work',
+    'Android default root and native bootstrap preserve isolated local work',
     (tester) async {
       await tester.runAsync(() async {
         RuntimeBootstrap? bootstrap;
         try {
-          bootstrap = await RuntimeBootstrap.open(clock: _clock);
+          // Verify the real platform root, then keep this journey's retained
+          // synthetic data separate from A2-A7's other QA fixtures.
+          final defaults = await const AndroidRuntimePlatformFactory()
+              .acquireDirectories();
+          try {
+            expect(
+              defaults.demo.path,
+              p.posix.join(await _qaRoot(), 'demo_v1'),
+            );
+            expect(
+              defaults.formal.path,
+              p.posix.join(await _qaRoot(), 'local_v1'),
+            );
+          } finally {
+            await defaults.demo.release();
+            await defaults.formal.release();
+          }
+          final retainedRoot = await Directory(
+            p.posix.join(await _qaRoot(), 'a1_bootstrap_retained_v1'),
+          ).create();
+          final fixturePlatform = _FixturePlatform(retainedRoot.path);
+          bootstrap = await RuntimeBootstrap.open(
+            clock: _clock,
+            platformFactory: fixturePlatform,
+          );
           final runtime = bootstrap.runtime;
           expect(
             runtime,
@@ -344,7 +369,10 @@ void main() {
           recovered.fillRange(0, recovered.length, 0);
           plain.fillRange(0, plain.length, 0);
           await bootstrap.close();
-          bootstrap = await RuntimeBootstrap.open(clock: _clock);
+          bootstrap = await RuntimeBootstrap.open(
+            clock: _clock,
+            platformFactory: fixturePlatform,
+          );
           final restored = bootstrap.runtime!;
           expect(
             (await restored.jwStore.localCalendar.query(_query)).items.length,
@@ -363,7 +391,7 @@ void main() {
                 .data
                 .values
                 .single,
-            18,
+            JwStore.currentSchemaVersion,
           );
           for (final (setting, expected) in <(String, Object)>[
             ('foreign_keys', 1),
@@ -386,7 +414,7 @@ void main() {
           expect(restored.diagnostics.diagnosticsView.available, isTrue);
           results['nativeCredentialRpc'] = true;
           results['localWorkRetained'] = true;
-          results['schema'] = 18;
+          results['schema'] = JwStore.currentSchemaVersion;
         } finally {
           await bootstrap?.close();
         }

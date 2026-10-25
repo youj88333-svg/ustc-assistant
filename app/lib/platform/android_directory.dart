@@ -34,6 +34,9 @@ final class AndroidDirectories {
     }
     final owner = _Owner(rootPath, handle);
     try {
+      // Register inside the cleanup boundary: resolving or attaching the
+      // finalizer must not leak an already acquired native lease on failure.
+      owner.attachFinalizer();
       // Both fixed children were created and pinned only after the parent lock.
       owner.ensureHeld();
       return AndroidDirectories._(
@@ -47,13 +50,23 @@ final class AndroidDirectories {
   }
 }
 
-final class _Owner {
+final class _Owner implements Finalizable {
   _Owner(this.path, this.handle);
+  static final _finalizer = NativeFinalizer(Native.addressOf(_finalize));
   final String path;
   Pointer<Void> handle;
+  bool _finalizerAttached = false;
   var references = 2;
   var lost = false;
   var closeFailed = false;
+
+  void attachFinalizer() {
+    // The two child leases share one native owner and one attachment. A live
+    // owner stays exclusive; this also drains resources when an Android host
+    // destroys its Dart environment without a normal application exit.
+    _finalizer.attach(this, handle, detach: this);
+    _finalizerAttached = true;
+  }
 
   void ensureHeld() {
     if (handle == nullptr || lost) {
@@ -86,6 +99,10 @@ final class _Owner {
       return;
     }
     final retained = handle;
+    if (_finalizerAttached) {
+      _finalizer.detach(this);
+      _finalizerAttached = false;
+    }
     handle = nullptr;
     lost = true;
     if (_release(retained) != 0) {
@@ -198,3 +215,9 @@ external int _child(
   symbol: 'ustc_posix_owner_release',
 )
 external int _release(Pointer<Void> owner);
+
+@Native<Void Function(Pointer<Void>)>(
+  assetId: _asset,
+  symbol: 'ustc_posix_owner_finalize',
+)
+external void _finalize(Pointer<Void> owner);

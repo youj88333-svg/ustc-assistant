@@ -202,3 +202,10 @@ API int ustc_posix_child(Owner *owner, const char *relative, int directory, int 
 API int ustc_posix_owner_release(Owner *owner) {
   return owner ? drain(owner) : LOST;
 }
+
+// NativeFinalizer runs without a Dart isolate and may use any VM thread.
+// Only drain this owner's resources; never call Dart, inspect or delete files.
+// Explicit release detaches this callback before consuming the same pointer.
+API void ustc_posix_owner_finalize(void *token) {
+  if (token) drain((Owner *)token);
+}
