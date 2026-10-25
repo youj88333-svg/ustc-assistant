@@ -32,7 +32,9 @@ W1–W6 关闭前需分别形成可复核证据：旧提供方/API32 与 API34/�
 
 ### Android A7连续使用反馈
 
-用户导出的QA4004安全日志已确认Young在准备阶段超时，以及本地修改已到waitingForApproval却未能看见卡；这些失败没有被前轮工程通过覆盖。F1–F4规格和[根记录13](../milestones/android-apk/records/13-mumu-navigation-approval-and-reasoning.md)分别验证固定导航、当前审批与键盘/长历史、手机整周/大字和可选思考展示。后续MuMu真实Young空/非空同步及活动查询见[记录18](../milestones/android-apk/records/18-qa4010-history-state.md)，当前内联审批的拒绝/批准/撤销、竖屏七列和安全导出见[记录19](../milestones/android-apk/records/19-mumu-a7-daily-approval-portrait.md)。真实撤销失败促成registry-v7的固定scope参数和严格拒绝回归，20工具诊断上限亦修复；模型预整理protocol失败回退、旧失败与有限成功分开保留。思考可见不证明执行成功，且仍与授权、持久历史和导出分离。窄屏审批弹层、目标机及原未观察项继续保留，A7/A8及完整V项未关闭。
+用户导出的QA4004安全日志已确认Young在准备阶段超时，以及本地修改已到waitingForApproval却未能看见卡；这些失败没有被前轮工程通过覆盖。F1–F4规格和[根记录13](../milestones/android-apk/records/13-mumu-navigation-approval-and-reasoning.md)分别验证固定导航、当前审批与键盘/长历史、手机整周/大字和可选思考展示。后续MuMu真实Young空/非空同步及活动查询见[记录18](../milestones/android-apk/records/18-qa4010-history-state.md)，当前内联审批的拒绝/批准/撤销、竖屏七列和安全导出见[记录19](../milestones/android-apk/records/19-mumu-a7-daily-approval-portrait.md)。真实撤销失败促成registry-v7的固定scope参数和严格拒绝回归，20工具诊断上限亦修复；模型预整理protocol失败回退、旧失败与有限成功分开保留。思考可见不证明执行成功，且仍与授权、持久历史和导出分离。[记录21](../milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)补充450dp手机审批自动弹出、收起/再开/拒绝，以及拒绝解释不稳定后的工程修订；QA4022被用户中断，最终模型回复复测继续保留。目标机及原未观察项、A7/A8和完整V项未关闭。
+
+2026-10-25用户MatePad 11.5″S/HarmonyOS4.2.0直接安装APK后报告后台返回ownerConflict，见[目录生命周期22](../milestones/android-apk/records/22-android-owner-lifecycle.md)。根在独立API34用真实FlutterEngine捕获旧实现销毁后的原生锁残留，并通过修复后的两项生命周期/合成数据保留、A1六组及共享/Windows回归；不删除锁、不放松活跃拥有者排他。该工程结果补充V-04/V-07，不证明鸿蒙目标机已复验通过，其他仍活引擎或ROM路径不得从一份启动错误日志猜成已排除。
 
 ### V-06 M5.9 验收增补（工程完成，M5 整体已关闭，未观察项保留）
 
@@ -50,7 +52,7 @@ M5.9 的规范依据是 [已批准任务单 §23](../milestones/m5/plan.md#23-m5
 
 ### V-02/V-04/V-05/V-06/V-08 每日二课同步
 
-用户已批准独立默认关闭的每日二课同步，现行边界见09/10及[任务单](../milestones/windows-polish/plan.md#每日二课自动同步2026-10-15已批准)。本切新增北京时间06:00/跨日/重启去重、前台空闲与全局租约、三次预算/退避/挑战、固定31日与手动历史范围隔离、许可撤销/秘密租约/最终守卫、维护当天抑制/重置关闭、成功覆盖与业务/期望提醒原子性，以及隐藏原生窗口/显式可见续接的反例。Windows工程与失败见[记录04](../milestones/windows-polish/records/04-young-daily-sync.md)，MuMu的当前滚动窗口显式恢复成功、同日重启去重及手动9月范围保留见[记录19](../milestones/android-apk/records/19-mumu-a7-daily-approval-portrait.md)。第一次登录超时保留；显式再试不代表次日06:00自动准入，实际下一日、长期网络/挑战、撤回与系统投递仍未新增证据，不据局部通过关闭完整V项。
+用户已批准独立默认关闭的每日二课同步，现行边界见09/10及[任务单](../milestones/windows-polish/plan.md#每日二课自动同步2026-10-15已批准)。本切新增北京时间06:00/跨日/重启去重、前台空闲与全局租约、三次预算/退避/挑战、固定31日与手动历史范围隔离、许可撤销/秘密租约/最终守卫、维护当天抑制/重置关闭、成功覆盖与业务/期望提醒原子性，以及隐藏原生窗口/显式可见续接的反例。Windows工程与失败见[记录04](../milestones/windows-polish/records/04-young-daily-sync.md)，MuMu的当前滚动窗口显式恢复成功、同日重启去重及手动9月范围保留见[记录19](../milestones/android-apk/records/19-mumu-a7-daily-approval-portrait.md)。[记录21](../milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)补充2026-10-24 13:14前台启动后的实际每日准入及提交，根尚未点击同步；它支持另一天06:00之后首次前台路径，不证明06:00整点、退出/锁屏/厂商后台执行。第一次登录超时、长期网络/挑战、撤回与系统投递等保留，不据局部通过关闭完整V项。
 
 ### 详细设计归属与触发时机
 

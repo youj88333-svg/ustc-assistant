@@ -4,24 +4,26 @@
 
 ## 当前QA包
 
-最新文件位于工程内：`app/build/model-providers/artifacts/USTC-Assistant-Android-QA4019-x86_64.apk`。本版保留既有来源、日程任务与[界面](../ui-refresh/plan.md)，新增可选 DeepSeek 官方 Key 配置，并包含此前上下文整理 180 秒等待修订；不是 A8 正式版或 ARM64 手机包。本版构建/合成证据及未验证项见[模型服务记录](../model-providers/records.md)。现有 MuMu 的最后一次完整使用旅程仍为 QA4018，见[记录20](records/20-mumu-full-journeys.md)，不把新构建当作新的真实学校或官方 API 通过；此前审批/撤销见[记录19](records/19-mumu-a7-daily-approval-portrait.md)。
+最新文件位于工程内：`app/build/android-owner-lifecycle/artifacts/USTC-Assistant-Android-QA4023-x86_64.apk`。修复旧Flutter环境销毁后原生目录锁残留，后台运行继续保持排他；保留来源、日程任务、[界面](../ui-refresh/plan.md)、可选DeepSeek官方配置和180秒上下文整理等待。构建与目录生命周期反例见[记录22](records/22-android-owner-lifecycle.md)，此前受控补验见[记录21](records/21-mumu-provider-and-remaining-checks.md)、完整旅程见[记录20](records/20-mumu-full-journeys.md)。来源拒绝的模型解释复测仍保留，不能把本轮工程检查当成该项或鸿蒙实机已通过；本包不是A8正式发行。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4019` |
-| ABI / 文件大小 | `x86_64` / `291042347` bytes |
-| SHA-256 | `02c27d90d4fdb709c96d92ead6a247747301a384e37944b4e2f55cc5e7c9bec4` |
-| 源码修订 | `37ce18804754cc8d395df4b44658e5447769cd2a` |
+| 版本 | `1.0.0-qa-a7-webview2` / `4023` |
+| ABI / 文件大小 | `x86_64` / `291059059` bytes |
+| SHA-256 | `2b72cc088a0969492acd9d3bbf3621e5fe361d34cd257272611005d2b3d49080` |
+| 源码修订 | `a67a06f3203b3d798dd3844bd691a70ed47354b9` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
 元数据在构建时记录入口为 `lib/main.dart`、`publicRelease: false`、`realDeepSeekValidated: false`；后来的真实 UI 证据另记。签名沿用既有 QA 包，覆盖升级保留资料。schema19 增量迁移保留旧学校配置及数据，但旧程序不能直接读取升级后的新 schema；不要降级、卸载或清数据来绕过问题。旧包和 Windows1.00 历史交付继续保留；不要把 QA 资料复制到 Windows，也不从 Windows 导入数据库或密文。
 
-本轮 ARM64 构建与哈希统一见[模型服务交付记录](../model-providers/records.md#私有交付)，不代表 ARM64 实机已验证。旧 QA4018/2018 仍保留；MuMu 使用 x86_64 包，不能用 ARM64 包覆盖。
+同目录ARM64文件为`USTC-Assistant-Android-QA2023-arm64-v8a.apk`，构建与哈希见[记录22](records/22-android-owner-lifecycle.md)，供MatePad 11.5″S/HarmonyOS4.2.0等已能直接安装APK的ARM64设备覆盖复验，不代表ARM64实机已通过。旧QA4018/2018至4022/2022在各自原目录保留；MuMu使用x86_64包，不能用ARM64包覆盖。
 
 选择官方服务时，在“设置 → Agent”选择“DeepSeek 官方”，仅在应用输入其 Key，阅读独立计费/发送说明后勾选同意，获取目录、选择模型、验证并保存。学校 Key、同意和模型配置会保留；切回可复用。官方本期直答，业务工具可用；真实速度、余额及所选模型的工具/图片表现需自行确认，安全摘要会包含 `provider`。请勿把 Key 发到开发聊天。
 
 ## 安装
+
+MatePad目录故障复验使用上面的ARM64 QA2023同签名覆盖包，沿用现有资料；更新后按原先可稳定触发的切后台/返回步骤重复确认。若仍报占用，从错误页导出最近日志并反馈返回方式；不用为了补验重新采集或清理资料。该设备已由用户确认直接安装APK，尚未连接开发环境，不把官方模拟器的引擎测试记作鸿蒙实际通过。
 
 在已有MuMu中启动实例，将上面的APK拖入模拟器，或在工具栏选择“安装APK”并选中同一文件。也可参考[MuMu本地APK安装说明](https://www.mumuplayer.com/help/win/developers-essentials-manual.html)。
 

@@ -1,6 +1,6 @@
 # 文档入口
 
-这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准，MuMu本轮完整使用旅程与修复见[记录20](milestones/android-apk/records/20-mumu-full-journeys.md)、[设备矩阵](milestones/android-apk/device-matrix.md)与[当前QA说明](milestones/android-apk/manual-validation.md)。旧失败保留，目标手机/鸿蒙、真实麦克风、次日触发及厂商策略等仍待验；A7未真人关闭、A8尚未正式交付，暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
+这是项目唯一文档导航入口。当前分支为 `codex/design-reset`；M0–M6已由用户确认关闭，Windows已获[1.00私有基线认可](milestones/windows-polish/acceptance.md)，[本地收尾交付](milestones/windows-polish/records/05-windows-v1-private-release.md)已完成。[Android APK迁移计划](milestones/android-apk/plan.md)已批准；MuMu完整旅程见[记录20](milestones/android-apk/records/20-mumu-full-journeys.md)，官方小测试、取消、评课与手机审批补验见[记录21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)，鸿蒙后台返回故障与目录生命周期修复见[记录22](milestones/android-apk/records/22-android-owner-lifecycle.md)。当前环境与交付见[设备矩阵](milestones/android-apk/device-matrix.md)及[QA说明](milestones/android-apk/manual-validation.md)。旧失败保留，目标机/鸿蒙复验、真实麦克风、06:00整点及厂商策略等仍待验；A7未真人关闭、A8尚未正式交付，暂不公开发布。具体边界、已知问题与未观察项见[状态页](status.md)，不要从历史流水判断当前完成情况。
 
 ## 按阅读目的选择
 
