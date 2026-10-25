@@ -36,6 +36,8 @@ git ls-remote --heads ustc main
 
 认证由本机Git的既有凭据或用户主动配置完成，不把密码/Token/私钥交给Agent。SSH主机指纹须与官方HTTPS公布值核对；可使用任务/仓库专用known_hosts，保留严格校验，不改系统信任或全局代理。校内认证缺失与同步成功分开记录，不能只凭本地remote-tracking引用宣称远端已更新。
 
+本机经核验后可在仓库级`core.sshCommand`固定SSH客户端和现有身份文件，服务器公钥放在本地忽略的`.local/git/known_hosts`。这只是本机连接配置；私钥仍由原位置的SSH客户端使用，不复制进工程、备份包或远端。换设备需自行重新配置认证，源码不携带这些机器路径或秘密。
+
 ## 私有交付与恢复
 
 安装/升级说明见[Windows](releases/windows-1.00.md)和[Android / APK鸿蒙](releases/android-private-1.00.md)。构建器仍在本工程`app/build/private-releases`生成并核验新包，再将核验后的完整目录移入总目录releases；已经交付的APK/ZIP按哈希冻结，不因源代码文档更新而重写。

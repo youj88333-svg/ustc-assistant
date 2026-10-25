@@ -19,6 +19,7 @@ app/android/.kotlin/
 
 # Worktree metadata, local credentials and private handoff assets
 .worktrees/
+.local/
 .env
 .env.*
 !.env.example
