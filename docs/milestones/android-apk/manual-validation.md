@@ -1,29 +1,31 @@
-# Android A7人工体验说明
+# Android A7–A8私有QA体验说明
 
-本说明对应A7私有QA包；正式签名和移动版发布属于A8。Android学校自动认证与采集按API28+普通系统WebView路线实施，实际可用性仍以具体系统和WebView提供方的检查结果为准，不能从安装成功或Android版本推断。普通路线不再要求提供方具备多Profile、独立删除、私有脚本世界或document-start能力；这不表示任一旧版MuMu、新版MuMu、目标手机或鸿蒙已通过。前轮五个官方环境见[记录12](records/12-ordinary-system-webview.md)，本轮跳转、审批、竖屏和思考展示见[记录13](records/13-mumu-navigation-approval-and-reasoning.md)及[设备能力矩阵](device-matrix.md)。
+本说明对应A7复验与A8准备的私有QA包；正式签名和移动版发布仍待A8完成。Android学校自动认证与采集按API28+普通系统WebView路线实施，实际可用性仍以具体系统和WebView提供方的检查结果为准，不能从安装成功或Android版本推断。普通路线不再要求提供方具备多Profile、独立删除、私有脚本世界或document-start能力；这不表示任一旧版MuMu、新版MuMu、目标手机或鸿蒙已通过。前轮五个官方环境见[记录12](records/12-ordinary-system-webview.md)，跳转、审批、竖屏和思考展示见[记录13](records/13-mumu-navigation-approval-and-reasoning.md)及[设备能力矩阵](device-matrix.md)。
 
 ## 当前QA包
 
-最新文件位于工程内：`app/build/android-owner-lifecycle/artifacts/USTC-Assistant-Android-QA4023-x86_64.apk`。修复旧Flutter环境销毁后原生目录锁残留，后台运行继续保持排他；保留来源、日程任务、[界面](../ui-refresh/plan.md)、可选DeepSeek官方配置和180秒上下文整理等待。构建与目录生命周期反例见[记录22](records/22-android-owner-lifecycle.md)，此前受控补验见[记录21](records/21-mumu-provider-and-remaining-checks.md)、完整旅程见[记录20](records/20-mumu-full-journeys.md)。来源拒绝的模型解释复测仍保留，不能把本轮工程检查当成该项或鸿蒙实机已通过；本包不是A8正式发行。
+最新文件位于工程内：`app/build/android-onboarding/artifacts/USTC-Assistant-Android-QA4024-x86_64.apk`。新增四步首次设置与main自定义图标，过程、根检查和包核验见[记录23](records/23-onboarding-and-brand.md)。原目录生命周期修复、来源、日程任务、[界面](../ui-refresh/plan.md)、可选DeepSeek官方配置和180秒上下文整理等待保留。目录反例见[记录22](records/22-android-owner-lifecycle.md)，此前受控补验见[记录21](records/21-mumu-provider-and-remaining-checks.md)、完整旅程见[记录20](records/20-mumu-full-journeys.md)。来源拒绝的模型解释及鸿蒙实机修复效果仍待复验，本包不是A8正式发行。
 
 | 项目 | 值 |
 |---|---|
 | 包名 | `cn.ustcassistant.mobile.qa` |
-| 版本 | `1.0.0-qa-a7-webview2` / `4023` |
-| ABI / 文件大小 | `x86_64` / `291059059` bytes |
-| SHA-256 | `2b72cc088a0969492acd9d3bbf3621e5fe361d34cd257272611005d2b3d49080` |
-| 源码修订 | `a67a06f3203b3d798dd3844bd691a70ed47354b9` |
+| 版本 | `1.0.0-qa-a8-setup` / `4024` |
+| ABI / 文件大小 | `x86_64` / `293625010` bytes |
+| SHA-256 | `6863b9f77f28ee3f3f2b82d199e42442e4cfb13ffd46069c9825b590d3f115fe` |
+| 源码修订 | `441a68b99ea713eb891b269dc0210a1c41b63f77` |
 | 签名证书 SHA-256 | `16d3f9867f0a15d4d4ffc877bdd9ec240e92a3fddf6a0a66da857e2888846036` |
 
-元数据在构建时记录入口为 `lib/main.dart`、`publicRelease: false`、`realDeepSeekValidated: false`；后来的真实 UI 证据另记。签名沿用既有 QA 包，覆盖升级保留资料。schema19 增量迁移保留旧学校配置及数据，但旧程序不能直接读取升级后的新 schema；不要降级、卸载或清数据来绕过问题。旧包和 Windows1.00 历史交付继续保留；不要把 QA 资料复制到 Windows，也不从 Windows 导入数据库或密文。
+元数据在构建时记录入口为 `lib/main.dart`、`publicRelease: false`、`realServicesUsed: false`；历次真实UI证据另记。签名沿用既有QA包，覆盖升级保留资料。schema20仅增量添加非敏感引导进度，保留旧配置及数据；旧程序不能直接读取升级后的新schema，不要降级、卸载或清数据来绕过问题。旧包和Windows1.00历史交付继续保留；不要跨平台复制数据库、密文或QA资料。
 
-同目录ARM64文件为`USTC-Assistant-Android-QA2023-arm64-v8a.apk`，构建与哈希见[记录22](records/22-android-owner-lifecycle.md)，供MatePad 11.5″S/HarmonyOS4.2.0等已能直接安装APK的ARM64设备覆盖复验，不代表ARM64实机已通过。旧QA4018/2018至4022/2022在各自原目录保留；MuMu使用x86_64包，不能用ARM64包覆盖。
+同目录ARM64文件为`USTC-Assistant-Android-QA2024-arm64-v8a.apk`，构建与哈希见记录23，供MatePad 11.5″S/HarmonyOS4.2.0等已能直接安装APK的ARM64设备覆盖复验，不代表ARM64实机已通过。旧包在各自原目录保留；MuMu使用x86_64包。
+
+新安装自动进入学校账号、两来源同步、模型Key、逐项授权四页。已有安装升级后直接进入原主页，可从“设置 → 首次设置”继续或重开，不需要清资料。各步可跳过或稍后继续；填写学校账号不等于已登录，同步与模型验证需主动启动，验证码及额外授权仍由你处理。提醒、晨报、评课与私人事务分别选择，系统通知许可独立申请；完成引导不会批量授权。同步恢复或模型失败时可在引导内导出安全日志，模型请求支持取消。
 
 选择官方服务时，在“设置 → Agent”选择“DeepSeek 官方”，仅在应用输入其 Key，阅读独立计费/发送说明后勾选同意，获取目录、选择模型、验证并保存。学校 Key、同意和模型配置会保留；切回可复用。官方本期直答，业务工具可用；真实速度、余额及所选模型的工具/图片表现需自行确认，安全摘要会包含 `provider`。请勿把 Key 发到开发聊天。
 
 ## 安装
 
-MatePad目录故障复验使用上面的ARM64 QA2023同签名覆盖包，沿用现有资料；更新后按原先可稳定触发的切后台/返回步骤重复确认。若仍报占用，从错误页导出最近日志并反馈返回方式；不用为了补验重新采集或清理资料。该设备已由用户确认直接安装APK，尚未连接开发环境，不把官方模拟器的引擎测试记作鸿蒙实际通过。
+MatePad目录故障复验使用上面的ARM64 QA2024同签名覆盖包，沿用现有资料；更新后按原先可稳定触发的切后台/返回步骤重复确认。若仍报占用，从错误页导出最近日志并反馈返回方式；不用为了补验重新采集或清理资料。该设备已由用户确认直接安装APK，尚未连接开发环境，不把官方模拟器的引擎测试记作鸿蒙实际通过。
 
 在已有MuMu中启动实例，将上面的APK拖入模拟器，或在工具栏选择“安装APK”并选中同一文件。也可参考[MuMu本地APK安装说明](https://www.mumuplayer.com/help/win/developers-essentials-manual.html)。
 
