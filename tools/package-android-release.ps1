@@ -47,9 +47,9 @@ $script:AndroidReleaseSpeechDocuments = [ordered]@{
     'ONNXRUNTIME-LICENSE.txt' = 'app/resources/speech/ONNXRUNTIME-LICENSE.txt'
 }
 $script:AndroidReleaseSpeechFiles = @(
-    [pscustomobject]@{ Name = 'model.int8.onnx'; Entry = 'assets/flutter_assets/speech/sensevoice/model.int8.onnx'; Bytes = 239233841L; Sha256 = 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' }
-    [pscustomobject]@{ Name = 'tokens.txt'; Entry = 'assets/flutter_assets/speech/sensevoice/tokens.txt'; Bytes = 315894L; Sha256 = 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' }
-    [pscustomobject]@{ Name = 'LICENSE'; Entry = 'assets/flutter_assets/speech/sensevoice/LICENSE'; Bytes = 71L; Sha256 = '221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17' }
+    [pscustomobject]@{ Name = 'model.int8.onnx'; Entry = 'assets/speech/sensevoice/model.int8.onnx'; Bytes = 239233841L; Sha256 = 'c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51' }
+    [pscustomobject]@{ Name = 'tokens.txt'; Entry = 'assets/speech/sensevoice/tokens.txt'; Bytes = 315894L; Sha256 = 'f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc' }
+    [pscustomobject]@{ Name = 'LICENSE'; Entry = 'assets/speech/sensevoice/LICENSE'; Bytes = 71L; Sha256 = '221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17' }
 )
 $script:AndroidReleaseForbiddenComponents = @(
     'cn.ustcassistant.mobile.notifications.ReminderOsProbeActivity'
@@ -305,7 +305,7 @@ function Assert-AndroidReleaseTextAssets {
         Assert-AndroidReleaseCopyOfSourceEntry $Entries ([string]$entryName) ([string]$script:AndroidReleaseProjectAssets[$entryName])
     }
     foreach ($noticeName in $script:AndroidReleaseSpeechDocuments.Keys) {
-        $entryPath = "assets/flutter_assets/speech/licenses/$noticeName"
+        $entryPath = "assets/speech/licenses/$noticeName"
         Assert-AndroidReleaseCopyOfSourceEntry $Entries $entryPath ([string]$script:AndroidReleaseSpeechDocuments[$noticeName])
     }
 }
@@ -559,10 +559,43 @@ function Get-AndroidReleaseSignerFacts {
     if ($signerCounts.Count -ne 1 -or [int]$signerCounts[0].Groups[1].Value -ne 1) {
         throw 'The APK must have exactly one signer.'
     }
-    $certLines = [regex]::Matches($Text, '(?im)^Signer #1 certificate SHA-256 digest:\s*(?<sha>[0-9a-fA-F: ]+)\s*$')
-    if ($certLines.Count -ne 1) { throw 'apksigner did not return one signer certificate digest.' }
-    if ([regex]::IsMatch($Text, '(?im)^Signer #2\s')) { throw 'The APK must have exactly one signer.' }
-    $certificate = ConvertTo-AndroidReleaseCertificateSha256 ([string]$certLines[0].Groups['sha'].Value)
+
+    $signerLabelLines = [regex]::Matches($Text, '(?im)^(?:(?<scheme>V\d+(?:\.\d+)*))[ \t]+Signer(?:[ \t]+#(?<index>\d+))?(?<separator>:|[ \t])[^\r\n]*\r?$|^(?<legacy>Signer)(?:[ \t]+#(?<legacyIndex>\d+))?(?<legacySeparator>:|[ \t])[^\r\n]*\r?$')
+    foreach ($line in $signerLabelLines) {
+        if ($line.Groups['scheme'].Success) {
+            $scheme = [string]$line.Groups['scheme'].Value
+            if ($scheme -cnotin @('V2', 'V3', 'V3.1', 'V3.2')) {
+                throw "apksigner reported an unsupported signer label: $scheme Signer."
+            }
+            if ($line.Groups['index'].Success) {
+                throw 'apksigner returned an unsupported numbered scheme signer label.'
+            }
+        }
+        elseif (-not $line.Groups['legacyIndex'].Success -or [int]$line.Groups['legacyIndex'].Value -ne 1) {
+            throw 'The APK must have exactly one signer with a recognized signer label.'
+        }
+    }
+
+    $certificates = [System.Collections.Generic.List[string]]::new()
+    $legacyCertificateLines = [regex]::Matches($Text, '(?im)^Signer #(?<index>\d+) certificate SHA-256 digest:[ \t]*(?<sha>[^\r\n]*?)[ \t]*\r?$')
+    foreach ($line in $legacyCertificateLines) {
+        if ([int]$line.Groups['index'].Value -ne 1) { throw 'The APK must have exactly one signer.' }
+        $certificates.Add((ConvertTo-AndroidReleaseCertificateSha256 ([string]$line.Groups['sha'].Value)))
+    }
+
+    $schemeCertificateLines = [regex]::Matches($Text, '(?im)^V(?<scheme>\d+(?:\.\d+)*) Signer: certificate SHA-256 digest:[ \t]*(?<sha>[^\r\n]*?)[ \t]*\r?$')
+    foreach ($line in $schemeCertificateLines) {
+        $scheme = 'V' + [string]$line.Groups['scheme'].Value
+        if ($scheme -cnotin @('V2', 'V3', 'V3.1', 'V3.2')) {
+            throw "apksigner reported an unsupported signing scheme certificate label: $scheme."
+        }
+        $certificates.Add((ConvertTo-AndroidReleaseCertificateSha256 ([string]$line.Groups['sha'].Value)))
+    }
+
+    if ($certificates.Count -eq 0) { throw 'apksigner did not return a signer certificate SHA-256 digest.' }
+    $distinctCertificates = @($certificates.ToArray() | Select-Object -Unique)
+    if ($distinctCertificates.Count -ne 1) { throw 'apksigner reported conflicting signer certificate digests.' }
+    $certificate = [string]$distinctCertificates[0]
     return [pscustomobject]@{ CertificateSha256 = $certificate; VerifiedV2 = $true; SignerCount = 1 }
 }
 

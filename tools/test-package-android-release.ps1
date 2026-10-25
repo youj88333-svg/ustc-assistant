@@ -145,7 +145,50 @@ Signer #1 certificate SHA-256 digest: $certificate
     Assert-AndroidReleaseSigner -Text $signerOutput -ExpectedCertificateSha256 $certificate | Out-Null
     $colonCertificate = [string]::Join(':', @([regex]::Matches($certificate, '.{2}') | ForEach-Object { $_.Value }))
     Assert-AndroidReleaseSigner -Text $signerOutput.Replace($certificate, $colonCertificate) -ExpectedCertificateSha256 $certificate | Out-Null
-    Assert-AndroidReleaseTest $true 'accept only the synthetic pinned single signer with verified v2 signature'
+
+    $buildTools37SignerOutput = @"
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): true
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v3.2 scheme (APK Signature Scheme v3.2): false
+Number of signers: 1
+V2 Signer: certificate DN: CN=synthetic test certificate
+V2 Signer: certificate SHA-256 digest: $certificate
+V2 Signer: public key SHA-256 digest: $('b' * 64)
+V3 Signer: certificate DN: CN=synthetic test certificate
+V3 Signer: certificate SHA-256 digest: $certificate
+V3 Signer: public key SHA-256 digest: $('b' * 64)
+"@
+    Assert-AndroidReleaseSigner -Text $buildTools37SignerOutput -ExpectedCertificateSha256 $certificate | Out-Null
+    Assert-AndroidReleaseTest $true 'accept build-tools 37 scheme-labelled certificate digests while ignoring the public-key digest'
+    $buildTools37SignerOutputCrlf = [regex]::Replace($buildTools37SignerOutput, '\r?\n', "`r`n")
+    Assert-AndroidReleaseSigner -Text $buildTools37SignerOutputCrlf -ExpectedCertificateSha256 $certificate | Out-Null
+    Assert-AndroidReleaseTest $true 'accept raw build-tools 37 output with CRLF line endings'
+
+    $conflictingSchemeCertificateOutput = $buildTools37SignerOutput.Replace("V3 Signer: certificate SHA-256 digest: $certificate", "V3 Signer: certificate SHA-256 digest: $('c' * 64)")
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $conflictingSchemeCertificateOutput } 'conflicting signer certificate digests' 'reject conflicting V2 and V3 certificate digests'
+    $malformedSchemeCertificateOutput = $buildTools37SignerOutput.Replace("V3 Signer: certificate SHA-256 digest: $certificate", 'V3 Signer: certificate SHA-256 digest: not-a-digest')
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $malformedSchemeCertificateOutput } '64 hexadecimal' 'reject a malformed digest even when another scheme has a valid certificate digest'
+    $unsupportedSchemeOutput = $buildTools37SignerOutput + "`nV4 Signer: certificate SHA-256 digest: $certificate"
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $unsupportedSchemeOutput } 'unsupported signer label' 'reject an unrecognized scheme certificate label'
+    $publicKeyOnlyOutput = [regex]::Replace($buildTools37SignerOutputCrlf, '(?im)^V(?:2|3(?:\.1|\.2)?) Signer: certificate SHA-256 digest:[^\r\n]*(?:\r\n|\n|$)', '')
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $publicKeyOnlyOutput } 'did not return a signer certificate' 'reject public-key digests when no certificate digest is present'
+    $sourceStampOnlyOutput = @"
+Verifies
+Verified using v2 scheme (APK Signature Scheme v2): true
+Number of signers: 1
+Source Stamp Signer certificate SHA-256 digest: $certificate
+Source Stamp Signer public key SHA-256 digest: $('b' * 64)
+"@
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $sourceStampOnlyOutput } 'did not return a signer certificate' 'reject a source-stamp digest as the APK signer certificate'
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $buildTools37SignerOutput.Replace('Number of signers: 1', 'Number of signers: 2') } 'exactly one signer' 'reject multiple signers in the build-tools 37 format'
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts ($buildTools37SignerOutput + "`nV2 Signer #2 certificate SHA-256 digest: $('c' * 64)") } 'unsupported numbered scheme signer label' 'reject an extra numbered build-tools 37 signer label'
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts ($buildTools37SignerOutputCrlf + "`r`nV2 Signer #2 certificate SHA-256 digest: $('c' * 64)") } 'unsupported numbered scheme signer label' 'reject an extra numbered scheme signer in raw CRLF output'
+    Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts ($signerOutput + "`nSigner #2 certificate SHA-256 digest: $('c' * 64)") } 'exactly one signer' 'reject an extra legacy signer label when the signer count claims one'
+
+    Assert-AndroidReleaseTest $true 'accept only synthetic pinned single-signer output with verified v2 signature'
     Assert-AndroidReleaseTestThrows { Assert-AndroidReleaseSigner -Text $signerOutput -ExpectedCertificateSha256 $script:AndroidReleaseKnownQaCertificate } 'known QA' 'reject the known QA certificate'
     Assert-AndroidReleaseTestThrows { Assert-AndroidReleaseSigner -Text $signerOutput -ExpectedCertificateSha256 ('b' * 64) } 'does not match' 'reject an unexpected certificate digest'
     Assert-AndroidReleaseTestThrows { Get-AndroidReleaseSignerFacts $signerOutput.Replace('v2): true', 'v2): false') } 'v2 signature' 'reject a missing v2 signature'
