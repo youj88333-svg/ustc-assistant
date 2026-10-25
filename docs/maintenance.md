@@ -43,3 +43,9 @@ git ls-remote --heads ustc main
 安装/升级说明见[Windows](releases/windows-1.00.md)和[Android / APK鸿蒙](releases/android-private-1.00.md)。构建器仍在本工程`app/build/private-releases`生成并核验新包，再将核验后的完整目录移入总目录releases；已经交付的APK/ZIP按哈希冻结，不因源代码文档更新而重写。
 
 源码迁移备份只用于Git/工作区恢复，不能恢复卸载后的手机业务或替代正式业务备份。恢复前读取迁移记录和移动清单，先核对源/目标，保留现有未提交成果；不要对未知工作区使用硬重置或清理命令。
+
+## 构建缓存与空间维护
+
+阶段APK和Windows暂存目录不作为永久交付留存；核对最终releases后，只保留必要的小型报告、日志、截图和源码修订。闲置合成AVD按需重建，不为历史API矩阵长期保存全部设备镜像。Flutter/native编译缓存可以再生成，清理后第一次构建会较慢；维护完成后不为证明缓存可重建而立刻跑完整构建。
+
+清理使用先盘点、固定白名单、校验路径/重解析点/跟踪状态/占用、删除、核对保留项的顺序，不对整个工作树或build目录一键递归删除。AVD稀疏逻辑体积和实际分配/可用空间分开报告，SDK、真实模拟器/设备、认证与业务资料不因目录名像缓存而被清理。2026-10-25的实际边界与结果见[空间记录](milestones/maintenance-handoff/records-cleanup.md)。

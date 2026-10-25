@@ -28,7 +28,7 @@ Luna/max只写`tools/test-maintenance-layout.ps1`及自建GUID临时仓库。根
 | `E:\107\archive\competition-minimal` | archive/competition-minimal，旧main e1b7ed3及48条本地状态 |
 | `E:\107\archive\flutter-native` | archive/flutter-native，原5ac2db0及3条本地状态 |
 | `archive/design-reset`引用 | 准备完成的重写2d2f3b0，历史本地保留 |
-| `E:\107\worktrees\maintenance-handoff` | detached临时交接快照，保留原构建/运行证据；原位置为E:\107\.worktrees\rewrite\design-reset，最后由用户完成Git移位 |
+| `E:\107\worktrees\maintenance-handoff` | detached源码交接快照，小型报告/日志保留；原位置为E:\107\.worktrees\rewrite\design-reset，由用户完成Git移位，后续授权清理闲置产物见空间记录 |
 
 最后一项为临时交接快照，不作为第二个长期主线；当前会话已使用`E:\107\main`继续维护。原总目录不再有.git，不重新init/clone第三个工程，不改归档文件内容或冻结历史中的原路径。
 
@@ -88,3 +88,5 @@ GitHub实时main为6e8fd35，校内实际main为068b1b7，均为迁移后main的
 2026-10-25，用户反馈“似乎已经成功运行，并将你迁移到此main”。根在`E:\107\main`实际核对：当前分支main、工作区干净，原`E:\107\.worktrees\rewrite\design-reset`不存在，目标`E:\107\worktrees\maintenance-handoff`存在且Git登记为干净的detached工作树，HEAD为7cb007e。主工程及交接工作树均使用`E:\107\main\.git`，总目录不存在独立.git；两旧工程的48/3条状态逐项仍与原恢复清单一致。
 
 目录尾项据此关闭，当前会话与未来维护使用main。前述失败、句柄快照及当时保留原目录的处理过程仍为历史事实，不再作为当前待办；本次没有重试移位、结束用户进程、删除交接资产、打开业务库或读取认证资产，也不反推用户为解除占用采取了哪一步。收口只更新文档并运行文档/差异检查，不因工作树移位重跑产品全量或重建冻结安装包。
+
+迁移完成后，用户另行授权清理旧工作树的闲置生成物；范围、前后空间和保留核验单独见[空间清理记录](records-cleanup.md)，不覆盖本记录中迁移时完整保留资产的事实。
