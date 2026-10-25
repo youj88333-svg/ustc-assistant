@@ -4,7 +4,7 @@
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
-| 开源与公开安装包 | 准备中，尚未公开或上传 | [任务单](milestones/open-source-release/plan.md)、[记录](milestones/open-source-release/records.md)、[用户决定](milestones/open-source-release/acceptance.md)。原创代码Apache-2.0，Android正式包cn.ustcassistant.mobile与旧测试版独立；本机签名已由用户初始化，公开证书验核完成。正在补签名/正式构建/候选包、源码审计、对外说明和发布清单；既有私有交付与未观察项保留 |
+| 开源与公开安装包 | 本地候选和清单已完成，尚未公开或上传 | [任务单](milestones/open-source-release/plan.md)、[记录](milestones/open-source-release/records.md)、[用户决定](milestones/open-source-release/acceptance.md)。原创代码Apache-2.0；干净9515e50a的Windows完整ZIP及长期签名Android双ABI正式包已构建、验核并冻结六份公开材料，正式Android与旧测试版独立。analyze、共享全套、相关原生及打包检查通过，自有API34安装/保留通过，源码审计范围单列。校内发布客户端登录、实例权限/下载核对及具体公开确认待完成；既有私有交付与实机等未观察项保留 |
 | 维护与Git交接 | 已完成，进入维护/修复 | [任务单](milestones/maintenance-handoff/plan.md)、[实际记录](milestones/maintenance-handoff/records.md)、[授权与结果](milestones/maintenance-handoff/acceptance.md)。主工程与当前会话为E:\107\main、维护分支main，交接工作树已移至worktrees/maintenance-handoff，唯一共用元数据为main/.git。旧main/放弃版48/3条状态保留，96个私有交付文件未变；GitHub和校内main正常向前同步。新根离线依赖/analyze、文档、打包及合成迁移通过；此前目录共享冲突的失败记录保留，后续使用短期codex/fix-*维护 |
 | 首次设置与main图标 | 工程与构建完成，纳入双平台当前私有交付 | [记录23](milestones/android-apk/records/23-onboarding-and-brand.md)：四页可跳过/续行、独立授权与恢复日志；新安装引导、升级用户从设置进入，schema20保留资料。最终analyze、1654项共享/1跳过、相关Windows/Android原生检查及双ABIQA4024/2024、独立Windows暂存核验通过。用户总体反馈不补造逐页引导验收；旧Windows包保留，当前Windows刷新见下行 |
 | 可选模型服务 | 官方最小真实能力检查通过；当前私有包见QA说明 | [任务单](milestones/model-providers/plan.md)、[决定](decisions/model-providers.md)和[记录](milestones/model-providers/records.md)。两方受保护配置隔离；QA4019中根仅触发一次4请求能力检查，文本/流式/合成工具往返通过，后续业务使用学校。[受控补验21](milestones/android-apk/records/21-mumu-provider-and-remaining-checks.md)与[当前QA](milestones/android-apk/manual-validation.md)分开记录，不推断完整官方业务、图片、速度或账单，不关闭A7/A8 |
