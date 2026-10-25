@@ -261,9 +261,9 @@ exit 7
     $pub = @($calls | Where-Object Operation -ceq 'Offline dependency preparation')[0]
     Check (($pub.Arguments -join ' ') -ceq 'pub get --offline --enforce-lockfile') 'dependency preparation stays offline and lockfile-bound'
     $windows = @($calls | Where-Object Operation -ceq 'Windows release build')[0]
-    Check (($windows.Arguments -join ' ') -ceq ('build windows --release --no-pub --target lib/main.dart --dart-define=USTC_BUILD_REVISION=' + $script:fixtureRevision)) 'Windows uses the ordinary release entry with exact revision'
+    Check (($windows.Arguments -join ' ') -ceq ('build windows --release --pub --target lib/main.dart --dart-define=USTC_BUILD_REVISION=' + $script:fixtureRevision)) 'Windows uses the ordinary release entry with exact revision and release plugin regeneration'
     $android = @($calls | Where-Object Operation -ceq 'Signed Android release build')[0]
-    Check (($android.Arguments -join ' ') -ceq ('build apk --release --no-pub --target lib/main.dart --target-platform android-arm64,android-x64 --split-per-abi --build-name=1.0.0 --build-number=1 --dart-define=USTC_BUILD_REVISION=' + $script:fixtureRevision)) 'Android uses only the approved two ABI ordinary-entry release arguments'
+    Check (($android.Arguments -join ' ') -ceq ('build apk --release --pub --target lib/main.dart --target-platform android-arm64,android-x64 --split-per-abi --build-name=1.0.0 --build-number=1 --dart-define=USTC_BUILD_REVISION=' + $script:fixtureRevision)) 'Android regenerates release plugin registration and uses only the approved two ABI ordinary-entry release arguments'
     Check ($android.SigningMatches -and @($calls | Where-Object { $_.SigningPresent -and $_.Operation -cne 'Signed Android release build' }).Count -eq 0) 'signing environment exists only during Android compilation'
     Check ($android.GradleOptions.Contains('-Dorg.gradle.daemon=false') -and $android.GradleOptions.Contains('-Dorg.gradle.configuration-cache=false')) 'Gradle daemon and configuration cache are disabled'
     Check ($android.Temp -ceq (Join-Path $script:fixtureRepository 'app/build/release-preparation/temp')) 'temporary files stay in the source-relative non-system build directory'

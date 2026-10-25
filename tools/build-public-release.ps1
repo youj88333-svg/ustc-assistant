@@ -290,7 +290,9 @@ function Invoke-PublicReleaseBuild {
         $stages.Add([pscustomobject]@{ name = 'fixed-speech-assets'; status = 'passed' })
         [void](Assert-PublicReleaseSource -RepositoryRoot $repository -Revision $sourceRevision -Git $git)
         if ($Platform -in @('Windows', 'All')) {
-            [void](Invoke-PublicReleaseProcess @common -Executable $flutter -Arguments @('build', 'windows', '--release', '--no-pub', '--target', 'lib/main.dart', "--dart-define=USTC_BUILD_REVISION=$sourceRevision") -Operation 'Windows release build' -LogPath (Join-Path $runRoot '03-windows-build.log'))
+            # --pub also regenerates release plugin registrants; --no-pub can
+            # retain integration-test registrations after a native test run.
+            [void](Invoke-PublicReleaseProcess @common -Executable $flutter -Arguments @('build', 'windows', '--release', '--pub', '--target', 'lib/main.dart', "--dart-define=USTC_BUILD_REVISION=$sourceRevision") -Operation 'Windows release build' -LogPath (Join-Path $runRoot '03-windows-build.log'))
             [void](Assert-PublicReleaseSource -RepositoryRoot $repository -Revision $sourceRevision -Git $git)
             $packager = Resolve-PublicReleaseLocalPath (Join-Path $repository 'tools/package-windows-release.ps1') -RequireFile
             [void](Invoke-PublicReleaseProcess @common -Executable $shell -Arguments ($powershellArguments + @($packager, '-ReleaseDirectory', (Join-Path $app 'build/windows/x64/runner/Release'), '-Revision', $sourceRevision)) -Operation 'Windows candidate package' -LogPath (Join-Path $runRoot '04-windows-package.log'))
@@ -305,7 +307,7 @@ function Invoke-PublicReleaseBuild {
                 [Environment]::SetEnvironmentVariable('USTC_ANDROID_KEY_ALIAS', $signing.KeyAlias, 'Process')
                 [Environment]::SetEnvironmentVariable('USTC_ANDROID_STORE_PASSWORD', $passwordText, 'Process')
                 [Environment]::SetEnvironmentVariable('USTC_ANDROID_KEY_PASSWORD', $passwordText, 'Process')
-                [void](Invoke-PublicReleaseProcess @common -Executable $flutter -Arguments @('build', 'apk', '--release', '--no-pub', '--target', 'lib/main.dart', '--target-platform', 'android-arm64,android-x64', '--split-per-abi', '--build-name=1.0.0', '--build-number=1', "--dart-define=USTC_BUILD_REVISION=$sourceRevision") -Operation 'Signed Android release build' -Secrets @($passwordText) -LogPath (Join-Path $runRoot '05-android-build.log'))
+                [void](Invoke-PublicReleaseProcess @common -Executable $flutter -Arguments @('build', 'apk', '--release', '--pub', '--target', 'lib/main.dart', '--target-platform', 'android-arm64,android-x64', '--split-per-abi', '--build-name=1.0.0', '--build-number=1', "--dart-define=USTC_BUILD_REVISION=$sourceRevision") -Operation 'Signed Android release build' -Secrets @($passwordText) -LogPath (Join-Path $runRoot '05-android-build.log'))
             } finally {
                 foreach ($name in @('USTC_ANDROID_KEYSTORE', 'USTC_ANDROID_KEY_ALIAS', 'USTC_ANDROID_STORE_PASSWORD', 'USTC_ANDROID_KEY_PASSWORD')) { [Environment]::SetEnvironmentVariable($name, $null, 'Process') }
                 $passwordText = $null
