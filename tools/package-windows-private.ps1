@@ -10,6 +10,8 @@ $script:DisplayVersion = '1.00'
 $script:ProductName = 'USTC Assistant'
 $script:ExecutableName = 'ustc_assistant_m0.exe'
 $script:IgnoredBuildFile = 'notification_native.lib'
+$script:BrandAsset = 'data/flutter_assets/assets/branding/ustc_assistant_icon_concept_v1.png'
+$script:BrandSha256 = 'a89623e9364cd95fe916ff0764407bf45ac11932a7eafc14bda47cb5175bbd7c'
 $script:Documents = [ordered]@{
   'windows-1.00.md' = 'docs/releases/windows-1.00.md'
   'windows-1.00-known-issues.md' = 'docs/releases/windows-1.00-known-issues.md'
@@ -21,6 +23,7 @@ function Get-ExpectedReleasePaths {
     'record_windows_plugin.dll', 'sherpa-onnx-c-api.dll', 'sqlite3.dll', 'ustc_directory_win.dll',
     'data/app.so', 'data/icudtl.dat', 'data/flutter_assets/AssetManifest.bin', 'data/flutter_assets/FontManifest.json',
     'data/flutter_assets/NativeAssetsManifest.json', 'data/flutter_assets/NOTICES.Z',
+    'data/flutter_assets/assets/branding/ustc_assistant_icon_concept_v1.png',
     'data/flutter_assets/assets/knowledge/catalog.json', 'data/flutter_assets/assets/knowledge/finance-business-index.md',
     'data/flutter_assets/assets/knowledge/finance-student-activities.md', 'data/flutter_assets/assets/knowledge/teach-adjustment.md',
     'data/flutter_assets/assets/knowledge/teach-certificates.md', 'data/flutter_assets/assets/knowledge/teach-deferred-exam.md',
@@ -122,6 +125,13 @@ function Assert-SpeechAssets {
   }
 }
 
+function Assert-BrandAsset {
+  param([string]$Root)
+  $path = Join-Path $Root $script:BrandAsset
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw 'Approved brand asset is missing.' }
+  if ((Get-Sha256 $path) -cne $script:BrandSha256) { throw 'Brand asset differs from the approved icon.' }
+}
+
 function Assert-ExecutableMetadata {
   param([string]$Path, [string]$Version)
   $info = (Get-Item -LiteralPath $Path).VersionInfo
@@ -146,6 +156,8 @@ function Write-PackageManifest {
   $manifest = [ordered]@{
     schemaVersion = 1; productName = $script:ProductName; displayVersion = $script:DisplayVersion
     version = $script:Version; sourceRevision = $Revision.ToLowerInvariant()
+    buildType = 'release'; entry = 'lib/main.dart'; dataSchema = 20; publicRelease = $false
+    agentToolRegistry = 'agent-tools-v7'; persona = 'ustc-personal-maid-agent-v15'
     pubspecLockSha256 = Get-Sha256 (Join-Path $script:WorkspaceRoot 'app\pubspec.lock')
     executable = [ordered]@{ file = $script:ExecutableName; fileVersion = $ExeInfo.FileVersion; productVersion = $ExeInfo.ProductVersion; productName = $ExeInfo.ProductName }
     files = @($Files)
@@ -224,7 +236,7 @@ function Invoke-WindowsPrivatePackage {
   param([string]$Source, [string]$SourceRevision)
   if ($SourceRevision -notmatch '^[0-9a-fA-F]{40}$') { throw 'Revision must be exactly 40 hexadecimal characters.' }
   $revision = $SourceRevision.ToLowerInvariant(); $version = Get-ReleaseVersion; $release = Resolve-ReleaseDirectory $Source
-  $files = @(Get-ValidatedReleaseFiles $release); Assert-SpeechAssets $release
+  $files = @(Get-ValidatedReleaseFiles $release); Assert-SpeechAssets $release; Assert-BrandAsset $release
   Assert-ExecutableMetadata (Join-Path $release $script:ExecutableName) $version
   $docs = [System.Collections.Generic.List[object]]::new()
   foreach ($name in $script:Documents.Keys) {
@@ -250,7 +262,7 @@ function Invoke-WindowsPrivatePackage {
     Copy-Item -LiteralPath $entry.Item.FullName -Destination $destination
   }
   foreach ($doc in $docs) { Copy-Item -LiteralPath $doc.Item.FullName -Destination (Join-Path $package $doc.Name) }
-  Assert-SpeechAssets $package; Assert-ExecutableMetadata (Join-Path $package $script:ExecutableName) $version
+  Assert-SpeechAssets $package; Assert-BrandAsset $package; Assert-ExecutableMetadata (Join-Path $package $script:ExecutableName) $version
   $expected = @(Get-ExpectedReleasePaths) + @($script:Documents.Keys); $records = @(Get-PackageFileRecords $package)
   if ($records.Count -ne $expected.Count) { throw 'Copied package file count differs from fixed payload.' }
   foreach ($record in $records) { if ($expected -cnotcontains $record.path) { throw "Unexpected copied package file: $($record.path)" } }

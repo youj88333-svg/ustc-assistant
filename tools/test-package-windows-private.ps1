@@ -19,7 +19,7 @@ function Throws([scriptblock]$Action, [string]$Pattern, [string]$Message) {
 try {
   [void][IO.Directory]::CreateDirectory($temp)
   Check ((Get-ReleaseVersion) -ceq '1.0.0+1') 'pubspec and Dart application version agree'
-  Check (@(Get-ExpectedReleasePaths).Count -eq 35) 'fixed runtime allowlist includes WebView2 notices'
+  Check (@(Get-ExpectedReleasePaths).Count -eq 36) 'fixed runtime allowlist includes the approved brand and WebView2 notices'
   Throws { Assert-NoReparseAttributes ([IO.FileAttributes]::Directory -bor [IO.FileAttributes]::ReparsePoint) 'fixture' } 'reparse point' 'reject reparse attributes'
   Throws { Assert-SafeRelativePath '../outside' } 'Unsafe package path' 'reject archive traversal'
 
@@ -32,7 +32,15 @@ try {
   [IO.File]::WriteAllText((Join-Path $release 'notification_native.lib'), 'build-only')
   $release = Resolve-ReleaseDirectory $release
   $files = @(Get-ValidatedReleaseFiles $release)
-  Check ($files.Count -eq 35) 'accept exact runtime file list and exclude notification_native.lib'
+  Check ($files.Count -eq 36) 'accept exact runtime file list and exclude notification_native.lib'
+  Throws { Assert-BrandAsset $release } 'differs from the approved icon' 'reject a substituted brand asset'
+  $brand = Join-Path $release 'data/flutter_assets/assets/branding/ustc_assistant_icon_concept_v1.png'
+  Copy-Item -LiteralPath (Join-Path $workspace 'app\assets\branding\ustc_assistant_icon_concept_v1.png') -Destination $brand
+  Assert-BrandAsset $release
+  Check $true 'accept the reviewed main icon without altering it'
+  Remove-Item -LiteralPath $brand
+  Throws { Get-ValidatedReleaseFiles $release } 'Required release files are missing' 'reject a payload missing its brand asset'
+  Copy-Item -LiteralPath (Join-Path $workspace 'app\assets\branding\ustc_assistant_icon_concept_v1.png') -Destination $brand
   $unknown = Join-Path $release 'extra.txt'; [IO.File]::WriteAllText($unknown, 'fixture')
   Throws { Get-ValidatedReleaseFiles $release } 'non-allowlisted' 'reject unknown release file'
   Remove-Item -LiteralPath $unknown
@@ -56,6 +64,11 @@ try {
   $exe = [pscustomobject]@{ FileVersion = '1.0.0+1'; ProductVersion = '1.0.0+1'; ProductName = 'USTC Assistant' }
   $revision = '0123456789abcdef0123456789abcdef01234567'
   $manifest = Write-PackageManifest $package $records $revision $exe
+  $metadata = Get-Content -LiteralPath (Join-Path $package 'manifest.json') -Raw | ConvertFrom-Json
+  Check ($metadata.dataSchema -eq 20 -and $metadata.buildType -ceq 'release' -and
+    $metadata.entry -ceq 'lib/main.dart' -and -not $metadata.publicRelease -and
+    $metadata.agentToolRegistry -ceq 'agent-tools-v7' -and
+    $metadata.persona -ceq 'ustc-personal-maid-agent-v15') 'handoff metadata identifies the current private ordinary build'
   $zip = Join-Path $temp 'synthetic.zip'
   [IO.Compression.ZipFile]::CreateFromDirectory($package, $zip, [IO.Compression.CompressionLevel]::Optimal, $true)
   Assert-ZipMatchesManifest $zip $folder $revision @('readme.md', 'nested/asset.bin') $manifest.Bytes $manifest.Sha256
