@@ -56,6 +56,10 @@ if [[ ! -d "$app/PlugIns/I0Widget.appex" ]]; then
   echo 'i0 build failed: embedded_widget_missing' >&2
   exit 2
 fi
+for binary in 'Runner' 'PlugIns/I0Widget.appex/I0Widget' 'Frameworks/App.framework/App' 'Frameworks/Flutter.framework/Flutter'; do
+  printf 'i0 device binary %s: ' "$binary"
+  xcrun lipo -archs "$app/$binary"
+done
 export I0_SOURCE_REVISION="$revision"
 export I0_APP_DIRECTORY="$app"
 export I0_OUTPUT_DIRECTORY="$output"

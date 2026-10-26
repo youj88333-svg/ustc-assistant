@@ -40,8 +40,13 @@ MAX_INFO_PLIST = 4 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_MACHO_LOAD_COMMAND_BYTES = 16 * 1024 * 1024
 MAX_MACHO_LOAD_COMMANDS = 65536
+MAX_FAT_ARCHES = 16
+MAX_FAT_ALIGNMENT_EXPONENT = 31
 MAX_COMPRESSION_RATIO = 1000
 STREAM_CHUNK_SIZE = 64 * 1024
+
+CPU_TYPE_ARM64 = 0x0100000C
+ARM64_SUBTYPE_BASES = {0, 1, 2}  # ARM64_ALL, ARM64_V8 and ARM64E
 
 ZIP_METHODS = {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}
 PRIVATE_KEY_SUFFIXES = (".p12", ".p8", ".pfx", ".key", ".pem", ".keystore", ".jks")
@@ -50,6 +55,12 @@ FAT_MACHO_MAGICS = {
     b"\xbe\xba\xfe\xca",
     b"\xca\xfe\xba\xbf",
     b"\xbf\xba\xfe\xca",
+}
+FAT_MACHO_FORMATS = {
+    b"\xca\xfe\xba\xbe": (">", False),  # FAT_MAGIC
+    b"\xbe\xba\xfe\xca": ("<", False),  # FAT_CIGAM
+    b"\xca\xfe\xba\xbf": (">", True),  # FAT_MAGIC_64
+    b"\xbf\xba\xfe\xca": ("<", True),  # FAT_CIGAM_64
 }
 
 
@@ -364,44 +375,37 @@ def _validate_bundle_layout(members: dict[str, zipfile.ZipInfo]) -> None:
         _fail("widget_bundle_count_mismatch")
 
 
-def _read_macho_prefix(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> tuple[bytes, bytes]:
-    if info.file_size < 32:
-        _fail("invalid_macho")
-    try:
-        with zf.open(info, "r") as stream:
-            header = stream.read(32)
-            if len(header) != 32:
-                _fail("invalid_macho")
-            magic = header[:4]
-            if magic in FAT_MACHO_MAGICS:
-                _fail("unsupported_macho_format")
-            if magic != b"\xcf\xfa\xed\xfe":
-                _fail("invalid_macho")
-            fields = struct.unpack("<IiiIIIII", header)
-            _, cpu_type, _, file_type, command_count, command_bytes, _, _ = fields
-            if cpu_type != 0x0100000C:
-                _fail("macho_not_arm64")
-            if command_count > MAX_MACHO_LOAD_COMMANDS or command_bytes > MAX_MACHO_LOAD_COMMAND_BYTES:
-                _fail("macho_load_command_limit")
-            if 32 + command_bytes > info.file_size:
-                _fail("invalid_macho")
-            commands = stream.read(command_bytes)
-            if len(commands) != command_bytes:
-                _fail("invalid_macho")
-            return header, commands
-    except VerificationError:
-        raise
-    except (OSError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError):
-        _fail("invalid_macho")
+def _read_exact(stream: Any, length: int, failure_code: str = "invalid_macho") -> bytes:
+    if length < 0:
+        _fail(failure_code)
+    data = bytearray()
+    while len(data) < length:
+        chunk = stream.read(min(STREAM_CHUNK_SIZE, length - len(data)))
+        if not chunk:
+            _fail(failure_code)
+        data.extend(chunk)
+    return bytes(data)
 
 
-def _validate_macho(zf: zipfile.ZipFile, info: zipfile.ZipInfo, expected_file_type: int) -> None:
-    header, commands = _read_macho_prefix(zf, info)
-    fields = struct.unpack("<IiiIIIII", header)
-    file_type, command_count, command_bytes = fields[3], fields[4], fields[5]
-    if file_type != expected_file_type:
-        _fail("macho_file_type_mismatch")
+def _skip_exact(stream: Any, length: int, failure_code: str = "invalid_macho") -> None:
+    if length < 0:
+        _fail(failure_code)
+    remaining = length
+    while remaining:
+        chunk = stream.read(min(STREAM_CHUNK_SIZE, remaining))
+        if not chunk:
+            _fail(failure_code)
+        remaining -= len(chunk)
 
+
+def _validate_arm64(cpu_type: int, cpu_subtype: int) -> None:
+    if cpu_type != CPU_TYPE_ARM64:
+        _fail("macho_not_arm64")
+    if (cpu_subtype & 0x00FFFFFF) not in ARM64_SUBTYPE_BASES:
+        _fail("macho_subtype_unsupported")
+
+
+def _validate_load_commands(commands: bytes, command_count: int, expected_command_bytes: int) -> None:
     offset = 0
     build_platforms: list[int] = []
     for _ in range(command_count):
@@ -418,7 +422,7 @@ def _validate_macho(zf: zipfile.ZipFile, info: zipfile.ZipInfo, expected_file_ty
                 _fail("invalid_macho_load_command")
             build_platforms.append(platform)
         offset += command_size
-    if offset != command_bytes:
+    if offset != expected_command_bytes:
         _fail("invalid_macho_load_command")
     if not build_platforms:
         _fail("macho_platform_missing")
@@ -426,16 +430,157 @@ def _validate_macho(zf: zipfile.ZipFile, info: zipfile.ZipInfo, expected_file_ty
         _fail("macho_platform_mismatch")
 
 
+def _read_thin_slice_prefix(
+    stream: Any,
+    first_four: bytes,
+    slice_size: int,
+    expected_file_type: int,
+    descriptor: tuple[int, int] | None = None,
+) -> bytes:
+    if first_four in FAT_MACHO_MAGICS:
+        _fail("unsupported_nested_fat_macho")
+    if first_four != b"\xcf\xfa\xed\xfe" or slice_size < 32:
+        _fail("invalid_macho")
+    header = first_four + _read_exact(stream, 28)
+    _, cpu_type, cpu_subtype, file_type, command_count, command_bytes, _, _ = struct.unpack("<IiiIIIII", header)
+    _validate_arm64(cpu_type, cpu_subtype)
+    if descriptor is not None and descriptor != (cpu_type, cpu_subtype):
+        _fail("fat_descriptor_mismatch")
+    if file_type != expected_file_type:
+        _fail("macho_file_type_mismatch")
+    if command_count > MAX_MACHO_LOAD_COMMANDS or command_bytes > MAX_MACHO_LOAD_COMMAND_BYTES:
+        _fail("macho_load_command_limit")
+    if 32 + command_bytes > slice_size:
+        _fail("invalid_macho")
+    commands = _read_exact(stream, command_bytes)
+    _validate_load_commands(commands, command_count, command_bytes)
+    return header + commands
+
+
+def _parse_fat_arches(stream: Any, magic: bytes, file_size: int) -> tuple[list[tuple[int, int, int, int]], int]:
+    byte_order, is_64 = FAT_MACHO_FORMATS[magic]
+    arch_count = struct.unpack(byte_order + "I", _read_exact(stream, 4))[0]
+    if arch_count < 1 or arch_count > MAX_FAT_ARCHES:
+        _fail("macho_fat_arch_count")
+    entry_size = 32 if is_64 else 20
+    table_bytes = arch_count * entry_size
+    table_end = 8 + table_bytes
+    if table_end > file_size:
+        _fail("macho_fat_table_truncated")
+    table = _read_exact(stream, table_bytes)
+
+    architectures: list[tuple[int, int, int, int]] = []
+    seen_architectures: set[tuple[int, int]] = set()
+    for index in range(arch_count):
+        base = index * entry_size
+        if is_64:
+            cpu_type, cpu_subtype, offset, size, alignment, reserved = struct.unpack_from(byte_order + "iiQQII", table, base)
+            if reserved != 0:
+                _fail("macho_fat_reserved_field")
+        else:
+            cpu_type, cpu_subtype, offset, size, alignment = struct.unpack_from(byte_order + "iiIII", table, base)
+
+        _validate_arm64(cpu_type, cpu_subtype)
+        architecture = (cpu_type, cpu_subtype)
+        if architecture in seen_architectures:
+            _fail("macho_fat_duplicate_arch")
+        seen_architectures.add(architecture)
+
+        if alignment > MAX_FAT_ALIGNMENT_EXPONENT:
+            _fail("macho_fat_alignment")
+        if offset < table_end:
+            _fail("macho_fat_table_overlap")
+        if size < 32 or offset > file_size or size > file_size - offset:
+            _fail("macho_fat_out_of_bounds")
+        if offset % (1 << alignment) != 0:
+            _fail("macho_fat_alignment")
+        architectures.append((cpu_type, cpu_subtype, offset, size))
+
+    ordered = sorted(architectures, key=lambda arch: arch[2])
+    previous_end = table_end
+    for _, _, offset, size in ordered:
+        if offset < previous_end:
+            _fail("macho_fat_overlap")
+        previous_end = offset + size
+    return ordered, table_end
+
+
+def _scan_slice_region(stream: Any, remaining: int, prefix: bytes, needle: bytes) -> bool:
+    found = needle in prefix
+    tail = prefix[-(len(needle) - 1) :] if len(needle) > 1 else b""
+    left = remaining
+    while left:
+        chunk = stream.read(min(STREAM_CHUNK_SIZE, left))
+        if not chunk:
+            _fail("invalid_macho")
+        left -= len(chunk)
+        if not found:
+            combined = tail + chunk
+            if needle in combined:
+                found = True
+            elif len(needle) > 1:
+                tail = combined[-(len(needle) - 1) :]
+    return found
+
+
+def _validate_macho(
+    zf: zipfile.ZipFile,
+    info: zipfile.ZipInfo,
+    expected_file_type: int,
+    *,
+    expected_revision: bytes | None = None,
+) -> bool:
+    """Validate one thin or universal executable using a single forward ZIP stream."""
+    scan_revision = expected_revision is not None
+    revision = expected_revision if expected_revision is not None else b""
+    try:
+        with zf.open(info, "r") as stream:
+            magic = _read_exact(stream, 4)
+            if magic == b"\xcf\xfa\xed\xfe":
+                prefix = _read_thin_slice_prefix(stream, magic, info.file_size, expected_file_type)
+                if not scan_revision:
+                    return True
+                return _scan_slice_region(stream, info.file_size - len(prefix), prefix, revision)
+            if magic not in FAT_MACHO_FORMATS:
+                if magic in FAT_MACHO_MAGICS:
+                    _fail("unsupported_macho_format")
+                _fail("invalid_macho")
+
+            architectures, table_end = _parse_fat_arches(stream, magic, info.file_size)
+            current_position = table_end
+            revision_found_in_every_slice = True
+            for cpu_type, cpu_subtype, slice_offset, slice_size in architectures:
+                if slice_offset < current_position:
+                    _fail("macho_fat_overlap")
+                _skip_exact(stream, slice_offset - current_position)
+                current_position = slice_offset
+                prefix = _read_thin_slice_prefix(
+                    stream,
+                    _read_exact(stream, 4),
+                    slice_size,
+                    expected_file_type,
+                    (cpu_type, cpu_subtype),
+                )
+                remaining = slice_size - len(prefix)
+                if scan_revision:
+                    if not _scan_slice_region(stream, remaining, prefix, revision):
+                        revision_found_in_every_slice = False
+                else:
+                    _skip_exact(stream, remaining)
+                current_position += slice_size
+            return revision_found_in_every_slice
+    except VerificationError:
+        raise
+    except (OSError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError):
+        _fail("invalid_macho")
+
+
 def _validate_archive_contents(
     zf: zipfile.ZipFile,
     infos: list[zipfile.ZipInfo],
     declared_total: int,
-    aot_info: zipfile.ZipInfo,
-    expected_revision: bytes,
-) -> bool:
+) -> None:
     actual_total = 0
-    aot_found = False
-    aot_tail = b""
     for info in infos:
         if info.is_dir():
             continue
@@ -450,12 +595,6 @@ def _validate_archive_contents(
                     actual_total += len(chunk)
                     if count > info.file_size or actual_total > MAX_TOTAL_UNCOMPRESSED:
                         _fail("archive_actual_size_limit")
-                    if info is aot_info and not aot_found:
-                        combined = aot_tail + chunk
-                        if expected_revision in combined:
-                            aot_found = True
-                        else:
-                            aot_tail = combined[-(len(expected_revision) - 1) :]
         except VerificationError:
             raise
         except (OSError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError):
@@ -464,7 +603,6 @@ def _validate_archive_contents(
             _fail("invalid_archive_member")
     if actual_total != declared_total:
         _fail("invalid_archive_size")
-    return aot_found
 
 
 def _hash_stream(stream: BinaryIO) -> tuple[str, int]:
@@ -527,10 +665,11 @@ def verify_package(
 
                 _validate_macho(zf, app_exec_info, 2)  # MH_EXECUTE
                 _validate_macho(zf, widget_exec_info, 2)
-                _validate_macho(zf, aot_info, 6)  # MH_DYLIB
+                aot_revision_found = _validate_macho(zf, aot_info, 6, expected_revision=expected_revision.encode("ascii"))  # MH_DYLIB
                 _validate_macho(zf, flutter_info, 6)
 
-                if not _validate_archive_contents(zf, infos, declared_total, aot_info, expected_revision.encode("ascii")):
+                _validate_archive_contents(zf, infos, declared_total)
+                if not aot_revision_found:
                     _fail("aot_revision_missing")
 
             final_stat = os.fstat(ipa_file.fileno())
