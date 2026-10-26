@@ -1,0 +1,4 @@
+# SDK analyzer defaults; the isolated probe has no third-party lint dependency.
+analyzer:
+  exclude:
+    - build/**

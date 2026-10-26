@@ -1,0 +1,33 @@
+workflows:
+  ios-i0-preflight:
+    name: iOS I0 - source and Mac preflight
+    instance_type: mac_mini_m2
+    max_build_duration: 5
+    environment:
+      xcode: '27.1'
+    scripts:
+      - name: Verify the public checkout and native toolchain
+        script: bash tools/ios-i0/preflight.sh
+    artifacts:
+      - app/build/ios-i0/artifacts/i0-preflight.json
+
+  ios-i0-probe:
+    name: iOS I0 - unsigned device and Widget probe
+    instance_type: mac_mini_m2
+    max_build_duration: 30
+    environment:
+      flutter: '3.47.7'
+      xcode: '27.1'
+    scripts:
+      - name: Verify source and native toolchain
+        script: bash tools/ios-i0/preflight.sh
+      - name: Build and verify the isolated Release probe
+        script: bash tools/ios-i0/build.sh
+    artifacts:
+      - app/build/ios-i0/artifacts/i0-preflight.json
+      - app/build/ios-i0/artifacts/ios-i0-unsigned.ipa
+      - app/build/ios-i0/artifacts/ios-i0-verification.json
+      - app/build/ios-i0/artifacts/ios-i0-provenance.json
+      - app/build/ios-i0/artifacts/Runner.entitlements
+      - app/build/ios-i0/artifacts/I0Widget.entitlements
+      - app/build/ios-i0/artifacts/i0-build.log
