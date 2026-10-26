@@ -307,11 +307,23 @@ def _validate_manifest(value: dict[str, Any], expected_revision: str) -> None:
         "widgetBundleId": WIDGET_BUNDLE_ID,
         "appGroupBase": APP_GROUP_BASE,
     }
+    if value.get("kind") == "ios-i0-signing-input-v1":
+        required.update({
+            "kind": "ios-i0-signing-input-v1",
+            "artifactStatus": "adhoc-request-only",
+            "metadataCarrier": "adhoc-entitlement-request",
+            "appleDeveloperSignature": False,
+        })
+    elif "metadataCarrier" in value or "appleDeveloperSignature" in value:
+        _fail("invalid_manifest")
     if set(required) - value.keys():
         _fail("invalid_manifest")
     for key, expected in required.items():
         actual = value.get(key)
-        if type(expected) is int:
+        if type(expected) is bool:
+            if type(actual) is not bool or actual is not expected:
+                _fail("invalid_manifest")
+        elif type(expected) is int:
             if type(actual) is not int or actual != expected:
                 _fail("invalid_manifest")
         elif not isinstance(actual, str) or actual != expected:
@@ -695,12 +707,12 @@ def verify_package(
 
     report: dict[str, Any] = {
         "reportVersion": 1,
-        "artifactKind": "ios-i0-unsigned-ipa-v1",
+        "artifactKind": manifest["kind"],
         "sourceRevision": expected_revision,
         "flutterVersion": "3.47.7",
         "xcodeVersion": "27.1",
         "buildMode": "release",
-        "artifactStatus": "unsigned-personal-probe",
+        "artifactStatus": manifest["artifactStatus"],
         "appBundleId": APP_BUNDLE_ID,
         "widgetBundleId": WIDGET_BUNDLE_ID,
         "appGroupBase": APP_GROUP_BASE,

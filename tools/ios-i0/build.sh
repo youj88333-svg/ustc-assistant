@@ -90,4 +90,84 @@ mkdir -p "$staging/Payload"
 ditto "$app" "$staging/Payload/Runner.app"
 ditto -c -k --norsrc --keepParent "$staging/Payload" "$output/ios-i0-unsigned.ipa"
 python3 "$repo/tools/ios-i0/verify_package.py" --ipa "$output/ios-i0-unsigned.ipa" --expected-revision "$revision" --report "$output/ios-i0-verification.json"
+
+# Separately approved I0 metadata carrier. Preserve the original signature-less
+# package above. This copy makes only a request visible to a local resigner;
+# ad-hoc signing uses no Apple identity, certificate, account or device profile.
+input_staging="$repo/app/build/ios-i0/signing-input"
+input_app="$input_staging/Payload/Runner.app"
+mkdir -p "$input_staging/Payload"
+ditto "$app" "$input_app"
+export I0_SIGNING_INPUT_DIRECTORY="$input_app"
+python3 - <<'PY'
+import json
+import os
+import plistlib
+from pathlib import Path
+
+root = Path(os.environ['I0_SIGNING_INPUT_DIRECTORY'])
+group = 'group.cn.ustcassistant.ios.i0'
+for relative in ('Info.plist', 'PlugIns/I0Widget.appex/Info.plist'):
+    path = root / relative
+    with path.open('rb') as source:
+        info = plistlib.load(source)
+    assert info['I0AppGroupBaseIdentifier'] == group
+    info['ALTAppGroups'] = [group]
+    with path.open('wb') as destination:
+        plistlib.dump(info, destination, fmt=plistlib.FMT_BINARY)
+path = root / 'ios-i0-provenance.json'
+manifest = json.loads(path.read_text(encoding='utf-8'))
+manifest['kind'] = 'ios-i0-signing-input-v1'
+manifest['artifactStatus'] = 'adhoc-request-only'
+manifest['metadataCarrier'] = 'adhoc-entitlement-request'
+manifest['appleDeveloperSignature'] = False
+path.write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+PY
+
+for framework in 'App' 'Flutter'; do
+  /usr/bin/codesign --force --sign - --timestamp=none "$input_app/Frameworks/$framework.framework"
+done
+/usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$generated/ios/I0Widget/I0Widget.entitlements" "$input_app/PlugIns/I0Widget.appex"
+/usr/bin/codesign --force --sign - --timestamp=none --generate-entitlement-der --entitlements "$generated/ios/Runner/Runner.entitlements" "$input_app"
+
+python3 - <<'PY'
+import json
+import os
+import plistlib
+import subprocess
+from pathlib import Path
+
+root = Path(os.environ['I0_SIGNING_INPUT_DIRECTORY'])
+expected = {'com.apple.security.application-groups': ['group.cn.ustcassistant.ios.i0']}
+for bundle in (root, root / 'PlugIns/I0Widget.appex'):
+    subprocess.run(['/usr/bin/codesign', '--verify', '--deep', '--strict', str(bundle)], check=True)
+    output = subprocess.run(
+        ['/usr/bin/codesign', '--display', '--entitlements', '-', '--xml', str(bundle)],
+        check=True, capture_output=True
+    )
+    if len(output.stdout) > 16384 or plistlib.loads(output.stdout) != expected:
+        raise ValueError('unexpected_requested_entitlements')
+    metadata = subprocess.run(
+        ['/usr/bin/codesign', '--display', '--verbose=4', str(bundle)],
+        check=True, capture_output=True, text=True
+    )
+    if 'Signature=adhoc' not in metadata.stderr:
+        raise ValueError('unexpected_signing_identity')
+    if (bundle / 'embedded.mobileprovision').exists():
+        raise ValueError('unexpected_apple_profile')
+report = {
+    'kind': 'ios-i0-entitlement-request-v1',
+    'sourceRevision': os.environ['I0_SOURCE_REVISION'],
+    'metadataCarrier': 'adhoc-entitlement-request',
+    'hostAndWidgetRequestVerified': True,
+    'appleCredentialsUsed': False,
+    'appleProfilePresent': False,
+    'appGroupAuthorizationVerified': False,
+}
+path = Path(os.environ['I0_OUTPUT_DIRECTORY']) / 'ios-i0-entitlement-request.json'
+path.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+print(json.dumps(report))
+PY
+ditto -c -k --norsrc --keepParent "$input_staging/Payload" "$output/ios-i0-signing-input.ipa"
+python3 "$repo/tools/ios-i0/verify_package.py" --ipa "$output/ios-i0-signing-input.ipa" --expected-revision "$revision" --report "$output/ios-i0-signing-input-verification.json"
 echo 'i0 build complete: unsigned_probe_verified; signing_and_device_gates_pending'

@@ -274,6 +274,43 @@ class VerifyPackageTests(unittest.TestCase):
         self.assertEqual(saved, report)
         self.assertNotIn(str(ipa_path), report_path.read_text(encoding="utf-8"))
 
+    def signing_input_members(self, **overrides: Any) -> list[tuple[str, bytes, int | None]]:
+        value = json.loads(manifest())
+        value.update({
+            "kind": "ios-i0-signing-input-v1",
+            "artifactStatus": "adhoc-request-only",
+            "metadataCarrier": "adhoc-entitlement-request",
+            "appleDeveloperSignature": False,
+        })
+        value.update(overrides)
+        return [(name, json.dumps(value).encode() if name == verify_package_module.MANIFEST_PATH else data, attr)
+                for name, data, attr in fixture_members()]
+
+    def test_signing_input_reports_a_distinct_non_authorizing_status(self) -> None:
+        path = write_ipa(self.root / "signing-input.ipa", self.signing_input_members())
+        report = verify_package_module.verify_package(path, REVISION)
+        self.assertEqual(report["artifactKind"], "ios-i0-signing-input-v1")
+        self.assertEqual(report["artifactStatus"], "adhoc-request-only")
+        self.assertTrue(report["checks"]["noEmbeddedProvisioningProfileOrPrivateKeyFiles"])
+
+    def test_signing_input_cannot_claim_apple_authorization_or_unsigned_identity(self) -> None:
+        cases = [
+            {"appleDeveloperSignature": True},
+            {"appleDeveloperSignature": 0},
+            {"metadataCarrier": "other"},
+            {"artifactStatus": "unsigned-personal-probe"},
+            {"kind": "ios-i0-unsigned-ipa-v1"},
+        ]
+        for index, overrides in enumerate(cases):
+            with self.subTest(overrides=overrides):
+                path = write_ipa(self.root / f"bad-input-{index}.ipa", self.signing_input_members(**overrides))
+                self.assert_reason("invalid_manifest", lambda: verify_package_module.verify_package(path, REVISION))
+
+    def test_signing_input_still_rejects_embedded_apple_profile(self) -> None:
+        path = write_ipa(self.root / "profile-input.ipa", self.signing_input_members(),
+                         extra_entries=[("Payload/Runner.app/embedded.mobileprovision", b"synthetic-profile")])
+        self.assert_reason("prohibited_package_asset", lambda: verify_package_module.verify_package(path, REVISION))
+
     def test_revision_must_appear_across_aot_stream_chunk_boundary(self) -> None:
         prefix = b"x" * (verify_package_module.STREAM_CHUNK_SIZE - 13)
         ipa_path = self.ipa(aot_prefix=prefix)

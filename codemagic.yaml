@@ -27,6 +27,9 @@ workflows:
       - app/build/ios-i0/artifacts/i0-preflight.json
       - app/build/ios-i0/artifacts/ios-i0-unsigned.ipa
       - app/build/ios-i0/artifacts/ios-i0-verification.json
+      - app/build/ios-i0/artifacts/ios-i0-signing-input.ipa
+      - app/build/ios-i0/artifacts/ios-i0-signing-input-verification.json
+      - app/build/ios-i0/artifacts/ios-i0-entitlement-request.json
       - app/build/ios-i0/artifacts/ios-i0-provenance.json
       - app/build/ios-i0/artifacts/Runner.entitlements
       - app/build/ios-i0/artifacts/I0Widget.entitlements
