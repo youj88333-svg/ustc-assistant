@@ -125,16 +125,16 @@ I0仅新增`verification/ios-private-probe`、`tools/ios-i0`及Codemagic入口�
 
 Flutter通道`ustc_assistant/ios_i0_v1`只允许无参数的`inspect`、`writeSyntheticMarker`。结果为`ios-i0-probe-v1`，只含源码修订、应用标识、共享可用/组摘要、合成标记/时间和固定失败码；无任意路径、账号、网络或脚本入口。Widget只读同一文件，按系统时间线展示合成值，点按仅打开探针。
 
-Codemagic分为手动预检和手动设备构建两个workflow，Mac M2、固定Xcode27.1；设备构建固定Flutter3.47.7、Release/AOT、不签名、不自动发布或设置通知收件人。预检限5分钟、构建限30分钟；云端不得提供Apple凭据/证书/配对文件。设备包含Runner及一个Widget，不含业务库、学校页面、语音权重或实际秘密。
+Codemagic分为手动预检和手动设备构建两个workflow，Mac M2、固定Xcode27.1；设备构建固定Flutter3.47.7、Release/AOT，保留原始未签名包，并按下述追加批准生成独立请求元数据副本，不自动发布或设置通知收件人。预检限5分钟、构建限30分钟；云端不得提供Apple凭据/证书/配对文件。设备包含Runner及一个Widget，不含业务库、学校页面、语音权重或实际秘密。
 
 未签名IPA须核验ZIP路径/重复与体积、真实iOS arm64 Mach-O（不能用arm64模拟器代替）、两目标身份与共享声明、源修订和AOT内嵌修订、无profile/签名私钥/Debug资产。追溯文件`ios-i0-provenance.json`使用版本1，绑定源码、Flutter/Xcode、Release模式和unsigned-probe身份，不能只靠该文件自报通过。生成工程另校验两目标的entitlements源文件及其引用，随附固定声明供本机签名参考；Info自定义键和源文件均不是有效profile授权。Windows验证器优先Conda basic310，云端用现成Python标准库；不额外安装C盘工具链。操作入口见[探针说明](../../../verification/ios-private-probe/README.md)。
 
 文件归属：Luna/max承接探针Flutter/Swift源和合成测试；另一Luna/max承接Python包校验器、反例测试及Windows包装；Sol负责云端生成/打包脚本、原生工程装配、Codemagic配置和独立验收。原生模板/脚本兼容性另做只读复核，文件不重叠。最终分别登记本机合成、云端实际构建、用户本机签名和目标机共享/续签证据，不以任一项替代其余项。
 
-### 待确认修订：共享组请求元数据副本
+### 共享组请求元数据副本（已批准）
 
-当前仍按云端不签名实施。公开[AltSign实现](https://github.com/rileytestut/AltSign/blob/master/AltSign/Model/ALTApplication.mm#L147-L183)从Mach-O签名提取entitlements，[AltStore](https://github.com/altstoreio/AltStore/blob/marketplace/AltStore/Operations/FetchProvisioningProfilesOperation.swift#L376-L475)据此申请共享组；仅有外置`.entitlements`和自定义Info键不能作为它的请求输入。`ALTAppGroups`主要是重签后的运行时映射，也不等于profile授权。Sideloadly免费路径是否自动处理这些请求仍未验证。
+用户于2026-10-26明确回复“批准额外生成元数据副本”，仅放行本节。公开[AltSign实现](https://github.com/rileytestut/AltSign/blob/master/AltSign/Model/ALTApplication.mm#L147-L183)从Mach-O签名提取entitlements，[AltStore](https://github.com/altstoreio/AltStore/blob/marketplace/AltStore/Operations/FetchProvisioningProfilesOperation.swift#L376-L475)据此申请共享组；仅有外置`.entitlements`和自定义Info键不能作为它的请求输入。`ALTAppGroups`主要是重签后的运行时映射，也不等于profile授权。Sideloadly免费路径是否自动处理这些请求仍未验证。
 
-建议在原始`ios-i0-unsigned.ipa`之外，另生成`ios-i0-signing-input.ipa`：对独立副本添加无开发者身份、无证书的ad-hoc元数据，host/Widget只声明既定共享组；固定Flutter框架只做同类封装。两目标Info附固定`ALTAppGroups`候选，另核验请求字典、ad-hoc标记和无profile，并对副本重复全部包校验。它仍不能直接安装，不向云端提供Apple账号/私钥/证书，不注册设备，不证明App Groups已获授权；实际Apple重签、授权与安装继续在Windows本机和iPhone验证。
+在原始`ios-i0-unsigned.ipa`之外，另生成`ios-i0-signing-input.ipa`：对独立副本添加无开发者身份、无证书的ad-hoc元数据，host/Widget只声明既定共享组；固定Flutter框架只做同类封装。两目标Info附固定`ALTAppGroups`候选，另核验请求字典、ad-hoc标记和无profile，并对副本重复全部包校验。副本manifest的kind为`ios-i0-signing-input-v1`、状态为`adhoc-request-only`，不能冒用原始unsigned身份；另标注`metadataCarrier=adhoc-entitlement-request`和`appleDeveloperSignature=false`。它仍不能直接安装，不向云端提供Apple账号/私钥/证书，不注册设备，不证明App Groups已获授权；实际Apple重签、授权与安装继续在Windows本机和iPhone验证。
 
-这会超出原“云端仅编译”的文字边界。自动审批审查已拒绝实现该动作；截至本条没有落入构建脚本或执行。用户确认前只推进原始未签名包的格式修复与复验，不通过其他工具或间接执行绕过拒绝。
+这扩展了原“云端仅编译”的文字边界。首次自动审批拒绝已保留，根此前没有通过其他工具或间接执行绕过；用户明确追加批准后才实施。ad-hoc仅用于传递请求，Apple也不将此视为受支持的iOS分发签名流程。实际元数据提取用[Apple TN3125](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles)的`--entitlements - --xml`，按内到外封装，`--deep`仅用于递归验证，不用于签名。云端成功仍不替代本机profile和目标机共享门禁。
