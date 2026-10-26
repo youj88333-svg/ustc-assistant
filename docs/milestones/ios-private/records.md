@@ -17,3 +17,9 @@ Widget核查区分了三种证据：Apple支持共享容器与系统时间线；
 本轮未创建iOS工程/Widget目标或workflow、未配置云账号/计费/Apple签名、未安装工具/IPA、未连接手机、未操作麦克风/权限、未访问真实学校或读取正式业务/浏览器资产。自动构建/测试和目标机结果均尚无；本轮只对文档运行检查，不重复Flutter或真实采集。
 
 根文档检查通过：182份Markdown、1424个本地链接，归档清单按规则核验；`git diff --check`通过。方案与研究记录及导航分开保存，不向设计正文追加施工流水；批准前保持iOS未实现状态。
+
+## 2026-10-26：GitHub找回期间的替代入口
+
+用户补充GitHub账号正在申诉找回，担心I0无法进行。根对这个明确的小范围依赖修订直接调查：Codemagic官方支持邮箱验证码注册，Personal账号每月500分钟macOS M2；Other/HTTPS接入支持Public repository，软件清单包含M2及Xcode27.1。出处已补入唯一任务单。I0首选据此改为邮箱Codemagic加校内公开HTTPS源，不需要GitHub恢复，也不通过另一个账号规避找回流程。
+
+本机关闭凭据助手及Git交互后，匿名`git ls-remote https://git.ustc.edu.cn/demo233/107_ustc_assistant.git refs/heads/main`成功读回9cfbfc71f5ecafa3b5e3abf9a51ac3ac00185645。这是本机HTTPS读取证据，不是Codemagic主机的网络或构建证据。没有注册Codemagic、配置应用/计费、上传Token/SSH私钥、触发iOS构建或尝试GitHub登录/推送。本次文档仅同步校内，GitHub镜像待账号恢复后核对补齐；实施仍待用户批准。

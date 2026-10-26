@@ -2,6 +2,8 @@
 
 日期：2026-10-26。状态：调研完成，实施待用户批准。目标是用户的 iPhone 15 Pro / iOS 27；具体 27.x 和系统 build 在首个实机原型登记。本轮只读核查和维护方案，未创建 iOS 工程、配置云构建、登录 Apple 账号或安装应用。过程见[研究记录](records.md)。
 
+当前交付前提：用户 GitHub 账号正在申诉找回。本轮 I0 首选改为 Codemagic 邮箱注册的个人免费账号，直接读取校内公开 GitLab 的 HTTPS 仓库；GitHub 登录或 Actions 不是准入前置条件。只调整方案，不因账号问题提前启用构建或收费。
+
 ## 目标、依据与待批准范围
 
 依据[文档入口](../../README.md)、[07 产品约束](../../architecture/07-constitution.md)、[08 平台分层](../../architecture/08-target-architecture.md)、[09 关键契约](../../architecture/09-contracts.md)、[10 运行链路](../../architecture/10-runtime.md)、[11 组件](../../architecture/11-component-designs.md)、[12 横切约束](../../architecture/12-cross-cutting.md)、[13 验证登记](../../quality/13-risks-and-acceptance.md)和[15 工作流](../../workflow.md)。M0–M6、Windows/Android 公开版和原设备反馈均不替代 iOS 验证。
@@ -22,8 +24,8 @@ Windows 编辑与共享测试 → 云端 macOS/Xcode 编译设备版 → 未签�
 
 | 选择 | 当前证据与代价 | 本项目建议 |
 |---|---|---|
-| GitHub Actions 标准 macOS runner | 公有仓库的标准 runner 编译分钟免费；私有仓库受账号免费额度限制，artifact 存储另计。公有仓库 artifact 对有读取权限的已登录用户可见 | 优先复用现有 GitHub 服务；I0 核对实际可见性/额度。未签名包也不能误称私密附件，不擅自改仓库公开级别 |
-| Codemagic 个人免费套餐 | 官方提供每月 500 分钟 macOS M2，个人账号可用，Team 不享受该赠额；需授权指定代码仓库 | GitHub 私有额度或环境不合适时的免费备选；只开免费用量，不自动启用付费超额 |
+| GitHub Actions 标准 macOS runner | 公有仓库的标准 runner 编译分钟免费；私有仓库受账号免费额度限制，artifact 存储另计。公有仓库 artifact 对有读取权限的已登录用户可见 | 账号恢复后再评估的备选；当前不依赖 GitHub 登录/Actions，不擅自改公开级别或绕过账号恢复流程 |
+| Codemagic 个人免费套餐 | 官方提供每月 500 分钟 macOS M2，个人账号可用，Team 不享受该赠额；支持邮箱注册及公开仓库 URL | 当前首选：邮箱登录、Personal 账号、Other/Public repository 接入校内 HTTPS 源；只开免费用量，不自动启用付费超额 |
 | Sideloadly / Windows | 官网 v0.71.0 声称支持 iOS 7–27+；免费账号 7 天有效，可经 USB 或已配对 Wi-Fi 自动尝试续签 | 主应用首选；含 Widget 时必须先过双目标及共享容器探针 |
 | AltStore Classic + AltServer / Windows | 同样 7 天与 3 个活动应用限制；AltStore 自身占一个应用位，有 Widget/App Groups 实现证据 | Sideloadly 的扩展重签不成立时，免费备选探针；验证后只保留一条日常安装链路 |
 | SideStore | 可在初装后使用设备侧续签，但多出本地 VPN、配对文件和 beta 兼容性成本 | 不作为首选；不能把它的扩展重签能力推定给其他工具 |
@@ -31,6 +33,10 @@ Windows 编辑与共享测试 → 云端 macOS/Xcode 编译设备版 → 未签�
 | TestFlight / PWA / TrollStore | TestFlight 需会员且 build 最长 90 天；PWA 无法直接复用当前原生层和跨站采集；TrollStore 官方支持版本不含 iOS 27 | 不作为本项目的免费私用主线 |
 
 来源：[GitHub 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、[artifact 下载权限](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)、[Codemagic 个人定价](https://docs.codemagic.io/billing/pricing/)、[仓库接入](https://docs.codemagic.io/getting-started/adding-apps/)、[Sideloadly 官网](https://sideloadly.io/index.html)与[FAQ](https://sideloadly.io/faq.html)、[AltStore Classic](https://faq.altstore.io/altstore-classic/your-altstore)、[SideStore 要求](https://docs.sidestore.io/docs/installation/prerequisites)、[Apple 会员](https://developer.apple.com/help/account/membership/program-enrollment)、[TestFlight](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/)、[TrollStore](https://github.com/opa334/TrollStore)。价格/支持声明均为检索时资料，不是本项目实测。
+
+Codemagic 的[邮箱注册](https://docs.codemagic.io/getting-started/signup/)独立于源码服务账号。批准 I0 后，由用户用自己的邮箱完成登录并选择 Personal；新增应用选择 Other、HTTPS URL `https://git.ustc.edu.cn/demo233/107_ustc_assistant.git`、Public repository，项目工作目录为 `app`。依据[任意公开仓库接入](https://docs.codemagic.io/partials/other/)，该路径不需要上传本机 SSH 私钥或校内 Token，也不需要用校内 GitLab 账号做 Codemagic OAuth 登录。
+
+I0 先验证 Codemagic 主机能匿名拉取指定修订和资源，再消耗编译分钟。根已验证本机匿名 HTTPS `git ls-remote` 成功，这不等于海外云主机已可达；若云端拉取失败，保留具体网络错误后再评估源码传递方式，不把本机校园网条件当成云端条件。官方[Mac M2/Xcode 27.1 清单](https://docs.codemagic.io/specs-macos/xcode-27-1/)可作为工具链候选，实际版本与赠额仍在账号内核对。
 
 免费不是永久免维护安装。Apple 当前[Personal Team 说明](https://developer.apple.com/help/account/basics/about-your-developer-account/)列出 7 天 profile、每设备最多 3 个 app、最多 10 个 App ID 等限制。Sideloadly 的自动续签要求电脑在到期前能通过 USB 或 Wi-Fi 发现手机；首次需 USB 配对，同一校园 Wi-Fi 也可能受网络隔离影响，因此保留 USB 续签。续签现有包不需要每周重新编译。逾期后先用同一账号/身份重签覆盖，不以卸载或清数据作为默认修复。
 
@@ -89,7 +95,7 @@ I0 必须证明主应用与扩展均保留、各自 profile 授权同一共享�
 
 | 切片 | 范围与接口/不变量 | 依赖与通过条件 |
 |---|---|---|
-| I0 免费构建/安装与 Widget 原型 | 固定云端 Flutter/Xcode，独立轻量 AOT 设备探针、未签名 IPA、Windows 本机签名；主应用+扩展仅用合成共享值。确定稳定 Bundle ID/共享组，不占用多余随机 App ID | 先核对云额度与产物访问权限；在目标手机首装、关闭重开、即时重签后值保留，Widget 真正共享而非默认占位。未通过前不大规模移植业务；7 天长期续签测试可与后续工作并行，未完成仍保留 |
+| I0 免费构建/安装与 Widget 原型 | Codemagic 邮箱个人账号、校内公开 HTTPS 源；固定 Flutter/Xcode，独立轻量 AOT 设备探针、未签名 IPA、Windows 本机签名；主应用+扩展仅用合成共享值。确定稳定 Bundle ID/共享组，不占用多余随机 App ID | 先核对个人赠额、云端匿名拉取可达性与产物访问权限；在目标手机首装、关闭重开、即时重签后值保留，Widget 真正共享而非默认占位。未通过前不大规模移植业务；7 天长期续签测试可与后续工作并行，未完成仍保留 |
 | I1 目录/数据库/凭据/平台启动 | iOS factory、Darwin 所有权、Keychain 与独立用途、增量 schema 和维护恢复 | I0 主应用成立；临时库独占/释放、重复前台/重入、崩溃恢复、密文篡改/用途不符/SQL 失败保留通过；不读正式资料 |
 | I2 教务和二课桥 | WKWebView、分区、固定认证/查询、身份、取消排空与清理；落实现行合同的 iOS 映射 | I1；先 loopback 对两 store、跨重启/单独清除、重定向/弹窗、伪 frame、文档变化和迟到结果做反例，再由用户在应用提供凭据/处理挑战完成真实同步验收 |
 | I3 通知与前后台 | 两槽容量、期望/已登记对账、冷启动点击、06:00 晨报及前台二课日同步 | I1/I2；合成过载、取消/重排、拒权/撤权和时区测试；实机验正常退出、后台、强退、重启、Focus，分别登记送达和系统限制 |
