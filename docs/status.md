@@ -4,7 +4,7 @@
 
 | 阶段 | 当前状态 | 范围与依据 |
 |---|---|---|
-| iOS 私用 | 调研方案已整理，实施待批准 | [唯一任务单](milestones/ios-private/plan.md)、[研究记录](milestones/ios-private/records.md)。目标iPhone 15 Pro/iOS 27，无自有Mac；GitHub账号找回期间首选Codemagic邮箱个人免费账号加校内公开HTTPS源，不以GitHub为I0前置。云端Mac构建、Windows本机签名与7天续签，Widget共享/扩展重签先做探针。只读调研与官方声明不等于构建或真机通过；尚未创建工程、安装、配置云账号或触发采集 |
+| iOS 私用 | I0已批准，独立探针及构建链路实施中 | [唯一任务单](milestones/ios-private/plan.md)、[实际记录](milestones/ios-private/records.md)、[授权](milestones/ios-private/acceptance.md)。目标iPhone 15 Pro/iOS 27，无自有Mac；Codemagic邮箱Personal免费账号及本项目短期只读部署令牌已由用户接入，不依赖待找回GitHub。只做独立Flutter/Widget合成探针，保留正式应用；本机检查、云编译、Windows签名及实际共享/续签分别登记。I1–I7与目标机结果仍待后续 |
 | 开源与公开安装包 | 已公开发布1.0.0，六份匿名下载核验通过 | [发布与下载](releases/public-1.0.0.md)、[任务单](milestones/open-source-release/plan.md)、[实际记录](milestones/open-source-release/records.md)、[用户确认](milestones/open-source-release/acceptance.md)。原创代码Apache-2.0；校内项目Public，v1.0.0绑定已构建9515e50a，Windows完整ZIP与长期签名Android双ABI包及三份说明/清单已上传。项目/Release匿名页面HTTP200，六份完整下载619783706字节及SHA-256全部匹配。analyze、共享全套、相关原生/打包、自有API34安装/保留与限定源码审计证据保留；校内CI此时pending，不列为通过。旧私有交付与实机等未观察项保留 |
 | 维护与Git交接 | 已完成，进入维护/修复 | [任务单](milestones/maintenance-handoff/plan.md)、[实际记录](milestones/maintenance-handoff/records.md)、[授权与结果](milestones/maintenance-handoff/acceptance.md)。主工程与当前会话为E:\107\main、维护分支main，交接工作树已移至worktrees/maintenance-handoff，唯一共用元数据为main/.git。旧main/放弃版48/3条状态保留，96个私有交付文件未变；GitHub和校内main正常向前同步。新根离线依赖/analyze、文档、打包及合成迁移通过；此前目录共享冲突的失败记录保留，后续使用短期codex/fix-*维护 |
 | 首次设置与main图标 | 工程与构建完成，纳入双平台当前私有交付 | [记录23](milestones/android-apk/records/23-onboarding-and-brand.md)：四页可跳过/续行、独立授权与恢复日志；新安装引导、升级用户从设置进入，schema20保留资料。最终analyze、1654项共享/1跳过、相关Windows/Android原生检查及双ABIQA4024/2024、独立Windows暂存核验通过。用户总体反馈不补造逐页引导验收；旧Windows包保留，当前Windows刷新见下行 |

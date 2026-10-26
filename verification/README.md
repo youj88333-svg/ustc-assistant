@@ -8,6 +8,7 @@
 | Windows 原生前置实验/手动跳转工具 | [windows](windows/README.md) | SDK、隔离、生命周期、DPAPI 与登录链路线索；保留原严格候选失败 |
 | 回环 HTTPS fixture | [https_fixture](https_fixture/README.md) | 合成认证/重定向测试，不访问学校 |
 | 来源验证入口 | [sources](sources.md) | 当前来源契约与对应真实证据导航 |
+| iOS 私用 I0 探针 | [ios-private-probe](ios-private-probe/README.md) | 独立设备/Widget、无签名 IPA 校验及本机签名门禁，不接正式业务 |
 
 ## 边界与记录
 

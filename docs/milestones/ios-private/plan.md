@@ -1,8 +1,8 @@
 # iOS 私用迁移方案
 
-日期：2026-10-26。状态：调研完成，实施待用户批准。目标是用户的 iPhone 15 Pro / iOS 27；具体 27.x 和系统 build 在首个实机原型登记。本轮只读核查和维护方案，未创建 iOS 工程、配置云构建、登录 Apple 账号或安装应用。过程见[研究记录](records.md)。
+日期：2026-10-26。状态：用户已批准开始 I0，正在实施独立原型；I1–I7及正式平台装配仍待后续推进。目标是用户的 iPhone 15 Pro / iOS 27；具体 27.x 和系统 build 在首个实机原型登记。原调研与实际过程见[记录](records.md)。
 
-当前交付前提：用户 GitHub 账号正在申诉找回。本轮 I0 首选改为 Codemagic 邮箱注册的个人免费账号，直接读取校内公开 GitLab 的 HTTPS 仓库；GitHub 登录或 Actions 不是准入前置条件。只调整方案，不因账号问题提前启用构建或收费。
+当前交付前提：用户 GitHub 账号正在申诉找回。本轮 I0 使用 Codemagic 邮箱注册的个人免费账号，经本项目短期只读部署令牌读取校内 GitLab 的 HTTPS 仓库；GitHub 登录或 Actions 不是准入前置条件。免费云构建属于 I0 授权；不启用付费超额。
 
 ## 目标、依据与待批准范围
 
@@ -34,7 +34,7 @@ Windows 编辑与共享测试 → 云端 macOS/Xcode 编译设备版 → 未签�
 
 来源：[GitHub 计费](https://docs.github.com/en/billing/concepts/product-billing/github-actions)、[artifact 下载权限](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)、[Codemagic 个人定价](https://docs.codemagic.io/billing/pricing/)、[仓库接入](https://docs.codemagic.io/getting-started/adding-apps/)、[Sideloadly 官网](https://sideloadly.io/index.html)与[FAQ](https://sideloadly.io/faq.html)、[AltStore Classic](https://faq.altstore.io/altstore-classic/your-altstore)、[SideStore 要求](https://docs.sidestore.io/docs/installation/prerequisites)、[Apple 会员](https://developer.apple.com/help/account/membership/program-enrollment)、[TestFlight](https://developer.apple.com/help/app-store-connect/test-a-beta-version/testflight-overview/)、[TrollStore](https://github.com/opa334/TrollStore)。价格/支持声明均为检索时资料，不是本项目实测。
 
-Codemagic 的[邮箱注册](https://docs.codemagic.io/getting-started/signup/)独立于源码服务账号。批准 I0 后，由用户用自己的邮箱完成登录并选择 Personal；新增应用选择 Other、HTTPS URL `https://git.ustc.edu.cn/demo233/107_ustc_assistant.git`、Public repository，项目工作目录为 `app`。依据[任意公开仓库接入](https://docs.codemagic.io/partials/other/)，该路径不需要上传本机 SSH 私钥或校内 Token，也不需要用校内 GitLab 账号做 Codemagic OAuth 登录。
+Codemagic 的[邮箱注册](https://docs.codemagic.io/getting-started/signup/)独立于源码服务账号。用户完成 Personal 注册；新增应用选择 Other、HTTPS URL `https://git.ustc.edu.cn/demo233/107_ustc_assistant.git`。实际匿名接入被 HTTP Basic 拒绝，根随后核对[校内 Git 当前说明](https://git.ustc.edu.cn/users/sign_in)，确认校外需要登录，HTTPS 要用令牌；不能以本机可达推定云端匿名可达。用户已批准仅限本项目、`read_repository`、7天到期的部署令牌，由本人直接填入 Codemagic。客户端取消 Public repository 选项以显示认证栏，不改变源码公开级别，不上传个人 API 令牌/SSH 私钥或用 GitLab OAuth。依据[任意仓库接入](https://docs.codemagic.io/partials/other/)与[GitLab 部署令牌](https://docs.gitlab.com/user/project/deploy_tokens/)。I0 项目类型手动选择 iOS，YAML 与脚本工作目录为仓库根，独立生成工程在忽略的 `app/build/ios-i0`。
 
 I0 先验证 Codemagic 主机能匿名拉取指定修订和资源，再消耗编译分钟。根已验证本机匿名 HTTPS `git ls-remote` 成功，这不等于海外云主机已可达；若云端拉取失败，保留具体网络错误后再评估源码传递方式，不把本机校园网条件当成云端条件。官方[Mac M2/Xcode 27.1 清单](https://docs.codemagic.io/specs-macos/xcode-27-1/)可作为工具链候选，实际版本与赠额仍在账号内核对。
 
@@ -91,7 +91,7 @@ I0 必须证明主应用与扩展均保留、各自 profile 授权同一共享�
 
 ## 切片、依赖与验收
 
-本表为唯一实施任务单，所有切片均待本方案批准。Sol 负责契约、跨层与集成；Luna/max 只承接契约已定、文件不重叠的实现/调查；Astra 按实际复杂问题参与。每片保留失败与实际检查，相关检查通过后建立 commit；自动与真人结果分开。
+本表为唯一实施任务单，当前只批准 I0。Sol 负责契约、跨层与集成；Luna/max 只承接契约已定、文件不重叠的实现/调查；Astra 按实际复杂问题参与。每片保留失败与实际检查，相关检查通过后建立 commit；自动与真人结果分开。
 
 | 切片 | 范围与接口/不变量 | 依赖与通过条件 |
 |---|---|---|
@@ -115,4 +115,18 @@ Windows 本机的下载、脚本、测试与私用产物优先放 E 盘，交付
 - Widget 在实际免费签名链路上通过共享与重签验证；不通过时先明确范围取舍，不以模拟器截图代替。
 - 7 天、系统挂起、通知覆盖/Focus、Widget 刷新预算及语音问题都有准确说明；Windows/Android 既有资料和行为保留。
 
-本轮批准点是采用此私用迁移范围、免费安装/续签代价、iOS 普通 WKWebView 信任映射和 Widget 原型优先；批准后先做 I0。方案未批准前不注册 App ID、启用 Developer Mode、读取 Apple 凭据或触发 iOS 云构建。
+用户“ok，我正在注册codemagic，请开始I0”授权独立构建/安装与 Widget 原型。正式业务平台装配及 iOS 普通 WKWebView 映射仍在后续切片单独落实。Apple 账号/2FA、Developer Mode和信任设置仍由用户在本机操作；免费账号资料仅交本机签名工具按用途使用，不进云端或聊天。
+
+## I0 执行契约
+
+I0仅新增`verification/ios-private-probe`、`tools/ios-i0`及Codemagic入口，不改当前`app`业务、依赖、平台工厂或公开包。当前授权工作区内使用短期`codex/fix-ios-i0`分支，避免新建嵌套Git或复制旧工程。生成工程和日志在忽略的`app/build/ios-i0`，私用下载/签名产物在源码外；不访问真实学校或模型。
+
+探针候选身份固定为`cn.ustcassistant.ios.i0`，Widget为其`.widget`子标识，共享组基名`group.cn.ustcassistant.ios.i0`；最终本机签名身份需由安装门禁确认。主应用与扩展只共享`ios-i0-marker-v1.json`，字段限版本、`i0-`加8位十六进制合成标记和UTC生成时间，最多2 KiB。共享组不可用、快照损坏/缺失均明确失败，不读写私有目录作为共享成功兜底。
+
+Flutter通道`ustc_assistant/ios_i0_v1`只允许无参数的`inspect`、`writeSyntheticMarker`。结果为`ios-i0-probe-v1`，只含源码修订、应用标识、共享可用/组摘要、合成标记/时间和固定失败码；无任意路径、账号、网络或脚本入口。Widget只读同一文件，按系统时间线展示合成值，点按仅打开探针。
+
+Codemagic分为手动预检和手动设备构建两个workflow，Mac M2、固定Xcode27.1；设备构建固定Flutter3.47.7、Release/AOT、不签名、不自动发布或设置通知收件人。预检限5分钟、构建限30分钟；云端不得提供Apple凭据/证书/配对文件。设备包含Runner及一个Widget，不含业务库、学校页面、语音权重或实际秘密。
+
+未签名IPA须核验ZIP路径/重复与体积、真实iOS arm64 Mach-O（不能用arm64模拟器代替）、两目标身份与共享声明、源修订和AOT内嵌修订、无profile/签名私钥/Debug资产。追溯文件`ios-i0-provenance.json`使用版本1，绑定源码、Flutter/Xcode、Release模式和unsigned-probe身份，不能只靠该文件自报通过。生成工程另校验两目标的entitlements源文件及其引用，随附固定声明供本机签名参考；Info自定义键和源文件均不是有效profile授权。Windows验证器优先Conda basic310，云端用现成Python标准库；不额外安装C盘工具链。操作入口见[探针说明](../../../verification/ios-private-probe/README.md)。
+
+文件归属：Luna/max承接探针Flutter/Swift源和合成测试；另一Luna/max承接Python包校验器、反例测试及Windows包装；Sol负责云端生成/打包脚本、原生工程装配、Codemagic配置和独立验收。原生模板/脚本兼容性另做只读复核，文件不重叠。最终分别登记本机合成、云端实际构建、用户本机签名和目标机共享/续签证据，不以任一项替代其余项。

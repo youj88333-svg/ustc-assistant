@@ -4,7 +4,7 @@
 
 | 阶段 | 范围 | 任务单 | 实施记录 | 用户验收 |
 |---|---|---|---|---|
-| iOS 私用 | iPhone 15 Pro/iOS 27、无自有 Mac 的免费构建/续签及只读 Widget | [待批准方案](ios-private/plan.md) | [只读研究](ios-private/records.md) | 仅调研；实施、免费双目标重签和目标机验收待批准/验证 |
+| iOS 私用 | iPhone 15 Pro/iOS 27、无自有 Mac 的免费构建/续签及只读 Widget | [I0任务单](ios-private/plan.md) | [记录](ios-private/records.md) · [授权](ios-private/acceptance.md) | I0独立探针实施中；本机合成、云构建和双目标实机共享分别验证 |
 | 开源与公开安装包 | 原创代码Apache-2.0、独立正式签名APK、Windows ZIP及校内GitLab发布 | [任务单](open-source-release/plan.md) | [审计、构建与实际发布](open-source-release/records.md) | [用户选择与公开确认](open-source-release/acceptance.md)，2026-10-25已发布v1.0.0并核验六份匿名下载；原设备/业务未观察项保留 |
 | 维护与Git交接 | main主线、统一总目录、旧成果保留与双远端同步 | [任务单](maintenance-handoff/plan.md) | [实际记录](maintenance-handoff/records.md) | [用户批准](maintenance-handoff/acceptance.md)，不扩大产品验收或公开分发范围 |
 | 可选模型服务 | 保留学校，增加固定 DeepSeek 官方 Key 接入 | [任务单](model-providers/plan.md) | [记录](model-providers/records.md) | 实际官方 Key/速度由用户在应用主动配置后核验；不关闭 A7/A8 |
