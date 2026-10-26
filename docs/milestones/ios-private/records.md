@@ -49,3 +49,17 @@ Widget核查区分了三种证据：Apple支持共享容器与系统时间线；
 根只读核对Personal计费页为免费分钟`0/500`，订阅未启用、无账单记录；没有点击订阅、切换收费机型或重复提交任务。官方状态页当时为operational，这不保证本任务无排队；根也没有确定其实际排队原因。本地Git对象6.03MiB loose加11.75MiB pack，不足以据此认定需要仓库历史清理；未执行官方通用排障中提及的gc/repack或force push。任务页和不含账号/令牌的截图、任务定位JSON仅保留在本机忽略的`app/build/ios-i0`，不提交这些私用资源。
 
 根另实际运行Windows PowerShell包装器，合成IPA成功生成安全报告，缺参返回固定exit2；未触碰真实IPA或手机。`git diff 005f211..8bb81ce -- app`为空，工作树干净，正式app源码/依赖及公开交付未改。下一步等待现有预检结束，成功后才对同一修订启动`ios-i0-probe`；若失败先读具体阶段，不盲重试。保留`codex/fix-ios-i0`在该修订供选取，后续状态文档不改变该待构建源码。未作用户手机、免费profile、Widget共享或续签通过结论。
+
+### 云预检通过、设备编译与通用二进制校验修复
+
+用户反馈“好像ok了”后，根检查到首个预检实际finished：界面开始时间2026-10-26 18:12、总时长1分16秒，源码获取23秒；原生步骤输出`checkoutVerified=true`、修订8bb81ce、Xcode27.1、iPhoneOS SDK27.1、xcodeproj1.28.1、Syntax OK及无需Apple凭据。根逐项读取真实步骤日志，不只依赖卡片颜色；这时才确认builder源码获取与工具链实际通过。
+
+根随后从已完成任务选择“Build commit #8bb81ce”，手动运行`ios-i0-probe`，保持M2、30分钟、无SSH/VNC、无Apple资料；未重复预检队列。该任务界面开始时间18:42、总3分19秒。Flutter3.47.7的analyze与6项合成测试实际通过，Xcode耗时70秒构建出15.6MB Runner.app；脚本对单一I0Widget目录检查亦通过。最后IPA校验返回`unsupported_macho_format`，故整个job失败；不能把编译成功写作包验收通过或提供安装建议。
+
+根确认旧验证器遇到FAT头即拒绝，交由Luna/max限定修改两份校验/测试文件，Sol复核并补充ARM64_V8及带不同ABI标记的合法子类型。现支持FAT32/64与两种字节序，最多16切片，有界检查表/偏移/对齐/重叠/架构描述；每个切片仍须ARM64、预期Mach-O类型和LC_BUILD_VERSION的iOS设备平台。AOT修订在每个切片内流式匹配，不接受外层填充冒充；混入模拟器/x86仍拒绝。根basic310独立32项反例通过，构建脚本只补4个固定二进制的lipo诊断，Bash语法检查通过。真实失败包的本机复验仍未完成，须重新运行云端校验。
+
+用户补充iPhone15Pro运行iOS27.0.1，Windows尚未安装Sideloadly；系统build、签名/配对与真机共享均未观察。根未安装或运行Sideloadly，未操作Apple登录、Developer Mode或信任。官网64位安装器已完整下载到E盘忽略的I0目录，144076887字节，SHA-256 `2f69c09f4669228fdfbe174b934640a21368e7afd2c160740c69c7c5bce306f7`；Windows读到NotSigned且版本资源为空，不将“官网来源”说成“已验证发布者签名”。此前128MiB下载上限不足、Python续传TLS EOF的失败保留；改用原生HTTPS客户端恢复后大小匹配。仅对安装元数据作只读检查，无现有Apple商店版命中，不卸载/替换任何软件。
+
+浏览器预检ZIP下载两次等待事件超时，标准下载目录亦未找到对应文件；另一下载尝试返回TypeError，未形成已验证本机报告。不扫描浏览器缓存或认证资产，实际预检证据取自UI步骤日志，不伪称已下载artifact。任务定位及工具下载均留在E盘忽略目录。
+
+另经Luna/max只读研究和根核对公开AltSign/AltStore源码，纯未签名IPA缺少共享组请求的签名元数据；外置sidecar不会自动代替它。根尝试新增独立ad-hoc元数据副本的补丁，被自动审批以超出“云端仅编译、Windows本机签名”拒绝，整份补丁没有落地，也未执行codesign。根保持原签名边界，只接入FAT修复/架构日志；[待确认修订](plan.md#待确认修订共享组请求元数据副本)交用户决定，不把未签名安装失败推断为免费Widget永久不可用。
