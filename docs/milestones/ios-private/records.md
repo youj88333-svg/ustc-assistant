@@ -77,3 +77,20 @@ Widget核查区分了三种证据：Apple支持共享容器与系统时间线；
 446fdf5的第2次设备任务随后实际finished，界面开始时间19:18、总时长6分45秒，源码获取2分1秒、原生构建119.4秒。根读取实际步骤日志：4个固定二进制lipo均报告arm64；验证器对真实包的路径/大小、单一host/Widget、身份/源码、设备Mach-O、每片AOT修订、无profile/私钥/Debug资产全部通过。IPA为6621241字节，SHA-256 `1d1247368ae97cb5f1f456d35879c26a14fb3c6374f094da4a0684c067637f51`。该证据为云端真实包校验；本机下载独立复验与iPhone仍未观察。
 
 已批准元数据副本的工程`6d51721`和文档`3a8f2b5`正常快进并同步校内。前一任务已经结束后，根才从main启动第3次设备任务，界面确认3a8f2b5/M2/queued；没有重复尚未结束的作业。元数据副本保持独立kind/status，源包先完整校验，副本再请求回读/递归完整性及相同包校验。此时还没有元数据云执行或手机结果，不由前一原始包通过推定。
+
+### 双包云校验完成，本机安装暂缓
+
+3a8f2b5的第3次设备任务实际finished，界面开始时间2026-10-26 19:54、总时长9分36秒；M2准备52秒、源码获取4分9秒、SDK1秒、原生预检8秒、构建与双包验证4分11秒。根读取实际步骤日志：Flutter3.47.7 analyze无问题、6项合成测试通过，Xcode27.1设备构建107.9秒，Runner.app为15.6MB。没有另开重复任务或启用付费。
+
+| 同一源码修订`3a8f2b596ba1f89aed7834162f6ad112926b20b9`的产物 | 字节数 | SHA-256 |
+|---|---:|---|
+| `ios-i0-unsigned.ipa`，`unsigned-personal-probe` | 6621213 | `83f8f5846287b13763f48aa4524bf377952bc7e33243731670d9b286798df7db` |
+| `ios-i0-signing-input.ipa`，`adhoc-request-only` | 6628785 | `121dfa4b4b0809af53ed61e235b00bb43370c6e64e5ceed97ebfedfb9f1df2e8` |
+
+两份实际IPA的七项包检查均通过，覆盖路径/大小、单一host与Widget、目标身份/源码、设备arm64 Mach-O及每片AOT修订、无profile/私钥文件/Debug资产。另一个实际请求报告返回`hostAndWidgetRequestVerified=true`、`appleCredentialsUsed=false`、`appleProfilePresent=false`及`appGroupAuthorizationVerified=false`；脚本已在云端对独立副本递归检查完整性、回读两目标固定请求和ad-hoc标记。该结果只证明请求元数据可形成，不证明Apple已授权共享组，不能直接安装或计作Widget真机通过。
+
+根读取的是Codemagic真实步骤日志；本机忽略目录中的安全JSON明确标记`downloadedArtifactLocallyVerified=false`，没有把网页摘录称作下载包独立复验。构建列表另提供直接IPA入口，根对本次独立签名输入包作一次30秒的受支持下载，仍超时且未返回本机文件；此前ZIP下载失败保留。随后不再盲试，也没有扫描缓存/凭据或创建额外API令牌。当前产物仍需从任务Artifacts取得并在本机用固定修订重新校验。
+
+用户对Windows签名工具回复“暂不安装”。根据此停止安装准备之外的动作，未运行安装器、未处理条款或Windows权限、未输入Apple账号、未加载IPA，也未更改手机Developer Mode/信任。本机重签、iPhone启动、host/Widget同值共享、即时重签保留和7天续签仍待后续；I0保持未关闭，I1–I7未开始，既有Windows/Android源码与交付未改。
+
+本次收口仅改状态、过程和用户决定三份文档；根文档检查184份Markdown/1438个本地链接及归档核验通过，`git diff --check`通过。正式`app`从I0起点至当前源码的跟踪差异为空；没有为纯记录更新重跑业务全套或真实采集。本机35项包反例与云端6项合成结果保留各自证据，不扩大成签名或手机验收。
