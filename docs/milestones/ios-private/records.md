@@ -41,3 +41,11 @@ Widget核查区分了三种证据：Apple支持共享容器与系统时间线；
 用户明确批准本项目7天、`read_repository`部署令牌，并本人生成、直接填写Codemagic后回复“已接入”。根期间不读取凭据页或令牌，随后已见仓库扫描成功进入Finish；取消Public repository仅用于客户端认证栏，不改变校内项目可见性。手动选iOS并创建Personal应用，界面已到仓库根YAML设置，提示尚无配置是因为新源文件当时仍在本机。没有使用GitHub、上传个人API凭据、SSH私钥或Apple资料，也没有启用收费。
 
 截至本条，本机合成/配置检查已取得证据；实际云编译、IPA下载核验、Windows签名、iPhone启动/共享/立即重签及7天续签仍未观察，不宣布I0关闭。操作入口见[探针说明](../../../verification/ios-private-probe/README.md)。
+
+### 首个云任务与当前等待点
+
+工程检查点`c51601a`与独立文档提交`8bb81ce`正常快进合入main并同步校内；没有访问GitHub、强推、打标签或上传iOS包。Codemagic已经从main读取根YAML，根手动启动唯一一次`ios-i0-preflight`，界面确认源码修订`8bb81ce0c649707628f38046d9bc5db42f85b495`、Mac mini M2及预检workflow。第1次任务在2026-10-26北京时间17:54后进入队列，18:10重新载入任务列表仍为`queued`；尚未产生机器准备/源码克隆/预检脚本日志，没有IPA或云端通过报告。不是脚本超时，也不能把metadata扫描成功写作builder已克隆。
+
+根只读核对Personal计费页为免费分钟`0/500`，订阅未启用、无账单记录；没有点击订阅、切换收费机型或重复提交任务。官方状态页当时为operational，这不保证本任务无排队；根也没有确定其实际排队原因。本地Git对象6.03MiB loose加11.75MiB pack，不足以据此认定需要仓库历史清理；未执行官方通用排障中提及的gc/repack或force push。任务页和不含账号/令牌的截图、任务定位JSON仅保留在本机忽略的`app/build/ios-i0`，不提交这些私用资源。
+
+根另实际运行Windows PowerShell包装器，合成IPA成功生成安全报告，缺参返回固定exit2；未触碰真实IPA或手机。`git diff 005f211..8bb81ce -- app`为空，工作树干净，正式app源码/依赖及公开交付未改。下一步等待现有预检结束，成功后才对同一修订启动`ios-i0-probe`；若失败先读具体阶段，不盲重试。保留`codex/fix-ios-i0`在该修订供选取，后续状态文档不改变该待构建源码。未作用户手机、免费profile、Widget共享或续签通过结论。
