@@ -31,7 +31,7 @@ jobs:
           9914212fc906b12429a1272b5b8f2230d9a7d66cd5066281dfe09752839a3218  app-arm64-v8a-release.apk
           2d3f4bac250f04818908181799f749a74ac06d6e7845adf3163f80bdc0f6eda3  app-x86_64-release.apk
           CHECKSUMS
-          base='https://git.ustc.edu.cn/api/v4/projects/6522/packages/generic/release-assets/v1.0.0'
+          base='https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads'
           while read -r digest file; do
             curl --disable --fail --silent --show-error --location \
               --proto '=https' --proto-redir '=https' \
