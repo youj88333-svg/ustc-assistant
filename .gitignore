@@ -62,3 +62,4 @@ docs/releases/android-private-1.00*.md
 verification/sources.md
 verification/windows/README.md
 tools/test-maintenance-layout.ps1
+.github/workflows/mirror-release-1.0.0.yml
