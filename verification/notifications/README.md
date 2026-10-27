@@ -1,6 +1,6 @@
-# M6 原生通知探针
+# Windows 原生通知测试
 
-本目录是独立 Windows C++20 合成验核，不依赖 Flutter 或正式数据。构建输出位于已忽略的 `build/`。实际命令、失败与证据范围见 [M6 平台记录](../../docs/milestones/m6/records/01-windows-platform.md)。
+本目录是独立 Windows C++20 通知合成检查，不依赖 Flutter 或正式数据。构建输出位于已忽略的 `build/`；测试使用隔离身份，不登记产品通知。构建与运行方式见下文。
 
 `activation_probe` 只验证严格协议、内存队列、COPYDATA 及本进程隔离窗口；不创建 OS 注册、不测多进程转交。`notification_probe` 需要调用方生成独立 32 位十六进制身份和 GUID，只管理 `USTC.Assistant.M6Probe.<identity>`、同名快捷方式及 `ustc-m6-probe-<identity>`；不得使用产品身份。动作包括 `protocol-initialize`、`protocol-schedule <秒数>`、`protocol-pending`、`protocol-replace <秒数>`、`protocol-cancel`、`protocol-history`、`protocol-activate`、`protocol-parser` 和 `protocol-cleanup`。
 

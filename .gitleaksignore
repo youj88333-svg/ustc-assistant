@@ -1,7 +1,7 @@
 # Reviewed historical false positives only (Gitleaks 8.30.1, 2026-10-25).
 # These entries identify exact commits/lines, not entire test folders or rules.
 # New commits are scanned normally, including replacements at the same path.
-# Rationale and scan boundaries: docs/milestones/open-source-release/records.md.
+# Suppressions apply only to the exact historical synthetic/checksum locations below.
 
 # JavaScript API object property, not a credential
 e5c8bf15ca8662429d85c2014d43e1d7379b5ab7:app/android/app/src/main/kotlin/cn/ustcassistant/mobile/browser/ScriptCatalog.kt:generic-api-key:53

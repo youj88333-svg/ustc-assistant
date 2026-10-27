@@ -1,10 +1,10 @@
 # Young 二课来源契约
 
-本文是本分支 Young 当前来源字段、读取范围和规范化语义的唯一详细参考。通用身份、作业、分区、事务与安全规则见 [09 关键契约](../../architecture/09-contracts.md)；M2 真人验收、用户批准范围和关闭状态见 [M2 验收记录](../../milestones/m2/acceptance.md)。
+本文说明 Young 来源字段、读取范围和规范化语义。通用身份、作业、分区、事务与安全规则见[09 关键契约](../../architecture/09-contracts.md)。
 
 ## 能力与当前状态
 
-M2 已正式验收关闭，范围是报名活动只读查询与个人日历中活动关联日程的同步。日历中没有活动关联的行不导入。验收不证明本人独立报名成功、取消状态、未关联样本或来源撤回语义；这些仍按验收记录保留为未知。
+日历中没有活动关联的行不导入。活动关联本身不证明本人独立报名成功或取消，且不作为学校执行报名操作的许可。
 
 本契约区分两项作业：
 
@@ -109,6 +109,6 @@ profile 只保留 `username`。分页响应只接受成功 envelope 中的 `resu
 
 - 真实未关联日历行样本未观察；产品已按用户批准规则验证全部行后排除未关联项。
 - `itemId` 关联不证明本人报名成功、取消或撤回状态；`source_retired` 只表示来源在完整所选范围内不再返回该活动关联日程，不证明学校取消或本人报名状态，这些语义仍未观察。
-- M2 的关闭仅覆盖上述正式范围，不把剩余未知项改写为真实通过。
+- 本契约不把未观察项描述为已验证行为。
 
 静态实现依据：[固定 origin 与入口](../../../app/lib/source/observation_contract.dart)、[固定 Young 页面和登录过渡](../../../app/windows/runner/observation_bridge.cpp)、[受控 API 读取器](../../../app/windows/runner/young_business_reader.cpp)、[业务字段与分页契约](../../../app/lib/source/young_business_contract.dart)、[采集封存与范围规则](../../../app/lib/source/young_collection_contract.dart)、[身份关联与作业协调](../../../app/lib/jobs/observation_coordinator.dart)、[正式同步协调器](../../../app/lib/jobs/young_sync_coordinator.dart)、[共享认证驱动](../../../app/lib/jobs/school_authentication_driver.dart)、[本地事务存储](../../../app/lib/data/young_store_extension.dart)。

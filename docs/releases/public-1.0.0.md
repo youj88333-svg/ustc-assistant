@@ -1,6 +1,6 @@
 # 1.0.0公开发布
 
-2026-10-25已在[校内GitLab发布v1.0.0](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)，源码修订为`9515e50a95d6988f0d1a438566b5957e0e88d78a`。项目和六份附件的匿名访问、完整下载字节数及SHA-256均已核验；实际发布与检查见[阶段记录](../milestones/open-source-release/records.md)。发布不替代新设备和真实业务验收。
+v1.0.0源码修订为`9515e50a95d6988f0d1a438566b5957e0e88d78a`。校内 GitLab 上的[公开发布页](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)提供以下安装包；GitHub 的[v1.0.0 发布页](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)待发布，验证完成前请以 GitLab 附件为准。公开安装包不代表所有设备或真实业务情形均已验收。
 
 | 使用设备 | 下载 |
 |---|---|

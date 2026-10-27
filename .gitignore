@@ -32,3 +32,33 @@ private/
 *.pfx
 **/key.properties
 **/signing.json
+
+# Local agent instructions and personal development history stay on this machine.
+# Existing commits are intentionally retained; ignore rules do not rewrite history.
+AGENTS.md
+agents.md
+CLAUDE.md
+GEMINI.md
+QWEN.md
+.agents/
+.codex/
+.claude/
+.gemini/
+docs/milestones/
+docs/archive/
+docs/refactor-docs/
+docs/reviews/
+docs/research/
+docs/quality/
+docs/decisions/
+docs/status.md
+docs/workflow.md
+docs/maintaining.md
+docs/maintenance.md
+docs/design-review.md
+docs/private-development-index.md
+docs/releases/windows-1.00*.md
+docs/releases/android-private-1.00*.md
+verification/sources.md
+verification/windows/README.md
+tools/test-maintenance-layout.ps1

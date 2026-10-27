@@ -19,6 +19,8 @@ USTC Assistant 是一款面向校内学习生活的本地优先助手。它把 A
 
 ## 下载 1.0.0
 
+GitHub 发布入口：[v1.0.0 Release（待发布）](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)。发布完成并验证附件前，请使用下方仍可用的校内 GitLab 下载。
+
 [校内 GitLab 发布页面](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)提供以下安装包，可直接下载：
 
 | 使用设备 | 下载 |

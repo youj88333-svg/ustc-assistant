@@ -1,10 +1,10 @@
 # 模型网关契约
 
-这是模型服务出口，不新增一条业务来源。通用秘密、出站、运行和维护要求见 [09](../../architecture/09-contracts.md)；模型入口与后续工具/图片的实际核验见 [M5 记录](../../milestones/m5/records.md)。
+这是模型服务出口，不新增一条业务来源。通用秘密、出站、运行和维护要求见[09 关键契约](../../architecture/09-contracts.md)。
 
 ## 固定请求
 
-生产目标由用户在学校和 DeepSeek 官方之间主动选择：学校 `https://api.llm.ustc.edu.cn:443`，官方 `https://api.deepseek.com:443`。无 URL 输入或自动回退主机。只使用绑定对应提供方的 Bearer Key，无 Cookie/学校密码/浏览器认证资产；任何 3xx 都拒绝，不将 Key 转交下个目标。尊重既有代理环境，不降低 TLS 或改系统信任。
+生产目标由用户在学校和 DeepSeek 官方之间主动选择：学校 `https://api.llm.ustc.edu.cn:443`，官方 `https://api.deepseek.com:443`。无 URL 输入或自动回退主机。只使用绑定对应提供方的 Bearer Key，无 Cookie/学校密码/浏览器认证资产；任何 3xx 都拒绝，不将 Key 转交下个目标。遵循用户已配置的代理，不降低 TLS 或改系统信任。
 
 | 操作 | 契约 |
 |---|---|
@@ -22,9 +22,9 @@ Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 
 
 ## 固定思考策略与人格前缀
 
-以下 `high` 策略仅适用于学校网关。DeepSeek 官方按本次提速要求，显式使用 `thinking:{type:"disabled"}` 的直答模式，不附 `reasoning_effort`，保留全部固定业务工具。官方[思考协议](https://api-docs.deepseek.com/guides/thinking_mode/)对带 tools 的历史要求完整回传 reasoning_content，本次不存储/伪造/重放思考，不依赖其默认开启行为。官方未来思考支持另行定界；模型列表动态读取，不将模型目录元数据视作 toolReady 验证结果。
+以下 `high` 策略仅适用于学校网关。DeepSeek 官方使用 `thinking:{type:"disabled"}` 的直答模式，不附 `reasoning_effort`，保留全部固定业务工具。官方[思考协议](https://api-docs.deepseek.com/guides/thinking_mode/)对带 tools 的历史要求完整回传 reasoning_content；应用不存储、伪造或重放思考，不依赖其默认开启行为。官方未来思考支持另行定界；模型列表动态读取，不将模型目录元数据视作 toolReady 验证结果。
 
-按用户偏好，精确模型 ID `deepseek-flash` 的全部请求统一发送顶层 `reasoning_effort:"high"`，包括验证、工具续答、compact 和晨报；其他 ID（含相近别名）保持服务默认，不推断能力。设置及安全能力摘要显示同一派生策略，不另增数据库事实或任意参数入口；不设置 `thinking`、数字预算或 `chat_template_kwargs`。服务明确以结构化 `error.param=reasoning_effort` 拒绝时映射为 `reasoningRejected`，不删参或改强度自动重试；无法识别的拒绝仍保留原固定协议错误。请求成功不证明服务器确实采用该强度。
+精确模型 ID `deepseek-flash` 的请求统一发送顶层 `reasoning_effort:"high"`，包括工具续答、compact 和晨报；其他 ID（含相近别名）保持服务默认，不推断能力。设置及安全能力摘要显示同一派生策略，不另增数据库事实或任意参数入口；不设置 `thinking`、数字预算或 `chat_template_kwargs`。服务明确以结构化 `error.param=reasoning_effort` 拒绝时映射为 `reasoningRejected`，不删参或改强度自动重试；无法识别的拒绝仍保留原固定协议错误。请求成功不证明服务器确实采用该强度。
 
 依据为[学校模型目录](https://llm.ustc.edu.cn/)公开列出的精确部署别名、[学校技术更新](https://llm.ustc.edu.cn/guide/technical-updates/)的推理参数适配及归一化说明，以及 [DeepSeek 自家 API](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode/)的顶层参数定义。它们支持此实施选择，但学校具体 Key/路由接受 `high` 仍待应用内核验；不将 DeepSeek 自家路由的全部行为套用到学校部署。思考仍仅用于有界本次展示，不进入后续请求；学校是否要求工具续轮回传思考尚未证实，不据其他提供方规则扩大出站。
 
@@ -32,8 +32,8 @@ Key 仅接受 1–4096 个可打印 ASCII 字节，模型 ID、工具名/调用 
 
 ## 能力与状态
 
-目录和实际能力分别记录。未验核为 unverified；合成文本与流式均通过但工具未完整通过为 chatOnly；固定 `echo_probe({value:"ustc_probe"})` 的调用及携带不可预知 proof 的工具结果续答均通过才 toolReady。echo_probe 不读取业务、授权或外部资料，不注册 M5.2 工具。
+目录和实际能力分别记录。未验核为 unverified；合成文本与流式均通过但工具未完整通过为 chatOnly；固定 `echo_probe({value:"ustc_probe"})` 的调用及携带不可预知 proof 的工具结果续答均通过才 toolReady。echo_probe 不读取业务、授权或外部资料，也不属于应用固定业务工具。
 
 Key 在 Windows 采用 DPAPI CurrentUser、Android 采用 Keystore AES-GCM，用途分别为 `ustc-model-key/v1/<owner>` 与 `deepseek-model-key/v1/<owner>`；用途参与熵/AAD，不能跨提供方解密。schema 19 无解密保留学校密文及旧用途，两方模型/目录/Key/同意/能力报告独立保存。配置事务复验 owner/reset/history/config/request 世代；切换推进配置与请求世代、撤销候选/旧租约，停止推进 requestEpoch，异步保护及 Key 交接中的旧操作不能落库或再注册出站。保存模型的联网同意可撤销/恢复，撤销保留当前 Key/历史但停止运行并禁新发送；删除只影响所选服务，重置应用清除两方。启动恢复历史清理和中断记录，不自动重放请求。
 
-2026-10-13 用户的应用内安全摘要确认实际所选模型为 toolReady，文本、流式、原生调用及结果续答均通过，目录为 12 项；不记录 Key 或推测具体模型 ID。普通聊天/停止体验与视觉能力仍待核对，详见 [真实能力记录](../../milestones/m5/acceptance.md)。接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)，主动图片编码参考 [OpenAI 图像输入](https://developers.openai.com/api/docs/guides/images-vision)。新参数仍按相应合成和真实核验，不从“兼容”推断支持。
+接口依据 [学校 API 指南](https://llm.ustc.edu.cn/guide/api-usage/)、[协议](https://llm.ustc.edu.cn/guide/protocol/)与 [模型](https://llm.ustc.edu.cn/guide/models/)；SSE 正常形状参考 [OpenAI 流式类型](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)，主动图片编码参考 [OpenAI 图像输入](https://developers.openai.com/api/docs/guides/images-vision)。新参数仍按相应合成和实际服务核验，不从“兼容”推断支持。

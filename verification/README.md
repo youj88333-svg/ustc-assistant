@@ -1,19 +1,11 @@
-# 前置验证与诊断
+# 验证与诊断
 
-本目录保留设计前置实验、合成测试和脱敏证据，属于可行性/诊断资料，不替代产品验收。产品 M0/M1/M2 已正式关闭；当前状态见 [状态页](../docs/status.md)，实际阶段结果见 [阶段索引](../docs/milestones/README.md)。
+本目录提供合成、回环与临时数据检查，帮助验证代码行为和协议边界。这些检查不访问真实学校，不读取正式业务资料、浏览器认证资产或秘密，也不替代目标设备或真实服务验证。
 
 | 内容 | 入口 | 用途 |
 |---|---|---|
-| 关键模型实验 | [model](model/README.md) | 新合成事务、时间、稳定身份、覆盖与取消反例 |
-| Windows 原生前置实验/手动跳转工具 | [windows](windows/README.md) | SDK、隔离、生命周期、DPAPI 与登录链路线索；保留原严格候选失败 |
-| 回环 HTTPS fixture | [https_fixture](https_fixture/README.md) | 合成认证/重定向测试，不访问学校 |
-| 来源验证入口 | [sources](sources.md) | 当前来源契约与对应真实证据导航 |
-| iOS 私用 I0 探针 | [ios-private-probe](ios-private-probe/README.md) | 独立设备/Widget、无签名 IPA 校验及本机签名门禁，不接正式业务 |
+| 模型与业务逻辑合成检查 | [model](model/README.md) | 使用合成输入验证事务、时间、稳定身份、覆盖和取消行为 |
+| 回环 HTTPS fixture | [https_fixture](https_fixture/README.md) | 验证合成认证、重定向和 HTTPS 行为，不访问学校 |
+| Windows 通知检查 | [notifications](notifications/README.md) | 使用独立测试身份检查通知接口与投递边界 |
 
-## 边界与记录
-
-自动实验只访问合成/loopback/独立临时资产，不读取正式业务、浏览器会话或秘密。真人观测由用户完成登录/学校授权，记录固定结构和计数，不保存原始响应、HAR、Cookie/Token 或认证内容。手动 Edge 只提供链路线索，产品身份/许可与自动认证须分别验收。
-
-首版边界按 [DR-ADR-09](../docs/decisions/dr-adr-09-browser-boundary.md)：严格 CAL/完整网络隔离及补丁资格退出首版门槛，旧失败留档；不用已有实验通过推定未执行平台或学校结果。实验不直接复制为产品代码或 fixtures。
-
-各实验目录的原记录保留发生时范围。整理前汇总和旧源码路径完整保存在 [档案](../docs/archive/README.md)；新的产品过程进入对应阶段记录，不再追加到本入口。
+检查命令见[开发说明](../docs/development.md)。自动检查通过不代表学校登录、真实数据对应关系、系统通知送达或所有设备组合均已验证；当前平台限制见[已知问题](../docs/releases/known-issues.md)。

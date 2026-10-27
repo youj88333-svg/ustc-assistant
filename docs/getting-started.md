@@ -1,6 +1,6 @@
 # 开始使用
 
-Windows x64 和 Android ARM64/x86_64 的 1.0.0 安装包已在[校内 GitLab Release](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)公开提供。先按[发布说明](releases/public-1.0.0.md)选择安装包；需要自行构建时使用下文入口。此前 Windows 私有包和 Android QA 应用继续保留，Android 正式版拥有独立身份和资料目录。
+Windows x64 和 Android ARM64/x86_64 的 1.0.0 安装包已在[校内 GitLab Release](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)公开提供；对应的[GitHub Release](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)待发布，完成前请从 GitLab 获取安装包。先按[发布说明](releases/public-1.0.0.md)选择安装包；需要自行构建时使用下文入口。Android 正式版与 QA 应用拥有独立身份和资料目录，不自动搬迁资料。
 
 ## 从源码启动 Windows 版本
 
