@@ -1,12 +1,12 @@
 # 1.0.0公开发布
 
-v1.0.0源码修订为`9515e50a95d6988f0d1a438566b5957e0e88d78a`。校内 GitLab 上的[公开发布页](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)提供以下安装包；GitHub 的[v1.0.0 发布页](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)待发布，验证完成前请以 GitLab 附件为准。公开安装包不代表所有设备或真实业务情形均已验收。
+v1.0.0源码修订为`9515e50a95d6988f0d1a438566b5957e0e88d78a`。[GitHub 发布页](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)与[校内 GitLab 发布页](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)均提供以下安装包及三份说明/清单，共六个相同文件。公开安装包不代表所有设备或真实业务情形均已验收。
 
-| 使用设备 | 下载 |
-|---|---|
-| Windows x64 | [完整便携ZIP](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/USTC-Assistant-1.0.0-windows-x64.zip) |
-| Android手机、可直接安装APK的鸿蒙 | [ARM64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-arm64-v8a-release.apk) |
-| x86_64模拟器 | [x86_64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-x86_64-release.apk) |
+| 使用设备 | GitHub 下载 | 校内 GitLab 下载 |
+|---|---|---|
+| Windows x64 | [完整便携ZIP](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/USTC-Assistant-1.0.0-windows-x64.zip) | [完整便携ZIP](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/USTC-Assistant-1.0.0-windows-x64.zip) |
+| Android手机、可直接安装APK的鸿蒙 | [ARM64 APK](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/app-arm64-v8a-release.apk) | [ARM64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-arm64-v8a-release.apk) |
+| x86_64模拟器 | [x86_64 APK](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/app-x86_64-release.apk) | [x86_64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-x86_64-release.apk) |
 
 ## 平台与安装
 
@@ -23,8 +23,8 @@ Windows继续沿用自己的既有正式资料根与DPAPI用途；Android新正�
 
 ## 校验与说明
 
-发布页附[文件清单](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/release-manifest.json)和[SHA256SUMS.txt](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/SHA256SUMS.txt)。Android证书SHA-256为`8f5022f13297f11ad3049d1da5d9eb61493b48f4745859b48d060dc99d549fa7`；此摘要用于辨认Android签名，文件摘要用于核对下载内容。候选文件中的不可变追溯标记继续保留，实际公开状态以Release页面为准。
+发布页附[文件清单](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/release-manifest.json)和[SHA256SUMS.txt](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/SHA256SUMS.txt)。Android证书SHA-256为`8f5022f13297f11ad3049d1da5d9eb61493b48f4745859b48d060dc99d549fa7`；此摘要用于辨认Android签名，文件摘要用于核对下载内容。候选文件中的不可变追溯标记继续保留，实际公开状态以Release页面为准。
 
 已知问题见[统一清单](known-issues.md)，完整来源和通知见随包`LICENSE`、`NOTICE`、`THIRD_PARTY_NOTICES.md`、Flutter通知与语音/SDK许可。
 
-学校资料、模型和图标参考元素的来源与代码许可分别说明，见随包第三方通知。图标按用户选择沿用现有版本。
+学校资料、模型和图标参考元素的来源与代码许可分别说明，见随包第三方通知。

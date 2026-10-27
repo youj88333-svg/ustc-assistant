@@ -1,5 +1,5 @@
-// Design basis: docs/milestones/android-apk/plan.md A2; docs/architecture/07,
-// 09 K-01-K-06, 10-13; and docs/workflow.md (15). All source pages, accounts,
+// Design basis: docs/architecture/07-12 and docs/reference/sources. The
+// source contracts cover identity, isolation, and imports. All pages, accounts,
 // credentials, events, and exams below are loopback fixtures. These tests use
 // the formal coordinators and Android credential protection in the isolated
 // QA no-backup root; they do not contact a school or model.

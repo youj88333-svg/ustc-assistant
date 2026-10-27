@@ -1,6 +1,5 @@
-// Design basis: docs/README.md navigation to architecture 07/09/10–12,
-// quality 13, reviews 14, workflow 15, and the approved daily Young sync scope
-// at the end of docs/milestones/windows-polish/plan.md. These tests use only a
+// Design basis: docs/architecture/09-contracts.md and 10-runtime.md describe
+// the daily Young sync lease and scheduling boundaries. These tests use only a
 // loopback synthetic school, a fresh temporary DemoDirectory, and synthetic
 // account/password values; they never contact a real school.
 import 'dart:async';

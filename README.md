@@ -19,17 +19,15 @@ USTC Assistant 是一款面向校内学习生活的本地优先助手。它把 A
 
 ## 下载 1.0.0
 
-GitHub 发布入口：[v1.0.0 Release（待发布）](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0)。发布完成并验证附件前，请使用下方仍可用的校内 GitLab 下载。
+安装包已在 [GitHub Release](https://github.com/youj88333-svg/ustc-assistant/releases/tag/v1.0.0) 和[校内 GitLab Release](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)发布，两处提供相同版本的文件：
 
-[校内 GitLab 发布页面](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0)提供以下安装包，可直接下载：
+| 使用设备 | GitHub 下载 | 校内 GitLab 下载 |
+|---|---|---|
+| Windows x64 | [便携 ZIP](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/USTC-Assistant-1.0.0-windows-x64.zip) | [便携 ZIP](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/USTC-Assistant-1.0.0-windows-x64.zip) |
+| Android 手机、可直接安装 APK 的鸿蒙 | [ARM64 APK](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/app-arm64-v8a-release.apk) | [ARM64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-arm64-v8a-release.apk) |
+| x86_64 模拟器 | [x86_64 APK](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/app-x86_64-release.apk) | [x86_64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-x86_64-release.apk) |
 
-| 使用设备 | 下载 |
-|---|---|
-| Windows x64 | [便携 ZIP](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/USTC-Assistant-1.0.0-windows-x64.zip) |
-| Android 手机、可直接安装 APK 的鸿蒙 | [ARM64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-arm64-v8a-release.apk) |
-| x86_64 模拟器 | [x86_64 APK](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/app-x86_64-release.apk) |
-
-安装步骤、签名及资料保留边界见[发布说明](docs/releases/public-1.0.0.md)，限制见[已知问题](docs/releases/known-issues.md)，文件摘要见[SHA256SUMS.txt](https://git.ustc.edu.cn/demo233/107_ustc_assistant/-/releases/v1.0.0/downloads/SHA256SUMS.txt)。源码构建入口见[开始使用](docs/getting-started.md)，构建命令见[开发说明](docs/development.md#正式候选构建)，完整导航见[docs/README.md](docs/README.md)。
+安装步骤、签名及资料保留边界见[发布说明](docs/releases/public-1.0.0.md)，限制见[已知问题](docs/releases/known-issues.md)，文件摘要见[SHA256SUMS.txt](https://github.com/youj88333-svg/ustc-assistant/releases/download/v1.0.0/SHA256SUMS.txt)。源码构建入口见[开始使用](docs/getting-started.md)，构建命令见[开发说明](docs/development.md#正式候选构建)，完整导航见[docs/README.md](docs/README.md)。
 
 ## 隐私与模型配置
 

@@ -1,5 +1,5 @@
-// Design basis: docs/milestones/android-apk/plan.md A3; docs/architecture/07-12;
-// docs/quality/13, docs/reviews/14, and docs/workflow.md. This Android QA test
+// Design basis: docs/architecture/07-12 and docs/reference/sources/campus.md.
+// This Android QA test
 // uses one app-private temporary owner, loopback HTTP, and approved bundled
 // public materials only. It does not contact a school or model endpoint.
 import 'dart:async';
