@@ -1,4 +1,22 @@
 workflows:
+  ios-i1-foundation:
+    name: iOS I1 - private storage and bootstrap
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+    environment:
+      flutter: '3.47.7'
+      xcode: '27.1'
+    scripts:
+      - name: Validate native storage, simulator lifecycle and device AOT
+        script: bash tools/ios-i1/build.sh
+    artifacts:
+      - app/build/ios-i1/artifacts/ios-i1-unsigned.ipa
+      - app/build/ios-i1/artifacts/ios-i1-verification.json
+      - app/build/ios-i1/artifacts/ios-i1-provenance.json
+      - app/build/ios-i1/artifacts/i1-build.log
+      - app/build/ios-i1/artifacts/i1-xcode.txt
+      - app/build/ios-i1/artifacts/i1-simulator-test.log
+
   ios-i0-preflight:
     name: iOS I0 - source and Mac preflight
     instance_type: mac_mini_m2

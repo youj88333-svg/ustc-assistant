@@ -14,6 +14,7 @@ import 'android_notifications.dart';
 import 'android_speech_model.dart';
 import 'android_speech_recorder.dart';
 import 'demo_directory.dart';
+import 'ios_runtime_platform_factory.dart';
 import 'jw_directory_path.dart';
 import 'native_observation_browser.dart';
 import 'offline_speech_input.dart';
@@ -44,6 +45,7 @@ abstract interface class RuntimePlatformFactory {
 RuntimePlatformFactory runtimePlatformFactory() {
   if (Platform.isWindows) return const WindowsRuntimePlatformFactory();
   if (Platform.isAndroid) return const AndroidRuntimePlatformFactory();
+  if (Platform.isIOS) return const IOSRuntimePlatformFactory();
   throw const AppFailure(FailureCode.unsupportedPlatform);
 }
 

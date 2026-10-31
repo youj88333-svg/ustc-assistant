@@ -404,13 +404,17 @@ final class _OwnedAppState extends State<OwnedApplication> {
         agentBuilder: (context) => AgentWorkspacePage(
           controller: runtime.agent,
           diagnostics: runtime.diagnostics,
-          speechInput: runtime.speechInput,
+          speechInput: defaultTargetPlatform == TargetPlatform.iOS
+              ? null
+              : runtime.speechInput,
           morningView: runtime.morning.view,
           morningChanges: runtime.morning.changes,
           morningNowUtc: () => runtime.clock.nowUtc,
           onMorningRetry: () => runtime.morning.check(manual: true),
           openMorningSource: (uri) => _openRestrictedExternalLink(context, uri),
-          pickImages: () => pickAgentImages(diagnostics: runtime.diagnostics),
+          pickImages: defaultTargetPlatform == TargetPlatform.iOS
+              ? null
+              : () => pickAgentImages(diagnostics: runtime.diagnostics),
           onModelValidation: () async {
             try {
               final runner = await runtime.agent.openBehaviorValidation();

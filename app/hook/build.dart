@@ -19,6 +19,15 @@ Future<void> main(List<String> args) async {
       ).run(input: input, output: output);
       return;
     }
+    if (input.config.code.targetOS == OS.iOS) {
+      await CBuilder.library(
+        name: 'ustc_directory_darwin',
+        assetName: 'platform/ios_directory.dart',
+        sources: ['native/directory_darwin.c'],
+        linkModePreference: LinkModePreference.dynamic,
+      ).run(input: input, output: output);
+      return;
+    }
     if (input.config.code.targetOS != OS.windows) return;
     final compilerInput = input.config.code.cCompiler == null
         ? await _withWindowsCompiler(input, output)
