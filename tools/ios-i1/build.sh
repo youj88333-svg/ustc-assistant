@@ -19,6 +19,7 @@ clang -std=c11 -Wall -Wextra -Werror -O2 app/native/directory_darwin.c verificat
 swiftc app/ios/Runner/IOSCredentialVault.swift verification/ios-i1/vault_main.swift -o "$TMPDIR/i1-vault-test"
 "$TMPDIR/i1-vault-test"
 python3 tools/ios-i1/test_verify_package.py
+python3 tools/ios-i1/test_select_simulator.py
 ruby tools/ios-i1/configure.rb "$revision"
 cd "$repo/app"
 # iOS has a newer fixed SDK; leave the Windows/Android baseline lock unchanged.
@@ -31,16 +32,8 @@ flutter test --no-pub test/platform/ios*test.dart
 # Create only this job's synthetic simulator. No user or pre-existing device.
 xcrun simctl list runtimes -j > "$TMPDIR/runtimes.json"
 xcrun simctl list devicetypes -j > "$TMPDIR/device-types.json"
-read -r runtime device_type < <(python3 - "$TMPDIR" <<'PY'
-import json, pathlib, sys
-p = pathlib.Path(sys.argv[1])
-r = [x for x in json.loads((p/'runtimes.json').read_text())['runtimes'] if x.get('isAvailable') and x['identifier'].startswith('com.apple.CoreSimulator.SimRuntime.iOS-27')]
-d = json.loads((p/'device-types.json').read_text())['devicetypes']
-device = next((x for x in d if x['identifier'].endswith('.iPhone-15-Pro')), None)
-assert r and device, 'i1 simulator requirements unavailable'
-print(sorted(r, key=lambda x: x['version'], reverse=True)[0]['identifier'], device['identifier'])
-PY
-)
+read -r runtime device_type < <(python3 "$repo/tools/ios-i1/select_simulator.py" --runtimes "$TMPDIR/runtimes.json" --device-types "$TMPDIR/device-types.json")
+printf 'i1 simulator: %s %s\n' "$runtime" "$device_type" | tee "$output/i1-simulator-selection.txt"
 simulator="$(xcrun simctl create USTC-I1-synthetic "$device_type" "$runtime")"
 [[ "$simulator" =~ ^[0-9A-Fa-f-]{36}$ ]] || exit 2
 trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true; xcrun simctl delete "$simulator" >/dev/null 2>&1 || true' EXIT

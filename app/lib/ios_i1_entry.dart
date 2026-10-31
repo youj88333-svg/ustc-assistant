@@ -53,6 +53,10 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
         await bootstrap.close();
         return;
       }
+      if (bootstrap.runtime == null) {
+        await bootstrap.close();
+        throw const AppFailure(FailureCode.cleanupPending);
+      }
       _bootstrap = bootstrap;
       await bootstrap.store.customStatement(
         'CREATE TABLE IF NOT EXISTS ios_i1_probe '

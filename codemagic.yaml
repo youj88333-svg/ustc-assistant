@@ -17,6 +17,7 @@ workflows:
       - app/build/ios-i1/artifacts/i1-xcode.txt
       - app/build/ios-i1/artifacts/i1-simulator-test.log
       - app/build/ios-i1/artifacts/ios-i1-pubspec.lock
+      - app/build/ios-i1/artifacts/i1-simulator-selection.txt
 
   ios-i0-preflight:
     name: iOS I0 - source and Mac preflight
