@@ -267,8 +267,9 @@ def _parse_signature_superblob(data: bytes) -> None:
         _fail("invalid_code_signature")
     if declared_length < 12 or declared_length > len(data) or count < 1 or count > MAX_CODE_SIGNATURE_BLOBS:
         _fail("invalid_code_signature")
-    if any(data[declared_length:]):
-        _fail("invalid_code_signature")
+    # LC_CODE_SIGNATURE may reserve bytes beyond the SuperBlob's own length.
+    # Apple indexes packed sub-blobs by byte offset; no four-byte alignment is
+    # required (Security/libsecurity_utilities/lib/superblob.h).
 
     table_end = 12 + count * 8
     if table_end > declared_length:
@@ -278,7 +279,7 @@ def _parse_signature_superblob(data: bytes) -> None:
     ranges: list[tuple[int, int]] = [(0, table_end)]
     for index in range(count):
         slot, offset = struct.unpack_from(">II", data, 12 + index * 8)
-        if slot in slots or offset % 4 != 0 or offset < table_end or offset > declared_length - 8:
+        if slot in slots or offset < table_end or offset > declared_length - 8:
             _fail("invalid_code_signature")
         blob_magic, blob_length = struct.unpack_from(">II", data, offset)
         if blob_length < 8 or blob_length > declared_length - offset:

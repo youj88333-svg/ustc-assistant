@@ -323,6 +323,33 @@ class VerifyI1PackageTests(unittest.TestCase):
             lambda: verifier.verify_package(ipa, REVISION),
         )
 
+    def test_packed_signature_offsets_and_reserved_padding(self) -> None:
+        def packed(entitlements: dict[str, Any]) -> bytes:
+            payload = plistlib.dumps(entitlements, fmt=plistlib.FMT_XML)
+            directory = struct.pack(">II", 0xFADE0C02, 9) + b"x"
+            xml = struct.pack(">II", 0xFADE7171, 8 + len(payload)) + payload
+            offset = 28 + len(directory)
+            blob = (
+                struct.pack(">III", 0xFADE0CC0, offset + len(xml), 2)
+                + struct.pack(">II", 0, 28)
+                + struct.pack(">II", 5, offset)
+                + directory + xml
+            )
+            return blob + b"\xa5\x01"  # Reserved outside the declared SuperBlob.
+
+        verifier.verify_package(
+            self.ipa("packed-signature.ipa", runner_signature=packed({})), REVISION,
+        )
+        self.assert_reason(
+            "app_group_signature_entitlement",
+            lambda: verifier.verify_package(
+                self.ipa(
+                    "packed-group-signature.ipa",
+                    runner_signature=packed({"com.apple.security.application-groups": ["group.fixture"]}),
+                ), REVISION,
+            ),
+        )
+
     def test_signature_entitlements_are_bounded_and_checked(self) -> None:
         empty_signature = signature_superblob()
         ipa = self.ipa(runner_signature=empty_signature)
