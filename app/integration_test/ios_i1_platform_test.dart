@@ -74,6 +74,7 @@ void main() {
           await reacquired.formal.release();
           await reacquired.demo.release();
         });
+        debugPrint('i1-checkpoint: directory-lease');
 
         final firstBootstrap = await tester.runAsync(
           () => RuntimeBootstrap.open(platformFactory: platform),
@@ -84,6 +85,7 @@ void main() {
         first = firstBootstrap;
         final runtime = firstBootstrap.runtime;
         if (runtime == null) throw StateError('I1 bootstrap did not activate');
+        debugPrint('i1-checkpoint: bootstrap-active');
 
         await tester.runAsync(() async {
           await _exerciseStore(runtime.store, 'demo-kept-v1');
@@ -137,6 +139,7 @@ void main() {
           expect(speech.view.transcript, isNull);
           await speech.close();
         });
+        debugPrint('i1-checkpoint: sqlite-protection-and-unavailable-services');
 
         // Exercise the application's real lifecycle listener. The new test
         // app sandbox has no enrolled source, so foregrounding cannot sync.
@@ -153,7 +156,8 @@ void main() {
         expect(ownedRuntime, same(runtime));
 
         _background(tester.binding);
-        await tester.pump();
+        // A live iOS binding suppresses frames while paused. Pumping here
+        // waits forever; inspect ownership without requesting a frame.
         expect(firstBootstrap.runtime, same(ownedRuntime));
         expect(ownedRuntime.directory.isHeld, isTrue);
         expect(ownedRuntime.jwDirectory.isHeld, isTrue);
@@ -167,6 +171,7 @@ void main() {
         _foreground(tester.binding);
         await tester.pump();
         expect(firstBootstrap.runtime, same(ownedRuntime));
+        debugPrint('i1-checkpoint: lifecycle-resumed');
         expect(ownedRuntime.directory.isHeld, isTrue);
         expect(ownedRuntime.jwDirectory.isHeld, isTrue);
         await tester.runAsync(
@@ -263,6 +268,7 @@ void main() {
         await tester.runAsync(reopenedBootstrap.close);
         reopened = null;
       } finally {
+        _foreground(tester.binding);
         if (appMounted) {
           await tester.pumpWidget(const SizedBox.shrink());
         }
@@ -271,6 +277,7 @@ void main() {
       }
     },
     skip: !Platform.isIOS,
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 
   testWidgets(
@@ -356,6 +363,7 @@ void main() {
       });
     },
     skip: !Platform.isIOS,
+    timeout: const Timeout(Duration(minutes: 3)),
   );
 }
 
