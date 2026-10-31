@@ -27,6 +27,17 @@ const _probeTable = 'ios_i1_synthetic_probe';
 
 void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final previousNetwork = HttpOverrides.current;
+  final network = _NoNetwork();
+  setUpAll(() => HttpOverrides.global = network);
+  tearDownAll(() {
+    HttpOverrides.global = previousNetwork;
+    expect(
+      network.attempts,
+      0,
+      reason: 'I1 only exercises local synthetic state',
+    );
+  });
 
   testWidgets(
     'iOS I1 private root, Darwin ownership, SQLite and bootstrap lifecycle',
@@ -46,14 +57,17 @@ void main() {
           );
 
           final firstLease = await platform.acquireDirectories();
-          expect(firstLease.demo.path, '$root/demo_v1');
-          expect(firstLease.formal.path, '$root/local_v1');
-          await expectLater(
-            IOSDirectories.acquire(root!),
-            _appFailure(FailureCode.ownerConflict),
-          );
-          await firstLease.formal.release();
-          await firstLease.demo.release();
+          try {
+            expect(firstLease.demo.path, '$root/demo_v1');
+            expect(firstLease.formal.path, '$root/local_v1');
+            await expectLater(
+              IOSDirectories.acquire(root!),
+              throwsA(_appFailure(FailureCode.ownerConflict)),
+            );
+          } finally {
+            await firstLease.formal.release();
+            await firstLease.demo.release();
+          }
 
           final reacquired = await IOSDirectories.acquire(root!);
           expect(reacquired.demo.isHeld, isTrue);
@@ -97,17 +111,19 @@ void main() {
           expect(runtime.browser.supportsIsolatedCleanupPending, isFalse);
           await expectLater(
             runtime.browser.ensureAvailable(),
-            _appFailure(FailureCode.unsupportedPlatform),
+            throwsA(_appFailure(FailureCode.unsupportedPlatform)),
           );
 
           final notifications = platform.createNotifications();
           expect((await notifications.initialize()).available, isFalse);
           await expectLater(
             notifications.pending(),
-            isA<ReminderFailure>().having(
-              (error) => error.code,
-              'stable code',
-              ReminderFailureCode.platformUnavailable,
+            throwsA(
+              isA<ReminderFailure>().having(
+                (error) => error.code,
+                'stable code',
+                ReminderFailureCode.platformUnavailable,
+              ),
             ),
           );
           await notifications.close();
@@ -144,7 +160,7 @@ void main() {
         await tester.runAsync(
           () => expectLater(
             IOSDirectories.acquire(root!),
-            _appFailure(FailureCode.ownerConflict),
+            throwsA(_appFailure(FailureCode.ownerConflict)),
           ),
         );
 
@@ -156,7 +172,7 @@ void main() {
         await tester.runAsync(
           () => expectLater(
             IOSDirectories.acquire(root!),
-            _appFailure(FailureCode.ownerConflict),
+            throwsA(_appFailure(FailureCode.ownerConflict)),
           ),
         );
 
@@ -288,18 +304,22 @@ void main() {
           ..[schoolEnvelope.length - 1] ^= 1;
         await expectLater(
           school.unprotect(damagedSchoolEnvelope, purpose: schoolPurpose),
-          isA<JwCredentialException>().having(
-            (error) => error.code,
-            'stable code',
-            JwCredentialFailure.invalidCredential,
+          throwsA(
+            isA<JwCredentialException>().having(
+              (error) => error.code,
+              'stable code',
+              JwCredentialFailure.invalidCredential,
+            ),
           ),
         );
         await expectLater(
           school.unprotect(schoolEnvelope, purpose: otherSchoolPurpose),
-          isA<JwCredentialException>().having(
-            (error) => error.code,
-            'stable code',
-            JwCredentialFailure.invalidCredential,
+          throwsA(
+            isA<JwCredentialException>().having(
+              (error) => error.code,
+              'stable code',
+              JwCredentialFailure.invalidCredential,
+            ),
           ),
         );
 
@@ -315,18 +335,22 @@ void main() {
           ..[modelEnvelope.length - 1] ^= 1;
         await expectLater(
           model.unprotect(damagedModelEnvelope, purpose: modelPurpose),
-          isA<AgentFailure>().having(
-            (error) => error.code,
-            'stable code',
-            AgentFailureCode.protectionFailed,
+          throwsA(
+            isA<AgentFailure>().having(
+              (error) => error.code,
+              'stable code',
+              AgentFailureCode.protectionFailed,
+            ),
           ),
         );
         await expectLater(
           model.unprotect(modelEnvelope, purpose: otherModelPurpose),
-          isA<AgentFailure>().having(
-            (error) => error.code,
-            'stable code',
-            AgentFailureCode.protectionFailed,
+          throwsA(
+            isA<AgentFailure>().having(
+              (error) => error.code,
+              'stable code',
+              AgentFailureCode.protectionFailed,
+            ),
           ),
         );
       });
@@ -337,6 +361,15 @@ void main() {
 
 Matcher _appFailure(FailureCode code) =>
     isA<AppFailure>().having((error) => error.code, 'stable code', code);
+
+final class _NoNetwork extends HttpOverrides {
+  int attempts = 0;
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    attempts++;
+    throw StateError('I1 platform checks cannot contact external services');
+  }
+}
 
 Future<Map<String, Object?>?> _readProtectionStatus() => _platformChannel
     .invokeMapMethod<String, Object?>('storageProtectionStatus');
