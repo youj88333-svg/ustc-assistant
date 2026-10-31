@@ -40,6 +40,11 @@ enum IOSPrivateStorage {
   /// Fixed owned locations only; no path arguments or user-file enumeration.
   static func protectionStatus() throws -> [String: Any] {
     let root = try self.root()
+    #if targetEnvironment(simulator)
+    let isSimulator = true
+    #else
+    let isSimulator = false
+    #endif
     var inspected = 0
     var protected = true
     let names = ["demo_v1/m0_demo.sqlite", "local_v1/jw.sqlite"]
@@ -56,7 +61,8 @@ enum IOSPrivateStorage {
       }
     }
     return ["kind": "ios-storage-protection-v1", "excludedFromBackup": true,
-            "filesInspected": inspected, "filesProtected": protected]
+            "filesInspected": inspected, "filesProtected": protected && inspected >= 2,
+            "isSimulator": isSimulator]
   }
 
   private static func checkPlain(_ url: URL, directory: Bool) throws {

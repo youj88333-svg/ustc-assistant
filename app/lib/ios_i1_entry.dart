@@ -107,6 +107,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
         _marker = marker;
         _cipherValid = cipherValid;
         _filesProtected =
+            status?['isSimulator'] == false &&
             status?['excludedFromBackup'] == true &&
             status?['filesProtected'] == true;
         _busy = false;
@@ -203,7 +204,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
                 ? '通过'
                 : '未通过'}',
           ),
-          Text('私有文件保护及备份排除：${_filesProtected ? '通过' : '待确认'}'),
+          Text('私有文件保护属性及备份排除：${_filesProtected ? '通过' : '待真机确认'}'),
           if (_failure != null)
             Padding(
               padding: const EdgeInsets.only(top: 16),
