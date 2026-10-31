@@ -4,6 +4,8 @@ The `ios-i1-foundation` Codemagic workflow builds the same Flutter application w
 
 `tools/ios-i1/build.sh` runs the Darwin directory-owner harness, the CryptoKit credential-vault harness, Dart port tests and the iOS Simulator integration test before producing a device Release/AOT package. Flutter and Xcode versions are pinned in `codemagic.yaml`. The Python package verifier also runs on Windows with Python 3.10+:
 
+The iOS workflow uses `tools/ios-i1/pubspec.lock` with its pinned Flutter SDK. It copies that lock into the disposable CI checkout and enforces it; the Windows/Android lock at `app/pubspec.lock` stays unchanged. Do not copy the iOS lock into a maintenance checkout using another SDK.
+
 ```text
 python tools/ios-i1/test_verify_package.py
 python tools/ios-i1/verify_package.py --ipa <file> --expected-revision <40-character Git revision> --report <new report path>

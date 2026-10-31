@@ -320,10 +320,11 @@ final class MorningBriefCoordinator {
       );
       final buffer = StringBuffer();
       ModelCompleted? completion;
-      iterator = StreamIterator(gateway.generate(request, secret));
+      final streamIterator = StreamIterator(gateway.generate(request, secret));
+      iterator = streamIterator;
       final consume = () async {
-        while (await iterator!.moveNext()) {
-          final event = iterator.current;
+        while (await streamIterator.moveNext()) {
+          final event = streamIterator.current;
           await _ensure(ticket);
           if (event is ModelTextDelta) {
             buffer.write(event.text);

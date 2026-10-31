@@ -21,19 +21,9 @@ swiftc app/ios/Runner/IOSCredentialVault.swift verification/ios-i1/vault_main.sw
 python3 tools/ios-i1/test_verify_package.py
 ruby tools/ios-i1/configure.rb "$revision"
 cd "$repo/app"
-# iOS uses a newer pinned SDK than the Windows/Android maintenance baseline.
-# Capture its resolved lock once; subsequent builds use the reviewed I1 lock.
-if [[ -f "$repo/tools/ios-i1/pubspec.lock" ]]; then
-  cp "$repo/tools/ios-i1/pubspec.lock" pubspec.lock
-  flutter pub get --enforce-lockfile
-else
-  python3 - <<'PY'
-from pathlib import Path
-p = Path('pubspec.lock')
-p.write_text(p.read_text().replace('https://pub.flutter-io.cn', 'https://pub.dev'))
-PY
-  flutter pub get
-fi
+# iOS has a newer fixed SDK; leave the Windows/Android baseline lock unchanged.
+cp "$repo/tools/ios-i1/pubspec.lock" pubspec.lock
+flutter pub get --enforce-lockfile
 cp pubspec.lock "$output/ios-i1-pubspec.lock"
 flutter analyze --no-pub
 flutter test --no-pub test/platform/ios*test.dart

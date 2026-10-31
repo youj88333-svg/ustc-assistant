@@ -112,9 +112,10 @@ void main() {
         // Use the same production maintenance command as Settings, on this
         // isolated fixture. Reset must withdraw the old tree and its drafts.
         await tester.runAsync(() async {
-          final snapshot = await bootstrap!.jwStore.applicationSettings
+          final current = bootstrap!;
+          final snapshot = await current.jwStore.applicationSettings
               .inspectSettings();
-          await bootstrap.settings.runMaintenance(
+          await current.settings.runMaintenance(
             snapshot.context,
             MaintenanceKind.reset,
             confirmed: true,
@@ -168,9 +169,9 @@ void main() {
           ),
         );
         await tester.runAsync(() async {
-          final preferences = await bootstrap!.jwStore.features
-              .inspectReminders();
-          await bootstrap.jwStore.features.saveReminderPreferences(
+          final current = bootstrap!;
+          final preferences = await current.jwStore.features.inspectReminders();
+          await current.jwStore.features.saveReminderPreferences(
             preferences,
             preferences.preferences.copyWith(morningEnabled: true),
           );
