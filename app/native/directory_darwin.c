@@ -10,8 +10,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef O_EVTONLY
-#error "directory_darwin.c requires Darwin O_EVTONLY"
+#ifndef O_SEARCH
+#error "directory_darwin.c requires Darwin O_SEARCH"
 #endif
 
 #define API __attribute__((visibility("default")))
@@ -20,7 +20,9 @@
 #define STORAGE 3
 #define LOST 4
 #define MAX_PINS (PATH_MAX / 2 + 2)
-#define DIRECTORY_FLAGS (O_EVTONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW)
+// Search-only ancestors need no directory-listing permission. O_EVTONLY still
+// requests read access on Darwin and fails for sandbox/container ancestors.
+#define DIRECTORY_FLAGS (O_SEARCH | O_CLOEXEC | O_NOFOLLOW)
 
 typedef struct {
   int fd;

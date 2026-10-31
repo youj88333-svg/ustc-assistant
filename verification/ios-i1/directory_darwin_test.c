@@ -12,7 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifndef O_EVTONLY
+#ifndef O_SEARCH
 #error "This harness must be compiled and run on macOS"
 #endif
 

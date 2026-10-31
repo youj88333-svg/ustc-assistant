@@ -153,7 +153,7 @@ final class IOSCredentialVault {
 
     init(root: URL, create: Bool) throws {
       rootPath = root.path
-      rootFD = open(root.path, O_EVTONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+      rootFD = open(root.path, O_SEARCH | O_NOFOLLOW | O_CLOEXEC)
       guard rootFD >= 0, fstat(rootFD, &rootMetadata) == 0,
             rootMetadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR),
             rootMetadata.st_uid == geteuid() else {
