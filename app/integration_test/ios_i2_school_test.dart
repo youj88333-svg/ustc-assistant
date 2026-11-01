@@ -529,7 +529,7 @@ Future<void> _runI2Scenario() async {
         await harness.browser.prepareYoungBusinessPage(
           session: temporaryYoungSession,
           document: youngReady.document,
-          page: YoungBusinessPage.activities,
+          page: YoungBusinessPage.calendar,
         ),
         isTrue,
       );
