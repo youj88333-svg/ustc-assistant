@@ -35,7 +35,7 @@ Young 注册表和原生 `NativeObservationBrowser`。教务与二课业务分�
   不替换已有日历数据。
 - 同一 loopback origin 下两个 JW UUID store 的标记隔离、正常关闭/重开保留，以及通过
   注册表删除临时候选 B 后已认领 A 仍保留标记；再由正式 coordinator 清除该来源登录资料。
-- 同文档、下一文档、Young 同 URL push/replace 的旧 document 拒绝；用户关闭排空；临时
+- JW 同文档 history、真实下一文档拒旧，Young 同 URL push/replace 保留固定业务准备能力；用户关闭排空；临时
   observation 正常关闭删除 WebKit store，正式 profile 普通关闭保留。
 
 原生 `i2Fixture` 只接受 `writeSyntheticMarker`、`checkSyntheticMarker`、

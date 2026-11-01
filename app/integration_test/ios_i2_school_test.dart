@@ -29,6 +29,7 @@ import 'package:ustc_assistant_m0/platform/owned_directory.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/platform/young_partition_registry.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
+import 'package:ustc_assistant_m0/source/young_active_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 
 import 'support/jw_sync_fixture.dart';
@@ -497,8 +498,8 @@ Future<void> _runI2Scenario() async {
         .timeout(_operationTimeout);
     expect(young.syncView.committed, isTrue);
 
-    // Same-URL history changes must invalidate the native document token. This
-    // disposable Young observation is removed by a normal native close.
+    // Young permits metadata-only same-URL push/replace. Real document changes
+    // still revoke old calls. This disposable observation is removed on close.
     temporaryYoungAssets = ObservationAssets.young(harness.directories.demo);
     final temporaryYoungPath = await temporaryYoungAssets.register().timeout(
       _operationTimeout,
@@ -511,17 +512,33 @@ Future<void> _runI2Scenario() async {
       target: youngTarget,
     );
     activeNativeSession = temporaryYoungSession;
+    for (final action in ['youngSameUrlPush', 'youngSameUrlReplace']) {
+      await harness.browser.exerciseFixture(
+        session: temporaryYoungSession,
+        document: youngReady.document,
+        action: action,
+      );
+      expect(
+        (await harness.browser.inspect(
+          session: temporaryYoungSession,
+          document: youngReady.document,
+        )).ready,
+        isTrue,
+      );
+      expect(
+        await harness.browser.prepareYoungBusinessPage(
+          session: temporaryYoungSession,
+          document: youngReady.document,
+          page: YoungBusinessPage.activities,
+        ),
+        isTrue,
+      );
+    }
     youngReady = await _exerciseDocumentChange(
       harness.browser,
       session: temporaryYoungSession,
       document: youngReady.document,
-      action: 'youngSameUrlPush',
-    );
-    youngReady = await _exerciseDocumentChange(
-      harness.browser,
-      session: temporaryYoungSession,
-      document: youngReady.document,
-      action: 'youngSameUrlReplace',
+      action: 'nextDocument',
     );
     await _closeDrained(harness.browser, temporaryYoungSession);
     activeNativeSession = 0;
