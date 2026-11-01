@@ -25,6 +25,7 @@ import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
 import 'support/jw_sync_fixture.dart';
 import 'support/ios_i2_drain.dart';
+import 'support/ios_i2_http.dart';
 
 const _phaseDefine = String.fromEnvironment(
   'USTC_I2_PERSISTENCE_PHASE',
@@ -70,14 +71,9 @@ void main() {
       );
       report['persistencePhase'] = phase;
       await tester.runAsync(
-        () => HttpOverrides.runZoned(
+        () => HttpOverrides.runWithHttpOverrides(
           () => _runPhase(phase),
-          createHttpClient: (context) {
-            final client = HttpClient(context: context);
-            client.findProxy = (uri) =>
-                _isLoopback(uri) ? 'DIRECT' : 'PROXY 127.0.0.1:9';
-            return client;
-          },
+          IOSI2LoopbackHttpOverrides(),
         ),
       );
       report['phaseCompleted'] = true;
@@ -100,9 +96,6 @@ String _persistencePhase() {
   }
   return phases.single;
 }
-
-bool _isLoopback(Uri uri) =>
-    uri.host == '127.0.0.1' && (uri.scheme == 'http' || uri.scheme == 'https');
 
 Future<void> _runPhase(String phase) async {
   final platform = IOSRuntimePlatformFactory();

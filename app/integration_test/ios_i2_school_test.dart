@@ -34,6 +34,7 @@ import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 
 import 'support/jw_sync_fixture.dart';
 import 'support/ios_i2_drain.dart';
+import 'support/ios_i2_http.dart';
 import 'support/young_business_fixture.dart';
 
 const _account = 'TEST0001';
@@ -71,14 +72,9 @@ void main() {
       );
 
       await tester.runAsync(
-        () => HttpOverrides.runZoned(
+        () => HttpOverrides.runWithHttpOverrides(
           () => _runI2Scenario(),
-          createHttpClient: (context) {
-            final client = HttpClient(context: context);
-            client.findProxy = (uri) =>
-                _isLoopback(uri) ? 'DIRECT' : 'PROXY 127.0.0.1:9';
-            return client;
-          },
+          IOSI2LoopbackHttpOverrides(),
         ),
       );
     },
@@ -86,9 +82,6 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
 }
-
-bool _isLoopback(Uri uri) =>
-    uri.host == '127.0.0.1' && (uri.scheme == 'http' || uri.scheme == 'https');
 
 Future<void> _runI2Scenario() async {
   final harness = await _I2Harness.create();

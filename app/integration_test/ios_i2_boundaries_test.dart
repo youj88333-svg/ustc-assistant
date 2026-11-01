@@ -19,6 +19,7 @@ import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
 import 'support/ios_i2_drain.dart';
+import 'support/ios_i2_http.dart';
 
 const _nativeTimeout = Duration(seconds: 25);
 const _operationTimeout = Duration(seconds: 35);
@@ -57,29 +58,21 @@ Future<void> _runWithLoopbackAndDenyProxy() async {
   final fixture = await _LoopbackFixture.start();
   final denyProxy = await _DenyProxy.start();
   try {
-    await HttpOverrides.runZoned(
-      () async {
-        await _verifyDartHttpFence(fixture, denyProxy);
-        await _runBoundarySuite(fixture);
-        expect(denyProxy.requestCount, 1);
-        expect(fixture.paths, isNot(contains('/i2-denied')));
-        expect(
-          fixture.paths.every(
-            (path) =>
-                path == '/i2-start' ||
-                path == '/i2-redirect' ||
-                path == '/i2-attachment',
-          ),
-          isTrue,
-        );
-      },
-      createHttpClient: (context) {
-        final client = HttpClient(context: context);
-        client.findProxy = (uri) =>
-            _isLoopback(uri) ? 'DIRECT' : 'PROXY 127.0.0.1:${denyProxy.port}';
-        return client;
-      },
-    );
+    await HttpOverrides.runWithHttpOverrides(() async {
+      await _verifyDartHttpFence(fixture, denyProxy);
+      await _runBoundarySuite(fixture);
+      expect(denyProxy.requestCount, 1);
+      expect(fixture.paths, isNot(contains('/i2-denied')));
+      expect(
+        fixture.paths.every(
+          (path) =>
+              path == '/i2-start' ||
+              path == '/i2-redirect' ||
+              path == '/i2-attachment',
+        ),
+        isTrue,
+      );
+    }, IOSI2LoopbackHttpOverrides(denyProxyPort: denyProxy.port));
   } finally {
     await fixture.close();
     await denyProxy.close();
@@ -426,9 +419,6 @@ Future<BrowserEvent> _openReady(
 }
 
 int _session() => _nextSession++;
-
-bool _isLoopback(Uri uri) =>
-    uri.host == '127.0.0.1' && (uri.scheme == 'http' || uri.scheme == 'https');
 
 final class _LoopbackFixture {
   _LoopbackFixture(this.server) {
