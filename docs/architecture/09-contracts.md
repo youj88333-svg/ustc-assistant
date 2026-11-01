@@ -52,6 +52,14 @@ Android 使用独立且不导出的学校宿主进程承载系统 WebView；主�
 
 Android 在 deletePending 之外增加独立的 `isolatedCleanupPending` 物理清理状态。只有 C3 撤销已持久提交、旧宿主与 WebView/renderer 已停止并获排空确认、旧提交资格已终止、新分区的所有权与全新后缀已持久登记，且平台契约和合成证据正面证明新分区不会与旧/遗留认证存储共享时，才可把唯一剩余的旧物理删除工作列为此状态。无需可靠限定旧 owner/backend、旧分区完整布局或所有旧文件的归属与精确位置；未知残留继续可见待清理，禁止猜测删除或报删除/重置成功。该旧分区永久禁用且不可重用；可对新分区完成许可/归属登记后继续。撤销失败、宿主或 renderer 仍活、排空失败、新分区所有权/后缀或新旧认证存储隔离不明、C3/密钥/数据库/可信恢复元数据失败均不符合例外：必要恢复仍阻止正常启动并拒绝新学校宿主。此物理残留不阻塞与该校通道无关的本地日程及已证明独立的 Agent 能力。真正删除仍仅限本应用拥有且路径可精确限定的目录，不扫描或猜测路径；在平台后缀契约、AOSP 实现和目标提供方验证前，不把目录隔离或删除记为已通过。
 
+#### iOS 私用 WKWebView 分区映射
+
+iOS 学校宿主沿用固定来源、DTO 与 C3 许可/事务。现行私用组合启用 iOS27+ 的 WKWebView；学校账号在原生窗口手动登录，应用不读取手填秘密、不投递密码，也不沿用 Android 的同源密码信任例外。低版本返回 unsupported，不以共享 default store 降级。
+
+每个已登记 Dart 来源分区映射一个独立持久 `WKWebsiteDataStore(forIdentifier:)` UUID；本应用受控 profile 内仅记录 backend/source/UUID/state，先持久登记再创建 store。正式分区普通关闭保留；临时观察或清理在释放全部 WebView 后使用官方 UUID 删除 API，失败保持 deletePending、禁复用，成功持久标记后才报告 drained。元数据不定位或读取 WebKit 内部认证文件；公开 API 没有 store 备份排除开关，因此不承诺这些不透明资产已排除系统备份或物理安全擦除。必要恢复失败仍阻止新学校作业。
+
+JW 固定 reader 运行在隔离 content world；Young 页面 helper 所需的 page-world 固定只读采集不获得应用秘密或权限。原生可观察主/子 frame 导航、当前代际、隔离 guard 的结果前后复核及 C1/C3 身份/schema/事务守卫共同拒旧；nonce、URL 相同或 WKFrameInfo 均不单独构成稳定文档身份。页面发来的 history 通知只撤销旧动作，不能授予 ready、身份或操作权。普通页面后台网络及原 CSP/TLS 保留；弹窗、下载、文件选择、媒体/运动/位置权限和外部协议拒绝，不能据此宣称全部 frame、资源和协议均被封闭。
+
 ### K-03 文档关联与受控动作
 
 `DocumentToken` 是不透明值，绑定会话实例、当前主文档世代；`OperationToken` 另绑定 jobId 和本次等待/动作。P 将平台 NavigationId 或等价能力映射为文档关联，frame 事件分别标识；只凭 URL 相等不能证明同一文档。Android 普通系统 WebView 只能用其原生可观察回调与宿主代际维护有限的主文档关联，不能据此推断 Navigation API、完整 frame 身份或中间请求全覆盖；适用边界见本节 Android 映射。
