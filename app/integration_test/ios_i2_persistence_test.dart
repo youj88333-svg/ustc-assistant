@@ -39,7 +39,6 @@ const _handoffKeys = <String>{
   'version',
   'purpose',
   'profileName',
-  'profilePath',
   'fixturePort',
 };
 const _operationTimeout = Duration(seconds: 45);
@@ -424,7 +423,6 @@ final class _PersistenceHandoff {
     'version': 1,
     'purpose': _handoffPurpose,
     'profileName': profileName,
-    'profilePath': profilePath,
     'fixturePort': fixturePort,
   };
 }
@@ -458,12 +456,10 @@ Future<_PersistenceHandoff> _readHandoff(
       decoded['version'] != 1 ||
       decoded['purpose'] != _handoffPurpose ||
       decoded['profileName'] is! String ||
-      decoded['profilePath'] is! String ||
       decoded['fixturePort'] is! int) {
     throw StateError('persistence_handoff_invalid');
   }
   final name = decoded['profileName'] as String;
-  final path = decoded['profilePath'] as String;
   final port = decoded['fixturePort'] as int;
   if (!RegExp(r'^jwp-[0-9a-f]{32}$').hasMatch(name) ||
       port <= 0 ||
@@ -474,10 +470,11 @@ Future<_PersistenceHandoff> _readHandoff(
     'jw_partitions_v1/$name',
     directory: true,
   );
-  if (path != expectedPath) throw StateError('persistence_handoff_invalid');
+  // An in-place Simulator install can relocate its data container. Persist
+  // only the registered relative ID, then rebind it under the current owner.
   final handoff = _PersistenceHandoff(
     profileName: name,
-    profilePath: path,
+    profilePath: expectedPath,
     fixturePort: port,
   );
   if (body != jsonEncode(handoff.toJson())) {

@@ -48,17 +48,19 @@ simulator="$(xcrun simctl create USTC-I2-synthetic "$device_type" "$runtime")"
 trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true; xcrun simctl delete "$simulator" >/dev/null 2>&1 || true' EXIT
 xcrun simctl boot "$simulator"
 xcrun simctl bootstatus "$simulator" -b
-flutter test --no-pub integration_test/ios_i2_boundaries_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-boundaries-test.log"
-flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-simulator-test.log"
-# The transaction suite binds a synthetic account. Start the persistence pair
-# with a fresh installation on this job-owned simulator, then preserve it
-# unchanged between write/read. No existing device or personal app is touched.
-xcrun simctl uninstall "$simulator" cn.ustcassistant.ios.private
+# Exercise persistence first on this newly created simulator. Preserve the
+# installation between two independent test processes; each in-place build
+# may relocate the container, so the handoff contains only a relative ID.
 flutter test --no-pub --no-uninstall integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=write 2>&1 | tee "$output/i2-persistence-write.log"
 # The first flutter-test process has exited. Explicit termination additionally
 # prevents a surviving app process from turning the next phase into a reopen.
 xcrun simctl terminate "$simulator" cn.ustcassistant.ios.private >/dev/null 2>&1 || true
 flutter test --no-pub --no-uninstall integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=read 2>&1 | tee "$output/i2-persistence-read.log"
+# Only this job-owned synthetic installation is removed. Both remaining
+# suites stay mandatory; no pre-existing device or personal app is touched.
+xcrun simctl uninstall "$simulator" cn.ustcassistant.ios.private
+flutter test --no-pub integration_test/ios_i2_boundaries_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-boundaries-test.log"
+flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-simulator-test.log"
 xcrun simctl shutdown "$simulator"
 xcrun simctl delete "$simulator"
 trap - EXIT
