@@ -52,8 +52,8 @@ localStorage、IndexedDB 与 CacheStorage。`i2StoreExists` 只接受固定 prof
 `app/integration_test/ios_i2_persistence_test.dart` 提供真正分成两个 Flutter 测试进程的
 合成持久性检查。`write` 阶段在本地数据库无账号绑定、无已提交许可的全新 Simulator 上，
 由注册表创建 JW UUID profile，启动只绑定 `127.0.0.1` 的固定 JW fixture，在 WK store 写入
-固定标记，并在应用 demo owner 下保存严格校验的合成 handoff（profile 名称/路径、loopback
-端口）。应用进程结束后，不卸载应用；在同一个 Simulator 上用独立 Flutter 测试进程运行
+固定标记，并在应用 demo owner 下保存严格校验的合成 handoff（profile 名称、loopback
+端口，路径从当前系统容器重新构造）。应用进程结束后，不卸载应用；在同一个 Simulator 上用独立 Flutter 测试进程运行
 `read` 阶段，重建注册表和原生浏览器，重新绑定原端口并打开同一 profile，验证 cookies、
 localStorage、IndexedDB、CacheStorage 标记仍在，再由注册表 recovery-only 清理 profile 和
 handoff。它不访问学校、模型服务、真实账号记录或秘密；失败不会跳过。该检查只允许 Debug
