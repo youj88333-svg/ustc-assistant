@@ -486,30 +486,43 @@ import CoreFoundation
       WKWebsiteDataStore.fetchAllDataStoreIdentifiers { [self] identifiers in
         guard closing === s else { return }
         if !identifiers.contains(record.id) {
-          confirmRemoved(s, record)
+          verifyRemoved(s, record, attempts: 0, absentSamples: 0, retries: 1)
           return
         }
-        WKWebsiteDataStore.remove(forIdentifier: record.id) { [self] error in
-          guard closing === s else { return }
-          guard error == nil else { closeFailure = .cleanupPending; return }
-          verifyRemoved(s, record, attempts: 0)
-        }
+        removeStore(s, record, retries: 1)
       }
     } else { endClose(s) }
   }
-  private func verifyRemoved(_ s: Session, _ record: IOSSchoolStoreRecord, attempts: Int) {
+  private func removeStore(_ s: Session, _ record: IOSSchoolStoreRecord, retries: Int) {
+    WKWebsiteDataStore.remove(forIdentifier: record.id) { [self] error in
+      guard closing === s else { return }
+      guard error == nil else { closeFailure = .cleanupPending; return }
+      verifyRemoved(s, record, attempts: 0, absentSamples: 0, retries: retries)
+    }
+  }
+  private func verifyRemoved(_ s: Session, _ record: IOSSchoolStoreRecord,
+                             attempts: Int, absentSamples: Int, retries: Int) {
     WKWebsiteDataStore.fetchAllDataStoreIdentifiers { [self] identifiers in
       guard closing === s else { return }
-      if !identifiers.contains(record.id) { confirmRemoved(s, record); return }
+      let absent = !identifiers.contains(record.id)
+      if absent && absentSamples >= 4 { confirmRemoved(s, record); return }
       guard attempts < 50 else { closeFailure = .cleanupPending; return }
+      if !absent && attempts >= 10 {
+        guard retries > 0 else { closeFailure = .cleanupPending; return }
+        // A closed storage manager may finish work after the deletion call.
+        // Retry only this already-revoked UUID through the official API once.
+        removeStore(s, record, retries: retries - 1)
+        return
+      }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in
-        verifyRemoved(s, record, attempts: attempts + 1)
+        verifyRemoved(s, record, attempts: attempts + 1,
+                      absentSamples: absent ? absentSamples + 1 : 0, retries: retries)
       }
     }
   }
   private func confirmRemoved(_ s: Session, _ record: IOSSchoolStoreRecord) {
-    // A completion callback alone can precede the identifier registry update.
-    // Only a confirmed absence may become a durable removed/drained result.
+    // Verify the observable postcondition instead of inferring physical erase
+    // or the OS's internal ordering from a completion callback alone.
     s.storeRemoved = true
     do { try s.ledger.didRemove(record); endClose(s) }
     catch { closeFailure = .cleanupPending }

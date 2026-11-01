@@ -372,7 +372,14 @@ Future<void> _runI2Scenario() async {
         .timeout(_operationTimeout);
     secondJwPartition = null;
     expect(jwFixture.requests.length, beforeRecoveryRequests);
-    expect(await _i2StoreExists(secondJwStorePath, 'jw'), isFalse);
+    for (var sample = 0; sample < 10; sample++) {
+      expect(
+        await _i2StoreExists(secondJwStorePath, 'jw'),
+        isFalse,
+        reason: 'a drained UUID must not reappear after registry cleanup',
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     expect(await _i2StoreExists(jwStorePath, 'jw'), isTrue);
     readyA = await _openFixture(
       harness.browser,
