@@ -483,14 +483,36 @@ import CoreFoundation
       // WebKit profile removal needs the data-store subsystem initialized.
       // Never give this default store to a school view.
       _ = WKWebsiteDataStore.default()
-      WKWebsiteDataStore.remove(forIdentifier: record.id) { [self] error in
+      WKWebsiteDataStore.fetchAllDataStoreIdentifiers { [self] identifiers in
         guard closing === s else { return }
-        guard error == nil else { closeFailure = .cleanupPending; return }
-        s.storeRemoved = true
-        do { try s.ledger.didRemove(record); endClose(s) }
-        catch { closeFailure = .cleanupPending }
+        if !identifiers.contains(record.id) {
+          confirmRemoved(s, record)
+          return
+        }
+        WKWebsiteDataStore.remove(forIdentifier: record.id) { [self] error in
+          guard closing === s else { return }
+          guard error == nil else { closeFailure = .cleanupPending; return }
+          verifyRemoved(s, record, attempts: 0)
+        }
       }
     } else { endClose(s) }
+  }
+  private func verifyRemoved(_ s: Session, _ record: IOSSchoolStoreRecord, attempts: Int) {
+    WKWebsiteDataStore.fetchAllDataStoreIdentifiers { [self] identifiers in
+      guard closing === s else { return }
+      if !identifiers.contains(record.id) { confirmRemoved(s, record); return }
+      guard attempts < 50 else { closeFailure = .cleanupPending; return }
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [self] in
+        verifyRemoved(s, record, attempts: attempts + 1)
+      }
+    }
+  }
+  private func confirmRemoved(_ s: Session, _ record: IOSSchoolStoreRecord) {
+    // A completion callback alone can precede the identifier registry update.
+    // Only a confirmed absence may become a durable removed/drained result.
+    s.storeRemoved = true
+    do { try s.ledger.didRemove(record); endClose(s) }
+    catch { closeFailure = .cleanupPending }
   }
   private func endClose(_ s: Session) {
     closedID = s.id; closing = nil; closeFailure = nil
