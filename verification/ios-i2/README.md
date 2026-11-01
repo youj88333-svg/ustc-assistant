@@ -4,6 +4,9 @@
 独立的教务/二课入口及合成集成检查。当前学校桥需要 iOS27+；它采用手动登录与固定
 只读采集，不向网页投递应用保存的密码。
 
+设备包审计将两份固定 reader 与源码的 Git LF 字节比较，同时核对 manifest 中的实际
+资源哈希；Windows 工作副本的 CRLF 只在源码比较端规范化，安装包资源不做改写或宽松匹配。
+
 ## 验收入口
 
 `app/lib/ios_i2_entry.dart` 通过 `RuntimeBootstrap.open` 和

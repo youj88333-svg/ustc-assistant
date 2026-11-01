@@ -42,7 +42,7 @@ def source_path(name: str) -> Path:
 
 
 def source_bytes(name: str) -> bytes:
-    return source_path(name).read_bytes()
+    return source_path(name).read_bytes().replace(b"\r\n", b"\n")
 
 
 def source_hashes() -> dict[str, str]:
@@ -219,6 +219,17 @@ class VerifyI2PackageTests(unittest.TestCase):
 
         changed = source_bytes("jw_probe.js") + b"\n// synthetic tamper"
         ipa = self.ipa(script_updates={"jw_probe.js": changed})
+        self.assert_reason("fixed_school_reader_mismatch", lambda: verifier.verify_package(ipa, REVISION))
+
+        # Windows checkout line endings do not change the reviewed LF source.
+        # The bundle itself may not rewrite bytes, even with a matching digest.
+        crlf_bundle = source_bytes("jw_probe.js").replace(b"\n", b"\r\n")
+        rewritten_hashes = source_hashes()
+        rewritten_hashes["jw_probe.js"] = hashlib.sha256(crlf_bundle).hexdigest()
+        ipa = self.ipa(
+            script_updates={"jw_probe.js": crlf_bundle},
+            manifest_updates={"schoolScripts": rewritten_hashes},
+        )
         self.assert_reason("fixed_school_reader_mismatch", lambda: verifier.verify_package(ipa, REVISION))
 
         ipa = self.ipa(omit_scripts={"young_transport.js"})

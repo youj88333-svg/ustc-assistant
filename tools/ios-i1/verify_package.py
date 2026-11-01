@@ -361,7 +361,10 @@ def _source_school_script_sha256(name: str) -> str:
         or getattr(initial, "st_ino", None) != getattr(final, "st_ino", None)
     ):
         _fail("fixed_school_reader_mismatch")
-    return hashlib.sha256(data).hexdigest()
+    # Git's reviewed script blobs and the Mac resource bundle use LF. A
+    # Windows checkout may contain CRLF; canonicalize only the source side.
+    # Packaged bytes must still match the manifest and the canonical source.
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def _validate_school_scripts(
