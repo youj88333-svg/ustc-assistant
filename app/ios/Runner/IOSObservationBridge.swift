@@ -651,13 +651,13 @@ import CoreFoundation
     case "sameDocument", "youngSameUrlPush": code = "history.pushState({},'',location.href);true"
     case "youngSameUrlReplace": code = "history.replaceState({},'',location.href);true"
     case "nextDocument": code = "location.reload();true"
-    case "topDenied": code = "location.href='http://127.0.0.1:1/i2-denied';true"
-    case "frameDenied": code = "(()=>{let f=document.createElement('iframe');f.src='http://127.0.0.1:1/i2-denied';document.body.append(f);return true})()"
+    case "topDenied": code = "location.href='http://127.0.0.1:49151/i2-denied';true"
+    case "frameDenied": code = "(()=>{let f=document.createElement('iframe');f.src='http://127.0.0.1:49151/i2-denied';document.body.append(f);return true})()"
     case "popup":
       // Exercise the native popup delegate rather than merely relying on
       // WebKit's default no-user-gesture suppression. Fixture build only.
       s.view?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-      code = "window.open('http://127.0.0.1:1/i2-denied','_blank');true"
+      code = "window.open('http://127.0.0.1:49151/i2-denied','_blank');true"
     case "external": code = "location.href='ustc-i2-fixture://denied';true"
     case "download": code = "location.href=location.origin+'/i2-attachment';true"
     case "userClose": event(s, "userClosed"); beginClose(s); reply(nil); return
