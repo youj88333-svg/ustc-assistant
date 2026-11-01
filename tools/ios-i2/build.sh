@@ -54,11 +54,11 @@ flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" -
 # with a fresh installation on this job-owned simulator, then preserve it
 # unchanged between write/read. No existing device or personal app is touched.
 xcrun simctl uninstall "$simulator" cn.ustcassistant.ios.private
-flutter test --no-pub integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=write 2>&1 | tee "$output/i2-persistence-write.log"
+flutter test --no-pub --no-uninstall integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=write 2>&1 | tee "$output/i2-persistence-write.log"
 # The first flutter-test process has exited. Explicit termination additionally
 # prevents a surviving app process from turning the next phase into a reopen.
 xcrun simctl terminate "$simulator" cn.ustcassistant.ios.private >/dev/null 2>&1 || true
-flutter test --no-pub integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=read 2>&1 | tee "$output/i2-persistence-read.log"
+flutter test --no-pub --no-uninstall integration_test/ios_i2_persistence_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" --dart-define=USTC_I2_PERSISTENCE_PHASE=read 2>&1 | tee "$output/i2-persistence-read.log"
 xcrun simctl shutdown "$simulator"
 xcrun simctl delete "$simulator"
 trap - EXIT

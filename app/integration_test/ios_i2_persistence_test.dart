@@ -112,6 +112,7 @@ Future<void> _runPhase(String phase) async {
   var retainForReadPhase = false;
   var registryCleaned = false;
   var cleanupComplete = true;
+  var primaryFailure = false;
 
   Future<bool> attempt(Future<void> Function() action) async {
     try {
@@ -304,6 +305,9 @@ Future<void> _runPhase(String phase) async {
     }
     await handoffFile.delete().timeout(_operationTimeout);
     debugPrint('I2 persistence phase: read and cleanup complete');
+  } catch (_) {
+    primaryFailure = true;
+    rethrow;
   } finally {
     if (activeSession != 0 && browser != null) {
       cleanupComplete =
@@ -398,7 +402,9 @@ Future<void> _runPhase(String phase) async {
     }
     if (!cleanupComplete) {
       debugPrint('I2 persistence phase: cleanup incomplete');
-      throw StateError('ios_i2_persistence_cleanup_incomplete');
+      if (!primaryFailure) {
+        throw StateError('ios_i2_persistence_cleanup_incomplete');
+      }
     }
   }
 }
