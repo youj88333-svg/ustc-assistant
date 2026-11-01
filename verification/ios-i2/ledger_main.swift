@@ -83,6 +83,7 @@ private final class Fixture {
 @main
 private enum IOSSchoolLedgerTests {
   static func main() throws {
+    setbuf(stdout, nil)
     let arguments = CommandLine.arguments
     if arguments.count == 5 && arguments[1] == "--ios-school-ledger-sandbox" {
       try sandboxedLedgerChild(
