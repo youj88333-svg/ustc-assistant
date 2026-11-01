@@ -17,6 +17,11 @@ import CoreFoundation
   private var pending: [UUID: Pending] = [:]
   private var observers: [NSObjectProtocol] = []
   private var retired = false
+#if DEBUG
+  // Test correlation only, never a partition/open authority. Retain the
+  // verified UUID so removal can still be measured after Dart removes metadata.
+  private var fixtureStoreIDs: [String: UUID] = [:]
+#endif
 
   private final class Session {
     let id: Int, policy: IOSSchoolPolicy, ledger: IOSSchoolStoreLedger
@@ -266,6 +271,9 @@ import CoreFoundation
     guard recovery || record != nil else { throw IOSSchoolFailure.storageFailed }
     let s = Session(id: id, policy: policy, ledger: ledger,
                     record: record, scripts: try IOSSchoolScripts(policy: policy), recovery: recovery)
+#if DEBUG
+    if policy.isFixture, let record { fixtureStoreIDs[policy.source + "|" + profile] = record.id }
+#endif
     active = s; Self.slot = self; closedID = nil; closeFailure = nil
     if recovery { return }
     let config = WKWebViewConfiguration()
@@ -596,10 +604,16 @@ import CoreFoundation
   private func storeExists(_ a: [String: Any], _ reply: @escaping FlutterResult) throws {
     try fields(a, ["profilePath", "source"])
     guard let profile = a["profilePath"] as? String, let source = a["source"] as? String else { throw IOSSchoolFailure.invalidSnapshot }
-    let ledger = IOSSchoolStoreLedger(root: try IOSPrivateStorage.root())
-    guard let record = try ledger.admit(profilePath: profile, source: source, create: false) else { reply(false); return }
+    let identifier: UUID
+    let key = source + "|" + profile
+    if let known = fixtureStoreIDs[key] { identifier = known }
+    else {
+      let ledger = IOSSchoolStoreLedger(root: try IOSPrivateStorage.root())
+      guard let record = try ledger.admit(profilePath: profile, source: source, create: false) else { reply(false); return }
+      identifier = record.id; fixtureStoreIDs[key] = identifier
+    }
     _ = WKWebsiteDataStore.default()
-    WKWebsiteDataStore.fetchAllDataStoreIdentifiers { identifiers in reply(identifiers.contains(record.id)) }
+    WKWebsiteDataStore.fetchAllDataStoreIdentifiers { identifiers in reply(identifiers.contains(identifier)) }
   }
   private func fixture(_ s: Session, _ a: [String: Any], _ reply: @escaping FlutterResult) throws {
     try fields(a, ["session", "document", "action"])

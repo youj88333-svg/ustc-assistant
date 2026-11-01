@@ -34,14 +34,16 @@ Young 注册表和原生 `NativeObservationBrowser`。教务与二课业务分�
 - 二课活动只读查询、固定日期区间日历事务导入、重复导入与用户隐藏覆盖保留；身份不匹配
   不替换已有日历数据。
 - 同一 loopback origin 下两个 JW UUID store 的标记隔离、正常关闭/重开保留，以及通过
-  正式 coordinator/registry 删除 A 后 B 仍可重开并保留标记。
+  注册表删除临时候选 B 后已认领 A 仍保留标记；再由正式 coordinator 清除该来源登录资料。
 - 同文档、下一文档、Young 同 URL push/replace 的旧 document 拒绝；用户关闭排空；临时
   observation 正常关闭删除 WebKit store，正式 profile 普通关闭保留。
 
 原生 `i2Fixture` 只接受 `writeSyntheticMarker`、`checkSyntheticMarker`、
 `checkNoSyntheticMarker` 三个固定操作；标记固定且仅用于检测当前 WK store 中的 cookies、
 localStorage、IndexedDB 与 CacheStorage。`i2StoreExists` 只接受固定 profile 结构和来源，
-仅返回 store 是否存在，不读取 WebKit 私有文件。生产构建不提供这些调试方法。
+仅返回 store 是否存在，不读取 WebKit 私有文件。调试宿主暂存已经核验的 UUID 关联，
+使 Dart 移除 profile 元数据后仍能通过官方枚举核对实际删除；这不授予打开/认领权限。
+生产构建不提供这些调试方法。
 
 集成检查重建 RuntimeBootstrap、注册表和浏览器对象，但没有杀进程或重新启动应用；结果不
 代表真正的跨进程恢复，也不代表目标 iPhone、学校认证或真实业务验收。请在全新、仅用于

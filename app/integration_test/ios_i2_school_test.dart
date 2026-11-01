@@ -354,30 +354,10 @@ Future<void> _runI2Scenario() async {
     await _closeDrained(harness.browser, reopenedASession);
     activeNativeSession = 0;
 
-    // Delete A through the real JW registry/coordinator. B remains openable
-    // and its independent marker stays present until its own delete.
-    await jw.clearSession().timeout(_operationTimeout);
-    expect(jw.syncView.phase, JwSyncPhase.idle);
-    expect(await _i2StoreExists(jwStorePath, 'jw'), isFalse);
-    expect(await _i2StoreExists(secondJwStorePath, 'jw'), isTrue);
-    readyB = await _openFixture(
-      harness.browser,
-      session: secondJwSession = _session(),
-      profilePath: secondJwStorePath,
-      target: jwTarget,
-    );
-    activeNativeSession = secondJwSession;
-    expect(
-      await _i2Fixture(
-        secondJwSession,
-        readyB.document,
-        'checkSyntheticMarker',
-      ),
-      isTrue,
-    );
-    await _closeDrained(harness.browser, secondJwSession);
-    activeNativeSession = 0;
-
+    // Delete provisional B through the real registry while claimed A remains.
+    // The product clearSession command intentionally revokes every JW permit
+    // and reconciles unpermitted profiles; it must not be used as a one-UUID
+    // delete operation and then expected to preserve unpermitted B.
     final beforeRecoveryRequests = jwFixture.requests.length;
     await harness.jwRegistry
         .clear(
@@ -389,13 +369,25 @@ Future<void> _runI2Scenario() async {
           ),
         )
         .timeout(_operationTimeout);
-    expect(
-      jwFixture.requests.length,
-      beforeRecoveryRequests,
-      reason: 'recovery-only close must not navigate the school fixture',
-    );
-    expect(await _i2StoreExists(secondJwStorePath, 'jw'), isFalse);
     secondJwPartition = null;
+    expect(jwFixture.requests.length, beforeRecoveryRequests);
+    expect(await _i2StoreExists(secondJwStorePath, 'jw'), isFalse);
+    expect(await _i2StoreExists(jwStorePath, 'jw'), isTrue);
+    readyA = await _openFixture(
+      harness.browser,
+      session: activeNativeSession = _session(),
+      profilePath: jwStorePath,
+      target: jwTarget,
+    );
+    expect(
+      await _i2Fixture(readyA.session, readyA.document, 'checkSyntheticMarker'),
+      isTrue,
+    );
+    await _closeDrained(harness.browser, readyA.session);
+    activeNativeSession = 0;
+    await jw.clearSession().timeout(_operationTimeout);
+    expect(jw.syncView.phase, JwSyncPhase.idle);
+    expect(await _i2StoreExists(jwStorePath, 'jw'), isFalse);
     _report['sameOriginStoreIsolationAndIndependentDelete'] = true;
 
     youngFixture = await YoungBusinessFixture.start();
@@ -493,6 +485,17 @@ Future<void> _runI2Scenario() async {
       reason: 'an identity mismatch must not replace committed calendar rows',
     );
     youngFixture.mode = 'good';
+    // A positively different account revokes/removes its browser partition,
+    // while committed calendar rows remain. Restore the good fixture to
+    // exercise reauthentication into a fresh valid profile before clearing it.
+    await young
+        .startCalendar(
+          expectedAccountCode: _account,
+          firstDay: firstDay,
+          lastDay: firstDay,
+        )
+        .timeout(_operationTimeout);
+    expect(young.syncView.committed, isTrue);
 
     // Same-URL history changes must invalidate the native document token. This
     // disposable Young observation is removed by a normal native close.
