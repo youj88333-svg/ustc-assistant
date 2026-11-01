@@ -87,9 +87,13 @@ import CoreFoundation
     }
   }
   private func current(_ a: [String: Any], document: Bool = true) throws -> Session {
-    guard let s = active, !s.isClosing, s.id == (try Self.integer(a, "session")),
-          !document || s.document == (try Self.integer(a, "document", minimum: 0)) else {
+    let id = try Self.integer(a, "session")
+    guard let s = active, !s.isClosing, s.id == id else {
       throw IOSSchoolFailure.staleResult
+    }
+    if document {
+      let expected = try Self.integer(a, "document", minimum: 0)
+      guard s.document == expected else { throw IOSSchoolFailure.staleResult }
     }
     return s
   }
@@ -270,7 +274,7 @@ import CoreFoundation
       source: IOSSchoolScripts.guardBootstrap, injectionTime: .atDocumentStart,
       forMainFrameOnly: true, in: .defaultClient))
     if policy.source == "jw" {
-      config.userContentController.addScriptMessageHandler(
+      config.userContentController.add(
         NavigationNotice(bridge: self), contentWorld: .page, name: "ustcI2Revoke")
       config.userContentController.addUserScript(WKUserScript(
         source: Self.jwNavigationNotices, injectionTime: .atDocumentStart,
