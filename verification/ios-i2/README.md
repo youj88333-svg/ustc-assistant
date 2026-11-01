@@ -64,13 +64,14 @@ iOS Simulator，不能用真机、已绑定账号的安装或包含其他 JW pro
 
 ```bash
 cd app
-flutter test integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=write
+flutter test --no-uninstall integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=write
 # 终止应用进程；不要卸载应用或清除 Simulator 数据
-flutter test integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=read
+flutter test --no-uninstall integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=read
 ```
 
-代码与单进程场景已准备，真正的两进程持久性结果尚待根任务的 macOS / iOS Simulator CI
-按上述顺序执行；在执行完成前不登记为跨进程通过。
+`--no-uninstall` 是必需参数：Flutter 测试默认在结束时卸载应用，单纯不手动卸载并不能保留数据。
+这组检查与单进程学校业务 suite 分开；必须在同一安装上完成 write/read 两阶段，
+单独运行其中一阶段不能证明跨进程保留。专用构建流程将两阶段都作为设备包生成门槛。
 
 ## 原生导航与失败恢复
 
@@ -78,6 +79,7 @@ flutter test integration_test/ios_i2_persistence_test.dart -d <simulator-id> --d
 它使用独立 loopback 页面和临时 demo profile，实际触发主页面、子 frame、弹窗、
 外部协议与附件下载的原生决策，同时核对同源重定向、缺失目录失败后的幂等排空和重新打开、
 JW 会话拒绝 Young 固定操作。清理失败会使检查失败，不访问真实学校或认证资料。
+发生多重错误时保留首个操作失败，仍尝试各层清理，并输出不含页面内容的固定阶段标签。
 
 ```bash
 cd app
