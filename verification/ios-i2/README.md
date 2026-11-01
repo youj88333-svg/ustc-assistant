@@ -1,0 +1,108 @@
+# iOS I2 教务与二课桥
+
+学校桥遵循[来源与分区契约](../../docs/architecture/09-contracts.md)，此目录提供
+独立的教务/二课入口及合成集成检查。当前学校桥需要 iOS27+；它采用手动登录与固定
+只读采集，不向网页投递应用保存的密码。
+
+## 验收入口
+
+`app/lib/ios_i2_entry.dart` 通过 `RuntimeBootstrap.open` 和
+`IOSRuntimePlatformFactory` 打开现行运行时，显示“教务”和“二课”两个标签，复用
+`JwSyncPanel`、`YoungSyncPanel` 的产品模式。出现学校登录、验证码或额外授权时，用户在
+学校窗口手动完成，返回应用后继续当前同步。密码字段可留空；流程不要求模型 Key，
+不读取学校窗口中手填的秘密。
+
+入口未增加提醒、每日自动同步、Agent、图片或语音功能。iOS 语音和 Widget 按已批准
+决定取消；此入口不改变其他平台的实现。
+
+## 集成检查范围
+
+`app/integration_test/ios_i2_school_test.dart` 仅在 iOS Debug Simulator 运行。测试先打开并
+关闭真实 iOS `RuntimeBootstrap`，再用固定 loopback 目标创建 iOS 目录、Drift 数据库、JW /
+Young 注册表和原生 `NativeObservationBrowser`。教务与二课业务分别使用现有合成 fixture，
+学号固定为 `TEST0001`，测试不访问学校、模型服务或实际认证资料。Dart `HttpClient` 只允许
+直接访问 `127.0.0.1`；其他目标被导向本机未开放端口，WKWebView 的 fixture 目标也必须是
+固定 loopback origin。
+
+自动检查覆盖：
+
+- 教务课程目录、课程/考试采集、重复导入与用户隐藏覆盖保留；暂停中的 loopback 读取被
+  取消后不提交新结果。
+- 二课活动只读查询、固定日期区间日历事务导入、重复导入与用户隐藏覆盖保留；身份不匹配
+  不替换已有日历数据。
+- 同一 loopback origin 下两个 JW UUID store 的标记隔离、正常关闭/重开保留，以及通过
+  正式 coordinator/registry 删除 A 后 B 仍可重开并保留标记。
+- 同文档、下一文档、Young 同 URL push/replace 的旧 document 拒绝；用户关闭排空；临时
+  observation 正常关闭删除 WebKit store，正式 profile 普通关闭保留。
+
+原生 `i2Fixture` 只接受 `writeSyntheticMarker`、`checkSyntheticMarker`、
+`checkNoSyntheticMarker` 三个固定操作；标记固定且仅用于检测当前 WK store 中的 cookies、
+localStorage、IndexedDB 与 CacheStorage。`i2StoreExists` 只接受固定 profile 结构和来源，
+仅返回 store 是否存在，不读取 WebKit 私有文件。生产构建不提供这些调试方法。
+
+集成检查重建 RuntimeBootstrap、注册表和浏览器对象，但没有杀进程或重新启动应用；结果不
+代表真正的跨进程恢复，也不代表目标 iPhone、学校认证或真实业务验收。请在全新、仅用于
+测试的 Simulator 上运行，因为检查会向应用的本地数据库写入合成 `TEST0001` 记录。
+
+`app/integration_test/ios_i2_persistence_test.dart` 提供真正分成两个 Flutter 测试进程的
+合成持久性检查。`write` 阶段在本地数据库无账号绑定、无已提交许可的全新 Simulator 上，
+由注册表创建 JW UUID profile，启动只绑定 `127.0.0.1` 的固定 JW fixture，在 WK store 写入
+固定标记，并在应用 demo owner 下保存严格校验的合成 handoff（profile 名称/路径、loopback
+端口）。应用进程结束后，不卸载应用；在同一个 Simulator 上用独立 Flutter 测试进程运行
+`read` 阶段，重建注册表和原生浏览器，重新绑定原端口并打开同一 profile，验证 cookies、
+localStorage、IndexedDB、CacheStorage 标记仍在，再由注册表 recovery-only 清理 profile 和
+handoff。它不访问学校、模型服务、真实账号记录或秘密；失败不会跳过。该检查只允许 Debug
+iOS Simulator，不能用真机、已绑定账号的安装或包含其他 JW profile 的 Simulator。
+
+跨进程检查命令必须在同一台全新 Simulator 上按顺序分两次执行，并在两次之间仅终止应用
+进程、保留安装和应用数据：
+
+```bash
+cd app
+flutter test integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=write
+# 终止应用进程；不要卸载应用或清除 Simulator 数据
+flutter test integration_test/ios_i2_persistence_test.dart -d <simulator-id> --dart-define=USTC_I2_PERSISTENCE_PHASE=read
+```
+
+代码与单进程场景已准备，真正的两进程持久性结果尚待根任务的 macOS / iOS Simulator CI
+按上述顺序执行；在执行完成前不登记为跨进程通过。
+
+## 原生导航与失败恢复
+
+`app/integration_test/ios_i2_boundaries_test.dart` 只在 Debug iOS Simulator 上运行。
+它使用独立 loopback 页面和临时 demo profile，实际触发主页面、子 frame、弹窗、
+外部协议与附件下载的原生决策，同时核对同源重定向、缺失目录失败后的幂等排空和重新打开、
+JW 会话拒绝 Young 固定操作。清理失败会使检查失败，不访问真实学校或认证资料。
+
+```bash
+cd app
+flutter test integration_test/ios_i2_boundaries_test.dart -d <simulator-id>
+```
+
+## 运行
+
+在 Windows 工作区可运行 Dart 格式与静态分析：
+
+```powershell
+cd app
+dart format --output=none --set-exit-if-changed lib/ios_i2_entry.dart integration_test/ios_i2_school_test.dart integration_test/ios_i2_persistence_test.dart test/platform/ios_i2_screen_test.dart
+flutter analyze --no-pub
+```
+
+Widget 检查可在工程支持的 Flutter 环境运行：
+
+```powershell
+cd app
+flutter test test/platform/ios_i2_screen_test.dart --no-pub
+```
+
+iOS 集成检查需要 macOS、Xcode 和已启动的 iOS Simulator：
+
+```bash
+cd app
+flutter run --target=lib/ios_i2_entry.dart -d <simulator-id>
+flutter test integration_test/ios_i2_school_test.dart -d <simulator-id>
+```
+
+Windows 静态检查不等同于 macOS/Xcode 编译或 iOS Simulator 执行；没有实际运行的命令不得
+登记为通过。

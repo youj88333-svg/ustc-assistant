@@ -64,8 +64,11 @@ final class JwSyncFixture {
   Uri get initialUri =>
       Uri.parse('http://127.0.0.1:${_server.port}/for-std/course-table');
 
-  static Future<JwSyncFixture> start({bool requireLogin = false}) async {
-    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+  static Future<JwSyncFixture> start({
+    bool requireLogin = false,
+    int port = 0,
+  }) async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
     final fixture = JwSyncFixture._(server, requireLogin);
     server.listen((request) => unawaited(fixture._serve(request)));
     return fixture;

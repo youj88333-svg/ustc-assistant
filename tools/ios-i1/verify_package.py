@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import os
@@ -17,13 +18,18 @@ from typing import Any, BinaryIO
 
 
 APP_BUNDLE_ID = "cn.ustcassistant.ios.private"
-MANIFEST_PATH = "Payload/Runner.app/ios-i1-provenance.json"
+I1_MANIFEST_PATH = "Payload/Runner.app/ios-i1-provenance.json"
+I2_MANIFEST_PATH = "Payload/Runner.app/ios-i2-provenance.json"
+MANIFEST_PATH = I1_MANIFEST_PATH  # Keep the historical I1 default for callers/tests.
 APP_INFO_PATH = "Payload/Runner.app/Info.plist"
 RUNNER_EXECUTABLE_PATH = "Payload/Runner.app/Runner"
 APP_FRAMEWORK_EXECUTABLE = "Payload/Runner.app/Frameworks/App.framework/App"
 FLUTTER_FRAMEWORK_EXECUTABLE = "Payload/Runner.app/Frameworks/Flutter.framework/Flutter"
 APP_FRAMEWORK_ROOT = "Payload/Runner.app/Frameworks/App.framework"
 FLUTTER_FRAMEWORK_ROOT = "Payload/Runner.app/Frameworks/Flutter.framework"
+SCHOOL_SCRIPT_NAMES = ("jw_probe.js", "young_transport.js")
+SCHOOL_SCRIPT_MAX_BYTES = 512 * 1024
+I2_DEBUG_MARKERS = (b"i2Fixture", b"i2StoreExists")
 
 MACHO_THIN_MAGICS = {
     b"\xfe\xed\xfa\xce",  # 32-bit big endian
@@ -92,19 +98,59 @@ def _expected_revision_is_valid(expected_revision: str) -> bool:
     )
 
 
-def _validate_manifest(value: dict[str, Any], expected_revision: str) -> None:
-    required = {
+def _stage_manifest_path(stage: int) -> str:
+    if stage == 1:
+        return I1_MANIFEST_PATH
+    if stage == 2:
+        return I2_MANIFEST_PATH
+    _fail("invalid_stage")
+
+
+def _info_revision_key(stage: int) -> str:
+    if stage == 1:
+        return "I1SourceRevision"
+    if stage == 2:
+        return "I2SourceRevision"
+    _fail("invalid_stage")
+
+
+def _validate_manifest(value: dict[str, Any], expected_revision: str, stage: int = 1) -> None:
+    required: dict[str, Any] = {
         "schemaVersion": 1,
-        "kind": "ios-i1-unsigned-ipa-v1",
         "sourceRevision": expected_revision,
         "flutterVersion": "3.47.7",
         "xcodeVersion": "27.1",
         "buildMode": "release",
         "bundleId": APP_BUNDLE_ID,
-        "scope": "i1-storage-bootstrap",
         "widget": False,
         "speech": False,
     }
+    if stage == 1:
+        required.update({
+            "kind": "ios-i1-unsigned-ipa-v1",
+            "scope": "i1-storage-bootstrap",
+        })
+    elif stage == 2:
+        required.update({
+            "kind": "ios-i2-unsigned-ipa-v1",
+            "scope": "i2-school-bridges",
+            "authentication": "manual",
+            "schoolStore": "wk-uuid-v1",
+        })
+        school_scripts = value.get("schoolScripts")
+        if not isinstance(school_scripts, dict) or set(school_scripts) != set(SCHOOL_SCRIPT_NAMES):
+            _fail("invalid_manifest")
+        for name in SCHOOL_SCRIPT_NAMES:
+            digest = school_scripts.get(name)
+            if (
+                not isinstance(digest, str)
+                or len(digest) != 64
+                or any(ch not in "0123456789abcdef" for ch in digest)
+            ):
+                _fail("invalid_manifest")
+        required["schoolScripts"] = school_scripts
+    else:
+        _fail("invalid_stage")
     if set(value) != set(required):
         _fail("invalid_manifest")
     for key, expected in required.items():
@@ -115,17 +161,22 @@ def _validate_manifest(value: dict[str, Any], expected_revision: str) -> None:
         elif type(expected) is int:
             if type(actual) is not int or actual != expected:
                 _fail("invalid_manifest")
+        elif isinstance(expected, dict):
+            if type(actual) is not dict or actual != expected:
+                _fail("invalid_manifest")
         elif not isinstance(actual, str) or actual != expected:
             _fail("invalid_manifest")
 
 
-def _validate_runner_info(value: dict[str, Any], expected_revision: str) -> str:
+def _validate_runner_info(value: dict[str, Any], expected_revision: str, stage: int = 1) -> str:
     if value.get("CFBundleIdentifier") != APP_BUNDLE_ID:
         _fail("bundle_identity_mismatch")
     supported = value.get("CFBundleSupportedPlatforms")
     if not isinstance(supported, list) or supported != ["iPhoneOS"]:
         _fail("platform_identity_mismatch")
-    if value.get("I1SourceRevision") != expected_revision:
+    if value.get(_info_revision_key(stage)) != expected_revision:
+        _fail("source_revision_mismatch")
+    if stage == 2 and value.get("I1SourceRevision") != expected_revision:
         _fail("source_revision_mismatch")
     executable = value.get("CFBundleExecutable")
     if (
@@ -195,6 +246,17 @@ def _contains_audio_permission(value: Any) -> bool:
     return False
 
 
+def _contains_camera_or_location_permission(value: Any) -> bool:
+    for item in _walk_plist_values(value):
+        if isinstance(item, dict):
+            for key in item:
+                if isinstance(key, str):
+                    folded = key.casefold()
+                    if folded.startswith("nscamera") or folded.startswith("nslocation"):
+                        return True
+    return False
+
+
 def _is_model_asset(path: str) -> bool:
     base = path.rsplit("/", 1)[-1].casefold()
     return base == "tokens.txt" or any(base.endswith(suffix) for suffix in MODEL_SUFFIXES)
@@ -232,6 +294,7 @@ def _parse_plist_member(zf: zipfile.ZipFile, members: dict[str, zipfile.ZipInfo]
 def _validate_info_and_entitlements(
     zf: zipfile.ZipFile,
     members: dict[str, zipfile.ZipInfo],
+    stage: int = 1,
 ) -> dict[str, Any]:
     runner_info: dict[str, Any] | None = None
     for path, info in members.items():
@@ -242,9 +305,16 @@ def _validate_info_and_entitlements(
             value = _parse_plist_member(zf, members, path)
             if _contains_audio_permission(value):
                 _fail("audio_permission_present")
+            if stage == 2 and _contains_camera_or_location_permission(value):
+                _fail("restricted_permission_present")
             if _contains_prohibited_declaration(value):
                 _fail("app_group_declaration_present")
             if path == APP_INFO_PATH:
+                if stage == 2 and any(
+                    isinstance(key, str) and key.casefold() == "nsapptransportsecurity"
+                    for key in value
+                ):
+                    _fail("transport_override_present")
                 runner_info = value
         elif folded.endswith(".entitlements"):
             value = _parse_plist_member(zf, members, path)
@@ -253,6 +323,90 @@ def _validate_info_and_entitlements(
     if runner_info is None:
         _fail("missing_required_member")
     return runner_info
+
+
+def _source_school_script_sha256(name: str) -> str:
+    if name not in SCHOOL_SCRIPT_NAMES:
+        _fail("fixed_school_reader_mismatch")
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "app"
+        / "android"
+        / "app"
+        / "src"
+        / "main"
+        / "assets"
+        / "ustc"
+        / name
+    )
+    try:
+        path_stat = path.lstat()
+        if not stat.S_ISREG(path_stat.st_mode) or _I0._is_reparse_or_symlink(path, path_stat):
+            _fail("fixed_school_reader_mismatch")
+        with path.open("rb") as stream:
+            initial = os.fstat(stream.fileno())
+            if initial.st_size > SCHOOL_SCRIPT_MAX_BYTES:
+                _fail("fixed_school_reader_mismatch")
+            data = stream.read(SCHOOL_SCRIPT_MAX_BYTES + 1)
+            final = os.fstat(stream.fileno())
+    except VerificationError:
+        raise
+    except (OSError, TypeError, ValueError):
+        _fail("fixed_school_reader_mismatch")
+    if (
+        len(data) != initial.st_size
+        or len(data) > SCHOOL_SCRIPT_MAX_BYTES
+        or initial.st_size != final.st_size
+        or getattr(initial, "st_mtime_ns", None) != getattr(final, "st_mtime_ns", None)
+        or getattr(initial, "st_ino", None) != getattr(final, "st_ino", None)
+    ):
+        _fail("fixed_school_reader_mismatch")
+    return hashlib.sha256(data).hexdigest()
+
+
+def _validate_school_scripts(
+    zf: zipfile.ZipFile,
+    members: dict[str, zipfile.ZipInfo],
+    manifest: dict[str, Any],
+    stage: int,
+) -> None:
+    if stage != 2:
+        return
+    declared = manifest["schoolScripts"]
+    for name in SCHOOL_SCRIPT_NAMES:
+        path = f"Payload/Runner.app/{name}"
+        info = _I0._required_member(members, path)
+        packaged = _I0._read_member(zf, info, SCHOOL_SCRIPT_MAX_BYTES)
+        packaged_hash = hashlib.sha256(packaged).hexdigest()
+        source_hash = _source_school_script_sha256(name)
+        if packaged_hash != source_hash or packaged_hash != declared[name]:
+            _fail("fixed_school_reader_mismatch")
+
+
+def _contains_i2_debug_marker(zf: zipfile.ZipFile, info: zipfile.ZipInfo) -> bool:
+    tail = b""
+    count = 0
+    overlap = max(len(marker) for marker in I2_DEBUG_MARKERS) - 1
+    try:
+        with zf.open(info, "r") as stream:
+            while True:
+                chunk = stream.read(_I0.STREAM_CHUNK_SIZE)
+                if not chunk:
+                    break
+                count += len(chunk)
+                if count > info.file_size or count > _I0.MAX_FILE_UNCOMPRESSED:
+                    _fail("invalid_archive_member")
+                combined = tail + chunk
+                if any(marker in combined for marker in I2_DEBUG_MARKERS):
+                    return True
+                tail = combined[-overlap:] if overlap else b""
+    except VerificationError:
+        raise
+    except (OSError, RuntimeError, EOFError, zipfile.BadZipFile, NotImplementedError):
+        _fail("invalid_archive_member")
+    if count != info.file_size:
+        _fail("invalid_archive_member")
+    return False
 
 
 def _is_macho_magic(magic: bytes) -> bool:
@@ -476,21 +630,25 @@ def _validate_all_contents(
     members: dict[str, zipfile.ZipInfo],
     declared_total: int,
     expected_revision: str,
+    stage: int,
 ) -> None:
     _validate_policy_paths(members)
-    manifest_path = MANIFEST_PATH
+    manifest_path = _stage_manifest_path(stage)
     manifest_data = _I0._read_member(zf, _I0._required_member(members, manifest_path), _I0.MAX_MANIFEST)
     manifest = _I0._parse_json_manifest(manifest_data)
-    _validate_manifest(manifest, expected_revision)
+    _validate_manifest(manifest, expected_revision, stage)
+    _validate_school_scripts(zf, members, manifest, stage)
 
-    app_info = _validate_info_and_entitlements(zf, members)
-    executable = _validate_runner_info(app_info, expected_revision)
+    app_info = _validate_info_and_entitlements(zf, members, stage)
+    executable = _validate_runner_info(app_info, expected_revision, stage)
     runner_path = f"Payload/Runner.app/{executable}"
     if runner_path != RUNNER_EXECUTABLE_PATH:
         _fail("runner_executable_mismatch")
 
     runner_info = _I0._required_member(members, runner_path)
     _I0._validate_macho(zf, runner_info, 2)  # MH_EXECUTE, iPhoneOS arm64
+    if stage == 2 and _contains_i2_debug_marker(zf, runner_info):
+        _fail("fixture_entry_point_present")
 
     framework_binaries = _validate_frameworks(zf, members, expected_revision)
     if APP_FRAMEWORK_EXECUTABLE not in framework_binaries:
@@ -512,9 +670,13 @@ def verify_package(
     ipa_path: os.PathLike[str] | str,
     expected_revision: str,
     report_path: os.PathLike[str] | str | None = None,
+    *,
+    stage: int = 1,
 ) -> dict[str, Any]:
-    """Verify an I1 unsigned IPA and return a path-free, fixed-shape report."""
+    """Verify an I1 or I2 unsigned IPA and return a path-free report."""
 
+    if type(stage) is not int or stage not in (1, 2):
+        _fail("invalid_stage")
     if not _expected_revision_is_valid(expected_revision):
         _fail("invalid_expected_revision")
     try:
@@ -530,7 +692,7 @@ def verify_package(
             with zipfile.ZipFile(ipa_file, "r") as zf:
                 members, declared_total = _I0._index_archive(zf)
                 infos = zf.infolist()
-                _validate_all_contents(zf, infos, members, declared_total, expected_revision)
+                _validate_all_contents(zf, infos, members, declared_total, expected_revision, stage)
             final_stat = os.fstat(ipa_file.fileno())
             if (
                 initial_stat.st_size != final_stat.st_size
@@ -552,27 +714,33 @@ def verify_package(
         except (OSError, EOFError, RuntimeError, zipfile.BadZipFile, zipfile.LargeZipFile, ValueError, struct.error):
             _fail("invalid_ipa")
 
+    artifact_kind = "ios-i1-unsigned-ipa-v1" if stage == 1 else "ios-i2-unsigned-ipa-v1"
+    scope = "i1-storage-bootstrap" if stage == 1 else "i2-school-bridges"
+    checks: dict[str, bool] = {
+        "archivePathsAndSizes": True,
+        "singleRunnerNoExtensionsOrPlugins": True,
+        "deviceArm64RunnerAndFrameworks": True,
+        "sourceRevisionMatchesRunnerAndAOT": True,
+        "noAppGroupInfoEntitlementFilesOrSignatureEntitlements": True,
+        "noProfilesPrivateKeysOrDebugAssets": True,
+        "noAudioPermissionOrModelWeights": True,
+    }
+    if stage == 2:
+        checks["fixedSchoolReadersMatchSource"] = True
+        checks["noFixtureEntryPointsOrTransportOverrides"] = True
     report: dict[str, Any] = {
         "reportVersion": 1,
-        "artifactKind": "ios-i1-unsigned-ipa-v1",
+        "artifactKind": artifact_kind,
         "sourceRevision": expected_revision,
         "flutterVersion": "3.47.7",
         "xcodeVersion": "27.1",
         "buildMode": "release",
         "bundleId": APP_BUNDLE_ID,
-        "scope": "i1-storage-bootstrap",
+        "scope": scope,
         "appleSignatureValidity": "not-verified",
         "ipaSha256": ipa_sha256,
         "ipaBytes": ipa_bytes,
-        "checks": {
-            "archivePathsAndSizes": True,
-            "singleRunnerNoExtensionsOrPlugins": True,
-            "deviceArm64RunnerAndFrameworks": True,
-            "sourceRevisionMatchesRunnerAndAOT": True,
-            "noAppGroupInfoEntitlementFilesOrSignatureEntitlements": True,
-            "noProfilesPrivateKeysOrDebugAssets": True,
-            "noAudioPermissionOrModelWeights": True,
-        },
+        "checks": checks,
     }
     if report_path is not None:
         _I0._write_report(report_path, ipa_path, report)

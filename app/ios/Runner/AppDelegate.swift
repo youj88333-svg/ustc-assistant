@@ -8,6 +8,7 @@ import UIKit
   private var credentialEpoch: UInt64 = 0
   private var hasBeenActive = false
   private var lifetimeObservers: [NSObjectProtocol] = []
+  private var schoolBridge: AnyObject?
 
   private func installLifetimeObservers() {
     guard lifetimeObservers.isEmpty else { return }
@@ -41,6 +42,20 @@ import UIKit
     installLifetimeObservers()
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
     let messenger = engineBridge.applicationRegistrar.messenger()
+    if #available(iOS 27.0, *) {
+      (schoolBridge as? IOSObservationBridge)?.shutdown()
+      schoolBridge = IOSObservationBridge(messenger: messenger, presenter: { [weak self] in
+        self?.window?.rootViewController ?? UIApplication.shared.connectedScenes
+          .compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+          .first(where: \.isKeyWindow)?.rootViewController
+      })
+    } else {
+      let unavailable = FlutterMethodChannel(name: "ustc_assistant/observation_v1", binaryMessenger: messenger)
+      unavailable.setMethodCallHandler { _, reply in
+        reply(FlutterError(code: "app_failure", message: nil, details: "unsupportedPlatform"))
+      }
+      schoolBridge = unavailable
+    }
     let platform = FlutterMethodChannel(name: "ustc_assistant/platform_v1", binaryMessenger: messenger)
     platform.setMethodCallHandler { call, reply in
       guard call.arguments == nil || call.arguments is NSNull else {
@@ -53,6 +68,11 @@ import UIKit
         case "i1BuildInfo": reply([
           "revision": Bundle.main.object(forInfoDictionaryKey: "I1SourceRevision") as? String ?? "unknown",
           "bundleId": Bundle.main.bundleIdentifier ?? "unknown"
+        ])
+        case "i2BuildInfo": reply([
+          "revision": Bundle.main.object(forInfoDictionaryKey: "I2SourceRevision") as? String ?? "unknown",
+          "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
+          "authentication": "manual", "schoolStore": "wk-uuid-v1"
         ])
         default: reply(FlutterMethodNotImplemented)
         }

@@ -1,4 +1,27 @@
 workflows:
+  ios-i2-school:
+    name: iOS I2 - manual school login and fixed collection
+    instance_type: mac_mini_m2
+    max_build_duration: 40
+    environment:
+      flutter: '3.47.7'
+      xcode: '27.1'
+    scripts:
+      - name: Validate school stores, loopback imports and device AOT
+        script: bash tools/ios-i2/build.sh
+    artifacts:
+      - app/build/ios-i2/artifacts/ios-i2-unsigned.ipa
+      - app/build/ios-i2/artifacts/ios-i2-verification.json
+      - app/build/ios-i2/artifacts/ios-i2-provenance.json
+      - app/build/ios-i2/artifacts/i2-build.log
+      - app/build/ios-i2/artifacts/i2-xcode.txt
+      - app/build/ios-i2/artifacts/i2-simulator-test.log
+      - app/build/ios-i2/artifacts/i2-boundaries-test.log
+      - app/build/ios-i2/artifacts/i2-persistence-write.log
+      - app/build/ios-i2/artifacts/i2-persistence-read.log
+      - app/build/ios-i2/artifacts/ios-i2-pubspec.lock
+      - app/build/ios-i2/artifacts/i2-simulator-selection.txt
+
   ios-i1-foundation:
     name: iOS I1 - private storage and bootstrap
     instance_type: mac_mini_m2

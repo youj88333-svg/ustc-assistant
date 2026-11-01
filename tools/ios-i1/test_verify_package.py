@@ -276,12 +276,43 @@ class VerifyI1PackageTests(unittest.TestCase):
         ipa_path = self.ipa()
         report_path = self.root / "verification.json"
         report = verifier.verify_package(ipa_path, REVISION, report_path)
+        explicit_stage_one = verifier.verify_package(ipa_path, REVISION, stage=1)
         self.assertEqual(report["artifactKind"], "ios-i1-unsigned-ipa-v1")
         self.assertEqual(report["sourceRevision"], REVISION)
         self.assertEqual(report["bundleId"], APP_ID)
+        self.assertEqual(
+            set(report),
+            {
+                "reportVersion",
+                "artifactKind",
+                "sourceRevision",
+                "flutterVersion",
+                "xcodeVersion",
+                "buildMode",
+                "bundleId",
+                "scope",
+                "appleSignatureValidity",
+                "ipaSha256",
+                "ipaBytes",
+                "checks",
+            },
+        )
         self.assertEqual(report["ipaSha256"], hashlib.sha256(ipa_path.read_bytes()).hexdigest())
         self.assertEqual(report["ipaBytes"], ipa_path.stat().st_size)
         self.assertTrue(all(report["checks"].values()))
+        self.assertEqual(report, explicit_stage_one)
+        self.assertEqual(
+            set(report["checks"]),
+            {
+                "archivePathsAndSizes",
+                "singleRunnerNoExtensionsOrPlugins",
+                "deviceArm64RunnerAndFrameworks",
+                "sourceRevisionMatchesRunnerAndAOT",
+                "noAppGroupInfoEntitlementFilesOrSignatureEntitlements",
+                "noProfilesPrivateKeysOrDebugAssets",
+                "noAudioPermissionOrModelWeights",
+            },
+        )
         self.assertEqual(json.loads(report_path.read_text(encoding="utf-8")), report)
         self.assertNotIn(str(ipa_path), report_path.read_text(encoding="utf-8"))
 
