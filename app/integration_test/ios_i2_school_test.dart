@@ -28,11 +28,13 @@ import 'package:ustc_assistant_m0/platform/observation_assets.dart';
 import 'package:ustc_assistant_m0/platform/owned_directory.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/platform/young_partition_registry.dart';
+import 'package:ustc_assistant_m0/source/jw_authentication_contract.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 import 'package:ustc_assistant_m0/source/young_active_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 
 import 'support/jw_sync_fixture.dart';
+import 'support/ios_i2_sso_fixture.dart';
 import 'support/ios_i2_drain.dart';
 import 'support/ios_i2_http.dart';
 import 'support/young_business_fixture.dart';
@@ -109,6 +111,9 @@ Future<void> _runI2Scenario() async {
   }
 
   try {
+    debugPrint('I2 synthetic phase: JW manual SSO and recovery');
+    await _runManualI2Sso(harness);
+
     jwFixture = await JwSyncFixture.start(requireLogin: false);
     final jwTarget = ObservationTarget.fixture(jwFixture.initialUri);
     jw = JwSyncCoordinator(
@@ -654,6 +659,423 @@ Future<void> _runI2Scenario() async {
     }
     if (!cleanupComplete) debugPrint('I2 cleanup after primary failure: false');
   }
+}
+
+Future<void> _runManualI2Sso(_I2Harness harness) async {
+  IOSI2SsoFixture? ssoFixture;
+  JwSyncFixture? businessFixture;
+  JwSyncCoordinator? manualCoordinator;
+  var sessionCleared = false;
+  var primaryFailure = false;
+  var cleanupComplete = true;
+
+  Future<bool> attempt(Future<void> Function() action) async {
+    try {
+      await action().timeout(_operationTimeout);
+      return true;
+    } on Object {
+      return false;
+    }
+  }
+
+  try {
+    final sso = await IOSI2SsoFixture.start();
+    ssoFixture = sso;
+    final business = await JwSyncFixture.start(
+      requireLogin: true,
+      syntheticIdentityOrigin: sso.origin,
+    );
+    businessFixture = business;
+    sso.configureBusinessOrigin(Uri.parse(business.initialUri.origin));
+    final target = ObservationTarget.fixture(
+      business.initialUri,
+      additionalOrigins: [sso.origin],
+    );
+    final coordinator = JwSyncCoordinator(
+      store: harness.store,
+      registry: JwPartitionRegistry(harness.directories.formal),
+      browser: harness.browser,
+      leases: harness.leases,
+      clock: harness.clock,
+      loginWaitTimeout: const Duration(seconds: 30),
+      automationPollInterval: const Duration(milliseconds: 100),
+      target: target,
+    );
+    manualCoordinator = coordinator;
+    await coordinator.initialize().timeout(_operationTimeout);
+
+    final startupEvents = <BrowserEvent>[];
+    final startupSubscription = harness.browser.events.listen(
+      startupEvents.add,
+    );
+    try {
+      await coordinator
+          .startSync(expectedAccountCode: _account, semesterId: 20261)
+          .timeout(_operationTimeout);
+    } finally {
+      await startupSubscription.cancel();
+    }
+    expect(coordinator.syncView.phase, JwSyncPhase.login);
+    expect(coordinator.syncView.automation, JwAutomationState.manualRequired);
+    expect(
+      coordinator.syncView.loginPauseReason,
+      JwLoginPauseReason.manualRequired,
+    );
+    final firstNavigation = startupEvents.firstWhere(
+      (event) => event.kind == BrowserEventKind.navigating,
+    );
+    final session = firstNavigation.session;
+    final loginReady = startupEvents.lastWhere(
+      (event) =>
+          event.session == session &&
+          event.kind == BrowserEventKind.ready &&
+          event.origin == target.initialUri.origin,
+    );
+    final loginInspection = await harness.browser.inspect(
+      session: session,
+      document: loginReady.document,
+    );
+    expect(loginInspection.ready, isTrue);
+    expect(loginInspection.windowVisible, isTrue);
+    expect(_jwCatalogReadCount(business), 0);
+    expect(sso.loginPageRequestCount, 0);
+
+    debugPrint('I2 synthetic phase: open fixed identity page');
+    final firstCasReadyFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: loginReady.document,
+      kind: BrowserEventKind.ready,
+      origin: sso.origin.origin,
+    );
+    await _iosI2Exercise(
+      session: session,
+      document: loginReady.document,
+      action: 'authentication',
+    );
+    final firstCasReady = await firstCasReadyFuture;
+    expect(sso.loginPageRequestCount, 1);
+    expect(sso.formPostCount, 0);
+
+    for (final action in const [
+      'iosNavigationCancelled',
+      'iosPolicyInterrupted',
+      'iosRetiredNavigationFailed',
+    ]) {
+      await _iosI2Exercise(
+        session: session,
+        document: firstCasReady.document,
+        action: action,
+      );
+      final inspection = await harness.browser.inspect(
+        session: session,
+        document: firstCasReady.document,
+      );
+      expect(inspection.ready, isTrue);
+      expect(inspection.windowVisible, isTrue);
+    }
+
+    debugPrint('I2 synthetic phase: recover current navigation failure');
+    final failedNavigationFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: firstCasReady.document,
+      kind: BrowserEventKind.navigating,
+    );
+    await _iosI2Exercise(
+      session: session,
+      document: firstCasReady.document,
+      action: 'iosNavigationFailed',
+    );
+    final failedNavigation = await failedNavigationFuture;
+    final failedInspection = await harness.browser.inspect(
+      session: session,
+      document: failedNavigation.document,
+    );
+    expect(failedInspection.ready, isFalse);
+    expect(failedInspection.windowVisible, isTrue);
+    final diagnostics = await _platformChannel
+        .invokeMapMethod<String, Object?>('i2BrowserDiagnostics')
+        .timeout(_nativeTimeout);
+    expect(diagnostics, isNotNull);
+    expect(diagnostics!.keys.toSet(), const {
+      'kind',
+      'source',
+      'state',
+      'lastEvent',
+      'failureStage',
+      'errorDomain',
+      'errorCode',
+      'cleanupStage',
+      'cleanupFailure',
+      'cleanupErrorDomain',
+      'cleanupErrorCode',
+    });
+    expect(diagnostics['kind'], 'ios-i2-browser-diagnostics-v1');
+    expect(diagnostics['source'], 'jw');
+    expect(diagnostics['state'], 'open');
+    expect(diagnostics['lastEvent'], 'navigationFailed');
+    expect(diagnostics['failureStage'], 'provisionalNavigation');
+    expect(diagnostics['errorDomain'], 'urlLoading');
+    expect(diagnostics['errorCode'], -1009);
+    expect(diagnostics['cleanupStage'], 'none');
+    expect(diagnostics['cleanupFailure'], 'none');
+    expect(diagnostics['cleanupErrorDomain'], 'none');
+    expect(diagnostics['cleanupErrorCode'], isNull);
+
+    debugPrint('I2 synthetic phase: reopen failed login window');
+    await _iosI2Exercise(
+      session: session,
+      document: failedNavigation.document,
+      action: 'iosReturnToApp',
+    );
+    final hiddenFailedInspection = await harness.browser.inspect(
+      session: session,
+      document: failedNavigation.document,
+    );
+    expect(hiddenFailedInspection.ready, isFalse);
+    expect(hiddenFailedInspection.windowVisible, isFalse);
+    await coordinator.continueSync().timeout(_operationTimeout);
+    expect(coordinator.syncView.phase, JwSyncPhase.login);
+    expect(coordinator.syncView.automation, JwAutomationState.manualRequired);
+    final restoredFailedInspection = await harness.browser.inspect(
+      session: session,
+      document: failedNavigation.document,
+    );
+    expect(restoredFailedInspection.ready, isFalse);
+    expect(restoredFailedInspection.windowVisible, isTrue);
+    await _iosI2Exercise(
+      session: session,
+      document: failedNavigation.document,
+      action: 'iosRetiredNavigationFinished',
+    );
+    final retiredFinishInspection = await harness.browser.inspect(
+      session: session,
+      document: failedNavigation.document,
+    );
+    expect(retiredFinishInspection.ready, isFalse);
+    expect(retiredFinishInspection.windowVisible, isTrue);
+
+    debugPrint('I2 synthetic phase: retry registered initial GET');
+    final retriedLoginFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: failedNavigation.document,
+      kind: BrowserEventKind.ready,
+      origin: target.initialUri.origin,
+    );
+    await _iosI2Exercise(
+      session: session,
+      document: failedNavigation.document,
+      action: 'iosRetryInitial',
+    );
+    final retriedLogin = await retriedLoginFuture;
+    final secondCasReadyFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: retriedLogin.document,
+      kind: BrowserEventKind.ready,
+      origin: sso.origin.origin,
+    );
+    await _iosI2Exercise(
+      session: session,
+      document: retriedLogin.document,
+      action: 'authentication',
+    );
+    final secondCasReady = await secondCasReadyFuture;
+    expect(sso.loginPageRequestCount, 2);
+    expect(sso.formPostCount, 0);
+
+    debugPrint('I2 synthetic phase: submit one fixed synthetic form');
+    final callbackReadyFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: secondCasReady.document,
+      kind: BrowserEventKind.ready,
+      origin: target.initialUri.origin,
+    );
+    await _iosI2Exercise(
+      session: session,
+      document: secondCasReady.document,
+      action: 'submitAuthForm',
+    );
+    await business.callbackEntered.future.timeout(_nativeTimeout);
+    final callbackReady = await callbackReadyFuture;
+    expect(callbackReady.document, greaterThan(secondCasReady.document));
+    expect(callbackReady.origin, target.initialUri.origin);
+    expect(sso.acceptedSubmissionCount, 1);
+    expect(sso.formPostCount, 1);
+    expect(business.syntheticSsoCallbackCount, 1);
+    expect(business.authenticationSubmissions, 0);
+    expect(_jwCatalogReadCount(business), 0);
+
+    // The callback route is still authentication context. Continuing here
+    // must pause again and must not read the fixed business catalog.
+    debugPrint('I2 synthetic phase: hold authentication callback');
+    await coordinator.continueSync().timeout(_operationTimeout);
+    expect(coordinator.syncView.phase, JwSyncPhase.login);
+    expect(coordinator.syncView.automation, JwAutomationState.manualRequired);
+    expect(_jwCatalogReadCount(business), 0);
+
+    debugPrint('I2 synthetic phase: release callback and return to app');
+    final homeReadyFuture = _nextI2Event(
+      harness.browser,
+      session: session,
+      afterDocument: callbackReady.document,
+      kind: BrowserEventKind.ready,
+      origin: target.initialUri.origin,
+    );
+    business.releaseCallback.complete();
+    await _waitFor(
+      () => business.authenticatedHomeCount == 1,
+      message: 'synthetic authenticated home was not reached',
+    );
+    final homeReady = await homeReadyFuture;
+    expect(homeReady.document, greaterThan(callbackReady.document));
+    await _iosI2Exercise(
+      session: session,
+      document: homeReady.document,
+      action: 'iosReturnToApp',
+    );
+    final returnedInspection = await harness.browser.inspect(
+      session: session,
+      document: homeReady.document,
+    );
+    expect(returnedInspection.ready, isTrue);
+    expect(returnedInspection.windowVisible, isFalse);
+
+    debugPrint('I2 synthetic phase: continue and import after return');
+    await coordinator.continueSync().timeout(_operationTimeout);
+    expect(coordinator.syncView.phase, JwSyncPhase.idle);
+    expect(coordinator.syncView.importCommitted, isTrue);
+    var imported = await harness.store.readView().timeout(_operationTimeout);
+    expect(imported.credentialSaved, isFalse);
+    expect(
+      imported.events.any((event) => event.kind == JwEventKind.course),
+      isTrue,
+    );
+    expect(
+      imported.events.any((event) => event.kind == JwEventKind.exam),
+      isTrue,
+    );
+    expect(_jwCatalogReadCount(business), greaterThan(0));
+    expect(sso.acceptedSubmissionCount, 1);
+
+    debugPrint('I2 synthetic phase: repeat import and clear login session');
+    final firstLocalIds = imported.events.map((event) => event.localId).toSet();
+    await coordinator
+        .startSync(expectedAccountCode: _account, semesterId: 20261)
+        .timeout(_operationTimeout);
+    expect(coordinator.syncView.phase, JwSyncPhase.idle);
+    final repeated = await harness.store.readView().timeout(_operationTimeout);
+    expect(repeated.courseCount, imported.courseCount);
+    expect(repeated.examCount, imported.examCount);
+    expect(repeated.events.length, imported.events.length);
+    expect(
+      repeated.events.map((event) => event.localId).toSet(),
+      firstLocalIds,
+    );
+    expect(repeated.credentialSaved, isFalse);
+    imported = repeated;
+
+    await coordinator.clearSession().timeout(_operationTimeout);
+    sessionCleared = true;
+    expect(coordinator.syncView.phase, JwSyncPhase.idle);
+    expect(coordinator.syncView.sessionRetained, isFalse);
+    final afterClear = await harness.store.readView().timeout(
+      _operationTimeout,
+    );
+    expect(afterClear.courseCount, imported.courseCount);
+    expect(afterClear.examCount, imported.examCount);
+    expect(afterClear.events.length, imported.events.length);
+    expect(afterClear.credentialSaved, isFalse);
+    expect(sso.acceptedSubmissionCount, 1);
+    expect(sso.formPostCount, 1);
+    await coordinator.shutdown().timeout(_operationTimeout);
+    manualCoordinator = null;
+    _report['jwManualSsoRecoveryAndImport'] = true;
+  } catch (_) {
+    primaryFailure = true;
+    debugPrint('I2 synthetic phase: JW manual SSO failed');
+    rethrow;
+  } finally {
+    final business = businessFixture;
+    if (business != null && !business.releaseCallback.isCompleted) {
+      business.releaseCallback.complete();
+    }
+    final coordinator = manualCoordinator;
+    if (coordinator != null) {
+      debugPrint('I2 synthetic phase: JW manual SSO cleanup');
+      if (coordinator.syncView.busy) {
+        cleanupComplete = await attempt(coordinator.cancel) && cleanupComplete;
+      }
+      if (coordinator.syncView.phase == JwSyncPhase.recovery) {
+        cleanupComplete =
+            await attempt(coordinator.retryRecovery) && cleanupComplete;
+      }
+      if (!sessionCleared && coordinator.syncView.phase == JwSyncPhase.idle) {
+        cleanupComplete =
+            await attempt(coordinator.clearSession) && cleanupComplete;
+      }
+      cleanupComplete = await attempt(coordinator.shutdown) && cleanupComplete;
+    }
+    if (business != null) {
+      cleanupComplete = await attempt(business.close) && cleanupComplete;
+    }
+    final sso = ssoFixture;
+    if (sso != null) {
+      cleanupComplete = await attempt(sso.close) && cleanupComplete;
+    }
+    if (!cleanupComplete && !primaryFailure) {
+      throw StateError('ios_i2_manual_sso_cleanup_incomplete');
+    }
+    if (!cleanupComplete) {
+      debugPrint('I2 synthetic phase: JW manual SSO cleanup incomplete');
+    }
+  }
+}
+
+Future<BrowserEvent> _nextI2Event(
+  NativeObservationBrowser browser, {
+  required int session,
+  required int afterDocument,
+  required BrowserEventKind kind,
+  String? origin,
+}) => browser.events
+    .firstWhere(
+      (event) =>
+          event.session == session &&
+          event.document > afterDocument &&
+          event.kind == kind &&
+          (origin == null || event.origin == origin),
+    )
+    .timeout(_nativeTimeout);
+
+Future<void> _iosI2Exercise({
+  required int session,
+  required int document,
+  required String action,
+}) async {
+  await _debugChannel
+      .invokeMethod<void>('exerciseFixture', {
+        'session': session,
+        'document': document,
+        'action': action,
+      })
+      .timeout(_nativeTimeout);
+}
+
+int _jwCatalogReadCount(JwSyncFixture fixture) {
+  const catalogPaths = {
+    '/for-std/course-table/info/571',
+    '/for-std/student-info/info/571',
+    '/for-std/course-table/get-data',
+    '/for-std/course-table/datum',
+    '/for-std/exam-arrange/info/571',
+  };
+  return fixture.requests
+      .where((request) => catalogPaths.any((path) => request.endsWith(path)))
+      .length;
 }
 
 final class _I2Harness {

@@ -124,6 +124,15 @@ struct IOSSchoolPolicy {
     return origins.contains(candidate)
   }
 
+  /// Readiness for fixed business operations must not interrupt a login
+  /// callback document before its own redirect has completed.
+  func isAuthenticationPage(_ url: URL) -> Bool {
+    guard origin(url) == businessOrigin else { return true }
+    let path = url.path
+    return path == "/login" || path == "/login/" || path.hasPrefix("/cas/") ||
+      (source == "jw" && path.hasPrefix("/ucas-sso/"))
+  }
+
   func target(page: String) throws -> URL {
     let path: String
     switch (source, page) {

@@ -52,6 +52,19 @@ private enum IOSSchoolScriptTests {
     }
 
     try test {
+      for path in ["/login", "/login/", "/cas/login", "/ucas-sso/login?ticket=synthetic"] {
+        try check(jw.isAuthenticationPage(URL(string: jw.businessOrigin + path)!), "jw-auth-route")
+      }
+      for path in ["/home", "/for-std/course-table", "/for-std/exam-arrange"] {
+        try check(!jw.isAuthenticationPage(URL(string: jw.businessOrigin + path)!), "jw-business-route")
+      }
+      let outside = URL(string: "https://outside.invalid/cas/login")!
+      try check(jw.isAuthenticationPage(outside) && !jw.allows(outside), "classification-never-admits-origin")
+      let youngCalendar = try young.target(page: "calendar")
+      try check(!young.isAuthenticationPage(youngCalendar), "young-business-route")
+    }
+
+    try test {
       try check(jwInstall.contains("jw_probe.js") == false, "jw-source-inlined")
       try check(jwInstall.contains("Reflect.apply(factory, root"), "jw-factory-this")
       try check(jwInstall.contains("const factory = (function("), "jw-factory-is-expression")

@@ -57,7 +57,7 @@ import UIKit
       schoolBridge = unavailable
     }
     let platform = FlutterMethodChannel(name: "ustc_assistant/platform_v1", binaryMessenger: messenger)
-    platform.setMethodCallHandler { call, reply in
+    platform.setMethodCallHandler { [weak self] call, reply in
       guard call.arguments == nil || call.arguments is NSNull else {
         reply(FlutterError(code: "invalid_request", message: nil, details: nil)); return
       }
@@ -74,6 +74,10 @@ import UIKit
           "bundleId": Bundle.main.bundleIdentifier ?? "unknown",
           "authentication": "manual", "schoolStore": "wk-uuid-v1"
         ])
+        case "i2BrowserDiagnostics":
+          if #available(iOS 27.0, *), let bridge = self?.schoolBridge as? IOSObservationBridge {
+            reply(bridge.diagnostics())
+          } else { reply(FlutterError(code: "unsupported_platform", message: nil, details: nil)) }
         default: reply(FlutterMethodNotImplemented)
         }
       } catch let error as IOSStorageFailure {

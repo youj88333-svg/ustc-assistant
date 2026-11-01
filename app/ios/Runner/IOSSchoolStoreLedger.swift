@@ -144,6 +144,7 @@ final class IOSSchoolStoreLedger {
   private let root: URL
   private let ledgerNonce = UUID()
   private var rootIdentity: IOSSchoolDirectoryIdentity?
+  private(set) var lastFailureErrno: Int32?
 #if os(macOS)
   /// Synthetic CLI only. The iOS target does not compile this fault-injection
   /// initializer or carry a runtime hook.
@@ -173,6 +174,7 @@ final class IOSSchoolStoreLedger {
     create: Bool
   ) throws -> IOSSchoolStoreRecord? {
     try Self.serializationLock.iosWithLock {
+      lastFailureErrno = nil
       let location = try parseLocation(profilePath: profilePath, source: source)
       return try withProfile(location) { profileFD, directoryIdentities in
         try discardIncompleteTemporary(profileFD: profileFD)
@@ -240,6 +242,7 @@ final class IOSSchoolStoreLedger {
 
   func markDeleting(_ record: IOSSchoolStoreRecord) throws {
     try Self.serializationLock.iosWithLock {
+      lastFailureErrno = nil
       if record.token.state == .removed {
         try transition(record, to: .removed, allowedFrom: [.removed])
       } else {
@@ -251,6 +254,7 @@ final class IOSSchoolStoreLedger {
   /// Call only after WKWebsiteDataStore.remove(forIdentifier:) reports success.
   func didRemove(_ record: IOSSchoolStoreRecord) throws {
     try Self.serializationLock.iosWithLock {
+      lastFailureErrno = nil
       try transition(record, to: .removed, allowedFrom: [.deletePending, .removed])
     }
   }
@@ -294,7 +298,7 @@ final class IOSSchoolStoreLedger {
         throw IOSSchoolFailure.staleResult
       }
       if current.metadata.state == nextState {
-        guard fsync(profileFD) == 0 else { throw IOSSchoolFailure.storageFailed }
+        try syncFile(profileFD)
         return
       }
 
@@ -370,7 +374,7 @@ final class IOSSchoolStoreLedger {
       }
     }
 
-    guard fsync(profileFD) == 0 else { throw IOSSchoolFailure.storageFailed }
+    try syncFile(profileFD)
     guard let durable = try readMetadata(profileFD: profileFD, name: Self.metadataName),
           durable.identity == pending.nextIdentity,
           durable.digest == pending.nextDigest,
@@ -627,7 +631,7 @@ final class IOSSchoolStoreLedger {
     defer { if needsClose { _ = close(fd) } }
     guard fchmod(fd, 0o600) == 0 else { throw IOSSchoolFailure.storageFailed }
     try writeAll(data, to: fd)
-    guard fsync(fd) == 0 else { throw IOSSchoolFailure.storageFailed }
+    try syncFile(fd)
     var written = stat()
     guard fstat(fd, &written) == 0 else { throw IOSSchoolFailure.storageFailed }
     try validateRegular(written)
@@ -692,7 +696,7 @@ final class IOSSchoolStoreLedger {
         throw pathFailure(errno)
       }
     }
-    guard fsync(profileFD) == 0 else { throw IOSSchoolFailure.storageFailed }
+    try syncFile(profileFD)
     var installed = stat()
     guard Self.metadataName.withCString({ fstatat(profileFD, $0, &installed, AT_SYMLINK_NOFOLLOW) }) == 0 else {
       throw pathFailure(errno)
@@ -744,7 +748,7 @@ final class IOSSchoolStoreLedger {
     guard Self.temporaryName.withCString({ unlinkat(profileFD, $0, 0) }) == 0 else {
       throw pathFailure(errno)
     }
-    guard fsync(profileFD) == 0 else { throw IOSSchoolFailure.storageFailed }
+    try syncFile(profileFD)
   }
 
   private func validateRegular(_ value: stat) throws {
@@ -773,6 +777,7 @@ final class IOSSchoolStoreLedger {
   }
 
   private func pathFailure(_ code: Int32) -> IOSSchoolFailure {
+    lastFailureErrno = code
     switch code {
     case ELOOP, ENOTDIR, EACCES, EPERM:
       return .unsafeDirectory
@@ -780,6 +785,13 @@ final class IOSSchoolStoreLedger {
       return .unsafeDirectory
     default:
       return .storageFailed
+    }
+  }
+
+  private func syncFile(_ fd: Int32) throws {
+    guard fsync(fd) == 0 else {
+      lastFailureErrno = errno
+      throw IOSSchoolFailure.storageFailed
     }
   }
 

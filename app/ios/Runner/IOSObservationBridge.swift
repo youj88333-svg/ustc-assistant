@@ -17,6 +17,13 @@ import CoreFoundation
   private var pending: [UUID: Pending] = [:]
   private var observers: [NSObjectProtocol] = []
   private var retired = false
+  // Closed, value-free diagnostics. Never retain NSError/userInfo, URLs,
+  // requests, page text, account values or WebKit authentication assets.
+  private var diagnosticSource = "none", diagnosticEvent = "none"
+  private var failureStage = "none", failureDomain = "none"
+  private var failureCode: Int?
+  private var cleanupStage = "none", cleanupReason = "none", cleanupDomain = "none"
+  private var cleanupCode: Int?
 #if DEBUG
   // Test correlation only, never a partition/open authority. Retain the
   // verified UUID so removal can still be measured after Dart removes metadata.
@@ -32,9 +39,14 @@ import CoreFoundation
     var host: SchoolHostController?
     var navigation: UINavigationController?
     var urlObserver: NSKeyValueObservation?
+    var activeLoad: WKNavigation?
     var document = 0
     var ready = false, finished = false, isClosing = false
     var storeRemoved = false
+    var manualLoadFailed = false
+#if DEBUG
+    var fixtureRetiredLoad: WKNavigation?
+#endif
     var guardValue: String?, lastURL: URL?
     init(id: Int, policy: IOSSchoolPolicy, ledger: IOSSchoolStoreLedger,
          record: IOSSchoolStoreRecord?, scripts: IOSSchoolScripts, recovery: Bool) {
@@ -61,6 +73,7 @@ import CoreFoundation
       forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
     ) { [weak self] _ in
       guard let self, let session = self.active else { return }
+      self.recordFailure("background", event: "background")
       self.event(session, "failed")
       self.beginClose(session)
     })
@@ -76,6 +89,59 @@ import CoreFoundation
 
   private static func error(_ code: IOSSchoolFailure) -> FlutterError {
     FlutterError(code: "app_failure", message: nil, details: code.rawValue)
+  }
+  func diagnostics() -> [String: Any] {
+    let state = closeFailure != nil ? "cleanupPending" : closing != nil ? "closing"
+      : active != nil ? "open" : closedID != nil ? "closed" : "idle"
+    return [
+      "kind": "ios-i2-browser-diagnostics-v1", "source": diagnosticSource, "state": state,
+      "lastEvent": diagnosticEvent, "failureStage": failureStage, "errorDomain": failureDomain,
+      "errorCode": failureCode.map { $0 as Any } ?? NSNull(), "cleanupStage": cleanupStage,
+      "cleanupFailure": cleanupReason, "cleanupErrorDomain": cleanupDomain,
+      "cleanupErrorCode": cleanupCode.map { $0 as Any } ?? NSNull()
+    ]
+  }
+  private static func safeError(_ error: Error?) -> (String, Int?) {
+    guard let error else { return ("none", nil) }
+    if let error = error as? IOSSchoolFailure {
+      let code: Int
+      switch error {
+      case .invalidSnapshot: code = 1
+      case .unsafeDirectory: code = 2
+      case .storageFailed: code = 3
+      case .cleanupPending: code = 4
+      case .staleResult: code = 5
+      case .busy: code = 6
+      case .closed: code = 7
+      case .sourceFailed: code = 8
+      case .unsupportedPlatform: code = 9
+      case .ownershipLost: code = 10
+      }
+      return ("app", code)
+    }
+    let value = error as NSError
+    let domain: String
+    switch value.domain {
+    case NSURLErrorDomain: domain = "urlLoading"
+    case "WKErrorDomain", "WebKitErrorDomain": domain = "webKit"
+    case NSPOSIXErrorDomain: domain = "posix"
+    default: domain = "other"
+    }
+    return (domain, (-100000...100000).contains(value.code) ? value.code : nil)
+  }
+  private func recordFailure(_ stage: String, event: String, error: Error? = nil) {
+    // Preserve the initiating failure when cleanup/automatic recovery follows.
+    if failureStage == "none" {
+      failureStage = stage
+      (failureDomain, failureCode) = Self.safeError(error)
+    }
+    diagnosticEvent = event
+  }
+  private func cleanupFailed(_ reason: String, error: Error? = nil, ioCode: Int32? = nil) {
+    closeFailure = .cleanupPending; cleanupReason = reason
+    if let ioCode, (-100000...100000).contains(Int(ioCode)) {
+      cleanupDomain = "posix"; cleanupCode = Int(ioCode)
+    } else { (cleanupDomain, cleanupCode) = Self.safeError(error) }
   }
   private static func integer(_ a: [String: Any], _ key: String,
                               minimum: Int = 1, maximum: Int = Int.max) throws -> Int {
@@ -151,14 +217,22 @@ import CoreFoundation
         try fields(a, ["session", "document", "operation"])
         _ = try Self.integer(a, "operation")
         guard s.policy.source == (method == "advanceJwLogin" ? "jw" : "young") else { throw IOSSchoolFailure.invalidSnapshot }
-        guard s.ready else { reply("waiting"); return }
-        let business = s.view?.url.flatMap(s.policy.origin) == s.policy.businessOrigin
-          && !(s.view?.url?.path.hasPrefix("/cas/") ?? false)
-          && s.view?.url?.path != "/login"
+        guard s.ready else {
+          if s.manualLoadFailed {
+            guard show(s) else { throw IOSSchoolFailure.busy }
+            reply("manualRequired")
+          } else { reply("waiting") }
+          return
+        }
+        let business = s.view?.url.map { !s.policy.isAuthenticationPage($0) } == true
         let youngReady = s.view?.url?.path.hasPrefix("/login/sc-wisdom-group-learning/") == true
           && s.view?.url?.query == nil
-        if business && (s.policy.source == "jw" || youngReady) { reply("businessReady") }
-        else { show(s); reply("manualRequired") }
+        if business && s.finished &&
+            s.view?.isLoading == false && (s.policy.source == "jw" || youngReady) { reply("businessReady") }
+        else {
+          guard show(s) else { throw IOSSchoolFailure.busy }
+          reply("manualRequired")
+        }
         return
       }
       if method == "submitJwLogin" || method == "submitYoungLogin" {
@@ -265,6 +339,12 @@ import CoreFoundation
     fixtureAllowed = false
 #endif
     let policy = try IOSSchoolPolicy(arguments: a, allowFixtures: fixtureAllowed)
+    if recovery && diagnosticSource == "none" { diagnosticSource = policy.source }
+    if !recovery {
+      diagnosticSource = policy.source; diagnosticEvent = "open"
+      failureStage = "none"; failureDomain = "none"; failureCode = nil
+      cleanupStage = "none"; cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
+    }
     let root = try IOSPrivateStorage.root()
     let ledger = IOSSchoolStoreLedger(root: root)
     let record = try ledger.admit(profilePath: profile, source: policy.source, create: !recovery)
@@ -299,7 +379,10 @@ import CoreFoundation
       self.invalidate(s)
       if !view.isLoading && s.finished { self.establish(s) }
     }
-    show(s)
+    guard show(s) else {
+      recordFailure("presentation", event: "navigationFailed")
+      beginClose(s); throw IOSSchoolFailure.sourceFailed
+    }
     navigate(s, policy.initialURL)
   }
 
@@ -311,6 +394,7 @@ import CoreFoundation
     channel.invokeMethod("event", arguments: value)
   }
   private func diagnostic(_ s: Session, _ code: String, _ url: URL?) {
+    diagnosticEvent = "policyBlocked"
     let site: String
     if s.policy.isFixture { site = "fixture" }
     else { site = ["jw.ustc.edu.cn": "jw", "young.ustc.edu.cn": "young", "passport.ustc.edu.cn": "passport",
@@ -320,6 +404,7 @@ import CoreFoundation
   }
   private func invalidate(_ s: Session) {
     s.document += 1; s.ready = false; s.guardValue = nil
+    diagnosticEvent = "navigating"
     rejectPending(.staleResult)
     event(s, "navigating")
   }
@@ -327,22 +412,41 @@ import CoreFoundation
     guard active === s, s.policy.allows(url), let view = s.view else { return }
     s.finished = false
     invalidate(s)
-    view.load(URLRequest(url: url))
+    s.activeLoad = nil
+#if DEBUG
+    s.fixtureRetiredLoad = nil
+#endif
+    s.activeLoad = view.load(URLRequest(url: url))
   }
-  private func show(_ s: Session) {
-    guard active === s, !s.isClosing, s.navigation == nil, let view = s.view,
-          UIApplication.shared.applicationState != .background, var controller = presenter() else { return }
+  @discardableResult private func show(_ s: Session) -> Bool {
+    guard active === s, !s.isClosing, let view = s.view,
+          UIApplication.shared.applicationState != .background else { return false }
+    if let navigation = s.navigation { return navigation.presentingViewController != nil }
+    guard var controller = presenter() else { return false }
     while let presented = controller.presentedViewController { controller = presented }
+    guard !controller.isBeingDismissed, !controller.isBeingPresented else { return false }
     let host = SchoolHostController(webView: view, source: s.policy.source,
       onReturn: { [weak self, weak s] in if let s { self?.hide(s) } },
+      onRetry: { [weak self, weak s] in
+        guard let self, let s, self.active === s else { return }
+        // A fixed GET, never reload/resubmit a school login POST or its body.
+        self.navigate(s, s.policy.initialURL)
+      },
       onCancel: { [weak self, weak s] in
         guard let self, let s else { return }
+        self.diagnosticEvent = "userClosed"
         self.event(s, "userClosed"); self.beginClose(s)
       })
     let navigation = UINavigationController(rootViewController: host)
     navigation.modalPresentationStyle = .fullScreen; navigation.isModalInPresentation = true
     s.host = host; s.navigation = navigation
     controller.present(navigation, animated: false)
+    guard navigation.presentingViewController != nil else {
+      host.detachView(); s.host = nil; s.navigation = nil
+      return false
+    }
+    host.setLoadFailure(s.manualLoadFailed)
+    return true
   }
   private func hide(_ s: Session) {
     s.host?.detachView()
@@ -367,7 +471,8 @@ import CoreFoundation
     return text
   }
   private func establish(_ s: Session) {
-    guard active === s, !s.isClosing, !s.ready, let url = s.view?.url, s.policy.allows(url) else { return }
+    guard active === s, !s.isClosing, !s.ready, s.finished, s.view?.isLoading == false,
+          let url = s.view?.url, s.policy.allows(url) else { return }
     let document = s.document
     raw(s, IOSSchoolScripts.readGuard, world: .defaultClient) { [weak self, weak s] result in
       guard let self, let s, self.isCurrent(s, document), let stamp = self.guardText(result, s) else { return }
@@ -375,21 +480,30 @@ import CoreFoundation
         guard let self, let s, self.isCurrent(s, document) else { return }
         self.raw(s, IOSSchoolScripts.readGuard, world: .defaultClient) { [weak self, weak s] last in
           guard let self, let s, self.isCurrent(s, document), self.guardText(last, s) == stamp else { return }
-          s.guardValue = stamp; s.ready = true; self.event(s, "ready")
+          guard s.finished, s.view?.isLoading == false else { return }
+          s.guardValue = stamp; s.ready = true; s.manualLoadFailed = false
+          s.host?.setLoadFailure(false); self.diagnosticEvent = "ready"; self.event(s, "ready")
         }
       }
       let business = s.policy.origin(url) == s.policy.businessOrigin
       let youngContext = url.path.hasPrefix("/login/sc-wisdom-group-learning/")
-      if business && (s.policy.source == "jw" || youngContext) {
+      if business && !s.policy.isAuthenticationPage(url) && (s.policy.source == "jw" || youngContext) {
         do {
           self.raw(s, try s.scripts.install(document: document), world: s.policy.source == "jw" ? .defaultClient : .page) { result in
             guard case let .success(value) = result, value as? Bool == true else {
-              if self.isCurrent(s, document) { self.event(s, "failed") }
+              if self.isCurrent(s, document), s.view?.isLoading == false {
+                let error: Error? = { if case let .failure(error) = result { return error }; return nil }()
+                self.recordFailure("readerInstall", event: "readerInstallFailed", error: error)
+                self.recoverableLoadFailure(s)
+              }
               return
             }
             finish()
           }
-        } catch { self.event(s, "failed") }
+        } catch {
+          self.recordFailure("readerInstall", event: "readerInstallFailed", error: error)
+          self.recoverableLoadFailure(s)
+        }
       } else { finish() }
     }
   }
@@ -446,38 +560,55 @@ import CoreFoundation
     s.isClosing = true; s.ready = false; s.guardValue = nil
     rejectPending(.staleResult)
     closeFailure = nil; closing = s; active = nil
+    cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
+    s.activeLoad = nil
+#if DEBUG
+    s.fixtureRetiredLoad = nil
+#endif
     // Browser bytes remain opaque. The durable marker precedes UUID removal.
     do {
-      if let record = s.record, s.recovery || record.disposable { try s.ledger.markDeleting(record) }
-    } catch { closeFailure = .cleanupPending }
+      if let record = s.record, s.recovery || record.disposable {
+        cleanupStage = "metadataDeletePending"; try s.ledger.markDeleting(record)
+      }
+    } catch { cleanupFailed("metadataWrite", error: error, ioCode: s.ledger.lastFailureErrno) }
     s.view?.stopLoading(); s.view?.navigationDelegate = nil; s.view?.uiDelegate = nil
     s.view?.configuration.userContentController.removeScriptMessageHandler(forName: "ustcI2Revoke", contentWorld: .page)
     s.urlObserver?.invalidate(); s.urlObserver = nil
     hide(s)
     s.releasedView = s.view; s.view = nil
+    cleanupStage = "waitingForView"
     finishClose(s, attempts: 0)
   }
   private func retryClose(_ s: Session) {
     closeFailure = nil
+    cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
     // Once WebKit acknowledged removal, retry only the durable completion.
     // Rewriting deletePending here would conflict with an interrupted swap
     // that has already installed removed on disk.
-    do { if let record = s.record, !s.storeRemoved && (s.recovery || record.disposable) { try s.ledger.markDeleting(record) } }
-    catch { closeFailure = .cleanupPending; return }
+    do {
+      if let record = s.record, !s.storeRemoved && (s.recovery || record.disposable) {
+        cleanupStage = "metadataDeletePending"; try s.ledger.markDeleting(record)
+      }
+    } catch { cleanupFailed("metadataWrite", error: error, ioCode: s.ledger.lastFailureErrno); return }
     finishClose(s, attempts: 0)
   }
   private func finishClose(_ s: Session, attempts: Int) {
     guard closing === s else { return }
     if s.releasedView != nil {
-      guard attempts < 30 else { closeFailure = .cleanupPending; return }
+      cleanupStage = "waitingForView"
+      // Keyboard/presentation and outstanding WebKit callbacks can outlive
+      // the old 1.5s window. Leave budget within Dart's 12s drain for official
+      // deletion; slow WebKit callbacks still remain a reported pending drain.
+      guard attempts < 100 else { cleanupFailed("viewRetained"); return }
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [self] in finishClose(s, attempts: attempts + 1) }
       return
     }
     guard closeFailure == nil else { return }
     if let record = s.record, s.recovery || record.disposable {
       if s.storeRemoved {
+        cleanupStage = "metadataRemoved"
         do { try s.ledger.didRemove(record); endClose(s) }
-        catch { closeFailure = .cleanupPending }
+        catch { cleanupFailed("metadataCompletion", error: error, ioCode: s.ledger.lastFailureErrno) }
         return
       }
       // WebKit profile removal needs the data-store subsystem initialized.
@@ -494,21 +625,33 @@ import CoreFoundation
     } else { endClose(s) }
   }
   private func removeStore(_ s: Session, _ record: IOSSchoolStoreRecord, retries: Int) {
+    cleanupStage = "removeStore"
     WKWebsiteDataStore.remove(forIdentifier: record.id) { [self] error in
       guard closing === s else { return }
-      guard error == nil else { closeFailure = .cleanupPending; return }
+      if let error {
+        if retries > 0 {
+          // Retry only the same revoked UUID; never switch stores or bypass
+          // the durable deletePending/official absence checks.
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [self] in
+            guard closing === s else { return }
+            removeStore(s, record, retries: retries - 1)
+          }
+        } else { cleanupFailed("removeRejected", error: error) }
+        return
+      }
       verifyRemoved(s, record, attempts: 0, absentSamples: 0, retries: retries)
     }
   }
   private func verifyRemoved(_ s: Session, _ record: IOSSchoolStoreRecord,
                              attempts: Int, absentSamples: Int, retries: Int) {
+    cleanupStage = "verifyStoreAbsent"
     WKWebsiteDataStore.fetchAllDataStoreIdentifiers { [self] identifiers in
       guard closing === s else { return }
       let absent = !identifiers.contains(record.id)
       if absent && absentSamples >= 4 { confirmRemoved(s, record); return }
-      guard attempts < 50 else { closeFailure = .cleanupPending; return }
+      guard attempts < 50 else { cleanupFailed("storePresent"); return }
       if !absent && attempts >= 10 {
-        guard retries > 0 else { closeFailure = .cleanupPending; return }
+        guard retries > 0 else { cleanupFailed("storePresent"); return }
         // A closed storage manager may finish work after the deletion call.
         // Retry only this already-revoked UUID through the official API once.
         removeStore(s, record, retries: retries - 1)
@@ -524,31 +667,56 @@ import CoreFoundation
     // Verify the observable postcondition instead of inferring physical erase
     // or the OS's internal ordering from a completion callback alone.
     s.storeRemoved = true
+    cleanupStage = "metadataRemoved"
     do { try s.ledger.didRemove(record); endClose(s) }
-    catch { closeFailure = .cleanupPending }
+    catch { cleanupFailed("metadataCompletion", error: error, ioCode: s.ledger.lastFailureErrno) }
   }
   private func endClose(_ s: Session) {
     closedID = s.id; closing = nil; closeFailure = nil
+    cleanupStage = "complete"; cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
     if Self.slot === self { Self.slot = nil }
   }
 
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     guard let s = active, s.view === webView else { return }
+    s.activeLoad = navigation; s.manualLoadFailed = false; s.host?.setLoadFailure(false)
     s.finished = false; invalidate(s)
   }
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-    guard let s = active, s.view === webView else { return }
+    guard let s = active, s.view === webView, currentLoad(s, navigation) else { return }
     s.finished = true; establish(s)
   }
-  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(webView, error) }
-  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(webView, error) }
-  private func failed(_ view: WKWebView, _ error: Error) {
-    guard let s = active, s.view === view else { return }
-    if (error as NSError).code == NSURLErrorCancelled { return }
-    invalidate(s); event(s, "failed"); beginClose(s)
+  func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    failed(webView, navigation: navigation, error: error, stage: "navigation")
+  }
+  func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+    failed(webView, navigation: navigation, error: error, stage: "provisionalNavigation")
+  }
+  private func currentLoad(_ s: Session, _ navigation: WKNavigation?) -> Bool {
+    if let navigation, let current = s.activeLoad { return navigation === current }
+    return navigation == nil && s.activeLoad == nil && !s.manualLoadFailed
+  }
+  private func failed(_ view: WKWebView, navigation: WKNavigation?, error: Error, stage: String) {
+    guard let s = active, s.view === view, currentLoad(s, navigation) else { return }
+    let value = error as NSError
+    if (value.domain == NSURLErrorDomain && value.code == NSURLErrorCancelled) ||
+        (value.domain == "WebKitErrorDomain" && value.code == 102) { return }
+    recordFailure(stage, event: "navigationFailed", error: error)
+    recoverableLoadFailure(s)
+  }
+  private func recoverableLoadFailure(_ s: Session) {
+    guard active === s, !s.isClosing else { return }
+    let failureEvent = diagnosticEvent
+    s.finished = false; s.manualLoadFailed = true; s.activeLoad = nil
+    invalidate(s) // Any active business operation still closes via C1.
+    diagnosticEvent = failureEvent
+    s.host?.setLoadFailure(true)
+    // While the user is signing in, a load failure leaves the host visible.
+    // Retrying uses the registered initial GET; it cannot replay a login POST.
   }
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
     guard let s = active, s.view === webView else { return }
+    recordFailure("process", event: "processTerminated")
     event(s, "failed"); beginClose(s)
   }
   func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
@@ -683,6 +851,36 @@ import CoreFoundation
     guard s.policy.isFixture, let action = a["action"] as? String else { throw IOSSchoolFailure.unsupportedPlatform }
     let code: String
     switch action {
+    case "authentication":
+      guard s.policy.source == "jw", s.view?.url?.path == "/login" else { throw IOSSchoolFailure.invalidSnapshot }
+      s.fixtureRetiredLoad = s.activeLoad
+      code = "document.querySelector('#login-unified-wrapper').click();true"
+    case "submitAuthForm":
+      guard s.policy.source == "jw", s.view?.url?.path == "/cas/login" else { throw IOSSchoolFailure.invalidSnapshot }
+      code = """
+        (()=>{const f=document.querySelector('#normalLoginForm');
+        f.querySelector('#nameInput').value='TEST0001';
+        f.querySelector('[type=password]').value='synthetic-password';
+        f.requestSubmit();return true})()
+        """
+    case "iosNavigationCancelled", "iosPolicyInterrupted", "iosNavigationFailed", "iosRetiredNavigationFailed":
+      guard let view = s.view else { throw IOSSchoolFailure.closed }
+      let navigation: WKNavigation?
+      if action == "iosRetiredNavigationFailed" {
+        guard let retired = s.fixtureRetiredLoad, retired !== s.activeLoad else { throw IOSSchoolFailure.invalidSnapshot }
+        navigation = retired
+      } else { navigation = s.activeLoad }
+      let error = NSError(domain: action == "iosPolicyInterrupted" ? "WebKitErrorDomain" : NSURLErrorDomain,
+                          code: action == "iosPolicyInterrupted" ? 102 : action == "iosNavigationCancelled" ? NSURLErrorCancelled : NSURLErrorNotConnectedToInternet,
+                          userInfo: [NSLocalizedDescriptionKey: "i2-secret-userinfo-sentinel",
+                                     NSURLErrorFailingURLStringErrorKey: "https://example.invalid/?ticket=i2-secret-url-sentinel"])
+      failed(view, navigation: navigation, error: error, stage: "provisionalNavigation")
+      reply(nil); return
+    case "iosRetiredNavigationFinished":
+      guard let view = s.view, let retired = s.fixtureRetiredLoad else { throw IOSSchoolFailure.invalidSnapshot }
+      webView(view, didFinish: retired); reply(nil); return
+    case "iosRetryInitial": navigate(s, s.policy.initialURL); reply(nil); return
+    case "iosReturnToApp": hide(s); reply(nil); return
     case "sameDocument", "youngSameUrlPush": code = "history.pushState({},'',location.href);true"
     case "youngSameUrlReplace": code = "history.replaceState({},'',location.href);true"
     case "nextDocument": code = "location.reload();true"
@@ -705,9 +903,10 @@ import CoreFoundation
 
 @MainActor private final class SchoolHostController: UIViewController {
   private var webView: WKWebView?
-  private let onReturn: () -> Void, onCancel: () -> Void
-  init(webView: WKWebView, source: String, onReturn: @escaping () -> Void, onCancel: @escaping () -> Void) {
-    self.webView = webView; self.onReturn = onReturn; self.onCancel = onCancel
+  private let onReturn: () -> Void, onRetry: () -> Void, onCancel: () -> Void
+  init(webView: WKWebView, source: String, onReturn: @escaping () -> Void,
+       onRetry: @escaping () -> Void, onCancel: @escaping () -> Void) {
+    self.webView = webView; self.onReturn = onReturn; self.onRetry = onRetry; self.onCancel = onCancel
     super.init(nibName: nil, bundle: nil)
     title = source == "jw" ? "教务 · 手动登录" : "二课 · 手动登录"
   }
@@ -715,7 +914,10 @@ import CoreFoundation
   override func viewDidLoad() {
     super.viewDidLoad(); view.backgroundColor = .systemBackground
     navigationItem.leftBarButtonItem = UIBarButtonItem(title: "取消同步", style: .plain, target: self, action: #selector(cancel))
-    navigationItem.rightBarButtonItem = UIBarButtonItem(title: "返回应用", style: .done, target: self, action: #selector(back))
+    navigationItem.rightBarButtonItems = [
+      UIBarButtonItem(title: "返回应用", style: .done, target: self, action: #selector(back)),
+      UIBarButtonItem(title: "重试", style: .plain, target: self, action: #selector(retry))
+    ]
     if let webView {
       view.addSubview(webView); webView.translatesAutoresizingMaskIntoConstraints = false
       NSLayoutConstraint.activate([webView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
@@ -724,6 +926,8 @@ import CoreFoundation
     }
   }
   func detachView() { webView?.removeFromSuperview(); webView = nil }
+  func setLoadFailure(_ failed: Bool) { navigationItem.prompt = failed ? "页面未能加载，请重试。" : nil }
   @objc private func back() { onReturn() }
+  @objc private func retry() { onRetry() }
   @objc private func cancel() { onCancel() }
 }

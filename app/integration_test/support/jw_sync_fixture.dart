@@ -25,10 +25,15 @@ final class JwLauncherCookieObservation {
 /// The cookies below are synthetic profile-continuity evidence only. Identity
 /// is served independently by the fixed identity page and checked by the app.
 final class JwSyncFixture {
-  JwSyncFixture._(this._server, this.requireLogin);
+  JwSyncFixture._(
+    this._server,
+    this.requireLogin,
+    this.syntheticIdentityOrigin,
+  );
 
   final HttpServer _server;
   final bool requireLogin;
+  final Uri? syntheticIdentityOrigin;
   int authenticationSubmissions = 0;
   int authenticationSubmissionsWithAuxiliaryFieldsPreserved = 0;
   bool emptyCourse = false;
@@ -48,6 +53,10 @@ final class JwSyncFixture {
       <JwLauncherCookieObservation>[];
   final Completer<void> indexEntered = Completer<void>();
   final Completer<void> releaseIndex = Completer<void>();
+  final Completer<void> callbackEntered = Completer<void>();
+  final Completer<void> releaseCallback = Completer<void>();
+  int syntheticSsoCallbackCount = 0;
+  int authenticatedHomeCount = 0;
   int rejectedRequestCount = 0;
   int _launcherCookieIssueCount = 0;
   int _identityReadCount = 0;
@@ -67,12 +76,38 @@ final class JwSyncFixture {
   static Future<JwSyncFixture> start({
     bool requireLogin = false,
     int port = 0,
+    Uri? syntheticIdentityOrigin,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    final fixture = JwSyncFixture._(server, requireLogin);
+    if (syntheticIdentityOrigin != null &&
+        (!requireLogin ||
+            !_isLoopbackOrigin(
+              syntheticIdentityOrigin,
+              excludingPort: server.port,
+            ))) {
+      await server.close();
+      throw StateError('invalid_synthetic_identity_origin');
+    }
+    final fixture = JwSyncFixture._(
+      server,
+      requireLogin,
+      syntheticIdentityOrigin,
+    );
     server.listen((request) => unawaited(fixture._serve(request)));
     return fixture;
   }
+
+  static bool _isLoopbackOrigin(Uri uri, {int? excludingPort}) =>
+      uri.scheme == 'http' &&
+      uri.host == '127.0.0.1' &&
+      uri.hasPort &&
+      uri.port > 0 &&
+      uri.port <= 65535 &&
+      uri.port != excludingPort &&
+      uri.userInfo.isEmpty &&
+      (uri.path.isEmpty || uri.path == '/') &&
+      !uri.hasQuery &&
+      !uri.hasFragment;
 
   Future<void> _serve(HttpRequest request) async {
     final path = request.uri.path;
@@ -93,12 +128,18 @@ final class JwSyncFixture {
             await _reject(request, HttpStatus.notFound);
             return;
           }
+          final identityOrigin = syntheticIdentityOrigin;
+          final loginDestination = identityOrigin == null
+              ? '/cas/login'
+              : '${identityOrigin.origin}/cas/login';
           await _writeHtml(request, '''<!doctype html><html><body>
-<button id="login-unified-wrapper" onclick="location.href='/cas/login'">Synthetic SSO</button>
+<button id="login-unified-wrapper" onclick="location.href='$loginDestination'">Synthetic SSO</button>
 </body></html>''');
           break;
         case '/cas/login':
-          if (!requireLogin || !_plainGet(request)) {
+          if (!requireLogin ||
+              syntheticIdentityOrigin != null ||
+              !_plainGet(request)) {
             await _reject(request, HttpStatus.notFound);
             return;
           }
@@ -119,8 +160,38 @@ final class JwSyncFixture {
  if(r.ok) location.href='/home';
 });</script></body></html>''');
           break;
+        case '/ucas-sso/login':
+          if (!requireLogin || !_plainGet(request)) {
+            await _reject(request, HttpStatus.notFound);
+            return;
+          }
+          syntheticSsoCallbackCount++;
+          request.response.cookies.add(
+            Cookie('synthetic-auth-marker', 'present')
+              ..httpOnly = true
+              ..path = '/',
+          );
+          await _writeHtml(request, '''<!doctype html><html><body>
+<p>Synthetic authentication callback</p>
+<script>
+fetch('/fixture-sso-callback-barrier', {cache:'no-store'}).then(() => {
+  location.href='/home';
+});
+</script></body></html>''');
+          break;
+        case '/fixture-sso-callback-barrier':
+          if (!requireLogin || !_plainGet(request)) {
+            await _reject(request, HttpStatus.notFound);
+            return;
+          }
+          if (!callbackEntered.isCompleted) callbackEntered.complete();
+          await releaseCallback.future;
+          request.response.statusCode = HttpStatus.noContent;
+          await request.response.close();
+          break;
         case '/fixture-authenticate':
           if (!requireLogin ||
+              syntheticIdentityOrigin != null ||
               request.method != 'POST' ||
               request.uri.hasQuery) {
             await _reject(request, HttpStatus.methodNotAllowed);
@@ -156,6 +227,18 @@ final class JwSyncFixture {
           if (!requireLogin || !_plainGet(request)) {
             await _reject(request, HttpStatus.notFound);
             return;
+          }
+          if (syntheticIdentityOrigin != null) {
+            if (!_hasCookie(request, 'synthetic-auth-marker')) {
+              request.response.statusCode = HttpStatus.found;
+              request.response.headers.set(
+                HttpHeaders.locationHeader,
+                '/login',
+              );
+              await request.response.close();
+              return;
+            }
+            authenticatedHomeCount++;
           }
           await _writeHtml(
             request,
@@ -447,6 +530,7 @@ final class JwSyncFixture {
     _closed = true;
     _closing = true;
     if (!releaseIndex.isCompleted) releaseIndex.complete();
+    if (!releaseCallback.isCompleted) releaseCallback.complete();
     await _server.close();
   }
 }

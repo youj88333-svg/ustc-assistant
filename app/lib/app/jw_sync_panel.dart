@@ -332,6 +332,7 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
   bool get _canStartSync => _canOpen;
 
   bool get _canContinueSync =>
+      _view.phase == JwSyncPhase.login &&
       _view.automation == JwAutomationState.manualRequired &&
       !_hasPendingOperation &&
       !_cancelPending;
@@ -1059,7 +1060,8 @@ class _JwSyncPanelState extends State<JwSyncPanel> {
         ),
       );
     }
-    if (_view.automation == JwAutomationState.manualRequired) {
+    if (_view.phase == JwSyncPhase.login &&
+        _view.automation == JwAutomationState.manualRequired) {
       actions.add(
         FilledButton.icon(
           key: const ValueKey('jw-sync-continue'),

@@ -1263,6 +1263,47 @@ void main() {
     expect(find.textContaining('全部成功'), findsNothing);
   });
 
+  testWidgets(
+    'recovery with stale manual-required state hides continue but keeps retry',
+    (tester) async {
+      final port = _FakeJwSyncPort(
+        view: JwSyncView(
+          phase: JwSyncPhase.recovery,
+          ready: false,
+          accountBound: true,
+          automation: JwAutomationState.manualRequired,
+        ),
+      );
+      addTearDown(port.dispose);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: JwSyncPanel(controller: port, productMode: true),
+          ),
+        ),
+      );
+
+      expect(find.text('教务登录窗口需要恢复。'), findsOneWidget);
+      expect(find.text('登录完成，继续同步'), findsNothing);
+      final retry = find.text('重试关闭窗口');
+      expect(_button(tester, '重试关闭窗口').onPressed, isNotNull);
+      await tester.ensureVisible(retry);
+      await tester.tap(retry);
+      await tester.pump();
+      expect(port.retryRecoveryCalls, 1);
+      expect(port.continueSyncCalls, 0);
+
+      port.emit(
+        JwSyncView(
+          phase: JwSyncPhase.closing,
+          automation: JwAutomationState.manualRequired,
+        ),
+      );
+      await tester.pump();
+      expect(find.text('登录完成，继续同步'), findsNothing);
+    },
+  );
+
   testWidgets('retained login data does not promise school authentication', (
     tester,
   ) async {

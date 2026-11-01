@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'app/demo_runtime.dart';
+import 'app/ios_school_diagnostics_button.dart';
 import 'app/jw_sync_panel.dart';
 import 'app/young_sync_panel.dart';
 import 'core/contracts.dart';
@@ -218,7 +219,10 @@ final class _IOSI2ScreenState extends State<_IOSI2Screen> {
   Widget build(BuildContext context) {
     final runtime = _bootstrap?.runtime;
     return Scaffold(
-      appBar: AppBar(title: const Text('教务与二课同步')),
+      appBar: AppBar(
+        title: const Text('教务与二课同步'),
+        actions: const [IOSSchoolDiagnosticsButton()],
+      ),
       body: SafeArea(
         child: _busy
             ? const Center(
