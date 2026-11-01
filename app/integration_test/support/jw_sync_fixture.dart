@@ -128,6 +128,13 @@ final class JwSyncFixture {
             await _reject(request, HttpStatus.notFound);
             return;
           }
+          if (syntheticIdentityOrigin != null &&
+              _hasCookie(request, 'synthetic-auth-marker')) {
+            request.response.statusCode = HttpStatus.found;
+            request.response.headers.set(HttpHeaders.locationHeader, '/home');
+            await request.response.close();
+            return;
+          }
           final identityOrigin = syntheticIdentityOrigin;
           final loginDestination = identityOrigin == null
               ? '/cas/login'
