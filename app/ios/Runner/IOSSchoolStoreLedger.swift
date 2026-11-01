@@ -106,7 +106,7 @@ fileprivate final class IOSSchoolStoreRecordToken {
   fileprivate let directoryIdentities: [IOSSchoolDirectoryIdentity]
   fileprivate var metadataIdentity: IOSSchoolFileIdentity
   fileprivate var metadataDigest: Data
-  fileprivate var state: IOSchoolStoreState
+  fileprivate var state: IOSSchoolStoreState
 
   init(
     ledgerNonce: UUID,
