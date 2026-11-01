@@ -48,8 +48,8 @@ simulator="$(xcrun simctl create USTC-I2-synthetic "$device_type" "$runtime")"
 trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true; xcrun simctl delete "$simulator" >/dev/null 2>&1 || true' EXIT
 xcrun simctl boot "$simulator"
 xcrun simctl bootstatus "$simulator" -b
-flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-simulator-test.log"
 flutter test --no-pub integration_test/ios_i2_boundaries_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-boundaries-test.log"
+flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-simulator-test.log"
 # The transaction suite binds a synthetic account. Start the persistence pair
 # with a fresh installation on this job-owned simulator, then preserve it
 # unchanged between write/read. No existing device or personal app is touched.

@@ -111,6 +111,7 @@ Future<void> _runBoundarySuite(_LoopbackFixture fixture) async {
   RuntimeDirectories? directories;
   ObservationAssets? assets;
   NativeObservationBrowser? browser;
+  var primaryFailure = false;
   try {
     directories = await platform.acquireDirectories().timeout(
       _operationTimeout,
@@ -138,6 +139,7 @@ Future<void> _runBoundarySuite(_LoopbackFixture fixture) async {
       }
     });
 
+    debugPrint('I2 boundary phase: rejected open and recovery');
     await _unsafeOpenAndRecovery(
       directories.demo,
       assets,
@@ -154,6 +156,7 @@ Future<void> _runBoundarySuite(_LoopbackFixture fixture) async {
       'download': BrowserDiagnosticCode.downloadBlocked,
     };
     for (final entry in boundaries.entries) {
+      debugPrint('I2 boundary phase: ${entry.key}');
       await _exerciseBoundary(
         assets,
         activeBrowser,
@@ -162,19 +165,24 @@ Future<void> _runBoundarySuite(_LoopbackFixture fixture) async {
         entry.value,
       );
     }
+  } catch (_) {
+    primaryFailure = true;
+    rethrow;
   } finally {
-    try {
-      if (assets != null) await assets.close();
-    } finally {
-      try {
+    await _cleanupAll(primaryFailure, {
+      'asset-registry': () async {
+        if (assets != null) await assets.close();
+      },
+      'browser': () async {
         if (browser != null) await browser.dispose();
-      } finally {
-        if (directories != null) {
-          await directories.formal.release();
-          await directories.demo.release();
-        }
-      }
-    }
+      },
+      'formal-owner': () async {
+        if (directories != null) await directories.formal.release();
+      },
+      'demo-owner': () async {
+        if (directories != null) await directories.demo.release();
+      },
+    });
   }
 }
 
@@ -192,6 +200,7 @@ Future<void> _unsafeOpenAndRecovery(
   var validSession = 0;
   var validOpenAttempted = false;
   var validDrained = false;
+  var primaryFailure = false;
   try {
     var missingProfile = '';
     for (var candidate = 0; candidate < 100; candidate++) {
@@ -290,29 +299,36 @@ Future<void> _unsafeOpenAndRecovery(
     );
     await closeAndDrainI2(browser, validSession, timeout: _nativeTimeout);
     validDrained = true;
+  } catch (_) {
+    primaryFailure = true;
+    rethrow;
   } finally {
-    if (badOpenAttempted && !badDrained) {
-      await _observationChannel
-          .invokeMethod<void>('close', {'session': badSession})
-          .timeout(_nativeTimeout);
-      badDrained =
+    await _cleanupAll(primaryFailure, {
+      'open-recovery': () async {
+        if (badOpenAttempted && !badDrained) {
           await _observationChannel
-              .invokeMethod<bool>('drained', {'session': badSession})
-              .timeout(_nativeTimeout) ??
-          false;
-      expect(badDrained, isTrue);
-    }
-    if (validOpenAttempted) {
-      if (!validDrained) {
-        final session = validSession;
-        await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
-        validDrained = true;
-      }
-    }
-    if ((!badOpenAttempted || badDrained) &&
-        (!validOpenAttempted || validDrained)) {
-      await assets.cleanup().timeout(_nativeTimeout);
-    }
+              .invokeMethod<void>('close', {'session': badSession})
+              .timeout(_nativeTimeout);
+          badDrained =
+              await _observationChannel
+                  .invokeMethod<bool>('drained', {'session': badSession})
+                  .timeout(_nativeTimeout) ??
+              false;
+          expect(badDrained, isTrue);
+        }
+        if (validOpenAttempted) {
+          if (!validDrained) {
+            final session = validSession;
+            await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
+            validDrained = true;
+          }
+        }
+        if ((!badOpenAttempted || badDrained) &&
+            (!validOpenAttempted || validDrained)) {
+          await assets.cleanup().timeout(_nativeTimeout);
+        }
+      },
+    });
   }
 }
 
@@ -326,6 +342,7 @@ Future<void> _exerciseBoundary(
   final profilePath = await assets.register().timeout(_nativeTimeout);
   final session = _session();
   var closeConfirmed = false;
+  var primaryFailure = false;
   try {
     final ready = await _openReady(
       browser,
@@ -396,10 +413,39 @@ Future<void> _exerciseBoundary(
       expect(fixture.paths, contains('/i2-attachment'));
     }
     expect(fixture.paths, isNot(contains('/i2-denied')));
+  } catch (_) {
+    primaryFailure = true;
+    rethrow;
   } finally {
-    await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
-    closeConfirmed = true;
-    if (closeConfirmed) await assets.cleanup().timeout(_nativeTimeout);
+    await _cleanupAll(primaryFailure, {
+      'native-session': () async {
+        await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
+        closeConfirmed = true;
+      },
+      'profile': () async {
+        if (closeConfirmed) await assets.cleanup().timeout(_nativeTimeout);
+      },
+    });
+  }
+}
+
+Future<void> _cleanupAll(
+  bool primaryFailure,
+  Map<String, Future<void> Function()> actions,
+) async {
+  Object? firstError;
+  StackTrace? firstStack;
+  for (final action in actions.entries) {
+    try {
+      await action.value();
+    } catch (error, stack) {
+      firstError ??= error;
+      firstStack ??= stack;
+      debugPrint('I2 boundary cleanup incomplete: ${action.key}');
+    }
+  }
+  if (!primaryFailure && firstError != null) {
+    Error.throwWithStackTrace(firstError, firstStack!);
   }
 }
 
