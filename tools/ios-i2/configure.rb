@@ -18,7 +18,9 @@ end
 host = project.targets.find { |t| t.name == 'Runner' }
 required = %w[AppDelegate.swift IOSCredentialVault.swift IOSPrivateStorage.swift SceneDelegate.swift IOSObservationBridge.swift IOSSchoolPolicy.swift IOSSchoolStoreLedger.swift IOSSchoolScripts.swift]
 abort 'i2 configuration failed: missing_native_source' unless (required - host.source_build_phase.files_references.map(&:path)).empty?
-resources = host.resources_build_phase.files_references.map { |r| File.basename(r.path) }
+# Storyboard variant groups have a name but no file path. The fixed readers
+# must still appear as actual resource file references with these basenames.
+resources = host.resources_build_phase.files_references.filter_map { |r| File.basename(r.path) if r.path }
 abort 'i2 configuration failed: missing_fixed_reader' unless (%w[jw_probe.js young_transport.js] - resources).empty?
 project.save
 info_path = ios.join('Runner/Info.plist')
