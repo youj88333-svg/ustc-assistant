@@ -18,6 +18,24 @@
 入口未增加提醒、每日自动同步、Agent、图片或语音功能。iOS 语音和 Widget 按已批准
 决定取消；此入口不改变其他平台的实现。
 
+## 登录失败与诊断
+
+普通网页加载失败先撤销旧文档资格，手动登录窗口保留，并显示“页面未能加载，请重试”。
+原生“重试”只 GET 固定来源入口，不重放登录 POST；失败后返回应用再继续，可重新打开
+同一受控窗口。后台和 WebContent 终止仍撤销工作；有业务读取在途时文档失效仍由 C1 收口。
+
+右上角“复制诊断”只在点击时调用无参数 `platform_v1/i2BrowserDiagnostics`。
+`ios-i2-browser-diagnostics-v1` 固定 11 项：kind、source、state、lastEvent、failureStage、
+errorDomain、errorCode、cleanupStage、cleanupFailure、cleanupErrorDomain、cleanupErrorCode。
+阶段/来源/错误域为闭合词表，数字码限 ±100000 或 null，不包含 URL、查询参数、账号、
+密码、Cookie、网页内容或 NSError.userInfo/描述。Dart 检查全部键和类型并重建后才复制。
+首个加载失败与清理失败分开保留；app 类码 1–10 对应 invalidSnapshot、unsafeDirectory、
+storageFailed、cleanupPending、staleResult、busy、closed、sourceFailed、unsupportedPlatform、ownershipLost。
+
+学校 suite 还使用两个 loopback origin，实际经过手动 CAS 表单 POST、认证 callback 屏障、
+返回应用及 coordinator 继续后导入；故障注入覆盖取消、旧 WKNavigation、当前加载失败、
+窗口重显和固定 GET 重试。注入测试不能证明目标手机原故障的 NSError 或具体成因。
+
 ## 集成检查范围
 
 `app/integration_test/ios_i2_school_test.dart` 仅在 iOS Debug Simulator 运行。测试先打开并
