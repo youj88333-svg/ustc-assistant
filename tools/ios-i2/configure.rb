@@ -16,6 +16,11 @@ project.targets.each do |target|
   end
 end
 host = project.targets.find { |t| t.name == 'Runner' }
+host.build_configurations.each do |config|
+  conditions = Array(config.build_settings['SWIFT_ACTIVE_COMPILATION_CONDITIONS']).join(' ').split
+  debug_present = conditions.include?('DEBUG')
+  abort 'i2 configuration failed: incorrect_fixture_compilation' unless debug_present == (config.name == 'Debug')
+end
 required = %w[AppDelegate.swift IOSCredentialVault.swift IOSPrivateStorage.swift SceneDelegate.swift IOSObservationBridge.swift IOSSchoolPolicy.swift IOSSchoolStoreLedger.swift IOSSchoolScripts.swift]
 abort 'i2 configuration failed: missing_native_source' unless (required - host.source_build_phase.files_references.map(&:path)).empty?
 # Storyboard variant groups have a name but no file path. The fixed readers

@@ -95,6 +95,7 @@ Future<void> _runI2Scenario() async {
   YoungBusinessFixture? youngFixture;
   ObservationAssets? temporaryYoungAssets;
   var cleanupComplete = true;
+  var primaryFailure = false;
   var jwStorePath = '';
   var secondJwStorePath = '';
   JwPartitionRef? secondJwPartition;
@@ -137,6 +138,7 @@ Future<void> _runI2Scenario() async {
     await jw
         .startSync(expectedAccountCode: _account, semesterId: 20261)
         .timeout(_operationTimeout);
+    debugPrint('I2 synthetic JW outcome: ${jw.syncView.safeSummary}');
     expect(jw.syncView.importCommitted, isTrue);
     var jwData = await harness.store.readView().timeout(_operationTimeout);
     expect(
@@ -549,6 +551,12 @@ Future<void> _runI2Scenario() async {
     young = null;
     expect(harness.leases.isBusy, isFalse);
     _report['sourceLeasesIdle'] = true;
+  } catch (_) {
+    primaryFailure = true;
+    if (jw != null) {
+      debugPrint('I2 synthetic JW failure: ${jw.syncView.safeSummary}');
+    }
+    rethrow;
   } finally {
     if (jwFixture != null) {
       // The held fixture reply is always released before asking the native
@@ -619,9 +627,10 @@ Future<void> _runI2Scenario() async {
     cleanupComplete =
         await attempt(harness.directories.demo.release) && cleanupComplete;
     _report['cleanupComplete'] = cleanupComplete;
-    if (!cleanupComplete) {
+    if (!cleanupComplete && !primaryFailure) {
       throw StateError('ios_i2_synthetic_cleanup_incomplete');
     }
+    if (!cleanupComplete) debugPrint('I2 cleanup after primary failure: false');
   }
 }
 
