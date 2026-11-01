@@ -538,6 +538,9 @@ private enum IOSSchoolLedgerTests {
       throw LedgerTestFailure.assertion("sandbox-fixture-path")
     }
     let profile = "(version 1)\n(allow default)\n(deny file-read* (literal \"\(deniedParentPath)\"))\n"
+    let canonicalParent = deniedParentPath.withCString { realpath($0, nil) }
+    let canonicalParentMatches = canonicalParent.map { String(cString: $0) == deniedParentPath } ?? false
+    if let canonicalParent { free(canonicalParent) }
     let sandboxResult = profile.withCString { iosSchoolSandboxInit($0, 0, nil) }
     try check(sandboxResult == 0, "sandbox-profile-installed")
 
@@ -548,7 +551,6 @@ private enum IOSSchoolLedgerTests {
       return descriptor
     }
     if readFD >= 0 { _ = close(readFD) }
-    try check(readFD < 0 && (openError == EPERM || openError == EACCES), "sandbox-parent-read-denied")
 
     var parentMetadata = stat()
     var metadataError: Int32 = 0
@@ -557,6 +559,8 @@ private enum IOSSchoolLedgerTests {
       if result != 0 { metadataError = errno }
       return result
     }
+    print("i2-sandbox-probe: canonical=\(canonicalParentMatches) trailingSlash=\(deniedParentPath.hasSuffix("/")) readDenied=\(readFD < 0) openErrno=\(openError) metadataDenied=\(metadataResult != 0) metadataErrno=\(metadataError)")
+    try check(readFD < 0 && (openError == EPERM || openError == EACCES), "sandbox-parent-read-denied")
     try check(
       metadataResult != 0 && (metadataError == EPERM || metadataError == EACCES),
       "sandbox-parent-metadata-denied"

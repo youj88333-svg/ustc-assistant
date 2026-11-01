@@ -15,14 +15,15 @@ flutter_version="$(flutter --version --machine | python3 -c 'import json,sys; pr
 xcodebuild -version | tee "$output/i2-xcode.txt"
 grep -q '^Xcode 27.1$' "$output/i2-xcode.txt" || exit 2
 
+# Recheck the proven C sandbox case on this same host before the Swift ledger.
+clang -std=c11 -Wall -Wextra -Werror -O2 app/native/directory_darwin.c verification/ios-i1/directory_darwin_test.c -o "$TMPDIR/i2-owner-test"
+"$TMPDIR/i2-owner-test"
 # The new ledger must work without enumerating the app container's ancestors.
 # Its CLI includes a real sandbox child plus atomic-swap failure recovery.
 swiftc app/ios/Runner/IOSSchoolPolicy.swift app/ios/Runner/IOSSchoolStoreLedger.swift verification/ios-i2/ledger_main.swift -o "$TMPDIR/i2-ledger-test"
 "$TMPDIR/i2-ledger-test"
 swiftc app/ios/Runner/IOSSchoolPolicy.swift app/ios/Runner/IOSSchoolScripts.swift verification/ios-i2/scripts_main.swift -o "$TMPDIR/i2-scripts-test"
 "$TMPDIR/i2-scripts-test" "$repo"
-clang -std=c11 -Wall -Wextra -Werror -O2 app/native/directory_darwin.c verification/ios-i1/directory_darwin_test.c -o "$TMPDIR/i2-owner-test"
-"$TMPDIR/i2-owner-test"
 swiftc app/ios/Runner/IOSCredentialVault.swift verification/ios-i1/vault_main.swift -o "$TMPDIR/i2-vault-test"
 "$TMPDIR/i2-vault-test"
 python3 tools/ios-i1/test_verify_package.py
