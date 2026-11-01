@@ -20,9 +20,10 @@
 #define STORAGE 3
 #define LOST 4
 #define MAX_PINS (PATH_MAX / 2 + 2)
-// Search-only ancestors need no directory-listing permission. O_EVTONLY still
-// requests read access on Darwin and fails for sandbox/container ancestors.
+// Search only within the Foundation-provided app container. iOS can forbid
+// opening system ancestors even when POSIX traversal to an allowed file works.
 #define DIRECTORY_FLAGS (O_SEARCH | O_CLOEXEC | O_NOFOLLOW)
+#define OWNED_RELATIVE_PATH "Library/Application Support/ustc_assistant_v1"
 
 typedef struct {
   int fd;
@@ -203,20 +204,31 @@ static void close_and_record(int fd, int *failure) {
   if (close_once(fd) != 0) *failure = LOST;
 }
 
-static int open_root_and_ancestors(Owner *owner, const char *path,
-                                   int *failure) {
-  struct stat metadata;
-  const int root_fd = open("/", DIRECTORY_FLAGS);
+static int open_container_root(Owner *owner, const char *container,
+                               const char *relative, int *failure, int *stage) {
+  struct stat metadata, named;
+  *stage = 1;
+  // The OS owns the container's ancestors. Do not acquire descriptors for /,
+  // /private or other apps' parent directories. Only the trusted container is
+  // opened by absolute name; all app-owned descendants use no-follow openat.
+  const int root_fd = open(container, DIRECTORY_FLAGS);
   if (root_fd < 0) {
     *failure = unsafe_path_errno(errno) ? UNSAFE : STORAGE;
     return 0;
   }
-  if (fstat(root_fd, &metadata) != 0 || !S_ISDIR(metadata.st_mode)) {
+  if (fstat(root_fd, &metadata) != 0 || lstat(container, &named) != 0) {
     close_and_record(root_fd, failure);
     if (*failure != LOST) *failure = STORAGE;
     return 0;
   }
-  int result = add_pin(owner, root_fd, -1, "", "/", &metadata, 0);
+  if (!S_ISDIR(metadata.st_mode) || !S_ISDIR(named.st_mode) ||
+      metadata.st_uid != geteuid() || named.st_uid != geteuid() ||
+      metadata.st_dev != named.st_dev || metadata.st_ino != named.st_ino) {
+    *failure = UNSAFE;
+    close_and_record(root_fd, failure);
+    return 0;
+  }
+  int result = add_pin(owner, root_fd, -1, "", container, &metadata, 1);
   if (result != 0) {
     close_and_record(root_fd, failure);
     if (*failure != LOST) *failure = result;
@@ -224,8 +236,9 @@ static int open_root_and_ancestors(Owner *owner, const char *path,
   }
 
   int parent_index = 0;
-  const char *part = path + 1;
+  const char *part = relative;
   while (*part) {
+    ++*stage;
     const char *separator = strchr(part, '/');
     const size_t component_length = separator
         ? (size_t)(separator - part)
@@ -252,7 +265,7 @@ static int open_root_and_ancestors(Owner *owner, const char *path,
       return 0;
     }
     result = add_pin(owner, fd, parent_index, component, full_path,
-                     &metadata, 0);
+                     &metadata, 1);
     free(full_path);
     if (result != 0) {
       close_and_record(fd, failure);
@@ -365,10 +378,13 @@ static int add_fixed_child(Owner *owner, const char *component,
   return 1;
 }
 
-API Owner *ustc_darwin_owner_acquire(const char *path, int *failure) {
-  if (!failure) return NULL;
+API Owner *ustc_darwin_owner_acquire(const char *container, const char *relative,
+                                    int *failure, int *stage) {
+  if (!failure || !stage) return NULL;
   *failure = UNSAFE;
-  if (!safe_absolute_path(path)) return NULL;
+  *stage = 0;
+  if (!safe_absolute_path(container) || !relative ||
+      strcmp(relative, OWNED_RELATIVE_PATH) != 0) return NULL;
 
   Owner *owner = calloc(1, sizeof(Owner));
   if (!owner) {
@@ -378,20 +394,26 @@ API Owner *ustc_darwin_owner_acquire(const char *path, int *failure) {
   owner->lock_fd = -1;
   owner->root_index = -1;
 
-  if (!open_root_and_ancestors(owner, path, failure) ||
-      !open_owner_lock(owner, failure) ||
-      !add_fixed_child(owner, "demo_v1", failure) ||
-      !add_fixed_child(owner, "local_v1", failure)) {
-    if (drain(owner) != 0) *failure = LOST;
-    return NULL;
-  }
+  if (!open_container_root(owner, container, relative, failure, stage)) goto fail;
+  *stage = 5;
+  if (!open_owner_lock(owner, failure)) goto fail;
+  *stage = 6;
+  if (!add_fixed_child(owner, "demo_v1", failure)) goto fail;
+  *stage = 7;
+  if (!add_fixed_child(owner, "local_v1", failure)) goto fail;
+  *stage = 8;
   if (ustc_darwin_owner_check(owner) != 0) {
     *failure = LOST;
     if (drain(owner) != 0) *failure = LOST;
     return NULL;
   }
   *failure = 0;
+  *stage = 9;
   return owner;
+
+fail:
+  if (drain(owner) != 0) *failure = LOST;
+  return NULL;
 }
 
 // Existing descendants are checked relative to the pinned root. A missing

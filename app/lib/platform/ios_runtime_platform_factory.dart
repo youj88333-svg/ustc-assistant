@@ -17,10 +17,19 @@ import 'runtime_platform_factory.dart'
 import 'unavailable_mobile_services.dart';
 
 final class IOSRuntimePlatformFactory implements RuntimePlatformFactory {
-  const IOSRuntimePlatformFactory()
+  const IOSRuntimePlatformFactory({this.onStartupStage})
     : _platformChannel = const MethodChannel('ustc_assistant/platform_v1');
 
   final MethodChannel _platformChannel;
+  final void Function(String)? onStartupStage;
+
+  void _stage(String value) {
+    try {
+      onStartupStage?.call(value);
+    } catch (_) {
+      // Diagnostic observers cannot change ownership or startup results.
+    }
+  }
 
   @override
   Future<RuntimeDirectories> acquireDirectories({
@@ -33,8 +42,13 @@ final class IOSRuntimePlatformFactory implements RuntimePlatformFactory {
     if (directoryPath != null || jwDirectoryPath != null) {
       throw const AppFailure(FailureCode.unsafeDirectory);
     }
+    _stage('privateRoot');
     final root = await fetchPrivateDataRoot(channel: _platformChannel);
-    final directories = await IOSDirectories.acquire(root);
+    final directories = await IOSDirectories.acquire(
+      root,
+      onStartupStage: (stage) => _stage(stage.name),
+    );
+    _stage('databases');
     return RuntimeDirectories(
       demo: directories.demo,
       formal: directories.formal,

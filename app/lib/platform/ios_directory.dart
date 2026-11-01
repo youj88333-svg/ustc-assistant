@@ -7,39 +7,76 @@ import 'package:path/path.dart' as p;
 import '../core/contracts.dart';
 import 'owned_directory.dart';
 
+/// Fixed startup phases only; never contains a sandbox path or native message.
+enum IOSDirectoryStage {
+  invalidRequest,
+  container,
+  library,
+  applicationSupport,
+  ownedRoot,
+  lock,
+  demo,
+  formal,
+  identityCheck,
+  ready,
+}
+
 /// The demo and formal stores share one Darwin lease on the app-private root.
 final class IOSDirectories {
   IOSDirectories._(this.demo, this.formal);
 
   final OwnedDirectory demo, formal;
 
-  static const _rootSuffix = '/Library/Application Support/ustc_assistant_v1';
+  static const relativeRoot = 'Library/Application Support/ustc_assistant_v1';
+  static const _rootSuffix = '/$relativeRoot';
 
   static String validateRootPath(String rootPath) {
     if (!p.posix.isAbsolute(rootPath) ||
         p.posix.normalize(rootPath) != rootPath ||
         rootPath.contains('\u0000') ||
         rootPath.contains('\\') ||
-        !rootPath.endsWith(_rootSuffix)) {
+        !rootPath.endsWith(_rootSuffix) ||
+        rootPath.length <= _rootSuffix.length) {
       throw const AppFailure(FailureCode.unsafeDirectory);
     }
     return rootPath;
   }
 
-  static Future<IOSDirectories> acquire(String rootPath) async {
+  static String containerPath(String rootPath) {
+    final checkedRoot = validateRootPath(rootPath);
+    return checkedRoot.substring(0, checkedRoot.length - _rootSuffix.length);
+  }
+
+  static Future<IOSDirectories> acquire(
+    String rootPath, {
+    void Function(IOSDirectoryStage)? onStartupStage,
+  }) async {
     if (!Platform.isIOS) {
       throw const AppFailure(FailureCode.unsupportedPlatform);
     }
     final checkedRoot = validateRootPath(rootPath);
-    final path = checkedRoot.toNativeUtf8();
+    final container = containerPath(checkedRoot).toNativeUtf8();
+    final relative = relativeRoot.toNativeUtf8();
     final failure = calloc<Int32>();
+    final stage = calloc<Int32>();
     Pointer<Void> handle;
     try {
-      handle = _acquire(path, failure);
+      handle = _acquire(container, relative, failure, stage);
+      try {
+        onStartupStage?.call(
+          stage.value >= 0 && stage.value < IOSDirectoryStage.values.length
+              ? IOSDirectoryStage.values[stage.value]
+              : IOSDirectoryStage.invalidRequest,
+        );
+      } catch (_) {
+        // A diagnostic observer must not strand the native lease.
+      }
       if (handle == nullptr) _fail(failure.value);
     } finally {
-      calloc.free(path);
+      calloc.free(container);
+      calloc.free(relative);
       calloc.free(failure);
+      calloc.free(stage);
     }
 
     final owner = _DarwinOwner(checkedRoot, handle);
@@ -201,11 +238,20 @@ Never _fail(int code) => throw AppFailure(switch (code) {
 
 const _asset = 'package:ustc_assistant_m0/platform/ios_directory.dart';
 
-@Native<Pointer<Void> Function(Pointer<Utf8>, Pointer<Int32>)>(
-  assetId: _asset,
-  symbol: 'ustc_darwin_owner_acquire',
-)
-external Pointer<Void> _acquire(Pointer<Utf8> path, Pointer<Int32> failure);
+@Native<
+  Pointer<Void> Function(
+    Pointer<Utf8>,
+    Pointer<Utf8>,
+    Pointer<Int32>,
+    Pointer<Int32>,
+  )
+>(assetId: _asset, symbol: 'ustc_darwin_owner_acquire')
+external Pointer<Void> _acquire(
+  Pointer<Utf8> container,
+  Pointer<Utf8> relative,
+  Pointer<Int32> failure,
+  Pointer<Int32> stage,
+);
 
 @Native<Int32 Function(Pointer<Void>)>(
   assetId: _asset,

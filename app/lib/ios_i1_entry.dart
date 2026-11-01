@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'app/demo_runtime.dart';
 import 'core/contracts.dart';
 import 'platform/ios_credential_protector.dart';
+import 'platform/ios_runtime_platform_factory.dart';
 
 const _revision = String.fromEnvironment(
   'USTC_BUILD_REVISION',
@@ -20,13 +21,28 @@ const _synthetic = [105, 49, 45, 115, 121, 110, 116, 104, 101, 116, 105, 99];
 /// model request, source sync, microphone or user-entered secrets are exposed.
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(
-    const MaterialApp(home: _I1Screen(), debugShowCheckedModeBanner: false),
+  runApp(const IOSI1App());
+}
+
+typedef IOSI1BootstrapOpener =
+    Future<RuntimeBootstrap> Function(IOSRuntimePlatformFactory platform);
+
+class IOSI1App extends StatelessWidget {
+  const IOSI1App({super.key, this.openBootstrap});
+
+  @visibleForTesting
+  final IOSI1BootstrapOpener? openBootstrap;
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    home: _I1Screen(openBootstrap: openBootstrap),
+    debugShowCheckedModeBanner: false,
   );
 }
 
 class _I1Screen extends StatefulWidget {
-  const _I1Screen();
+  const _I1Screen({this.openBootstrap});
+  final IOSI1BootstrapOpener? openBootstrap;
   @override
   State<_I1Screen> createState() => _I1State();
 }
@@ -34,7 +50,9 @@ class _I1Screen extends StatefulWidget {
 class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
   RuntimeBootstrap? _bootstrap;
   String? _marker, _failure, _bundleId;
+  String _stage = 'buildInfo';
   bool _busy = true,
+      _requiresRestart = false,
       _cipherValid = false,
       _revisionValid = false,
       _filesProtected = false;
@@ -47,28 +65,59 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
   }
 
   Future<void> _open() async {
+    RuntimeBootstrap? opened;
     try {
-      final bootstrap = await RuntimeBootstrap.open();
+      setState(() {
+        _busy = true;
+        _failure = null;
+        _stage = 'buildInfo';
+      });
+      // Identity is independent of storage; an owner failure must not leave
+      // it misleadingly displayed as still loading.
+      final info = await _platform
+          .invokeMapMethod<String, Object?>('i1BuildInfo')
+          .timeout(const Duration(seconds: 5));
+      _bundleId = info?['bundleId'] as String?;
+      _revisionValid = _revision != 'unknown' && info?['revision'] == _revision;
+      final platform = IOSRuntimePlatformFactory(
+        onStartupStage: (stage) {
+          if (mounted) setState(() => _stage = stage);
+        },
+      );
+      _stage = 'privateRoot';
+      final bootstrap =
+          await (widget.openBootstrap?.call(platform) ??
+              // This entry point is the synthetic platform acceptance target.
+              // ignore: invalid_use_of_visible_for_testing_member
+              RuntimeBootstrap.open(platformFactory: platform));
+      opened = bootstrap;
       if (!mounted) {
         await bootstrap.close();
         return;
       }
       if (bootstrap.runtime == null) {
-        await bootstrap.close();
         throw const AppFailure(FailureCode.cleanupPending);
       }
       _bootstrap = bootstrap;
+      _stage = 'probeTable';
       await bootstrap.store.customStatement(
         'CREATE TABLE IF NOT EXISTS ios_i1_probe '
         '(id INTEGER PRIMARY KEY CHECK(id=1), marker TEXT NOT NULL, cipher BLOB NOT NULL)',
       );
-      final info = await _platform.invokeMapMethod<String, Object?>(
-        'i1BuildInfo',
-      );
-      _bundleId = info?['bundleId'] as String?;
-      _revisionValid = _revision != 'unknown' && info?['revision'] == _revision;
       await _read();
     } catch (error) {
+      if (opened != null) {
+        try {
+          await opened.close();
+        } catch (_) {
+          // A failed close must retain the owner and cannot invite reacquire.
+          _bootstrap = opened;
+          _requiresRestart = true;
+          _recordFailure(const AppFailure(FailureCode.ownershipLost));
+          return;
+        }
+        _bootstrap = null;
+      }
       _recordFailure(error);
     }
   }
@@ -77,6 +126,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
     final bootstrap = _bootstrap;
     if (bootstrap == null) return;
     try {
+      _stage = 'readProbe';
       bootstrap.directory.ensureHeld();
       bootstrap.jwDirectory.ensureHeld();
       final rows = await bootstrap.store
@@ -85,6 +135,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
       String? marker;
       var cipherValid = false;
       if (rows.isNotEmpty) {
+        _stage = 'decryptProbe';
         marker = rows.single.read<String>('marker');
         final cipher = Uint8List.fromList(
           rows.single.read<Uint8List>('cipher'),
@@ -99,6 +150,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
         }
         plain.fillRange(0, plain.length, 0);
       }
+      _stage = 'fileProtection';
       final status = await _platform.invokeMapMethod<String, Object?>(
         'storageProtectionStatus',
       );
@@ -112,6 +164,7 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
             status?['filesProtected'] == true;
         _busy = false;
         _failure = null;
+        _stage = 'ready';
       });
     } catch (error) {
       _recordFailure(error);
@@ -152,6 +205,13 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
     setState(() {
       _failure = error is AppFailure
           ? error.code.name
+          : error is PlatformException &&
+                const {
+                  'unsafe_directory',
+                  'storage_failed',
+                  'unavailable',
+                }.contains(error.code)
+          ? error.code
           : 'platform_or_storage_failed';
       _busy = false;
     });
@@ -191,7 +251,8 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
             '构建：${_revision.length > 12 ? _revision.substring(0, 12) : _revision}',
           ),
           Text('修订一致：${_revisionValid ? '是' : '待确认'}'),
-          Text('应用身份：${_bundleId ?? '读取中'}'),
+          Text('应用身份：${_bundleId ?? (_failure == null ? '读取中' : '未读到')}'),
+          Text('检查阶段：$_stage'),
           const SizedBox(height: 20),
           SelectableText(
             _marker ?? '尚未写入测试值',
@@ -217,17 +278,29 @@ class _I1State extends State<_I1Screen> with WidgetsBindingObserver {
             ),
           const SizedBox(height: 24),
           FilledButton(
-            onPressed: _busy || _bootstrap == null ? null : _write,
+            onPressed: _busy || _requiresRestart || _bootstrap == null
+                ? null
+                : _write,
             child: const Text('写入新测试值'),
           ),
           TextButton(
-            onPressed: _busy || _bootstrap == null
+            onPressed: _busy || _requiresRestart
                 ? null
                 : () {
-                    setState(() => _busy = true);
-                    _read();
+                    if (_bootstrap == null) {
+                      _open();
+                    } else {
+                      setState(() => _busy = true);
+                      _read();
+                    }
                   },
-            child: const Text('重新读取'),
+            child: Text(
+              _requiresRestart
+                  ? '请关闭重开'
+                  : _bootstrap == null
+                  ? '重试启动'
+                  : '重新读取',
+            ),
           ),
           const Divider(height: 32),
           const Text('本阶段只验启动与存储，课程同步、提醒和图片等随后接入。此 iOS 版本不提供小组件和语音输入。'),

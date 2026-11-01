@@ -23,22 +23,42 @@ void main() {
     messenger.setMockMethodCallHandler(observationChannel, null);
   });
 
-  test(
-    'privateDataRoot is requested without arguments and validated',
-    () async {
-      messenger.setMockMethodCallHandler(platformChannel, (call) async {
-        expect(call.method, 'privateDataRoot');
-        expect(call.arguments, isNull);
-        return appSupportRoot;
-      });
+  test('privateDataRoot is requested without arguments and validated', () async {
+    messenger.setMockMethodCallHandler(platformChannel, (call) async {
+      expect(call.method, 'privateDataRoot');
+      expect(call.arguments, isNull);
+      return appSupportRoot;
+    });
 
+    expect(
+      await IOSRuntimePlatformFactory.fetchPrivateDataRoot(),
+      appSupportRoot,
+    );
+    expect(IOSDirectories.validateRootPath(appSupportRoot), appSupportRoot);
+    expect(
+      '${IOSDirectories.containerPath(appSupportRoot)}/${IOSDirectories.relativeRoot}',
+      appSupportRoot,
+    );
+  });
+
+  test('container anchor keeps system prefixes and strips only fixed suffix', () {
+    for (final container in [
+      '/private/var/mobile/Containers/Data/Application/synthetic',
+      '/var/mobile/Containers/Data/Application/synthetic',
+      '/Users/synthetic/Simulator/Devices/device/data/Containers/Data/Application/app',
+    ]) {
       expect(
-        await IOSRuntimePlatformFactory.fetchPrivateDataRoot(),
-        appSupportRoot,
+        IOSDirectories.containerPath(
+          '$container/${IOSDirectories.relativeRoot}',
+        ),
+        container,
       );
-      expect(IOSDirectories.validateRootPath(appSupportRoot), appSupportRoot);
-    },
-  );
+    }
+    expect(
+      () => IOSDirectories.containerPath('/${IOSDirectories.relativeRoot}'),
+      throwsA(isA<AppFailure>()),
+    );
+  });
 
   test('invalid or non-string private roots fail closed', () async {
     for (final value in <Object?>[
