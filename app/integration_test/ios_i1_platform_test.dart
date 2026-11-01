@@ -41,7 +41,8 @@ void main() {
   testWidgets(
     'iOS I1 private root, Darwin ownership, SQLite and bootstrap lifecycle',
     (tester) async {
-      const platform = IOSRuntimePlatformFactory();
+      final stages = <String>[];
+      final platform = IOSRuntimePlatformFactory(onStartupStage: stages.add);
       String? root;
       RuntimeBootstrap? first;
       RuntimeBootstrap? reopened;
@@ -57,18 +58,27 @@ void main() {
 
           final firstLease = await platform.acquireDirectories();
           try {
+            expect(stages, ['privateRoot', 'ready', 'databases']);
             expect(firstLease.demo.path, '$root/demo_v1');
             expect(firstLease.formal.path, '$root/local_v1');
+            IOSDirectoryStage? conflictStage;
             await expectLater(
-              IOSDirectories.acquire(root!),
+              IOSDirectories.acquire(
+                root!,
+                onStartupStage: (stage) => conflictStage = stage,
+              ),
               throwsA(_appFailure(FailureCode.ownerConflict)),
             );
+            expect(conflictStage, IOSDirectoryStage.lock);
           } finally {
             await firstLease.formal.release();
             await firstLease.demo.release();
           }
 
-          final reacquired = await IOSDirectories.acquire(root!);
+          final reacquired = await IOSDirectories.acquire(
+            root!,
+            onStartupStage: (_) => throw StateError('synthetic observer error'),
+          );
           expect(reacquired.demo.isHeld, isTrue);
           await reacquired.formal.release();
           await reacquired.demo.release();
