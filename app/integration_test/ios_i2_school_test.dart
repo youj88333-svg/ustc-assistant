@@ -576,12 +576,6 @@ Future<void> _runI2Scenario() async {
           cleanupComplete;
       activeNativeSession = 0;
     }
-    if (jwFixture != null) {
-      cleanupComplete = await attempt(jwFixture.close) && cleanupComplete;
-    }
-    if (youngFixture != null) {
-      cleanupComplete = await attempt(youngFixture.close) && cleanupComplete;
-    }
     final retainedTemporaryAssets = temporaryYoungAssets;
     if (retainedTemporaryAssets != null) {
       cleanupComplete =
@@ -622,6 +616,14 @@ Future<void> _runI2Scenario() async {
       }
       cleanupComplete = await attempt(young.clearSession) && cleanupComplete;
       cleanupComplete = await attempt(young.shutdown) && cleanupComplete;
+    }
+    // Recovery-only drains may still need the fixed target's bound port.
+    // Keep the fixture alive until all source/partition teardown has finished.
+    if (jwFixture != null) {
+      cleanupComplete = await attempt(jwFixture.close) && cleanupComplete;
+    }
+    if (youngFixture != null) {
+      cleanupComplete = await attempt(youngFixture.close) && cleanupComplete;
     }
     cleanupComplete = await attempt(harness.browser.dispose) && cleanupComplete;
     cleanupComplete = await attempt(harness.store.close) && cleanupComplete;
