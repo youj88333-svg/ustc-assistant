@@ -397,13 +397,24 @@ private enum IOSSchoolLedgerTests {
 
   private static func processSandboxAllowsOnlyAnchoredRootOperations() throws {
     let fixture = try Fixture()
-    let profilePath = try fixture.profile("jw").path
-    let deniedParentPath = fixture.root.deletingLastPathComponent().path
+    // Deny a newly created synthetic parent, not the process TMPDIR, for
+    // which Foundation/the launcher may already hold sandbox extensions.
+    let anchor = fixture.root.appendingPathComponent("container", isDirectory: true)
+    var profileURL = fixture.root
+    for component in ["container", "local_v1", "jw_partitions_v1", "jwp-00000000000000000000000000000001"] {
+      profileURL.appendPathComponent(component, isDirectory: true)
+      try FileManager.default.createDirectory(
+        at: profileURL, withIntermediateDirectories: false,
+        attributes: [.posixPermissions: 0o700]
+      )
+    }
+    let profilePath = profileURL.path
+    let deniedParentPath = fixture.root.path
     let process = Process()
     process.executableURL = URL(fileURLWithPath: CommandLine.arguments[0])
     process.arguments = [
       "--ios-school-ledger-sandbox",
-      fixture.root.path,
+      anchor.path,
       profilePath,
       deniedParentPath,
     ]

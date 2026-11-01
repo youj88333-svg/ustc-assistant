@@ -521,9 +521,9 @@ import CoreFoundation
   func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
     guard let s = active, s.view === webView, let url = response.response.url,
-          s.policy.allows(url), response.canShowMIMEType else { decisionHandler(.cancel); return }
+          s.policy.allows(url) else { decisionHandler(.cancel); return }
     let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
-    if disposition.lowercased().contains("attachment") {
+    if disposition.lowercased().contains("attachment") || !response.canShowMIMEType {
       diagnostic(s, "downloadBlocked", url); decisionHandler(.cancel); return
     }
     decisionHandler(.allow)
