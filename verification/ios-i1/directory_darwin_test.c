@@ -130,11 +130,19 @@ static int exec_child(const char *mode, const char *path) {
   return WIFEXITED(status) ? WEXITSTATUS(status) : 128;
 }
 
-static void sandbox_root_open_and_metadata(void) {
-  const char profile[] =
-      "(version 1)\n"
-      "(allow default)\n"
-      "(deny file-read* (literal \"/\"))\n";
+static void sandbox_ancestor_metadata(const char *container) {
+  char ancestor[PATH_MAX], profile[PATH_MAX + 128];
+  const size_t length = strlen(container);
+  REQUIRE(length < sizeof(ancestor));
+  memcpy(ancestor, container, length + 1);
+  char *separator = strrchr(ancestor, '/');
+  REQUIRE(separator != NULL && separator != ancestor);
+  *separator = '\0';
+  REQUIRE(strchr(ancestor, '"') == NULL && strchr(ancestor, '\\') == NULL);
+  const int written = snprintf(profile, sizeof(profile),
+      "(version 1)\n(allow default)\n"
+      "(deny file-read* (literal \"%s\"))\n", ancestor);
+  REQUIRE(written >= 0 && (size_t)written < sizeof(profile));
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -146,19 +154,22 @@ static void sandbox_root_open_and_metadata(void) {
   REQUIRE(result == 0);
 
   errno = 0;
-  const int root_fd = open("/", O_SEARCH | O_CLOEXEC);
-  REQUIRE(root_fd < 0);
+  const int ancestor_fd = open(ancestor, O_RDONLY | O_CLOEXEC);
+  REQUIRE(ancestor_fd < 0);
   REQUIRE(errno == EPERM || errno == EACCES);
 
   struct stat metadata;
   errno = 0;
-  REQUIRE(stat("/", &metadata) != 0);
+  // O_SEARCH alone need not request a read. The previous implementation also
+  // pinned every system ancestor and fstatat'd its name on each owner check.
+  // Assert that exact metadata prerequisite is denied for this outside parent.
+  REQUIRE(fstatat(AT_FDCWD, ancestor, &metadata, AT_SYMLINK_NOFOLLOW) != 0);
   REQUIRE(errno == EPERM || errno == EACCES);
 }
 
 static int child_mode(const char *mode, const char *container) {
   if (strcmp(mode, "--sandbox-anchor") == 0) {
-    sandbox_root_open_and_metadata();
+    sandbox_ancestor_metadata(container);
     Owner *owner = acquire_ok(container);
     REQUIRE(ustc_darwin_owner_check(owner) == 0);
     REQUIRE(ustc_darwin_owner_release(owner) == 0);
