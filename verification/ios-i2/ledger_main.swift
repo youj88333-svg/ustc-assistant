@@ -538,10 +538,17 @@ private enum IOSSchoolLedgerTests {
           !deniedParentPath.contains("\\") else {
       throw LedgerTestFailure.assertion("sandbox-fixture-path")
     }
-    let profile = "(version 1)\n(allow default)\n(deny file-read* (literal \"\(deniedParentPath)\"))\n"
     let canonicalParent = deniedParentPath.withCString { realpath($0, nil) }
-    let canonicalParentMatches = canonicalParent.map { String(cString: $0) == deniedParentPath } ?? false
-    if let canonicalParent { free(canonicalParent) }
+    guard let canonicalParent else { throw LedgerTestFailure.assertion("sandbox-parent-realpath") }
+    let canonicalParentText = String(cString: canonicalParent)
+    free(canonicalParent)
+    guard !canonicalParentText.contains("\""), !canonicalParentText.contains("\\") else {
+      throw LedgerTestFailure.assertion("sandbox-canonical-parent-path")
+    }
+    // sandbox literal filters use the POSIX canonical spelling. Foundation
+    // may preserve an alias (for example a /private prefix difference).
+    let canonicalParentMatches = canonicalParentText == deniedParentPath
+    let profile = "(version 1)\n(allow default)\n(deny file-read* (literal \"\(canonicalParentText)\"))\n"
     let sandboxResult = profile.withCString { iosSchoolSandboxInit($0, 0, nil) }
     try check(sandboxResult == 0, "sandbox-profile-installed")
 
