@@ -555,7 +555,6 @@ import CoreFoundation
   func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                defaultText: String?, initiatedByFrame frame: WKFrameInfo,
                completionHandler: @escaping (String?) -> Void) { completionHandler(nil) }
-  @available(iOS 18.4, *)
   func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
     if let s = active { diagnostic(s, "permissionBlocked", webView.url) }
