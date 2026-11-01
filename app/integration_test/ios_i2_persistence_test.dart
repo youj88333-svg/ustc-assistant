@@ -24,6 +24,7 @@ import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
 import 'support/jw_sync_fixture.dart';
+import 'support/ios_i2_drain.dart';
 
 const _phaseDefine = String.fromEnvironment(
   'USTC_I2_PERSISTENCE_PHASE',
@@ -533,10 +534,7 @@ Future<void> _closeDrained(
   NativeObservationBrowser browser,
   int session,
 ) async {
-  await browser.close(session).timeout(_nativeTimeout);
-  if (!await browser.drained(session).timeout(_nativeTimeout)) {
-    throw StateError('native_drain_not_confirmed');
-  }
+  await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
 }
 
 Future<void> _recoveryDrain(

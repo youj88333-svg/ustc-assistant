@@ -32,6 +32,7 @@ import 'package:ustc_assistant_m0/source/observation_contract.dart';
 import 'package:ustc_assistant_m0/app/demo_runtime.dart';
 
 import 'support/jw_sync_fixture.dart';
+import 'support/ios_i2_drain.dart';
 import 'support/young_business_fixture.dart';
 
 const _account = 'TEST0001';
@@ -309,7 +310,7 @@ Future<void> _runI2Scenario() async {
       action: 'userClose',
     );
     await userClosed.timeout(_nativeTimeout);
-    expect(await harness.browser.drained(secondJwSession), isTrue);
+    await _closeDrained(harness.browser, secondJwSession);
     activeNativeSession = 0;
     expect(await _i2StoreExists(secondJwStorePath, 'jw'), isTrue);
 
@@ -814,8 +815,7 @@ Future<void> _closeDrained(
   NativeObservationBrowser browser,
   int session,
 ) async {
-  await browser.close(session).timeout(_nativeTimeout);
-  expect(await browser.drained(session).timeout(_nativeTimeout), isTrue);
+  await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
 }
 
 Future<void> _recoveryDrain(
@@ -833,10 +833,7 @@ Future<void> _recoveryDrain(
         recoveryOnly: true,
       )
       .timeout(_nativeTimeout);
-  await browser.close(session).timeout(_nativeTimeout);
-  if (!await browser.drained(session).timeout(_nativeTimeout)) {
-    throw StateError('native_drain_not_confirmed');
-  }
+  await _closeDrained(browser, session);
 }
 
 Future<bool> _i2Fixture(int session, int document, String action) async {

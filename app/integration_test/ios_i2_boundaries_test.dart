@@ -18,6 +18,8 @@ import 'package:ustc_assistant_m0/platform/owned_directory.dart';
 import 'package:ustc_assistant_m0/platform/runtime_platform_factory.dart';
 import 'package:ustc_assistant_m0/source/observation_contract.dart';
 
+import 'support/ios_i2_drain.dart';
+
 const _nativeTimeout = Duration(seconds: 25);
 const _operationTimeout = Duration(seconds: 35);
 const _platformChannel = MethodChannel('ustc_assistant/platform_v1');
@@ -139,11 +141,7 @@ Future<void> _runBoundarySuite(_LoopbackFixture fixture) async {
           recoveryOnly: true,
         );
       } finally {
-        await activeBrowser.close(session).timeout(_nativeTimeout);
-        expect(
-          await activeBrowser.drained(session).timeout(_nativeTimeout),
-          isTrue,
-        );
+        await closeAndDrainI2(activeBrowser, session, timeout: _nativeTimeout);
       }
     });
 
@@ -297,9 +295,8 @@ Future<void> _unsafeOpenAndRecovery(
       )).ready,
       isTrue,
     );
-    await browser.close(validSession).timeout(_nativeTimeout);
-    validDrained = await browser.drained(validSession).timeout(_nativeTimeout);
-    expect(validDrained, isTrue);
+    await closeAndDrainI2(browser, validSession, timeout: _nativeTimeout);
+    validDrained = true;
   } finally {
     if (badOpenAttempted && !badDrained) {
       await _observationChannel
@@ -315,9 +312,8 @@ Future<void> _unsafeOpenAndRecovery(
     if (validOpenAttempted) {
       if (!validDrained) {
         final session = validSession;
-        await browser.close(session).timeout(_nativeTimeout);
-        validDrained = await browser.drained(session).timeout(_nativeTimeout);
-        expect(validDrained, isTrue);
+        await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
+        validDrained = true;
       }
     }
     if ((!badOpenAttempted || badDrained) &&
@@ -408,9 +404,8 @@ Future<void> _exerciseBoundary(
     }
     expect(fixture.paths, isNot(contains('/i2-denied')));
   } finally {
-    await browser.close(session).timeout(_nativeTimeout);
-    closeConfirmed = await browser.drained(session).timeout(_nativeTimeout);
-    expect(closeConfirmed, isTrue);
+    await closeAndDrainI2(browser, session, timeout: _nativeTimeout);
+    closeConfirmed = true;
     if (closeConfirmed) await assets.cleanup().timeout(_nativeTimeout);
   }
 }
