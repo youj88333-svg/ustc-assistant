@@ -58,7 +58,11 @@ iOS 学校宿主沿用固定来源、DTO 与 C3 许可/事务。现行私用组�
 
 每个已登记 Dart 来源分区映射一个独立持久 `WKWebsiteDataStore(forIdentifier:)` UUID；本应用受控 profile 内仅记录 backend/source/UUID/state，先持久登记再创建 store。正式分区普通关闭保留；临时观察或清理在释放全部 WebView 后使用官方 UUID 删除 API，失败保持 deletePending、禁复用，成功持久标记后才报告 drained。元数据不定位或读取 WebKit 内部认证文件；公开 API 没有 store 备份排除开关，因此不承诺这些不透明资产已排除系统备份或物理安全擦除。必要恢复失败仍阻止新学校作业。
 
-JW 固定 reader 运行在隔离 content world；Young 页面 helper 所需的 page-world 固定只读采集不获得应用秘密或权限。原生可观察主/子 frame 导航、当前代际、隔离 guard 的结果前后复核及 C1/C3 身份/schema/事务守卫共同拒旧；nonce、URL 相同或 WKFrameInfo 均不单独构成稳定文档身份。页面发来的 history 通知只撤销旧动作，不能授予 ready、身份或操作权。普通页面后台网络及原 CSP/TLS 保留；弹窗、下载、文件选择、媒体/运动/位置权限和外部协议拒绝，不能据此宣称全部 frame、资源和协议均被封闭。
+JW 固定 reader 运行在隔离 content world；Young 页面 helper 所需的 page-world 固定只读采集不获得应用秘密或权限。原生可观察主/子 frame 导航、当前代际、隔离 guard 的结果前后复核及 C1/C3 身份/schema/事务守卫共同拒旧；nonce、URL 相同或 WKFrameInfo 均不单独构成稳定文档身份。页面发来的 history 通知只撤销旧动作，不能授予 ready、身份或操作权；JW通知仅在固定业务origin安装，其他认证origin不改写History原型。
+
+iOS手动浏览与固定业务采集分别准入：主页面可在无URL userinfo、默认443的HTTPS下浏览ustc.edu.cn及其规范子域，子frame允许普通HTTPS/default443与精确about:blank/srcdoc，保留浏览器同源、CSP及TLS。导航许可不是认证/身份背书，不扩展原固定操作origin、reader或C3许可；未登记校内页仅显示，不导出其origin、不给业务ready，完成加载后暂停手动处理。回固定业务页后重新核验代际与读出资格。
+
+主frame的明确GET、linkActivated新窗链接可按主页面规则转入当前view，使用新的空body请求，不重放POST或复制认证header；其他新窗不提供通用opener支持。网页alert/confirm显示标明来源域名的系统提示，确认由用户选择，不静默否决；返回、重试或关闭取消待处理提示。网页消息只用于当次显示，不入日志/诊断/C3。下载、文本prompt、文件选择、媒体/运动/位置权限和外部协议仍拒绝。上述为私用手动认证兼容边界，不能据此宣称全部frame、资源和协议均被封闭。
 
 ### K-03 文档关联与受控动作
 

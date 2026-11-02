@@ -25,8 +25,11 @@
 同一受控窗口。后台和 WebContent 终止仍撤销工作；有业务读取在途时文档失效仍由 C1 收口。
 
 右上角“复制诊断”只在点击时调用无参数 `platform_v1/i2BrowserDiagnostics`。
-`ios-i2-browser-diagnostics-v1` 固定 11 项：kind、source、state、lastEvent、failureStage、
+`ios-i2-browser-diagnostics-v2` 保留原 11 项：kind、source、state、lastEvent、failureStage、
 errorDomain、errorCode、cleanupStage、cleanupFailure、cleanupErrorDomain、cleanupErrorCode。
+另有 policyAction、policyTarget 两项闭合分类，总计13键，独立保留最近策略拒绝，不会被
+之后的 navigating/ready 覆盖。它们只表达跳转/弹窗/权限等类型与 registered/campus/
+external/localFixture/otherScheme 范围，不含实际主机或URL。Dart仍严格兼容11键v1。
 阶段/来源/错误域为闭合词表，数字码限 ±100000 或 null，不包含 URL、查询参数、账号、
 密码、Cookie、网页内容或 NSError.userInfo/描述。Dart 检查全部键和类型并重建后才复制。
 首个加载失败与清理失败分开保留；app 类码 1–10 对应 invalidSnapshot、unsafeDirectory、
@@ -40,6 +43,23 @@ storageFailed、cleanupPending、staleResult、busy、closed、sourceFailed、un
 profile；如再次要求手动登录，还必须观察合成服务器因缺少认证 marker 的固定重定向，
 再经过真实合成表单和 callback，返回应用由 coordinator 完成重复导入。两条路径都检查
 原行 ID、数量和无保存密码，并记录实际是否再次登录；不延长 Cookie 时效或放宽事务断言。
+
+## 手动网页兼容与权限分离
+
+主页面允许无userinfo、默认443的规范校内HTTPS主机；子frame保留普通HTTPS和
+about:blank/srcdoc浏览。固定 `allows`/业务origin、reader、身份/schema及C3事务没有扩展。
+导航only认证页可显示但ready=false、inspect/event不回传其未登记origin，加载完后
+advance=manualRequired，不能据此读业务。JW不改其他认证origin的History原型。
+
+主frame明确GET链接的`_blank`可转入同一view；POST、脚本新窗和通用opener不支持。
+网页alert/confirm用带来源域名的系统提示交给用户；返回/重试/关闭取消当前提示，消息
+不进入诊断。文本prompt和设备/文件权限仍拒绝，TLS与页面已有策略保留。
+
+`ios_i2_auth_compatibility_test.dart`在新鲜Simulator中使用三个loopback来源，验证
+导航only无读出权限、拒绝后诊断保留、重试可再登录且提交后的POST计数不增加、GET新窗
+和POST新窗的不同结果、实际WK alert/confirm显示及完成核心、返回取消与排空。原生浅/深色
+弹层有截图；合成调用共用完成函数不等于真人触屏点击验收。Debug仅可显式增加受控loopback
+导航origin，Release拒绝该参数；自动过程不访问学校或真实认证资料。
 
 ## 集成检查范围
 

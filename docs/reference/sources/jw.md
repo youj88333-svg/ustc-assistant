@@ -23,6 +23,8 @@
 - `https://id.ustc.edu.cn`
 - `https://analytics.ustc.edu.cn`
 
+上述精确origin仍约束应用的固定操作和业务准入。iOS手动认证另按[平台映射](../../architecture/09-contracts.md#ios-私用-wkwebview-分区映射)允许校内HTTPS主页面及普通HTTPS子frame浏览；浏览可达不提供reader、身份或导入许可，也不向这些页面自动投递密码。
+
 产品只接受已登记的页面类型和本地学期选择，不接收任意页面 URL。固定页面入口为 `/for-std/course-table` 与 `/for-std/exam-arrange`，由学校解析自身页面详情路由。
 
 当前数据读取使用固定的校内只读请求：

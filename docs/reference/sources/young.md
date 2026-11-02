@@ -23,6 +23,8 @@
 - `https://id.ustc.edu.cn`
 - `https://analytics.ustc.edu.cn`
 
+精确origin约束固定操作与业务采集。iOS手动网页登录的校内HTTPS主页面及普通HTTPS子frame许可另见[平台映射](../../architecture/09-contracts.md#ios-私用-wkwebview-分区映射)；这种浏览不授予reader、身份或导入许可，不共享其他来源会话，也不向页面自动投递密码。
+
 固定业务页为报名活动 `/login/sc-wisdom-group-learning/myproject/SignUp` 和个人日程 `/login/sc-wisdom-group-learning/personalInformation/mySchedule`。`/login/` 门户以及 `/login/sc-wisdom-group-learning[/]` 回调根只表示登录过渡；等待学校自然进入同一来源下的业务 namespace 子路由后，再准备固定目标页。不得读取或解释回调票据，也不能把页面 ready 当作身份或导入许可。
 
 产品主动读取仅接受已登记主文档内固定 GET helper 和三个固定路径；原生响应关联只接受同一来源下 `/login/wisdom-group-learning-bg/` 业务请求：
