@@ -47,8 +47,13 @@ import CoreFoundation
     var manualLoadFailed = false
     var displayedHost: String?
     var dialog: SchoolDialog?
+    var isHiding = false
+    var hideCompletions: [() -> Void] = []
+    var uiCloseAttempt = 0
 #if DEBUG
     var fixtureRetiredLoad: WKNavigation?
+    var fixtureDialogTrace: [String] = []
+    var fixtureCancelDuringPresentation = false
 #endif
     var guardValue: String?, lastURL: URL?
     init(id: Int, policy: IOSSchoolPolicy, ledger: IOSSchoolStoreLedger,
@@ -61,6 +66,9 @@ import CoreFoundation
   private final class SchoolDialog {
     let alert: UIAlertController
     let kind: String
+    var presented = false, dismissing = false
+    var requestedAcceptance: Bool?
+    var afterDismiss: [() -> Void] = []
     private var reply: ((Bool) -> Void)?
     init(alert: UIAlertController, kind: String, reply: @escaping (Bool) -> Void) {
       self.alert = alert; self.kind = kind; self.reply = reply
@@ -447,18 +455,21 @@ import CoreFoundation
     event(s, "navigating")
   }
   private func navigate(_ s: Session, _ url: URL) {
-    guard active === s, s.policy.allows(url), let view = s.view else { return }
-    finishDialog(s, accepted: false)
-    s.finished = false
-    invalidate(s)
-    s.activeLoad = nil
+    guard active === s, s.policy.allows(url) else { return }
+    let document = s.document
+    finishDialog(s, accepted: false) { [weak self, weak s] in
+      guard let self, let s, self.isCurrent(s, document), let view = s.view else { return }
+      s.finished = false
+      self.invalidate(s)
+      s.activeLoad = nil
 #if DEBUG
-    s.fixtureRetiredLoad = nil
+      s.fixtureRetiredLoad = nil
 #endif
-    s.activeLoad = view.load(URLRequest(url: url))
+      s.activeLoad = view.load(URLRequest(url: url))
+    }
   }
   @discardableResult private func show(_ s: Session) -> Bool {
-    guard active === s, !s.isClosing, let view = s.view,
+    guard active === s, !s.isClosing, !s.isHiding, let view = s.view,
           UIApplication.shared.applicationState != .background else { return false }
     if let navigation = s.navigation { return navigation.presentingViewController != nil }
     guard var controller = presenter() else { return false }
@@ -487,11 +498,27 @@ import CoreFoundation
     host.setHost(s.displayedHost); host.setLoadFailure(s.manualLoadFailed)
     return true
   }
-  private func hide(_ s: Session) {
-    finishDialog(s, accepted: false)
+  private func hide(_ s: Session, completion: @escaping () -> Void = {}) {
+    s.hideCompletions.append(completion)
+    guard !s.isHiding else { return }
+    s.isHiding = true
+    finishDialog(s, accepted: false) { [self, s] in dismissHost(s) }
+  }
+  private func dismissHost(_ s: Session) {
+    guard s.isHiding else { return }
     s.host?.detachView()
-    s.navigation?.dismiss(animated: false)
-    s.host = nil; s.navigation = nil
+    let complete = { [s] in
+      guard s.isHiding else { return }
+      s.host = nil; s.navigation = nil; s.isHiding = false
+      let completions = s.hideCompletions; s.hideCompletions.removeAll()
+      completions.forEach { $0() }
+    }
+    guard let navigation = s.navigation else { complete(); return }
+    if navigation.isBeingDismissed, let transition = navigation.transitionCoordinator,
+        transition.animate(alongsideTransition: nil, completion: { _ in complete() }) { return }
+    if navigation.presentingViewController != nil {
+      navigation.dismiss(animated: false, completion: complete)
+    } else { complete() }
   }
 
   private func raw(_ s: Session, _ script: String, world: WKContentWorld,
@@ -620,10 +647,7 @@ import CoreFoundation
     s.view?.stopLoading(); s.view?.navigationDelegate = nil; s.view?.uiDelegate = nil
     s.view?.configuration.userContentController.removeScriptMessageHandler(forName: "ustcI2Revoke", contentWorld: .page)
     s.urlObserver?.invalidate(); s.urlObserver = nil
-    hide(s)
-    s.releasedView = s.view; s.view = nil
-    cleanupStage = "waitingForView"
-    finishClose(s, attempts: 0)
+    closeView(s)
   }
   private func retryClose(_ s: Session) {
     closeFailure = nil
@@ -636,7 +660,34 @@ import CoreFoundation
         cleanupStage = "metadataDeletePending"; try s.ledger.markDeleting(record)
       }
     } catch { cleanupFailed("metadataWrite", error: error, ioCode: s.ledger.lastFailureErrno); return }
-    finishClose(s, attempts: 0)
+    if s.view != nil { closeView(s) }
+    else { finishClose(s, attempts: 0) }
+  }
+  private func closeView(_ s: Session) {
+    s.uiCloseAttempt += 1
+    let attempt = s.uiCloseAttempt
+    cleanupStage = "waitingForView"
+    // UIKit presentation/dismissal is asynchronous too. Keep its failure
+    // bounded and retryable before starting the existing WebView release drain.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 5) { [self, s] in
+      guard closing === s, s.uiCloseAttempt == attempt, s.view != nil else { return }
+      cleanupFailed("viewRetained")
+    }
+    let wasHiding = s.isHiding
+    hide(s) { [self, s] in
+      guard closing === s, let view = s.view else { return }
+      s.releasedView = view; s.view = nil
+      cleanupStage = "waitingForView"
+      finishClose(s, attempts: 0)
+    }
+    if wasHiding {
+      if let dialog = s.dialog {
+        if !dialog.alert.isBeingPresented && !dialog.alert.isBeingDismissed {
+          dialog.dismissing = false
+          finishDialog(s, accepted: false)
+        }
+      } else { dismissHost(s) }
+    }
   }
   private func finishClose(_ s: Session, attempts: Int) {
     guard closing === s else { return }
@@ -723,19 +774,56 @@ import CoreFoundation
     if Self.slot === self { Self.slot = nil }
   }
 
-  private func finishDialog(_ s: Session, accepted: Bool) {
-    guard let dialog = s.dialog else { return }
-    s.dialog = nil
-    dialog.alert.dismiss(animated: false)
-    dialog.finish(accepted)
+  private func traceDialog(_ s: Session, _ value: String) {
+#if DEBUG
+    if s.policy.isFixture {
+      s.fixtureDialogTrace.append(value)
+      if s.fixtureDialogTrace.count > 32 { s.fixtureDialogTrace.removeFirst() }
+    }
+#endif
+  }
+  private func finishDialog(_ s: Session, accepted: Bool,
+                            completion: @escaping () -> Void = {}) {
+    guard let dialog = s.dialog else { completion(); return }
+    dialog.afterDismiss.append(completion)
+    if dialog.requestedAcceptance == nil { dialog.requestedAcceptance = accepted }
+    guard !dialog.dismissing else { return }
+    // Closing while UIKit is still presenting must wait for that transition.
+    if !dialog.presented && dialog.alert.presentingViewController != nil {
+      traceDialog(s, "dismissWaitingForPresentation"); return
+    }
+    dialog.dismissing = true
+    traceDialog(s, "dismissRequested")
+    let complete = { [self, s, dialog] in
+      guard s.dialog === dialog else { return }
+      s.dialog = nil
+      traceDialog(s, "dismissCompleted")
+      // WebKit resumes only after UIKit has actually dismissed the panel.
+      dialog.finish(dialog.requestedAcceptance ?? false)
+      traceDialog(s, "completionDelivered")
+      let completions = dialog.afterDismiss; dialog.afterDismiss.removeAll()
+      completions.forEach { $0() }
+    }
+    if dialog.alert.isBeingDismissed, let transition = dialog.alert.transitionCoordinator,
+        transition.animate(alongsideTransition: nil, completion: { _ in complete() }) { return }
+    if dialog.alert.presentingViewController != nil {
+      dialog.alert.dismiss(animated: false, completion: complete)
+    } else { complete() }
   }
   private func presentDialog(_ view: WKWebView, message: String, frame: WKFrameInfo,
                              kind: String, reply: @escaping (Bool) -> Void) {
-    guard let s = active, s.view === view, !s.isClosing,
+    guard let s = active, s.view === view else { reply(false); return }
+    traceDialog(s, kind == "confirm" ? "confirmRequested" : "alertRequested")
+    guard !s.isClosing, !s.isHiding,
           UIApplication.shared.applicationState == .active,
           let navigation = s.navigation, navigation.presentingViewController != nil,
           navigation.presentedViewController == nil, s.dialog == nil else {
-      if let s = active, s.view === view { diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked") }
+      let reason = s.isClosing ? "closing" : s.isHiding ? "hiding"
+        : UIApplication.shared.applicationState != .active ? "inactive"
+        : s.navigation?.presentingViewController == nil ? "missingPresenter"
+        : s.navigation?.presentedViewController != nil ? "existingModal" : "existingDialog"
+      traceDialog(s, reason)
+      diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked")
       reply(false); return
     }
     let host = String((frame.request.url?.host ?? "学校网页").prefix(253))
@@ -753,10 +841,23 @@ import CoreFoundation
       if let s { self?.finishDialog(s, accepted: true) }
     }
     alert.addAction(accept); alert.preferredAction = accept
-    navigation.present(alert, animated: false)
-    if alert.presentingViewController == nil {
-      diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked")
-      finishDialog(s, accepted: false)
+    var cancelDuringPresentation = false
+#if DEBUG
+    cancelDuringPresentation = s.policy.isFixture && s.fixtureCancelDuringPresentation
+    s.fixtureCancelDuringPresentation = false
+#endif
+    navigation.present(alert, animated: cancelDuringPresentation) { [weak self, weak s, weak dialog] in
+      guard let self, let s, let dialog, s.dialog === dialog, !dialog.dismissing else { return }
+      dialog.presented = true; self.traceDialog(s, "presentCompleted")
+      if let accepted = dialog.requestedAcceptance { self.finishDialog(s, accepted: accepted) }
+    }
+    if cancelDuringPresentation { finishDialog(s, accepted: false) }
+    DispatchQueue.main.async { [weak self, weak s, weak dialog] in
+      guard let self, let s, let dialog, s.dialog === dialog, !dialog.dismissing,
+            alert.presentingViewController == nil else { return }
+      self.traceDialog(s, "presentationFailed")
+      self.diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked")
+      self.finishDialog(s, accepted: false)
     }
   }
 
@@ -818,9 +919,11 @@ import CoreFoundation
         decisionHandler(.cancel)
         DispatchQueue.main.async { [weak self, weak s] in
           guard let self, let s, self.isCurrent(s, document), let view = s.view else { return }
-          self.finishDialog(s, accepted: false)
-          s.finished = false; self.invalidate(s)
-          s.activeLoad = view.load(URLRequest(url: url))
+          self.finishDialog(s, accepted: false) { [weak self, weak s, weak view] in
+            guard let self, let s, let view, self.isCurrent(s, document), s.view === view else { return }
+            s.finished = false; self.invalidate(s)
+            s.activeLoad = view.load(URLRequest(url: url))
+          }
         }
       } else { diagnostic(s, "popupBlocked", url); decisionHandler(.cancel) }
       return
@@ -988,13 +1091,23 @@ import CoreFoundation
       }
       return
     case "compatConfirm": code = "window.__i2ConfirmResult=confirm('Synthetic confirmation');true"
+    case "compatConfirmCancelDuringPresentation":
+      s.fixtureCancelDuringPresentation = true
+      code = "window.__i2ConfirmResult=confirm('Synthetic pending presentation');true"
     case "compatAlert": code = "alert('Synthetic alert');true"
-    case "hasSyntheticDialog": reply(s.dialog != nil); return
+    case "hasSyntheticDialog": reply(s.dialog?.presented == true && s.dialog?.dismissing == false); return
+    case "syntheticDialogStatus":
+      reply(["trace": s.fixtureDialogTrace,
+             "applicationActive": UIApplication.shared.applicationState == .active,
+             "webAttached": s.view?.window != nil,
+             "navigationVisible": s.navigation?.presentingViewController != nil,
+             "modalVisible": s.navigation?.presentedViewController != nil,
+             "pending": s.dialog != nil, "hiding": s.isHiding]); return
     case "acceptSyntheticDialog", "dismissSyntheticAlert":
       guard let dialog = s.dialog, dialog.kind == (action == "acceptSyntheticDialog" ? "confirm" : "alert") else {
         reply(false); return
       }
-      finishDialog(s, accepted: true); reply(true); return
+      finishDialog(s, accepted: true) { reply(true) }; return
     case "showSyntheticWindow": reply(show(s)); return
     case "useLightAppearance", "useDarkAppearance":
       s.navigation?.overrideUserInterfaceStyle = action == "useDarkAppearance" ? .dark : .light
@@ -1028,7 +1141,7 @@ import CoreFoundation
       guard let view = s.view, let retired = s.fixtureRetiredLoad else { throw IOSSchoolFailure.invalidSnapshot }
       webView(view, didFinish: retired); reply(nil); return
     case "iosRetryInitial": navigate(s, s.policy.initialURL); reply(nil); return
-    case "iosReturnToApp": hide(s); reply(nil); return
+    case "iosReturnToApp": hide(s) { reply(nil) }; return
     case "sameDocument", "youngSameUrlPush": code = "history.pushState({},'',location.href);true"
     case "youngSameUrlReplace": code = "history.replaceState({},'',location.href);true"
     case "nextDocument": code = "location.reload();true"
@@ -1044,7 +1157,11 @@ import CoreFoundation
     case "userClose": event(s, "userClosed"); beginClose(s); reply(nil); return
     default: throw IOSSchoolFailure.unsupportedPlatform
     }
-    raw(s, code, world: .page) { _ in reply(nil) }
+    raw(s, code, world: .page) { result in
+      if ["compatConfirm", "compatConfirmCancelDuringPresentation", "compatAlert"].contains(action), case .failure = result {
+        reply(Self.error(.sourceFailed))
+      } else { reply(nil) }
+    }
   }
 #endif
 }

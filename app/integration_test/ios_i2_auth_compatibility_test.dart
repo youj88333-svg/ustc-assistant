@@ -151,10 +151,8 @@ Future<void> _run(IntegrationTestWidgetsFlutterBinding binding) async {
 
     debugPrint('I2 compatibility phase: native confirm and alert');
     await flow.exercise('useLightAppearance');
-    final confirm = flow.exercise('compatConfirm');
-    await _untilAsync(
-      () async => await flow.exercise('hasSyntheticDialog') == true,
-    );
+    final confirm = flow.startDialog('compatConfirm');
+    await flow.waitDialog(confirm);
     final light = await binding.takeScreenshot('i2-confirm-light');
     expect(light.length, greaterThan(1000));
     await File(
@@ -164,31 +162,41 @@ Future<void> _run(IntegrationTestWidgetsFlutterBinding binding) async {
       ),
     ).writeAsBytes(light, flush: true);
     expect(await flow.exercise('acceptSyntheticDialog'), isTrue);
-    await confirm;
+    await confirm.finish();
     expect(await flow.exercise('checkConfirmationAccepted'), isTrue);
 
     await flow.exercise('useDarkAppearance');
-    final alert = flow.exercise('compatAlert');
-    await _untilAsync(
-      () async => await flow.exercise('hasSyntheticDialog') == true,
-    );
+    final alert = flow.startDialog('compatAlert');
+    await flow.waitDialog(alert);
     final dark = await binding.takeScreenshot('i2-alert-dark');
     expect(dark.length, greaterThan(1000));
     await File(
       directories.demo.checkedChildPath('i2-alert-dark.png', directory: false),
     ).writeAsBytes(dark, flush: true);
     expect(await flow.exercise('dismissSyntheticAlert'), isTrue);
-    await alert;
+    await alert.finish();
+
+    debugPrint(
+      'I2 compatibility phase: cancel while native panel is presenting',
+    );
+    await flow.startDialog('compatConfirmCancelDuringPresentation').finish();
+    expect(await flow.exercise('checkConfirmationRejected'), isTrue);
 
     debugPrint('I2 compatibility phase: pending confirm cancelled on return');
-    final cancelledConfirm = flow.exercise('compatConfirm');
-    await _untilAsync(
-      () async => await flow.exercise('hasSyntheticDialog') == true,
-    );
+    final cancelledConfirm = flow.startDialog('compatConfirm');
+    await flow.waitDialog(cancelledConfirm);
     await flow.exercise('iosReturnToApp');
-    await cancelledConfirm;
+    await cancelledConfirm.finish();
     expect(await flow.exercise('checkConfirmationRejected'), isTrue);
     expect((await flow.call('inspect') as Map)['windowVisible'], isFalse);
+    final dialogStatus = await flow.exercise('syntheticDialogStatus') as Map;
+    final trace = dialogStatus['trace'] as List;
+    expect(trace.where((e) => e == 'presentCompleted').length, 4);
+    expect(trace.where((e) => e == 'dismissCompleted').length, 4);
+    expect(trace.where((e) => e == 'completionDelivered').length, 4);
+    expect(trace, contains('dismissWaitingForPresentation'));
+    expect(dialogStatus['pending'], isFalse);
+    expect(dialogStatus['hiding'], isFalse);
     expect(await flow.exercise('showSyntheticWindow'), isTrue);
     await flow.close();
     await assets.cleanup();
@@ -288,6 +296,35 @@ final class _Flow {
   Future<Object?> exercise(String action) =>
       call('exerciseFixture', {'action': action});
 
+  _DialogRun startDialog(String action) {
+    final run = _DialogRun();
+    run.completed = exercise(action).then<void>(
+      (_) {},
+      onError: (Object error, StackTrace stack) {
+        run.error = error;
+        run.stack = stack;
+      },
+    );
+    return run;
+  }
+
+  Future<void> waitDialog(_DialogRun run) async {
+    try {
+      await _untilAsync(() async {
+        run.rethrowFailure();
+        return await exercise('hasSyntheticDialog') == true;
+      });
+    } on Object {
+      // Both native projections are closed, synthetic-only state. Never dump
+      // a URL, page content, WebKit error text or authentication asset.
+      debugPrint('I2 dialog diagnostic: ${await _diagnostics()}');
+      debugPrint(
+        'I2 dialog lifecycle: ${await exercise('syntheticDialogStatus')}',
+      );
+      rethrow;
+    }
+  }
+
   Future<void> readyAfter(int after, {required String? origin}) async {
     await _until(
       () => events.any(
@@ -323,6 +360,21 @@ final class _Flow {
   }
 
   Future<void> dispose() async => _native.setMethodCallHandler(null);
+}
+
+final class _DialogRun {
+  late Future<void> completed;
+  Object? error;
+  StackTrace? stack;
+
+  void rethrowFailure() {
+    if (error != null) Error.throwWithStackTrace(error!, stack!);
+  }
+
+  Future<void> finish() async {
+    await completed;
+    rethrowFailure();
+  }
 }
 
 Future<void> _until(bool Function() condition) =>
