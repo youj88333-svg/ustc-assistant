@@ -141,6 +141,35 @@ void main() {
       await identityServer.close(force: true);
     }
   });
+
+  test('missing auth redirect counter tracks only absent marker', () async {
+    final fixture = await JwSyncFixture.start(requireLogin: true);
+    final client = HttpClient();
+    try {
+      final unauthenticated = await _request(client, fixture.initialUri);
+
+      expect(unauthenticated.statusCode, HttpStatus.found);
+      expect(unauthenticated.location, '/login');
+      expect(fixture.missingAuthRedirectCount, 1);
+
+      final authenticated = await _request(
+        client,
+        fixture.initialUri,
+        authenticated: true,
+      );
+
+      expect(authenticated.statusCode, HttpStatus.found);
+      expect(authenticated.location, '/for-std/course-table/info/571');
+      expect(fixture.missingAuthRedirectCount, 1);
+      expect(fixture.requests, <String>[
+        'GET /for-std/course-table',
+        'GET /for-std/course-table',
+      ]);
+    } finally {
+      client.close(force: true);
+      await fixture.close();
+    }
+  });
 }
 
 Future<_FixtureResponse> _request(

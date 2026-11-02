@@ -963,10 +963,80 @@ Future<void> _runManualI2Sso(_I2Harness harness) async {
 
     debugPrint('I2 synthetic phase: repeat import and clear login session');
     final firstLocalIds = imported.events.map((event) => event.localId).toSet();
-    await coordinator
-        .startSync(expectedAccountCode: _account, semesterId: 20261)
-        .timeout(_operationTimeout);
+    final missingAuthBeforeRepeat = business.missingAuthRedirectCount;
+    final repeatEvents = <BrowserEvent>[];
+    final repeatSubscription = harness.browser.events.listen(repeatEvents.add);
+    var repeatRequiredLogin = false;
+    try {
+      await coordinator
+          .startSync(expectedAccountCode: _account, semesterId: 20261)
+          .timeout(_operationTimeout);
+      expect(coordinator.syncView.profileReused, isTrue);
+      if (coordinator.syncView.phase == JwSyncPhase.login) {
+        // Observe a missing synthetic auth marker on the retained profile,
+        // without inferring its internal cause. Exercise the approved manual
+        // reauthentication path without changing Cookie lifetime or row IDs.
+        repeatRequiredLogin = true;
+        expect(
+          coordinator.syncView.automation,
+          JwAutomationState.manualRequired,
+        );
+        expect(
+          coordinator.syncView.loginPauseReason,
+          JwLoginPauseReason.manualRequired,
+        );
+        expect(business.missingAuthRedirectCount, missingAuthBeforeRepeat + 1);
+        final repeatLogin = repeatEvents.lastWhere(
+          (event) =>
+              event.kind == BrowserEventKind.ready &&
+              event.origin == target.initialUri.origin,
+        );
+        final repeatCasFuture = _nextI2Event(
+          harness.browser,
+          session: repeatLogin.session,
+          afterDocument: repeatLogin.document,
+          kind: BrowserEventKind.ready,
+          origin: sso.origin.origin,
+        );
+        await _iosI2Exercise(
+          session: repeatLogin.session,
+          document: repeatLogin.document,
+          action: 'authentication',
+        );
+        final repeatCas = await repeatCasFuture;
+        final homeCount = business.authenticatedHomeCount;
+        await _iosI2Exercise(
+          session: repeatCas.session,
+          document: repeatCas.document,
+          action: 'submitAuthForm',
+        );
+        await _waitFor(
+          () => business.authenticatedHomeCount == homeCount + 1,
+          message: 'repeat synthetic authenticated home was not reached',
+        );
+        // The callback barrier is already released. Poll the actual fixed
+        // readiness contract rather than guessing when its redirect finished.
+        final repeatHome = await _waitForI2BusinessReady(
+          harness.browser,
+          repeatEvents,
+          session: repeatCas.session,
+          afterDocument: repeatCas.document,
+          origin: target.initialUri.origin,
+        );
+        await _iosI2Exercise(
+          session: repeatHome.session,
+          document: repeatHome.document,
+          action: 'iosReturnToApp',
+        );
+        await coordinator.continueSync().timeout(_operationTimeout);
+      } else {
+        expect(business.missingAuthRedirectCount, missingAuthBeforeRepeat);
+      }
+    } finally {
+      await repeatSubscription.cancel();
+    }
     expect(coordinator.syncView.phase, JwSyncPhase.idle);
+    expect(coordinator.syncView.importCommitted, isTrue);
     final repeated = await harness.store.readView().timeout(_operationTimeout);
     expect(repeated.courseCount, imported.courseCount);
     expect(repeated.examCount, imported.examCount);
@@ -989,10 +1059,14 @@ Future<void> _runManualI2Sso(_I2Harness harness) async {
     expect(afterClear.examCount, imported.examCount);
     expect(afterClear.events.length, imported.events.length);
     expect(afterClear.credentialSaved, isFalse);
-    expect(sso.acceptedSubmissionCount, 1);
-    expect(sso.formPostCount, 1);
+    expect(sso.acceptedSubmissionCount, repeatRequiredLogin ? 2 : 1);
+    expect(sso.formPostCount, repeatRequiredLogin ? 2 : 1);
     await coordinator.shutdown().timeout(_operationTimeout);
     manualCoordinator = null;
+    debugPrint(
+      'I2 synthetic repeat required manual login: $repeatRequiredLogin',
+    );
+    _report['jwManualSsoRepeatRequiredLogin'] = repeatRequiredLogin;
     _report['jwManualSsoRecoveryAndImport'] = true;
   } catch (_) {
     primaryFailure = true;
@@ -1050,6 +1124,40 @@ Future<BrowserEvent> _nextI2Event(
           (origin == null || event.origin == origin),
     )
     .timeout(_nativeTimeout);
+
+Future<BrowserEvent> _waitForI2BusinessReady(
+  NativeObservationBrowser browser,
+  List<BrowserEvent> events, {
+  required int session,
+  required int afterDocument,
+  required String origin,
+}) async {
+  final elapsed = Stopwatch()..start();
+  while (elapsed.elapsed < _nativeTimeout) {
+    final readyEvents = events.where(
+      (event) =>
+          event.session == session &&
+          event.document > afterDocument &&
+          event.kind == BrowserEventKind.ready &&
+          event.origin == origin,
+    );
+    if (readyEvents.isNotEmpty) {
+      final ready = readyEvents.last;
+      try {
+        final state = await browser.advanceJwLogin(
+          session: session,
+          document: ready.document,
+          operation: 1,
+        );
+        if (state == JwLoginState.businessReady) return ready;
+      } on AppFailure catch (error) {
+        if (error.code != FailureCode.staleResult) rethrow;
+      }
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 25));
+  }
+  throw StateError('synthetic business document was not ready');
+}
 
 Future<void> _iosI2Exercise({
   required int session,

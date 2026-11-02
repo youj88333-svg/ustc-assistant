@@ -34,6 +34,7 @@ final class JwSyncFixture {
   final HttpServer _server;
   final bool requireLogin;
   final Uri? syntheticIdentityOrigin;
+  int missingAuthRedirectCount = 0;
   int authenticationSubmissions = 0;
   int authenticationSubmissionsWithAuxiliaryFieldsPreserved = 0;
   bool emptyCourse = false;
@@ -117,6 +118,7 @@ final class JwSyncFixture {
       if (requireLogin &&
           path.startsWith('/for-std/') &&
           !_hasCookie(request, 'synthetic-auth-marker')) {
+        missingAuthRedirectCount++;
         request.response.statusCode = HttpStatus.found;
         request.response.headers.set(HttpHeaders.locationHeader, '/login');
         await request.response.close();
