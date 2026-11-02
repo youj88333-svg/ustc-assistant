@@ -134,6 +134,9 @@ private enum IOSSchoolPolicyTests {
     let policy = try productionPolicy("jw")
     let external = try makeURL("https://login.example.net/cas/frame")
     try check(policy.allowsSubframeNavigation(external), "subframe-external-https")
+    if #available(macOS 13.0, *) {
+      try check(policy.allowsSubframeNavigation(try makeURL("https://xn--9ca.example.net/frame")), "subframe-idna-host")
+    }
     try check(policy.allowsSubframeNavigation(try makeURL("https://192.0.2.1/frame")), "subframe-canonical-ipv4")
     try check(!policy.allowsNavigation(external), "subframe-external-not-top-navigation")
     try check(policy.allowsSubframeNavigation(try makeURL("about:blank")), "subframe-exact-about-blank")

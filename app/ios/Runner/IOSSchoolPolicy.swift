@@ -1,6 +1,5 @@
 import Foundation
 import Darwin
-import Darwin
 
 enum IOSSchoolFailure: String, Error {
   case invalidSnapshot
@@ -290,9 +289,9 @@ struct IOSSchoolPolicy {
           components.user == nil,
           components.password == nil,
           components.port == nil || components.port == 443,
-          let host = components.host,
+          let host = encodedHTTPSHost(components),
           !host.isEmpty,
-          components.percentEncodedHost == host,
+          !host.contains("%"),
           !hasEmptyExplicitPort(url),
           host.utf8.count <= 253,
           host.unicodeScalars.allSatisfy({ $0.value < 128 }) else {
@@ -331,6 +330,17 @@ struct IOSSchoolPolicy {
       }
     }
     return normalized
+  }
+
+  private static func encodedHTTPSHost(_ components: URLComponents) -> String? {
+    // Modern Foundation decodes IDNA in `host` and percent-encodes the decoded
+    // value in `percentEncodedHost`. Use the actual ASCII DNS representation.
+    if #available(iOS 16.0, macOS 13.0, *) {
+      return components.encodedHost
+    }
+    // The older fallback admits ordinary ASCII hosts; non-ASCII/percent-encoded
+    // hosts are rejected by the caller rather than guessed or re-encoded.
+    return components.percentEncodedHost
   }
 
   private static func isCanonicalIPv4(_ host: String) -> Bool {
