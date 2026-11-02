@@ -24,6 +24,7 @@ import CoreFoundation
   private var failureCode: Int?
   private var cleanupStage = "none", cleanupReason = "none", cleanupDomain = "none"
   private var cleanupCode: Int?
+  private var policyAction = "none", policyTarget = "none"
 #if DEBUG
   // Test correlation only, never a partition/open authority. Retain the
   // verified UUID so removal can still be measured after Dart removes metadata.
@@ -44,6 +45,8 @@ import CoreFoundation
     var ready = false, finished = false, isClosing = false
     var storeRemoved = false
     var manualLoadFailed = false
+    var displayedHost: String?
+    var dialog: SchoolDialog?
 #if DEBUG
     var fixtureRetiredLoad: WKNavigation?
 #endif
@@ -52,6 +55,18 @@ import CoreFoundation
          record: IOSSchoolStoreRecord?, scripts: IOSSchoolScripts, recovery: Bool) {
       self.id = id; self.policy = policy; self.ledger = ledger
       self.record = record; self.scripts = scripts; self.recovery = recovery
+    }
+  }
+
+  private final class SchoolDialog {
+    let alert: UIAlertController
+    let kind: String
+    private var reply: ((Bool) -> Void)?
+    init(alert: UIAlertController, kind: String, reply: @escaping (Bool) -> Void) {
+      self.alert = alert; self.kind = kind; self.reply = reply
+    }
+    func finish(_ accepted: Bool) {
+      let completion = reply; reply = nil; completion?(accepted)
     }
   }
 
@@ -94,11 +109,12 @@ import CoreFoundation
     let state = closeFailure != nil ? "cleanupPending" : closing != nil ? "closing"
       : active != nil ? "open" : closedID != nil ? "closed" : "idle"
     return [
-      "kind": "ios-i2-browser-diagnostics-v1", "source": diagnosticSource, "state": state,
+      "kind": "ios-i2-browser-diagnostics-v2", "source": diagnosticSource, "state": state,
       "lastEvent": diagnosticEvent, "failureStage": failureStage, "errorDomain": failureDomain,
       "errorCode": failureCode.map { $0 as Any } ?? NSNull(), "cleanupStage": cleanupStage,
       "cleanupFailure": cleanupReason, "cleanupErrorDomain": cleanupDomain,
-      "cleanupErrorCode": cleanupCode.map { $0 as Any } ?? NSNull()
+      "cleanupErrorCode": cleanupCode.map { $0 as Any } ?? NSNull(),
+      "policyAction": policyAction, "policyTarget": policyTarget
     ]
   }
   private static func safeError(_ error: Error?) -> (String, Int?) {
@@ -199,7 +215,7 @@ import CoreFoundation
       if method == "inspect" {
         try fields(a, ["session", "document"])
         reply(["session": s.id, "document": s.document, "ready": s.ready,
-               "origin": s.view?.url.flatMap(s.policy.origin) as Any? ?? NSNull(),
+               "origin": exportedOrigin(s) as Any? ?? NSNull(),
                "windowVisible": s.navigation?.presentingViewController != nil,
                "windowForeground": UIApplication.shared.applicationState == .active])
         return
@@ -217,6 +233,11 @@ import CoreFoundation
         try fields(a, ["session", "document", "operation"])
         _ = try Self.integer(a, "operation")
         guard s.policy.source == (method == "advanceJwLogin" ? "jw" : "young") else { throw IOSSchoolFailure.invalidSnapshot }
+        if let url = s.view?.url, !s.policy.allows(url), s.policy.allowsNavigation(url),
+            s.finished, s.view?.isLoading == false {
+          guard show(s) else { throw IOSSchoolFailure.busy }
+          reply("manualRequired"); return
+        }
         guard s.ready else {
           if s.manualLoadFailed {
             guard show(s) else { throw IOSSchoolFailure.busy }
@@ -321,7 +342,12 @@ import CoreFoundation
   }
 
   private func open(_ a: [String: Any]) throws {
-    try fields(a, ["session", "profilePath", "initialUrl", "source", "allowedOrigins", "testMode", "recoveryOnly", "background"])
+    var keys: Set<String> = ["session", "profilePath", "initialUrl", "source", "allowedOrigins", "testMode", "recoveryOnly", "background"]
+    var optional: Set<String> = []
+#if DEBUG
+    keys.insert("testNavigationOrigins"); optional.insert("testNavigationOrigins")
+#endif
+    try fields(a, keys, optional: optional)
     guard active == nil, closing == nil,
           Self.slot == nil || Self.slot === self else { throw IOSSchoolFailure.busy }
     let id = try Self.integer(a, "session")
@@ -344,6 +370,7 @@ import CoreFoundation
       diagnosticSource = policy.source; diagnosticEvent = "open"
       failureStage = "none"; failureDomain = "none"; failureCode = nil
       cleanupStage = "none"; cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
+      policyAction = "none"; policyTarget = "none"
     }
     let root = try IOSPrivateStorage.root()
     let ledger = IOSSchoolStoreLedger(root: root)
@@ -365,7 +392,7 @@ import CoreFoundation
       config.userContentController.add(
         NavigationNotice(bridge: self), contentWorld: .page, name: "ustcI2Revoke")
       config.userContentController.addUserScript(WKUserScript(
-        source: Self.jwNavigationNotices, injectionTime: .atDocumentStart,
+        source: try Self.jwNavigationNotices(for: policy.businessOrigin), injectionTime: .atDocumentStart,
         forMainFrameOnly: true, in: .page))
     }
     config.mediaTypesRequiringUserActionForPlayback = .all
@@ -389,18 +416,29 @@ import CoreFoundation
   private func event(_ s: Session, _ kind: String, diagnostic: [String: String]? = nil) {
     guard !retired else { return }
     var value: [String: Any] = ["session": s.id, "document": s.document, "kind": kind]
-    if let origin = s.view?.url.flatMap(s.policy.origin), s.policy.origins.contains(origin) { value["origin"] = origin }
+    if let origin = exportedOrigin(s) { value["origin"] = origin }
     if let diagnostic { value["diagnostic"] = diagnostic }
     channel.invokeMethod("event", arguments: value)
   }
-  private func diagnostic(_ s: Session, _ code: String, _ url: URL?) {
+  private func exportedOrigin(_ s: Session) -> String? {
+    guard let origin = s.view?.url.flatMap(s.policy.origin), s.policy.origins.contains(origin) else { return nil }
+    return origin
+  }
+  private func diagnostic(_ s: Session, _ code: String, _ url: URL?, action: String? = nil) {
     diagnosticEvent = "policyBlocked"
+    policyAction = action ?? code
+    let scheme = url?.scheme?.lowercased()
+    if scheme != "http" && scheme != "https" { policyTarget = "otherScheme" }
+    else if let url, s.policy.allows(url) { policyTarget = "registered" }
+    else if url?.host == "127.0.0.1" { policyTarget = "localFixture" }
+    else if let host = url?.host?.lowercased(), host == "ustc.edu.cn" || host.hasSuffix(".ustc.edu.cn") { policyTarget = "campus" }
+    else { policyTarget = "external" }
     let site: String
     if s.policy.isFixture { site = "fixture" }
     else { site = ["jw.ustc.edu.cn": "jw", "young.ustc.edu.cn": "young", "passport.ustc.edu.cn": "passport",
                    "id.ustc.edu.cn": "identity", "ucas.ustc.edu.cn": "ucas"][url?.host ?? ""] ?? "unknown" }
-    let scheme = ["http", "https"].contains(url?.scheme ?? "") ? url!.scheme! : "other"
-    event(s, "diagnostic", diagnostic: ["code": code, "site": site, "scheme": scheme])
+    let safeScheme = ["http", "https"].contains(scheme ?? "") ? scheme! : "other"
+    event(s, "diagnostic", diagnostic: ["code": code, "site": site, "scheme": safeScheme])
   }
   private func invalidate(_ s: Session) {
     s.document += 1; s.ready = false; s.guardValue = nil
@@ -410,6 +448,7 @@ import CoreFoundation
   }
   private func navigate(_ s: Session, _ url: URL) {
     guard active === s, s.policy.allows(url), let view = s.view else { return }
+    finishDialog(s, accepted: false)
     s.finished = false
     invalidate(s)
     s.activeLoad = nil
@@ -445,10 +484,11 @@ import CoreFoundation
       host.detachView(); s.host = nil; s.navigation = nil
       return false
     }
-    host.setLoadFailure(s.manualLoadFailed)
+    host.setHost(s.displayedHost); host.setLoadFailure(s.manualLoadFailed)
     return true
   }
   private func hide(_ s: Session) {
+    finishDialog(s, accepted: false)
     s.host?.detachView()
     s.navigation?.dismiss(animated: false)
     s.host = nil; s.navigation = nil
@@ -472,7 +512,13 @@ import CoreFoundation
   }
   private func establish(_ s: Session) {
     guard active === s, !s.isClosing, !s.ready, s.finished, s.view?.isLoading == false,
-          let url = s.view?.url, s.policy.allows(url) else { return }
+          let url = s.view?.url, s.policy.allowsNavigation(url) else { return }
+    if !s.policy.allows(url) {
+      // Navigation-only school pages are visible, never a business document.
+      s.guardValue = nil; s.ready = false; s.manualLoadFailed = false
+      s.host?.setLoadFailure(false); diagnosticEvent = "ready"; event(s, "ready")
+      return
+    }
     let document = s.document
     raw(s, IOSSchoolScripts.readGuard, world: .defaultClient) { [weak self, weak s] result in
       guard let self, let s, self.isCurrent(s, document), let stamp = self.guardText(result, s) else { return }
@@ -677,6 +723,43 @@ import CoreFoundation
     if Self.slot === self { Self.slot = nil }
   }
 
+  private func finishDialog(_ s: Session, accepted: Bool) {
+    guard let dialog = s.dialog else { return }
+    s.dialog = nil
+    dialog.alert.dismiss(animated: false)
+    dialog.finish(accepted)
+  }
+  private func presentDialog(_ view: WKWebView, message: String, frame: WKFrameInfo,
+                             kind: String, reply: @escaping (Bool) -> Void) {
+    guard let s = active, s.view === view, !s.isClosing,
+          UIApplication.shared.applicationState == .active,
+          let navigation = s.navigation, navigation.presentingViewController != nil,
+          navigation.presentedViewController == nil, s.dialog == nil else {
+      if let s = active, s.view === view { diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked") }
+      reply(false); return
+    }
+    let host = String((frame.request.url?.host ?? "学校网页").prefix(253))
+    // Page text is only displayed here. It is never copied to a diagnostic,
+    // persisted, inspected for credentials, or treated as an app instruction.
+    let alert = UIAlertController(title: "网页提示 · \(host)", message: String(message.prefix(2000)), preferredStyle: .alert)
+    let dialog = SchoolDialog(alert: alert, kind: kind, reply: reply)
+    s.dialog = dialog
+    if kind == "confirm" {
+      alert.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self, weak s] _ in
+        if let s { self?.finishDialog(s, accepted: false) }
+      })
+    }
+    let accept = UIAlertAction(title: "确定", style: .default) { [weak self, weak s] _ in
+      if let s { self?.finishDialog(s, accepted: true) }
+    }
+    alert.addAction(accept); alert.preferredAction = accept
+    navigation.present(alert, animated: false)
+    if alert.presentingViewController == nil {
+      diagnostic(s, "permissionBlocked", frame.request.url, action: "dialogBlocked")
+      finishDialog(s, accepted: false)
+    }
+  }
+
   func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
     guard let s = active, s.view === webView else { return }
     s.activeLoad = navigation; s.manualLoadFailed = false; s.host?.setLoadFailure(false)
@@ -685,6 +768,10 @@ import CoreFoundation
   func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
     guard let s = active, s.view === webView, currentLoad(s, navigation) else { return }
     s.finished = true; establish(s)
+  }
+  func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+    guard let s = active, s.view === webView, currentLoad(s, navigation) else { return }
+    s.displayedHost = webView.url?.host; s.host?.setHost(s.displayedHost)
   }
   func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
     failed(webView, navigation: navigation, error: error, stage: "navigation")
@@ -722,11 +809,24 @@ import CoreFoundation
   func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
     guard let s = active, s.view === webView, !s.isClosing, let url = action.request.url else { decisionHandler(.cancel); return }
-    if action.targetFrame == nil { diagnostic(s, "popupBlocked", url); decisionHandler(.cancel); return }
     if action.shouldPerformDownload { diagnostic(s, "downloadBlocked", url); decisionHandler(.cancel); return }
-    if action.targetFrame?.isMainFrame == false && url.absoluteString == "about:blank" { decisionHandler(.allow); return }
-    guard s.policy.allows(url) else {
-      let main = action.targetFrame?.isMainFrame == true
+    if action.targetFrame == nil {
+      if action.sourceFrame.isMainFrame, action.navigationType == .linkActivated,
+          action.request.httpMethod == "GET", action.request.httpBody == nil,
+          action.request.httpBodyStream == nil, s.policy.allowsNavigation(url) {
+        let document = s.document
+        decisionHandler(.cancel)
+        DispatchQueue.main.async { [weak self, weak s] in
+          guard let self, let s, self.isCurrent(s, document), let view = s.view else { return }
+          self.finishDialog(s, accepted: false)
+          s.finished = false; self.invalidate(s)
+          s.activeLoad = view.load(URLRequest(url: url))
+        }
+      } else { diagnostic(s, "popupBlocked", url); decisionHandler(.cancel) }
+      return
+    }
+    let main = action.targetFrame?.isMainFrame == true
+    guard (main ? s.policy.allowsNavigation(url) : s.policy.allowsSubframeNavigation(url)) else {
       diagnostic(s, !["https", "http"].contains(url.scheme ?? "") ? "externalProtocolBlocked" : main ? "topNavigationBlocked" : "frameNavigationBlocked", url)
       if main { invalidate(s); event(s, "blocked") }
       decisionHandler(.cancel); return
@@ -735,8 +835,12 @@ import CoreFoundation
   }
   func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
-    guard let s = active, s.view === webView, let url = response.response.url,
-          s.policy.allows(url) else { decisionHandler(.cancel); return }
+    guard let s = active, s.view === webView, let url = response.response.url else { decisionHandler(.cancel); return }
+    guard (response.isForMainFrame ? s.policy.allowsNavigation(url) : s.policy.allowsSubframeNavigation(url)) else {
+      diagnostic(s, response.isForMainFrame ? "topNavigationBlocked" : "frameNavigationBlocked", url, action: "responseOriginBlocked")
+      if response.isForMainFrame { invalidate(s); event(s, "blocked") }
+      decisionHandler(.cancel); return
+    }
     let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
     if disposition.lowercased().contains("attachment") || !response.canShowMIMEType {
       diagnostic(s, "downloadBlocked", url); decisionHandler(.cancel); return
@@ -764,12 +868,19 @@ import CoreFoundation
     if let s = active { diagnostic(s, "permissionBlocked", webView.url) }; decisionHandler(.deny)
   }
   func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
-               initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) { completionHandler() }
+               initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+    presentDialog(webView, message: message, frame: frame, kind: "alert") { _ in completionHandler() }
+  }
   func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
-               initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) { completionHandler(false) }
+               initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+    presentDialog(webView, message: message, frame: frame, kind: "confirm", reply: completionHandler)
+  }
   func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String,
                defaultText: String?, initiatedByFrame frame: WKFrameInfo,
-               completionHandler: @escaping (String?) -> Void) { completionHandler(nil) }
+               completionHandler: @escaping (String?) -> Void) {
+    if let s = active, s.view === webView { diagnostic(s, "permissionBlocked", frame.request.url, action: "textPromptBlocked") }
+    completionHandler(nil)
+  }
   func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
                initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
     if let s = active { diagnostic(s, "permissionBlocked", webView.url) }
@@ -788,12 +899,15 @@ import CoreFoundation
   private func navigationNotice(_ message: WKScriptMessage) {
     guard let s = active, s.policy.source == "jw", message.body as? String == "history",
           message.webView === s.view, message.frameInfo.isMainFrame,
-          let url = message.frameInfo.request.url, s.policy.allows(url) else { return }
+          let url = message.frameInfo.request.url, s.policy.origin(url) == s.policy.businessOrigin else { return }
     invalidate(s)
     if s.finished && s.view?.isLoading == false { establish(s) }
   }
-  private static let jwNavigationNotices = #"""
-    (()=>{'use strict'; if(window!==window.top)return;
+  private static func jwNavigationNotices(for origin: String) throws -> String {
+    let data = try JSONSerialization.data(withJSONObject: origin, options: [.fragmentsAllowed])
+    guard let literal = String(data: data, encoding: .utf8) else { throw IOSSchoolFailure.invalidSnapshot }
+    return """
+    (()=>{'use strict'; if(window!==window.top || location.origin!==\(literal))return;
       const send=()=>{try{window.webkit.messageHandlers.ustcI2Revoke.postMessage('history');}catch(_){}};
       for(const name of ['pushState','replaceState']) {
         const original=History.prototype[name];
@@ -801,7 +915,8 @@ import CoreFoundation
           value:function(){try{return Reflect.apply(original,this,arguments);}finally{send();}}});}catch(_){send();}
       }
     })();
-    """#
+    """
+  }
 
 #if DEBUG
   private func storeExists(_ a: [String: Any], _ reply: @escaping FlutterResult) throws {
@@ -851,6 +966,39 @@ import CoreFoundation
     guard s.policy.isFixture, let action = a["action"] as? String else { throw IOSSchoolFailure.unsupportedPlatform }
     let code: String
     switch action {
+    case "compatLink", "compatBlankLink", "compatPostBlank", "compatDeniedLink", "compatSubmit":
+      let ids = ["compatLink": "compat-link", "compatBlankLink": "compat-blank",
+                 "compatPostBlank": "compat-post-blank", "compatDeniedLink": "compat-denied", "compatSubmit": "compat-form"]
+      if action == "compatBlankLink" || action == "compatPostBlank" {
+        s.view?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+      }
+      let id = ids[action]!
+      code = action == "compatSubmit" || action == "compatPostBlank"
+        ? "document.getElementById('\(id)').requestSubmit();true"
+        : "document.getElementById('\(id)').click();true"
+    case "authHistoryUnmodified", "checkConfirmationAccepted", "checkConfirmationRejected":
+      let body = action == "authHistoryUnmodified"
+        ? "String(History.prototype.pushState).includes('[native code]') && String(History.prototype.replaceState).includes('[native code]')"
+        : action == "checkConfirmationAccepted" ? "window.__i2ConfirmResult===true" : "window.__i2ConfirmResult===false"
+      let document = s.document
+      raw(s, body, world: .page) { [weak self, weak s] result in
+        guard let self, let s, self.isCurrent(s, document), case let .success(value) = result,
+              let value = value as? Bool else { reply(Self.error(.staleResult)); return }
+        reply(value)
+      }
+      return
+    case "compatConfirm": code = "window.__i2ConfirmResult=confirm('Synthetic confirmation');true"
+    case "compatAlert": code = "alert('Synthetic alert');true"
+    case "hasSyntheticDialog": reply(s.dialog != nil); return
+    case "acceptSyntheticDialog", "dismissSyntheticAlert":
+      guard let dialog = s.dialog, dialog.kind == (action == "acceptSyntheticDialog" ? "confirm" : "alert") else {
+        reply(false); return
+      }
+      finishDialog(s, accepted: true); reply(true); return
+    case "showSyntheticWindow": reply(show(s)); return
+    case "useLightAppearance", "useDarkAppearance":
+      s.navigation?.overrideUserInterfaceStyle = action == "useDarkAppearance" ? .dark : .light
+      reply(nil); return
     case "authentication":
       guard s.policy.source == "jw", s.view?.url?.path == "/login" else { throw IOSSchoolFailure.invalidSnapshot }
       s.fixtureRetiredLoad = s.activeLoad
@@ -903,6 +1051,7 @@ import CoreFoundation
 
 @MainActor private final class SchoolHostController: UIViewController {
   private var webView: WKWebView?
+  private var locationHost: String?, loadFailed = false
   private let onReturn: () -> Void, onRetry: () -> Void, onCancel: () -> Void
   init(webView: WKWebView, source: String, onReturn: @escaping () -> Void,
        onRetry: @escaping () -> Void, onCancel: @escaping () -> Void) {
@@ -925,8 +1074,12 @@ import CoreFoundation
         webView.leadingAnchor.constraint(equalTo: view.leadingAnchor), webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)])
     }
   }
-  func detachView() { webView?.removeFromSuperview(); webView = nil }
-  func setLoadFailure(_ failed: Bool) { navigationItem.prompt = failed ? "页面未能加载，请重试。" : nil }
+  func detachView() { webView?.endEditing(true); webView?.removeFromSuperview(); webView = nil }
+  func setHost(_ host: String?) { locationHost = host; updatePrompt() }
+  func setLoadFailure(_ failed: Bool) { loadFailed = failed; updatePrompt() }
+  private func updatePrompt() {
+    navigationItem.prompt = loadFailed ? "页面未能加载，请重试。" : locationHost.map { "正在访问：\($0)" }
+  }
   @objc private func back() { onReturn() }
   @objc private func retry() { onRetry() }
   @objc private func cancel() { onCancel() }

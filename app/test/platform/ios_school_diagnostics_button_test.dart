@@ -7,7 +7,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:ustc_assistant_m0/app/ios_school_diagnostics_button.dart';
 
 const _channel = MethodChannel('ustc_assistant/platform_v1');
-const _schema = 'ios-i2-browser-diagnostics-v1';
+const _v1Schema = 'ios-i2-browser-diagnostics-v1';
+const _v2Schema = 'ios-i2-browser-diagnostics-v2';
 
 void main() {
   tearDown(() {
@@ -130,10 +131,66 @@ void main() {
     expect(requests, 1);
     expect(clipboard, hasLength(1));
   });
+
+  testWidgets('copies v2 policy fields and preserves clipboard on rejection', (
+    tester,
+  ) async {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final clipboardWrites = <String>[];
+    var clipboardText = 'pre-existing clipboard text';
+    final responses = <Map<String, Object?>>[
+      _validV2Response(),
+      <String, Object?>{..._validV2Response()}..remove('policyTarget'),
+      <String, Object?>{..._validV2Response(), 'policyAction': 'unknownAction'},
+      <String, Object?>{
+        ..._validV2Response(),
+        'policyTarget': 'login.ustc.edu.cn',
+      },
+      <String, Object?>{
+        ..._validV2Response(),
+        'url': 'https://login.ustc.edu.cn/path?ticket=private-value',
+      },
+      <String, Object?>{
+        ..._validResponse(),
+        'policyAction': 'topNavigationBlocked',
+        'policyTarget': 'campus',
+      },
+    ];
+    var requests = 0;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      final response = responses[requests];
+      requests++;
+      return response;
+    });
+    _captureClipboard(
+      messenger,
+      clipboardWrites,
+      onSet: (text) => clipboardText = text,
+    );
+
+    await tester.pumpWidget(_host());
+    for (var index = 0; index < responses.length; index++) {
+      await tester.tap(find.byKey(const ValueKey('ios-i2-copy-diagnostics')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      if (index == 0) {
+        final copied = jsonDecode(clipboardText) as Map<String, dynamic>;
+        expect(copied, _validV2Response());
+        expect(copied['policyAction'], 'topNavigationBlocked');
+        expect(copied['policyTarget'], 'campus');
+      } else {
+        expect(clipboardText, jsonEncode(_validV2Response()));
+      }
+    }
+
+    expect(requests, responses.length);
+    expect(clipboardWrites, <String>[jsonEncode(_validV2Response())]);
+  });
 }
 
 Map<String, Object?> _validResponse() => <String, Object?>{
-  'kind': _schema,
+  'kind': _v1Schema,
   'source': 'jw',
   'state': 'open',
   'lastEvent': 'ready',
@@ -146,6 +203,13 @@ Map<String, Object?> _validResponse() => <String, Object?>{
   'cleanupErrorCode': null,
 };
 
+Map<String, Object?> _validV2Response() => <String, Object?>{
+  ..._validResponse(),
+  'kind': _v2Schema,
+  'policyAction': 'topNavigationBlocked',
+  'policyTarget': 'campus',
+};
+
 Widget _host() => MaterialApp(
   home: Scaffold(
     appBar: AppBar(actions: [const IOSSchoolDiagnosticsButton()]),
@@ -155,12 +219,15 @@ Widget _host() => MaterialApp(
 
 void _captureClipboard(
   TestDefaultBinaryMessenger messenger,
-  List<String> clipboard,
-) {
+  List<String> clipboard, {
+  void Function(String text)? onSet,
+}) {
   messenger.setMockMethodCallHandler(SystemChannels.platform, (call) async {
     if (call.method == 'Clipboard.setData') {
       final arguments = call.arguments as Map<Object?, Object?>;
-      clipboard.add(arguments['text'] as String);
+      final text = arguments['text'] as String;
+      clipboard.add(text);
+      onSet?.call(text);
     }
     return null;
   });

@@ -1,4 +1,6 @@
 import Foundation
+import Darwin
+import Darwin
 
 enum IOSSchoolFailure: String, Error {
   case invalidSnapshot
@@ -22,6 +24,7 @@ struct IOSSchoolPolicy {
   let origins: Set<String>
   let isFixture: Bool
   let businessOrigin: String
+  private let navigationOrigins: Set<String>
 
   private static let jwInitial = "https://jw.ustc.edu.cn/"
   private static let youngInitial = "https://young.ustc.edu.cn/login/"
@@ -50,6 +53,11 @@ struct IOSSchoolPolicy {
       throw IOSSchoolFailure.invalidSnapshot
     }
 
+    let hasTestNavigationOrigins = arguments.keys.contains("testNavigationOrigins")
+    if hasTestNavigationOrigins && (!testMode || !allowFixtures) {
+      throw testMode ? IOSSchoolFailure.unsupportedPlatform : IOSSchoolFailure.invalidSnapshot
+    }
+
     if testMode {
       guard allowFixtures else { throw IOSSchoolFailure.unsupportedPlatform }
       let initialOrigin = try Self.fixtureOrigin(of: initialURL)
@@ -73,11 +81,33 @@ struct IOSSchoolPolicy {
         throw IOSSchoolFailure.invalidSnapshot
       }
 
+      var parsedNavigationOrigins = parsedOrigins
+      if hasTestNavigationOrigins {
+        guard let rawNavigationOrigins = arguments["testNavigationOrigins"] as? [String],
+              !rawNavigationOrigins.isEmpty,
+              rawNavigationOrigins.count <= 4 else {
+          throw IOSSchoolFailure.invalidSnapshot
+        }
+        var additionalOrigins = Set<String>()
+        for rawOrigin in rawNavigationOrigins {
+          let normalized = try Self.fixtureNavigationOriginString(rawOrigin)
+          guard !parsedOrigins.contains(normalized),
+                additionalOrigins.insert(normalized).inserted else {
+            throw IOSSchoolFailure.invalidSnapshot
+          }
+        }
+        guard parsedOrigins.count + additionalOrigins.count <= 4 else {
+          throw IOSSchoolFailure.invalidSnapshot
+        }
+        parsedNavigationOrigins.formUnion(additionalOrigins)
+      }
+
       self.source = source
       self.initialURL = initialURL
       self.origins = parsedOrigins
       self.isFixture = true
       self.businessOrigin = initialOrigin
+      self.navigationOrigins = parsedNavigationOrigins
       return
     }
 
@@ -95,6 +125,7 @@ struct IOSSchoolPolicy {
     self.businessOrigin = source == "jw"
       ? "https://jw.ustc.edu.cn"
       : "https://young.ustc.edu.cn"
+    self.navigationOrigins = Set(expectedOrigins)
   }
 
   /// Returns a normalized HTTP(S) origin, excluding URL credentials.
@@ -122,6 +153,28 @@ struct IOSSchoolPolicy {
   func allows(_ url: URL) -> Bool {
     guard let candidate = origin(url) else { return false }
     return origins.contains(candidate)
+  }
+
+  /// Allows a user-driven top-level browser destination. This is intentionally
+  /// separate from `allows`, which remains the exact source/data-origin check.
+  func allowsNavigation(_ url: URL) -> Bool {
+    if isFixture {
+      guard let candidate = Self.fixtureNavigationOrigin(of: url) else { return false }
+      return navigationOrigins.contains(candidate)
+    }
+    guard let host = Self.canonicalHTTPSHost(of: url) else { return false }
+    return host == "ustc.edu.cn" || host.hasSuffix(".ustc.edu.cn")
+  }
+
+  /// Allows ordinary HTTPS subframes without granting them business-read
+  /// authority. Only the exact about:blank/srcdoc documents bypass HTTPS.
+  func allowsSubframeNavigation(_ url: URL) -> Bool {
+    if Self.isExactAboutDocument(url) { return true }
+    if isFixture {
+      guard let candidate = Self.fixtureNavigationOrigin(of: url) else { return false }
+      return navigationOrigins.contains(candidate)
+    }
+    return Self.canonicalHTTPSHost(of: url) != nil
   }
 
   /// Readiness for fixed business operations must not interrupt a login
@@ -196,5 +249,120 @@ struct IOSSchoolPolicy {
     let defaultPort = scheme == "https" ? 443 : 80
     let portPart = port == defaultPort ? "" : ":\(port)"
     return "\(scheme)://127.0.0.1\(portPart)"
+  }
+
+  private static func fixtureNavigationOriginString(_ raw: String) throws -> String {
+    let normalized = try fixtureOriginString(raw)
+    guard let components = URLComponents(string: raw),
+          let scheme = components.scheme?.lowercased(),
+          let port = components.port,
+          port != (scheme == "https" ? 443 : 80) else {
+      throw IOSSchoolFailure.invalidSnapshot
+    }
+    return normalized
+  }
+
+  private static func fixtureNavigationOrigin(of url: URL) -> String? {
+    guard url.baseURL == nil,
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          let schemeText = components.scheme,
+          let host = components.host,
+          host == "127.0.0.1",
+          components.percentEncodedHost == host,
+          components.user == nil,
+          components.password == nil,
+          let port = components.port,
+          (1...65535).contains(port),
+          !hasEmptyExplicitPort(url) else {
+      return nil
+    }
+    let scheme = schemeText.lowercased()
+    guard scheme == "http" || scheme == "https" else { return nil }
+    let defaultPort = scheme == "https" ? 443 : 80
+    let portPart = port == defaultPort ? "" : ":\(port)"
+    return "\(scheme)://127.0.0.1\(portPart)"
+  }
+
+  private static func canonicalHTTPSHost(of url: URL) -> String? {
+    guard url.baseURL == nil,
+          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+          components.scheme?.lowercased() == "https",
+          components.user == nil,
+          components.password == nil,
+          components.port == nil || components.port == 443,
+          let host = components.host,
+          !host.isEmpty,
+          components.percentEncodedHost == host,
+          !hasEmptyExplicitPort(url),
+          host.utf8.count <= 253,
+          host.unicodeScalars.allSatisfy({ $0.value < 128 }) else {
+      return nil
+    }
+
+    let normalized = host.lowercased()
+    if normalized.hasPrefix("[") || normalized.hasSuffix("]") {
+      guard normalized.hasPrefix("["), normalized.hasSuffix("]"),
+            normalized.count > 2 else {
+        return nil
+      }
+      let address = String(normalized.dropFirst().dropLast())
+      var parsedAddress = in6_addr()
+      guard address.withCString({ inet_pton(AF_INET6, $0, &parsedAddress) }) == 1 else {
+        return nil
+      }
+      return normalized
+    }
+
+    if normalized.allSatisfy({ $0.isNumber || $0 == "." }) {
+      guard isCanonicalIPv4(normalized) else { return nil }
+      return normalized
+    }
+
+    guard !normalized.hasPrefix("."), !normalized.hasSuffix(".") else { return nil }
+    let labels = normalized.split(separator: ".", omittingEmptySubsequences: false)
+    guard !labels.isEmpty else { return nil }
+    for label in labels {
+      guard !label.isEmpty, label.utf8.count <= 63,
+            let first = label.utf8.first,
+            let last = label.utf8.last,
+            isASCIILetterOrDigit(first), isASCIILetterOrDigit(last),
+            label.utf8.allSatisfy({ isASCIILetterOrDigit($0) || $0 == 45 }) else {
+        return nil
+      }
+    }
+    return normalized
+  }
+
+  private static func isCanonicalIPv4(_ host: String) -> Bool {
+    let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+    guard octets.count == 4 else { return false }
+    for octet in octets {
+      guard !octet.isEmpty,
+            octet.count == 1 || octet.first != "0",
+            let value = Int(octet),
+            (0...255).contains(value) else {
+        return false
+      }
+    }
+    return true
+  }
+
+  private static func isASCIILetterOrDigit(_ byte: UInt8) -> Bool {
+    (byte >= 97 && byte <= 122) || (byte >= 48 && byte <= 57)
+  }
+
+  private static func isExactAboutDocument(_ url: URL) -> Bool {
+    url.baseURL == nil &&
+      (url.absoluteString == "about:blank" || url.absoluteString == "about:srcdoc")
+  }
+
+  private static func hasEmptyExplicitPort(_ url: URL) -> Bool {
+    guard let schemeEnd = url.absoluteString.range(of: "://") else { return false }
+    let remainder = url.absoluteString[schemeEnd.upperBound...]
+    let authorityEnd = remainder.firstIndex(where: { $0 == "/" || $0 == "?" || $0 == "#" })
+      ?? remainder.endIndex
+    let authority = remainder[..<authorityEnd]
+    let hostPort = authority.split(separator: "@", omittingEmptySubsequences: false).last ?? ""
+    return hostPort.hasSuffix(":")
   }
 }

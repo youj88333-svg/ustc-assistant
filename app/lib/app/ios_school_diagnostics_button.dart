@@ -4,8 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 const _platformChannel = MethodChannel('ustc_assistant/platform_v1');
-const _diagnosticSchema = 'ios-i2-browser-diagnostics-v1';
-const _diagnosticKeys = <String>{
+const _diagnosticV1Schema = 'ios-i2-browser-diagnostics-v1';
+const _diagnosticV2Schema = 'ios-i2-browser-diagnostics-v2';
+const _diagnosticV1Keys = <String>{
   'kind',
   'source',
   'state',
@@ -17,6 +18,11 @@ const _diagnosticKeys = <String>{
   'cleanupFailure',
   'cleanupErrorDomain',
   'cleanupErrorCode',
+};
+const _diagnosticV2Keys = <String>{
+  ..._diagnosticV1Keys,
+  'policyAction',
+  'policyTarget',
 };
 const _sourceValues = <String>{'none', 'jw', 'young'};
 const _stateValues = <String>{
@@ -72,6 +78,26 @@ const _cleanupFailureValues = <String>{
   'storePresent',
   'metadataCompletion',
 };
+const _policyActionValues = <String>{
+  'none',
+  'topNavigationBlocked',
+  'frameNavigationBlocked',
+  'popupBlocked',
+  'downloadBlocked',
+  'permissionBlocked',
+  'externalProtocolBlocked',
+  'responseOriginBlocked',
+  'dialogBlocked',
+  'textPromptBlocked',
+};
+const _policyTargetValues = <String>{
+  'none',
+  'registered',
+  'campus',
+  'external',
+  'localFixture',
+  'otherScheme',
+};
 
 final class IOSSchoolDiagnosticsButton extends StatefulWidget {
   const IOSSchoolDiagnosticsButton({super.key});
@@ -123,15 +149,23 @@ final class _IOSSchoolDiagnosticsButtonState
 }
 
 Map<String, Object?> _projectDiagnostics(Object? response) {
-  if (response is! Map ||
-      response.length != _diagnosticKeys.length ||
-      response.keys.any((key) => key is! String) ||
-      !_diagnosticKeys.every(response.containsKey)) {
+  if (response is! Map || response.keys.any((key) => key is! String)) {
     throw const _InvalidDiagnosticsResponse();
   }
 
   final kind = response['kind'];
-  if (kind != _diagnosticSchema) throw const _InvalidDiagnosticsResponse();
+  final Set<String> expectedKeys;
+  if (kind == _diagnosticV1Schema) {
+    expectedKeys = _diagnosticV1Keys;
+  } else if (kind == _diagnosticV2Schema) {
+    expectedKeys = _diagnosticV2Keys;
+  } else {
+    throw const _InvalidDiagnosticsResponse();
+  }
+  if (response.length != expectedKeys.length ||
+      !expectedKeys.every(response.containsKey)) {
+    throw const _InvalidDiagnosticsResponse();
+  }
 
   final source = _enumValue(response['source'], _sourceValues);
   final state = _enumValue(response['state'], _stateValues);
@@ -156,8 +190,8 @@ Map<String, Object?> _projectDiagnostics(Object? response) {
   );
   final cleanupErrorCode = _errorCode(response['cleanupErrorCode']);
 
-  return <String, Object?>{
-    'kind': _diagnosticSchema,
+  final projection = <String, Object?>{
+    'kind': kind,
     'source': source,
     'state': state,
     'lastEvent': lastEvent,
@@ -169,6 +203,17 @@ Map<String, Object?> _projectDiagnostics(Object? response) {
     'cleanupErrorDomain': cleanupErrorDomain,
     'cleanupErrorCode': cleanupErrorCode,
   };
+  if (kind == _diagnosticV2Schema) {
+    projection['policyAction'] = _enumValue(
+      response['policyAction'],
+      _policyActionValues,
+    );
+    projection['policyTarget'] = _enumValue(
+      response['policyTarget'],
+      _policyTargetValues,
+    );
+  }
+  return projection;
 }
 
 String _enumValue(Object? value, Set<String> allowed) {

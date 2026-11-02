@@ -24,6 +24,8 @@ swiftc app/ios/Runner/IOSSchoolPolicy.swift app/ios/Runner/IOSSchoolStoreLedger.
 "$TMPDIR/i2-ledger-test"
 swiftc app/ios/Runner/IOSSchoolPolicy.swift app/ios/Runner/IOSSchoolScripts.swift verification/ios-i2/scripts_main.swift -o "$TMPDIR/i2-scripts-test"
 "$TMPDIR/i2-scripts-test" "$repo"
+swiftc app/ios/Runner/IOSSchoolPolicy.swift verification/ios-i2/policy_main.swift -o "$TMPDIR/i2-policy-test"
+"$TMPDIR/i2-policy-test"
 swiftc app/ios/Runner/IOSCredentialVault.swift verification/ios-i1/vault_main.swift -o "$TMPDIR/i2-vault-test"
 "$TMPDIR/i2-vault-test"
 python3 tools/ios-i1/test_verify_package.py
@@ -48,6 +50,15 @@ simulator="$(xcrun simctl create USTC-I2-synthetic "$device_type" "$runtime")"
 trap 'xcrun simctl shutdown "$simulator" >/dev/null 2>&1 || true; xcrun simctl delete "$simulator" >/dev/null 2>&1 || true' EXIT
 xcrun simctl boot "$simulator"
 xcrun simctl bootstatus "$simulator" -b
+# First exercise ordinary manual authentication without expanding read rights.
+# Preserve this job-owned synthetic installation just long enough to export
+# two fixed screenshots, then start the original school suite from fresh data.
+flutter test --no-pub --no-uninstall integration_test/ios_i2_auth_compatibility_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-auth-compatibility-test.log"
+synthetic_container="$(xcrun simctl get_app_container "$simulator" cn.ustcassistant.ios.private data)"
+for name in i2-confirm-light i2-alert-dark; do
+  cp "$synthetic_container/Library/Application Support/ustc_assistant_v1/demo_v1/$name.png" "$output/$name.png"
+done
+xcrun simctl uninstall "$simulator" cn.ustcassistant.ios.private
 # Exercise the manual SSO/regression path first, then navigation. Both run on
 # this job-owned simulator; no physical device or personal data is used.
 flutter test --no-pub integration_test/ios_i2_school_test.dart -d "$simulator" --dart-define="USTC_BUILD_REVISION=$revision" 2>&1 | tee "$output/i2-simulator-test.log"

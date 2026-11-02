@@ -17,6 +17,9 @@ workflows:
       - app/build/ios-i2/artifacts/i2-xcode.txt
       - app/build/ios-i2/artifacts/i2-simulator-test.log
       - app/build/ios-i2/artifacts/i2-boundaries-test.log
+      - app/build/ios-i2/artifacts/i2-auth-compatibility-test.log
+      - app/build/ios-i2/artifacts/i2-confirm-light.png
+      - app/build/ios-i2/artifacts/i2-alert-dark.png
       - app/build/ios-i2/artifacts/i2-persistence-write.log
       - app/build/ios-i2/artifacts/i2-persistence-read.log
       - app/build/ios-i2/artifacts/ios-i2-pubspec.lock
