@@ -664,6 +664,9 @@ import CoreFoundation
     else { finishClose(s, attempts: 0) }
   }
   private func closeView(_ s: Session) {
+    // Recovery-only sessions reconcile the registered store without creating
+    // a WebView or presenting UIKit. They must still enter the store drain.
+    if s.view == nil { finishClose(s, attempts: 0); return }
     s.uiCloseAttempt += 1
     let attempt = s.uiCloseAttempt
     cleanupStage = "waitingForView"
