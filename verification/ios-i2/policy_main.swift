@@ -6,7 +6,7 @@ private enum PolicyTestFailure: Error {
 }
 
 private func check(_ condition: Bool, _ name: String) throws {
-  if !condition() { throw PolicyTestFailure.assertion(name) }
+  if !condition { throw PolicyTestFailure.assertion(name) }
 }
 
 private func rejects(_ name: String, _ action: () throws -> Void) throws {
