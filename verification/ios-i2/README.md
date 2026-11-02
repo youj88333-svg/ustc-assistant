@@ -36,6 +36,11 @@ storageFailed、cleanupPending、staleResult、busy、closed、sourceFailed、un
 返回应用及 coordinator 继续后导入；故障注入覆盖取消、旧 WKNavigation、当前加载失败、
 窗口重显和固定 GET 重试。注入测试不能证明目标手机原故障的 NSError 或具体成因。
 
+重复同步检查不假定会话 Cookie 在全部 WK 视图关闭后仍然有效。它先要求复用同一已认领
+profile；如再次要求手动登录，还必须观察合成服务器因缺少认证 marker 的固定重定向，
+再经过真实合成表单和 callback，返回应用由 coordinator 完成重复导入。两条路径都检查
+原行 ID、数量和无保存密码，并记录实际是否再次登录；不延长 Cookie 时效或放宽事务断言。
+
 ## 集成检查范围
 
 `app/integration_test/ios_i2_school_test.dart` 仅在 iOS Debug Simulator 运行。测试先打开并
