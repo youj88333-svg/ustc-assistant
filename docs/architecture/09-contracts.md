@@ -60,7 +60,9 @@ iOS 学校宿主沿用固定来源、DTO 与 C3 许可/事务。现行私用组�
 
 JW 固定 reader 运行在隔离 content world；Young 页面 helper 所需的 page-world 固定只读采集不获得应用秘密或权限。原生可观察主/子 frame 导航、当前代际、隔离 guard 的结果前后复核及 C1/C3 身份/schema/事务守卫共同拒旧；nonce、URL 相同或 WKFrameInfo 均不单独构成稳定文档身份。页面发来的 history 通知只撤销旧动作，不能授予 ready、身份或操作权；JW通知仅在固定业务origin安装，其他认证origin不改写History原型。
 
-iOS手动浏览与固定业务采集分别准入：主页面可在无URL userinfo、默认443的HTTPS下浏览ustc.edu.cn及其规范子域，子frame允许普通HTTPS/default443与精确about:blank/srcdoc，保留浏览器同源、CSP及TLS。导航许可不是认证/身份背书，不扩展原固定操作origin、reader或C3许可；未登记校内页仅显示，不导出其origin、不给业务ready，完成加载后暂停手动处理。回固定业务页后重新核验代际与读出资格。
+iOS手动浏览与固定业务采集分别准入：先解析absoluteURL，主页面可在无URL userinfo、有效数值端口的HTTPS下浏览ustc.edu.cn及其规范子域，子frame允许普通HTTPS与精确about:blank/srcdoc，保留浏览器同源、CSP及TLS。导航许可不是认证/身份背书，不扩展原固定操作origin或其端口、reader及C3许可；未登记校内页仅显示，不导出其origin、不给业务ready，完成加载后暂停手动处理。回固定业务页后重新核验代际与读出资格。
+
+校内HTTP主导航只对明确GET、无body/bodyStream、默认HTTP端口做同主机HTTPS默认443升级；先取消原请求并撤销旧资格，再用URL-only新GET，路径/查询只透传，不解释或记录，不复制认证header、不重放POST。调度前后复核session/document，固定入口重试可撤销排队请求；每会话最多8次升级，只有用户固定入口重试重置。TLS失败不能回退HTTP，生产不加ATS放宽。策略拒绝保留手动窗口并进入可恢复状态，退休旧load、提示失败；advance返回manualRequired而非一直waiting。策略分类独立保留，不伪造网络NSError。
 
 主frame的明确GET、linkActivated新窗链接可按主页面规则转入当前view，使用新的空body请求，不重放POST或复制认证header；其他新窗不提供通用opener支持。网页alert/confirm显示标明来源域名的系统提示，确认由用户选择，不静默否决；返回、重试或关闭取消待处理提示。网页消息只用于当次显示，不入日志/诊断/C3。下载、文本prompt、文件选择、媒体/运动/位置权限和外部协议仍拒绝。上述为私用手动认证兼容边界，不能据此宣称全部frame、资源和协议均被封闭。
 
