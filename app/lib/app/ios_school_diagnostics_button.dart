@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 const _platformChannel = MethodChannel('ustc_assistant/platform_v1');
 const _diagnosticV1Schema = 'ios-i2-browser-diagnostics-v1';
 const _diagnosticV2Schema = 'ios-i2-browser-diagnostics-v2';
+const _diagnosticV3Schema = 'ios-i2-browser-diagnostics-v3';
 const _diagnosticV1Keys = <String>{
   'kind',
   'source',
@@ -23,6 +24,13 @@ const _diagnosticV2Keys = <String>{
   ..._diagnosticV1Keys,
   'policyAction',
   'policyTarget',
+};
+const _diagnosticV3Keys = <String>{
+  ..._diagnosticV2Keys,
+  'policyReason',
+  'policyScheme',
+  'policyMethod',
+  'policyURLForm',
 };
 const _sourceValues = <String>{'none', 'jw', 'young'};
 const _stateValues = <String>{
@@ -98,6 +106,24 @@ const _policyTargetValues = <String>{
   'localFixture',
   'otherScheme',
 };
+const _policyReasonValues = <String>{
+  'none',
+  'scheme',
+  'credentials',
+  'port',
+  'emptyPort',
+  'hostEncoding',
+  'hostSyntax',
+  'outsideCampus',
+  'fixtureOrigin',
+  'invalidURL',
+  'insecureMethod',
+  'insecurePort',
+  'upgradeLimit',
+};
+const _policySchemeValues = <String>{'none', 'http', 'https', 'other'};
+const _policyMethodValues = <String>{'unknown', 'get', 'post', 'other'};
+const _policyURLFormValues = <String>{'none', 'absolute', 'relative'};
 
 final class IOSSchoolDiagnosticsButton extends StatefulWidget {
   const IOSSchoolDiagnosticsButton({super.key});
@@ -159,6 +185,8 @@ Map<String, Object?> _projectDiagnostics(Object? response) {
     expectedKeys = _diagnosticV1Keys;
   } else if (kind == _diagnosticV2Schema) {
     expectedKeys = _diagnosticV2Keys;
+  } else if (kind == _diagnosticV3Schema) {
+    expectedKeys = _diagnosticV3Keys;
   } else {
     throw const _InvalidDiagnosticsResponse();
   }
@@ -203,7 +231,7 @@ Map<String, Object?> _projectDiagnostics(Object? response) {
     'cleanupErrorDomain': cleanupErrorDomain,
     'cleanupErrorCode': cleanupErrorCode,
   };
-  if (kind == _diagnosticV2Schema) {
+  if (kind == _diagnosticV2Schema || kind == _diagnosticV3Schema) {
     projection['policyAction'] = _enumValue(
       response['policyAction'],
       _policyActionValues,
@@ -211,6 +239,24 @@ Map<String, Object?> _projectDiagnostics(Object? response) {
     projection['policyTarget'] = _enumValue(
       response['policyTarget'],
       _policyTargetValues,
+    );
+  }
+  if (kind == _diagnosticV3Schema) {
+    projection['policyReason'] = _enumValue(
+      response['policyReason'],
+      _policyReasonValues,
+    );
+    projection['policyScheme'] = _enumValue(
+      response['policyScheme'],
+      _policySchemeValues,
+    );
+    projection['policyMethod'] = _enumValue(
+      response['policyMethod'],
+      _policyMethodValues,
+    );
+    projection['policyURLForm'] = _enumValue(
+      response['policyURLForm'],
+      _policyURLFormValues,
     );
   }
   return projection;

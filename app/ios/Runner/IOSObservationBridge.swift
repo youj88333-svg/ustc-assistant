@@ -25,6 +25,8 @@ import CoreFoundation
   private var cleanupStage = "none", cleanupReason = "none", cleanupDomain = "none"
   private var cleanupCode: Int?
   private var policyAction = "none", policyTarget = "none"
+  private var policyReason = "none", policyScheme = "none"
+  private var policyMethod = "unknown", policyURLForm = "none"
 #if DEBUG
   // Test correlation only, never a partition/open authority. Retain the
   // verified UUID so removal can still be measured after Dart removes metadata.
@@ -45,6 +47,7 @@ import CoreFoundation
     var ready = false, finished = false, isClosing = false
     var storeRemoved = false
     var manualLoadFailed = false
+    var upgradeBudget = IOSSchoolUpgradeBudget()
     var displayedHost: String?
     var dialog: SchoolDialog?
     var isHiding = false
@@ -54,6 +57,8 @@ import CoreFoundation
     var fixtureRetiredLoad: WKNavigation?
     var fixtureDialogTrace: [String] = []
     var fixtureCancelDuringPresentation = false
+    var fixtureHoldGET = false
+    var fixturePendingGET: (() -> Void)?
 #endif
     var guardValue: String?, lastURL: URL?
     init(id: Int, policy: IOSSchoolPolicy, ledger: IOSSchoolStoreLedger,
@@ -117,12 +122,14 @@ import CoreFoundation
     let state = closeFailure != nil ? "cleanupPending" : closing != nil ? "closing"
       : active != nil ? "open" : closedID != nil ? "closed" : "idle"
     return [
-      "kind": "ios-i2-browser-diagnostics-v2", "source": diagnosticSource, "state": state,
+      "kind": "ios-i2-browser-diagnostics-v3", "source": diagnosticSource, "state": state,
       "lastEvent": diagnosticEvent, "failureStage": failureStage, "errorDomain": failureDomain,
       "errorCode": failureCode.map { $0 as Any } ?? NSNull(), "cleanupStage": cleanupStage,
       "cleanupFailure": cleanupReason, "cleanupErrorDomain": cleanupDomain,
       "cleanupErrorCode": cleanupCode.map { $0 as Any } ?? NSNull(),
-      "policyAction": policyAction, "policyTarget": policyTarget
+      "policyAction": policyAction, "policyTarget": policyTarget,
+      "policyReason": policyReason, "policyScheme": policyScheme,
+      "policyMethod": policyMethod, "policyURLForm": policyURLForm
     ]
   }
   private static func safeError(_ error: Error?) -> (String, Int?) {
@@ -218,7 +225,8 @@ import CoreFoundation
 #endif
       let s = try current(a, document: method != "navigateInitial")
       if method == "navigateInitial" {
-        try fields(a, ["session"]); navigate(s, s.policy.initialURL); reply(nil); return
+        try fields(a, ["session"]); s.upgradeBudget.reset()
+        navigate(s, s.policy.initialURL); reply(nil); return
       }
       if method == "inspect" {
         try fields(a, ["session", "document"])
@@ -354,6 +362,7 @@ import CoreFoundation
     var optional: Set<String> = []
 #if DEBUG
     keys.insert("testNavigationOrigins"); optional.insert("testNavigationOrigins")
+    keys.insert("testTLSUpgradeOrigin"); optional.insert("testTLSUpgradeOrigin")
 #endif
     try fields(a, keys, optional: optional)
     guard active == nil, closing == nil,
@@ -379,6 +388,7 @@ import CoreFoundation
       failureStage = "none"; failureDomain = "none"; failureCode = nil
       cleanupStage = "none"; cleanupReason = "none"; cleanupDomain = "none"; cleanupCode = nil
       policyAction = "none"; policyTarget = "none"
+      policyReason = "none"; policyScheme = "none"; policyMethod = "unknown"; policyURLForm = "none"
     }
     let root = try IOSPrivateStorage.root()
     let ledger = IOSSchoolStoreLedger(root: root)
@@ -432,10 +442,16 @@ import CoreFoundation
     guard let origin = s.view?.url.flatMap(s.policy.origin), s.policy.origins.contains(origin) else { return nil }
     return origin
   }
-  private func diagnostic(_ s: Session, _ code: String, _ url: URL?, action: String? = nil) {
+  private func diagnostic(_ s: Session, _ code: String, _ url: URL?, action: String? = nil,
+                          reason: IOSSchoolNavigationReason = .none, method: String? = nil) {
     diagnosticEvent = "policyBlocked"
     policyAction = action ?? code
+    policyReason = reason.rawValue
+    policyURLForm = url == nil ? "none" : url?.baseURL == nil ? "absolute" : "relative"
+    policyMethod = method == "GET" ? "get" : method == "POST" ? "post" : method == nil ? "unknown" : "other"
+    let url = url?.absoluteURL
     let scheme = url?.scheme?.lowercased()
+    policyScheme = scheme == nil ? "none" : ["https", "http"].contains(scheme!) ? scheme! : "other"
     if scheme != "http" && scheme != "https" { policyTarget = "otherScheme" }
     else if let url, s.policy.allows(url) { policyTarget = "registered" }
     else if url?.host == "127.0.0.1" { policyTarget = "localFixture" }
@@ -480,7 +496,7 @@ import CoreFoundation
       onRetry: { [weak self, weak s] in
         guard let self, let s, self.active === s else { return }
         // A fixed GET, never reload/resubmit a school login POST or its body.
-        self.navigate(s, s.policy.initialURL)
+        s.upgradeBudget.reset(); self.navigate(s, s.policy.initialURL)
       },
       onCancel: { [weak self, weak s] in
         guard let self, let s else { return }
@@ -637,6 +653,7 @@ import CoreFoundation
     s.activeLoad = nil
 #if DEBUG
     s.fixtureRetiredLoad = nil
+    s.fixturePendingGET = nil; s.fixtureHoldGET = false
 #endif
     // Browser bytes remain opaque. The durable marker precedes UUID removal.
     do {
@@ -905,6 +922,42 @@ import CoreFoundation
     // While the user is signing in, a load failure leaves the host visible.
     // Retrying uses the registered initial GET; it cannot replay a login POST.
   }
+
+  private func rejectMainNavigation(_ s: Session, url: URL?, reason: IOSSchoolNavigationReason,
+                                    method: String?, response: Bool = false) {
+    // A policy cancellation is recoverable manual state, not a fabricated
+    // network error and not an indefinitely waiting readiness probe.
+#if DEBUG
+    if s.policy.isFixture { s.fixtureRetiredLoad = s.activeLoad }
+#endif
+    s.finished = false; s.manualLoadFailed = true; s.activeLoad = nil
+    invalidate(s)
+    finishDialog(s, accepted: false)
+    s.host?.setLoadFailure(true)
+    let scheme = url?.absoluteURL.scheme?.lowercased()
+    let code = scheme == "http" || scheme == "https" ? "topNavigationBlocked" : "externalProtocolBlocked"
+    diagnostic(s, code, url, action: response ? "responseOriginBlocked" : nil, reason: reason, method: method)
+    event(s, "blocked")
+  }
+
+  private func replaceWithGET(_ s: Session, url: URL) {
+    s.finished = false; s.activeLoad = nil
+    invalidate(s)
+    let document = s.document
+    let execute = { [weak self, weak s] in
+      guard let self, let s, self.isCurrent(s, document) else { return }
+      self.finishDialog(s, accepted: false) { [weak self, weak s] in
+        guard let self, let s, self.isCurrent(s, document), let view = s.view else { return }
+        // URL components are forwarded to the same requested destination;
+        // no authentication headers or POST/body bytes are copied.
+        s.activeLoad = view.load(URLRequest(url: url.absoluteURL))
+      }
+    }
+#if DEBUG
+    if s.policy.isFixture && s.fixtureHoldGET { s.fixturePendingGET = execute; return }
+#endif
+    DispatchQueue.main.async(execute: execute)
+  }
   func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
     guard let s = active, s.view === webView else { return }
     recordFailure("process", event: "processTerminated")
@@ -912,29 +965,43 @@ import CoreFoundation
   }
   func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-    guard let s = active, s.view === webView, !s.isClosing, let url = action.request.url else { decisionHandler(.cancel); return }
+    guard let s = active, s.view === webView, !s.isClosing else { decisionHandler(.cancel); return }
+    guard let url = action.request.url else {
+      if action.targetFrame?.isMainFrame == true {
+        rejectMainNavigation(s, url: nil, reason: .invalidURL, method: action.request.httpMethod)
+      } else { diagnostic(s, "frameNavigationBlocked", nil, reason: .invalidURL, method: action.request.httpMethod) }
+      decisionHandler(.cancel); return
+    }
     if action.shouldPerformDownload { diagnostic(s, "downloadBlocked", url); decisionHandler(.cancel); return }
     if action.targetFrame == nil {
       if action.sourceFrame.isMainFrame, action.navigationType == .linkActivated,
           action.request.httpMethod == "GET", action.request.httpBody == nil,
           action.request.httpBodyStream == nil, s.policy.allowsNavigation(url) {
-        let document = s.document
         decisionHandler(.cancel)
-        DispatchQueue.main.async { [weak self, weak s] in
-          guard let self, let s, self.isCurrent(s, document), let view = s.view else { return }
-          self.finishDialog(s, accepted: false) { [weak self, weak s, weak view] in
-            guard let self, let s, let view, self.isCurrent(s, document), s.view === view else { return }
-            s.finished = false; self.invalidate(s)
-            s.activeLoad = view.load(URLRequest(url: url))
-          }
-        }
-      } else { diagnostic(s, "popupBlocked", url); decisionHandler(.cancel) }
+        replaceWithGET(s, url: url)
+      } else { diagnostic(s, "popupBlocked", url, method: action.request.httpMethod); decisionHandler(.cancel) }
       return
     }
     let main = action.targetFrame?.isMainFrame == true
-    guard (main ? s.policy.allowsNavigation(url) : s.policy.allowsSubframeNavigation(url)) else {
-      diagnostic(s, !["https", "http"].contains(url.scheme ?? "") ? "externalProtocolBlocked" : main ? "topNavigationBlocked" : "frameNavigationBlocked", url)
-      if main { invalidate(s); event(s, "blocked") }
+    if main {
+      switch s.policy.mainNavigationDecision(url, method: action.request.httpMethod,
+          hasBody: action.request.httpBody != nil, hasBodyStream: action.request.httpBodyStream != nil) {
+      case .allow: decisionHandler(.allow)
+      case let .upgrade(secure):
+        guard s.upgradeBudget.consume() else {
+          rejectMainNavigation(s, url: url, reason: .upgradeLimit, method: action.request.httpMethod)
+          decisionHandler(.cancel); return
+        }
+        decisionHandler(.cancel); replaceWithGET(s, url: secure)
+      case let .reject(reason):
+        rejectMainNavigation(s, url: url, reason: reason, method: action.request.httpMethod)
+        decisionHandler(.cancel)
+      }
+      return
+    }
+    if let reason = s.policy.subframeNavigationRejection(url) {
+      let scheme = url.absoluteURL.scheme?.lowercased()
+      diagnostic(s, scheme == "http" || scheme == "https" ? "frameNavigationBlocked" : "externalProtocolBlocked", url, reason: reason, method: action.request.httpMethod)
       decisionHandler(.cancel); return
     }
     decisionHandler(.allow)
@@ -942,9 +1009,9 @@ import CoreFoundation
   func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse,
                decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
     guard let s = active, s.view === webView, let url = response.response.url else { decisionHandler(.cancel); return }
-    guard (response.isForMainFrame ? s.policy.allowsNavigation(url) : s.policy.allowsSubframeNavigation(url)) else {
-      diagnostic(s, response.isForMainFrame ? "topNavigationBlocked" : "frameNavigationBlocked", url, action: "responseOriginBlocked")
-      if response.isForMainFrame { invalidate(s); event(s, "blocked") }
+    if let reason = response.isForMainFrame ? s.policy.navigationRejection(url) : s.policy.subframeNavigationRejection(url) {
+      if response.isForMainFrame { rejectMainNavigation(s, url: url, reason: reason, method: nil, response: true) }
+      else { diagnostic(s, "frameNavigationBlocked", url, action: "responseOriginBlocked", reason: reason) }
       decisionHandler(.cancel); return
     }
     let disposition = (response.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
@@ -1072,14 +1139,15 @@ import CoreFoundation
     guard s.policy.isFixture, let action = a["action"] as? String else { throw IOSSchoolFailure.unsupportedPlatform }
     let code: String
     switch action {
-    case "compatLink", "compatBlankLink", "compatPostBlank", "compatDeniedLink", "compatSubmit":
+    case "compatLink", "compatBlankLink", "compatPostBlank", "compatDeniedLink", "compatSubmit", "compatTLSPost", "compatTLSRedirect":
       let ids = ["compatLink": "compat-link", "compatBlankLink": "compat-blank",
-                 "compatPostBlank": "compat-post-blank", "compatDeniedLink": "compat-denied", "compatSubmit": "compat-form"]
+                 "compatPostBlank": "compat-post-blank", "compatDeniedLink": "compat-denied", "compatSubmit": "compat-form",
+                 "compatTLSPost": "compat-tls-post", "compatTLSRedirect": "compat-tls-redirect"]
       if action == "compatBlankLink" || action == "compatPostBlank" {
         s.view?.configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
       }
       let id = ids[action]!
-      code = action == "compatSubmit" || action == "compatPostBlank"
+      code = ["compatSubmit", "compatPostBlank", "compatTLSPost", "compatTLSRedirect"].contains(action)
         ? "document.getElementById('\(id)').requestSubmit();true"
         : "document.getElementById('\(id)').click();true"
     case "authHistoryUnmodified", "checkConfirmationAccepted", "checkConfirmationRejected":
@@ -1099,6 +1167,16 @@ import CoreFoundation
       code = "window.__i2ConfirmResult=confirm('Synthetic pending presentation');true"
     case "compatAlert": code = "alert('Synthetic alert');true"
     case "hasSyntheticDialog": reply(s.dialog?.presented == true && s.dialog?.dismissing == false); return
+    case "hasSyntheticRecovery": reply(s.manualLoadFailed && !s.ready && !s.finished && s.activeLoad == nil && s.host?.showsLoadFailure == true); return
+    case "syntheticUpgradeCount": reply(s.upgradeBudget.used); return
+    case "holdSyntheticGET":
+      guard !s.fixtureHoldGET, s.fixturePendingGET == nil else { throw IOSSchoolFailure.invalidSnapshot }
+      s.fixtureHoldGET = true; reply(nil); return
+    case "hasPendingSyntheticGET": reply(s.fixturePendingGET != nil); return
+    case "releaseSyntheticGET":
+      s.fixtureHoldGET = false
+      let execute = s.fixturePendingGET; s.fixturePendingGET = nil
+      execute?(); reply(nil); return
     case "syntheticDialogStatus":
       reply(["trace": s.fixtureDialogTrace,
              "applicationActive": UIApplication.shared.applicationState == .active,
@@ -1143,7 +1221,7 @@ import CoreFoundation
     case "iosRetiredNavigationFinished":
       guard let view = s.view, let retired = s.fixtureRetiredLoad else { throw IOSSchoolFailure.invalidSnapshot }
       webView(view, didFinish: retired); reply(nil); return
-    case "iosRetryInitial": navigate(s, s.policy.initialURL); reply(nil); return
+    case "iosRetryInitial": s.upgradeBudget.reset(); navigate(s, s.policy.initialURL); reply(nil); return
     case "iosReturnToApp": hide(s) { reply(nil) }; return
     case "sameDocument", "youngSameUrlPush": code = "history.pushState({},'',location.href);true"
     case "youngSameUrlReplace": code = "history.replaceState({},'',location.href);true"
@@ -1197,6 +1275,7 @@ import CoreFoundation
   func detachView() { webView?.endEditing(true); webView?.removeFromSuperview(); webView = nil }
   func setHost(_ host: String?) { locationHost = host; updatePrompt() }
   func setLoadFailure(_ failed: Bool) { loadFailed = failed; updatePrompt() }
+  var showsLoadFailure: Bool { loadFailed }
   private func updatePrompt() {
     navigationItem.prompt = loadFailed ? "页面未能加载，请重试。" : locationHost.map { "正在访问：\($0)" }
   }

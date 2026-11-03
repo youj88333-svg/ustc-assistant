@@ -87,6 +87,26 @@ Future<void> _run(IntegrationTestWidgetsFlutterBinding binding) async {
     var diagnostics = await _diagnostics();
     expect(diagnostics['policyAction'], 'topNavigationBlocked');
     expect(diagnostics['policyTarget'], 'localFixture');
+    expect(diagnostics['lastEvent'], 'policyBlocked');
+    expect(diagnostics['policyReason'], 'fixtureOrigin');
+    expect(diagnostics['policyScheme'], 'http');
+    expect(diagnostics['policyMethod'], 'get');
+    expect(diagnostics['policyURLForm'], 'absolute');
+    expect(await flow.exercise('hasSyntheticRecovery'), isTrue);
+    final rejectedDocument = flow.document;
+    await flow.exercise('iosRetiredNavigationFinished');
+    await flow.exercise('iosRetiredNavigationFailed');
+    expect(flow.document, rejectedDocument);
+    expect(await flow.exercise('hasSyntheticRecovery'), isTrue);
+    expect((await _diagnostics())['lastEvent'], 'policyBlocked');
+    expect((await _diagnostics())['errorDomain'], 'none');
+    await flow.exercise('iosReturnToApp');
+    expect(
+      await flow.call('advanceJwLogin', {'operation': 1}),
+      'manualRequired',
+    );
+    expect((await flow.call('inspect') as Map)['windowVisible'], isTrue);
+    expect(await flow.exercise('hasSyntheticRecovery'), isTrue);
     await flow.toStart(sites.businessOrigin);
     diagnostics = await _diagnostics();
     expect(diagnostics['lastEvent'], 'ready');
@@ -149,6 +169,79 @@ Future<void> _run(IntegrationTestWidgetsFlutterBinding binding) async {
       reason: 'retry after a POST must still be GET only',
     );
 
+    debugPrint('I2 compatibility phase: insecure POST is never transferred');
+    before = flow.document;
+    await flow.exercise('compatTLSPost');
+    await flow.waitKind('blocked', after: before);
+    diagnostics = await _diagnostics();
+    expect(diagnostics['policyReason'], 'insecureMethod');
+    expect(diagnostics['policyMethod'], 'post');
+    expect(sites.tlsProbe.tlsHandshakes, 0);
+    expect(sites.tlsProbe.plaintextRequests, 0);
+    expect(sites.tlsProbe.connections, 0);
+    expect(
+      await flow.call('advanceJwLogin', {'operation': 3}),
+      'manualRequired',
+    );
+    await flow.toStart(sites.businessOrigin);
+
+    debugPrint(
+      'I2 compatibility phase: explicit retry revokes a queued upgrade',
+    );
+    await flow.exercise('holdSyntheticGET');
+    await flow.exercise('compatTLSRedirect');
+    await _untilAsync(() async {
+      try {
+        return await flow.exercise('hasPendingSyntheticGET') == true;
+      } on PlatformException catch (error) {
+        if (error.details == 'staleResult') return false;
+        rethrow;
+      }
+    });
+    expect(sites.tlsProbe.connections, 0);
+    expect(sites.legacyFormPosts, 1);
+    await flow.toStart(sites.businessOrigin);
+    await flow.exercise('releaseSyntheticGET');
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+    expect(sites.tlsProbe.connections, 0);
+    expect(sites.legacyFormPosts, 1);
+    expect(await flow.exercise('syntheticUpgradeCount'), 0);
+
+    debugPrint(
+      'I2 compatibility phase: POST redirect GET upgrades without TLS fallback',
+    );
+    final legacyBefore = sites.legacyFormPosts;
+    before = flow.document;
+    await flow.exercise('compatTLSRedirect');
+    await _untilAsync(() async {
+      final current = await _diagnostics();
+      return flow.document > before &&
+          current['lastEvent'] == 'navigationFailed';
+    });
+    expect(sites.legacyFormPosts, legacyBefore + 1);
+    expect(sites.tlsProbe.tlsHandshakes, greaterThan(0));
+    expect(sites.tlsProbe.plaintextRequests, 0);
+    expect(await flow.exercise('syntheticUpgradeCount'), 1);
+    expect(await flow.exercise('hasSyntheticRecovery'), isTrue);
+    expect(
+      await flow.call('advanceJwLogin', {'operation': 4}),
+      'manualRequired',
+    );
+    diagnostics = await _diagnostics();
+    expect({
+      'provisionalNavigation',
+      'navigation',
+    }, contains(diagnostics['failureStage']));
+    expect(diagnostics['errorDomain'], isNot('none'));
+    await flow.toStart(sites.businessOrigin);
+    expect(await flow.exercise('syntheticUpgradeCount'), 0);
+    expect(
+      sites.legacyFormPosts,
+      legacyBefore + 1,
+      reason: 'fixed retry cannot replay the original POST',
+    );
+    expect(sites.tlsProbe.plaintextRequests, 0);
+
     debugPrint('I2 compatibility phase: native confirm and alert');
     await flow.exercise('useLightAppearance');
     final confirm = flow.startDialog('compatConfirm');
@@ -208,6 +301,11 @@ Future<void> _run(IntegrationTestWidgetsFlutterBinding binding) async {
       'postBlankRejected': true,
       'authHistoryUnmodified': true,
       'nativeDialogsAndCancellation': true,
+      'policyBlockReturnsToManualRecovery': true,
+      'insecurePostNotTransferred': true,
+      'redirectGetUpgradeNoPlaintextFallback': true,
+      'queuedUpgradeRevokedByRetry': true,
+      'retiredCallbacksCannotRestorePolicyBlockedPage': true,
     };
   } catch (_) {
     primaryFailure = true;
@@ -244,8 +342,8 @@ Future<Map<Object?, Object?>> _diagnostics() async {
   final result = await _platform.invokeMapMethod<Object?, Object?>(
     'i2BrowserDiagnostics',
   );
-  expect(result?['kind'], 'ios-i2-browser-diagnostics-v2');
-  expect(result?.length, 13);
+  expect(result?['kind'], 'ios-i2-browser-diagnostics-v3');
+  expect(result?.length, 17);
   return result!;
 }
 
@@ -272,7 +370,12 @@ final class _Flow {
           'initialUrl': sites.startUri.toString(),
           'source': 'jw',
           'allowedOrigins': [sites.businessOrigin],
-          'testNavigationOrigins': [sites.identityOrigin],
+          'testNavigationOrigins': [
+            sites.identityOrigin,
+            sites.tlsProbe.httpOrigin,
+            sites.tlsProbe.httpsOrigin,
+          ],
+          'testTLSUpgradeOrigin': sites.tlsProbe.httpOrigin,
           'testMode': true,
           'recoveryOnly': false,
           'background': false,
@@ -391,9 +494,11 @@ Future<void> _untilAsync(Future<bool> Function() condition) async {
 }
 
 final class _Sites {
-  _Sites(this.business, this.identity, this.denied);
+  _Sites(this.business, this.identity, this.denied, this.tlsProbe);
   final HttpServer business, identity, denied;
+  final _TLSHandshakeProbe tlsProbe;
   int formPosts = 0, frameRequests = 0, deniedRequests = 0;
+  int legacyFormPosts = 0;
   String get businessOrigin => 'http://127.0.0.1:${business.port}';
   String get identityOrigin => 'http://127.0.0.1:${identity.port}';
   String get deniedOrigin => 'http://127.0.0.1:${denied.port}';
@@ -403,7 +508,18 @@ final class _Sites {
     final business = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final identity = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final denied = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final sites = _Sites(business, identity, denied);
+    final _TLSHandshakeProbe probe;
+    try {
+      probe = await _TLSHandshakeProbe.start();
+    } on Object {
+      await Future.wait([
+        business.close(force: true),
+        identity.close(force: true),
+        denied.close(force: true),
+      ]);
+      rethrow;
+    }
+    final sites = _Sites(business, identity, denied, probe);
     business.listen((request) => unawaited(sites.serve(request, 'business')));
     identity.listen((request) => unawaited(sites.serve(request, 'identity')));
     denied.listen((request) => unawaited(sites.serve(request, 'denied')));
@@ -420,6 +536,23 @@ final class _Sites {
         return;
       }
       final path = request.uri.path;
+      if (site == 'business' &&
+          path == '/legacy-submit' &&
+          request.method == 'POST') {
+        legacyFormPosts++;
+        final body = await utf8.decoder.bind(request).join();
+        if (body != 'token=synthetic') {
+          request.response.statusCode = HttpStatus.badRequest;
+        } else {
+          request.response.statusCode = HttpStatus.seeOther;
+          request.response.headers.set(
+            HttpHeaders.locationHeader,
+            '${tlsProbe.httpOrigin}/synthetic-callback',
+          );
+        }
+        await request.response.close();
+        return;
+      }
       if (site == 'identity' && path == '/submit' && request.method == 'POST') {
         formPosts++;
         final body = await utf8.decoder.bind(request).join();
@@ -448,6 +581,10 @@ final class _Sites {
 <a id="compat-blank" target="_blank" href="$identityOrigin/identity">New window link</a>
 <form id="compat-post-blank" method="post" target="_blank" action="$identityOrigin/submit">
 <input name="token" value="synthetic"><button type="submit">Post</button></form>
+<form id="compat-tls-post" method="post" action="${tlsProbe.httpOrigin}/synthetic-callback">
+<input name="token" value="synthetic"><button type="submit">Insecure post</button></form>
+<form id="compat-tls-redirect" method="post" action="$businessOrigin/legacy-submit">
+<input name="token" value="synthetic"><button type="submit">Synthetic redirect</button></form>
 <iframe src="$identityOrigin/frame"></iframe>
 </body></html>''');
       } else if (site == 'business' && path == '/home') {
@@ -480,6 +617,58 @@ final class _Sites {
       business.close(force: true),
       identity.close(force: true),
       denied.close(force: true),
+      tlsProbe.close(),
     ]);
+  }
+}
+
+// Fresh loopback socket, not a trusted HTTPS service. Observe only the first
+// record type, then close: TLS must fail normally and must never fall back to
+// an HTTP request. No certificate exception or raw payload logging is used.
+final class _TLSHandshakeProbe {
+  _TLSHandshakeProbe(this.server) {
+    subscription = server.listen((socket) {
+      connections++;
+      sockets.add(socket);
+      var observed = false;
+      socket.listen(
+        (bytes) {
+          if (observed || bytes.isEmpty) return;
+          observed = true;
+          if (bytes.first == 0x16) {
+            tlsHandshakes++;
+          } else {
+            plaintextRequests++;
+          }
+          socket.destroy();
+          sockets.remove(socket);
+        },
+        onError: (Object _) {
+          socket.destroy();
+          sockets.remove(socket);
+        },
+        onDone: () => sockets.remove(socket),
+      );
+    });
+  }
+
+  final ServerSocket server;
+  late final StreamSubscription<Socket> subscription;
+  final sockets = <Socket>{};
+  int connections = 0, tlsHandshakes = 0, plaintextRequests = 0;
+  String get httpOrigin => 'http://127.0.0.1:${server.port}';
+  String get httpsOrigin => 'https://127.0.0.1:${server.port}';
+
+  static Future<_TLSHandshakeProbe> start() async => _TLSHandshakeProbe(
+    await ServerSocket.bind(InternetAddress.loopbackIPv4, 0),
+  );
+
+  Future<void> close() async {
+    for (final socket in sockets.toList()) {
+      socket.destroy();
+    }
+    sockets.clear();
+    await subscription.cancel();
+    await server.close();
   }
 }

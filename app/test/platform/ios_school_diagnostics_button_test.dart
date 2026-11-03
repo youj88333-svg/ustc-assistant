@@ -9,6 +9,7 @@ import 'package:ustc_assistant_m0/app/ios_school_diagnostics_button.dart';
 const _channel = MethodChannel('ustc_assistant/platform_v1');
 const _v1Schema = 'ios-i2-browser-diagnostics-v1';
 const _v2Schema = 'ios-i2-browser-diagnostics-v2';
+const _v3Schema = 'ios-i2-browser-diagnostics-v3';
 
 void main() {
   tearDown(() {
@@ -187,6 +188,121 @@ void main() {
     expect(requests, responses.length);
     expect(clipboardWrites, <String>[jsonEncode(_validV2Response())]);
   });
+
+  testWidgets('copies v3 with each allowed policy enum value', (tester) async {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final clipboardWrites = <String>[];
+    var clipboardText = 'pre-existing clipboard text';
+    final responses = <Map<String, Object?>>[];
+    for (final value in <String>[
+      'none',
+      'scheme',
+      'credentials',
+      'port',
+      'emptyPort',
+      'hostEncoding',
+      'hostSyntax',
+      'outsideCampus',
+      'fixtureOrigin',
+      'invalidURL',
+      'insecureMethod',
+      'insecurePort',
+      'upgradeLimit',
+    ]) {
+      responses.add(_validV3Response(policyReason: value));
+    }
+    for (final value in <String>['none', 'http', 'https', 'other']) {
+      responses.add(_validV3Response(policyScheme: value));
+    }
+    for (final value in <String>['unknown', 'get', 'post', 'other']) {
+      responses.add(_validV3Response(policyMethod: value));
+    }
+    for (final value in <String>['none', 'absolute', 'relative']) {
+      responses.add(_validV3Response(policyURLForm: value));
+    }
+    var requests = 0;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      expect(call.method, 'i2BrowserDiagnostics');
+      expect(call.arguments, isNull);
+      return responses[requests++];
+    });
+    _captureClipboard(
+      messenger,
+      clipboardWrites,
+      onSet: (text) => clipboardText = text,
+    );
+
+    for (final response in responses) {
+      await tester.pumpWidget(_host());
+      await tester.tap(find.byKey(const ValueKey('ios-i2-copy-diagnostics')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(jsonDecode(clipboardText), response);
+    }
+
+    expect(requests, responses.length);
+    expect(clipboardWrites, hasLength(responses.length));
+    expect(
+      jsonDecode(clipboardWrites.first),
+      _validV3Response(policyReason: 'none'),
+    );
+    expect(
+      jsonDecode(clipboardWrites.last),
+      _validV3Response(policyURLForm: 'relative'),
+    );
+  });
+
+  testWidgets('rejects raw v3 URL, host, structure, and enum values', (
+    tester,
+  ) async {
+    final messenger = tester.binding.defaultBinaryMessenger;
+    final clipboardWrites = <String>[];
+    const previousClipboard = 'pre-existing clipboard text';
+    var clipboardText = previousClipboard;
+    const privateUrl = 'https://login.ustc.edu.cn/path?ticket=private-value';
+    const rawHost = 'login.ustc.edu.cn';
+    final responses = <Map<String, Object?>>[
+      <String, Object?>{..._validV3Response(), 'url': privateUrl},
+      <String, Object?>{..._validV3Response(), 'host': rawHost},
+      <String, Object?>{
+        ..._validV3Response(),
+        'navigation': <String, Object?>{
+          'url': privateUrl,
+          'headers': <String, String>{'Authorization': 'private-header'},
+        },
+      },
+      _validV3Response(policyReason: 'outside-campus'),
+      _validV3Response(policyScheme: 'file'),
+      _validV3Response(policyMethod: 'put'),
+      _validV3Response(policyURLForm: 'URL'),
+    ];
+    var requests = 0;
+    messenger.setMockMethodCallHandler(_channel, (call) async {
+      return responses[requests++];
+    });
+    _captureClipboard(
+      messenger,
+      clipboardWrites,
+      onSet: (text) => clipboardText = text,
+    );
+
+    for (var index = 0; index < responses.length; index++) {
+      await tester.pumpWidget(_host());
+      await tester.tap(find.byKey(const ValueKey('ios-i2-copy-diagnostics')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+
+      expect(clipboardText, previousClipboard);
+    }
+
+    expect(requests, responses.length);
+    expect(clipboardWrites, isEmpty);
+    expect(find.text('未能复制诊断，请重试。'), findsOneWidget);
+    expect(find.textContaining(privateUrl), findsNothing);
+    expect(find.textContaining(rawHost), findsNothing);
+    expect(find.textContaining('private-header'), findsNothing);
+  });
 }
 
 Map<String, Object?> _validResponse() => <String, Object?>{
@@ -208,6 +324,20 @@ Map<String, Object?> _validV2Response() => <String, Object?>{
   'kind': _v2Schema,
   'policyAction': 'topNavigationBlocked',
   'policyTarget': 'campus',
+};
+
+Map<String, Object?> _validV3Response({
+  Object? policyReason = 'outsideCampus',
+  Object? policyScheme = 'https',
+  Object? policyMethod = 'get',
+  Object? policyURLForm = 'absolute',
+}) => <String, Object?>{
+  ..._validV2Response(),
+  'kind': _v3Schema,
+  'policyReason': policyReason,
+  'policyScheme': policyScheme,
+  'policyMethod': policyMethod,
+  'policyURLForm': policyURLForm,
 };
 
 Widget _host() => MaterialApp(

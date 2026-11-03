@@ -41,6 +41,10 @@ private enum IOSSchoolPolicyTests {
     try test { try fixtureNavigationUsesOnlyDeclaredOrigins() }
     try test { try fixtureNavigationFieldIsStrictAndDebugOnly() }
     try test { try fixtureNavigationDefaultsToOriginalOrigins() }
+    try test { try relativeAndSecurePortNavigation() }
+    try test { try insecureGetUpgradeAndSubmissionRejection() }
+    try test { try declaredTLSFixtureIsStrict() }
+    try test { try upgradeBudgetIsBoundedAndExplicitlyReset() }
     print("ios-i2-policy-tests: \(count) passed")
   }
 
@@ -106,13 +110,13 @@ private enum IOSSchoolPolicyTests {
       "HTTPS://WWW.USTC.EDU.CN/login",
       "https://passport.ustc.edu.cn/cas/login?service=x",
       "https://ustc.edu.cn:443/path",
+      "https://auth.ustc.edu.cn:8443/login",
       "https://xn--9ca.ustc.edu.cn/login",
     ] {
       try check(policy.allowsNavigation(try makeURL(allowed)), "top-campus-\(allowed)")
     }
     for denied in [
       "http://passport.ustc.edu.cn/login",
-      "https://passport.ustc.edu.cn:444/login",
       "https://user@passport.ustc.edu.cn/login",
       "https://passport.ustc.edu.cn./login",
       "https://bad..ustc.edu.cn/login",
@@ -134,6 +138,7 @@ private enum IOSSchoolPolicyTests {
     let policy = try productionPolicy("jw")
     let external = try makeURL("https://login.example.net/cas/frame")
     try check(policy.allowsSubframeNavigation(external), "subframe-external-https")
+    try check(policy.allowsSubframeNavigation(try makeURL("https://login.example.net:8443/frame")), "subframe-secure-port")
     if #available(macOS 13.0, *) {
       try check(policy.allowsSubframeNavigation(try makeURL("https://xn--9ca.example.net/frame")), "subframe-idna-host")
     }
@@ -154,7 +159,7 @@ private enum IOSSchoolPolicyTests {
       "https://frame_.example.net/",
       "https://frame.example.net./",
       "https://user:secret@frame.example.net/",
-      "https://frame.example.net:444/",
+      "https://frame.example.net:65536/",
       "https://frame.example.net:/",
     ] {
       if let candidate = URL(string: denied) {
@@ -297,6 +302,92 @@ private enum IOSSchoolPolicyTests {
       "allowedOrigins": source == "jw" ? jwOrigins : youngOrigins,
       "testMode": false,
     ], allowFixtures: false)
+  }
+
+  private static func relativeAndSecurePortNavigation() throws {
+    let policy = try productionPolicy("jw")
+    let base = try makeURL("https://auth.ustc.edu.cn:8443/cas/start")
+    guard let relative = URL(string: "../callback?ticket=synthetic", relativeTo: base),
+          let foreign = URL(string: "//outside.example/callback", relativeTo: base) else {
+      throw PolicyTestFailure.assertion("relative-construction")
+    }
+    try check(relative.baseURL != nil, "relative-base-retained")
+    try check(policy.allowsNavigation(relative), "relative-resolved-campus-https")
+    try check(policy.allowsNavigation(relative.absoluteURL), "absolute-equivalent")
+    try check(!policy.allows(relative), "secure-other-port-does-not-authorize-business")
+    try check(policy.navigationRejection(foreign) == .outsideCampus, "relative-foreign-rejected")
+    try check(policy.navigationRejection(try makeURL("https://user@auth.ustc.edu.cn/")) == .credentials, "credentials-reason")
+    if let emptyPort = URL(string: "https://auth.ustc.edu.cn:/") {
+      try check(policy.navigationRejection(emptyPort) == .emptyPort, "empty-port-reason")
+    }
+    for port in [1, 444, 8443, 65535] {
+      try check(policy.allowsNavigation(try makeURL("https://auth.ustc.edu.cn:\(port)/")), "valid-tls-port-\(port)")
+    }
+  }
+
+  private static func insecureGetUpgradeAndSubmissionRejection() throws {
+    let policy = try productionPolicy("jw")
+    for input in ["http://auth.ustc.edu.cn/callback?ticket=synthetic%2Bvalue", "http://auth.ustc.edu.cn:80/callback?ticket=synthetic%2Bvalue"] {
+      let url = try makeURL(input)
+      guard case let .upgrade(secure) = policy.mainNavigationDecision(url, method: "GET", hasBody: false, hasBodyStream: false) else {
+        throw PolicyTestFailure.assertion("get-upgrade")
+      }
+      try check(secure.absoluteString == "https://auth.ustc.edu.cn/callback?ticket=synthetic%2Bvalue", "upgrade-preserves-opaque-components")
+      try check(policy.allowsNavigation(secure), "upgraded-target-validated")
+      try check(!policy.allows(secure), "upgrade-not-business-authority")
+    }
+    let url = try makeURL("http://auth.ustc.edu.cn/callback")
+    for method in [nil, "POST", "HEAD", "PATCH"] as [String?] {
+      try expectRejected(policy.mainNavigationDecision(url, method: method, hasBody: false, hasBodyStream: false), .insecureMethod)
+    }
+    try expectRejected(policy.mainNavigationDecision(url, method: "GET", hasBody: true, hasBodyStream: false), .insecureMethod)
+    try expectRejected(policy.mainNavigationDecision(url, method: "GET", hasBody: false, hasBodyStream: true), .insecureMethod)
+    try expectRejected(policy.mainNavigationDecision(try makeURL("http://auth.ustc.edu.cn:8080/"), method: "GET", hasBody: false, hasBodyStream: false), .insecurePort)
+    try expectRejected(policy.mainNavigationDecision(try makeURL("http://outside.example/"), method: "GET", hasBody: false, hasBodyStream: false), .outsideCampus)
+    try expectRejected(policy.mainNavigationDecision(try makeURL("http://user@auth.ustc.edu.cn/"), method: "GET", hasBody: false, hasBodyStream: false), .credentials)
+    guard case .allow = policy.mainNavigationDecision(try makeURL("https://auth.ustc.edu.cn:8443/"), method: "POST", hasBody: true, hasBodyStream: false) else {
+      throw PolicyTestFailure.assertion("normal-secure-post-is-not-replayed-or-blocked")
+    }
+  }
+
+  private static func expectRejected(_ decision: IOSSchoolNavigationDecision, _ reason: IOSSchoolNavigationReason) throws {
+    guard case let .reject(actual) = decision, actual == reason else {
+      throw PolicyTestFailure.assertion("expected-rejection-\(reason.rawValue)")
+    }
+  }
+
+  private static func declaredTLSFixtureIsStrict() throws {
+    var args = fixtureArguments(navigationOrigins: ["http://127.0.0.1:49154", "https://127.0.0.1:49154"])
+    args["testTLSUpgradeOrigin"] = "http://127.0.0.1:49154"
+    let fixture = try IOSSchoolPolicy(arguments: args, allowFixtures: true)
+    let insecure = try makeURL("http://127.0.0.1:49154/synthetic")
+    try check(!fixture.allowsNavigation(insecure), "fixture-insecure-source-is-upgrade-only")
+    guard case let .upgrade(secure) = fixture.mainNavigationDecision(insecure, method: "GET", hasBody: false, hasBodyStream: false) else {
+      throw PolicyTestFailure.assertion("fixture-upgrade")
+    }
+    try check(secure.absoluteString == "https://127.0.0.1:49154/synthetic", "fixture-preserves-declared-port")
+    try check(!fixture.allows(secure), "fixture-upgrade-navigation-only")
+    try expectRejected(fixture.mainNavigationDecision(insecure, method: "POST", hasBody: true, hasBodyStream: false), .insecureMethod)
+    try rejects("release-rejects-upgrade-field") { _ = try IOSSchoolPolicy(arguments: args, allowFixtures: false) }
+    for bad in ["http://127.0.0.1:49152", "http://127.0.0.1:49155", "https://127.0.0.1:49154", "http://127.0.0.1:49154/", "http://public.example:49154"] {
+      var wrong = args; wrong["testTLSUpgradeOrigin"] = bad
+      try rejects("fixture-upgrade-declaration-rejected") { _ = try IOSSchoolPolicy(arguments: wrong, allowFixtures: true) }
+    }
+    var missingSecure = fixtureArguments(navigationOrigins: ["http://127.0.0.1:49154"])
+    missingSecure["testTLSUpgradeOrigin"] = "http://127.0.0.1:49154"
+    try rejects("fixture-secure-target-must-be-declared") { _ = try IOSSchoolPolicy(arguments: missingSecure, allowFixtures: true) }
+    var production: [String: Any] = ["source": "jw", "initialUrl": "https://jw.ustc.edu.cn/", "allowedOrigins": ["https://jw.ustc.edu.cn", "https://passport.ustc.edu.cn", "https://id.ustc.edu.cn", "https://analytics.ustc.edu.cn"], "testMode": false]
+    production["testTLSUpgradeOrigin"] = "http://127.0.0.1:49154"
+    try rejects("production-rejects-upgrade-field") { _ = try IOSSchoolPolicy(arguments: production, allowFixtures: true) }
+  }
+
+  private static func upgradeBudgetIsBoundedAndExplicitlyReset() throws {
+    var budget = IOSSchoolUpgradeBudget()
+    for _ in 0..<8 { try check(budget.consume(), "upgrade-budget-available") }
+    for _ in 0..<3 { try check(!budget.consume(), "upgrade-budget-exhausted") }
+    try check(budget.used == 8, "budget-does-not-overflow")
+    budget.reset()
+    try check(budget.used == 0 && budget.consume(), "explicit-retry-resets-budget")
   }
 
   private static func fixtureArguments(navigationOrigins: [String]? = nil) -> [String: Any] {

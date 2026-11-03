@@ -812,8 +812,12 @@ Future<void> _runManualI2Sso(_I2Harness harness) async {
       'cleanupErrorCode',
       'policyAction',
       'policyTarget',
+      'policyReason',
+      'policyScheme',
+      'policyMethod',
+      'policyURLForm',
     });
-    expect(diagnostics['kind'], 'ios-i2-browser-diagnostics-v2');
+    expect(diagnostics['kind'], 'ios-i2-browser-diagnostics-v3');
     expect(diagnostics['source'], 'jw');
     expect(diagnostics['state'], 'open');
     expect(diagnostics['lastEvent'], 'navigationFailed');
@@ -826,6 +830,10 @@ Future<void> _runManualI2Sso(_I2Harness harness) async {
     expect(diagnostics['cleanupErrorCode'], isNull);
     expect(diagnostics['policyAction'], 'none');
     expect(diagnostics['policyTarget'], 'none');
+    expect(diagnostics['policyReason'], 'none');
+    expect(diagnostics['policyScheme'], 'none');
+    expect(diagnostics['policyMethod'], 'unknown');
+    expect(diagnostics['policyURLForm'], 'none');
 
     debugPrint('I2 synthetic phase: reopen failed login window');
     await _iosI2Exercise(

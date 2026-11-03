@@ -14,6 +14,26 @@ enum IOSSchoolFailure: String, Error {
   case ownershipLost
 }
 
+enum IOSSchoolNavigationReason: String {
+  case none, scheme, credentials, port, emptyPort, hostEncoding, hostSyntax
+  case outsideCampus, fixtureOrigin, invalidURL, insecureMethod, insecurePort, upgradeLimit
+}
+
+enum IOSSchoolNavigationDecision {
+  case allow
+  case upgrade(URL)
+  case reject(IOSSchoolNavigationReason)
+}
+
+struct IOSSchoolUpgradeBudget {
+  private(set) var used = 0
+  mutating func consume() -> Bool {
+    guard used < 8 else { return false }
+    used += 1; return true
+  }
+  mutating func reset() { used = 0 }
+}
+
 /// Fixed iOS school destinations. This describes navigations the host may
 /// admit; it is not an allowlist for ordinary page subresources or background
 /// network requests.
@@ -24,6 +44,7 @@ struct IOSSchoolPolicy {
   let isFixture: Bool
   let businessOrigin: String
   private let navigationOrigins: Set<String>
+  private let testTLSUpgradeOrigin: String?
 
   private static let jwInitial = "https://jw.ustc.edu.cn/"
   private static let youngInitial = "https://young.ustc.edu.cn/login/"
@@ -53,7 +74,8 @@ struct IOSSchoolPolicy {
     }
 
     let hasTestNavigationOrigins = arguments.keys.contains("testNavigationOrigins")
-    if hasTestNavigationOrigins && (!testMode || !allowFixtures) {
+    let hasTestTLSUpgradeOrigin = arguments.keys.contains("testTLSUpgradeOrigin")
+    if (hasTestNavigationOrigins || hasTestTLSUpgradeOrigin) && (!testMode || !allowFixtures) {
       throw testMode ? IOSSchoolFailure.unsupportedPlatform : IOSSchoolFailure.invalidSnapshot
     }
 
@@ -101,12 +123,28 @@ struct IOSSchoolPolicy {
         parsedNavigationOrigins.formUnion(additionalOrigins)
       }
 
+      var tlsUpgradeOrigin: String?
+      if hasTestTLSUpgradeOrigin {
+        guard let rawUpgradeOrigin = arguments["testTLSUpgradeOrigin"] as? String else {
+          throw IOSSchoolFailure.invalidSnapshot
+        }
+        let normalized = try Self.fixtureNavigationOriginString(rawUpgradeOrigin)
+        guard let components = URLComponents(string: normalized), components.scheme == "http",
+              let port = components.port, port != 443,
+              !parsedOrigins.contains(normalized), parsedNavigationOrigins.contains(normalized),
+              parsedNavigationOrigins.contains("https://127.0.0.1:\(port)") else {
+          throw IOSSchoolFailure.invalidSnapshot
+        }
+        tlsUpgradeOrigin = normalized
+      }
+
       self.source = source
       self.initialURL = initialURL
       self.origins = parsedOrigins
       self.isFixture = true
       self.businessOrigin = initialOrigin
       self.navigationOrigins = parsedNavigationOrigins
+      self.testTLSUpgradeOrigin = tlsUpgradeOrigin
       return
     }
 
@@ -125,12 +163,13 @@ struct IOSSchoolPolicy {
       ? "https://jw.ustc.edu.cn"
       : "https://young.ustc.edu.cn"
     self.navigationOrigins = Set(expectedOrigins)
+    self.testTLSUpgradeOrigin = nil
   }
 
   /// Returns a normalized HTTP(S) origin, excluding URL credentials.
   func origin(_ url: URL) -> String? {
-    guard url.user == nil, url.password == nil,
-          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+    guard let components = URLComponents(url: url.absoluteURL, resolvingAgainstBaseURL: false),
+          components.user == nil, components.password == nil,
           let schemeText = components.scheme,
           let hostText = components.host,
           !hostText.isEmpty else {
@@ -157,23 +196,59 @@ struct IOSSchoolPolicy {
   /// Allows a user-driven top-level browser destination. This is intentionally
   /// separate from `allows`, which remains the exact source/data-origin check.
   func allowsNavigation(_ url: URL) -> Bool {
+    navigationRejection(url) == nil
+  }
+
+  /// One decision vocabulary is shared with value-free failure diagnostics.
+  func navigationRejection(_ url: URL) -> IOSSchoolNavigationReason? {
     if isFixture {
-      guard let candidate = Self.fixtureNavigationOrigin(of: url) else { return false }
-      return navigationOrigins.contains(candidate)
+      guard let candidate = Self.fixtureNavigationOrigin(of: url.absoluteURL),
+            candidate != testTLSUpgradeOrigin,
+            navigationOrigins.contains(candidate) else { return .fixtureOrigin }
+      return nil
     }
-    guard let host = Self.canonicalHTTPSHost(of: url) else { return false }
-    return host == "ustc.edu.cn" || host.hasSuffix(".ustc.edu.cn")
+    if let failure = Self.webAuthorityRejection(url, schemes: ["https"]) { return failure }
+    guard let host = Self.webHost(url), Self.isCampusHost(host) else { return .outsideCampus }
+    return nil
+  }
+
+  func mainNavigationDecision(_ url: URL, method: String?, hasBody: Bool,
+                              hasBodyStream: Bool) -> IOSSchoolNavigationDecision {
+    let absolute = url.absoluteURL
+    let fixtureUpgrade = isFixture && Self.fixtureNavigationOrigin(of: absolute) == testTLSUpgradeOrigin
+      && testTLSUpgradeOrigin != nil
+    let campusUpgrade = !isFixture && absolute.scheme?.lowercased() == "http"
+    if fixtureUpgrade || campusUpgrade {
+      if let failure = Self.webAuthorityRejection(absolute, schemes: ["http"]) { return .reject(failure) }
+      guard let host = Self.webHost(absolute), isFixture || Self.isCampusHost(host) else { return .reject(.outsideCampus) }
+      guard let components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else { return .reject(.invalidURL) }
+      if !isFixture, let port = components.port, port != 80 { return .reject(.insecurePort) }
+      guard method == "GET", !hasBody, !hasBodyStream else { return .reject(.insecureMethod) }
+      var secure = components
+      secure.scheme = "https"
+      if !isFixture { secure.port = nil }
+      guard let upgraded = secure.url, navigationRejection(upgraded) == nil else { return .reject(.invalidURL) }
+      return .upgrade(upgraded)
+    }
+    if let failure = navigationRejection(absolute) { return .reject(failure) }
+    return .allow
   }
 
   /// Allows ordinary HTTPS subframes without granting them business-read
   /// authority. Only the exact about:blank/srcdoc documents bypass HTTPS.
   func allowsSubframeNavigation(_ url: URL) -> Bool {
-    if Self.isExactAboutDocument(url) { return true }
+    subframeNavigationRejection(url) == nil
+  }
+
+  func subframeNavigationRejection(_ url: URL) -> IOSSchoolNavigationReason? {
+    if Self.isExactAboutDocument(url.absoluteURL) { return nil }
     if isFixture {
-      guard let candidate = Self.fixtureNavigationOrigin(of: url) else { return false }
-      return navigationOrigins.contains(candidate)
+      guard let candidate = Self.fixtureNavigationOrigin(of: url.absoluteURL), navigationOrigins.contains(candidate) else {
+        return .fixtureOrigin
+      }
+      return nil
     }
-    return Self.canonicalHTTPSHost(of: url) != nil
+    return Self.webAuthorityRejection(url, schemes: ["https"])
   }
 
   /// Readiness for fixed business operations must not interrupt a login
@@ -282,54 +357,56 @@ struct IOSSchoolPolicy {
     return "\(scheme)://127.0.0.1\(portPart)"
   }
 
-  private static func canonicalHTTPSHost(of url: URL) -> String? {
-    guard url.baseURL == nil,
-          let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-          components.scheme?.lowercased() == "https",
-          components.user == nil,
-          components.password == nil,
-          components.port == nil || components.port == 443,
-          let host = encodedHTTPSHost(components),
-          !host.isEmpty,
-          !host.contains("%"),
-          !hasEmptyExplicitPort(url),
-          host.utf8.count <= 253,
-          host.unicodeScalars.allSatisfy({ $0.value < 128 }) else {
-      return nil
-    }
+  private static func webHost(_ url: URL) -> String? {
+    guard let components = URLComponents(url: url.absoluteURL, resolvingAgainstBaseURL: false) else { return nil }
+    return encodedHTTPSHost(components)?.lowercased()
+  }
+  private static func isCampusHost(_ host: String) -> Bool {
+    host == "ustc.edu.cn" || host.hasSuffix(".ustc.edu.cn")
+  }
+  private static func webAuthorityRejection(_ url: URL, schemes: Set<String>) -> IOSSchoolNavigationReason? {
+    let absolute = url.absoluteURL
+    guard let components = URLComponents(url: absolute, resolvingAgainstBaseURL: false) else { return .invalidURL }
+    guard let scheme = components.scheme?.lowercased(), schemes.contains(scheme) else { return .scheme }
+    guard components.user == nil, components.password == nil else { return .credentials }
+    if hasEmptyExplicitPort(absolute) { return .emptyPort }
+    if let port = components.port, !(1...65535).contains(port) { return .port }
+    guard let host = encodedHTTPSHost(components), !host.isEmpty else { return .hostSyntax }
+    guard !host.contains("%"), host.unicodeScalars.allSatisfy({ $0.value < 128 }) else { return .hostEncoding }
+    guard host.utf8.count <= 253 else { return .hostSyntax }
 
     let normalized = host.lowercased()
     if normalized.hasPrefix("[") || normalized.hasSuffix("]") {
       guard normalized.hasPrefix("["), normalized.hasSuffix("]"),
             normalized.count > 2 else {
-        return nil
+        return .hostSyntax
       }
       let address = String(normalized.dropFirst().dropLast())
       var parsedAddress = in6_addr()
       guard address.withCString({ inet_pton(AF_INET6, $0, &parsedAddress) }) == 1 else {
-        return nil
+        return .hostSyntax
       }
-      return normalized
+      return nil
     }
 
     if normalized.allSatisfy({ $0.isNumber || $0 == "." }) {
-      guard isCanonicalIPv4(normalized) else { return nil }
-      return normalized
+      guard isCanonicalIPv4(normalized) else { return .hostSyntax }
+      return nil
     }
 
-    guard !normalized.hasPrefix("."), !normalized.hasSuffix(".") else { return nil }
+    guard !normalized.hasPrefix("."), !normalized.hasSuffix(".") else { return .hostSyntax }
     let labels = normalized.split(separator: ".", omittingEmptySubsequences: false)
-    guard !labels.isEmpty else { return nil }
+    guard !labels.isEmpty else { return .hostSyntax }
     for label in labels {
       guard !label.isEmpty, label.utf8.count <= 63,
             let first = label.utf8.first,
             let last = label.utf8.last,
             isASCIILetterOrDigit(first), isASCIILetterOrDigit(last),
             label.utf8.allSatisfy({ isASCIILetterOrDigit($0) || $0 == 45 }) else {
-        return nil
+        return .hostSyntax
       }
     }
-    return normalized
+    return nil
   }
 
   private static func encodedHTTPSHost(_ components: URLComponents) -> String? {
